@@ -319,10 +319,15 @@ def read_test_mode(profile):
 def save_connect_test_mode(profile, data):
     """Bind draft-only Test Mode to an already received Connect conversation."""
     from tenant_ai_agents_store import _authorize, _audit
+    from tenant_connect_transport import _schema as ensure_connect_schema
     if not isinstance(data, dict) or set(data) - {'provider','channel_id','conversation_id','enabled','emergency_stop'}:
         raise TenantLinearError('Connect Test Mode settings are invalid.')
     with _connect() as conn:
         ensure_schema(conn)
+        # Test Mode can be opened before the first channel configuration.
+        # Ensure its lookup tables exist so an empty setup returns a 409
+        # guidance message instead of an opaque 503 from PostgreSQL.
+        ensure_connect_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
             channel, conversation = str(data.get('channel_id') or '').strip(), str(data.get('conversation_id') or '').strip()

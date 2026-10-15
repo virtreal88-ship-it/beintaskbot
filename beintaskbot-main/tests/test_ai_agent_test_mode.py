@@ -106,5 +106,22 @@ class TestModeBindingTests(unittest.TestCase):
         self.assertFalse(test_mode.allowed_event(cursor,TENANT,BINDING['account_domain'],{'lead_id':1}))
         self.assertEqual(cursor.execute.call_count,1)
 
+    def test_connect_test_mode_initializes_transport_schema_before_channel_lookup(self):
+        conn=MagicMock();conn.__enter__.return_value=conn
+        cursor=MagicMock();cursor.__enter__.return_value=cursor;conn.cursor.return_value=cursor
+        cursor.fetchone.return_value=None
+        with patch.object(test_mode,'_connect',return_value=conn), \
+             patch.object(test_mode,'ensure_schema') as ensure_ai_schema, \
+             patch('tenant_connect_transport._schema') as ensure_connect_schema, \
+             patch('tenant_ai_agents_store._authorize',return_value=(TENANT,42)), \
+             patch('tenant_ai_agents_store._audit'):
+            result=test_mode.save_connect_test_mode({'tenant_id':TENANT,'telegram_id':42},
+                {'provider':'connect','channel_id':'channel-1','conversation_id':'conversation-1',
+                 'enabled':False,'emergency_stop':False})
+        ensure_ai_schema.assert_called_once_with(conn)
+        ensure_connect_schema.assert_called_once_with(conn)
+        self.assertFalse(result['verified'])
+        self.assertTrue(result['draft_only'])
+
 
 if __name__=='__main__': unittest.main()
