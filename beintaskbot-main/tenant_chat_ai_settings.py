@@ -1,10 +1,29 @@
 """Separate company chat key; never read the global or news AI credential."""
 import json
 from tenant_platform import _connect, _fernet
-from tenant_news_ai_settings import authorize
 from tenant_chat_ai_schema import ensure_schema
 from tenant_chat_ai_policy import configuration
-from tenant_linear_policy import TenantLinearError
+from tenant_linear_policy import TenantLinearError, identifier
+
+
+def authorize(cur, session):
+    """Allow active company owners and admins to manage company Chat AI."""
+    if not isinstance(session, dict):
+        raise TenantLinearError('İcazə yoxdur.', 403)
+    tenant = identifier(session.get('tenant_id'))
+    try:
+        user = int(session.get('telegram_id'))
+    except (TypeError, ValueError):
+        raise TenantLinearError('İcazə yoxdur.', 403) from None
+    cur.execute('''SELECT m.role,m.active,t.status FROM saas_tenant_members m
+      JOIN saas_tenants t ON t.id=m.tenant_id
+      WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, user))
+    person = cur.fetchone()
+    if not person or person.get('active') is not True or person.get('status') != 'active':
+        raise TenantLinearError('Bu şirkətdə aktiv üzvlük tələb olunur.', 403)
+    if person.get('role') not in {'owner', 'admin'}:
+        raise TenantLinearError('Chat AI ayarlarını yalnız şirkət sahibi və ya admin dəyişə bilər.', 403)
+    return tenant, user
 
 
 def public(row):

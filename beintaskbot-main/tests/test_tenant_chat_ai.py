@@ -40,6 +40,33 @@ class Policy(unittest.TestCase):
         self.assertEqual(history([ROW],{'voice-1':'transcript'})[1],0)
         self.assertEqual(history([{'direction':'ambiguous'}],{})[0][0]['speaker'],'UNKNOWN SPEAKER')
 
+
+class SettingsAuthorization(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        tree=ast.parse((Path(__file__).resolve().parents[1]/'tenant_chat_ai_settings.py').read_text(encoding='utf-8-sig'))
+        node=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='authorize')
+        namespace={'TenantLinearError':TenantLinearError,'identifier':lambda value:value}
+        exec(compile(ast.Module(body=[node],type_ignores=[]),'chat-ai-authorize','exec'),namespace)
+        cls.authorize=staticmethod(namespace['authorize'])
+
+    def test_owner_and_admin_can_manage_chat_ai_settings(self):
+        for role in ('owner','admin'):
+            cur=Mock();cur.fetchone.return_value={'role':role,'active':True,'status':'active'}
+            self.assertEqual(self.authorize(cur,SESSION),(TENANT,20))
+
+    def test_other_roles_inactive_members_and_suspended_tenants_are_denied(self):
+        for person in (
+            {'role':'manager','active':True,'status':'active'},
+            {'role':'admin','active':False,'status':'active'},
+            {'role':'admin','active':True,'status':'suspended'},
+            None,
+        ):
+            cur=Mock();cur.fetchone.return_value=person
+            with self.assertRaises(TenantLinearError) as error:
+                self.authorize(cur,SESSION)
+            self.assertEqual(error.exception.status,403)
+
     def test_media_exact_domain_https_no_credentials_ports_or_controls(self):
         self.assertEqual(media_address(ROW['media_url'],CONFIG['media_hosts']).hostname,'cdn.example.com')
         for url in ('http://cdn.example.com/a','https://cdn.example.com.evil/a','https://user:secret@cdn.example.com/a','https://cdn.example.com:444/a','https://cdn.example.com/a\n','https://cdn.example.com/a#fragment','https://cdn.example.com\\@localhost/a'):
