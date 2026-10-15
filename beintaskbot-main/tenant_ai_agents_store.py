@@ -741,13 +741,17 @@ def list_handoffs(profile,limit=50):
 
 def list_connect_diagnostics(profile, limit=50):
     """Return tenant-local Connect processing checkpoints, without message text."""
+    import os
     from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+    from tenant_ai_agent_runtime_flags import configured as runtime_configured
+    from tenant_ai_agent_runtime_flags import staging_mode
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, _ = _authorize(cur, profile)
-            cur.execute('''SELECT t.status AS tenant_status,COALESCE(s.enabled,FALSE) AS company_ai_enabled,
-                COALESCE(s.operating_mode,'test') AS operating_mode,COALESCE(s.emergency_stop,FALSE) AS emergency_stop,
+            cur.execute('''SELECT t.status AS tenant_status,s.tenant_id IS NOT NULL AS company_settings_configured,
+                COALESCE(s.enabled,FALSE) AS company_ai_enabled,
+                s.operating_mode AS operating_mode,COALESCE(s.emergency_stop,FALSE) AS emergency_stop,
                 COALESCE(s.auto_send_enabled,FALSE) AS auto_send_enabled,
                 (SELECT count(*) FROM saas_tenant_integrations i WHERE i.tenant_id=t.id
                   AND i.provider='connect' AND i.status='connected') AS connected_connect_accounts,
@@ -755,6 +759,22 @@ def list_connect_diagnostics(profile, limit=50):
               FROM saas_tenants t LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=t.id
               WHERE t.id=%s::uuid''', (tenant,))
             system = dict(cur.fetchone() or {})
+            system['tenant_id'] = tenant
+            cur.execute('''SELECT connect_channel_id::text AS channel_id,name,status,active
+              FROM saas_connect_channels WHERE tenant_id=%s::uuid ORDER BY name,connect_channel_id''', (tenant,))
+            channels = [dict(row) for row in cur.fetchall()]
+            cur.execute('''SELECT id::text AS agent_id,name,enabled,mode,scopes
+              FROM saas_ai_agents WHERE tenant_id=%s::uuid ORDER BY created_at,id''', (tenant,))
+            agent_rows = cur.fetchall()
+            agents = []
+            for row in agent_rows:
+                item = dict(row)
+                scopes = item.get('scopes') if isinstance(item.get('scopes'), list) else []
+                item['connect_scope_channel_ids'] = [str(scope.get('channel_id') or '')
+                    for scope in scopes if isinstance(scope, dict)
+                    and str(scope.get('provider') or '').casefold() == 'connect']
+                item.pop('scopes', None)
+                agents.append(item)
             cur.execute('''SELECT COALESCE(e.received_at,m.happened_at) AS received_at,
                 CASE WHEN e.fingerprint IS NULL THEN 'stored_not_queued' ELSE e.state END AS event_state,
                 e.error_code AS event_error,SUBSTRING(m.channel FROM 9) AS channel_id,
@@ -775,6 +795,9 @@ def list_connect_diagnostics(profile, limit=50):
               ORDER BY m.happened_at DESC LIMIT %s''',
                          (tenant, max(1, min(int(limit), 100))))
             rows = cur.fetchall()
+    ai_enabled = runtime_flag('AI_AGENTS_ENABLED')
+    auto_send_enabled = runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')
+    system['enabled_agents'] = sum(1 for agent in agents if agent.get('enabled') is True)
     result = []
     for row in rows:
         item = dict(row)
@@ -793,7 +816,26 @@ def list_connect_diagnostics(profile, limit=50):
             elif not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'):
                 item['auto_send_block_reason'] = 'server_auto_send_flag_disabled'
         result.append(item)
-    return {'system': system, 'server_flags': {
-        'ai_agents_enabled': runtime_flag('AI_AGENTS_ENABLED'),
-        'auto_send_enabled': runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'),
-    }, 'events': result, 'latest_event_found': bool(result)}
+    return {
+        'system': system,
+        'server_flags': {
+            'ai_agents_enabled': ai_enabled,
+            'auto_send_enabled': auto_send_enabled,
+        },
+        'runtime': {
+            'service_name': str(os.environ.get('RAILWAY_SERVICE_NAME') or ''),
+            'service_id': str(os.environ.get('RAILWAY_SERVICE_ID') or ''),
+            'deployment_id': str(os.environ.get('RAILWAY_DEPLOYMENT_ID') or ''),
+            'environment_name': str(os.environ.get('RAILWAY_ENVIRONMENT_NAME') or ''),
+            'environment_id': str(os.environ.get('RAILWAY_ENVIRONMENT_ID') or ''),
+            'staging_mode': staging_mode(),
+            'configured_ai_agents_enabled': runtime_configured('AI_AGENTS_ENABLED'),
+            'configured_auto_send_enabled': runtime_configured('AI_AGENTS_AUTO_SEND_ENABLED'),
+            'ai_agents_enabled': ai_enabled,
+            'auto_send_enabled': auto_send_enabled,
+        },
+        'channels': channels,
+        'agents': agents,
+        'events': result,
+        'latest_event_found': bool(result),
+    }

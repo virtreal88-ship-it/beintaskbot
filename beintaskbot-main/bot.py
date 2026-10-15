@@ -18727,6 +18727,18 @@ async def start_webhook_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
     await site.start()
+    from tenant_ai_agent_runtime_flags import configured as ai_flag_configured, enabled as ai_runtime_flag, staging_mode as ai_staging_mode
+    logger.info(
+        "AI runtime switches service=%s deployment=%s environment=%s staging=%s AI_AGENTS_ENABLED(configured/effective)=%s/%s AI_AGENTS_AUTO_SEND_ENABLED(configured/effective)=%s/%s",
+        os.environ.get("RAILWAY_SERVICE_ID", ""),
+        os.environ.get("RAILWAY_DEPLOYMENT_ID", ""),
+        os.environ.get("RAILWAY_ENVIRONMENT_ID", ""),
+        ai_staging_mode(),
+        ai_flag_configured("AI_AGENTS_ENABLED"),
+        ai_runtime_flag("AI_AGENTS_ENABLED"),
+        ai_flag_configured("AI_AGENTS_AUTO_SEND_ENABLED"),
+        ai_runtime_flag("AI_AGENTS_AUTO_SEND_ENABLED"),
+    )
     logger.info(f"Webhook server started on port {WEBHOOK_PORT}")
     # The durable AI queue is shared by Kommo and Connect.  It runs in the
     # existing Railway worker process, so no additional service is needed.

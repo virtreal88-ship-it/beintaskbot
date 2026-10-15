@@ -1,5 +1,6 @@
 """Same-origin tenant APIs for manual agent configuration and knowledge."""
 import asyncio
+import os
 from aiohttp import web
 from tenant_ai_agents_store import (delete_agent, delete_knowledge, list_agents,
     list_drafts, list_knowledge, read_settings, save_agent, save_knowledge, save_settings, configuration_options, refresh_configuration_catalog,
@@ -9,7 +10,8 @@ from tenant_ai_knowledge_files import extract
 from tenant_linear_policy import TenantLinearError
 from tenant_chat_send_service import run as send_chat_message
 from tenant_ai_agent_test_mode import read_test_mode, save_test_mode, verify_test_mode, discover_test_talks
-from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+from tenant_ai_agent_runtime_flags import (configured as runtime_configured,
+    enabled as runtime_flag, staging_mode as runtime_staging_mode)
 
 
 def _expected(data, profile):
@@ -27,6 +29,30 @@ def _json_body(request):
     return request.content_type == 'application/json'
 
 
+def _attach_runtime_status(result):
+    runtime = result.setdefault('runtime', {})
+    runtime.update({
+        'configured_ai_agents_enabled': runtime_configured('AI_AGENTS_ENABLED'),
+        'configured_auto_send_enabled': runtime_configured('AI_AGENTS_AUTO_SEND_ENABLED'),
+        'server_ai_agents_enabled': runtime_flag('AI_AGENTS_ENABLED'),
+        'server_auto_send_enabled': runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'),
+        'server_crm_actions_enabled': runtime_flag('AI_AGENTS_CRM_ENABLED'),
+        'staging_mode': runtime_staging_mode(),
+    })
+    runtime.update({
+        'service_name': str(os.environ.get('RAILWAY_SERVICE_NAME') or ''),
+        'service_id': str(os.environ.get('RAILWAY_SERVICE_ID') or ''),
+        'deployment_id': str(os.environ.get('RAILWAY_DEPLOYMENT_ID') or ''),
+        'environment_name': str(os.environ.get('RAILWAY_ENVIRONMENT_NAME') or ''),
+        'environment_id': str(os.environ.get('RAILWAY_ENVIRONMENT_ID') or ''),
+    })
+    # Keep the established fields for older clients.
+    result['server_ai_agents_enabled'] = runtime['server_ai_agents_enabled']
+    result['server_auto_send_enabled'] = runtime['server_auto_send_enabled']
+    result['server_crm_actions_enabled'] = runtime['server_crm_actions_enabled']
+    return result
+
+
 def handler(member_from_request, canonical_origin, logger, resource, request_provider=None, wait_slot=None):
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
@@ -38,15 +64,7 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
             if method == 'GET':
                 if resource == 'settings':
                     result = await asyncio.to_thread(read_settings, profile)
-                    runtime = result.setdefault('runtime', {})
-                    runtime['server_ai_agents_enabled'] = runtime_flag('AI_AGENTS_ENABLED')
-                    runtime['server_auto_send_enabled'] = runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')
-                    runtime['server_crm_actions_enabled'] = runtime_flag('AI_AGENTS_CRM_ENABLED')
-                    # Preserve these established response fields for older UI
-                    # bundles that have not yet read the nested runtime state.
-                    result['server_ai_agents_enabled'] = runtime['server_ai_agents_enabled']
-                    result['server_auto_send_enabled'] = runtime['server_auto_send_enabled']
-                    result['server_crm_actions_enabled'] = runtime['server_crm_actions_enabled']
+                    result = _attach_runtime_status(result)
                 elif resource == 'test_mode':
                     result = await asyncio.to_thread(read_test_mode, profile)
                 elif resource == 'agents':
@@ -189,14 +207,7 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 else:
                     raise TenantLinearError('Əməliyyat dəstəklənmir.', 405)
             if resource == 'settings':
-                runtime = result.setdefault('runtime', {})
-                runtime['server_ai_agents_enabled'] = runtime_flag('AI_AGENTS_ENABLED')
-                runtime['server_auto_send_enabled'] = runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')
-                runtime['server_crm_actions_enabled'] = runtime_flag('AI_AGENTS_CRM_ENABLED')
-                # Keep the established fields for existing clients.
-                result['server_ai_agents_enabled'] = runtime['server_ai_agents_enabled']
-                result['server_auto_send_enabled'] = runtime['server_auto_send_enabled']
-                result['server_crm_actions_enabled'] = runtime['server_crm_actions_enabled']
+                result = _attach_runtime_status(result)
             return web.json_response({'success': True, 'result': result}, headers=headers)
         except TenantLinearError as error:
             return web.json_response({'success': False, 'error': str(error)}, status=error.status, headers=headers)

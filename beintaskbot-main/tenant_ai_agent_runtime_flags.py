@@ -10,8 +10,13 @@ def staging_mode() -> bool:
     return str(os.environ.get("STAGING_MODE") or "").strip().casefold() in _TRUE
 
 
+def configured(name: str) -> bool:
+    """Return the value injected into this process before safety overrides."""
+    return str(os.environ.get(name) or "").strip().casefold() in _TRUE
+
+
 def enabled(name: str) -> bool:
     """Read a feature flag, forcing external AI side effects off in staging."""
     if staging_mode() and name in _STAGING_FORBIDDEN:
         return False
-    return str(os.environ.get(name) or "").strip().casefold() in _TRUE
+    return configured(name)

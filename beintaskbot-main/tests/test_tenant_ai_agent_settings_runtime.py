@@ -90,7 +90,8 @@ class TenantAiAgentSettingsRuntimeTests(unittest.TestCase):
         source = Path('tenant_ai_agents_api.py').read_text(encoding='utf-8')
         # GET and PATCH must both expose the same runtime decision, while PATCH
         # reads the committed tenant row again instead of trusting browser data.
-        self.assertGreaterEqual(source.count("runtime['server_ai_agents_enabled'] = runtime_flag('AI_AGENTS_ENABLED')"), 2)
+        self.assertGreaterEqual(source.count('_attach_runtime_status(result)'), 2)
+        self.assertIn("'configured_auto_send_enabled': runtime_configured('AI_AGENTS_AUTO_SEND_ENABLED')", source)
         self.assertIn('await asyncio.to_thread(save_settings, profile, payload)', source)
         self.assertIn('result = await asyncio.to_thread(read_settings, profile)', source)
 
