@@ -13,10 +13,11 @@ class PlatformError(Exception):
 
 
 class Request:
-    def __init__(self, body=None, *, origin="https://crm.pro.az", cookies=None):
+    def __init__(self, body=None, *, origin="https://crm.pro.az", cookies=None, query_string=""):
         self.body = body
         self.headers = {"Origin": origin} if origin is not None else {}
         self.cookies = cookies or {}
+        self.query_string = query_string
 
     async def json(self):
         if isinstance(self.body, Exception):
@@ -148,6 +149,16 @@ class TenantAuthTests(unittest.IsolatedAsyncioTestCase):
         response = self.api["app_page"](Request())
         self.assertEqual(response.status, 404)
 
+    async def test_unauthenticated_connect_sso_redirects_to_product_login_and_preserves_request(self):
+        self.context.sso = object()
+        self.member.return_value = None
+        handler = self.api["sso_authorize"]
+        with self.assertRaises(Exception) as raised:
+            await handler(Request(query_string="client_id=beintaskbot-connect&state=abc123"))
+        self.assertEqual(raised.exception.status, 302)
+        self.assertEqual(raised.exception.location,
+                         "/connector/login?next=%2Fapi%2Fplatform%2Fsso%2Fauthorize%3Fclient_id%3Dbeintaskbot-connect%26state%3Dabc123")
+
     def test_display_name_is_bounded_and_has_fallback(self):
         self.assertEqual(telegram_display_name({}), "İstifadəçi")
         self.assertEqual(telegram_display_name({"first_name": " A ", "last_name": " B "}), "A B")
@@ -158,6 +169,8 @@ class TenantAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('tenant_auth_handlers(AuthApiContext(', source)
         for route, handler in (("/api/platform/register", "register"), ("/api/platform/login", "login"),
                                ("/api/platform/logout", "logout"), ("/api/platform/me", "me"),
+                               ("/connector/", "connector_page"),
+                               ("/connector/login", "auth_page"),
                                ("/app", "app_page")):
             self.assertIn(f'"{route}", auth_api["{handler}"]', source)
         for legacy in ("handle_platform_register", "handle_platform_login", "handle_platform_logout",
