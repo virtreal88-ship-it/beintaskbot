@@ -7,7 +7,15 @@ from aiohttp import web
 
 from tenant_connect_transport import channels, configure, disconnect, ingest, status
 from tenant_platform import TenantPlatformError
+from tenant_linear_policy import TenantLinearError
 from tenant_request_origin import require_json_post
+
+
+def _policy_error_response(web_module, exc: TenantLinearError) -> web.Response:
+    return web_module.json_response(
+        {'success': False, 'error': str(exc)}, status=exc.status,
+        headers={'Cache-Control': 'no-store'},
+    )
 
 
 def settings_handler(member_from_request, origin: str, logger):
@@ -32,6 +40,10 @@ def settings_handler(member_from_request, origin: str, logger):
             return web.json_response({'success': True, **result}, headers={'Cache-Control': 'no-store'})
         except TenantPlatformError as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=403, headers={'Cache-Control': 'no-store'})
+        except TenantLinearError as exc:
+            # The shared origin guard raises this policy exception. Treating it
+            # as an unknown failure hid the real reason behind a misleading 503.
+            return _policy_error_response(web, exc)
         except Exception:
             logger.exception('Connect settings request failed')
             return web.json_response({'success': False, 'error': 'Connect ayarları saxlanmadı.'}, status=503, headers={'Cache-Control': 'no-store'})
