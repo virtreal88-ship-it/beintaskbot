@@ -38,9 +38,15 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
             if method == 'GET':
                 if resource == 'settings':
                     result = await asyncio.to_thread(read_settings, profile)
-                    result['server_auto_send_enabled']=runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')
-                    result['server_crm_actions_enabled']=runtime_flag('AI_AGENTS_CRM_ENABLED')
-                    result['server_ai_agents_enabled']=runtime_flag('AI_AGENTS_ENABLED')
+                    runtime = result.setdefault('runtime', {})
+                    runtime['server_ai_agents_enabled'] = runtime_flag('AI_AGENTS_ENABLED')
+                    runtime['server_auto_send_enabled'] = runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')
+                    runtime['server_crm_actions_enabled'] = runtime_flag('AI_AGENTS_CRM_ENABLED')
+                    # Preserve these established response fields for older UI
+                    # bundles that have not yet read the nested runtime state.
+                    result['server_ai_agents_enabled'] = runtime['server_ai_agents_enabled']
+                    result['server_auto_send_enabled'] = runtime['server_auto_send_enabled']
+                    result['server_crm_actions_enabled'] = runtime['server_crm_actions_enabled']
                 elif resource == 'test_mode':
                     result = await asyncio.to_thread(read_test_mode, profile)
                 elif resource == 'agents':
@@ -127,7 +133,11 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 payload = {key: value for key, value in data.items()
                            if key not in {'expected_tenant_id', 'expected_user_id'}}
                 if resource == 'settings':
-                    result = await asyncio.to_thread(save_settings, profile, payload)
+                    # Return a fresh, tenant-scoped read after saving.  The
+                    # old response omitted server flags, which made the UI
+                    # show a just-saved auto-send switch as disabled.
+                    await asyncio.to_thread(save_settings, profile, payload)
+                    result = await asyncio.to_thread(read_settings, profile)
                 elif resource == 'test_mode':
                     result = await asyncio.to_thread(save_test_mode, profile, payload)
                 elif resource == 'test_mode_verify' and method == 'POST':
@@ -178,6 +188,15 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     result = await asyncio.to_thread(delete_knowledge, profile, request.match_info['source_id'])
                 else:
                     raise TenantLinearError('Əməliyyat dəstəklənmir.', 405)
+            if resource == 'settings':
+                runtime = result.setdefault('runtime', {})
+                runtime['server_ai_agents_enabled'] = runtime_flag('AI_AGENTS_ENABLED')
+                runtime['server_auto_send_enabled'] = runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')
+                runtime['server_crm_actions_enabled'] = runtime_flag('AI_AGENTS_CRM_ENABLED')
+                # Keep the established fields for existing clients.
+                result['server_ai_agents_enabled'] = runtime['server_ai_agents_enabled']
+                result['server_auto_send_enabled'] = runtime['server_auto_send_enabled']
+                result['server_crm_actions_enabled'] = runtime['server_crm_actions_enabled']
             return web.json_response({'success': True, 'result': result}, headers=headers)
         except TenantLinearError as error:
             return web.json_response({'success': False, 'error': str(error)}, status=error.status, headers=headers)

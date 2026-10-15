@@ -84,8 +84,10 @@ def _ensure_no_active_scope_overlap(cur, tenant, selected_scopes, exclude_agent=
 
 
 def read_settings(profile):
+    from tenant_connect_transport import _schema as ensure_connect_schema
     with _connect() as conn:
         ensure_schema(conn)
+        ensure_connect_schema(conn)
         with conn.cursor() as cur:
             tenant, _ = _authorize(cur, profile)
             cur.execute('''INSERT INTO saas_ai_agent_settings(tenant_id) VALUES(%s::uuid)
@@ -93,6 +95,22 @@ def read_settings(profile):
             cur.execute('''SELECT company_instructions,enabled,operating_mode,emergency_stop,auto_send_enabled,crm_actions_enabled,max_replies_per_chat,updated_at
               FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid''', (tenant,))
             result = _row(cur.fetchone())
+            # This summary is intentionally scoped by the already-authorized
+            # tenant.  It lets the browser distinguish a saved company switch
+            # from a missing Connect route without exposing other companies.
+            cur.execute('''SELECT
+                EXISTS(SELECT 1 FROM saas_tenant_integrations WHERE tenant_id=%s::uuid
+                  AND provider='connect' AND status='connected') AS connect_connected,
+                (SELECT count(*) FROM saas_connect_channels WHERE tenant_id=%s::uuid AND active=TRUE) AS active_connect_channels,
+                (SELECT count(*) FROM saas_ai_agents WHERE tenant_id=%s::uuid AND enabled=TRUE) AS enabled_agents''',
+                (tenant, tenant, tenant))
+            runtime = dict(cur.fetchone() or {})
+            result['runtime'] = {
+                'tenant_id': tenant,
+                'connect_connected': runtime.get('connect_connected') is True,
+                'active_connect_channels': int(runtime.get('active_connect_channels') or 0),
+                'enabled_agents': int(runtime.get('enabled_agents') or 0),
+            }
         conn.commit()
     return result
 
