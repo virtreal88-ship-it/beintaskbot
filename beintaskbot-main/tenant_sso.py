@@ -137,7 +137,12 @@ def exchange_code(*, code: str, verifier: str, client_id: str, redirect_uri: str
                 raise TenantPlatformError("SSO kodu etibarsızdır və ya vaxtı bitib.")
             if not _access(cur, str(row['tenant_id']), int(row['actor_id'])):
                 raise TenantPlatformError("Connect girişi artıq aktiv deyil.")
+            cur.execute('''SELECT email FROM saas_auth_users
+              WHERE actor_id=%s AND verified_at IS NOT NULL AND disabled_at IS NULL
+              ORDER BY created_at LIMIT 1''', (int(row['actor_id']),))
+            auth_user = cur.fetchone()
             cur.execute("UPDATE saas_oauth_codes SET used_at=now() WHERE id=%s", (row['id'],))
         conn.commit()
     return {'actor_id': int(row['actor_id']), 'tenant_id': str(row['tenant_id']), 'role': str(row['role']),
+            'email': str(auth_user['email']).strip().lower() if auth_user and auth_user.get('email') else None,
             'expires_in': 300, 'product': CONNECT_PRODUCT}
