@@ -50,11 +50,19 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     # supplied account.  This keeps the pick-list current and
                     # prevents saved agent scopes from narrowing it.
                     if request_provider is not None:
-                        remote = await request_provider(profile['tenant_id'], 'GET', 'leads/pipelines')
-                        result = await asyncio.to_thread(
-                            refresh_configuration_catalog, profile,
-                            ((remote.get('_embedded') or {}).get('pipelines') or []),
-                        )
+                        try:
+                            remote = await request_provider(profile['tenant_id'], 'GET', 'leads/pipelines')
+                        except Exception:
+                            # The transport is optional. Keep agent settings and
+                            # the last tenant-owned catalog usable while Kommo
+                            # is disconnected or temporarily unavailable.
+                            logger.warning('AI Agents pipeline catalog unavailable; using cached tenant configuration')
+                            result = await asyncio.to_thread(configuration_options, profile)
+                        else:
+                            result = await asyncio.to_thread(
+                                refresh_configuration_catalog, profile,
+                                ((remote.get('_embedded') or {}).get('pipelines') or []),
+                            )
                     else:
                         result = await asyncio.to_thread(configuration_options, profile)
                 elif resource == 'drafts':
@@ -177,3 +185,4 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
             logger.error('Tenant AI Agents request failed')
             return web.json_response({'success': False, 'error': 'AI Agents xidməti əlçatan deyil.'}, status=503, headers=headers)
     return handle
+
