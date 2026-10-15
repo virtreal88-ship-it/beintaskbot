@@ -18727,13 +18727,22 @@ async def start_webhook_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
     await site.start()
+    logger.info(f"Webhook server started on port {WEBHOOK_PORT}")
     # The durable AI queue is shared by Kommo and Connect.  It runs in the
     # existing Railway worker process, so no additional service is needed.
-    from tenant_ai_agent_startup import start_worker
-    from tenant_ai_agent_worker import run_worker as tenant_ai_agent_worker
-    await start_worker(app_web, tenant_ai_agent_worker, _tenant_kommo_request, logger,
-                       _wait_for_tenant_kommo_slot, prepare_database_first=True)
-    logger.info(f"Webhook server started on port {WEBHOOK_PORT}")
+    # It is deliberately started after the HTTP listener and isolated from it:
+    # an additive migration or queue failure must never take crm.pro.az down.
+    async def _start_tenant_ai_worker():
+        try:
+            from tenant_ai_agent_startup import start_worker
+            from tenant_ai_agent_worker import run_worker as tenant_ai_agent_worker
+            await start_worker(app_web, tenant_ai_agent_worker, _tenant_kommo_request, logger,
+                               _wait_for_tenant_kommo_slot, prepare_database_first=True)
+            logger.info("Tenant AI queue worker started")
+        except Exception:
+            logger.exception("Tenant AI queue worker could not start; HTTP service remains available")
+    app_web["tenant_ai_agent_startup"] = asyncio.create_task(
+        _start_tenant_ai_worker(), name="tenant-ai-agent-startup")
 
 
 def _rehydrate_tecili_tasks():
