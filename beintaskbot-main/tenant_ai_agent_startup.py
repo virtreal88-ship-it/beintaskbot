@@ -1,5 +1,26 @@
 """Fail-fast AI Agent database preparation and worker startup."""
 import asyncio
+import time
+
+
+_RETRYABLE_MIGRATION_SQLSTATES = {"40P01", "40001"}
+
+
+def _retryable_migration_error(exc: Exception) -> bool:
+    """Only retry PostgreSQL deadlocks/serialization conflicts."""
+    return getattr(exc, "sqlstate", None) in _RETRYABLE_MIGRATION_SQLSTATES
+
+
+def _prepare_database_with_retry(prepare, *, attempts=5, delay_seconds=1):
+    """Retry additive, idempotent schema setup after transient DB conflicts."""
+    for attempt in range(attempts):
+        try:
+            prepare()
+            return
+        except Exception as exc:
+            if not _retryable_migration_error(exc) or attempt + 1 >= attempts:
+                raise
+            time.sleep(delay_seconds * (attempt + 1))
 
 
 def prepare_database() -> None:
@@ -19,6 +40,6 @@ async def start_worker(app, worker, kommo_request, logger, wait_slot,
                        prepare=prepare_database) -> None:
     """Optionally migrate an isolated staging DB before the worker can run."""
     if prepare_database_first:
-        await asyncio.to_thread(prepare)
+        await asyncio.to_thread(_prepare_database_with_retry, prepare)
     app["tenant_ai_agent_worker"] = asyncio.create_task(
         worker(kommo_request, logger, wait_slot), name="tenant-ai-agent-worker")
