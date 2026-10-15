@@ -18526,7 +18526,10 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         cookie_ttl=_TENANT_SESSION_TTL_SEC,
         base_dir=os.path.dirname(os.path.abspath(__file__)), logger=logger,
         email_auth=tenant_email_auth, sso=tenant_sso,
-        legacy_member=_webapp_ai_member_from_request,
+        # The retired legacy WebApp identity resolver is no longer present in
+        # this service.  Keep the optional compatibility endpoint disabled
+        # instead of failing the entire public HTTP server at startup.
+        legacy_member=None,
     ))
     app_web.router.add_post("/api/platform/register", auth_api["register"])
     app_web.router.add_post("/api/platform/login", auth_api["login"])
