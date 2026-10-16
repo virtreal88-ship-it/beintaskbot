@@ -18740,6 +18740,13 @@ async def start_webhook_server():
         ai_runtime_flag("AI_AGENTS_AUTO_SEND_ENABLED"),
     )
     logger.info(f"Webhook server started on port {WEBHOOK_PORT}")
+    # This is normally a no-op.  A platform administrator can explicitly
+    # enable a one-shot catalogue probe during a controlled deployment.
+    try:
+        from tenant_ai_platform_probe import run_configured_probe
+        await asyncio.to_thread(run_configured_probe, logger)
+    except Exception:
+        logger.exception("AI platform model probe failed before worker startup")
     # The durable AI queue is shared by Kommo and Connect.  It runs in the
     # existing Railway worker process, so no additional service is needed.
     # It is deliberately started after the HTTP listener and isolated from it:

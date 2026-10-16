@@ -10,7 +10,8 @@ from tenant_ai_agent_queue import _scope_matches
 from tenant_ai_agent_actions import should_handoff, enabled_triggers, matching_triggers, handoff
 from tenant_ai_agent_crm_actions import execute_matching_actions
 from tenant_ai_agent_run_store import (claim_next, complete_run, defer_job,
-    finish_unknown, finish_superseded, finish_sent, knowledge_context, reserve_run, retry_or_fail, skip_job)
+    finish_unknown, finish_superseded, finish_sent, knowledge_context, record_token_usage,
+    reserve_run, retry_or_fail, skip_job)
 from tenant_chat_ai_policy import history
 from tenant_chat_ai_provider import ChatAIProviderError, INSTRUCTIONS, generate, transcribe
 from tenant_chat_ai_policy import audio as is_audio
@@ -330,10 +331,12 @@ async def process_one(job, kommo_request, wait_slot, logger):
                          'trigger_actions':action_preview.get('actions',[])}
         assert_job_allowed(job)
         call = asyncio.create_task(asyncio.to_thread(generate,reservation['api_key'],model,'reply',lines,'',
-            instructions=prompt,extra_context=extra_context,images=images))
+            instructions=prompt,extra_context=extra_context,images=images,with_usage=True))
         try:
             phase = 'model_generation'
-            draft, generated_task_text = _agent_output(await _settle_thread(call), needs_task)
+            generated, usage = await _settle_thread(call)
+            await asyncio.to_thread(record_token_usage, job, reservation, usage)
+            draft, generated_task_text = _agent_output(generated, needs_task)
             # A generated reply must pass a server-side boundary before it can
             # become either a manual draft or an automatic Kommo message.
             draft = sanitize_draft(draft, reservation['agent_language'])
@@ -496,11 +499,12 @@ async def process_connect_one(job, logger):
         prompt += ('\n\n' + server_instructions() + '\nReply to the latest customer message. '
                    'Do not claim a message was sent unless the system confirms it.')
         phase = 'connect_generation'
-        draft = await asyncio.to_thread(generate, reservation['api_key'], model, 'reply', lines, '',
+        draft, usage = await asyncio.to_thread(generate, reservation['api_key'], model, 'reply', lines, '',
                                         instructions=prompt,
                                         extra_context={'language':reservation['agent_language'], 'style':reservation['agent_style'],
                                                        'knowledge':knowledge, 'latest_client_message_id':source_id,
-                                                       'latest_client_message':query, 'unprocessed_media_count':missing}, images=[])
+                                                       'latest_client_message':query, 'unprocessed_media_count':missing}, images=[], with_usage=True)
+        await asyncio.to_thread(record_token_usage, job, reservation, usage)
         draft = sanitize_draft(str(draft), reservation['agent_language'])
         # A manual reply or a newer inbound message invalidates this run.
         current = await asyncio.to_thread(connect_history, tenant, int(job['lead_id']), str(job['channel_id']))

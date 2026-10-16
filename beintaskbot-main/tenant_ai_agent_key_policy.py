@@ -1,4 +1,10 @@
-"""Explicit, tenant-and-agent scoped platform credential policy."""
+"""Platform-owned AI credentials and centrally managed model catalogue.
+
+The catalogue lives in Railway environment variables, not the browser.  That
+keeps platform credentials and model admission under platform control while
+allowing a catalogue change without an application release.
+"""
+import json
 import os
 
 
@@ -13,7 +19,74 @@ def platform_agent_pairs():
 
 
 def platform_model():
-    return str(os.environ.get('OPENAI_HISTORY_REPLY_MODEL') or '').strip()
+    """Backward-compatible name for the platform default model."""
+    requested = str(os.environ.get('AI_AGENTS_PLATFORM_DEFAULT_MODEL') or '').strip()
+    configured = platform_models()
+    if requested and requested in configured:
+        return requested
+    legacy = str(os.environ.get('OPENAI_HISTORY_REPLY_MODEL') or '').strip()
+    if legacy:
+        return legacy
+    return configured[0] if configured else ''
+
+
+def _enabled(value):
+    return str(value or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def platform_models():
+    """Return safe API model identifiers configured by a platform admin.
+
+    ``AI_AGENTS_PLATFORM_MODELS`` accepts either a JSON array of identifiers
+    or objects with an ``id`` field.  Invalid entries are ignored rather than
+    being made selectable by a tenant browser.
+    """
+    raw = str(os.environ.get('AI_AGENTS_PLATFORM_MODELS') or '').strip()
+    values = []
+    if raw:
+        try:
+            decoded = json.loads(raw)
+        except ValueError:
+            decoded = []
+        if isinstance(decoded, list):
+            for item in decoded:
+                value = item.get('id') if isinstance(item, dict) else item
+                if isinstance(value, str):
+                    value = value.strip()
+                    if value and len(value) <= 100 and all(char.isalnum() or char in '._-' for char in value):
+                        values.append(value)
+    legacy = str(os.environ.get('OPENAI_HISTORY_REPLY_MODEL') or '').strip()
+    if legacy and legacy not in values:
+        values.append(legacy)
+    return list(dict.fromkeys(values))
+
+
+def platform_model_choices():
+    """Public, non-secret labels for the tenant editor."""
+    raw = str(os.environ.get('AI_AGENTS_PLATFORM_MODELS') or '').strip()
+    labels = {}
+    if raw:
+        try:
+            decoded = json.loads(raw)
+        except ValueError:
+            decoded = []
+        if isinstance(decoded, list):
+            for item in decoded:
+                if isinstance(item, dict) and isinstance(item.get('id'), str) and isinstance(item.get('label'), str):
+                    labels[item['id'].strip()] = item['label'].strip()[:120]
+    default = platform_model()
+    choices = [{'id': '', 'label': 'Default (recommended)'}]
+    for value in platform_models():
+        choices.append({'id': value, 'label': labels.get(value) or value,
+                        'recommended': value == default})
+    return choices
+
+
+def platform_service_ready():
+    """Whether the shared key is deliberately enabled for AI Agents."""
+    return (_enabled(os.environ.get('AI_AGENTS_PLATFORM_ENABLED'))
+            and bool(os.environ.get('OPENAI_API_KEY'))
+            and bool(platform_model()))
 
 
 def platform_agent_enabled(tenant_id, agent_id, provider='connect'):
@@ -24,17 +97,57 @@ def platform_agent_enabled(tenant_id, agent_id, provider='connect'):
 
 
 def platform_key_ready(tenant_id, agent_id, provider='connect'):
-    return (platform_agent_enabled(tenant_id, agent_id, provider)
-            and bool(os.environ.get('OPENAI_API_KEY'))
-            and bool(platform_model())
-            and bool(str(os.environ.get('AI_AGENTS_PLATFORM_KEY_ACTIVATED_AT') or '').strip()))
+    # The old explicit allow-list remains supported for Nizam Ai and any
+    # already deployed cutovers.  The global service is opt-in through an
+    # explicit Railway flag, so adding this code alone never enables AI.
+    legacy = (platform_agent_enabled(tenant_id, agent_id, provider)
+              and bool(str(os.environ.get('AI_AGENTS_PLATFORM_KEY_ACTIVATED_AT') or '').strip())
+              and bool(os.environ.get('OPENAI_API_KEY'))
+              and bool(platform_model()))
+    return legacy or platform_service_ready()
 
 
-def choose_api_credential(tenant_id, agent_id, provider, company_key):
-    """Use the server key only for an explicitly mapped Connect agent."""
-    if platform_key_ready(tenant_id, agent_id, provider):
+def platform_model_allowed(model):
+    return str(model or '').strip() in set(platform_models())
+
+
+def choose_api_credential(tenant_id, agent_id, provider, company_key, model=''):
+    """Choose a credential without exposing either secret.
+
+    Existing companies with a configured Chat AI key continue to use it for
+    legacy/custom models.  New agents (and any agent selecting a centrally
+    admitted model) use the shared key by default.
+    """
+    use_platform = (platform_key_ready(tenant_id, agent_id, provider)
+                    and (platform_agent_enabled(tenant_id, agent_id, provider)
+                         or not str(company_key or '')
+                         or platform_model_allowed(model)))
+    if use_platform:
         return str(os.environ.get('OPENAI_API_KEY') or ''), 'platform'
     return str(company_key or ''), 'company'
+
+
+def platform_token_limit(tenant_id):
+    """Return the platform-enforced daily token cap for one tenant.
+
+    A zero value means no cap.  Overrides are a Railway-only JSON object such
+    as {"tenant-uuid": 250000}; tenants never submit this value through an API.
+    """
+    raw = str(os.environ.get('AI_AGENTS_PLATFORM_TENANT_TOKEN_LIMITS') or '').strip()
+    overrides = {}
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            overrides = parsed if isinstance(parsed, dict) else {}
+        except ValueError:
+            overrides = {}
+    value = overrides.get(str(tenant_id))
+    if value is None:
+        value = os.environ.get('AI_AGENTS_PLATFORM_DEFAULT_TOKEN_LIMIT', '0')
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def skip_pre_activation_jobs(cur):

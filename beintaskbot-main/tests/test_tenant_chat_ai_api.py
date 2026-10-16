@@ -100,6 +100,16 @@ class Provider(unittest.TestCase):
         self.assertEqual(content[1]['type'],'input_image')
         self.assertTrue(content[1]['image_url'].startswith('data:image/png;base64,'))
 
+    def test_agent_generation_returns_only_provider_reported_usage_when_requested(self):
+        from unittest.mock import patch
+        response=Mock(status_code=200);response.json.return_value={
+            'status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':'draft'}]}],
+            'usage':{'input_tokens':12,'output_tokens':7,'total_tokens':19}}
+        with patch('tenant_chat_ai_provider.requests.post',return_value=response):
+            result, usage=self.generate('company-key','text-model','reply',[],'',with_usage=True)
+        self.assertEqual(result,'draft')
+        self.assertEqual(usage,{'input_tokens':12,'output_tokens':7,'total_tokens':19})
+
     def test_provider_failure_keeps_response_private_but_records_safe_category(self):
         from unittest.mock import patch
         from tenant_chat_ai_provider import ChatAIProviderError

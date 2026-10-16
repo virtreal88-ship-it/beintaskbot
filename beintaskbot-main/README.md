@@ -40,6 +40,19 @@ CRM Smart Assistant — веб-платформа BeinSystems для компа�
 Старые переменные (`KOMMO_TOKEN`, WhatsApp, Telegram, VAPID и OpenAI) пока
 нужны внутреннему BeinSystems-контуру и не должны переноситься в tenant-данные.
 
+### Встроенный AI для AI Agents
+
+Платформенный OpenAI-ключ остаётся только в Railway worker. Для включения
+встроенного AI администратор платформы задаёт `AI_AGENTS_PLATFORM_ENABLED=true`,
+`OPENAI_API_KEY` и центральный каталог `AI_AGENTS_PLATFORM_MODELS` (JSON-массив
+идентификаторов моделей или объектов `{ "id", "label" }`).
+`AI_AGENTS_PLATFORM_DEFAULT_MODEL` выбирает рекомендуемую модель. Клиенты не
+видят ключ и не могут расширить каталог через API. Необязательные
+`AI_AGENTS_PLATFORM_DEFAULT_TOKEN_LIMIT` и
+`AI_AGENTS_PLATFORM_TENANT_TOKEN_LIMITS` (JSON `{tenant_id: limit}`) задают
+дневные лимиты токенов; `0` означает отсутствие лимита. Существующая
+интеграция «Çat üçün AI» остаётся совместимым источником для legacy-моделей.
+
 ## SaaS-аудит и целевая архитектура
 
 Публичная документация с картой текущих жёстко заданных правил, моделью

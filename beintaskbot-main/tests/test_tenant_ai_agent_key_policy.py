@@ -3,7 +3,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from tenant_ai_agent_key_policy import (platform_agent_enabled, platform_key_ready,
-    platform_model, skip_pre_activation_jobs, choose_api_credential)
+    platform_model, platform_models, platform_model_choices, platform_token_limit,
+    skip_pre_activation_jobs, choose_api_credential)
 
 
 TENANT = 'e09a5c24-093f-4141-992d-532052e00c90'
@@ -49,6 +50,33 @@ class PlatformKeyPolicyTests(unittest.TestCase):
         self.assertEqual(cur.execute.call_args_list[0].args[1], ('2026-10-16T04:00:00Z', [PAIR]))
         self.assertEqual(cur.execute.call_args_list[1].args[1], ([PAIR], '2026-10-16T04:00:00Z'))
         self.assertIn("j.provider='connect'", cur.execute.call_args_list[0].args[0])
+
+    def test_platform_catalog_is_centrally_admitted_and_default_is_shared(self):
+        env = {
+            'AI_AGENTS_PLATFORM_ENABLED': 'true',
+            'OPENAI_API_KEY': 'opaque-secret',
+            'AI_AGENTS_PLATFORM_DEFAULT_MODEL': 'gpt-4.1-mini',
+            'AI_AGENTS_PLATFORM_MODELS': '[{"id":"gpt-4.1-mini","label":"GPT-4.1 mini"},"gpt-5-mini"]',
+        }
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(platform_models(), ['gpt-4.1-mini', 'gpt-5-mini'])
+            self.assertEqual(platform_model(), 'gpt-4.1-mini')
+            self.assertEqual(platform_model_choices()[0]['id'], '')
+            self.assertTrue(platform_key_ready('tenant-a', 'agent-a', 'connect'))
+            self.assertEqual(choose_api_credential('tenant-a', 'agent-a', 'connect', '', 'gpt-5-mini'),
+                             ('opaque-secret', 'platform'))
+            # A legacy tenant with a private key and a non-catalogue model is
+            # left on its private configuration.
+            self.assertEqual(choose_api_credential('tenant-b', 'agent-b', 'kommo', 'company-secret', 'legacy-model'),
+                             ('company-secret', 'company'))
+
+    def test_platform_limits_are_server_scoped_per_tenant(self):
+        env = {'AI_AGENTS_PLATFORM_DEFAULT_TOKEN_LIMIT': '1000',
+               'AI_AGENTS_PLATFORM_TENANT_TOKEN_LIMITS': '{"tenant-a": 250}'}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(platform_token_limit('tenant-a'), 250)
+            self.assertEqual(platform_token_limit('tenant-b'), 1000)
+            self.assertEqual(platform_token_limit('tenant-c'), 1000)
 
 
 if __name__ == '__main__':

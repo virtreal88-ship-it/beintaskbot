@@ -7,7 +7,9 @@ from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agent_access import tenant_status_allows_ai
 from tenant_linear_policy import TenantLinearError
 from tenant_platform import _connect, _fernet, _json
-from tenant_ai_agent_key_policy import choose_api_credential, platform_key_ready, platform_model, skip_pre_activation_jobs
+from tenant_ai_agent_key_policy import (choose_api_credential, platform_key_ready,
+    platform_model, platform_model_allowed, platform_service_ready,
+    platform_token_limit, skip_pre_activation_jobs)
 
 
 def claim_next():
@@ -115,7 +117,7 @@ def load_agent_config(job, *, with_block_reason=False):
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''SELECT a.enabled AS agent_enabled,a.scopes,a.model AS agent_model,a.safety,a.schedule,a.mode,
-              s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.crm_actions_enabled,i.metadata,t.status AS tenant_status,cs.state AS conversation_state,
+              s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.crm_actions_enabled,i.metadata,i.secrets,t.status AS tenant_status,cs.state AS conversation_state,
               (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb JOIN saas_tenant_webhook_events ce
                 ON ce.tenant_id=j.tenant_id AND ce.fingerprint=j.event_fingerprint WHERE cb.tenant_id=j.tenant_id AND cb.enabled=TRUE
                 AND cb.verified=TRUE AND cb.emergency_stop=FALSE AND cb.channel_id=j.channel_id AND cb.conversation_id=j.conversation_id
@@ -128,7 +130,7 @@ def load_agent_config(job, *, with_block_reason=False):
                   AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END) AS test_mode_allowed
               FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
               JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id
-              JOIN saas_tenant_integrations i ON i.tenant_id=j.tenant_id AND i.provider='chat_ai'
+              LEFT JOIN saas_tenant_integrations i ON i.tenant_id=j.tenant_id AND i.provider='chat_ai'
               JOIN saas_tenants t ON t.id=j.tenant_id
               LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id
               WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s
@@ -152,16 +154,23 @@ def load_agent_config(job, *, with_block_reason=False):
         reason = 'test_binding_mismatch'
     if reason:
         return (None, reason) if with_block_reason else None
+    selected_model = str(row['agent_model'] or '')
     config = row['metadata'] if isinstance(row['metadata'],dict) else {}
-    if config.get('enabled') is not True:
-        reason = 'chat_ai_disabled'
-    elif config.get('consent') is not True:
-        reason = 'chat_ai_consent_missing'
+    if not selected_model and platform_service_ready():
+        selected_model = platform_model()
+    if not selected_model:
+        selected_model = str(config.get('model') or '')
+    use_platform = platform_key_ready(job['tenant_id'], job['agent_id'], job.get('provider')) and (
+        not row.get('secrets') or platform_model_allowed(selected_model))
+    if not use_platform:
+        if config.get('enabled') is not True:
+            reason = 'chat_ai_disabled'
+        elif config.get('consent') is not True:
+            reason = 'chat_ai_consent_missing'
+        elif not row.get('secrets'):
+            reason = 'chat_ai_key_missing'
     if reason:
         return (None, reason) if with_block_reason else None
-    selected_model = str(row['agent_model'] or '')
-    if platform_key_ready(job['tenant_id'], job['agent_id'], job.get('provider')):
-        selected_model = platform_model()
     result = {'scopes':row['scopes'],'agent_model':selected_model,'safety':row.get('safety') or {},
       'chat_model':str(config.get('model') or ''),'schedule':row['schedule'],'mode':row['mode'],
       'crm_actions_enabled':row['crm_actions_enabled'] is True}
@@ -229,7 +238,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
               i.secrets,i.metadata,i.updated_at AS config_version,t.status AS tenant_status
               FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
               JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id
-              JOIN saas_tenant_integrations i ON i.tenant_id=j.tenant_id AND i.provider='chat_ai'
+              LEFT JOIN saas_tenant_integrations i ON i.tenant_id=j.tenant_id AND i.provider='chat_ai'
               JOIN saas_tenants t ON t.id=j.tenant_id
               LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id
               WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s
@@ -239,20 +248,35 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
             if not row:
                 raise TenantLinearError('Agent işi yenilənib.', 409)
             config = row['metadata'] if isinstance(row.get('metadata'), dict) else {}
-            use_platform_key = platform_key_ready(tenant, job['agent_id'], job.get('provider'))
+            configured_model = str(row.get('configured_model') or '')
+            selected_model = str(model or configured_model or '')
+            if not selected_model and platform_service_ready():
+                selected_model = platform_model()
+            if not selected_model:
+                selected_model = str(config.get('model') or '')
+            company_key = ''
+            if row.get('secrets'):
+                try:
+                    secret = json.loads(_fernet().decrypt(bytes(row['secrets'])))
+                    if secret.get('tenant_id') != tenant or secret.get('provider') != 'chat_ai' or not secret.get('api_key'):
+                        raise ValueError()
+                    company_key = str(secret['api_key'])
+                except Exception:
+                    raise TenantLinearError('AI təhlükəsizlik ayarlarını yoxlayın.', 503) from None
+            api_key, credential_source = choose_api_credential(tenant, job['agent_id'], job.get('provider'), company_key, selected_model)
+            use_platform_key = credential_source == 'platform'
             if (not tenant_status_allows_ai(row['tenant_status'],job.get('provider')) or row['settings_enabled'] is not True or row.get('emergency_stop') is True or row['agent_enabled'] is not True
                     or row['conversation_state'] in {'human','paused'}
-                    or config.get('enabled') is not True or config.get('consent') is not True
-                    or (not use_platform_key and not row.get('secrets'))):
+                    or (not use_platform_key and (config.get('enabled') is not True or config.get('consent') is not True or not company_key))):
                 raise TenantLinearError('AI Agents və mövcud Chat AI ayarları aktiv deyil.', 409)
             allowed_models = [str(item).strip() for item in config.get('models', []) if isinstance(item, str) and item.strip()]
-            configured_model = str(config.get('model') or '').strip()
-            if configured_model and configured_model not in allowed_models:
-                allowed_models.append(configured_model)
+            chat_model = str(config.get('model') or '').strip()
+            if chat_model and chat_model not in allowed_models:
+                allowed_models.append(chat_model)
             if use_platform_key:
-                if str(model) != platform_model() or (row.get('configured_model') and row['configured_model'] != platform_model()):
-                    raise TenantLinearError('Platform AI model ayarı dəyişib. Yeniləyin.', 409)
-            elif str(model) not in allowed_models or (row.get('configured_model') and row['configured_model'] != model):
+                if not platform_model_allowed(selected_model):
+                    raise TenantLinearError('Seçilmiş model platforma üçün təsdiqlənməyib.', 409)
+            elif selected_model not in allowed_models or (configured_model and configured_model != selected_model):
                 raise TenantLinearError('Agent modeli Chat AI ayarları ilə uyğun deyil.', 409)
             scopes = row['scopes'] if isinstance(row['scopes'], list) else []
             provider = str(job.get('provider') or 'kommo')
@@ -267,16 +291,12 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
               AND event_fingerprint=%s AND revision=%s''', (tenant,job['agent_id'],job['event_fingerprint'],job['revision']))
             if cur.fetchone():
                 raise TenantLinearError('Bu hadisə üçün AI sorğusu artıq başlanıb.', 409)
-            if use_platform_key:
-                api_key, _credential_source = choose_api_credential(tenant, job['agent_id'], job.get('provider'), '')
-            else:
-                try:
-                    secret = json.loads(_fernet().decrypt(bytes(row['secrets'])))
-                    if secret.get('tenant_id') != tenant or secret.get('provider') != 'chat_ai' or not secret.get('api_key'):
-                        raise ValueError()
-                    api_key, _credential_source = choose_api_credential(tenant, job['agent_id'], job.get('provider'), secret['api_key'])
-                except Exception:
-                    raise TenantLinearError('AI təhlükəsizlik ayarlarını yoxlayın.', 503) from None
+            platform_cap = platform_token_limit(tenant) if use_platform_key else 0
+            if platform_cap:
+                cur.execute('''SELECT COALESCE(sum(total_tokens),0) AS tokens FROM saas_ai_agent_token_usage
+                  WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC' ''', (tenant,))
+                if int((cur.fetchone() or {}).get('tokens') or 0) >= platform_cap:
+                    raise TenantLinearError('Şirkətin platform AI token limiti dolub.', 429)
             limit = int(config.get('daily_limit') or 50)
             cur.execute('''SELECT COALESCE(sum(reserved_calls),0) AS calls FROM saas_chat_ai_runs
               WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date''', (tenant,))
@@ -290,7 +310,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
             run_id = uuid.uuid4()
             cur.execute('''INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state)
               VALUES(%s::uuid,%s,%s::uuid,%s,%s,%s,'generating')''',
-              (tenant,run_id,job['agent_id'],job['event_fingerprint'],job['revision'],model))
+              (tenant,run_id,job['agent_id'],job['event_fingerprint'],job['revision'],selected_model))
             cur.execute("UPDATE saas_tenant_webhook_events SET state='processing',attempts=attempts+1 WHERE tenant_id=%s::uuid AND fingerprint=%s",
                         (tenant,job['event_fingerprint']))
             cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,agent_id,state,first_inbound_message_id,last_inbound_message_id)
@@ -309,9 +329,34 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
               'mode':row['mode'],'auto_send_enabled':row['auto_send_enabled'],'crm_actions_enabled':row['crm_actions_enabled'],
               'max_replies_per_chat':row['max_replies_per_chat'],
               'source_message_id':str((job.get('payload') or {}).get('message_id') or ''),
-              'model':model,'pipeline_id':str(pipeline_id),'stage_id':str(stage_id)}
+              'model':selected_model,'credential_source':credential_source,'pipeline_id':str(pipeline_id),'stage_id':str(stage_id)}
         conn.commit()
     return result
+
+
+def record_token_usage(job, reservation, usage):
+    """Persist provider-reported usage against the already reserved run.
+
+    The browser never supplies these values.  A unique run receipt makes a
+    retry idempotent and retains the tenant/agent/model boundary for audits.
+    """
+    values = usage if isinstance(usage, dict) else {}
+    try:
+        input_tokens = max(0, int(values.get('input_tokens') or 0))
+        output_tokens = max(0, int(values.get('output_tokens') or 0))
+        total_tokens = max(input_tokens + output_tokens, int(values.get('total_tokens') or 0))
+    except (TypeError, ValueError):
+        input_tokens = output_tokens = total_tokens = 0
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''INSERT INTO saas_ai_agent_token_usage
+              (tenant_id,id,run_id,agent_id,model,input_tokens,output_tokens,total_tokens)
+              VALUES(%s::uuid,%s,%s::uuid,%s::uuid,%s,%s,%s,%s)
+              ON CONFLICT(tenant_id,run_id) DO NOTHING''',
+              (job['tenant_id'],uuid.uuid4(),reservation['run_id'],job['agent_id'],reservation['model'],
+               input_tokens,output_tokens,total_tokens))
+        conn.commit()
 
 
 def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False):
@@ -333,7 +378,7 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
               cs.state AS conversation_state,cs.revision AS conversation_revision
               FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
               JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id
-              JOIN saas_tenant_integrations i ON i.tenant_id=j.tenant_id AND i.provider='chat_ai'
+              LEFT JOIN saas_tenant_integrations i ON i.tenant_id=j.tenant_id AND i.provider='chat_ai'
               JOIN saas_tenants t ON t.id=j.tenant_id
               LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id
               WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s
@@ -348,8 +393,8 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
                     or current['conversation_revision']!=reservation.get('conversation_revision')
                     or not tenant_status_allows_ai(current['tenant_status'],job.get('provider')) or current.get('emergency_stop') is True
                     or (current.get('operating_mode')!='active' and current.get('test_mode_allowed') is not True)
-                    or str(current['config_version'])!=reservation['config_version']
-                    or config.get('consent') is not True):
+                    or str(current.get('config_version'))!=str(reservation.get('config_version'))
+                    or (reservation.get('credential_source') != 'platform' and config.get('consent') is not True)):
                 cur.execute("UPDATE saas_ai_agent_runs SET state='superseded',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",
                             (job['tenant_id'],reservation['run_id']))
                 conn.commit()

@@ -169,6 +169,22 @@ def ensure_schema(conn):
               FOREIGN KEY(tenant_id,event_fingerprint) REFERENCES saas_tenant_webhook_events(tenant_id,fingerprint) ON DELETE CASCADE)''')
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_ai_agent_runs_usage_idx
               ON saas_ai_agent_runs(tenant_id,created_at) WHERE state IN ('generating','completed','unknown')''')
+            cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_agent_token_usage(
+              tenant_id UUID NOT NULL,
+              id UUID NOT NULL,
+              run_id UUID NOT NULL,
+              agent_id UUID NOT NULL,
+              model TEXT NOT NULL,
+              input_tokens INTEGER NOT NULL DEFAULT 0 CHECK(input_tokens>=0),
+              output_tokens INTEGER NOT NULL DEFAULT 0 CHECK(output_tokens>=0),
+              total_tokens INTEGER NOT NULL DEFAULT 0 CHECK(total_tokens>=0),
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              PRIMARY KEY(tenant_id,id),
+              UNIQUE(tenant_id,run_id),
+              FOREIGN KEY(tenant_id,run_id) REFERENCES saas_ai_agent_runs(tenant_id,id) ON DELETE CASCADE,
+              FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE)''')
+            cur.execute('''CREATE INDEX IF NOT EXISTS saas_ai_agent_token_usage_daily_idx
+              ON saas_ai_agent_token_usage(tenant_id,created_at)''')
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_agent_drafts(
               tenant_id UUID NOT NULL,
               id UUID NOT NULL,

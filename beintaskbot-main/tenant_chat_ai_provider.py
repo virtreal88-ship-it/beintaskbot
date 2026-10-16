@@ -52,7 +52,7 @@ def _provider_error_category(response):
     return 'unknown'
 
 
-def generate(key, model, mode, lines, draft, *, instructions=None, extra_context=None, images=None):
+def generate(key, model, mode, lines, draft, *, instructions=None, extra_context=None, images=None, with_usage=False):
     """Generate one draft for both the Chat AI and the existing AI Agents.
 
     Agents add tenant-scoped instructions, knowledge context and verified image
@@ -86,7 +86,18 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
                      for part in output.get('content', []) if part.get('type') == 'output_text').strip()
     if not result or len(result) > 16000:
         raise ValueError('Invalid chat AI response')
-    return result
+    if not with_usage:
+        return result
+    usage = payload.get('usage') if isinstance(payload.get('usage'), dict) else {}
+    # Responses uses input_tokens/output_tokens today.  Keep the normalised
+    # shape here so workers do not depend on browser data or provider bodies.
+    try:
+        input_tokens = max(0, int(usage.get('input_tokens') or 0))
+        output_tokens = max(0, int(usage.get('output_tokens') or 0))
+        total_tokens = max(input_tokens + output_tokens, int(usage.get('total_tokens') or 0))
+    except (TypeError, ValueError):
+        input_tokens = output_tokens = total_tokens = 0
+    return result, {'input_tokens': input_tokens, 'output_tokens': output_tokens, 'total_tokens': total_tokens}
 
 
 def transcribe(key, model, content, extension, content_type):

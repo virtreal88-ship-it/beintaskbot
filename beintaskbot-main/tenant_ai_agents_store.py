@@ -7,7 +7,8 @@ from tenant_ai_agents_policy import (MAX_AGENTS, MAX_SOURCES, agent as validate_
 from tenant_ai_agents_schema import ensure_schema
 from tenant_linear_policy import TenantLinearError, identifier
 from tenant_ai_agent_access import tenant_status_allows_management
-from tenant_ai_agent_key_policy import platform_key_ready, platform_model
+from tenant_ai_agent_key_policy import (platform_key_ready, platform_model,
+    platform_model_choices, platform_model_allowed, platform_service_ready)
 from tenant_platform import _connect, _json
 
 
@@ -126,7 +127,7 @@ def save_settings(profile, data):
             tenant, actor = _authorize(cur, profile)
             if any(patch.get(key) is True for key in ('auto_send_enabled','crm_actions_enabled')) and profile.get('role') != 'owner':
                 raise TenantLinearError('Avtomatik göndərmə və CRM yazılarını yalnız şirkət sahibi aça bilər.',403)
-            if patch.get('enabled') is True:
+            if patch.get('enabled') is True and not platform_service_ready():
                 cur.execute("SELECT secrets,metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
                 integration = cur.fetchone() or {}
                 metadata = integration.get('metadata') or {}
@@ -168,9 +169,6 @@ def list_agents(profile):
               schedule,scopes,model,safety,version,created_at,updated_at FROM saas_ai_agents
               WHERE tenant_id=%s::uuid ORDER BY created_at,id''', (tenant,))
             rows = [_row(row) for row in cur.fetchall()]
-    for row in rows:
-        if platform_key_ready(tenant, row['id'], 'connect'):
-            row['model'] = platform_model()
     return rows
 
 
@@ -200,16 +198,19 @@ def configuration_options(profile):
             cur.execute('''SELECT connect_channel_id AS id,name FROM saas_connect_channels
               WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY name,connect_channel_id''', (tenant,))
             connect_channels=[{'id':str(row['id']),'name':str(row.get('name') or row['id'])} for row in cur.fetchall()]
-            cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid', (tenant,))
-            platform_available=any(platform_key_ready(tenant, row['id'], 'connect') for row in cur.fetchall())
+            platform_available=platform_service_ready()
     configured=str(meta.get('model') or '').strip()
-    models=meta.get('models') if isinstance(meta.get('models'),list) else []
-    models=[str(x).strip() for x in models if isinstance(x,str) and x.strip()]
-    if configured and configured not in models: models.insert(0,configured)
-    if platform_available and platform_model() and platform_model() not in models:
-        models.insert(0,platform_model())
+    company_models=meta.get('models') if isinstance(meta.get('models'),list) else []
+    company_models=[str(x).strip() for x in company_models if isinstance(x,str) and x.strip()]
+    if configured and configured not in company_models: company_models.insert(0,configured)
+    models = platform_model_choices() if platform_available else []
+    model_ids = {item['id'] for item in models}
+    for item in company_models:
+        if item not in model_ids:
+            models.append({'id':item,'label':item,'source':'company'})
+            model_ids.add(item)
     return {'pipelines':pipelines,'stages':stages,'channels':channels,'connect_channels':connect_channels,
-            'models':models if (chat.get('secrets') or platform_available) and meta.get('enabled') is True and meta.get('consent') is True else []}
+            'models':models if platform_available or (chat.get('secrets') and meta.get('enabled') is True and meta.get('consent') is True) else []}
 
 
 def refresh_configuration_catalog(profile, remote_pipelines):
@@ -265,20 +266,19 @@ def save_agent(profile, data, *, agent_id=None):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
-            if patch.get('model'):
+            if 'model' in patch:
                 cur.execute("SELECT metadata,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
                 integration = cur.fetchone() or {}
                 config = integration.get('metadata') or {}
-                existing_agent_id = identifier(agent_id) if not creating else ''
-                platform_selected = (not creating and platform_key_ready(tenant, existing_agent_id, 'connect'))
                 allowed_models = [str(item).strip() for item in config.get('models', []) if isinstance(item, str) and item.strip()]
                 configured = str(config.get('model') or '').strip()
                 if configured and configured not in allowed_models:
                     allowed_models.append(configured)
-                if platform_selected and platform_model() and platform_model() not in allowed_models:
-                    allowed_models.append(platform_model())
-                if ((not integration.get('secrets') and not platform_selected) or config.get('enabled') is not True or config.get('consent') is not True
-                        or patch['model'] not in allowed_models):
+                requested = str(patch.get('model') or '')
+                platform_selected = platform_service_ready() and (not requested or platform_model_allowed(requested))
+                company_selected = requested in allowed_models
+                if not platform_selected and (not integration.get('secrets') or config.get('enabled') is not True
+                                              or config.get('consent') is not True or not company_selected):
                     raise TenantLinearError('Model yalnız aktiv mövcud Chat AI provayderindən seçilə bilər.', 409)
             for scope in patch.get('scopes', []):
                 if scope.get('provider', 'kommo') == 'connect':
@@ -303,7 +303,8 @@ def save_agent(profile, data, *, agent_id=None):
                       WHERE s.tenant_id=%s::uuid''', (tenant,))
                     readiness = cur.fetchone() or {}
                     metadata = readiness.get('metadata') or {}
-                    if readiness.get('enabled') is not True or not readiness.get('secrets') or metadata.get('enabled') is not True or metadata.get('consent') is not True:
+                    platform_selected = platform_service_ready() and (not patch.get('model') or platform_model_allowed(patch.get('model')))
+                    if readiness.get('enabled') is not True or (not platform_selected and (not readiness.get('secrets') or metadata.get('enabled') is not True or metadata.get('consent') is not True)):
                         raise TenantLinearError('Əvvəlcə AI Agents və mövcud Chat AI ayarlarını tamamlayın.', 409)
                 agent_uuid = uuid.uuid4()
                 cur.execute('''INSERT INTO saas_ai_agents(id,tenant_id,name,instructions,enabled,mode,language,style,
@@ -332,8 +333,8 @@ def save_agent(profile, data, *, agent_id=None):
                       WHERE s.tenant_id=%s::uuid''', (tenant,))
                     readiness = cur.fetchone() or {}
                     metadata = readiness.get('metadata') or {}
-                    platform_selected = platform_key_ready(tenant, agent_uuid, 'connect')
-                    if readiness.get('enabled') is not True or (not readiness.get('secrets') and not platform_selected) or metadata.get('enabled') is not True or metadata.get('consent') is not True:
+                    platform_selected = platform_service_ready() and (not merged.get('model') or platform_model_allowed(merged.get('model')))
+                    if readiness.get('enabled') is not True or (not platform_selected and (not readiness.get('secrets') or metadata.get('enabled') is not True or metadata.get('consent') is not True)):
                         raise TenantLinearError('Əvvəlcə AI Agents və mövcud Chat AI ayarlarını tamamlayın.', 409)
                 cur.execute('''UPDATE saas_ai_agents SET name=%s,instructions=%s,enabled=%s,mode=%s,language=%s,
                   style=%s,delay_seconds=%s,schedule=%s::jsonb,scopes=%s::jsonb,model=%s,safety=%s::jsonb,version=version+1,updated_at=now()
