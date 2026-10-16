@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from tenant_ai_agent_key_policy import (platform_agent_enabled, platform_key_ready,
-    platform_model, skip_pre_activation_jobs)
+    platform_model, skip_pre_activation_jobs, choose_api_credential)
 
 
 TENANT = 'e09a5c24-093f-4141-992d-532052e00c90'
@@ -23,6 +23,10 @@ class PlatformKeyPolicyTests(unittest.TestCase):
             self.assertFalse(platform_agent_enabled(TENANT, 'other-agent', 'connect'))
             self.assertTrue(platform_key_ready(TENANT, AGENT, 'connect'))
             self.assertEqual(platform_model(), 'gpt-4.1-2025-04-14')
+            self.assertEqual(choose_api_credential(TENANT, AGENT, 'connect', 'company-secret'),
+                             ('opaque-secret', 'platform'))
+            self.assertEqual(choose_api_credential(TENANT, AGENT, 'kommo', 'company-secret'),
+                             ('company-secret', 'company'))
 
     def test_incomplete_or_missing_platform_configuration_never_uses_global_key(self):
         cases = [

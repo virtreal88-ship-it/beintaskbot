@@ -30,6 +30,13 @@ def platform_key_ready(tenant_id, agent_id, provider='connect'):
             and bool(str(os.environ.get('AI_AGENTS_PLATFORM_KEY_ACTIVATED_AT') or '').strip()))
 
 
+def choose_api_credential(tenant_id, agent_id, provider, company_key):
+    """Use the server key only for an explicitly mapped Connect agent."""
+    if platform_key_ready(tenant_id, agent_id, provider):
+        return str(os.environ.get('OPENAI_API_KEY') or ''), 'platform'
+    return str(company_key or ''), 'company'
+
+
 def skip_pre_activation_jobs(cur):
     """Terminally skip only allowlisted Connect jobs received before cutover."""
     pairs = [tenant + ':' + agent for tenant, agent in platform_agent_pairs()]

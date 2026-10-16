@@ -7,7 +7,7 @@ from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agent_access import tenant_status_allows_ai
 from tenant_linear_policy import TenantLinearError
 from tenant_platform import _connect, _fernet, _json
-from tenant_ai_agent_key_policy import platform_key_ready, platform_model, skip_pre_activation_jobs
+from tenant_ai_agent_key_policy import choose_api_credential, platform_key_ready, platform_model, skip_pre_activation_jobs
 
 
 def claim_next():
@@ -268,13 +268,13 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
             if cur.fetchone():
                 raise TenantLinearError('Bu hadisə üçün AI sorğusu artıq başlanıb.', 409)
             if use_platform_key:
-                api_key = str(os.environ.get('OPENAI_API_KEY') or '')
+                api_key, _credential_source = choose_api_credential(tenant, job['agent_id'], job.get('provider'), '')
             else:
                 try:
                     secret = json.loads(_fernet().decrypt(bytes(row['secrets'])))
                     if secret.get('tenant_id') != tenant or secret.get('provider') != 'chat_ai' or not secret.get('api_key'):
                         raise ValueError()
-                    api_key = secret['api_key']
+                    api_key, _credential_source = choose_api_credential(tenant, job['agent_id'], job.get('provider'), secret['api_key'])
                 except Exception:
                     raise TenantLinearError('AI təhlükəsizlik ayarlarını yoxlayın.', 503) from None
             limit = int(config.get('daily_limit') or 50)

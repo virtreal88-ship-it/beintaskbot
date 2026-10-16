@@ -1,6 +1,5 @@
 """Fail-fast AI Agent database preparation and worker startup."""
 import asyncio
-import os
 import time
 
 
@@ -42,13 +41,5 @@ async def start_worker(app, worker, kommo_request, logger, wait_slot,
     """Optionally migrate an isolated staging DB before the worker can run."""
     if prepare_database_first:
         await asyncio.to_thread(_prepare_database_with_retry, prepare)
-    probe_tenant = str(os.environ.get('AI_AGENTS_OPENAI_PROBE_TENANT_ID') or '').strip()
-    if probe_tenant:
-        try:
-            from tenant_ai_openai_diagnostics import run_probe
-            await asyncio.to_thread(run_probe, probe_tenant, logger)
-        except Exception:
-            # Do not prevent the queue worker from starting if diagnostics fail.
-            logger.error('AI OpenAI access probe could not complete for the explicitly configured tenant')
     app["tenant_ai_agent_worker"] = asyncio.create_task(
         worker(kommo_request, logger, wait_slot), name="tenant-ai-agent-worker")
