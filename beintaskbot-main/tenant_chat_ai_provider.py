@@ -15,11 +15,41 @@ class ChatAIProviderError(RuntimeError):
     """Safe provider failure detail for logs and diagnostics.
 
     The provider body can contain account and request information, so retain
-    only its HTTP status.  Never include an API key, prompt or model response.
+    only its HTTP status and a category mapped from allowlisted error codes.
+    Never include an API key, prompt, provider message or model response.
     """
-    def __init__(self, status_code):
+    def __init__(self, status_code, category='unknown'):
         self.status_code = int(status_code)
-        super().__init__('Chat AI provider returned HTTP ' + str(self.status_code))
+        self.category = category if category in {
+            'invalid_credentials', 'project_access', 'billing_or_quota',
+            'model_access', 'rate_limit', 'request_rejected', 'unknown',
+        } else 'unknown'
+        super().__init__('Chat AI provider returned HTTP ' + str(self.status_code) + ' (' + self.category + ')')
+
+
+def _provider_error_category(response):
+    """Map provider error identifiers to safe diagnostic categories only."""
+    try:
+        error = response.json().get('error') or {}
+        code = str(error.get('code') or '').lower()
+        error_type = str(error.get('type') or '').lower()
+    except (AttributeError, TypeError, ValueError):
+        return 'unknown'
+
+    identifiers = {code, error_type}
+    if identifiers & {'invalid_api_key', 'incorrect_api_key', 'authentication_error'}:
+        return 'invalid_credentials'
+    if identifiers & {'insufficient_quota', 'billing_hard_limit_reached', 'billing_not_active'}:
+        return 'billing_or_quota'
+    if identifiers & {'model_not_found', 'model_not_available', 'unsupported_model'}:
+        return 'model_access'
+    if identifiers & {'permission_denied', 'project_not_found', 'organization_not_found', 'restricted_api_key'}:
+        return 'project_access'
+    if identifiers & {'rate_limit_exceeded', 'requests_per_minute', 'tokens_per_minute'}:
+        return 'rate_limit'
+    if identifiers & {'invalid_request_error', 'bad_request'}:
+        return 'request_rejected'
+    return 'unknown'
 
 
 def generate(key, model, mode, lines, draft, *, instructions=None, extra_context=None, images=None):
@@ -48,7 +78,7 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
               'input': request_input},
         timeout=(5, 60), allow_redirects=False)
     if response.status_code != 200:
-        raise ChatAIProviderError(response.status_code)
+        raise ChatAIProviderError(response.status_code, _provider_error_category(response))
     payload = response.json()
     if payload.get('status') != 'completed':
         raise ValueError('Incomplete chat AI response')

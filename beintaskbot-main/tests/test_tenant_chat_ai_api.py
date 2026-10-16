@@ -100,15 +100,29 @@ class Provider(unittest.TestCase):
         self.assertEqual(content[1]['type'],'input_image')
         self.assertTrue(content[1]['image_url'].startswith('data:image/png;base64,'))
 
-    def test_provider_failure_keeps_response_private_but_records_http_status(self):
+    def test_provider_failure_keeps_response_private_but_records_safe_category(self):
         from unittest.mock import patch
         from tenant_chat_ai_provider import ChatAIProviderError
-        response=Mock(status_code=401);response.text='private provider response'
+        response=Mock(status_code=403);response.text='private provider response'
+        response.json.return_value={'error':{'code':'invalid_api_key','type':'authentication_error','message':'private provider response'}}
         with patch('tenant_chat_ai_provider.requests.post',return_value=response):
             with self.assertRaises(ChatAIProviderError) as caught:
                 self.generate('company-key','text-model','reply',[],'')
-        self.assertEqual(caught.exception.status_code,401)
+        self.assertEqual(caught.exception.status_code,403)
+        self.assertEqual(caught.exception.category,'invalid_credentials')
         self.assertNotIn('private provider response',str(caught.exception))
+
+    def test_provider_error_body_cannot_inject_diagnostic_category(self):
+        from unittest.mock import patch
+        from tenant_chat_ai_provider import ChatAIProviderError
+        response=Mock(status_code=403)
+        response.json.return_value={'error':{'code':'customer-secret-value','type':'permission_denied','message':'private'}}
+        with patch('tenant_chat_ai_provider.requests.post',return_value=response):
+            with self.assertRaises(ChatAIProviderError) as caught:
+                self.generate('company-key','text-model','reply',[],'')
+        self.assertEqual(caught.exception.category,'project_access')
+        self.assertNotIn('customer-secret-value',str(caught.exception))
+        self.assertNotIn('private',str(caught.exception))
 
     def test_audio_uploaded_as_bytes_without_remote_media_url(self):
         from unittest.mock import patch
