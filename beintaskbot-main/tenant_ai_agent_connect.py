@@ -155,9 +155,10 @@ def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''UPDATE saas_ai_conversation_state SET state='human',reason='manager_replied',
-              revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
-                AND conversation_id=%s AND state='active' ''', (tenant, conversation_id))
+            cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,state,reason)
+              VALUES(%s::uuid,'connect',%s,'human','manager_replied')
+              ON CONFLICT(tenant_id,provider,conversation_id) DO UPDATE SET state='human',reason='manager_replied',
+                revision=saas_ai_conversation_state.revision+1,updated_at=now()''', (tenant, conversation_id))
             cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',lease_token=NULL,lease_until=NULL,
               error_code='manager_replied',updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
                 AND conversation_id=%s AND state IN ('queued','processing')''', (tenant, conversation_id))

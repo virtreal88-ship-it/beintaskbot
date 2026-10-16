@@ -201,7 +201,8 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     result = await asyncio.to_thread(list_handoffs,profile,request.query.get('limit',50))
                 elif resource in {'handoff','resume'} and method == 'POST':
                     result = await asyncio.to_thread(set_conversation_state,profile,request.match_info['conversation_id'],
-                        'human' if resource=='handoff' else 'active',str(payload.get('reason') or ('manual_handoff' if resource=='handoff' else 'manager_resume')))
+                        'human' if resource=='handoff' else 'active',str(payload.get('reason') or ('manual_handoff' if resource=='handoff' else 'manager_resume')),
+                        str(payload.get('provider') or 'kommo'),str(payload.get('channel_id') or ''))
                 elif resource == 'knowledge' and method == 'POST':
                     result = await asyncio.to_thread(save_knowledge, profile, payload)
                 elif resource == 'knowledge_item' and method == 'PATCH':

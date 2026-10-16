@@ -459,7 +459,7 @@ async def process_connect_one(job, logger):
         from tenant_ai_agent_connect import history as connect_history, scope_matches
         from tenant_ai_agent_run_store import load_agent_config
         from tenant_ai_agent_safety import server_instructions, sanitize_draft
-        from tenant_connect_transport import connect_route, send_ai_reply as send_connect_ai, record_outbound
+        from tenant_connect_transport import send_ai_reply_if_active
         from tenant_platform import _connect
         tenant = str(job['tenant_id'])
         assert_job_allowed(job)
@@ -518,15 +518,13 @@ async def process_connect_one(job, logger):
         if auto and (job.get('payload') or {}).get('test_mode') is not True:
             phase = 'connect_send'
             def route_and_send():
-                with _connect() as conn:
-                    with conn.cursor() as cur:
-                        route = connect_route(cur, tenant, int(job['lead_id']))
-                if not route:
-                    raise TenantLinearError('Connect route is no longer active.', 409)
-                message_id = send_connect_ai(route, draft[:8000], reservation['run_id'])
-                record_outbound(tenant, int(job['lead_id']), route, draft[:8000], message_id, author='AI Agent')
-                return message_id
+                return send_ai_reply_if_active(tenant, int(job['lead_id']), str(job['channel_id']),
+                                               str(job['conversation_id']), draft[:8000], reservation['run_id'],
+                                               int(reservation.get('conversation_revision') or 0))
             message_id = await asyncio.to_thread(route_and_send)
+            if not message_id:
+                await asyncio.to_thread(finish_superseded, job, reservation, 'connect_human_takeover')
+                return
             await asyncio.to_thread(finish_sent, job, reservation, message_id)
             return
         await asyncio.to_thread(complete_run, job, reservation, draft[:16000],

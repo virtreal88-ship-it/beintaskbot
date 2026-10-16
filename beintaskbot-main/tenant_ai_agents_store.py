@@ -571,46 +571,71 @@ def delete_trigger(profile,agent_id,trigger_id):
     return {'deleted':True}
 
 
-def set_conversation_state(profile,conversation_id,state,reason=''):
+def _conversation_provider_allowed(cur, tenant, provider, conversation, channel_id=''):
+    """Verify the server-owned tenant/provider route before changing a chat."""
+    if provider == 'connect':
+        from tenant_connect_transport import _schema as connect_schema
+        connect_schema(cur.connection)
+        if channel_id:
+            cur.execute('''SELECT connect_channel_id::text AS channel_id FROM saas_connect_conversations c
+              JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
+              WHERE c.tenant_id=%s::uuid AND c.conversation_id=%s AND c.connect_channel_id=%s::uuid''',
+                        (tenant, conversation, channel_id))
+        else:
+            cur.execute('''SELECT c.connect_channel_id::text AS channel_id FROM saas_connect_conversations c
+              JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
+              WHERE c.tenant_id=%s::uuid AND c.conversation_id=%s ORDER BY c.connect_channel_id LIMIT 2''', (tenant, conversation))
+        rows = cur.fetchall()
+        if len(rows) != 1:
+            raise TenantLinearError('Connect dialoqu bu şirkətə aid deyil və ya kanal seçilməyib.', 404)
+        return str(rows[0]['channel_id'])
+    if provider != 'kommo':
+        raise TenantLinearError('Mesaj mənbəyi düzgün deyil.')
+    from tenant_ai_agent_test_mode import conversation_allowed
+    if not conversation_allowed(cur,tenant,conversation):
+        raise TenantLinearError('Conversation is outside the verified Test Mode binding.',409)
+    return ''
+
+
+def set_conversation_state(profile,conversation_id,state,reason='',provider='kommo',channel_id=''):
     conversation=str(conversation_id or '').strip()
+    provider=str(provider or 'kommo').strip().lower()
     if not conversation or len(conversation)>160 or state not in {'human','active','paused'}:
         raise TenantLinearError('Söhbət vəziyyəti düzgün deyil.')
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
-            from tenant_ai_agent_test_mode import conversation_allowed
-            if not conversation_allowed(cur,tenant,conversation):
-                raise TenantLinearError('Conversation is outside the verified Test Mode binding.',409)
+            resolved_channel = _conversation_provider_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
             cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,state,reason)
-              VALUES(%s::uuid,'kommo',%s,%s,%s) ON CONFLICT(tenant_id,provider,conversation_id) DO UPDATE
+              VALUES(%s::uuid,%s,%s,%s,%s) ON CONFLICT(tenant_id,provider,conversation_id) DO UPDATE
               SET state=EXCLUDED.state,reason=EXCLUDED.reason,revision=saas_ai_conversation_state.revision+1,updated_at=now()''',
-              (tenant,conversation,state,str(reason)[:240]))
+              (tenant,provider,conversation,state,str(reason)[:240]))
             if state in {'human','paused'}:
-                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='human_handoff' WHERE tenant_id=%s::uuid AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s AND state IN ('queued','processing'))",(tenant,tenant,conversation))
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='human_handoff' WHERE tenant_id=%s::uuid AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND state IN ('queued','processing'))",(tenant,tenant,provider,conversation))
                 cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,
-                  error_code='human_handoff',updated_at=now() WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s
-                  AND state IN ('queued','processing')''',(tenant,conversation))
-            _audit(cur,tenant,actor,'ai_conversation_'+state,'conversation',conversation,{'reason':str(reason)[:240]})
+                  error_code='human_handoff',updated_at=now() WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s
+                  AND state IN ('queued','processing')''',(tenant,provider,conversation))
+            _audit(cur,tenant,actor,'ai_conversation_'+state,'conversation',conversation,{'reason':str(reason)[:240],'provider':provider,'channel_id':resolved_channel})
         conn.commit()
-    return {'conversation_id':conversation,'state':state,'reason':str(reason)[:240]}
+    return {'conversation_id':conversation,'provider':provider,'channel_id':resolved_channel,'state':state,'reason':str(reason)[:240]}
 
 
-def read_conversation_state(profile,conversation_id):
+def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=''):
     conversation=str(conversation_id or '').strip()
+    provider=str(provider or 'kommo').strip().lower()
     if not conversation or len(conversation)>160:raise TenantLinearError('Söhbət identifikatoru düzgün deyil.')
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,_=_authorize(cur,profile)
-            from tenant_ai_agent_test_mode import conversation_allowed
-            if not conversation_allowed(cur,tenant,conversation):
-                raise TenantLinearError('Conversation is outside the verified Test Mode binding.',404)
+            resolved_channel = _conversation_provider_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
             cur.execute('''SELECT conversation_id,state,reason,assigned_to,last_inbound_message_id,last_agent_message_id,revision,updated_at
-              FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s''',(tenant,conversation))
+              FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s''',(tenant,provider,conversation))
             row=cur.fetchone()
-    if not row:return {'conversation_id':conversation,'state':'active','reason':'','revision':0}
+    if not row:return {'conversation_id':conversation,'provider':provider,'channel_id':resolved_channel,'state':'active','reason':'','revision':0}
     item=dict(row)
+    item['provider']=provider;item['channel_id']=resolved_channel
     if item.get('updated_at'):item['updated_at']=item['updated_at'].isoformat()
     return item
 
@@ -730,19 +755,13 @@ def list_handoffs(profile,limit=50):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,_=_authorize(cur,profile)
-            cur.execute('''SELECT cs.conversation_id,cs.reason,cs.updated_at,a.name AS agent_name,
-                COALESCE(b.lead_id,j.lead_id) AS lead_id,COALESCE(b.talk_id,j.talk_id) AS talk_id
+            cur.execute('''SELECT cs.provider,cs.conversation_id,cs.reason,cs.updated_at,a.name AS agent_name,
+                j.lead_id,j.talk_id,j.channel_id
               FROM saas_ai_conversation_state cs
-              JOIN saas_ai_agent_settings s ON s.tenant_id=cs.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE
-              LEFT JOIN saas_ai_agent_test_mode b ON b.tenant_id=cs.tenant_id AND b.chat_id=cs.conversation_id
               LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
-              LEFT JOIN LATERAL (SELECT lead_id,talk_id FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=cs.tenant_id
+              LEFT JOIN LATERAL (SELECT lead_id,talk_id,channel_id FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=cs.tenant_id
                 AND j0.provider=cs.provider AND j0.conversation_id=cs.conversation_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
-              WHERE cs.tenant_id=%s::uuid AND cs.provider='kommo' AND cs.state IN ('human','paused')
-                AND (s.operating_mode='active' OR (b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
-                  AND EXISTS (SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=b.tenant_id AND i.provider='kommo'
-                    AND i.status='connected' AND i.account_domain=b.account_domain)))
-                AND j.lead_id IS NOT NULL
+              WHERE cs.tenant_id=%s::uuid AND cs.state IN ('human','paused')
               ORDER BY cs.updated_at DESC LIMIT %s''',(tenant,max(1,min(int(limit),100))))
             rows=cur.fetchall()
     result=[]

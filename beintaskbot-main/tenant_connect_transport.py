@@ -19,6 +19,7 @@ from tenant_platform import TenantPlatformError, _connect, _ensure_schema, _fern
 from tenant_member_store import member
 
 CONNECT_URL = str(os.environ.get("CONNECT_PUBLIC_URL") or "https://connect.crm.pro.az").rstrip("/")
+CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed')
 
 
 def _schema(conn) -> None:
@@ -76,10 +77,25 @@ def status(profile: dict) -> dict:
     with _connect() as conn:
         _schema(conn)
         with conn.cursor() as cur:
-            cur.execute("SELECT status,metadata,updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='connect'", (tenant,))
+            cur.execute("SELECT status,metadata,secrets,updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='connect'", (tenant,))
             row = cur.fetchone()
             cur.execute("SELECT connect_channel_id,name,status,active FROM saas_connect_channels WHERE tenant_id=%s::uuid ORDER BY name", (tenant,))
             channels = [_public_channel(channel) for channel in cur.fetchall()]
+    # Existing Connect installations predate observed outbound events. The
+    # stored subscription belongs to this tenant alone, so an owner/admin
+    # opening its settings safely upgrades just that webhook without touching
+    # another CRM subscriber or another tenant.
+    if row and row.get('status') == 'connected' and profile.get('role') in {'owner', 'admin'}:
+        try:
+            credentials = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode()) if row.get('secrets') else {}
+            webhook_id = str(credentials.get('webhook_id') or '')
+            if webhook_id:
+                _request(str(credentials.get('api_key') or ''), 'PATCH', '/v1/webhooks/' + webhook_id,
+                         {'events': list(CONNECT_WEBHOOK_EVENTS)})
+        except Exception:
+            # Do not make a read-only settings page fail during a temporary
+            # Connect outage. configure() always applies the complete list.
+            pass
     return {'connected': bool(row and row['status'] == 'connected'), 'channels': channels,
             'updated_at': row['updated_at'].isoformat() if row and row.get('updated_at') else None,
             'metadata': (row or {}).get('metadata') or {}}
@@ -99,7 +115,7 @@ def configure(profile: dict, payload: dict, callback_url: str) -> dict:
     if len(selected) != len(requested):
         raise TenantPlatformError('Seçilmiş kanal bu Connect hesabına aid deyil.')
     secret = secrets.token_urlsafe(32)
-    hook = _request(key, 'POST', '/v1/webhooks', {'url': callback_url, 'events': ['message.inbound.received']})
+    hook = _request(key, 'POST', '/v1/webhooks', {'url': callback_url, 'events': list(CONNECT_WEBHOOK_EVENTS)})
     # Connect creates the secret and returns it once. Use it for HMAC verification.
     webhook_secret = str(hook.get('secret') or '')
     if not webhook_secret:
@@ -143,6 +159,35 @@ def disconnect(profile: dict) -> dict:
     return status(profile)
 
 
+def sync_webhook_subscriptions() -> int:
+    """Upgrade only Beintaskbot-owned Connect webhooks after deployment.
+
+    This keeps existing company installations working without asking an owner
+    to disconnect/reconnect a channel. The API key and webhook id remain
+    tenant-local and are never logged or returned.
+    """
+    updated = 0
+    with _connect() as conn:
+        _schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT tenant_id,secrets FROM saas_tenant_integrations WHERE provider='connect' AND status='connected' AND secrets IS NOT NULL")
+            rows = cur.fetchall()
+    for row in rows:
+        try:
+            credentials = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode())
+            webhook_id = str(credentials.get('webhook_id') or '')
+            api_key = str(credentials.get('api_key') or '')
+            if not webhook_id or not api_key:
+                continue
+            _request(api_key, 'PATCH', '/v1/webhooks/' + webhook_id, {'events': list(CONNECT_WEBHOOK_EVENTS)})
+            updated += 1
+        except Exception:
+            # A single stale external webhook must never prevent the HTTP API
+            # or AI worker from starting for the other companies.
+            continue
+    return updated
+
+
 def _credentials(cur, tenant: str) -> dict | None:
     cur.execute("SELECT secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='connect' AND status='connected' FOR SHARE", (tenant,))
     row = cur.fetchone()
@@ -162,7 +207,8 @@ def _verify_signature(secret: str, raw: bytes, signature: str) -> bool:
 
 def ingest(raw: bytes, signature: str, event: dict) -> bool:
     event_id, data = str(event.get('id') or ''), event.get('data') or {}
-    if event.get('type') != 'message.inbound.received' or not event_id or not isinstance(data, dict):
+    event_type = str(event.get('type') or '')
+    if event_type not in CONNECT_WEBHOOK_EVENTS or not event_id or not isinstance(data, dict):
         raise TenantPlatformError('Connect webhook formatı düzgün deyil.')
     channel_id, conversation = str(data.get('channelId') or ''), str(data.get('conversationId') or '')
     if not channel_id or not conversation:
@@ -189,10 +235,31 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 return False
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
             inserted_event = bool(cur.fetchone())
-            # A previous delivery may have committed the durable CRM copy just
-            # before a transient queue failure.  Do not lose the AI job merely
-            # because Connect retries the same signed event: enqueue() itself
-            # is idempotent on the message fingerprint.
+            if event_type == 'message.outbound.observed':
+                # Connect emits this only for a fromMe Evolution message that
+                # was not previously recorded by Connect's own send API. It is
+                # therefore a real human takeover from the linked phone.
+                if not inserted_event:
+                    conn.commit()
+                    return True
+                phone = conversation.split('@', 1)[0]
+                cur.execute('''INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,contact_name,phone,last_message_at)
+                  VALUES(%s::uuid,%s::uuid,%s,%s,%s,now()) ON CONFLICT(tenant_id,connect_channel_id,conversation_id) DO UPDATE
+                  SET last_message_at=now(),updated_at=now() RETURNING lead_id''', (tenant,channel_id,conversation,phone,phone))
+                lead_id = int(cur.fetchone()['lead_id'])
+                occurred = str(event.get('occurred_at') or datetime.now(timezone.utc).isoformat())
+                external = 'connect:' + str(data.get('id') or event_id)
+                cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
+                  VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,'WhatsApp operator',%s,%s,'',%s::timestamptz,%s::jsonb)
+                  ON CONFLICT(tenant_id,external_id) DO NOTHING''',
+                            (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,str(data.get('text') or ''),str(data.get('type') or 'text'),occurred,_json(data)))
+                conn.commit()
+                from tenant_ai_agent_connect import mark_operator_reply
+                mark_operator_reply(tenant, lead_id, channel_id, conversation)
+                return True
+            # A previous inbound delivery may have committed the durable CRM
+            # copy just before a transient queue failure. Do not lose the AI
+            # job merely because Connect retries the same signed event.
             if not inserted_event:
                 cur.execute('''SELECT lead_id FROM saas_connect_conversations
                   WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s''',
@@ -266,6 +333,48 @@ def send_ai_reply(route: dict, text: str, run_id: str) -> str:
     except (ValueError, TypeError, AttributeError):
         raise TenantPlatformError('AI cavabının sorğu ID-si düzgün deyil.') from None
     return send(route, text, client_message_id)
+
+
+def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversation_id: str,
+                            text: str, run_id: str, expected_revision: int) -> str | None:
+    """Serialize Connect send with an observed human takeover.
+
+    The row lock intentionally spans the short Connect request. If the human
+    event was committed first, this returns ``None`` and no AI request is made.
+    If the AI request wins the lock, the later human event still switches the
+    dialogue to Human Mode immediately after acceptance. A provider event that
+    arrives only after an already accepted AI request cannot be recalled; that
+    ordering is recorded rather than hidden.
+    """
+    with _connect() as conn:
+        _schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''SELECT c.connect_channel_id,c.conversation_id,i.secrets,cs.revision,cs.state
+              FROM saas_connect_conversations c
+              JOIN saas_tenant_integrations i ON i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected'
+              JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
+              JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id
+              WHERE c.tenant_id=%s::uuid AND c.lead_id=%s AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s
+              FOR UPDATE OF c,cs''', (tenant, int(lead_id), channel_id, conversation_id))
+            row = cur.fetchone()
+            if (not row or row.get('state') != 'active' or int(row.get('revision') or 0) != int(expected_revision)):
+                conn.rollback()
+                return None
+            try:
+                secret = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode())
+            except Exception as exc:
+                raise TenantPlatformError('Connect açarı oxunmadı.') from exc
+            route = {'provider':'connect','channel_id':str(row['connect_channel_id']),'conversation_id':str(row['conversation_id']),
+                     'api_key':str(secret.get('api_key') or '')}
+            message_id = send_ai_reply(route, text, run_id)
+            cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
+              VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,'AI Agent',%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
+                        (uuid.uuid4(),tenant,int(lead_id),'connect:'+message_id,'connect:'+channel_id,text,_json({'source':'connect','status':'accepted','run_id':str(run_id)})))
+            cur.execute('''UPDATE saas_ai_conversation_state SET last_agent_message_id=%s,revision=revision+1,updated_at=now()
+              WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state='active' AND revision=%s''',
+                        (str(message_id),tenant,conversation_id,int(expected_revision)))
+        conn.commit()
+    return message_id
 
 
 def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_id: str, author: str = 'Operator') -> None:
