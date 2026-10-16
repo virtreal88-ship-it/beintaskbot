@@ -285,6 +285,32 @@ def save_agent(profile, data, *, agent_id=None):
                 existing = _row(cur.fetchone())
                 if existing:
                     return existing
+                # The original version of the night-operator wizard did not
+                # send a setup key.  Match only one *identical*, disabled,
+                # employee-owned draft and attach the key to it.  This makes
+                # the failed historical flow recoverable without deleting or
+                # guessing at any existing agent.
+                cur.execute('''SELECT id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,
+                  schedule,scopes,model,safety,version,created_at,updated_at FROM saas_ai_agents
+                  WHERE tenant_id=%s::uuid AND created_by=%s AND setup_key IS NULL
+                    AND name=%s AND instructions=%s AND enabled=%s AND mode=%s AND language=%s AND style=%s
+                    AND delay_seconds=%s AND schedule=%s::jsonb AND scopes=%s::jsonb AND model=%s AND safety=%s::jsonb
+                  ORDER BY created_at DESC LIMIT 2 FOR UPDATE''',
+                            (tenant, actor, patch['name'], patch['instructions'], patch['enabled'], patch['mode'],
+                             patch['language'], patch['style'], patch['delay_seconds'], _json(patch['schedule']),
+                             _json(patch['scopes']), patch['model'], _json(patch['safety'])))
+                legacy = cur.fetchall()
+                if len(legacy) == 1:
+                    cur.execute('''UPDATE saas_ai_agents SET setup_key=%s
+                      WHERE tenant_id=%s::uuid AND id=%s::uuid AND setup_key IS NULL
+                      RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,
+                        schedule,scopes,model,safety,version,created_at,updated_at''',
+                                (patch['setup_key'], tenant, legacy[0]['id']))
+                    recovered = _row(cur.fetchone())
+                    if recovered:
+                        _audit(cur, tenant, actor, 'ai_agent_setup_recovered', 'ai_agent', recovered['id'])
+                        conn.commit()
+                        return recovered
             if 'model' in patch:
                 cur.execute("SELECT metadata,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
                 integration = cur.fetchone() or {}
@@ -435,6 +461,26 @@ def save_knowledge(profile, data, *, source_id=None):
                         if existing['content_hash'] != digest:
                             raise TenantLinearError('Eyni yenidən cəhd açarı ilə başqa bilik faylı yüklənə bilməz.', 409)
                         return existing
+                    # Recover a source created by the pre-retry-key wizard,
+                    # but only when it is an exact match owned by this user.
+                    # More than one match is deliberately left untouched.
+                    cur.execute('''SELECT id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at
+                      FROM saas_ai_knowledge_sources
+                      WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND created_by=%s AND setup_key IS NULL
+                        AND title=%s AND kind=%s AND active=%s AND content_hash=%s
+                      ORDER BY created_at DESC LIMIT 2 FOR UPDATE''',
+                                (tenant, bound_agent, actor, patch['title'], patch['kind'], patch['active'], digest))
+                    legacy = cur.fetchall()
+                    if len(legacy) == 1:
+                        cur.execute('''UPDATE saas_ai_knowledge_sources SET setup_key=%s
+                          WHERE tenant_id=%s::uuid AND id=%s::uuid AND setup_key IS NULL
+                          RETURNING id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at''',
+                                    (retry_key, tenant, legacy[0]['id']))
+                        recovered = _row(cur.fetchone())
+                        if recovered:
+                            _audit(cur, tenant, actor, 'ai_knowledge_setup_recovered', 'knowledge_source', recovered['id'])
+                            conn.commit()
+                            return recovered
                 cur.execute('SELECT count(*) AS total FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid', (tenant,))
                 if int((cur.fetchone() or {}).get('total') or 0) >= MAX_SOURCES:
                     raise TenantLinearError('Bilik mənbələrinin sayı həddə çatıb.')
@@ -583,6 +629,23 @@ def save_trigger(profile,agent_id,data,*,trigger_id=None):
                   FROM saas_ai_agent_triggers WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND setup_key=%s FOR SHARE''',
                             (tenant,agent,patch['setup_key']))
                 existing = cur.fetchone()
+                if not existing:
+                    cur.execute('''SELECT id,agent_id,name,trigger_type,condition,actions,enabled,version,created_at,updated_at
+                      FROM saas_ai_agent_triggers
+                      WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND setup_key IS NULL
+                        AND name=%s AND trigger_type=%s AND condition=%s::jsonb AND actions=%s::jsonb AND enabled=%s
+                      ORDER BY created_at DESC LIMIT 2 FOR UPDATE''',
+                                (tenant, agent, patch['name'], patch['trigger_type'], _json(patch['condition']),
+                                 _json(patch['actions']), patch['enabled']))
+                    legacy = cur.fetchall()
+                    if len(legacy) == 1:
+                        cur.execute('''UPDATE saas_ai_agent_triggers SET setup_key=%s
+                          WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND id=%s::uuid AND setup_key IS NULL
+                          RETURNING id,agent_id,name,trigger_type,condition,actions,enabled,version,created_at,updated_at''',
+                                    (patch['setup_key'], tenant, agent, legacy[0]['id']))
+                        existing = cur.fetchone()
+                        if existing:
+                            _audit(cur,tenant,actor,'ai_agent_trigger_setup_recovered','ai_agent_trigger',existing['id'])
             if existing:
                 result=dict(existing)
             if not existing and any(action in patch.get('actions',[]) for action in ('create_task','update_phone','move_stage')):
