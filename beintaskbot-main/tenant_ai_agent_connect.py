@@ -214,15 +214,22 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT external_id,direction,body,message_type,media_url,happened_at
-              FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
-                AND channel=%s ORDER BY happened_at,id LIMIT 80''', (tenant, int(lead_id), 'connect:' + channel_id))
+            cur.execute('''SELECT * FROM (
+              SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,m.id,
+                COALESCE(v.state,'') AS voice_state,
+                CASE WHEN v.state='completed' THEN m.body ELSE '' END AS transcript
+              FROM saas_crm_messages m LEFT JOIN saas_connect_voice_receipts v
+                ON v.tenant_id=m.tenant_id AND 'connect:' || v.channel_id::text=m.channel AND v.external_id=m.external_id
+              WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s
+                AND m.channel=%s ORDER BY m.happened_at DESC,m.id DESC LIMIT 80
+              ) recent ORDER BY happened_at,id''', (tenant, int(lead_id), 'connect:' + channel_id))
             rows = cur.fetchall()
     return [{'external_id': str(row.get('external_id') or '').removeprefix('connect:'),
              'direction': str(row.get('direction') or ''), 'body': str(row.get('body') or ''),
              'message_type': str(row.get('message_type') or 'text'), 'media_url': str(row.get('media_url') or ''),
              'has_attachment': bool(row.get('media_url')) or str(row.get('message_type') or 'text') != 'text',
              'happened_at': row['happened_at'].isoformat() if row.get('happened_at') else '',
+             'transcript': str(row.get('transcript') or ''), 'voice_state': str(row.get('voice_state') or ''),
              'channel': channel_id} for row in rows]
 
 

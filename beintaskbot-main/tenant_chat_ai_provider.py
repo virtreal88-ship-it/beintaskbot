@@ -100,13 +100,23 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
     return result, {'input_tokens': input_tokens, 'output_tokens': output_tokens, 'total_tokens': total_tokens}
 
 
-def transcribe(key, model, content, extension, content_type):
+def transcribe(key, model, content, extension, content_type, *, with_usage=False):
     response = requests.post('https://api.openai.com/v1/audio/transcriptions',
         headers={'Authorization': 'Bearer ' + key}, data={'model': model, 'response_format': 'json'},
         files={'file': ('recording.' + extension, content, content_type)}, timeout=(5, 90), allow_redirects=False)
     if response.status_code != 200:
-        raise ValueError('Transcription unavailable')
-    result = response.json().get('text')
+        raise ChatAIProviderError(response.status_code, _provider_error_category(response))
+    payload = response.json()
+    result = payload.get('text')
     if not isinstance(result, str) or not result.strip() or len(result) > 60000:
         raise ValueError('Invalid transcription')
-    return result.strip()
+    if not with_usage:
+        return result.strip()
+    usage = payload.get('usage') if isinstance(payload.get('usage'), dict) else {}
+    try:
+        incoming = max(0, int(usage.get('input_tokens') or 0))
+        outgoing = max(0, int(usage.get('output_tokens') or 0))
+        total = max(incoming + outgoing, int(usage.get('total_tokens') or 0))
+    except (TypeError, ValueError):
+        incoming = outgoing = total = 0
+    return result.strip(), {'input_tokens': incoming, 'output_tokens': outgoing, 'total_tokens': total}

@@ -442,7 +442,8 @@ async def process_connect_one(job, logger):
         from tenant_ai_agent_run_store import load_agent_config
         from tenant_ai_agent_safety import server_instructions, sanitize_draft
         from tenant_connect_transport import send_ai_reply_if_active
-        from tenant_platform import _connect
+        from tenant_connect_voice import (VoiceError, transcribe_message, active as voice_active,
+            generation_budget_available)
         tenant = str(job['tenant_id'])
         assert_job_allowed(job)
         rows = await asyncio.to_thread(connect_history, tenant, int(job['lead_id']), str(job['channel_id']))
@@ -463,6 +464,47 @@ async def process_connect_one(job, logger):
         if open_at:
             await asyncio.to_thread(defer_job, job, open_at)
             return
+        voice = is_audio(source)
+        if voice and source.get('voice_state') in {'failed', 'processing'} and not source.get('transcript'):
+            await asyncio.to_thread(skip_job, job, 'voice_already_claimed')
+            return
+        # Existing jobs coalesce to the newest inbound. Recover recent pending
+        # voice from that same tenant/channel history when text arrives next.
+        # Bound the work/cost per turn; older audio remains explicitly unavailable.
+        pending_audio = [row for row in rows[-30:] if row.get('direction') == 'incoming'
+                         and is_audio(row) and not row.get('transcript') and not row.get('voice_state')]
+        pending_audio = pending_audio[-3:]
+        if pending_audio:
+            model = str(config.get('agent_model') or config['chat_model'])
+            phase = 'connect_transcription'
+            reservation = await asyncio.to_thread(reserve_run, job, pipeline_id='', stage_id='',
+                                                  model=model, reserved_calls=1 + len(pending_audio))
+            for audio_row in pending_audio:
+                try:
+                    transcript = await asyncio.to_thread(transcribe_message, job, reservation, audio_row)
+                except VoiceError as error:
+                    audio_row['voice_state'] = 'failed'
+                    if audio_row['external_id'] == source_id or error.code == 'voice_conversation_changed':
+                        finish = finish_superseded if error.code == 'voice_conversation_changed' else finish_unknown
+                        await asyncio.to_thread(finish, job, reservation, error.code)
+                        return
+                    # A failed earlier attachment cannot prevent a later text
+                    # message from receiving its normal answer.
+                    continue
+                audio_row['body'] = transcript
+                audio_row['transcript'] = transcript
+                audio_row['voice_state'] = 'completed'
+                if not await asyncio.to_thread(generation_budget_available, job, reservation):
+                    await asyncio.to_thread(finish_unknown, job, reservation, 'voice_token_limit')
+                    return
+            # Takeover, Pause, newer messages, disabled agent/company and Test
+            # Mode must be rechecked after transcription, before generation.
+            assert_job_allowed(job)
+            refreshed = await asyncio.to_thread(load_agent_config, job)
+            if (not refreshed or not scope_matches(refreshed.get('scopes'), str(job['channel_id']))
+                    or not await asyncio.to_thread(voice_active, job, reservation)):
+                await asyncio.to_thread(finish_superseded, job, reservation, 'voice_conversation_changed')
+                return
         triggers = await asyncio.to_thread(enabled_triggers, tenant, job['agent_id'])
         payload = job.get('payload') or {}
         # Connect has no Kommo deal/contact payload.  Its durable conversation
@@ -473,16 +515,19 @@ async def process_connect_one(job, logger):
                                    phone=str(payload.get('phone') or ''))
         if should_handoff(source['body']) or any('handoff' in (trigger.get('actions') or []) for trigger in matched):
             await asyncio.to_thread(handoff, job, 'customer_requested_manager')
+            if reservation:
+                await asyncio.to_thread(finish_superseded, job, reservation, 'customer_requested_manager')
             return
         model = str(config.get('agent_model') or config['chat_model'])
         phase = 'connect_reserve'
-        reservation = await asyncio.to_thread(reserve_run, job, pipeline_id='', stage_id='', model=model)
-        # Connect currently stores media type but deliberately has no trusted
-        # downloadable media URL.  ``history`` represents unavailable voice
-        # rather than attempting a provider fetch, so a malformed/expired
-        # attachment can never poison the queue for a later text message.
+        if reservation is None:
+            reservation = await asyncio.to_thread(reserve_run, job, pipeline_id='', stage_id='', model=model)
+        # Cached voice text is used in later text/voice turns without another
+        # provider call. The history formatter preserves the audio marker.
+        transcripts = {row['external_id']: row['transcript'] for row in rows if row.get('transcript')}
+        context_rows = [{**row, 'body': ''} if row.get('transcript') else row for row in rows]
         try:
-            lines, missing = history(rows[-30:], {})
+            lines, missing = history(context_rows[-30:], transcripts)
         except (KeyError, TypeError, ValueError):
             lines = [{'speaker': 'CLIENT',
                       'text': '[Attachment unavailable: do not infer its contents]',
@@ -502,7 +547,13 @@ async def process_connect_one(job, logger):
                                         extra_context={'language':reservation['agent_language'], 'style':reservation['agent_style'],
                                                        'knowledge':knowledge, 'latest_client_message_id':source_id,
                                                        'latest_client_message':query, 'unprocessed_media_count':missing}, images=[], with_usage=True)
-        await asyncio.to_thread(record_token_usage, job, reservation, usage)
+        if pending_audio:
+            audio_usage = reservation.get('voice_usage') or {}
+            combined = {key: int(usage.get(key) or 0) + int(audio_usage.get(key) or 0)
+                        for key in ('input_tokens', 'output_tokens', 'total_tokens')}
+            await asyncio.to_thread(record_token_usage, job, reservation, combined, cumulative=True)
+        else:
+            await asyncio.to_thread(record_token_usage, job, reservation, usage)
         draft = sanitize_draft(str(draft), reservation['agent_language'])
         # A manual reply or a newer inbound message invalidates this run.
         current = await asyncio.to_thread(connect_history, tenant, int(job['lead_id']), str(job['channel_id']))

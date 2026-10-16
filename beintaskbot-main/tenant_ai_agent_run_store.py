@@ -254,8 +254,10 @@ def knowledge_context(tenant_id, query, *, limit=6):
                      'content':str(row['content'])[:1800]} for row in cur.fetchall()]
 
 
-def reserve_run(job, *, pipeline_id, stage_id, model):
-    """Reserve one shared Chat AI daily call before contacting the provider."""
+def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
+    """Reserve shared Chat AI calls before contacting the provider."""
+    if type(reserved_calls) is not int or not 1 <= reserved_calls <= 4:
+        raise ValueError("Invalid AI call reservation")
     from tenant_ai_agent_test_mode import assert_job_allowed
     assert_job_allowed(job)
     with _connect() as conn:
@@ -337,16 +339,16 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
             cur.execute('''SELECT COALESCE(sum(reserved_calls),0) AS calls FROM saas_chat_ai_runs
               WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date''', (tenant,))
             existing = int((cur.fetchone() or {}).get('calls') or 0)
-            cur.execute('''SELECT count(*) AS calls FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid
+            cur.execute('''SELECT COALESCE(sum(reserved_calls),0) AS calls FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid
               AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'
-              AND state IN ('generating','completed','unknown')''', (tenant,))
+              AND (state IN ('generating','completed','unknown') OR reserved_calls>1)''', (tenant,))
             existing += int((cur.fetchone() or {}).get('calls') or 0)
-            if existing + 1 > limit:
+            if existing + reserved_calls > limit:
                 raise TenantLinearError('Şirkətin gündəlik Chat AI limiti dolub.', 429)
             run_id = uuid.uuid4()
-            cur.execute('''INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state)
-              VALUES(%s::uuid,%s,%s::uuid,%s,%s,%s,'generating')''',
-              (tenant,run_id,job['agent_id'],job['event_fingerprint'],job['revision'],selected_model))
+            cur.execute('''INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,reserved_calls)
+              VALUES(%s::uuid,%s,%s::uuid,%s,%s,%s,'generating',%s)''',
+              (tenant,run_id,job['agent_id'],job['event_fingerprint'],job['revision'],selected_model,reserved_calls))
             cur.execute("UPDATE saas_tenant_webhook_events SET state='processing',attempts=attempts+1 WHERE tenant_id=%s::uuid AND fingerprint=%s",
                         (tenant,job['event_fingerprint']))
             cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,agent_id,state,first_inbound_message_id,last_inbound_message_id)
@@ -356,6 +358,9 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
               WHERE saas_ai_conversation_state.state='active' RETURNING revision''',
               (tenant,job['provider'],job['conversation_id'],job['agent_id'],str((job.get('payload') or {}).get('message_id') or ''),str((job.get('payload') or {}).get('message_id') or '')))
             conversation = cur.fetchone()
+            if reserved_calls > 1:
+                cur.execute("UPDATE saas_ai_agent_jobs SET lease_until=now()+(%s * interval '3 minutes') WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND lease_token=%s AND revision=%s",
+                            (reserved_calls,tenant,job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
             result = {'run_id':str(run_id),'api_key':api_key,'config':config,
               'config_version':str(row['config_version']),'company_instructions':row['company_instructions'],
               'settings_version':str(row['settings_version']),
@@ -370,7 +375,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
     return result
 
 
-def record_token_usage(job, reservation, usage):
+def record_token_usage(job, reservation, usage, *, cumulative=False):
     """Persist provider-reported usage against the already reserved run.
 
     The browser never supplies these values.  A unique run receipt makes a
@@ -386,10 +391,18 @@ def record_token_usage(job, reservation, usage):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            conflict = 'DO NOTHING'
+            if cumulative:
+                # Audio is recorded first; the later cumulative receipt includes
+                # audio + generation. Maxima make repeated writes idempotent.
+                conflict = '''DO UPDATE SET
+                  input_tokens=GREATEST(saas_ai_agent_token_usage.input_tokens,EXCLUDED.input_tokens),
+                  output_tokens=GREATEST(saas_ai_agent_token_usage.output_tokens,EXCLUDED.output_tokens),
+                  total_tokens=GREATEST(saas_ai_agent_token_usage.total_tokens,EXCLUDED.total_tokens)'''
             cur.execute('''INSERT INTO saas_ai_agent_token_usage
               (tenant_id,id,run_id,agent_id,model,input_tokens,output_tokens,total_tokens)
               VALUES(%s::uuid,%s,%s::uuid,%s::uuid,%s,%s,%s,%s)
-              ON CONFLICT(tenant_id,run_id) DO NOTHING''',
+              ON CONFLICT(tenant_id,run_id) ''' + conflict,
               (job['tenant_id'],uuid.uuid4(),reservation['run_id'],job['agent_id'],reservation['model'],
                input_tokens,output_tokens,total_tokens))
         conn.commit()
