@@ -12,7 +12,7 @@ from tenant_ai_agent_crm_actions import execute_matching_actions
 from tenant_ai_agent_run_store import (claim_next, complete_run, defer_job,
     finish_unknown, finish_superseded, finish_sent, knowledge_context, reserve_run, retry_or_fail, skip_job)
 from tenant_chat_ai_policy import history
-from tenant_chat_ai_provider import INSTRUCTIONS, generate, transcribe
+from tenant_chat_ai_provider import ChatAIProviderError, INSTRUCTIONS, generate, transcribe
 from tenant_chat_ai_policy import audio as is_audio
 from tenant_chat_media import AUDIO_TYPES, IMAGE_TYPES, download
 from tenant_chat_reader import read_messages, read_talks
@@ -542,6 +542,17 @@ async def process_connect_one(job, logger):
         else:
             await asyncio.to_thread(skip_job, job, 'connect_policy_blocked')
         logger.warning('Connect AI job stopped safely: tenant=%s agent=%s phase=%s', job.get('tenant_id'), job.get('agent_id'), phase)
+    except ChatAIProviderError as error:
+        # A provider HTTP rejection is a definite generation failure: no draft
+        # was produced and no WhatsApp send was attempted. Persist only the
+        # provider's safe, allowlisted diagnostic category, never its body.
+        error_code = 'chat_ai_http_' + str(error.status_code) + '_' + error.category
+        if reservation:
+            await asyncio.to_thread(finish_unknown, job, reservation, error_code)
+        else:
+            await asyncio.to_thread(retry_or_fail, job, error_code)
+        logger.error('Connect AI job rejected by Chat AI provider: tenant=%s agent=%s phase=%s status=%s category=%s',
+                     job.get('tenant_id'), job.get('agent_id'), phase, error.status_code, error.category)
     except Exception:
         if reservation:
             await asyncio.to_thread(finish_unknown, job, reservation, 'connect_result_unknown')
