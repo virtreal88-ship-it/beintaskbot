@@ -5,7 +5,7 @@ from tenant_hot_order_policy import HotOrderPolicy, validate_hot_order_settings
 
 
 ROLE_PERMISSIONS = {
-    'owner': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear', 'ai_agents', 'dialogs', 'support'],
+    'owner': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear', 'ai_agents', 'dialogs', 'support', 'night_report'],
     'admin': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear', 'ai_agents', 'dialogs', 'support'],
     'manager': ['deals', 'tasks', 'customers', 'dialogs', 'support'],
     'worker': ['tasks'],
@@ -62,6 +62,8 @@ class TenantPolicy:
             if self.profile.get('role') == 'master':
                 return False
             return module in set(self.profile.get('permissions') or []) or self.allows('ai_agents')
+        if module == 'night_report':
+            return self.profile.get('role') != 'master' and ('night_report' in set(self.profile.get('permissions') or []) or self.allows('ai_agents'))
         if module == 'ai_agents':
             return self.profile.get('role') == 'admin' and self.member_settings.get('ai_agents_manage') is True
         if self.profile.get('role') == 'master' and module != 'hot_orders':
