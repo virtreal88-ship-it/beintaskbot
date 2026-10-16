@@ -196,3 +196,8 @@ html[data-app-theme="dark"] body[data-app-ui="kwid"] {
   body[data-app-ui="kwid"] #aiAgentsOverview .ai-overview-tiles {grid-template-columns:1fr 1fr;gap:10px}
 }
 @media(prefers-reduced-motion:reduce) {body[data-app-ui="kwid"] {--app-motion:0ms}body[data-app-ui="kwid"] *,body[data-app-ui="kwid"] *::before,body[data-app-ui="kwid"] *::after {animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+/* Operator navigation uses the same sidebar and responsive shell. */
+.app-language-select{max-width:70px;padding:6px;border:1px solid var(--app-line);border-radius:8px;background:var(--app-surface);color:var(--app-ink);font:inherit}
+body[data-app-ui="kwid"] .nav [data-view="dialogs"],body[data-app-ui="kwid"] .nav [data-view="support"]{position:relative}
+body[data-app-ui="kwid"][data-sidebar="collapsed"] #dialogsAttentionCount,body[data-app-ui="kwid"][data-sidebar="collapsed"] #supportUnresolvedCount{position:absolute;right:2px;top:2px;padding:1px 4px;font-size:9px;max-width:34px}

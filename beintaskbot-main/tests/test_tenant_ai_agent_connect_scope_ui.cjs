@@ -70,7 +70,7 @@ assert.match(source, /aiScheduleEnabled/,
   'the editor must expose the durable schedule rather than a hidden fixed window');
 assert.match(appSource, /data-ai-section-nav="stopping"/,
   'the editor must expose a separate stop/handoff section');
-assert.match(source, /data-dialog-action="pause"/,
+assert.match(fs.readFileSync(path.join(root,'docs/tenant-operator-dialogs.js'),'utf8'), /add\('pause','pause'\)/,
   'an active dialogue must offer Pause rather than only a handoff action');
 
 console.log('PASS: Connect provider and selected WhatsApp channel survive editor save/reload flow.');

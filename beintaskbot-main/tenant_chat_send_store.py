@@ -19,11 +19,14 @@ def authority(cur, session, lead_id):
     profile = {**profile, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)}
     policy = TenantPolicy(profile)
     cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE', (tenant, lead_id))
-    if not policy.allows('deals') or not policy.can_access_deal(cur.fetchone()):
+    deal = cur.fetchone()
+    if not policy.allows('dialogs') and (not policy.allows('deals') or not policy.can_access_deal(deal)):
         raise TenantLinearError('Mesaj göndərmək üçün icazəniz yoxdur.', 403)
     connect = connect_route(cur, tenant, lead_id)
     if connect:
         return profile, ['connect', connect['channel_id'], connect['conversation_id']], {'provider': 'connect', 'route': connect}
+    if not policy.allows('deals') or not policy.can_access_deal(deal):
+        raise TenantLinearError('Mesaj göndərmək üçün icazəniz yoxdur.', 403)
     cur.execute("SELECT account_domain,connected_at,status,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE", (tenant,))
     integration = cur.fetchone()
     if not integration or integration['status'] != 'connected' or not integration['secrets']:
