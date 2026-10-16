@@ -126,9 +126,11 @@ class ConnectAiFlowTests(unittest.TestCase):
         cursor = Cursor(ones=[{'revision': 9}])
         connection = Connection(cursor)
         job = {'tenant_id': TENANT, 'agent_id': CHANNEL, 'conversation_id': 'client@s.whatsapp.net',
-               'lease_token': 'lease-a', 'revision': 3, 'event_fingerprint': 'event-a'}
+               'lease_token': 'lease-a', 'revision': 3, 'event_fingerprint': 'event-a', 'provider':'connect', 'channel_id':CHANNEL}
         with patch.object(connect_ai, '_connect', return_value=connection), \
-             patch.object(connect_ai, 'ensure_schema'):
+             patch.object(connect_ai, 'ensure_schema'), \
+             patch('tenant_support_inbox_store.handoff_ticket') as inbox, \
+             patch('tenant_support_inbox_store.summarize_created'):
             self.assertTrue(connect_ai.finish_sent_after_reply_handoff(job, {'run_id': DRAFT}, 'message-a'))
         state_sql = next(sql for sql, _params in cursor.executed if "state='human'" in sql)
         self.assertIn('trigger_reply_sent_then_handoff', state_sql)
@@ -146,10 +148,12 @@ class ConnectAiFlowTests(unittest.TestCase):
         self.assertFalse(any("state='sending'" in sql for sql, _params in cursor.executed))
 
     def test_accepted_connect_manual_draft_handoff_uses_connect_state_not_kommo(self):
-        cursor = Cursor(ones=[{'provider': 'connect'}, {'chat_id': 'client@s.whatsapp.net', 'handoff_after_send': True}])
+        cursor = Cursor(ones=[{'provider': 'connect','payload':{'channel_id':CHANNEL},'source_fingerprint':'event-a'}, {'chat_id': 'client@s.whatsapp.net', 'handoff_after_send': True}])
         connection = Connection(cursor)
         with patch.object(agents_store, '_connect', return_value=connection), \
-             patch.object(agents_store, 'ensure_schema'):
+             patch.object(agents_store, 'ensure_schema'), \
+             patch('tenant_support_inbox_store.handoff_ticket'), \
+             patch('tenant_support_inbox_store.summarize_created'):
             self.assertEqual(agents_store.finish_draft_send(TENANT, DRAFT, 'accepted'), 'approved')
         transition = next(params for sql, params in cursor.executed if "trigger_reply_sent_then_handoff" in sql)
         self.assertEqual(transition[1], 'connect')

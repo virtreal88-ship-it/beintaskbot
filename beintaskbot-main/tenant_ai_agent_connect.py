@@ -187,6 +187,8 @@ def finish_sent_after_reply_handoff(job: dict, reservation: dict, message_id: st
     transaction closes the old gap where a ``handoff_after_reply`` trigger
     could send a message but leave the AI active after a process restart.
     """
+    from tenant_support_inbox_store import handoff_ticket, summarize_created
+    ticket = None
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -200,12 +202,15 @@ def finish_sent_after_reply_handoff(job: dict, reservation: dict, message_id: st
             # Do not overwrite a real operator takeover that won the race.
             cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state='active' RETURNING revision",
                         (job['tenant_id'], job['conversation_id']))
-            if cur.fetchone():
+            changed = cur.fetchone()
+            ticket = handoff_ticket(cur, job, 'trigger_reply_sent_then_handoff')
+            if changed:
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='trigger_reply_sent_then_handoff' WHERE tenant_id=%s::uuid AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state IN ('queued','processing'))",
                             (job['tenant_id'], job['tenant_id'], job['conversation_id']))
                 cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='trigger_reply_sent_then_handoff',updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state IN ('queued','processing')",
                             (job['tenant_id'], job['conversation_id']))
         conn.commit()
+    summarize_created(job['tenant_id'], ticket)
     return True
 
 

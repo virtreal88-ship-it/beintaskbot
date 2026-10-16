@@ -24,3 +24,7 @@ ENV/
 !docs/manifest.json
 !guide_site/seed.json
 .DS_Store
+
+# Local support inbox verification environments
+.venv-support/
+.support-test-deps/

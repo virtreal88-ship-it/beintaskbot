@@ -591,7 +591,7 @@ def _conversation_provider_allowed(cur, tenant, provider, conversation, channel_
         from tenant_connect_transport import _schema as connect_schema
         connect_schema(cur.connection)
         if channel_id:
-            cur.execute('''SELECT connect_channel_id::text AS channel_id FROM saas_connect_conversations c
+            cur.execute('''SELECT c.connect_channel_id::text AS channel_id FROM saas_connect_conversations c
               JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
               WHERE c.tenant_id=%s::uuid AND c.conversation_id=%s AND c.connect_channel_id=%s::uuid''',
                         (tenant, conversation, channel_id))
@@ -612,6 +612,8 @@ def _conversation_provider_allowed(cur, tenant, provider, conversation, channel_
 
 
 def set_conversation_state(profile,conversation_id,state,reason='',provider='kommo',channel_id=''):
+    from tenant_support_inbox_store import create_in_transaction, summarize_created
+    ticket = None
     conversation=str(conversation_id or '').strip()
     provider=str(provider or 'kommo').strip().lower()
     if not conversation or len(conversation)>160 or state not in {'human','active','paused'}:
@@ -631,8 +633,12 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
                 cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,
                   error_code=%s,updated_at=now() WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s
                   AND state IN ('queued','processing')''',(stop_code,tenant,provider,conversation))
+            if state == 'human' and provider == 'connect':
+                ticket = create_in_transaction(cur, tenant, resolved_channel, conversation, reason,
+                    'manual-handoff:' + str(uuid.uuid4()), actor=actor)
             _audit(cur,tenant,actor,'ai_conversation_'+state,'conversation',conversation,{'reason':str(reason)[:240],'provider':provider,'channel_id':resolved_channel})
         conn.commit()
+    summarize_created(tenant, ticket)
     return {'conversation_id':conversation,'provider':provider,'channel_id':resolved_channel,'state':state,'reason':str(reason)[:240]}
 
 
@@ -879,12 +885,14 @@ def reserve_draft_send(profile,draft_id):
 
 
 def finish_draft_send(tenant_id,draft_id,state):
+    from tenant_support_inbox_store import handoff_ticket, summarize_created
+    ticket = None
     final={'accepted':'approved','unknown':'unknown'}.get(state)
     if state not in {'accepted','unknown','blocked'}:raise ValueError('Invalid draft send state')
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT e.provider FROM saas_ai_agent_drafts d
+            cur.execute('''SELECT e.provider,e.payload,d.source_fingerprint FROM saas_ai_agent_drafts d
               JOIN saas_tenant_webhook_events e ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
               WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid''',(tenant_id,draft_id))
             provenance=cur.fetchone() or {}
@@ -900,8 +908,14 @@ def finish_draft_send(tenant_id,draft_id,state):
                 cur.execute("UPDATE saas_ai_agent_drafts SET state=%s WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='sending' RETURNING chat_id,handoff_after_send",(final,tenant_id,draft_id))
                 row=cur.fetchone()
                 if state=='accepted' and row and row.get('handoff_after_send'):
+                    if provider == 'connect':
+                        ticket = handoff_ticket(cur, {'tenant_id':tenant_id,'provider':provider,
+                            'channel_id':(provenance.get('payload') or {}).get('channel_id'),
+                            'conversation_id':row['chat_id'],'event_fingerprint':provenance['source_fingerprint']},
+                            'trigger_reply_sent_then_handoff')
                     cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND state='active'",(tenant_id,provider,row['chat_id']))
         conn.commit()
+    summarize_created(tenant_id, ticket)
     return final
 
 

@@ -261,5 +261,7 @@ def ensure_schema(conn):
               UNIQUE(tenant_id,event_fingerprint,action_key),
               FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE,
               FOREIGN KEY(tenant_id,event_fingerprint) REFERENCES saas_tenant_webhook_events(tenant_id,fingerprint) ON DELETE CASCADE)''')
+        from tenant_support_inbox_schema import create_schema
+        create_schema(conn)
         conn.commit()
         _ready = True
