@@ -295,9 +295,11 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
     accepted = False
     queued_payload = None
     with _connect() as conn:
-        _schema(conn)
+        # AI schema initialization also prepares Connect tables. Never hold
+        # Connect DDL locks while waiting for the AI schema's process lock.
         from tenant_ai_agents_schema import ensure_schema
         ensure_schema(conn)
+        _schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT tenant_id,secrets FROM saas_tenant_integrations WHERE provider='connect' AND status='connected' AND secrets IS NOT NULL")
             matches = []
@@ -489,10 +491,10 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
 
 def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_id: str, author: str = 'Operator') -> None:
     with _connect() as conn:
-        _schema(conn)
         if author != 'AI Agent':
             from tenant_ai_agents_schema import ensure_schema
             ensure_schema(conn)
+        _schema(conn)
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, "connect", route["channel_id"], route["conversation_id"])
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)

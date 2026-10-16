@@ -1,4 +1,4 @@
-# Connect channel isolation: release candidate
+# Connect channel isolation: release record
 
 Branch: `codex/connect-channel-isolation`, based on testing-center integration `f38f1a5e`.
 Production references rechecked: Beintaskbot `f49e8b5c`; Connect `ea2179b3`.
@@ -33,11 +33,11 @@ Migration version 1 snapshots all legacy Connect states in `saas_ai_channel_lega
 
 Before publishing, run `python scripts/audit_connect_channel_scope.py` inside a trusted environment with the existing database URL in its environment. It sets a read-only transaction and a statement timeout, never calls schema initialization, prints counts only and exits nonzero for ambiguity, inconsistent job provenance or lack of a verified connection. Do not paste the URL into tickets or logs.
 
-The current session's Railway OAuth connector exposes variable names only and provides no SQL execution. No local authorized database URL or Railway CLI session is available. The gate returned `database_connection_not_available`; the absence of unresolved production records is **not verified**. Deployment therefore remains blocked. This is not a claim that production data are clean or that a particular ambiguity count was measured.
+The subsequent authorized audit ran in the existing worker's Railway web console, using its DATABASE_URL without disclosure. PostgreSQL 18.6 returned 16 legacy Connect states: 12 uniquely assignable and 4 ambiguous. All 7 Connect jobs had consistent route/event provenance. The old primary keys matched expectations and had no inbound foreign keys. The user explicitly approved retaining ambiguous rows in quarantine; the original CLI gate still reports those rows conservatively as blocked.
 
 ## Safe publication and rollback
 
-1. Complete the read-only data gate. If it finds ambiguous states or inconsistent routes, keep this release unpublished and resolve them through an evidence-based, separately reviewed procedure.
+1. Complete the read-only data gate. Under the subsequent user authorization, ambiguous states may remain quarantined. Do not infer a channel or reset Human Mode. Inconsistent job provenance remains a blocker pending investigation.
 2. Back up the database. Pause application writers/AI workers for the key migration; do not overlap old and new binaries. Old binaries use the old `ON CONFLICT` keys and are not rolling-deployment compatible with the new primary keys.
 3. Apply the transactional schema once, rerun the gate, then start the tested Beintaskbot revision. Connect remains on `ea2179b3`; no Connect deploy or session reset is required.
 4. Check health, worker recovery, media HTTP 403 correction, all three testing modes, and two selected owned WhatsApp channels. Verify manual A leaves B active, Resume processes only new inbound messages, and drafts/tickets/history belong to the selected channel. Do not message third-party contacts.
@@ -57,3 +57,37 @@ No production migration, merge, push, deployment, secret rotation, proxy change,
  Real PostgreSQL race tests use a disposable database on a loopback-only temporary server, with all Connect/model calls mocked. The database is dropped and the local server stopped after validation. Portable test binaries came from [EDB's PostgreSQL binaries](https://www.enterprisedb.com/download-postgresql-binaries).
 
 Live WhatsApp and production data migration have not been exercised for this revision. Railway read-only status shows the existing application, Connect, Evolution and PostgreSQL services online with no pending deployment. Existing application deployment: `26973d29-ec76-4352-9118-fc521af8aa3d`; Connect: `9bc33025-cd1f-4e09-85ba-a4d6064c86f4`. There is no new deployment ID.
+
+
+## Production preflight and startup correction (2026-10-16)
+
+A custom-format pg_dump was written inside the existing PostgreSQL container to
+`/var/lib/postgresql/data/beintaskbot-release-8ab2d57d-20261016/database.dump`.
+The directory is private (umask 077); the archive is mode 0600. No dump or secret
+was exported to logs or another service. The archive was successfully restored
+with `pg_restore --exit-on-error --single-transaction` into a temporary database
+on the same existing PostgreSQL server. This is migration recovery protection,
+not an off-volume disaster-recovery backup. Railway's built-in backup page had
+no backups and required a plan upgrade to create one; no upgrade was made.
+
+The exact accepted migration (verified SHA-256) and full AI schema were rehearsed
+on the restored database. The result was 12 resolved / 4 quarantined states,
+unchanged original state fields and job rows, safe repeated migration, and refusal
+of an unsafe downgrade to channel-less keys. Never restore this archive over a
+live database with later messages: stop writers and reconcile newer data first.
+Prefer a forward correction after multi-channel state has been created.
+
+The first production rollout exposed a cold-start lock inversion not present in
+the single-process schema rehearsal. A webhook acquired Connect DDL locks before
+waiting for the AI schema Python lock; the startup thread held that Python lock
+and waited for Connect DDL. Manual outbound recording had the same order. The
+worker was stopped; PostgreSQL confirmed zero remaining lock waiters, no committed
+channel migration, and all 16 legacy states retained. The follow-up correction
+initializes AI schema before Connect DDL in those two entrypoints. It does not
+change business data, send rules, agent settings or the pilot UI.
+
+Two deterministic real-PostgreSQL thread regressions cover webhook and manual
+outbound cold startup. The follow-up blocking suite passed 150 tests, including
+9 real PostgreSQL concurrency cases, testing-center, channel isolation, migration
+and media checks. Final deployment ID and post-release checks are recorded in the
+release conversation; the historical validation above describes the accepted base.

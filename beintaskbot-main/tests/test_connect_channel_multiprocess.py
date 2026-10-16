@@ -176,3 +176,48 @@ def test_concurrent_signed_webhook_retries_do_not_duplicate_messages(channels):
     other={**event,'id':str(uuid.uuid4()),'data':{**event['data'],'id':str(uuid.uuid4()),'channelId':CB}}
     assert all(race(db,[('webhook',event),('webhook',event),('webhook',other)],key))
     assert db.execute("SELECT count(*) n FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id IN (%s,%s)",(A,'connect:'+event['data']['id'],'connect:'+other['data']['id']))[0]['n']==2;db.commit()
+
+
+@pytest.mark.parametrize("operation", ["webhook", "manual_outbound"])
+def test_cold_start_never_holds_connect_ddl_while_waiting_for_ai_schema(database, monkeypatch, operation):
+    """Reproduce the Python-lock/Postgres-lock cycle observed during rollout."""
+    import threading
+    import tenant_connect_transport as transport
+    factory=lambda:psycopg.connect(database.dsn,row_factory=dict_row,
+                                  options="-c statement_timeout=10000 -c lock_timeout=1500")
+    monkeypatch.setattr(transport, '_connect', factory)
+    original=schema.ensure_schema
+    waiting=threading.Event()
+    finished=threading.Event()
+    errors=[]
+    def observed(conn):
+        waiting.set()
+        return original(conn)
+    monkeypatch.setattr(schema, 'ensure_schema', observed)
+    monkeypatch.setattr(schema, '_ready', False)
+    def invoke():
+        try:
+            if operation=='webhook':
+                transport.ingest(b'{}','invalid',{'id':'startup-lock-probe',
+                    'type':'message.inbound.received','data':{'channelId':CA,'conversationId':'startup-probe'}})
+            else:
+                transport.record_outbound(A,999999,{'channel_id':CA,'conversation_id':'startup-probe'},
+                                          'test only','startup-lock-probe')
+        except Exception as error:
+            errors.append(type(error).__name__)
+        finally:
+            finished.set()
+    thread=threading.Thread(target=invoke,daemon=True)
+    schema._lock.acquire()
+    try:
+        thread.start()
+        assert waiting.wait(5), 'Request did not reach AI schema initialization'
+        # The startup thread owns the Python AI schema lock and next needs
+        # Connect DDL. The concurrent request must not already own that DDL.
+        with factory() as startup:
+            transport._schema(startup)
+    finally:
+        schema._lock.release()
+        thread.join(15)
+    assert finished.is_set(), 'Cold-start request deadlocked'
+    assert errors, 'Synthetic request must be rejected without storing customer data'
