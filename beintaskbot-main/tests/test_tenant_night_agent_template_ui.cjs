@@ -36,6 +36,8 @@ assert.equal(disabled.auto_send_enabled, undefined, 'The template must not enabl
 const confirmedAutomatic = helpers.nightAgentPayload({...base, mode: 'automatic', confirmedLaunch: true, model: 'gpt-5.6'});
 assert.equal(confirmedAutomatic.mode, 'automatic');
 assert.equal(confirmedAutomatic.enabled, true, 'Automatic can only be enabled after an explicit confirmation.');
+const retryPayload = helpers.nightAgentPayload({...base, setupKey: 'night-wizard-retry-0001'});
+assert.equal(retryPayload.setup_key, 'night-wizard-retry-0001', 'A resumed wizard must send its opaque retry key.');
 assert.throws(() => helpers.nightAgentScope(''), /WhatsApp/, 'A missing Connect channel must fail before saving.');
 assert.throws(() => helpers.nightAgentSchedule('Asia/Baku', [0], '22:00', '22:00'), /разные часы/, 'An ambiguous 24-hour shift is rejected.');
 
@@ -46,6 +48,8 @@ assert.match(source, /expected_user_id:current\.telegram_id/,
 assert.match(source, /provider:'connect'/, 'The template must work through Connect without Kommo.');
 assert.match(source, /actions:\['handoff'\]/, 'Complex/unsolved requests must use the existing handoff action.');
 assert.match(source, /knowledge\/upload/, 'Knowledge files must use the existing upload endpoint.');
+assert.match(source, /localStorage\.setItem/, 'An interrupted setup must be recoverable after a reload.');
+assert.match(source, /setup_key/, 'Agent, handoff and knowledge retries must use idempotency keys.');
 assert.match(source, /never.*Active Mode|не меняет этот режим/i,
   'The UI must explain that it does not silently enable company Active Mode.');
 assert.doesNotMatch(source, /api\('agents\/settings','PATCH'/,

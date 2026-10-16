@@ -148,6 +148,54 @@ class ConnectAiFlowTests(unittest.TestCase):
                 agents_store.reserve_draft_send(profile, DRAFT)
         self.assertFalse(any("state='sending'" in sql for sql, _params in cursor.executed))
 
+    def test_wizard_retry_keys_return_existing_tenant_records_without_another_insert(self):
+        profile = {'tenant_id': TENANT, 'telegram_id': 7}
+        retry = 'night-wizard-retry-0001'
+        existing_agent = {'id': DRAFT, 'tenant_id': TENANT, 'name': 'Night support', 'enabled': False,
+                          'mode': 'manual', 'schedule': {}, 'scopes': [], 'version': 1}
+        cursor = Cursor(ones=[existing_agent])
+        connection = Connection(cursor)
+        agent_data = {'name': 'Night support', 'instructions': 'Known facts only.', 'enabled': False,
+                      'mode': 'manual', 'language': 'auto', 'style': 'balanced', 'delay_seconds': 40,
+                      'schedule': {'timezone': 'Asia/Baku', 'days': [0], 'start': '22:00', 'end': '06:00'},
+                      'scopes': [{'provider': 'connect', 'channel_id': CHANNEL}], 'model': '',
+                      'safety': {'protect_internal': True, 'verified_facts': True, 'block_adult': True,
+                                 'block_prompt_injection': True, 'scope_only': True}, 'setup_key': retry}
+        with patch.object(agents_store, '_connect', return_value=connection), \
+             patch.object(agents_store, 'ensure_schema'), \
+             patch.object(agents_store, '_authorize', return_value=(TENANT, 7)):
+            self.assertEqual(agents_store.save_agent(profile, agent_data)['id'], DRAFT)
+        self.assertFalse(any('INSERT INTO saas_ai_agents' in sql for sql, _params in cursor.executed))
+        self.assertIn('created_by=%s AND setup_key=%s', cursor.executed[0][0])
+
+        existing_trigger = {'id': DRAFT, 'agent_id': CHANNEL, 'name': 'Handoff', 'trigger_type': 'phrase',
+                            'condition': {'phrase': 'operator', 'target_stage_id': '', 'task_text': ''},
+                            'actions': ['handoff'], 'enabled': True, 'version': 1, 'created_at': None, 'updated_at': None}
+        cursor = Cursor(ones=[{'id': CHANNEL}, existing_trigger])
+        connection = Connection(cursor)
+        trigger_data = {'name': 'Handoff', 'trigger_type': 'phrase',
+                        'condition': {'phrase': 'operator', 'target_stage_id': '', 'task_text': ''},
+                        'actions': ['handoff'], 'enabled': True, 'setup_key': f'{retry}-handoff'}
+        with patch.object(agents_store, '_connect', return_value=connection), \
+             patch.object(agents_store, 'ensure_schema'), \
+             patch.object(agents_store, '_authorize', return_value=(TENANT, 7)):
+            self.assertEqual(agents_store.save_trigger(profile, CHANNEL, trigger_data)['id'], DRAFT)
+        self.assertFalse(any('INSERT INTO saas_ai_agent_triggers' in sql for sql, _params in cursor.executed))
+
+        digest = __import__('hashlib').sha256(b'Router instructions').hexdigest()
+        existing_source = {'id': DRAFT, 'tenant_id': TENANT, 'agent_id': CHANNEL, 'title': 'BeinSystems',
+                           'kind': 'txt', 'content': 'Router instructions', 'active': True,
+                           'content_hash': digest, 'created_at': None, 'updated_at': None}
+        cursor = Cursor(ones=[{'id': CHANNEL}, existing_source])
+        connection = Connection(cursor)
+        source_data = {'title': 'BeinSystems', 'kind': 'txt', 'content': 'Router instructions', 'active': True,
+                       'agent_id': CHANNEL, 'setup_key': f'{retry}-kb-file'}
+        with patch.object(agents_store, '_connect', return_value=connection), \
+             patch.object(agents_store, 'ensure_schema'), \
+             patch.object(agents_store, '_authorize', return_value=(TENANT, 7)):
+            self.assertEqual(agents_store.save_knowledge(profile, source_data)['id'], DRAFT)
+        self.assertFalse(any('INSERT INTO saas_ai_knowledge_sources' in sql for sql, _params in cursor.executed))
+
     def test_accepted_connect_manual_draft_handoff_uses_connect_state_not_kommo(self):
         cursor = Cursor(ones=[{'provider': 'connect','payload':{'channel_id':CHANNEL},'source_fingerprint':'event-a'}, {'chat_id': 'client@s.whatsapp.net', 'handoff_after_send': True}])
         connection = Connection(cursor)

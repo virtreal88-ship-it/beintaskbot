@@ -85,6 +85,12 @@ def ensure_schema(conn):
             # This is deliberately additive: existing agents receive the
             # server-enforced default policy on their next read.
             cur.execute("ALTER TABLE saas_ai_agents ADD COLUMN IF NOT EXISTS safety JSONB NOT NULL DEFAULT '{}'::jsonb")
+            # A wizard may survive a browser refresh after its first request.
+            # The opaque setup key makes that retry return the same record
+            # instead of creating another agent for the same employee.
+            cur.execute("ALTER TABLE saas_ai_agents ADD COLUMN IF NOT EXISTS setup_key TEXT NULL")
+            cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS saas_ai_agents_setup_key_idx
+              ON saas_ai_agents(tenant_id,created_by,setup_key)''')
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_ai_agents_tenant_idx
               ON saas_ai_agents(tenant_id,updated_at DESC)''')
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_knowledge_sources(
@@ -230,6 +236,9 @@ def ensure_schema(conn):
               PRIMARY KEY(tenant_id,id),FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE)''')
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_ai_agent_triggers_active_idx
               ON saas_ai_agent_triggers(tenant_id,agent_id,enabled,trigger_type)''')
+            cur.execute("ALTER TABLE saas_ai_agent_triggers ADD COLUMN IF NOT EXISTS setup_key TEXT NULL")
+            cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS saas_ai_agent_triggers_setup_key_idx
+              ON saas_ai_agent_triggers(tenant_id,agent_id,setup_key)''')
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_conversation_state(
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
               provider TEXT NOT NULL,conversation_id TEXT NOT NULL,agent_id UUID NULL,
@@ -265,6 +274,9 @@ def ensure_schema(conn):
             cur.execute("ALTER TABLE saas_ai_conversation_state ADD COLUMN IF NOT EXISTS resumed_at TIMESTAMPTZ")
         with conn.cursor() as cur:
             cur.execute("ALTER TABLE saas_ai_knowledge_sources ADD COLUMN IF NOT EXISTS agent_id UUID")
+            cur.execute("ALTER TABLE saas_ai_knowledge_sources ADD COLUMN IF NOT EXISTS setup_key TEXT NULL")
+            cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS saas_ai_knowledge_sources_setup_key_idx
+              ON saas_ai_knowledge_sources(tenant_id,agent_id,setup_key)''')
             cur.execute("ALTER TABLE saas_ai_agent_runs ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ")
             cur.execute("ALTER TABLE saas_ai_agent_runs ADD COLUMN IF NOT EXISTS error_code TEXT NOT NULL DEFAULT ''")
             cur.execute("ALTER TABLE saas_ai_agent_drafts ADD COLUMN IF NOT EXISTS send_started_at TIMESTAMPTZ")

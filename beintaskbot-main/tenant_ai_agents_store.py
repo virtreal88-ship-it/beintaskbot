@@ -3,7 +3,8 @@ import hashlib
 import uuid
 
 from tenant_ai_agents_policy import (MAX_AGENTS, MAX_SOURCES, agent as validate_agent,
-    company_settings, knowledge as validate_knowledge, chunk_text, trigger as validate_trigger, safety_policy)
+    company_settings, knowledge as validate_knowledge, chunk_text, trigger as validate_trigger, safety_policy,
+    setup_key as validate_setup_key)
 from tenant_ai_agents_schema import ensure_schema
 from tenant_linear_policy import TenantLinearError, identifier
 from tenant_ai_agent_access import tenant_status_allows_ai, tenant_status_allows_management
@@ -55,7 +56,7 @@ def _row(row):
     if not row:
         return None
     value = dict(row)
-    for key in ('id', 'tenant_id'):
+    for key in ('id', 'tenant_id', 'agent_id'):
         if key in value:
             value[key] = str(value[key])
     for key in ('created_at', 'updated_at'):
@@ -272,6 +273,18 @@ def save_agent(profile, data, *, agent_id=None):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
+            # A retry after a browser/network interruption must return the
+            # original disabled agent.  The key is also employee-scoped so an
+            # administrator cannot accidentally resume another employee's
+            # unfinished wizard.
+            if creating and patch.get('setup_key'):
+                cur.execute('''SELECT id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,
+                  schedule,scopes,model,safety,version,created_at,updated_at FROM saas_ai_agents
+                  WHERE tenant_id=%s::uuid AND created_by=%s AND setup_key=%s FOR SHARE''',
+                            (tenant, actor, patch['setup_key']))
+                existing = _row(cur.fetchone())
+                if existing:
+                    return existing
             if 'model' in patch:
                 cur.execute("SELECT metadata,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
                 integration = cur.fetchone() or {}
@@ -314,10 +327,11 @@ def save_agent(profile, data, *, agent_id=None):
                         raise TenantLinearError('Əvvəlcə AI Agents və mövcud Chat AI ayarlarını tamamlayın.', 409)
                 agent_uuid = uuid.uuid4()
                 cur.execute('''INSERT INTO saas_ai_agents(id,tenant_id,name,instructions,enabled,mode,language,style,
-                  delay_seconds,schedule,scopes,model,safety,created_by) VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s)
+                  delay_seconds,schedule,scopes,model,safety,created_by,setup_key) VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s,%s)
                   RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,schedule,scopes,model,safety,version,created_at,updated_at''',
                   (agent_uuid, tenant, patch['name'], patch['instructions'], patch['enabled'], patch['mode'], patch['language'], patch['style'],
-                   patch['delay_seconds'], _json(patch['schedule']), _json(patch['scopes']), patch['model'], _json(patch['safety']), actor))
+                   patch['delay_seconds'], _json(patch['schedule']), _json(patch['scopes']), patch['model'], _json(patch['safety']), actor,
+                   patch.get('setup_key')))
                 result = _row(cur.fetchone())
                 _audit(cur, tenant, actor, 'ai_agent_created', 'ai_agent', agent_uuid, {'name': patch['name']})
             else:
@@ -390,9 +404,14 @@ def list_knowledge(profile, source_id=None):
 
 def save_knowledge(profile, data, *, source_id=None):
     creating = source_id is None
+    if not isinstance(data, dict):
+        raise TenantLinearError('Bilik mənbəyi düzgün deyil.')
     if not creating and 'agent_id' in data:
         raise TenantLinearError('Bilik mənbəyinin agenti dəyişdirilə bilməz.')
-    patch = validate_knowledge({k:v for k,v in data.items() if k!='agent_id'} if isinstance(data,dict) else data, creating=creating)
+    if not creating and 'setup_key' in data:
+        raise TenantLinearError('Yenidən cəhd açarı dəyişdirilə bilməz.')
+    retry_key = validate_setup_key(data['setup_key']) if data.get('setup_key') is not None else None
+    patch = validate_knowledge({k:v for k,v in data.items() if k not in {'agent_id','setup_key'}}, creating=creating)
     if not patch:
         raise TenantLinearError('Dəyişdiriləcək bilik ayarı yoxdur.')
     with _connect() as conn:
@@ -401,17 +420,28 @@ def save_knowledge(profile, data, *, source_id=None):
             tenant, actor = _authorize(cur, profile)
             if creating:
                 bound_agent = identifier(data['agent_id']) if data.get('agent_id') else None
+                if retry_key and not bound_agent:
+                    raise TenantLinearError('Bilik bazasını yenidən yükləmək üçün agent seçilməlidir.')
                 if bound_agent:
                     cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE', (tenant,bound_agent))
                     if not cur.fetchone(): raise TenantLinearError('Agent tapılmadı.',404)
+                digest = hashlib.sha256(patch['content'].encode('utf-8')).hexdigest()
+                if retry_key:
+                    cur.execute('''SELECT id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at
+                      FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND setup_key=%s FOR SHARE''',
+                                (tenant, bound_agent, retry_key))
+                    existing = _row(cur.fetchone())
+                    if existing:
+                        if existing['content_hash'] != digest:
+                            raise TenantLinearError('Eyni yenidən cəhd açarı ilə başqa bilik faylı yüklənə bilməz.', 409)
+                        return existing
                 cur.execute('SELECT count(*) AS total FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid', (tenant,))
                 if int((cur.fetchone() or {}).get('total') or 0) >= MAX_SOURCES:
                     raise TenantLinearError('Bilik mənbələrinin sayı həddə çatıb.')
                 source = uuid.uuid4()
-                digest = hashlib.sha256(patch['content'].encode('utf-8')).hexdigest()
-                cur.execute('''INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,active,content_hash,created_by,agent_id)
-                  VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid) RETURNING id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at''',
-                  (source, tenant, patch['title'], patch['kind'], patch['content'], patch['active'], digest, actor, bound_agent))
+                cur.execute('''INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,active,content_hash,created_by,agent_id,setup_key)
+                  VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s) RETURNING id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at''',
+                  (source, tenant, patch['title'], patch['kind'], patch['content'], patch['active'], digest, actor, bound_agent, retry_key))
                 result = _row(cur.fetchone())
             else:
                 source = identifier(source_id)
@@ -547,19 +577,28 @@ def save_trigger(profile,agent_id,data,*,trigger_id=None):
             tenant,actor=_authorize(cur,profile)
             cur.execute("SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,agent))
             if not cur.fetchone():raise TenantLinearError('Agent tapılmadı.',404)
-            if any(action in patch.get('actions',[]) for action in ('create_task','update_phone','move_stage')):
+            existing = None
+            if creating and patch.get('setup_key'):
+                cur.execute('''SELECT id,agent_id,name,trigger_type,condition,actions,enabled,version,created_at,updated_at
+                  FROM saas_ai_agent_triggers WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND setup_key=%s FOR SHARE''',
+                            (tenant,agent,patch['setup_key']))
+                existing = cur.fetchone()
+            if existing:
+                result=dict(existing)
+            if not existing and any(action in patch.get('actions',[]) for action in ('create_task','update_phone','move_stage')):
                 cur.execute('SELECT crm_actions_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid FOR SHARE',(tenant,))
                 settings=cur.fetchone() or {}
                 if patch.get('enabled') and settings.get('crm_actions_enabled') is not True:
                     raise TenantLinearError('Əvvəlcə şirkət səviyyəsində AI CRM əməliyyatlarını aktiv edin.',409)
             if creating:
-                trigger_uuid=uuid.uuid4()
-                cur.execute('''INSERT INTO saas_ai_agent_triggers(tenant_id,id,agent_id,name,trigger_type,condition,actions,enabled)
-                  VALUES(%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s)
-                  RETURNING id,agent_id,name,trigger_type,condition,actions,enabled,version,created_at,updated_at''',
-                  (tenant,trigger_uuid,agent,patch['name'],patch['trigger_type'],_json(patch['condition']),_json(patch['actions']),patch['enabled']))
-                result=dict(cur.fetchone())
-                _audit(cur,tenant,actor,'ai_agent_trigger_created','ai_agent_trigger',trigger_uuid,{'type':patch['trigger_type']})
+                if not existing:
+                    trigger_uuid=uuid.uuid4()
+                    cur.execute('''INSERT INTO saas_ai_agent_triggers(tenant_id,id,agent_id,name,trigger_type,condition,actions,enabled,setup_key)
+                      VALUES(%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s,%s)
+                      RETURNING id,agent_id,name,trigger_type,condition,actions,enabled,version,created_at,updated_at''',
+                      (tenant,trigger_uuid,agent,patch['name'],patch['trigger_type'],_json(patch['condition']),_json(patch['actions']),patch['enabled'],patch.get('setup_key')))
+                    result=dict(cur.fetchone())
+                    _audit(cur,tenant,actor,'ai_agent_trigger_created','ai_agent_trigger',trigger_uuid,{'type':patch['trigger_type']})
             else:
                 trigger_uuid=identifier(trigger_id)
                 if type(data.get('expected_version')) is not int:raise TenantLinearError('Trigger versiyası yoxdur.',409)

@@ -8,15 +8,50 @@
  const DEFAULT_HANDOFF='оператор | менеджер | человек | авария | критическая ошибка | не работает';
  const DEFAULT_INSTRUCTIONS=`Вы — вежливый AI-оператор ночной технической поддержки.\n\nРаботайте только в выбранные дни и часы. Поздоровайтесь в первом ответе активной сессии и отвечайте на языке клиента. Отвечайте только на основе доступной базы знаний и этих инструкций. Если данных недостаточно, задайте короткий уточняющий вопрос или честно скажите, что решение неизвестно.\n\nНе выдумывайте решения, инструкции, сроки, цены, статусы или результаты действий. Для сложных, аварийных или нерешённых проблем сообщайте клиенту, что обращение передаётся человеку, и не обещайте невозможного. Условия передачи ниже создадут существующий handoff-триггер: он фиксирует нерешённое обращение в текущем контуре поддержки.`;
  const STEPS=['Название','WhatsApp-канал','Часовой пояс','Ночная смена','Модель','Инструкции','База знаний','Передача человеку','Режим','Проверка'];
+ const RECOVERY_PREFIX='beintaskbot.night-agent-template.v1';
+ const ERROR_COPY={
+  ru:{name:'Проверьте название AI-оператора.',instructions:'Проверьте инструкции компании.',timezone:'Проверьте часовой пояс компании.',schedule:'Проверьте дни и часы ночной смены.',model:'Выберите модель из разрешённого списка.',channel:'Выбранный WhatsApp-канал недоступен для этой компании. Обновите список и выберите активный канал.',handoff:'Проверьте условия передачи человеку.',knowledge_file:'Проверьте файл базы знаний и повторите загрузку.',permissions:'Недостаточно прав для создания AI-оператора в этой компании.',activation:'Агент сохранён, но его включение не подтверждено сервером. Проверьте статус в редакторе AI Agents.',configuration:'Не удалось сохранить настройки мастера. Повторите незавершённый шаг.'},
+  az:{name:'AI operatorun adını yoxlayın.',instructions:'Şirkət təlimatlarını yoxlayın.',timezone:'Şirkətin saat qurşağını yoxlayın.',schedule:'Gecə növbəsinin gün və saatlarını yoxlayın.',model:'İcazəli siyahıdan model seçin.',channel:'Seçilmiş WhatsApp kanalı bu şirkət üçün əlçatan deyil. Siyahını yeniləyin və aktiv kanalı seçin.',handoff:'Əməkdaşa ötürmə şərtlərini yoxlayın.',knowledge_file:'Bilik bazası faylını yoxlayın və yükləməni təkrarlayın.',permissions:'Bu şirkətdə AI operator yaratmaq üçün icazə yoxdur.',activation:'Agent saxlanıldı, lakin aktivləşdirmə server tərəfindən təsdiqlənmədi. AI Agents redaktorunda statusu yoxlayın.',configuration:'Ustanın parametrlərini saxlamaq alınmadı. Tamamlanmamış addımı təkrarlayın.'},
+  en:{name:'Check the AI operator name.',instructions:'Check the company instructions.',timezone:'Check the company time zone.',schedule:'Check the night-shift days and hours.',model:'Select a model from the allowed list.',channel:'The selected WhatsApp channel is unavailable for this company. Refresh the list and choose an active channel.',handoff:'Check the handoff conditions.',knowledge_file:'Check the knowledge-base file and retry the upload.',permissions:'You do not have permission to create an AI operator for this company.',activation:'The agent was saved, but the server did not confirm activation. Check its status in the AI Agents editor.',configuration:'The wizard settings could not be saved. Retry the unfinished step.'}
+ };
  let epoch=0;
- document.addEventListener('tenant-profile',event=>{epoch++;profile=event.detail?.member||null;createdAgent=null;triggerSaved=false;uploadedFileSignature='';if($('nightAgentTemplateModal'))close()});
- let profile=null,options=null,settings=null,knowledgeSources=[],returnFocus=null,createdAgent=null,triggerSaved=false,uploadedFileSignature='';
+ document.addEventListener('tenant-profile',event=>{epoch++;profile=event.detail?.member||null;createdAgent=null;triggerSaved=false;uploadedFileSignature='';setupKey='';if($('nightAgentTemplateModal'))close()});
+ let profile=null,options=null,settings=null,knowledgeSources=[],returnFocus=null,createdAgent=null,triggerSaved=false,uploadedFileSignature='',setupKey='';
 
  function option(label,value,selected=false){const node=document.createElement('option');node.value=value;node.textContent=label;node.selected=selected;return node}
  function setNotice(message,state=''){const node=$('nightAgentNotice');if(!node)return;node.textContent=message||'';node.dataset.state=state}
  function showError(message){setNotice(message,'warn')}
  function selectedDays(){return [...document.querySelectorAll('[name=nightAgentDay]:checked')].map(node=>Number(node.value)).sort((a,b)=>a-b)}
  function fileSignature(file){return file?`${file.name}:${file.size}:${file.lastModified}`:''}
+ function errorLanguage(){const language=window.tenantI18n?.language||document.documentElement.lang||'ru';return language==='az'||language==='en'?language:'ru'}
+ function wizardError(error){
+  if(!error?.field)return error?.message||ERROR_COPY[errorLanguage()].configuration;
+  return ERROR_COPY[errorLanguage()][error.field]||ERROR_COPY[errorLanguage()].configuration;
+ }
+ function recoveryStorageKey(){return profile?.tenant_id&&profile?.telegram_id?`${RECOVERY_PREFIX}.${profile.tenant_id}.${profile.telegram_id}`:''}
+ function newSetupKey(){
+  const random=globalThis.crypto?.randomUUID?.().replaceAll('-','')||`${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  return `night-${Date.now().toString(36)}-${random}`.slice(0,120);
+ }
+ function restoreProgress(){
+  const key=recoveryStorageKey();if(!key)return false;
+  try{
+   const saved=JSON.parse(localStorage.getItem(key)||'null');
+   if(saved&&typeof saved.setup_key==='string'&&saved.agent&&typeof saved.agent.id==='string'){
+    setupKey=saved.setup_key;createdAgent=saved.agent;triggerSaved=saved.trigger_saved===true;uploadedFileSignature=String(saved.uploaded_file_signature||'');return true;
+   }
+  }catch(_error){}
+  setupKey=newSetupKey();return false;
+ }
+ function saveProgress(){
+  const key=recoveryStorageKey();if(!key||!setupKey||!createdAgent?.id)return;
+  try{localStorage.setItem(key,JSON.stringify({setup_key:setupKey,agent:createdAgent,trigger_saved:triggerSaved,uploaded_file_signature:uploadedFileSignature}))}catch(_error){}
+ }
+ function clearProgress(){const key=recoveryStorageKey();if(key)try{localStorage.removeItem(key)}catch(_error){}}
+ function knowledgeSetupKey(file){
+  let hash=2166136261;for(const character of fileSignature(file)){hash=Math.imul(hash^character.charCodeAt(0),16777619)}
+  return `${setupKey}-kb-${(hash>>>0).toString(36)}`;
+ }
 
  // Kept independent from the DOM so the setup contract is regression-tested.
  function nightAgentSchedule(timezone,days,start,end){
@@ -35,10 +70,12 @@
   const name=String(values.name||'').trim();
   const instructions=String(values.instructions||'').trim();
   if(!name||!instructions)throw new Error('Укажите название и инструкции оператора.');
-  return {name,instructions,enabled:values.confirmedLaunch===true,mode,language:'auto',style:'balanced',delay_seconds:40,
+  const payload={name,instructions,enabled:values.confirmedLaunch===true,mode,language:'auto',style:'balanced',delay_seconds:40,
    schedule:nightAgentSchedule(values.timezone,values.days,values.start,values.end),scopes:nightAgentScope(values.channelId),
    model:values.model===DEFAULT_MODEL?'':String(values.model||''),
    safety:{protect_internal:true,verified_facts:true,block_adult:true,block_prompt_injection:true,scope_only:true}};
+  if(values.setupKey)payload.setup_key=String(values.setupKey);
+  return payload;
  }
 
  async function loadProfile(){
@@ -55,7 +92,7 @@
   const response=await fetch(endpoint+path,{method,credentials:'same-origin',cache:'no-store',headers:data?{'Content-Type':'application/json'}:{},...(data?{body:JSON.stringify({...data,expected_tenant_id:current.tenant_id,expected_user_id:current.telegram_id})}:{})});
   const payload=await response.json().catch(()=>({}));
   if(typeof version!=='undefined'&&version!==epoch)throw new Error('Компания изменилась. Откройте мастер заново.');
-  if(!response.ok||!payload.success){const error=new Error(payload.error||'AI Agents сейчас недоступен.');error.status=response.status;throw error}
+  if(!response.ok||!payload.success){const error=new Error(payload.error||'AI Agents сейчас недоступен.');error.status=response.status;error.code=payload.code;error.field=payload.field;throw error}
   return payload.result;
  }
  async function uploadKnowledge(file,title){
@@ -63,12 +100,13 @@
   form.append('file',file,file.name);
   form.append('title',title||file.name);
   form.append('agent_id',createdAgent.id);
+  form.append('setup_key',knowledgeSetupKey(file));
   form.append('expected_tenant_id',current.tenant_id);
   form.append('expected_user_id',current.telegram_id);
   const response=await fetch(endpoint+'knowledge/upload',{method:'POST',credentials:'same-origin',cache:'no-store',body:form});
   const payload=await response.json().catch(()=>({}));
   if(typeof version!=='undefined'&&version!==epoch)throw new Error('Компания изменилась. Откройте мастер заново.');
-  if(!response.ok||!payload.success)throw new Error(payload.error||'Базу знаний не удалось загрузить.');
+  if(!response.ok||!payload.success){const error=new Error(payload.error||'Базу знаний не удалось загрузить.');error.status=response.status;error.code=payload.code;error.field=payload.field;throw error}
   return payload.result;
  }
 
@@ -88,7 +126,7 @@
   $('nightAgentLaunch').checked=false;
   $('nightAgentKnowledgeFile').value='';
   $('nightAgentKnowledgeTitle').value='';
-  createdAgent=null;triggerSaved=false;uploadedFileSignature='';
+  createdAgent=null;triggerSaved=false;uploadedFileSignature='';setupKey='';
  }
  function fillOptions(){
   const channel=$('nightAgentChannel'),model=$('nightAgentModel');
@@ -100,6 +138,18 @@
   if(!models.length)model.append(option('Нет разрешённых моделей — завершите настройку Chat AI',''));
   models.forEach((item,index)=>model.append(option(item.label,item.id||DEFAULT_MODEL,index===0)));
   $('nightAgentExistingKnowledge').textContent=knowledgeSources.length?`Уже доступно источников базы знаний: ${knowledgeSources.length}.`:'В компании пока нет источников базы знаний: загрузите файл на этом шаге.';
+ }
+ function hydrateRecoveredAgent(){
+  if(!createdAgent)return;
+  const agent=createdAgent,schedule=agent.schedule||{},scope=(agent.scopes||[]).find(item=>item?.provider==='connect')||{};
+  $('nightAgentName').value=agent.name||$('nightAgentName').value;
+  $('nightAgentInstructions').value=agent.instructions||$('nightAgentInstructions').value;
+  $('nightAgentTimezone').value=schedule.timezone||$('nightAgentTimezone').value;
+  $('nightAgentStart').value=schedule.start||$('nightAgentStart').value;$('nightAgentEnd').value=schedule.end||$('nightAgentEnd').value;
+  document.querySelectorAll('[name=nightAgentDay]').forEach(node=>{node.checked=(schedule.days||[]).includes(Number(node.value))});
+  if(scope.channel_id)$('nightAgentChannel').value=scope.channel_id;
+  if(agent.model&&[...$('nightAgentModel').options].some(option=>option.value===agent.model))$('nightAgentModel').value=agent.model;
+  $('nightAgentMode').value=agent.mode==='automatic'?'automatic':'manual';$('nightAgentLaunch').checked=agent.enabled===true;
  }
  function modeHint(){
   const automatic=$('nightAgentMode').value==='automatic',launch=$('nightAgentLaunch').checked;
@@ -118,7 +168,7 @@
  }
  function values(){return {name:$('nightAgentName').value,instructions:$('nightAgentInstructions').value,channelId:$('nightAgentChannel').value,
   timezone:$('nightAgentTimezone').value,days:selectedDays(),start:$('nightAgentStart').value,end:$('nightAgentEnd').value,
-  model:modelValue(),mode:$('nightAgentMode').value,confirmedLaunch:$('nightAgentLaunch').checked,handoff:$('nightAgentHandoff').value.trim()}}
+  model:modelValue(),mode:$('nightAgentMode').value,confirmedLaunch:$('nightAgentLaunch').checked,handoff:$('nightAgentHandoff').value.trim(),setupKey:setupKey}}
  function validate(step){
   const current=values(),file=$('nightAgentKnowledgeFile').files[0];
   if(step===0&&!current.name.trim())throw new Error('Введите название AI-оператора.');
@@ -157,22 +207,23 @@
  function close(){const modal=$('nightAgentTemplateModal');modal.hidden=true;document.body.removeAttribute('data-night-agent-template-open');returnFocus?.focus?.();returnFocus=null}
  async function open(){
   returnFocus=document.activeElement;setNotice('Загружаю доступные каналы, модели и базу знаний…');$('nightAgentTemplateModal').hidden=false;document.body.dataset.nightAgentTemplateOpen='true';setupForm();render(0);
-  try{await loadProfile();[options,settings,knowledgeSources]=await Promise.all([api('agents/options?cached=1'),api('agents/settings'),api('knowledge')]);knowledgeSources=knowledgeSources.filter(item=>!item.agent_id&&item.active!==false);fillOptions();modeHint();setNotice('Мастер не меняет общие настройки компании.','good');$('nightAgentName').focus()}
+  try{await loadProfile();[options,settings,knowledgeSources]=await Promise.all([api('agents/options?cached=1'),api('agents/settings'),api('knowledge')]);knowledgeSources=knowledgeSources.filter(item=>!item.agent_id&&item.active!==false);fillOptions();const recovered=restoreProgress();if(recovered){hydrateRecoveredAgent();setNotice('Продолжаем незавершённое создание. Повторная отправка не создаст дубликат.','good')}else setNotice('Мастер не меняет общие настройки компании.','good');modeHint();$('nightAgentName').focus()}
   catch(error){showError(error.message)}
  }
  async function create(){
   try{
    validate(0);validate(1);validate(2);validate(3);validate(4);validate(5);validate(6);validate(7);validate(8);
    const button=$('nightAgentCreate');button.disabled=true;button.textContent='Сохраняю…';setNotice('Сохраняю стандартную конфигурацию AI Agent…');
+   if(!setupKey)setupKey=newSetupKey();
    const current=values(),file=$('nightAgentKnowledgeFile').files[0];
-   if(!createdAgent){createdAgent=await api('agents','POST',{...nightAgentPayload(current),enabled:false});setNotice('Агент сохранён. Настраиваю передачу человеку…','good')}
-   if(!triggerSaved){await api(`agents/${encodeURIComponent(createdAgent.id)}/triggers`,'POST',{name:'Ночная техподдержка: передать человеку',trigger_type:'phrase',condition:{phrase:current.handoff,target_stage_id:'',task_text:''},actions:['handoff'],enabled:true});triggerSaved=true}
-   if(file&&uploadedFileSignature!==fileSignature(file)){await uploadKnowledge(file,$('nightAgentKnowledgeTitle').value.trim()||file.name);uploadedFileSignature=fileSignature(file)}
+   if(!createdAgent){createdAgent=await api('agents','POST',{...nightAgentPayload(current),enabled:false});saveProgress();setNotice('Агент сохранён. Настраиваю передачу человеку…','good')}
+   if(!triggerSaved){await api(`agents/${encodeURIComponent(createdAgent.id)}/triggers`,'POST',{name:'Ночная техподдержка: передать человеку',trigger_type:'phrase',condition:{phrase:current.handoff,target_stage_id:'',task_text:''},actions:['handoff'],enabled:true,setup_key:`${setupKey}-handoff`});triggerSaved=true;saveProgress()}
+   if(file&&uploadedFileSignature!==fileSignature(file)){await uploadKnowledge(file,$('nightAgentKnowledgeTitle').value.trim()||file.name);uploadedFileSignature=fileSignature(file);saveProgress()}
    if(current.confirmedLaunch&&!createdAgent.enabled)createdAgent=await api(`agents/${encodeURIComponent(createdAgent.id)}`,'PATCH',{expected_version:createdAgent.version,enabled:true});
    const activation=current.confirmedLaunch?'включён по вашему явному подтверждению':'сохранён выключенным';
-   setNotice(`Готово: «${createdAgent.name}» ${activation}. Active Mode и автоотправка компании не изменялись.`,`good`);
+   clearProgress();setNotice(`Готово: «${createdAgent.name}» ${activation}. Active Mode и автоотправка компании не изменялись.`,`good`);
    button.textContent='Готово';
-  }catch(error){showError(error.message);$('nightAgentCreate').disabled=false;$('nightAgentCreate').textContent=createdAgent?'Повторить незавершённый шаг':'Создать оператор'}
+  }catch(error){showError(wizardError(error));$('nightAgentCreate').disabled=false;$('nightAgentCreate').textContent=createdAgent?'Повторить незавершённый шаг':'Создать оператор'}
  }
  function install(){
   const opener=$('aiNightTemplateOpen');if(!opener||$('nightAgentTemplateModal'))return;

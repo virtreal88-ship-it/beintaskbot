@@ -51,6 +51,60 @@ def run_without_event_loop(coroutine):
 
 
 class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
+    def test_invalid_wizard_request_returns_a_field_key_instead_of_a_generic_azerbaijani_error(self):
+        profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
+
+        class Request:
+            method = 'POST'
+            content_type = 'application/json'
+            content_length = 128
+            headers = {'Origin': 'https://crm.pro.az'}
+            query = {}
+            match_info = {}
+
+            async def json(self):
+                return {'expected_tenant_id': profile['tenant_id'], 'expected_user_id': profile['telegram_id']}
+
+        handler, namespace = load_handler(
+            _origin=lambda *_args: None,
+            _json_body=lambda _request: True,
+            _expected=lambda *_args: None,
+            save_agent=Mock(side_effect=ValueError('database value failed')),
+        )
+        response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az', Mock(), 'agents')(Request()))
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 400)
+        self.assertEqual(payload['field'], 'configuration')
+        self.assertEqual(payload['code'], 'invalid_configuration')
+        self.assertNotEqual(payload['error'], 'Sorğu düzgün deyil.')
+        namespace['save_agent'].assert_called_once()
+
+    def test_model_validation_identifies_the_model_field(self):
+        profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
+
+        class Request:
+            method = 'POST'
+            content_type = 'application/json'
+            content_length = 128
+            headers = {'Origin': 'https://crm.pro.az'}
+            query = {}
+            match_info = {}
+
+            async def json(self):
+                return {'expected_tenant_id': profile['tenant_id'], 'expected_user_id': profile['telegram_id']}
+
+        handler, _ = load_handler(
+            _origin=lambda *_args: None,
+            _json_body=lambda _request: True,
+            _expected=lambda *_args: None,
+            save_agent=Mock(side_effect=TenantLinearError('Model yalnız aktiv mövcud Chat AI provayderindən seçilə bilər.', 409)),
+        )
+        response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az', Mock(), 'agents')(Request()))
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 409)
+        self.assertEqual(payload['field'], 'model')
+        self.assertEqual(payload['code'], 'invalid_model')
+
     def test_get_diagnostics_dispatches_to_live_diagnostic_reader_with_verified_session(self):
         handler, namespace = load_handler()
         profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}

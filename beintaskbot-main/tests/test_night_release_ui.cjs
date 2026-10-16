@@ -27,7 +27,8 @@ const tick=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r));}
  for(let i=0;i<9;i++){d.getElementById('nightAgentNext').click();await tick();}
  d.getElementById('nightAgentCreate').click();await tick();
  const saved=calls.find(c=>c.path.endsWith('/agents')&&c.method==='POST');assert.equal(saved.data.enabled,false);assert.equal(saved.data.mode,'manual');assert.equal(saved.data.schedule.start,'22:00');assert.equal(saved.data.schedule.end,'06:00');assert.equal(saved.data.scopes[0].channel_id,'channel-a');
- assert.equal(calls.find(c=>c.path.endsWith('/knowledge/upload')).data.agent_id,'created-agent');
+ assert.match(saved.data.setup_key,/^night-/);assert.match(calls.find(c=>c.path.endsWith('/triggers')).data.setup_key,/handoff$/);
+ assert.equal(calls.find(c=>c.path.endsWith('/knowledge/upload')).data.agent_id,'created-agent');assert.match(calls.find(c=>c.path.endsWith('/knowledge/upload')).data.setup_key,/-kb-/);
  assert.equal(calls.filter(c=>c.path.endsWith('/agents/settings')&&c.method!=='GET').length,0);
  assert.match(d.getElementById('nightAgentNotice').textContent,/Готово/);
  d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{member:{tenant_id:'company-b',telegram_id:22},capabilities:{modules:{night_report:false}}}}));

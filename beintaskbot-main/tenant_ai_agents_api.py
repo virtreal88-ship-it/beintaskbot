@@ -57,6 +57,33 @@ def _attach_runtime_status(result):
 def handler(member_from_request, canonical_origin, logger, resource, request_provider=None, wait_slot=None):
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
+
+        def validation_field(message=''):
+            """Return a safe field identifier; never reflect request data."""
+            text = str(message or '').casefold()
+            if any(value in text for value in ('agent adı', 'agent ayarları')):
+                return 'name'
+            if 'təlimat' in text:
+                return 'instructions'
+            if 'saat qurşağı' in text:
+                return 'timezone'
+            if any(value in text for value in ('iş günləri', 'iş saatları', 'iş cədvəli')):
+                return 'schedule'
+            if 'model' in text:
+                return 'model'
+            if any(value in text for value in ('connect', 'whatsapp kanalı', 'mənbə və ya kanal', 'əhatə dairəsi')):
+                return 'channel'
+            if any(value in text for value in ('açar ifadə', 'trigger')):
+                return 'handoff'
+            if any(value in text for value in ('bilik', 'fayl', 'mətn', 'mənbə adı')):
+                return 'knowledge_file'
+            if any(value in text for value in ('icazə', 'üzvlüy', 'şirkət')):
+                return 'permissions'
+            return {
+                'agents': 'configuration', 'agent': 'activation',
+                'triggers': 'handoff', 'trigger': 'handoff',
+                'knowledge_upload': 'knowledge_file', 'knowledge': 'knowledge_file',
+            }.get(resource, 'configuration')
         try:
             profile = member_from_request(request)
             if not profile:
@@ -157,7 +184,9 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 safe_name, kind, content = await asyncio.to_thread(extract, filename, raw)
                 title = str(fields.get('title') or safe_name).strip()[:180]
                 result = await asyncio.to_thread(save_knowledge, profile,
-                    {'title': title, 'kind': kind, 'content': content, 'active': True, **({'agent_id':fields['agent_id']} if fields.get('agent_id') else {})})
+                    {'title': title, 'kind': kind, 'content': content, 'active': True,
+                     **({'agent_id':fields['agent_id']} if fields.get('agent_id') else {}),
+                     **({'setup_key':fields['setup_key']} if fields.get('setup_key') else {})})
             else:
                 if not _json_body(request):
                     raise TenantLinearError('JSON sorğusu tələb olunur.', 415)
@@ -244,9 +273,21 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 result = _attach_runtime_status(result)
             return web.json_response({'success': True, 'result': result}, headers=headers)
         except TenantLinearError as error:
-            return web.json_response({'success': False, 'error': str(error)}, status=error.status, headers=headers)
-        except (ValueError, TypeError, KeyError):
-            return web.json_response({'success': False, 'error': 'Sorğu düzgün deyil.'}, status=400, headers=headers)
+            field = validation_field(error)
+            return web.json_response({'success': False, 'error': str(error),
+                                      'code': f'invalid_{field}', 'field': field},
+                                     status=error.status, headers=headers)
+        except (ValueError, TypeError, KeyError) as error:
+            # The previous broad response hid the failing wizard step and made
+            # safe recovery impossible to explain.  Keep the implementation
+            # detail in server logs only; the browser gets a stable field key.
+            field = validation_field()
+            logger.warning('Tenant AI Agents request validation failed for resource=%s type=%s',
+                           resource, type(error).__name__, exc_info=True)
+            return web.json_response({'success': False,
+                                      'error': 'Sorğu emal edilə bilmədi.',
+                                      'code': f'invalid_{field}', 'field': field},
+                                     status=400, headers=headers)
         except Exception:
             logger.error('Tenant AI Agents request failed')
             return web.json_response({'success': False, 'error': 'AI Agents xidməti əlçatan deyil.'}, status=503, headers=headers)

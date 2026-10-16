@@ -34,6 +34,30 @@ def test_night_agent_is_disabled_and_knowledge_is_scoped_without_changing_existi
     assert db.execute('SELECT * FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid',(A,))[0]==settings
 
 
+def test_night_wizard_retry_reuses_agent_handoff_and_knowledge(flow, monkeypatch):
+    """A lost browser response must not create three extra wizard records."""
+    f = flow; db = f['db']
+    monkeypatch.setattr(agents, 'platform_service_ready', lambda: True)
+    monkeypatch.setattr(agents, 'platform_model_allowed', lambda model: True)
+    retry = 'night-wizard-retry-0001'
+    payload = {'name':'Night retry','instructions':'Use known facts.','enabled':False,'mode':'manual',
+               'model':'test-model','schedule':{'timezone':'Asia/Baku','days':[0,1,2,3,4],'start':'22:00','end':'06:00'},
+               'scopes':[{'provider':'connect','channel_id':CA}],'setup_key':retry}
+    first = agents.save_agent(PROFILE, payload)
+    second = agents.save_agent(PROFILE, payload)
+    assert first['id'] == second['id']
+    handoff = {'name':'Night retry handoff','trigger_type':'phrase',
+               'condition':{'phrase':'operator|incident','target_stage_id':'','task_text':''},
+               'actions':['handoff'],'enabled':True,'setup_key':f'{retry}-handoff'}
+    assert agents.save_trigger(PROFILE, first['id'], handoff)['id'] == agents.save_trigger(PROFILE, first['id'], handoff)['id']
+    source = {'title':'BeinSystems','kind':'txt','content':'Router instructions','active':True,
+              'agent_id':first['id'],'setup_key':f'{retry}-kb-file'}
+    assert agents.save_knowledge(PROFILE, source)['id'] == agents.save_knowledge(PROFILE, source)['id']
+    assert db.execute('SELECT count(*) AS total FROM saas_ai_agents WHERE tenant_id=%s::uuid AND setup_key=%s',(A,retry))[0]['total'] == 1
+    assert db.execute('SELECT count(*) AS total FROM saas_ai_agent_triggers WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND setup_key=%s',(A,first['id'],f'{retry}-handoff'))[0]['total'] == 1
+    assert db.execute('SELECT count(*) AS total FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND setup_key=%s',(A,first['id'],f'{retry}-kb-file'))[0]['total'] == 1
+
+
 def test_report_uses_durable_connect_error_after_queue_advances(flow,monkeypatch):
     f=flow;db=f['db'];monkeypatch.setattr(report,'_connect',lambda:db)
     f['inbound']();job=runs.claim_next();receipt=runs.reserve_run(job,pipeline_id='',stage_id='',model='test-model')
