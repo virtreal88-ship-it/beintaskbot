@@ -96,7 +96,7 @@ class AiAgentRunStoreLockTests(unittest.TestCase):
         self.assertTrue(connection.committed)
 
     def test_deferring_unreserved_job_keeps_its_revision(self):
-        cursor = Cursor()
+        cursor = Cursor(({'ok': 1},))
         connection = Connection(cursor)
         job = {
             'tenant_id': '00000000-0000-0000-0000-000000000001',

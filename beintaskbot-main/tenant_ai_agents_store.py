@@ -970,7 +970,7 @@ def _reserve_connect_draft_send(cur, tenant, draft):
     row = cur.fetchone()
     if not row:
         return None
-    cur.execute("UPDATE saas_ai_agent_drafts SET state='sending' WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='pending' RETURNING id",
+    cur.execute("UPDATE saas_ai_agent_drafts SET state='sending',send_started_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='pending' RETURNING id",
                 (tenant, draft))
     if not cur.fetchone():
         return None
@@ -1006,7 +1006,7 @@ def reserve_draft_send(profile,draft_id):
                   'provider':'connect','conversation_id':str(row['chat_id']),'channel_id':str(row['channel_id']),
                   'expected_revision':int(row.get('revision') or 0),'handoff_after_send':bool(row.get('handoff_after_send')),
                   'source_fingerprint':str(row['source_fingerprint'])}
-            cur.execute('''UPDATE saas_ai_agent_drafts d SET state='sending'
+            cur.execute('''UPDATE saas_ai_agent_drafts d SET state='sending',send_started_at=now()
               FROM saas_ai_conversation_state cs,saas_ai_agents a,saas_ai_agent_settings s,saas_tenants t
               WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='pending'
                 AND a.tenant_id=d.tenant_id AND a.id=d.agent_id AND a.enabled=TRUE

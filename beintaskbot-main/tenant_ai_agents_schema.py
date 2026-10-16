@@ -263,6 +263,13 @@ def ensure_schema(conn):
               FOREIGN KEY(tenant_id,event_fingerprint) REFERENCES saas_tenant_webhook_events(tenant_id,fingerprint) ON DELETE CASCADE)''')
         with conn.cursor() as cur:
             cur.execute("ALTER TABLE saas_ai_conversation_state ADD COLUMN IF NOT EXISTS resumed_at TIMESTAMPTZ")
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE saas_ai_agent_runs ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ")
+            cur.execute("ALTER TABLE saas_ai_agent_runs ADD COLUMN IF NOT EXISTS error_code TEXT NOT NULL DEFAULT ''")
+            cur.execute("ALTER TABLE saas_ai_agent_drafts ADD COLUMN IF NOT EXISTS send_started_at TIMESTAMPTZ")
+            cur.execute("CREATE INDEX IF NOT EXISTS saas_ai_accepted_run_idx ON saas_crm_messages(tenant_id,(raw->>'run_id')) WHERE direction='outgoing' AND author_name='AI Agent' AND raw->>'status'='accepted'")
+            cur.execute("CREATE INDEX IF NOT EXISTS saas_ai_inbound_diagnostics_idx ON saas_tenant_webhook_events(tenant_id,received_at DESC) WHERE event_type='incoming_message'")
+            cur.execute("CREATE TABLE IF NOT EXISTS saas_ai_worker_health (worker TEXT PRIMARY KEY,last_seen_at TIMESTAMPTZ NOT NULL)")
         from tenant_support_inbox_schema import create_schema
         create_schema(conn)
         conn.commit()
