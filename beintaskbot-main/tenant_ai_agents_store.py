@@ -6,7 +6,8 @@ from tenant_ai_agents_policy import (MAX_AGENTS, MAX_SOURCES, agent as validate_
     company_settings, knowledge as validate_knowledge, chunk_text, trigger as validate_trigger, safety_policy)
 from tenant_ai_agents_schema import ensure_schema
 from tenant_linear_policy import TenantLinearError, identifier
-from tenant_ai_agent_access import tenant_status_allows_management
+from tenant_ai_agent_access import tenant_status_allows_ai, tenant_status_allows_management
+from tenant_ai_agent_runtime_flags import enabled as runtime_flag
 from tenant_ai_agent_key_policy import (platform_key_ready, platform_model,
     platform_model_choices, platform_model_allowed, platform_service_ready)
 from tenant_platform import _connect, _json
@@ -611,6 +612,126 @@ def _conversation_provider_allowed(cur, tenant, provider, conversation, channel_
     return ''
 
 
+def _conversation_provider_read_allowed(cur, tenant, provider, conversation, channel_id=''):
+    """Resolve a tenant-owned dialogue for read-only status display.
+
+    Management actions deliberately use the stricter admission check above.
+    A stopped company or disabled agent must nevertheless remain visible in the
+    chat UI, otherwise a manager cannot learn why the agent is stopped.
+    """
+    if provider == 'connect':
+        from tenant_connect_transport import _schema as connect_schema
+        connect_schema(cur.connection)
+        if channel_id:
+            cur.execute('''SELECT c.connect_channel_id::text AS channel_id
+              FROM saas_connect_conversations c
+              WHERE c.tenant_id=%s::uuid AND c.conversation_id=%s
+                AND c.connect_channel_id=%s::uuid''', (tenant, conversation, channel_id))
+        else:
+            cur.execute('''SELECT c.connect_channel_id::text AS channel_id
+              FROM saas_connect_conversations c
+              WHERE c.tenant_id=%s::uuid AND c.conversation_id=%s
+              ORDER BY c.connect_channel_id LIMIT 2''', (tenant, conversation))
+        rows = cur.fetchall()
+        if len(rows) != 1:
+            raise TenantLinearError('Connect dialoqu bu şirkətə aid deyil və ya kanal seçilməyib.', 404)
+        return str(rows[0]['channel_id'])
+    if provider != 'kommo':
+        raise TenantLinearError('Mesaj mənbəyi düzgün deyil.')
+    cur.execute('''SELECT 1 FROM saas_ai_conversation_state cs
+      WHERE cs.tenant_id=%s::uuid AND cs.provider='kommo' AND cs.conversation_id=%s
+        AND EXISTS (SELECT 1 FROM saas_ai_agent_jobs j WHERE j.tenant_id=cs.tenant_id
+          AND j.provider='kommo' AND j.conversation_id=cs.conversation_id)''', (tenant, conversation))
+    if not cur.fetchone():
+        raise TenantLinearError('Conversation bu şirkətə aid deyil.', 404)
+    return ''
+
+
+def _resume_block_reason(row, provider):
+    """Return a durable, safe reason why a stopped dialogue cannot resume."""
+    if not runtime_flag('AI_AGENTS_ENABLED'):
+        return 'server_ai_disabled'
+    if row.get('company_enabled') is not True:
+        return 'company_ai_disabled'
+    if row.get('company_emergency_stop') is True:
+        return 'emergency_stop'
+    if not tenant_status_allows_ai(row.get('tenant_status'), provider):
+        return 'tenant_ai_unavailable'
+    if not row.get('agent_id'):
+        return 'agent_not_found'
+    if row.get('agent_enabled') is not True:
+        return 'agent_disabled'
+    return ''
+
+
+def _decorate_conversation_state(item):
+    """Expose a presentation-safe effective state without changing storage."""
+    state = str(item.get('state') or 'active')
+    provider = str(item.get('provider') or 'kommo')
+    mandatory_block = _resume_block_reason(item, provider)
+    transient_block = ''
+    if state == 'active':
+        if item.get('latest_job_error') and item.get('latest_job_state') in {'skipped', 'failed', 'unknown'}:
+            transient_block = str(item['latest_job_error'])
+        elif item.get('latest_event_error') and item.get('latest_event_state') in {'skipped', 'failed', 'unknown', 'superseded'}:
+            transient_block = str(item['latest_event_error'])
+    effective = 'blocked' if state == 'active' and (mandatory_block or transient_block) else state
+    item['display_state'] = effective
+    item['resume_allowed'] = state in {'human', 'paused'} and not mandatory_block
+    item['resume_block_reason'] = mandatory_block
+    # A Human Mode/Pause reason explains why the agent stopped; a separate
+    # resume blocker explains why it cannot be started again yet.
+    item['display_reason'] = (str(item.get('reason') or '') if state in {'human', 'paused'}
+                              else mandatory_block or transient_block or str(item.get('reason') or ''))
+    return item
+
+
+def _assert_resume_allowed(cur, tenant, provider, conversation, channel_id):
+    """Resume only a tracked, still-admissible dialogue; never revive old work."""
+    cur.execute('''SELECT cs.state,COALESCE(cs.agent_id,j.agent_id)::text AS agent_id,
+        a.enabled AS agent_enabled,s.enabled AS company_enabled,
+        s.emergency_stop AS company_emergency_stop,t.status AS tenant_status,s.operating_mode
+      FROM saas_ai_conversation_state cs
+      JOIN saas_ai_agent_settings s ON s.tenant_id=cs.tenant_id
+      JOIN saas_tenants t ON t.id=cs.tenant_id
+      LEFT JOIN LATERAL (SELECT j0.agent_id FROM saas_ai_agent_jobs j0
+        WHERE j0.tenant_id=cs.tenant_id AND j0.provider=cs.provider
+          AND j0.conversation_id=cs.conversation_id
+        ORDER BY j0.updated_at DESC,j0.revision DESC LIMIT 1) j ON TRUE
+      LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=COALESCE(cs.agent_id,j.agent_id)
+      WHERE cs.tenant_id=%s::uuid AND cs.provider=%s AND cs.conversation_id=%s
+      FOR SHARE OF cs,s,t''', (tenant, provider, conversation))
+    row = cur.fetchone()
+    if not row or str(row.get('state') or '') not in {'human', 'paused'}:
+        raise TenantLinearError('Bu dialoq Resume üçün dayandırılmış vəziyyətdə deyil.', 409)
+    block = _resume_block_reason(row, provider)
+    if block:
+        messages = {
+            'server_ai_disabled': 'AI Agents serverdə söndürülüb.',
+            'company_ai_disabled': 'AI Agents bu şirkət üçün söndürülüb.',
+            'emergency_stop': 'AI Agents üçün аварийная остановка включена.',
+            'tenant_ai_unavailable': 'Bu şirkətdə AI Agents işləyə bilməz.',
+            'agent_not_found': 'Bu dialoq üçün AI Agent tapılmadı.',
+            'agent_disabled': 'Bu dialoqun AI Agent-i söndürülüb.',
+        }
+        raise TenantLinearError(messages.get(block, 'AI Resume hazırda əlçatan deyil.'), 409)
+    if provider == 'connect':
+        cur.execute('''SELECT 1 FROM saas_tenant_integrations
+          WHERE tenant_id=%s::uuid AND provider='connect' AND status='connected' ''', (tenant,))
+        if not cur.fetchone():
+            raise TenantLinearError('Connect inteqrasiyası qoşulu deyil.', 409)
+        if row.get('operating_mode') != 'active':
+            from tenant_ai_agent_connect import test_allowed
+            if not test_allowed(cur, tenant, channel_id, conversation):
+                raise TenantLinearError('Connect Test Mode üçün dəqiq dialoq bağlaması artıq aktiv deyil.', 409)
+    else:
+        cur.execute('''SELECT 1 FROM saas_tenant_integrations
+          WHERE tenant_id=%s::uuid AND provider='kommo' AND status='connected' ''', (tenant,))
+        if not cur.fetchone():
+            raise TenantLinearError('Kommo inteqrasiyası qoşulu deyil.', 409)
+    return row
+
+
 def set_conversation_state(profile,conversation_id,state,reason='',provider='kommo',channel_id=''):
     from tenant_support_inbox_store import create_in_transaction, summarize_created
     ticket = None
@@ -623,6 +744,11 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
             resolved_channel = _conversation_provider_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
+            if state == 'active':
+                # Resume only changes the durable conversation gate.  It does
+                # not queue a prior inbound event, so only a future customer
+                # message can create fresh AI work after this transition.
+                _assert_resume_allowed(cur, tenant, provider, conversation, resolved_channel)
             cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,state,reason)
               VALUES(%s::uuid,%s,%s,%s,%s) ON CONFLICT(tenant_id,provider,conversation_id) DO UPDATE
               SET state=EXCLUDED.state,reason=EXCLUDED.reason,revision=saas_ai_conversation_state.revision+1,updated_at=now()''',
@@ -650,19 +776,20 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,_=_authorize(cur,profile)
-            resolved_channel = _conversation_provider_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
+            resolved_channel = _conversation_provider_read_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
             # The route was verified above against tenant-owned Connect data.
             # Diagnostics below intentionally expose only metadata and safe
             # state/error codes; message bodies and external secrets never
             # cross this boundary.
             cur.execute('''SELECT cs.conversation_id,cs.state,cs.reason,cs.assigned_to,
-                cs.agent_id,a.name AS agent_name,cs.last_inbound_message_id,cs.last_agent_message_id,
+                COALESCE(cs.agent_id,j.agent_id)::text AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,
+                s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,t.status AS tenant_status,
+                cs.last_inbound_message_id,cs.last_agent_message_id,
                 cs.revision,cs.updated_at,m.happened_at AS last_inbound_at,
                 j.state AS latest_job_state,j.error_code AS latest_job_error,j.updated_at AS latest_job_updated_at,
                 r.state AS latest_run_state,r.updated_at AS latest_run_updated_at,
                 e.state AS latest_event_state,e.error_code AS latest_event_error,e.received_at AS latest_event_received_at
               FROM saas_ai_conversation_state cs
-              LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
               LEFT JOIN LATERAL (
                 SELECT j0.agent_id,j0.event_fingerprint,j0.state,j0.error_code,j0.updated_at,j0.revision
                 FROM saas_ai_agent_jobs j0
@@ -671,6 +798,9 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
                   AND (cs.provider<>'connect' OR j0.channel_id=%s)
                 ORDER BY j0.updated_at DESC,j0.revision DESC LIMIT 1
               ) j ON TRUE
+              LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=COALESCE(cs.agent_id,j.agent_id)
+              LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=cs.tenant_id
+              LEFT JOIN saas_tenants t ON t.id=cs.tenant_id
               LEFT JOIN LATERAL (
                 SELECT r0.state,r0.updated_at FROM saas_ai_agent_runs r0
                 WHERE r0.tenant_id=cs.tenant_id AND r0.agent_id=j.agent_id
@@ -703,30 +833,23 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
                 event = cur.fetchone() or {}
                 result = {'conversation_id':conversation,'provider':provider,'channel_id':resolved_channel,
                     'state':'active','reason':'','revision':0,'tracked':False,
+                    'resume_allowed':False,'display_state':'blocked' if event.get('error_code') else 'active',
                     'latest_event_state':event.get('state') or '',
                     'latest_event_error':event.get('error_code') or ''}
                 if event.get('received_at'):
                     result['latest_event_received_at']=event['received_at'].isoformat()
                 if result['latest_event_error']:
                     result['blocked_reason']=result['latest_event_error']
+                    result['display_reason']=result['latest_event_error']
                 return result
     item=dict(row)
     item['provider']=provider;item['channel_id']=resolved_channel;item['tracked']=True
-    for key in ('agent_id',):
-        if item.get(key):item[key]=str(item[key])
     for key in ('updated_at','last_inbound_at','latest_job_updated_at','latest_run_updated_at','latest_event_received_at'):
         if item.get(key):item[key]=item[key].isoformat()
-    # Only emit a blocker when it is directly supported by durable state.
-    # In particular, absence of a job is not treated as proof that no agent
-    # is configured: it may simply predate AI processing.
-    if item.get('state') in {'human','paused'}:
-        item['blocked_reason']=item.get('reason') or item['state']
-    elif item.get('latest_job_error') and item.get('latest_job_state') in {'skipped','failed','unknown'}:
-        item['blocked_reason']=item['latest_job_error']
-    elif item.get('latest_event_error') and item.get('latest_event_state') in {'skipped','failed','unknown','superseded'}:
-        item['blocked_reason']=item['latest_event_error']
-    else:
-        item['blocked_reason']=''
+    # Only surface durable state and error codes; the browser maps them to a
+    # clear operator-facing explanation without exposing message text.
+    item = _decorate_conversation_state(item)
+    item['blocked_reason'] = item['display_reason']
     return item
 
 
@@ -749,14 +872,9 @@ def read_conversation_for_lead(profile, lead_id):
             tenant, _ = _authorize(cur, profile)
             cur.execute('''SELECT j.conversation_id,cs.state,cs.reason,cs.revision
               FROM saas_ai_agent_jobs j
-              JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id AND a.enabled=TRUE
-              JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE
               LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider
                 AND cs.conversation_id=j.conversation_id
               WHERE j.tenant_id=%s::uuid AND j.provider='kommo' AND j.lead_id=%s
-                AND (s.operating_mode='active' OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
-                  WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
-                    AND b.lead_id=j.lead_id AND b.talk_id=j.talk_id AND b.chat_id=j.chat_id AND b.channel_id=j.channel_id))
               ORDER BY j.updated_at DESC LIMIT 1''', (tenant, lead))
             row = cur.fetchone()
     if not row:
@@ -929,19 +1047,32 @@ def list_handoffs(profile,limit=50):
     """
     with _connect() as conn:
         ensure_schema(conn)
+        from tenant_connect_transport import _schema as ensure_connect_schema
+        ensure_connect_schema(conn)
         with conn.cursor() as cur:
             tenant,_=_authorize(cur,profile)
             cur.execute('''SELECT cs.provider,cs.conversation_id,cs.state,cs.reason,cs.updated_at,
-                cs.last_inbound_message_id,cs.last_agent_message_id,a.name AS agent_name,
+                COALESCE(cs.agent_id,j.agent_id)::text AS agent_id,cs.last_inbound_message_id,cs.last_agent_message_id,
+                a.name AS agent_name,a.enabled AS agent_enabled,
+                COALESCE(NULLIF(c.contact_name,''),NULLIF(c.phone,''),NULLIF(d.contact_name,''),NULLIF(d.name,''),cs.conversation_id) AS customer_name,
+                CASE WHEN cs.provider='connect' THEN COALESCE(NULLIF(ch.name,''),j.channel_id,'WhatsApp')
+                  ELSE COALESCE(NULLIF(j.channel_id,''),'Kommo') END AS channel_name,
+                s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,t.status AS tenant_status,
                 j.lead_id,j.talk_id,j.channel_id,j.state AS latest_job_state,
                 j.error_code AS latest_job_error,j.updated_at AS latest_job_updated_at,
                 inbound.happened_at AS last_inbound_at,agent_message.happened_at AS last_agent_at
               FROM saas_ai_conversation_state cs
-              LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
-              LEFT JOIN LATERAL (SELECT lead_id,talk_id,channel_id,state,error_code,updated_at
+              LEFT JOIN LATERAL (SELECT agent_id,lead_id,talk_id,channel_id,state,error_code,updated_at
                 FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=cs.tenant_id
                   AND j0.provider=cs.provider AND j0.conversation_id=cs.conversation_id
                 ORDER BY j0.updated_at DESC,j0.revision DESC LIMIT 1) j ON TRUE
+              LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=COALESCE(cs.agent_id,j.agent_id)
+              LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=cs.tenant_id
+              LEFT JOIN saas_tenants t ON t.id=cs.tenant_id
+              LEFT JOIN saas_connect_conversations c ON c.tenant_id=cs.tenant_id
+                AND c.conversation_id=cs.conversation_id AND c.connect_channel_id::text=j.channel_id
+              LEFT JOIN saas_connect_channels ch ON ch.tenant_id=cs.tenant_id AND ch.connect_channel_id::text=j.channel_id
+              LEFT JOIN saas_crm_deals d ON d.tenant_id=cs.tenant_id AND d.kommo_lead_id=j.lead_id
               LEFT JOIN LATERAL (SELECT m.happened_at FROM saas_crm_messages m
                 WHERE m.tenant_id=cs.tenant_id AND m.direction='incoming'
                   AND m.external_id=CASE WHEN cs.provider='connect'
@@ -957,7 +1088,7 @@ def list_handoffs(profile,limit=50):
             rows=cur.fetchall()
     result=[]
     for row in rows:
-        item=dict(row)
+        item=_decorate_conversation_state(dict(row))
         for key in ('updated_at','last_inbound_at','last_agent_at','latest_job_updated_at'):
             if item.get(key):item[key]=item[key].isoformat()
         result.append(item)

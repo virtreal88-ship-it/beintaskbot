@@ -142,14 +142,15 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
                 for agent in matches:
                     delay = max(40, min(int(agent['delay_seconds']), 300))
                     cur.execute('''INSERT INTO saas_ai_conversation_state
-                      (tenant_id,provider,conversation_id,state,first_inbound_message_id,last_inbound_message_id)
-                      VALUES(%s::uuid,'kommo',%s,'active',%s,%s)
+                      (tenant_id,provider,conversation_id,agent_id,state,first_inbound_message_id,last_inbound_message_id)
+                      VALUES(%s::uuid,'kommo',%s,%s::uuid,'active',%s,%s)
                       ON CONFLICT(tenant_id,provider,conversation_id) DO UPDATE SET
+                        agent_id=EXCLUDED.agent_id,
                         last_inbound_message_id=EXCLUDED.last_inbound_message_id,
                         first_inbound_message_id=CASE WHEN saas_ai_conversation_state.first_inbound_message_id='' THEN EXCLUDED.first_inbound_message_id ELSE saas_ai_conversation_state.first_inbound_message_id END,
                         revision=saas_ai_conversation_state.revision+1,updated_at=now()
                       WHERE saas_ai_conversation_state.state='active' ''',
-                      (tenant,event['chat_id'],event['message_id'],event['message_id']))
+                      (tenant,event['chat_id'],agent['id'],event['message_id'],event['message_id']))
                     cur.execute('''INSERT INTO saas_ai_agent_jobs
                       (tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,channel_id,
                        event_fingerprint,due_at,state)

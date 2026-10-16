@@ -72,12 +72,18 @@ class TenantConnectHandoffTests(unittest.TestCase):
         self.assertEqual(insert[4], 'connect:' + CHANNEL)
 
     def test_connect_resume_verifies_the_tenant_owned_channel(self):
-        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]])
+        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[
+            {'state': 'human', 'agent_id': CHANNEL, 'agent_enabled': True,
+             'company_enabled': True, 'company_emergency_stop': False,
+             'tenant_status': 'active', 'operating_mode': 'active'},
+            {'connected': True},
+        ])
         connection = Connection(cursor)
         profile = {'tenant_id': TENANT, 'telegram_id': 7}
         with patch.object(agents_store, '_connect', return_value=connection), \
              patch.object(agents_store, 'ensure_schema'), \
              patch.object(agents_store, '_authorize', return_value=(TENANT, 7)), \
+            patch.object(agents_store, 'runtime_flag', return_value=True), \
              patch('tenant_connect_transport._schema'):
             result = agents_store.set_conversation_state(profile, 'client@s.whatsapp.net', 'active',
                                                          'manager_resume', 'connect', CHANNEL)
@@ -98,6 +104,43 @@ class TenantConnectHandoffTests(unittest.TestCase):
             with self.assertRaises(TenantLinearError):
                 agents_store.set_conversation_state(profile, 'foreign@s.whatsapp.net', 'active',
                                                     provider='connect', channel_id=CHANNEL)
+
+    def test_resume_does_not_requeue_old_messages_and_refuses_an_emergency_stop(self):
+        profile = {'tenant_id': TENANT, 'telegram_id': 7}
+        paused = {'state': 'paused', 'agent_id': CHANNEL, 'agent_enabled': True,
+                  'company_enabled': True, 'company_emergency_stop': False,
+                  'tenant_status': 'active', 'operating_mode': 'active'}
+        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[paused, {'connected': True}])
+        with patch.object(agents_store, '_connect', return_value=Connection(cursor)), \
+             patch.object(agents_store, 'ensure_schema'), \
+             patch.object(agents_store, '_authorize', return_value=(TENANT, 7)), \
+             patch.object(agents_store, 'runtime_flag', return_value=True), \
+             patch('tenant_connect_transport._schema'):
+            agents_store.set_conversation_state(profile, 'client@s.whatsapp.net', 'active',
+                                                'manager_resume', 'connect', CHANNEL)
+        statements = '\n'.join(sql for sql, _params in cursor.executed)
+        self.assertNotIn('INSERT INTO saas_ai_agent_jobs', statements)
+        self.assertNotIn("state='queued'", statements)
+
+        blocked = {**paused, 'company_emergency_stop': True}
+        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[blocked])
+        with patch.object(agents_store, '_connect', return_value=Connection(cursor)), \
+             patch.object(agents_store, 'ensure_schema'), \
+             patch.object(agents_store, '_authorize', return_value=(TENANT, 7)), \
+             patch.object(agents_store, 'runtime_flag', return_value=True), \
+             patch('tenant_connect_transport._schema'):
+            with self.assertRaises(TenantLinearError):
+                agents_store.set_conversation_state(profile, 'client@s.whatsapp.net', 'active',
+                                                    'manager_resume', 'connect', CHANNEL)
+
+    def test_ai_authored_connect_outbound_never_marks_human_mode(self):
+        route = {'channel_id': CHANNEL, 'conversation_id': 'client@s.whatsapp.net'}
+        cursor = Cursor()
+        with patch.object(transport, '_connect', return_value=Connection(cursor)), \
+             patch.object(transport, '_schema'), \
+             patch('tenant_ai_agent_connect.mark_operator_reply') as stop:
+            transport.record_outbound(TENANT, 42, route, 'AI reply', 'ai-message', author='AI Agent')
+        stop.assert_not_called()
 
     def test_ai_send_is_rejected_after_human_takeover_without_calling_connect(self):
         """The final state/revision check must happen while the send is reserved."""
