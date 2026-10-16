@@ -259,6 +259,15 @@ def send(route: dict, text: str, client_message_id: str) -> str:
     return str(result.get('id') or client_message_id)
 
 
+def send_ai_reply(route: dict, text: str, run_id: str) -> str:
+    """Use the run UUID directly as Connect's UUID-validated idempotency key."""
+    try:
+        client_message_id = str(uuid.UUID(str(run_id)))
+    except (ValueError, TypeError, AttributeError):
+        raise TenantPlatformError('AI cavabının sorğu ID-si düzgün deyil.') from None
+    return send(route, text, client_message_id)
+
+
 def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_id: str, author: str = 'Operator') -> None:
     with _connect() as conn:
         _schema(conn)

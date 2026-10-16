@@ -456,7 +456,7 @@ async def process_connect_one(job, logger):
         from tenant_ai_agent_connect import history as connect_history, scope_matches
         from tenant_ai_agent_run_store import load_agent_config
         from tenant_ai_agent_safety import server_instructions, sanitize_draft
-        from tenant_connect_transport import connect_route, send as send_connect, record_outbound
+        from tenant_connect_transport import connect_route, send_ai_reply as send_connect_ai, record_outbound
         from tenant_platform import _connect
         tenant = str(job['tenant_id'])
         assert_job_allowed(job)
@@ -519,7 +519,7 @@ async def process_connect_one(job, logger):
                         route = connect_route(cur, tenant, int(job['lead_id']))
                 if not route:
                     raise TenantLinearError('Connect route is no longer active.', 409)
-                message_id = send_connect(route, draft[:8000], 'ai-' + str(reservation['run_id']))
+                message_id = send_connect_ai(route, draft[:8000], reservation['run_id'])
                 record_outbound(tenant, int(job['lead_id']), route, draft[:8000], message_id, author='AI Agent')
                 return message_id
             message_id = await asyncio.to_thread(route_and_send)
