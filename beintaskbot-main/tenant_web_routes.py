@@ -85,6 +85,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('support-tickets/{ticket_id}', support_handler(member, origin, logger, 'ticket'), ('GET', 'PATCH')),
         ('support-tickets/{ticket_id}/summary', support_handler(member, origin, logger, 'summary'), ('POST',)),
         ('handoffs', ai_agents_handler(member, origin, logger, 'handoffs'), ('GET',)),
+        ('reliability', ai_agents_handler(member, origin, logger, 'reliability'), ('GET',)),
         ('diagnostics', ai_agents_handler(member, origin, logger, 'diagnostics'), ('GET',)),
         ('agents/{agent_id}', ai_agents_handler(member, origin, logger, 'agent'), ('PATCH', 'DELETE')),
         ('agents/{agent_id}/triggers', ai_agents_handler(member, origin, logger, 'triggers'), ('GET', 'POST')),

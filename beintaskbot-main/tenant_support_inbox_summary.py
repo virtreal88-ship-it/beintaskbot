@@ -68,7 +68,7 @@ def reserve(tenant, ticket_id, profile=None, retry=False):
                 if int(cur.fetchone()['tokens']) >= cap: raise TenantLinearError('AI token limit.',429)
             cur.execute("SELECT COALESCE(sum(reserved_calls),0) AS calls FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date", (tenant,))
             used = int(cur.fetchone()['calls'])
-            cur.execute("SELECT COALESCE(sum(reserved_calls),0) AS calls FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC' AND (state IN ('generating','completed','unknown') OR reserved_calls>1)", (tenant,))
+            cur.execute("SELECT COALESCE(sum(reserved_calls),0) AS calls FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC' AND (state IN ('generating','completed','unknown') OR reserved_calls>1 OR generated_at IS NOT NULL)", (tenant,))
             used += int(cur.fetchone()['calls'])
             if used + 1 > int(config.get('daily_limit') or 50): raise TenantLinearError('AI daily limit.',429)
             cur.execute('''SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,

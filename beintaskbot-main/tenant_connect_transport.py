@@ -220,6 +220,8 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
     queued_payload = None
     with _connect() as conn:
         _schema(conn)
+        from tenant_ai_agents_schema import ensure_schema
+        ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT tenant_id,secrets FROM saas_tenant_integrations WHERE provider='connect' AND status='connected' AND secrets IS NOT NULL")
             matches = []
@@ -260,7 +262,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn)
                 conn.commit()
                 return True
-            # A previous inbound delivery may have committed the durable CRM
+            # A legacy inbound delivery may have committed the durable CRM
             # copy just before a transient queue failure. Do not lose the AI
             # job merely because Connect retries the same signed event.
             if not inserted_event:
@@ -268,14 +270,13 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                   WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s''',
                             (tenant, channel_id, conversation))
                 previous = cur.fetchone()
-                conn.commit()
                 if not previous:
                     return False
                 accepted = True
                 queued_payload = (tenant, channel_id, conversation, int(previous['lead_id']),
                                   str(data.get('id') or event_id), event_id,
                                   str(data.get('text') or ''), str(data.get('type') or 'text'))
-                # Exit the cursor block; the common, idempotent enqueue below
+                # The common, idempotent enqueue below
                 # restores a missing job without duplicating CRM history.
                 continue_processing = False
             else:
@@ -302,17 +303,17 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                             # would make every text look like an attachment and
                             # can incorrectly affect later AI context.
                             (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,phone,str(data.get('text') or ''),str(data.get('type') or 'text'),'',occurred,_json(data)))
-                conn.commit()
                 accepted = True
                 queued_payload = (tenant, channel_id, conversation, lead_id, str(data.get('id') or event_id), event_id,
                                   str(data.get('text') or ''), str(data.get('type') or 'text'))
-    # Queue only after the incoming event and CRM copy are committed.  A queue
-    # outage is retried by Connect without creating a duplicate CRM message.
-    if accepted and queued_payload:
-        from tenant_ai_agent_connect import enqueue
-        enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
-                lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
-                text=queued_payload[6], message_type=queued_payload[7])
+            # The CRM copy, dedup receipt and AI admission commit together.
+            # A failed queue write rolls back the webhook, so Connect can retry.
+            if accepted and queued_payload:
+                from tenant_ai_agent_connect import enqueue
+                enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
+                        lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
+                        text=queued_payload[6], message_type=queued_payload[7], connection=conn)
+            conn.commit()
     return accepted
 
 

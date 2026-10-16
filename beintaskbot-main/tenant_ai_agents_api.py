@@ -66,6 +66,9 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 if resource == 'settings':
                     result = await asyncio.to_thread(read_settings, profile)
                     result = _attach_runtime_status(result)
+                elif resource == 'reliability':
+                    from tenant_ai_reliability import snapshot
+                    result = await asyncio.to_thread(snapshot, profile, request.query.get('limit', 50))
                 elif resource == 'diagnostics':
                     # Keep diagnostics in the GET dispatch.  The generic GET
                     # fallback below returns the knowledge list, which used
