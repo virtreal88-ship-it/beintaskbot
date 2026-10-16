@@ -63,9 +63,10 @@ class TenantConnectHandoffTests(unittest.TestCase):
              patch.object(transport, '_fernet', return_value=cipher), \
              patch.object(transport, '_verify_signature', return_value=True), \
              patch.object(transport, '_schema'), \
+             patch('tenant_ai_agents_schema.ensure_schema'), \
              patch('tenant_ai_agent_connect.mark_operator_reply') as stop:
             self.assertTrue(transport.ingest(b'{}', 'sha256=valid', event))
-        stop.assert_called_once_with(TENANT, 42, CHANNEL, 'client@s.whatsapp.net')
+        stop.assert_called_once_with(TENANT, 42, CHANNEL, 'client@s.whatsapp.net', connection=connection)
         self.assertTrue(connection.committed)
         insert = next(params for sql, params in cursor.executed if 'saas_crm_messages' in sql)
         self.assertEqual(insert[1], TENANT)

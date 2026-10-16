@@ -25,6 +25,10 @@ A,B,CA,CB,AGENT = [str(uuid.UUID(int=n)) for n in (101,102,201,202,301)]
 PROFILE={'tenant_id':A,'telegram_id':11}
 
 
+class Timestamp(str):
+    def isoformat(self): return str(self)
+
+
 class Database:
     def __init__(self):
         self.process=subprocess.Popen(['node',str(ROOT/'tests/support_pglite.cjs')],cwd=ROOT,
@@ -42,7 +46,8 @@ class Database:
         result=json.loads(line,object_hook=lambda v:bytes.fromhex(v['__bytes']) if '__bytes' in v else v)
         if 'error' in result:
             raise pg_errors.lookup(result['code'])(result['error']) if result.get('code') else RuntimeError(result['error'])
-        return result['rows']
+        return [{k: Timestamp(v) if k.endswith('_at') and isinstance(v,str) else v
+                 for k,v in row.items()} for row in result['rows']]
     def execute(self,sql,params=()):
         if not self.transaction:
             self.query('BEGIN');self.transaction=True

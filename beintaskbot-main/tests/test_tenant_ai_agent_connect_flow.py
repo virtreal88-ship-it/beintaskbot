@@ -130,6 +130,7 @@ class ConnectAiFlowTests(unittest.TestCase):
         with patch.object(connect_ai, '_connect', return_value=connection), \
              patch.object(connect_ai, 'ensure_schema'), \
              patch('tenant_support_inbox_store.handoff_ticket') as inbox, \
+             patch('tenant_support_inbox_store.handoff_recorded', return_value=False), \
              patch('tenant_support_inbox_store.summarize_created'):
             self.assertTrue(connect_ai.finish_sent_after_reply_handoff(job, {'run_id': DRAFT}, 'message-a'))
         state_sql = next(sql for sql, _params in cursor.executed if "state='human'" in sql)
@@ -153,6 +154,7 @@ class ConnectAiFlowTests(unittest.TestCase):
         with patch.object(agents_store, '_connect', return_value=connection), \
              patch.object(agents_store, 'ensure_schema'), \
              patch('tenant_support_inbox_store.handoff_ticket'), \
+             patch('tenant_support_inbox_store.handoff_recorded', return_value=False), \
              patch('tenant_support_inbox_store.summarize_created'):
             self.assertEqual(agents_store.finish_draft_send(TENANT, DRAFT, 'accepted'), 'approved')
         transition = next(params for sql, params in cursor.executed if "trigger_reply_sent_then_handoff" in sql)

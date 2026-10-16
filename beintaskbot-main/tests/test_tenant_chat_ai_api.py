@@ -48,6 +48,7 @@ class Settings(unittest.TestCase):
         self.crypto=Mock();self.crypto.encrypt.return_value=b'encrypted'
         self.owner=Mock(return_value=(TENANT,20))
         self.service=loaders.load('tenant_chat_ai_settings',{'_connect':self.connect,'_fernet':lambda:self.crypto,'authorize':self.owner,'ensure_schema':Mock()}, {'tenant_platform','tenant_news_ai_settings','tenant_chat_ai_schema'})
+        self.service.save.__globals__['authorize']=self.owner
         self.data={**CONFIG,'api_key':'sk-'+'x'*30,'expected_updated_at':'version-1'}
         self.cur.fetchone.side_effect=[CONNECTION,CONNECTION]
 

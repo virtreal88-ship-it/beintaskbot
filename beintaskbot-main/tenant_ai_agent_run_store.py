@@ -173,6 +173,7 @@ def load_agent_config(job, *, with_block_reason=False):
         return (None, reason) if with_block_reason else None
     result = {'scopes':row['scopes'],'agent_model':selected_model,'safety':row.get('safety') or {},
       'chat_model':str(config.get('model') or ''),'schedule':row['schedule'],'mode':row['mode'],
+      'operating_mode':row.get('operating_mode'),
       'crm_actions_enabled':row['crm_actions_enabled'] is True}
     return (result, None) if with_block_reason else result
 

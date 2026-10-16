@@ -261,6 +261,8 @@ def ensure_schema(conn):
               UNIQUE(tenant_id,event_fingerprint,action_key),
               FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE,
               FOREIGN KEY(tenant_id,event_fingerprint) REFERENCES saas_tenant_webhook_events(tenant_id,fingerprint) ON DELETE CASCADE)''')
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE saas_ai_conversation_state ADD COLUMN IF NOT EXISTS resumed_at TIMESTAMPTZ")
         from tenant_support_inbox_schema import create_schema
         create_schema(conn)
         conn.commit()

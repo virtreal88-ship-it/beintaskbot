@@ -68,12 +68,16 @@ def reserve(tenant, ticket_id, profile=None, retry=False):
                 if int(cur.fetchone()['tokens']) >= cap: raise TenantLinearError('AI token limit.',429)
             cur.execute("SELECT COALESCE(sum(reserved_calls),0) AS calls FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date", (tenant,))
             used = int(cur.fetchone()['calls'])
-            cur.execute("SELECT count(*) AS calls FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC' AND state IN ('generating','completed','unknown')", (tenant,))
+            cur.execute("SELECT COALESCE(sum(reserved_calls),0) AS calls FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC' AND (state IN ('generating','completed','unknown') OR reserved_calls>1)", (tenant,))
             used += int(cur.fetchone()['calls'])
             if used + 1 > int(config.get('daily_limit') or 50): raise TenantLinearError('AI daily limit.',429)
-            cur.execute('''SELECT external_id,direction,body,message_type,media_url,happened_at FROM saas_crm_messages
-              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
-              ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 30''', (tenant,selected['lead_id'],'connect:'+str(ticket['channel_id'])))
+            cur.execute('''SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,
+                CASE WHEN v.state='completed' THEN m.body ELSE '' END AS transcript
+              FROM saas_crm_messages m LEFT JOIN saas_connect_voice_receipts v
+                ON v.tenant_id=m.tenant_id AND 'connect:' || v.channel_id::text=m.channel
+                  AND v.external_id=m.external_id
+              WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s
+              ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 30''', (tenant,selected['lead_id'],'connect:'+str(ticket['channel_id'])))
             rows = list(reversed(cur.fetchall()))
             run_id = str(uuid.uuid4())
             if agent:
@@ -125,7 +129,9 @@ def summarize(tenant, ticket_id, profile=None, retry=False):
             # Recheck membership/lifecycle after reservation, before the paid call.
             with _connect() as conn:
                 with conn.cursor() as cur: _authorize(cur,item['profile'])
-            lines, _ = history(item['rows'],{})
+            transcripts = {row['external_id']: row['transcript'] for row in item['rows'] if row.get('transcript')}
+            rows = [{**row, 'body': ''} if row.get('transcript') else row for row in item['rows']]
+            lines, _ = history(rows, transcripts)
             text, usage = generate(item['key'],item['model'],'summary',lines,'',instructions=INSTRUCTIONS,
                 extra_context={'handoff_reason':item['reason'],'history':'Most recent 30 messages only; earlier history may be missing'},with_usage=True)
             parsed = json.loads(text)

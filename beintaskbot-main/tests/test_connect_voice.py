@@ -149,6 +149,21 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
         self.assertIn('qiyməti nə qədərdir', str(self.generate.call_args.args[3]))
         self.assertEqual(self.generate.call_args.kwargs['extra_context']['latest_client_message'], 'Bəs aylıq?')
 
+    async def test_resume_does_not_transcribe_older_pending_audio(self):
+        self.rows = [{**row(), 'voice_eligible': False},
+                     row('new-text', 'text', 'Salam', '2026-10-16T02:00:00Z')]
+        await self.process({**JOB, 'payload': {'message_id': 'new-text'}})
+        self.transcribe.assert_not_called()
+        self.send.assert_called_once()
+        self.assertIn('Audio unavailable', str(self.generate.call_args.args[3]))
+
+    async def test_delayed_pre_resume_voice_job_is_skipped(self):
+        self.rows[0]['voice_eligible'] = False
+        await self.process()
+        self.transcribe.assert_not_called()
+        self.generate.assert_not_called()
+        self.send.assert_not_called()
+
     async def test_three_pending_audio_calls_are_bounded_and_usage_is_cumulative(self):
         self.rows = [row('v1', at='2026-10-16T00:01:00Z'),
                      row('v2', at='2026-10-16T00:02:00Z'),

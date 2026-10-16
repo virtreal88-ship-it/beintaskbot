@@ -465,6 +465,9 @@ async def process_connect_one(job, logger):
             await asyncio.to_thread(defer_job, job, open_at)
             return
         voice = is_audio(source)
+        if voice and source.get('voice_eligible') is False and not source.get('transcript'):
+            await asyncio.to_thread(skip_job, job, 'voice_before_resume')
+            return
         if voice and source.get('voice_state') in {'failed', 'processing'} and not source.get('transcript'):
             await asyncio.to_thread(skip_job, job, 'voice_already_claimed')
             return
@@ -472,7 +475,8 @@ async def process_connect_one(job, logger):
         # voice from that same tenant/channel history when text arrives next.
         # Bound the work/cost per turn; older audio remains explicitly unavailable.
         pending_audio = [row for row in rows[-30:] if row.get('direction') == 'incoming'
-                         and is_audio(row) and not row.get('transcript') and not row.get('voice_state')]
+                         and is_audio(row) and row.get('voice_eligible') is not False
+                         and not row.get('transcript') and not row.get('voice_state')]
         pending_audio = pending_audio[-3:]
         if pending_audio:
             model = str(config.get('agent_model') or config['chat_model'])
@@ -573,16 +577,16 @@ async def process_connect_one(job, logger):
         # Test Mode is always draft-only; it cannot send a WhatsApp message.
         if auto and (job.get('payload') or {}).get('test_mode') is not True:
             phase = 'connect_send'
+            handoff_after_reply = any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matched)
+            send_options = {'handoff_fingerprint':job['event_fingerprint']} if handoff_after_reply else {}
             def route_and_send():
                 return send_ai_reply_if_active(tenant, int(job['lead_id']), str(job['channel_id']),
                                                str(job['conversation_id']), draft[:8000], reservation['run_id'],
-                                               int(reservation.get('conversation_revision') or 0))
+                                               int(reservation.get('conversation_revision') or 0), **send_options)
             message_id = await asyncio.to_thread(route_and_send)
             if not message_id:
                 await asyncio.to_thread(finish_superseded, job, reservation, 'connect_human_takeover')
                 return
-            handoff_after_reply = any('handoff_after_reply' in (trigger.get('actions') or [])
-                                      for trigger in matched)
             if handoff_after_reply:
                 await asyncio.to_thread(finish_sent_after_reply_handoff, job, reservation, message_id)
             else:

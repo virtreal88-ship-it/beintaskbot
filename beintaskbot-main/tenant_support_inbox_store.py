@@ -218,3 +218,15 @@ def update(profile, ticket_id, data):
             _audit(cur,tenant,actor,'support_update','support_ticket',ticket_id,data)
         conn.commit()
     return detail(profile,ticket_id)
+
+
+def handoff_recorded(cur, job):
+    if job.get('provider') != 'connect':
+        return False
+    # Serialize replay checks with Resume and competing handoff transactions.
+    cur.execute("SELECT state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s FOR UPDATE",
+                (job['tenant_id'],job.get('conversation_id') or job.get('chat_id')))
+    cur.fetchone()
+    cur.execute("SELECT 1 FROM saas_support_events WHERE tenant_id=%s::uuid AND event_key=%s",
+                (job['tenant_id'], 'handoff:' + str(job['event_fingerprint'])))
+    return bool(cur.fetchone())

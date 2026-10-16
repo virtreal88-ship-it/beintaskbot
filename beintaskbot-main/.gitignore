@@ -27,4 +27,6 @@ ENV/
 
 # Local support inbox verification environments
 .venv-support/
+.venv-integration/
+!railpack.json
 .support-test-deps/

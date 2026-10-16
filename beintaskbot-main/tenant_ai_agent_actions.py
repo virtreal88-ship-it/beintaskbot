@@ -33,12 +33,14 @@ def matching_triggers(triggers,text,*,first_inquiry=False,phone=''):
 
 
 def handoff(job,reason):
-    from tenant_support_inbox_store import handoff_ticket, summarize_created
+    from tenant_support_inbox_store import handoff_ticket, summarize_created, handoff_recorded
     ticket = None
     tenant=str(job['tenant_id']);chat=str(job['chat_id'])
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            if handoff_recorded(cur, job):
+                return False
             cur.execute('''UPDATE saas_ai_conversation_state SET state='human',reason=%s,revision=revision+1,updated_at=now()
               WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND state<>'human' RETURNING agent_id''',
               (str(reason)[:240],tenant,job['provider'],chat))

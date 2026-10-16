@@ -27,12 +27,12 @@ class OnboardingActivation(unittest.TestCase):
                    'timezone': timezone, 'timedelta': timedelta}
         exec(code, self.ns)
 
-    def test_finalize_requires_connected_same_tenant_and_preserves_disabled_status(self):
+    def test_finalize_is_provider_independent_and_preserves_disabled_status(self):
         self.ns['finalize_onboarding'](tenant_id='company-a', owner_id=1)
         sql, params = self.cur.execute.call_args.args
         self.assertIn("t.status IN ('onboarding', 'ready_for_integration')", sql)
-        self.assertIn("i.tenant_id=t.id AND i.provider='kommo' AND i.status='connected'", sql)
-        self.assertIn("THEN 'active' ELSE 'ready_for_integration'", sql)
+        self.assertNotIn("provider='kommo'", sql)
+        self.assertIn("THEN 'active'", sql)
         self.assertIn('ELSE t.status END', sql)
         self.assertEqual(params, ('company-a',))
 
