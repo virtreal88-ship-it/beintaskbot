@@ -30,6 +30,7 @@ ASSETS = (
     ('/assets/tenant-operator-dialogs.js', 'tenant-operator-dialogs.js', 'no-store'),
     ('/assets/tenant-support-inbox.js', 'tenant-support-inbox.js', 'no-store'),
     ('/assets/tenant-ai-agents.js', 'tenant-ai-agents.js', 'no-cache, max-age=0, must-revalidate'),
+    ('/assets/tenant-night-agent-template.js', 'tenant-night-agent-template.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-workflow.js', 'tenant-workflow.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-chakra-ui.js', 'tenant-chakra-ui.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-workspace.js', 'tenant-workspace.js', None),
