@@ -35,8 +35,9 @@ DRAFT = '00000000-0000-0000-0000-000000000103'
 
 
 class Cursor:
-    def __init__(self, *, ones=()):
+    def __init__(self, *, ones=(), alls=()):
         self.ones = list(ones)
+        self.alls = list(alls)
         self.executed = []
         self.connection = None
 
@@ -51,6 +52,9 @@ class Cursor:
 
     def fetchone(self):
         return self.ones.pop(0) if self.ones else None
+
+    def fetchall(self):
+        return self.alls.pop(0) if self.alls else []
 
 
 class Connection:
@@ -190,6 +194,55 @@ class ConnectAiFlowTests(unittest.TestCase):
         connection = Connection(cursor)
         source_data = {'title': 'BeinSystems', 'kind': 'txt', 'content': 'Router instructions', 'active': True,
                        'agent_id': CHANNEL, 'setup_key': f'{retry}-kb-file'}
+        with patch.object(agents_store, '_connect', return_value=connection), \
+             patch.object(agents_store, 'ensure_schema'), \
+             patch.object(agents_store, '_authorize', return_value=(TENANT, 7)):
+            self.assertEqual(agents_store.save_knowledge(profile, source_data)['id'], DRAFT)
+        self.assertFalse(any('INSERT INTO saas_ai_knowledge_sources' in sql for sql, _params in cursor.executed))
+
+    def test_pre_retry_key_partial_wizard_is_adopted_only_when_it_exactly_matches(self):
+        """The historic agent/trigger can be safely resumed after a page reload."""
+        profile = {'tenant_id': TENANT, 'telegram_id': 7}
+        retry = 'night-wizard-retry-legacy-0001'
+        agent_data = {'name': 'Night support', 'instructions': 'Known facts only.', 'enabled': False,
+                      'mode': 'manual', 'language': 'auto', 'style': 'balanced', 'delay_seconds': 40,
+                      'schedule': {'timezone': 'Asia/Baku', 'days': [0], 'start': '22:00', 'end': '06:00'},
+                      'scopes': [{'provider': 'connect', 'channel_id': CHANNEL}], 'model': '',
+                      'safety': {'protect_internal': True, 'verified_facts': True, 'block_adult': True,
+                                 'block_prompt_injection': True, 'scope_only': True}, 'setup_key': retry}
+        legacy_agent = {'id': DRAFT, 'tenant_id': TENANT, **{key: value for key, value in agent_data.items()
+                       if key != 'setup_key'}, 'version': 1, 'created_at': None, 'updated_at': None}
+        cursor = Cursor(ones=[None, legacy_agent], alls=[[legacy_agent]])
+        connection = Connection(cursor)
+        with patch.object(agents_store, '_connect', return_value=connection), \
+             patch.object(agents_store, 'ensure_schema'), \
+             patch.object(agents_store, '_authorize', return_value=(TENANT, 7)):
+            self.assertEqual(agents_store.save_agent(profile, agent_data)['id'], DRAFT)
+        self.assertTrue(connection.committed)
+        self.assertFalse(any('INSERT INTO saas_ai_agents' in sql for sql, _params in cursor.executed))
+        self.assertTrue(any('setup_key IS NULL' in sql for sql, _params in cursor.executed))
+
+        trigger_data = {'name': 'Handoff', 'trigger_type': 'phrase',
+                        'condition': {'phrase': 'operator', 'target_stage_id': '', 'task_text': ''},
+                        'actions': ['handoff'], 'enabled': True, 'setup_key': f'{retry}-handoff'}
+        legacy_trigger = {'id': DRAFT, 'agent_id': CHANNEL, **{key: value for key, value in trigger_data.items()
+                          if key != 'setup_key'}, 'version': 1, 'created_at': None, 'updated_at': None}
+        cursor = Cursor(ones=[{'id': CHANNEL}, None, legacy_trigger], alls=[[legacy_trigger]])
+        connection = Connection(cursor)
+        with patch.object(agents_store, '_connect', return_value=connection), \
+             patch.object(agents_store, 'ensure_schema'), \
+             patch.object(agents_store, '_authorize', return_value=(TENANT, 7)):
+            self.assertEqual(agents_store.save_trigger(profile, CHANNEL, trigger_data)['id'], DRAFT)
+        self.assertFalse(any('INSERT INTO saas_ai_agent_triggers' in sql for sql, _params in cursor.executed))
+
+        source_data = {'title': 'BeinSystems', 'kind': 'txt', 'content': 'Router instructions', 'active': True,
+                       'agent_id': CHANNEL, 'setup_key': f'{retry}-kb-file'}
+        digest = __import__('hashlib').sha256(source_data['content'].encode()).hexdigest()
+        legacy_source = {'id': DRAFT, 'tenant_id': TENANT, 'agent_id': CHANNEL, 'title': 'BeinSystems',
+                         'kind': 'txt', 'content': source_data['content'], 'active': True, 'content_hash': digest,
+                         'created_at': None, 'updated_at': None}
+        cursor = Cursor(ones=[{'id': CHANNEL}, None, legacy_source], alls=[[legacy_source]])
+        connection = Connection(cursor)
         with patch.object(agents_store, '_connect', return_value=connection), \
              patch.object(agents_store, 'ensure_schema'), \
              patch.object(agents_store, '_authorize', return_value=(TENANT, 7)):
