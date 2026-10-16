@@ -4,12 +4,14 @@ No message bodies, prompts, keys, raw exceptions or provider responses leave
 this module. An uncertain paid call/send is NEVER automatically replayed.
 """
 import asyncio
+from tenant_ai_dialog_scope import job_scope
 import re
 from tenant_platform import _connect, _json
 from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agent_runtime_flags import enabled
 
 REASONS = {
+    "legacy_channel_ambiguous": "Старое состояние диалога не привязано к каналу; требуется безопасная проверка администратором",
     'agent_disabled': 'Агент выключен', 'agent_not_found': 'Подходящий агент не найден',
     'company_ai_disabled': 'AI компании выключен', 'ai_agents_server_disabled': 'Worker выключен на сервере',
     'emergency_stop': 'Включена аварийная остановка', 'ai_emergency_stop': 'Включена аварийная остановка',
@@ -138,8 +140,8 @@ def recover_terminal_jobs(cur):
         if accepted:
             cur.execute("UPDATE saas_ai_agent_runs SET state='completed',result=%s::jsonb,error_code='',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",
                         (_json({'send_state':'accepted','message_id':accepted.removeprefix('connect:')}),row['tenant_id'],row['run_id']))
-        cur.execute("UPDATE saas_ai_agent_jobs SET state=%s,error_code=%s,lease_token=NULL,lease_until=NULL,updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s",
-                    (state,code,row['tenant_id'],row['agent_id'],row['provider'],row['conversation_id']))
+        cur.execute("UPDATE saas_ai_agent_jobs SET state=%s,error_code=%s,lease_token=NULL,lease_until=NULL,updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s",
+                    (state,code,row['tenant_id'],row['agent_id'],row['provider'],row['conversation_id'],job_scope(row)))
         event_state = 'completed' if state in {'sent','drafted'} else state
         cur.execute("UPDATE saas_tenant_webhook_events SET state=%s,error_code=%s,completed_at=now() WHERE tenant_id=%s::uuid AND fingerprint=%s",
                     (event_state,code,row['tenant_id'],row['event_fingerprint']))
@@ -192,6 +194,8 @@ def _message(row):
         status = 'generated' if generated else 'processing'
     else:
         status,code = 'received','received_not_queued'
+    if item.get('legacy_scope_unresolved') and not sent and state in {'queued','processing','skipped'}:
+        code = 'legacy_channel_ambiguous'
     safe_code,label = reason(code)
     return {'message_id':item['message_id'], 'provider':item['provider'], 'channel_id':item.get('channel_id') or '',
             'agent_id':str(item.get('agent_id') or ''), 'status':status,'reason_code':safe_code,'reason':label,
@@ -200,7 +204,7 @@ def _message(row):
             'checkpoints':{'received':True,'queued':bool(item.get('run_state') or item.get('job_state') or state in {'queued','processing','completed','superseded'}),
                            'processing':bool(item.get('run_state') or state in {'processing','sent','drafted'}),
                            'generated':generated,'sent':sent},
-            'automatic_retry':state=='queued' and not item.get('run_state') and code not in {'agent_disabled','company_ai_disabled','emergency_stop','conversation_human','conversation_paused'}}
+            'automatic_retry':state=='queued' and not item.get('run_state') and code not in {'legacy_channel_ambiguous','agent_disabled','company_ai_disabled','emergency_stop','conversation_human','conversation_paused'}}
 
 
 def snapshot(profile, limit=50):
@@ -240,6 +244,9 @@ def snapshot(profile, limit=50):
                 j.state AS job_state,j.error_code AS job_error,j.attempts,j.due_at,
                 COALESCE(j.agent_id,r.agent_id) AS agent_id,a.enabled AS agent_enabled,a.mode AS agent_mode,
                 s.enabled AS company_enabled,s.emergency_stop,s.operating_mode,cs.state AS conversation_state,
+                EXISTS(SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=e.tenant_id
+                  AND e.provider='connect' AND legacy.provider='connect' AND legacy.channel_id=''
+                  AND legacy.conversation_id=e.payload->>'conversation_id') AS legacy_scope_unresolved,
                 r.state AS run_state,r.error_code AS run_error,r.generated_at,
                 (SELECT d.state FROM saas_ai_agent_drafts d WHERE d.tenant_id=e.tenant_id AND d.source_fingerprint=e.fingerprint ORDER BY d.created_at DESC LIMIT 1) AS draft_state,
                 EXISTS(SELECT 1 FROM saas_ai_agent_drafts d WHERE d.tenant_id=e.tenant_id AND d.source_fingerprint=e.fingerprint) AS drafted,
@@ -257,6 +264,7 @@ def snapshot(profile, limit=50):
               LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=e.tenant_id
               LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=e.tenant_id AND cs.provider=e.provider
                 AND cs.conversation_id=COALESCE(e.payload->>'conversation_id',e.payload->>'chat_id')
+                AND cs.channel_id=CASE WHEN e.provider='connect' THEN e.payload->>'channel_id' ELSE '' END
               WHERE e.tenant_id=%s::uuid AND e.event_type='incoming_message'
               ORDER BY e.received_at DESC,e.fingerprint LIMIT %s''',(tenant,max(1,min(int(limit),100))))
             messages = [_message(row) for row in cur.fetchall()]

@@ -145,7 +145,7 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
                     cur.execute('''INSERT INTO saas_ai_conversation_state
                       (tenant_id,provider,conversation_id,agent_id,state,first_inbound_message_id,last_inbound_message_id)
                       VALUES(%s::uuid,'kommo',%s,%s::uuid,'active',%s,%s)
-                      ON CONFLICT(tenant_id,provider,conversation_id) DO UPDATE SET
+                      ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE SET
                         agent_id=EXCLUDED.agent_id,
                         last_inbound_message_id=EXCLUDED.last_inbound_message_id,
                         first_inbound_message_id=CASE WHEN saas_ai_conversation_state.first_inbound_message_id='' THEN EXCLUDED.first_inbound_message_id ELSE saas_ai_conversation_state.first_inbound_message_id END,
@@ -156,7 +156,7 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
                       (tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,channel_id,
                        event_fingerprint,due_at,state)
                       VALUES(%s::uuid,%s,'kommo',%s,%s,%s,%s,%s,%s,now()+(%s*interval '1 second'),'queued')
-                      ON CONFLICT(tenant_id,agent_id,provider,conversation_id) DO UPDATE SET
+                      ON CONFLICT(tenant_id,agent_id,provider,scope_channel_id,conversation_id) DO UPDATE SET
                         lead_id=EXCLUDED.lead_id,talk_id=EXCLUDED.talk_id,chat_id=EXCLUDED.chat_id,
                         channel_id=EXCLUDED.channel_id,event_fingerprint=EXCLUDED.event_fingerprint,
                         revision=saas_ai_agent_jobs.revision+1,state='queued',due_at=EXCLUDED.due_at,

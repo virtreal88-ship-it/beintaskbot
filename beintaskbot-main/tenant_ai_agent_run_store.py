@@ -3,6 +3,7 @@ from tenant_ai_testing_budget import TOKEN_USAGE_SQL
 import json
 import os
 import uuid
+from tenant_ai_dialog_scope import job_scope, lock_dialog, assert_resolved
 
 from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agent_access import tenant_status_allows_ai
@@ -25,7 +26,7 @@ def claim_next():
             recover_terminal_jobs(cur)
             # Never replay Connect jobs received before an explicit key cutover.
             skip_pre_activation_jobs(cur)
-            cur.execute('''SELECT j.tenant_id,j.agent_id,j.provider,j.conversation_id,j.revision,j.event_fingerprint
+            cur.execute('''SELECT j.tenant_id,j.agent_id,j.provider,j.channel_id,j.conversation_id,j.revision,j.event_fingerprint
               FROM saas_ai_agent_jobs j WHERE j.state='processing' AND j.lease_until<=now()
               AND NOT EXISTS (SELECT 1 FROM saas_ai_agent_runs r WHERE r.tenant_id=j.tenant_id
                 AND r.agent_id=j.agent_id AND r.event_fingerprint=j.event_fingerprint AND r.revision=j.revision)
@@ -34,8 +35,8 @@ def claim_next():
             for row in abandoned:
                 cur.execute('''UPDATE saas_ai_agent_jobs SET state=CASE WHEN attempts>=5 THEN 'failed' ELSE 'queued' END,
                   lease_token=NULL,lease_until=NULL,due_at=now(),error_code='worker_interrupted',updated_at=now()
-                  WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s''',
-                  (row['tenant_id'],row['agent_id'],row['provider'],row['conversation_id']))
+                  WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s''',
+                  (row['tenant_id'],row['agent_id'],row['provider'],row['conversation_id'],job_scope(row)))
                 cur.execute("UPDATE saas_tenant_webhook_events SET state=CASE WHEN EXISTS (SELECT 1 FROM saas_ai_agent_jobs j WHERE j.tenant_id=saas_tenant_webhook_events.tenant_id AND j.event_fingerprint=saas_tenant_webhook_events.fingerprint AND j.state='failed') THEN 'failed' ELSE 'queued' END,error_code='worker_interrupted' WHERE tenant_id=%s::uuid AND fingerprint=%s",
                             (row['tenant_id'],row['event_fingerprint']))
             cur.execute('''UPDATE saas_ai_agent_runs r SET state='unknown',updated_at=now()
@@ -57,6 +58,8 @@ def claim_next():
               JOIN saas_ai_agent_settings cfg ON cfg.tenant_id=j.tenant_id AND cfg.enabled=TRUE AND cfg.emergency_stop=FALSE
               JOIN saas_tenants t ON t.id=j.tenant_id
               WHERE j.state='queued' AND j.due_at<=now()
+              AND NOT EXISTS (SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=j.tenant_id
+                AND j.provider='connect' AND legacy.provider=j.provider AND legacy.channel_id='' AND legacy.conversation_id=j.conversation_id)
               AND (t.status='active' OR (j.provider='connect' AND t.status IN ('onboarding','ready_for_integration')))
               AND (cfg.operating_mode='active' OR (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb
                 JOIN saas_tenant_webhook_events ce ON ce.tenant_id=j.tenant_id AND ce.fingerprint=j.event_fingerprint
@@ -76,8 +79,8 @@ def claim_next():
             token = uuid.uuid4()
             cur.execute('''UPDATE saas_ai_agent_jobs SET state='processing',lease_token=%s,lease_until=now()+interval '3 minutes',
               attempts=attempts+1,updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid
-              AND provider=%s AND conversation_id=%s RETURNING *''',
-              (token,row['tenant_id'],row['agent_id'],row['provider'],row['conversation_id']))
+              AND provider=%s AND conversation_id=%s AND scope_channel_id=%s RETURNING *''',
+              (token,row['tenant_id'],row['agent_id'],row['provider'],row['conversation_id'],job_scope(row)))
             claimed = dict(cur.fetchone())
             cur.execute('''SELECT payload FROM saas_tenant_webhook_events
               WHERE tenant_id=%s::uuid AND fingerprint=%s FOR UPDATE''',
@@ -85,8 +88,8 @@ def claim_next():
             event = cur.fetchone()
             if not event:
                 cur.execute('''UPDATE saas_ai_agent_jobs SET state='failed',error_code='event_missing',updated_at=now()
-                  WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s''',
-                  (claimed['tenant_id'],claimed['agent_id'],claimed['provider'],claimed['conversation_id']))
+                  WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s''',
+                  (claimed['tenant_id'],claimed['agent_id'],claimed['provider'],claimed['conversation_id'],job_scope(claimed)))
                 conn.commit()
                 return None
             claimed['payload'] = event['payload'] if isinstance(event['payload'], dict) else {}
@@ -107,12 +110,12 @@ def retry_or_fail(job, error_code):
             cur.execute('''UPDATE saas_ai_agent_jobs SET state=CASE WHEN attempts>=5 THEN 'failed' ELSE 'queued' END,
               due_at=now()+(LEAST(60,2^LEAST(attempts,5))*interval '1 second'),
               lease_token=NULL,lease_until=NULL,error_code=%s,updated_at=now()
-              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s
                 AND state='processing' AND lease_token=%s AND revision=%s
                 AND NOT EXISTS (SELECT 1 FROM saas_ai_agent_runs r WHERE r.tenant_id=saas_ai_agent_jobs.tenant_id
                   AND r.agent_id=saas_ai_agent_jobs.agent_id AND r.event_fingerprint=saas_ai_agent_jobs.event_fingerprint
                   AND r.revision=saas_ai_agent_jobs.revision) RETURNING state''',
-              (str(error_code)[:80],job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
+              (str(error_code)[:80],job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job_scope(job),job['lease_token'],job['revision']))
             changed=cur.fetchone()
             if not changed:
                 conn.commit()
@@ -143,10 +146,10 @@ def load_agent_config(job, *, with_block_reason=False):
               JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id
               LEFT JOIN saas_tenant_integrations i ON i.tenant_id=j.tenant_id AND i.provider='chat_ai'
               JOIN saas_tenants t ON t.id=j.tenant_id
-              LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id
-              WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s
+              LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id AND cs.channel_id=j.scope_channel_id
+              WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s AND j.scope_channel_id=%s
                 AND j.state='processing' AND j.lease_token=%s AND j.revision=%s''',
-              (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
+              (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job_scope(job),job['lease_token'],job['revision']))
             row = cur.fetchone()
     reason = None
     if not row:
@@ -220,9 +223,9 @@ def defer_job(job, due_at, reservation=None):
             revision_bump = ',revision=revision+1' if reservation is not None else ''
             requeue_sql = '''UPDATE saas_ai_agent_jobs SET state='queued',due_at=%s,lease_token=NULL,lease_until=NULL,
               attempts=GREATEST(attempts-1,0),error_code='outside_schedule',updated_at=now()''' + revision_bump + ''' WHERE tenant_id=%s::uuid AND agent_id=%s::uuid
-              AND provider=%s AND conversation_id=%s AND state='processing' AND lease_token=%s AND revision=%s'''
+              AND provider=%s AND conversation_id=%s AND scope_channel_id=%s AND state='processing' AND lease_token=%s AND revision=%s'''
             cur.execute(requeue_sql + ' RETURNING 1',
-              (due_at,job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
+              (due_at,job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job_scope(job),job['lease_token'],job['revision']))
             if not cur.fetchone():
                 # The run is already terminalized above, but a newer lease owns
                 # the job/event.  Do not reopen that newer worker's event.
@@ -239,9 +242,9 @@ def skip_job(job, error_code):
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',lease_token=NULL,lease_until=NULL,error_code=%s,updated_at=now()
-              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s
                 AND state='processing' AND lease_token=%s AND revision=%s RETURNING state''',
-              (str(error_code)[:80],job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
+              (str(error_code)[:80],job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job_scope(job),job['lease_token'],job['revision']))
             if not cur.fetchone():
                 conn.commit()
                 return False
@@ -278,6 +281,9 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            lock_dialog(cur, job["tenant_id"], job["provider"], job.get("channel_id"), job["conversation_id"])
+            if job["provider"] == "connect":
+                assert_resolved(cur, job["tenant_id"], job["channel_id"], job["conversation_id"])
             tenant = str(job['tenant_id'])
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('tenant-chat-ai:' + tenant,))
             cur.execute('''SELECT j.*,a.name,a.instructions,a.enabled AS agent_enabled,a.mode,a.version AS agent_version,a.scopes,a.language,a.style,
@@ -289,14 +295,14 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
               JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id
               LEFT JOIN saas_tenant_integrations i ON i.tenant_id=j.tenant_id AND i.provider='chat_ai'
               JOIN saas_tenants t ON t.id=j.tenant_id
-              LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id
-              WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s
+              LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id AND cs.channel_id=j.scope_channel_id
+              WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s AND j.scope_channel_id=%s
               AND j.state='processing' AND j.lease_token=%s AND j.revision=%s
               -- `i` is nullable because Chat AI can be provided by the platform.
               -- PostgreSQL cannot lock that nullable relation.
               -- The tenant advisory lock above serializes Chat AI setting changes;
               -- the mutable job, agent and company-setting rows still need locks.
-              FOR UPDATE OF j,a,s''', (tenant,job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
+              FOR UPDATE OF j,a,s''', (tenant,job['agent_id'],job['provider'],job['conversation_id'],job_scope(job),job['lease_token'],job['revision']))
             row = cur.fetchone()
             if not row:
                 raise TenantLinearError('Agent işi yenilənib.', 409)
@@ -365,16 +371,16 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
               (tenant,run_id,job['agent_id'],job['event_fingerprint'],job['revision'],selected_model,reserved_calls))
             cur.execute("UPDATE saas_tenant_webhook_events SET state='processing',attempts=attempts+1 WHERE tenant_id=%s::uuid AND fingerprint=%s",
                         (tenant,job['event_fingerprint']))
-            cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,agent_id,state,first_inbound_message_id,last_inbound_message_id)
-              VALUES(%s::uuid,%s,%s,%s::uuid,'active',%s,%s)
-              ON CONFLICT(tenant_id,provider,conversation_id) DO UPDATE SET agent_id=EXCLUDED.agent_id,
+            cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,channel_id,agent_id,state,first_inbound_message_id,last_inbound_message_id)
+              VALUES(%s::uuid,%s,%s,%s,%s::uuid,'active',%s,%s)
+              ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE SET agent_id=EXCLUDED.agent_id,
                 last_inbound_message_id=EXCLUDED.last_inbound_message_id,updated_at=now()
               WHERE saas_ai_conversation_state.state='active' RETURNING revision''',
-              (tenant,job['provider'],job['conversation_id'],job['agent_id'],str((job.get('payload') or {}).get('message_id') or ''),str((job.get('payload') or {}).get('message_id') or '')))
+              (tenant,job['provider'],job['conversation_id'],job_scope(job),job['agent_id'],str((job.get('payload') or {}).get('message_id') or ''),str((job.get('payload') or {}).get('message_id') or '')))
             conversation = cur.fetchone()
             if reserved_calls > 1:
-                cur.execute("UPDATE saas_ai_agent_jobs SET lease_until=now()+(%s * interval '3 minutes') WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND lease_token=%s AND revision=%s",
-                            (reserved_calls,tenant,job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
+                cur.execute("UPDATE saas_ai_agent_jobs SET lease_until=now()+(%s * interval '3 minutes') WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s AND lease_token=%s AND revision=%s",
+                            (reserved_calls,tenant,job['agent_id'],job['provider'],job['conversation_id'],job_scope(job),job['lease_token'],job['revision']))
             result = {'run_id':str(run_id),'api_key':api_key,'config':config,
               'config_version':str(row['config_version']),'company_instructions':row['company_instructions'],
               'settings_version':str(row['settings_version']),
@@ -429,6 +435,9 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            lock_dialog(cur, job["tenant_id"], job["provider"], job.get("channel_id"), job["conversation_id"])
+            if job["provider"] == "connect":
+                assert_resolved(cur, job["tenant_id"], job["channel_id"], job["conversation_id"])
             cur.execute('''SELECT j.revision,j.lease_token,j.state,a.enabled AS agent_enabled,a.version AS agent_version,s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.updated_at AS settings_version,
               i.updated_at AS config_version,i.metadata,t.status AS tenant_status,
               (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb JOIN saas_tenant_webhook_events ce
@@ -446,12 +455,12 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
               JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id
               LEFT JOIN saas_tenant_integrations i ON i.tenant_id=j.tenant_id AND i.provider='chat_ai'
               JOIN saas_tenants t ON t.id=j.tenant_id
-              LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id
-              WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s
+              LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id AND cs.channel_id=j.scope_channel_id
+              WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s AND j.scope_channel_id=%s
               -- See reserve_run: `i` is a nullable LEFT JOIN and cannot be
               -- locked by PostgreSQL. The version check below invalidates a
               -- result if the Chat AI configuration changed while generating.
-              FOR UPDATE OF j,a,s''', (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id']))
+              FOR UPDATE OF j,a,s''', (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job_scope(job)))
             current = cur.fetchone()
             config = current.get('metadata') if current and isinstance(current.get('metadata'),dict) else {}
             if (not current or current['state']!='processing' or current['lease_token']!=job['lease_token']
@@ -479,9 +488,9 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
               (job['tenant_id'],draft_id,job['agent_id'],reservation['run_id'],job['lead_id'],job['talk_id'],job['chat_id'],
                str(payload.get('message_id') or ''),job['event_fingerprint'],draft,_json(source_ids),bool(stop_after_reply)))
             cur.execute('''UPDATE saas_ai_agent_jobs SET state='drafted',lease_token=NULL,lease_until=NULL,error_code='',updated_at=now()
-              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s
                 AND lease_token=%s AND revision=%s''',
-              (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
+              (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job_scope(job),job['lease_token'],job['revision']))
             cur.execute("UPDATE saas_tenant_webhook_events SET state='completed',completed_at=now(),error_code='' WHERE tenant_id=%s::uuid AND fingerprint=%s",
                         (job['tenant_id'],job['event_fingerprint']))
         conn.commit()
@@ -495,9 +504,9 @@ def finish_unknown(job, reservation, error_code='provider_result_unknown'):
             cur.execute("UPDATE saas_ai_agent_runs SET state='unknown',error_code=%s,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",
                         (str(error_code)[:80],job['tenant_id'],reservation['run_id']))
             cur.execute('''UPDATE saas_ai_agent_jobs SET state='unknown',lease_token=NULL,lease_until=NULL,error_code=%s,updated_at=now()
-              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s
                 AND lease_token=%s AND revision=%s RETURNING state''',
-              (str(error_code)[:80],job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
+              (str(error_code)[:80],job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job_scope(job),job['lease_token'],job['revision']))
             if not cur.fetchone():
                 conn.commit()
                 return False
@@ -512,8 +521,8 @@ def finish_superseded(job,reservation,error_code='conversation_changed'):
         with conn.cursor() as cur:
             cur.execute("UPDATE saas_ai_agent_runs SET state='superseded',error_code=%s,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",(str(error_code)[:80],job['tenant_id'],reservation['run_id']))
             cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',lease_token=NULL,lease_until=NULL,error_code=%s,updated_at=now()
-              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND lease_token=%s AND revision=%s RETURNING state''',
-              (error_code,job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s AND lease_token=%s AND revision=%s RETURNING state''',
+              (error_code,job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job_scope(job),job['lease_token'],job['revision']))
             if not cur.fetchone():
                 conn.commit()
                 return False
@@ -528,8 +537,8 @@ def finish_sent(job, reservation, message_id: str) -> bool:
         with conn.cursor() as cur:
             cur.execute("UPDATE saas_ai_agent_runs SET state='completed',result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",
                         (_json({'send_state':'accepted','message_id':str(message_id)}),job['tenant_id'],reservation['run_id']))
-            cur.execute("UPDATE saas_ai_agent_jobs SET state='sent',lease_token=NULL,lease_until=NULL,error_code='',updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider='connect' AND conversation_id=%s AND lease_token=%s AND revision=%s",
-                        (job['tenant_id'],job['agent_id'],job['conversation_id'],job['lease_token'],job['revision']))
+            cur.execute("UPDATE saas_ai_agent_jobs SET state='sent',lease_token=NULL,lease_until=NULL,error_code='',updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider='connect' AND conversation_id=%s AND scope_channel_id=%s AND lease_token=%s AND revision=%s",
+                        (job['tenant_id'],job['agent_id'],job['conversation_id'],job_scope(job),job['lease_token'],job['revision']))
             cur.execute("UPDATE saas_tenant_webhook_events SET state='completed',completed_at=now(),error_code='' WHERE tenant_id=%s::uuid AND fingerprint=%s",
                         (job['tenant_id'],job['event_fingerprint']))
         conn.commit()

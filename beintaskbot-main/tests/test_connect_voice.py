@@ -361,7 +361,7 @@ class VoiceBoundaries(unittest.TestCase):
             'max_replies_per_chat': 100,
         }
         for used, blocked in ((0, False), (1, True)):
-            conn, cur = self.connection([config, None, {'calls': used}, {'calls': 0}, {'revision': 1}])
+            conn, cur = self.connection([None, config, None, {'calls': used}, {'calls': 0}, {'revision': 1}])
             with self.subTest(used=used), patch.object(runs, '_connect', return_value=conn), \
                  patch.object(runs, 'ensure_schema'), patch('tenant_ai_agent_test_mode.assert_job_allowed'), \
                  patch.object(runs, 'choose_api_credential', return_value=('central-key', 'platform')), \
@@ -395,7 +395,7 @@ class VoiceBoundaries(unittest.TestCase):
         self.assertFalse(post.call_args.kwargs['allow_redirects'])
 
     def test_duplicate_signed_webhook_does_not_queue_again(self):
-        conn, cur = self.connection([{'operating_mode': 'active'}, None])
+        conn, cur = self.connection([{'operating_mode': 'active'}, None, {'payload':{'channel_id':CHANNEL,'conversation_id':JOB['conversation_id']}}])
         with patch.object(adapter, '_connect', return_value=conn), patch.object(adapter, 'ensure_schema'), \
              patch.object(adapter, 'allowed') as allowed:
             count = adapter.enqueue(TENANT, channel_id=CHANNEL, conversation_id=JOB['conversation_id'],

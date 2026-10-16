@@ -147,7 +147,7 @@ def active(job, reservation):
         with conn.cursor() as cur:
             cur.execute("""SELECT 1 FROM saas_ai_agent_jobs j
               JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id
-                AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id
+                AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id AND cs.channel_id=j.scope_channel_id
               WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider='connect'
                 AND j.channel_id=%s AND j.conversation_id=%s AND j.state='processing'
                 AND j.lease_token=%s AND j.revision=%s AND j.lease_until>now()

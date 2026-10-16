@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 from contextlib import nullcontext
 import re
+from tenant_ai_dialog_scope import channel_scope, job_scope, lock_dialog
 
 from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agent_runtime_flags import enabled as runtime_flag
@@ -77,11 +78,14 @@ def allowed(job: dict, connection=None) -> bool:
             cur.execute('''SELECT 1 FROM saas_tenant_integrations i JOIN saas_connect_channels c
               ON c.tenant_id=i.tenant_id AND c.connect_channel_id=%s::uuid AND c.active=TRUE
               WHERE i.tenant_id=%s::uuid AND i.provider='connect' AND i.status='connected'
-                AND NOT EXISTS (SELECT 1 FROM saas_connect_conversations other
-                  WHERE other.tenant_id=i.tenant_id AND other.conversation_id=%s
-                    AND other.connect_channel_id<>c.connect_channel_id)
+                AND NOT EXISTS (SELECT 1 FROM saas_ai_conversation_state legacy
+                  WHERE legacy.tenant_id=i.tenant_id AND legacy.provider='connect' AND legacy.conversation_id=%s
+                    AND legacy.channel_id='')
+                AND EXISTS (SELECT 1 FROM saas_connect_conversations route
+                  WHERE route.tenant_id=i.tenant_id AND route.connect_channel_id=c.connect_channel_id
+                    AND route.conversation_id=%s AND (%s::bigint IS NULL OR route.lead_id=%s))
               FOR SHARE OF i,c''',
-                        (channel, tenant, conversation))
+                        (channel, tenant, conversation, conversation, job.get('lead_id'), job.get('lead_id')))
             connected = bool(cur.fetchone())
             tenant_active = tenant_status_allows_ai(settings.get('status'), 'connect')
             if settings.get('operating_mode') == 'active':
@@ -102,12 +106,14 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
     The webhook event table + job primary key make Connect retries and Evolution
     duplicate events harmless.  No model call occurs in this transaction.
     """
+    channel_id = channel_scope('connect', channel_id)
     fingerprint = hashlib.sha256(('connect:' + str(message_id or event_id)).encode('utf-8')).hexdigest()
     queued = 0
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
         if connection is None:
             ensure_schema(conn)
         with conn.cursor() as cur:
+            lock_dialog(cur, tenant, 'connect', channel_id, conversation_id)
             cur.execute('SELECT operating_mode,enabled,emergency_stop FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid', (tenant,))
             settings = cur.fetchone() or {}
             test_mode = str(settings.get('operating_mode') or 'test') != 'active'
@@ -124,10 +130,14 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
               ON CONFLICT(tenant_id,fingerprint) DO NOTHING RETURNING fingerprint''',
                         (tenant, fingerprint, str(message_id or event_id), _json(payload)))
             if not cur.fetchone():
+                cur.execute("SELECT payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s", (tenant, fingerprint))
+                previous = (cur.fetchone() or {}).get('payload') or {}
+                if previous.get('channel_id') != channel_id or previous.get('conversation_id') != conversation_id:
+                    raise ValueError('Connect event scope mismatch')
                 if connection is None:
                     conn.commit()
                 return 0
-            if not allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel_id,'conversation_id':conversation_id}, connection=conn):
+            if not allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel_id,'conversation_id':conversation_id,'lead_id':lead_id}, connection=conn):
                 reason = ('ai_agents_server_disabled' if not runtime_flag('AI_AGENTS_ENABLED') else
                           'company_ai_disabled' if settings.get('enabled') is not True else
                           'emergency_stop' if settings.get('emergency_stop') else 'connect_admission_blocked')
@@ -138,7 +148,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 return 0
             cur.execute('''UPDATE saas_tenant_webhook_events SET state='superseded',completed_at=now(),error_code='newer_inbound'
               WHERE tenant_id=%s::uuid AND provider='connect' AND state IN ('queued','processing')
-                AND payload->>'conversation_id'=%s AND fingerprint<>%s''', (tenant, conversation_id, fingerprint))
+                AND payload->>'conversation_id'=%s AND payload->>'channel_id'=%s AND fingerprint<>%s''', (tenant, conversation_id, channel_id, fingerprint))
             from tenant_ai_testing_scope import clause
             cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.enabled FROM saas_ai_agents a
               WHERE a.tenant_id=%s::uuid'''+clause('a','connect')+' ORDER BY a.created_at,a.id', (tenant,))
@@ -169,14 +179,14 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             # messages.  A manager must explicitly resume the dialogue; an
             # inbound message cannot silently revive the agent.
             cur.execute('''INSERT INTO saas_ai_conversation_state
-              (tenant_id,provider,conversation_id,agent_id,state,first_inbound_message_id,last_inbound_message_id)
-              VALUES(%s::uuid,'connect',%s,%s::uuid,'active',%s,%s)
-              ON CONFLICT(tenant_id,provider,conversation_id) DO UPDATE SET
+              (tenant_id,provider,conversation_id,channel_id,agent_id,state,first_inbound_message_id,last_inbound_message_id)
+              VALUES(%s::uuid,'connect',%s,%s,%s::uuid,'active',%s,%s)
+              ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE SET
                 agent_id=EXCLUDED.agent_id,last_inbound_message_id=EXCLUDED.last_inbound_message_id,
                 revision=saas_ai_conversation_state.revision+1,updated_at=now()
               WHERE saas_ai_conversation_state.state='active'
               RETURNING first_inbound_message_id''',
-                        (tenant, conversation_id, agents[0]['id'], payload['message_id'], payload['message_id']))
+                        (tenant, conversation_id, channel_id, agents[0]['id'], payload['message_id'], payload['message_id']))
             state = cur.fetchone()
             if not state:
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='conversation_human_or_paused' WHERE tenant_id=%s::uuid AND fingerprint=%s",
@@ -194,7 +204,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 cur.execute('''INSERT INTO saas_ai_agent_jobs
                   (tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,channel_id,event_fingerprint,due_at,state)
                   VALUES(%s::uuid,%s::uuid,'connect',%s,%s,'',%s,%s,%s,now()+(%s*interval '1 second'),'queued')
-                  ON CONFLICT(tenant_id,agent_id,provider,conversation_id) DO UPDATE SET
+                  ON CONFLICT(tenant_id,agent_id,provider,scope_channel_id,conversation_id) DO UPDATE SET
                     lead_id=EXCLUDED.lead_id,chat_id=EXCLUDED.chat_id,channel_id=EXCLUDED.channel_id,
                     event_fingerprint=EXCLUDED.event_fingerprint,revision=saas_ai_agent_jobs.revision+1,
                     state='queued',due_at=EXCLUDED.due_at,lease_token=NULL,lease_until=NULL,attempts=0,error_code='',updated_at=now()''',
@@ -222,8 +232,8 @@ def finish_sent_after_reply_handoff(job: dict, reservation: dict, message_id: st
             cur.execute("UPDATE saas_ai_agent_runs SET state='completed',result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",
                         (_json({'send_state': 'accepted', 'message_id': str(message_id)}),
                          job['tenant_id'], reservation['run_id']))
-            cur.execute("UPDATE saas_ai_agent_jobs SET state='sent',lease_token=NULL,lease_until=NULL,error_code='',updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider='connect' AND conversation_id=%s AND lease_token=%s AND revision=%s",
-                        (job['tenant_id'], job['agent_id'], job['conversation_id'], job['lease_token'], job['revision']))
+            cur.execute("UPDATE saas_ai_agent_jobs SET state='sent',lease_token=NULL,lease_until=NULL,error_code='',updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s AND lease_token=%s AND revision=%s",
+                        (job['tenant_id'], job['agent_id'], job['conversation_id'], job_scope(job), job['lease_token'], job['revision']))
             cur.execute("UPDATE saas_tenant_webhook_events SET state='completed',completed_at=now(),error_code='' WHERE tenant_id=%s::uuid AND fingerprint=%s",
                         (job['tenant_id'], job['event_fingerprint']))
             # The send transaction may already have committed this handoff.
@@ -232,15 +242,15 @@ def finish_sent_after_reply_handoff(job: dict, reservation: dict, message_id: st
                 conn.commit()
                 return True
             # Do not overwrite a real operator takeover that won the race.
-            cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state='active' RETURNING revision",
-                        (job['tenant_id'], job['conversation_id']))
+            cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s AND state='active' RETURNING revision",
+                        (job['tenant_id'], job['conversation_id'], job_scope(job)))
             changed = cur.fetchone()
             ticket = handoff_ticket(cur, job, 'trigger_reply_sent_then_handoff')
             if changed:
-                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='trigger_reply_sent_then_handoff' WHERE tenant_id=%s::uuid AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state IN ('queued','processing'))",
-                            (job['tenant_id'], job['tenant_id'], job['conversation_id']))
-                cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='trigger_reply_sent_then_handoff',updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state IN ('queued','processing')",
-                            (job['tenant_id'], job['conversation_id']))
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='trigger_reply_sent_then_handoff' WHERE tenant_id=%s::uuid AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s AND state IN ('queued','processing'))",
+                            (job['tenant_id'], job['tenant_id'], job['conversation_id'], job_scope(job)))
+                cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='trigger_reply_sent_then_handoff',updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s AND state IN ('queued','processing')",
+                            (job['tenant_id'], job['conversation_id'], job_scope(job)))
         conn.commit()
     summarize_created(job['tenant_id'], ticket)
     return True
@@ -256,7 +266,7 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
                 COALESCE(v.state,'') AS voice_state,
                 NOT EXISTS (SELECT 1 FROM saas_connect_conversations c
                   JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id
-                    AND cs.provider='connect' AND cs.conversation_id=c.conversation_id
+                    AND cs.provider='connect' AND cs.conversation_id=c.conversation_id AND cs.channel_id=c.connect_channel_id::text
                   WHERE c.tenant_id=m.tenant_id AND 'connect:' || c.connect_channel_id::text=m.channel
                     AND c.lead_id=m.kommo_lead_id AND m.created_at<=cs.resumed_at) AS voice_eligible,
                 CASE WHEN v.state='completed' THEN m.body ELSE '' END AS transcript
@@ -281,12 +291,16 @@ def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,state,reason)
-              VALUES(%s::uuid,'connect',%s,'human','manager_replied')
-              ON CONFLICT(tenant_id,provider,conversation_id) DO UPDATE SET state='human',reason='manager_replied',
-                revision=saas_ai_conversation_state.revision+1,updated_at=now()''', (tenant, conversation_id))
+            channel_id = lock_dialog(cur, tenant, "connect", channel_id, conversation_id)
+            cur.execute("SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s AND lead_id=%s", (tenant, channel_id, conversation_id, int(lead_id)))
+            if not cur.fetchone():
+                raise ValueError("Connect dialogue route mismatch")
+            cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,channel_id,state,reason)
+              VALUES(%s::uuid,'connect',%s,%s,'human','manager_replied')
+              ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE SET state='human',reason='manager_replied',
+                revision=saas_ai_conversation_state.revision+1,updated_at=now()''', (tenant, conversation_id, channel_id))
             cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',lease_token=NULL,lease_until=NULL,
               error_code='manager_replied',updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
-                AND conversation_id=%s AND state IN ('queued','processing')''', (tenant, conversation_id))
+                AND conversation_id=%s AND channel_id=%s AND state IN ('queued','processing')''', (tenant, conversation_id, channel_id))
         if connection is None:
             conn.commit()

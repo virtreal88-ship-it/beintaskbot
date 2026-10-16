@@ -278,7 +278,7 @@ def test_worker_configuration_rechecks_selected_test_agent(sandbox,monkeypatch):
     lease=uid();sandbox.execute("UPDATE saas_ai_agent_jobs SET state='processing',lease_token=%s::uuid,lease_until=now()+interval '3 minutes'",(lease,))
     sandbox.execute("UPDATE saas_tenant_webhook_events SET payload='{\"test_mode\":true}'::jsonb")
     sandbox.execute("INSERT INTO saas_ai_agent_connect_test_mode(tenant_id,channel_id,conversation_id,agent_id,enabled,verified,updated_by) VALUES(%s::uuid,%s,'client',%s::uuid,TRUE,TRUE,11)",(A,CA,AGENT));sandbox.commit()
-    job={'tenant_id':A,'agent_id':AGENT,'provider':'connect','conversation_id':'client','lease_token':lease,'revision':1}
+    job={'tenant_id':A,'agent_id':AGENT,'provider':'connect','channel_id':CA,'conversation_id':'client','lease_token':lease,'revision':1}
     assert runs.load_agent_config(job)['mode']=='manual'
     other=uid();sandbox.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled) VALUES(%s::uuid,%s::uuid,'Second',11,TRUE)",(A,other));sandbox.execute('UPDATE saas_ai_agent_connect_test_mode SET agent_id=%s::uuid',(other,));sandbox.commit()
     assert runs.load_agent_config(job,with_block_reason=True)==(None,'test_binding_mismatch')

@@ -79,6 +79,7 @@ class AiAgentRunStoreLockTests(unittest.TestCase):
             'tenant_id': '00000000-0000-0000-0000-000000000001',
             'agent_id': '00000000-0000-0000-0000-000000000002',
             'provider': 'connect', 'conversation_id': 'conversation-a',
+            'channel_id': '00000000-0000-0000-0000-000000000003',
             'lease_token': 'lease-a', 'revision': 3, 'event_fingerprint': 'event-a',
         }
         with patch.object(run_store, '_connect', return_value=connection), \
@@ -102,6 +103,7 @@ class AiAgentRunStoreLockTests(unittest.TestCase):
             'tenant_id': '00000000-0000-0000-0000-000000000001',
             'agent_id': '00000000-0000-0000-0000-000000000002',
             'provider': 'connect', 'conversation_id': 'conversation-a',
+            'channel_id': '00000000-0000-0000-0000-000000000003',
             'lease_token': 'lease-a', 'revision': 3, 'event_fingerprint': 'event-a',
         }
         with patch.object(run_store, '_connect', return_value=connection), \
@@ -118,6 +120,7 @@ class AiAgentRunStoreLockTests(unittest.TestCase):
             'tenant_id': '00000000-0000-0000-0000-000000000001',
             'agent_id': '00000000-0000-0000-0000-000000000002',
             'provider': 'connect', 'conversation_id': 'conversation-a',
+            'channel_id': '00000000-0000-0000-0000-000000000003',
             'lease_token': 'lease-a', 'revision': 3, 'event_fingerprint': 'event-a',
         }
         with patch.object(run_store, '_connect', return_value=connection), \

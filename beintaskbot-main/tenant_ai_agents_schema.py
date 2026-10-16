@@ -287,5 +287,7 @@ def ensure_schema(conn):
         create_testing_schema(conn)
         from tenant_support_inbox_schema import create_schema
         create_schema(conn)
+        from tenant_ai_channel_schema import migrate
+        migrate(conn)
         conn.commit()
         _ready = True

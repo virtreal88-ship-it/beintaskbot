@@ -170,6 +170,7 @@ def test_same_jid_in_second_channel_fails_closed_and_never_sends(flow):
     channel=str(uuid.uuid4())
     db.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'Second')",(A,channel))
     db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,'client',43)",(A,channel));db.commit()
+    db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,state) VALUES(%s::uuid,'connect','client','human')",(A,));db.commit()
     assert not connect_ai.allowed({'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':'client'})
     assert f['inbound']()[1]==0
     assert f['process']() is None

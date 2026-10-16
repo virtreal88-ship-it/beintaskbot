@@ -1,5 +1,6 @@
 """Tenant-scoped Connect support queue. Viewing never changes AI conversation state."""
 import uuid
+from tenant_ai_dialog_scope import job_scope, lock_dialog
 from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agents_store import _audit, _decorate_conversation_state
 from tenant_operator_access import authorize as _authorize
@@ -14,6 +15,10 @@ def public(row):
     if 'ai_state' in row:
         effective=_decorate_conversation_state({**row,'provider':'connect','state':row.get('ai_state') or 'active'})
         row['ai_state']=effective['display_state'] if row.get('agent_id') or row.get('ai_state') in {'human','paused'} else 'unmanaged'
+        if row.get('unambiguous') is False:
+            row['ai_state']='blocked'
+            row['resume_allowed']=False
+            row['resume_block_reason']='legacy_channel_ambiguous'
     return {key: value.isoformat() if hasattr(value, 'isoformat') else str(value) if isinstance(value, uuid.UUID) else value
             for key, value in dict(row).items()}
 
@@ -37,7 +42,7 @@ def route(cur, tenant, channel, conversation, lead_id=None):
           WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s
             AND ch.active=TRUE FOR SHARE OF c,ch''', (tenant, channel, conversation))
     value = cur.fetchone()
-    if not value:
+    if not value or (channel and str(value['connect_channel_id']) != str(channel)) or (conversation and str(value['conversation_id']) != str(conversation)):
         raise TenantLinearError('Диалог или канал недоступен в этой компании.', 404)
     return dict(value)
 
@@ -109,8 +114,7 @@ _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_messag
  a.enabled AS agent_enabled,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,
  company.status AS tenant_status,j.state AS latest_job_state,j.error_code AS latest_job_error,
  ch.active AS channel_active,cs.updated_at AS ai_updated_at,
- (SELECT count(*) FROM saas_connect_conversations other WHERE other.tenant_id=t.tenant_id
-   AND other.conversation_id=t.conversation_id)=1 AS unambiguous
+ NOT EXISTS (SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=t.tenant_id AND legacy.provider='connect' AND legacy.channel_id='' AND legacy.conversation_id=t.conversation_id) AS unambiguous
  FROM saas_support_tickets t
  JOIN saas_connect_conversations c ON c.tenant_id=t.tenant_id AND c.connect_channel_id=t.channel_id AND c.conversation_id=t.conversation_id
  JOIN saas_connect_channels ch ON ch.tenant_id=t.tenant_id AND ch.connect_channel_id=t.channel_id
@@ -119,7 +123,7 @@ _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_messag
  LEFT JOIN LATERAL (SELECT agent_id,state,error_code FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=t.tenant_id
    AND j0.provider='connect' AND j0.channel_id=t.channel_id::text AND j0.conversation_id=t.conversation_id
    ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
- LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect' AND cs.conversation_id=t.conversation_id
+ LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect' AND cs.conversation_id=t.conversation_id AND cs.channel_id=t.channel_id::text
  LEFT JOIN saas_ai_agents a ON a.tenant_id=t.tenant_id AND a.id=COALESCE(cs.agent_id,j.agent_id)
  LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.assigned_to
  LEFT JOIN LATERAL (SELECT COALESCE(happened_at,created_at) AS last_message_at FROM saas_crm_messages
@@ -250,8 +254,9 @@ def handoff_recorded(cur, job):
     if job.get('provider') != 'connect':
         return False
     # Serialize replay checks with Resume and competing handoff transactions.
-    cur.execute("SELECT state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s FOR UPDATE",
-                (job['tenant_id'],job.get('conversation_id') or job.get('chat_id')))
+    lock_dialog(cur, job['tenant_id'], 'connect', job['channel_id'], job.get('conversation_id') or job.get('chat_id'))
+    cur.execute("SELECT state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s FOR UPDATE",
+                (job['tenant_id'],job.get('conversation_id') or job.get('chat_id'),job_scope(job)))
     cur.fetchone()
     cur.execute("SELECT 1 FROM saas_support_events WHERE tenant_id=%s::uuid AND event_key=%s",
                 (job['tenant_id'], 'handoff:' + str(job['event_fingerprint'])))

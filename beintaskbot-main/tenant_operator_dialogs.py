@@ -76,13 +76,12 @@ def projection(policy):
         t.status AS tenant_status,j.state AS latest_job_state,COALESCE(j.error_code,'') AS latest_job_error,
         COALESCE(lm.last_message_at,c.last_message_at,c.created_at) AS last_message_at,
         ticket.assigned_to,tm.display_name AS assignee_name,
-        (SELECT count(*) FROM saas_connect_conversations other WHERE other.tenant_id=c.tenant_id
-          AND other.conversation_id=c.conversation_id)=1 AS unambiguous,
+        NOT EXISTS (SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=c.tenant_id AND legacy.provider='connect' AND legacy.channel_id='' AND legacy.conversation_id=c.conversation_id) AS unambiguous,
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected') AS connected
       FROM saas_connect_conversations c
       JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id
       JOIN saas_tenants t ON t.id=c.tenant_id
-      LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id
+      LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id AND cs.channel_id=c.connect_channel_id::text
       LEFT JOIN LATERAL(SELECT j0.* FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=c.tenant_id AND j0.provider='connect'
         AND j0.channel_id=c.connect_channel_id::text AND j0.conversation_id=c.conversation_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
       LEFT JOIN saas_ai_agents a ON a.tenant_id=c.tenant_id AND a.id=COALESCE(j.agent_id,cs.agent_id)
@@ -108,7 +107,7 @@ def projection(policy):
         ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1) lm ON TRUE
       LEFT JOIN LATERAL(SELECT j0.* FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=d.tenant_id AND j0.provider='kommo'
         AND j0.lead_id=d.kommo_lead_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
-      LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=d.tenant_id AND cs.provider='kommo' AND cs.conversation_id=j.conversation_id
+      LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=d.tenant_id AND cs.provider='kommo' AND cs.conversation_id=j.conversation_id AND cs.channel_id=j.scope_channel_id
       LEFT JOIN saas_ai_agents a ON a.tenant_id=d.tenant_id AND a.id=j.agent_id
       LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=d.tenant_id
       LEFT JOIN saas_tenant_members tm ON tm.tenant_id=d.tenant_id AND tm.telegram_id=cs.assigned_to
@@ -138,8 +137,10 @@ def decorate(row):
         item['phone'] = ''
     item['customer_kind'] = ('group' if item.get('conversation_kind') == 'group' else
                              'contact' if item.get('provider') == 'connect' else 'contact')
+    if item.get('provider') == 'connect' and item.get('unambiguous') is False:
+        item.update(display_state='blocked', display_reason='legacy_channel_ambiguous', resume_allowed=False, resume_block_reason='legacy_channel_ambiguous')
     item['controls_allowed']=bool(item.get('channel_active') and item.get('unambiguous') and item.get('conversation_id'))
-    item['control_block_reason']='channel_inactive' if not item.get('channel_active') else 'ambiguous_channel' if not item.get('unambiguous') else 'untracked_dialog' if not item.get('conversation_id') else ''
+    item['control_block_reason']='channel_inactive' if not item.get('channel_active') else 'legacy_channel_ambiguous' if not item.get('unambiguous') else 'untracked_dialog' if not item.get('conversation_id') else ''
     item['can_send']=bool(item.get('channel_active') and item.get('connected') and item.get('tenant_status')=='active')
     item['send_block_reason']='integration_disconnected' if not item.get('connected') else 'channel_inactive' if not item.get('channel_active') else 'tenant_not_active' if item.get('tenant_status')!='active' else ''
     if item.get('display_state') == 'active':
@@ -152,7 +153,7 @@ def decorate(row):
         item['ai_availability'] = 'stopped'
     else:
         item['ai_availability'] = 'blocked'
-    item['available_actions'] = (['pause','handoff'] if item.get('state') == 'active' and item.get('ai_availability') == 'available'
+    item['available_actions'] = (['pause','handoff'] if item.get('state') == 'active' and item.get('ai_availability') == 'available' and item.get('controls_allowed')
                                  else ['resume'] if item.get('state') in {'paused','human'} and item.get('resume_allowed') and item.get('controls_allowed')
                                  else [])
     item['state_changed_at'] = item.get('updated_at')

@@ -101,6 +101,7 @@ def test_ambiguous_jid_stays_readable_but_controls_cannot_cross_channels(operato
     other=str(uuid.uuid4())
     operator_db.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'Second')",(A,other))
     operator_db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,'client',43)",(A,other));operator_db.commit()
+    operator_db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,state) VALUES(%s::uuid,'connect','client','human')",(A,));operator_db.commit()
     person=employee(operator_db,['dialogs'])
     rows=dialogs.listing(person)['dialogs']
     assert len(rows)==2 and all(not row['controls_allowed'] for row in rows)

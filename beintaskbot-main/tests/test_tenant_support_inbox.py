@@ -167,7 +167,7 @@ def seed_job(db):
     db.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled) VALUES(%s::uuid,%s::uuid,'Night support',11,TRUE)",(A,AGENT))
     db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled) VALUES(%s::uuid,TRUE)",(A,))
     db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider) VALUES(%s::uuid,'evt','connect')",(A,))
-    db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,agent_id,state) VALUES(%s::uuid,'connect','client',%s::uuid,'active')",(A,AGENT))
+    db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,channel_id,agent_id,state) VALUES(%s::uuid,'connect','client',%s,%s::uuid,'active')",(A,CA,AGENT))
     db.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,chat_id,channel_id,lead_id,event_fingerprint,talk_id,due_at) VALUES(%s::uuid,%s::uuid,'connect','client','client',%s,41,'evt','',now())",(A,AGENT,CA))
     db.commit()
     return {'tenant_id':A,'provider':'connect','agent_id':AGENT,'conversation_id':'client','chat_id':'client','channel_id':CA,'lead_id':41,'event_fingerprint':'evt','lease_token':str(uuid.uuid4()),'revision':1}

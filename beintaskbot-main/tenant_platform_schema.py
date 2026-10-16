@@ -16,6 +16,8 @@ def _ensure_schema(conn) -> None:
         if _schema_ready:
             return
         with conn.cursor() as cur:
+            # Process-local locks do not protect concurrent web/worker startup.
+            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended('tenant-platform-schema',0))")
             migrate_identity_schema(cur)
             migrate_operations_schema(cur)
             migrate_crm_schema(cur)

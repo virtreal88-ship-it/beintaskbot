@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import uuid
+from tenant_ai_dialog_scope import lock_dialog
 from datetime import datetime, timezone
 
 import requests
@@ -313,6 +314,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
             cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active=TRUE', (tenant, channel_id))
             if not cur.fetchone():
                 return False
+            lock_dialog(cur, tenant, 'connect', channel_id, conversation)
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
             inserted_event = bool(cur.fetchone())
             outbound = event_type == 'message.outbound.observed' or data.get('fromMe') is True
@@ -329,9 +331,11 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
                   VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,'WhatsApp operator',%s,%s,'',%s::timestamptz,%s::jsonb)
                   ON CONFLICT(tenant_id,external_id) DO UPDATE SET external_id=saas_crm_messages.external_id
-                  RETURNING author_name,raw''',
+                  RETURNING author_name,raw,kommo_lead_id,channel''',
                             (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,str(data.get('text') or ''),str(data.get('type') or 'text'),occurred,_json(data)))
                 stored = cur.fetchone()
+                if stored and (stored.get('kommo_lead_id') != lead_id or stored.get('channel') != 'connect:' + channel_id):
+                    raise TenantPlatformError('Connect message scope mismatch.')
                 # A malformed outbound event with ``fromMe:false`` is kept as
                 # an observable outbound record, but cannot take over a chat.
                 if data.get('fromMe') is not False and not _is_ai_message(stored):
@@ -387,6 +391,10 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
             # The CRM copy, dedup receipt and AI admission commit together.
             # A failed queue write rolls back the webhook, so Connect can retry.
             if accepted and queued_payload:
+                cur.execute("SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND kommo_lead_id=%s AND channel=%s AND direction='incoming'",
+                            (tenant, 'connect:' + queued_payload[4], queued_payload[3], 'connect:' + channel_id))
+                if not cur.fetchone():
+                    raise TenantPlatformError('Connect message scope mismatch.')
                 from tenant_ai_agent_connect import enqueue
                 enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
                         lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
@@ -438,14 +446,15 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
     with _connect() as conn:
         _schema(conn)
         with conn.cursor() as cur:
+            lock_dialog(cur, tenant, "connect", channel_id, conversation_id)
             cur.execute('''SELECT c.connect_channel_id,c.conversation_id,i.secrets,cs.revision,cs.state
               FROM saas_connect_conversations c
               JOIN saas_tenant_integrations i ON i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected'
               JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
-              JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id
+              JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id AND cs.channel_id=c.connect_channel_id::text
               WHERE c.tenant_id=%s::uuid AND c.lead_id=%s AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s
-                AND NOT EXISTS (SELECT 1 FROM saas_connect_conversations other WHERE other.tenant_id=c.tenant_id
-                  AND other.conversation_id=c.conversation_id AND other.connect_channel_id<>c.connect_channel_id)
+                AND NOT EXISTS (SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=c.tenant_id
+                  AND legacy.provider='connect' AND legacy.conversation_id=c.conversation_id AND legacy.channel_id='')
               FOR UPDATE OF c,cs''', (tenant, int(lead_id), channel_id, conversation_id))
             row = cur.fetchone()
             if (not row or row.get('state') != 'active' or int(row.get('revision') or 0) != int(expected_revision)):
@@ -462,15 +471,15 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,'AI Agent',%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
                         (uuid.uuid4(),tenant,int(lead_id),'connect:'+message_id,'connect:'+channel_id,text,_json({'source':'connect','status':'accepted','run_id':str(run_id)})))
             cur.execute('''UPDATE saas_ai_conversation_state SET last_agent_message_id=%s,revision=revision+1,updated_at=now()
-              WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state='active' AND revision=%s''',
-                        (str(message_id),tenant,conversation_id,int(expected_revision)))
+              WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s AND state='active' AND revision=%s''',
+                        (str(message_id),tenant,conversation_id,channel_id,int(expected_revision)))
             if handoff_fingerprint:
                 from tenant_support_inbox_store import handoff_ticket
                 ticket = handoff_ticket(cur, {'tenant_id':tenant,'provider':'connect',
                     'channel_id':channel_id,'conversation_id':conversation_id,
                     'event_fingerprint':handoff_fingerprint}, 'trigger_reply_sent_then_handoff')
-                cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s",
-                            (tenant,conversation_id))
+                cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s",
+                            (tenant,conversation_id,channel_id))
         conn.commit()
     if ticket:
         from tenant_support_inbox_store import summarize_created
@@ -485,6 +494,7 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
             from tenant_ai_agents_schema import ensure_schema
             ensure_schema(conn)
         with conn.cursor() as cur:
+            lock_dialog(cur, tenant, "connect", route["channel_id"], route["conversation_id"])
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
                         (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending'})))

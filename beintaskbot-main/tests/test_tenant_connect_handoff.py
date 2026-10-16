@@ -73,10 +73,10 @@ class TenantConnectHandoffTests(unittest.TestCase):
         self.assertEqual(insert[4], 'connect:' + CHANNEL)
 
     def test_connect_resume_verifies_the_tenant_owned_channel(self):
-        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[
+        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None,
             {'state': 'human', 'agent_id': CHANNEL, 'agent_enabled': True,
              'company_enabled': True, 'company_emergency_stop': False,
-             'tenant_status': 'active', 'operating_mode': 'active'},
+             'scopes': [{'provider':'connect','channel_id':CHANNEL}], 'tenant_status': 'active', 'operating_mode': 'active'},
             {'connected': True},
         ])
         connection = Connection(cursor)
@@ -93,7 +93,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
         ownership = next(params for sql, params in cursor.executed if 'saas_connect_conversations' in sql)
         self.assertEqual(ownership, (TENANT, 'client@s.whatsapp.net', CHANNEL))
         update = next(params for sql, params in cursor.executed if 'INSERT INTO saas_ai_conversation_state' in sql)
-        self.assertEqual(update[:4], (TENANT, 'connect', 'client@s.whatsapp.net', 'active'))
+        self.assertEqual(update[:5], (TENANT, 'connect', 'client@s.whatsapp.net', CHANNEL, 'active'))
 
     def test_connect_resume_rejects_an_ambiguous_or_foreign_conversation(self):
         cursor = Cursor(rows=[[]])
@@ -110,8 +110,8 @@ class TenantConnectHandoffTests(unittest.TestCase):
         profile = {'tenant_id': TENANT, 'telegram_id': 7}
         paused = {'state': 'paused', 'agent_id': CHANNEL, 'agent_enabled': True,
                   'company_enabled': True, 'company_emergency_stop': False,
-                  'tenant_status': 'active', 'operating_mode': 'active'}
-        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[paused, {'connected': True}])
+                  'scopes': [{'provider':'connect','channel_id':CHANNEL}], 'tenant_status': 'active', 'operating_mode': 'active'}
+        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, paused, {'connected': True}])
         with patch.object(agents_store, '_connect', return_value=Connection(cursor)), \
              patch.object(agents_store, 'ensure_schema'), \
              patch.object(agents_store, '_authorize', return_value=(TENANT, 7)), \
@@ -124,7 +124,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
         self.assertNotIn("state='queued'", statements)
 
         blocked = {**paused, 'company_emergency_stop': True}
-        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[blocked])
+        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, blocked])
         with patch.object(agents_store, '_connect', return_value=Connection(cursor)), \
              patch.object(agents_store, 'ensure_schema'), \
              patch.object(agents_store, '_authorize', return_value=(TENANT, 7)), \
@@ -146,7 +146,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
     def test_group_identity_and_participant_survive_signed_connect_event(self):
         cursor = Cursor(
             rows=[[{'tenant_id': TENANT, 'secrets': b'encrypted'}]],
-            ones=[{'active': True}, {'event_id': 'group-event'}, {'lead_id': 42}],
+            ones=[{'active': True}, {'event_id': 'group-event'}, {'lead_id': 42}, {'ok':1}],
         )
         connection = Connection(cursor)
         event = {'id': 'group-event', 'type': 'message.inbound.received',
@@ -175,7 +175,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
         cursor = Cursor(
             rows=[[{'tenant_id': TENANT, 'secrets': b'encrypted'}]],
             ones=[{'active': True}, {'event_id': 'ai-echo'}, {'lead_id': 42},
-                  {'author_name': 'AI Agent', 'raw': {'run_id': 'run-1'}}],
+                  {'author_name': 'AI Agent', 'raw': {'run_id': 'run-1'}, 'kommo_lead_id':42,'channel':'connect:'+CHANNEL}],
         )
         connection = Connection(cursor)
         event = {'id': 'ai-echo', 'type': 'message.outbound.observed',
