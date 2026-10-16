@@ -177,17 +177,49 @@ def load_agent_config(job, *, with_block_reason=False):
     return (result, None) if with_block_reason else result
 
 
-def defer_job(job, due_at):
+def defer_job(job, due_at, reservation=None):
+    """Return a leased job to the queue, optionally invalidating its AI run.
+
+    A schedule may close after ``reserve_run`` has already created a
+    ``generating`` receipt.  In that case the receipt must be terminalized in
+    the same transaction as the requeue; otherwise the next worker can see an
+    in-flight run and incorrectly treat the event as already consumed.
+    """
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''UPDATE saas_ai_agent_jobs SET state='queued',due_at=%s,lease_token=NULL,lease_until=NULL,
-              attempts=GREATEST(attempts-1,0),updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid
-              AND provider=%s AND conversation_id=%s AND state='processing' AND lease_token=%s AND revision=%s''',
+            if reservation is not None:
+                run_id = str((reservation or {}).get('run_id') or '')
+                if not run_id:
+                    raise ValueError('A reserved AI run requires run_id.')
+                cur.execute('''UPDATE saas_ai_agent_runs SET state='superseded',updated_at=now()
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND agent_id=%s::uuid
+                    AND event_fingerprint=%s AND revision=%s AND state='generating'
+                  RETURNING id''',
+                  (job['tenant_id'], run_id, job['agent_id'], job['event_fingerprint'], job['revision']))
+                # A stale or already-finalized reservation must never reopen a
+                # job that another worker has taken over.
+                if not cur.fetchone():
+                    conn.commit()
+                    return False
+            # A run receipt is unique per revision. Once a reservation has
+            # been superseded, retry it as a new revision rather than colliding
+            # with that terminal receipt on the next reserve_run call.
+            revision_bump = ',revision=revision+1' if reservation is not None else ''
+            requeue_sql = '''UPDATE saas_ai_agent_jobs SET state='queued',due_at=%s,lease_token=NULL,lease_until=NULL,
+              attempts=GREATEST(attempts-1,0),updated_at=now()''' + revision_bump + ''' WHERE tenant_id=%s::uuid AND agent_id=%s::uuid
+              AND provider=%s AND conversation_id=%s AND state='processing' AND lease_token=%s AND revision=%s'''
+            cur.execute(requeue_sql + (' RETURNING 1' if reservation is not None else ''),
               (due_at,job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
+            if reservation is not None and not cur.fetchone():
+                # The run is already terminalized above, but a newer lease owns
+                # the job/event.  Do not reopen that newer worker's event.
+                conn.commit()
+                return False
             cur.execute("UPDATE saas_tenant_webhook_events SET state='queued' WHERE tenant_id=%s::uuid AND fingerprint=%s",
                         (job['tenant_id'],job['event_fingerprint']))
         conn.commit()
+    return True
 
 
 def skip_job(job, error_code):
@@ -243,7 +275,11 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
               LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id
               WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s
               AND j.state='processing' AND j.lease_token=%s AND j.revision=%s
-              FOR UPDATE OF j,a,s,i''', (tenant,job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
+              -- `i` is nullable because Chat AI can be provided by the platform.
+              -- PostgreSQL cannot lock that nullable relation.
+              -- The tenant advisory lock above serializes Chat AI setting changes;
+              -- the mutable job, agent and company-setting rows still need locks.
+              FOR UPDATE OF j,a,s''', (tenant,job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
             row = cur.fetchone()
             if not row:
                 raise TenantLinearError('Agent işi yenilənib.', 409)
@@ -382,7 +418,10 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
               JOIN saas_tenants t ON t.id=j.tenant_id
               LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id
               WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s
-              FOR UPDATE OF j,a,s,i''', (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id']))
+              -- See reserve_run: `i` is a nullable LEFT JOIN and cannot be
+              -- locked by PostgreSQL. The version check below invalidates a
+              -- result if the Chat AI configuration changed while generating.
+              FOR UPDATE OF j,a,s''', (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id']))
             current = cur.fetchone()
             config = current.get('metadata') if current and isinstance(current.get('metadata'),dict) else {}
             if (not current or current['state']!='processing' or current['lease_token']!=job['lease_token']

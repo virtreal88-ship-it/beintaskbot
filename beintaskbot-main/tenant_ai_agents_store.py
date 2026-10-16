@@ -466,12 +466,18 @@ def list_drafts(profile, *, limit=50):
         with conn.cursor() as cur:
             tenant, _ = _authorize(cur, profile)
             cur.execute('''SELECT d.id,d.agent_id,a.name AS agent_name,d.lead_id,d.talk_id,d.chat_id,
-              d.source_message_id,d.draft,d.source_ids,d.handoff_after_send,d.state,d.created_at
+              d.source_message_id,d.draft,d.source_ids,d.handoff_after_send,d.state,d.created_at,
+              e.provider,COALESCE(e.payload->>'channel_id','') AS channel_id,
+              COALESCE(e.payload->>'conversation_id',d.chat_id) AS conversation_id,s.operating_mode
               FROM saas_ai_agent_drafts d JOIN saas_ai_agents a
                 ON a.tenant_id=d.tenant_id AND a.id=d.agent_id
-              WHERE d.tenant_id=%s::uuid AND EXISTS (SELECT 1 FROM saas_ai_agent_settings s
-                WHERE s.tenant_id=d.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE AND (
-                  s.operating_mode='active' OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
+              JOIN saas_tenant_webhook_events e ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
+              JOIN saas_ai_agent_settings s ON s.tenant_id=d.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE
+              WHERE d.tenant_id=%s::uuid AND (
+                  s.operating_mode='active' OR (e.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb
+                WHERE cb.tenant_id=d.tenant_id AND cb.enabled=TRUE AND cb.verified=TRUE AND cb.emergency_stop=FALSE
+                  AND cb.channel_id=(e.payload->>'channel_id') AND cb.conversation_id=d.chat_id
+                  AND (e.payload->>'test_mode')='true')) OR (e.provider='kommo' AND EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
                 JOIN saas_tenant_integrations i ON i.tenant_id=b.tenant_id AND i.provider='kommo' AND i.status='connected'
                 WHERE b.tenant_id=d.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                   AND b.account_domain=i.account_domain AND b.lead_id=d.lead_id AND b.contact_id=(
@@ -488,6 +494,14 @@ def list_drafts(profile, *, limit=50):
     for row in rows:
         item = dict(row)
         item['id'] = str(item['id']); item['agent_id'] = str(item['agent_id'])
+        item['provider'] = str(item.get('provider') or 'kommo')
+        item['channel_id'] = str(item.get('channel_id') or '')
+        item['conversation_id'] = str(item.get('conversation_id') or item.get('chat_id') or '')
+        # Connect Test Mode is intentionally simulation-only.  The draft
+        # remains visible and reviewable, but the backend will never turn its
+        # review action into a real WhatsApp send.
+        item['send_allowed'] = not (item['provider'] == 'connect'
+                                    and str(item.get('operating_mode') or '') != 'active')
         if item.get('created_at'):
             item['created_at'] = item['created_at'].isoformat()
         result.append(item)
@@ -612,10 +626,11 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
               SET state=EXCLUDED.state,reason=EXCLUDED.reason,revision=saas_ai_conversation_state.revision+1,updated_at=now()''',
               (tenant,provider,conversation,state,str(reason)[:240]))
             if state in {'human','paused'}:
-                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='human_handoff' WHERE tenant_id=%s::uuid AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND state IN ('queued','processing'))",(tenant,tenant,provider,conversation))
+                stop_code = 'manager_pause' if state == 'paused' else 'human_handoff'
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code=%s WHERE tenant_id=%s::uuid AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND state IN ('queued','processing'))",(stop_code,tenant,tenant,provider,conversation))
                 cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,
-                  error_code='human_handoff',updated_at=now() WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s
-                  AND state IN ('queued','processing')''',(tenant,provider,conversation))
+                  error_code=%s,updated_at=now() WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s
+                  AND state IN ('queued','processing')''',(stop_code,tenant,provider,conversation))
             _audit(cur,tenant,actor,'ai_conversation_'+state,'conversation',conversation,{'reason':str(reason)[:240],'provider':provider,'channel_id':resolved_channel})
         conn.commit()
     return {'conversation_id':conversation,'provider':provider,'channel_id':resolved_channel,'state':state,'reason':str(reason)[:240]}
@@ -630,13 +645,82 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
         with conn.cursor() as cur:
             tenant,_=_authorize(cur,profile)
             resolved_channel = _conversation_provider_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
-            cur.execute('''SELECT conversation_id,state,reason,assigned_to,last_inbound_message_id,last_agent_message_id,revision,updated_at
-              FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s''',(tenant,provider,conversation))
+            # The route was verified above against tenant-owned Connect data.
+            # Diagnostics below intentionally expose only metadata and safe
+            # state/error codes; message bodies and external secrets never
+            # cross this boundary.
+            cur.execute('''SELECT cs.conversation_id,cs.state,cs.reason,cs.assigned_to,
+                cs.agent_id,a.name AS agent_name,cs.last_inbound_message_id,cs.last_agent_message_id,
+                cs.revision,cs.updated_at,m.happened_at AS last_inbound_at,
+                j.state AS latest_job_state,j.error_code AS latest_job_error,j.updated_at AS latest_job_updated_at,
+                r.state AS latest_run_state,r.updated_at AS latest_run_updated_at,
+                e.state AS latest_event_state,e.error_code AS latest_event_error,e.received_at AS latest_event_received_at
+              FROM saas_ai_conversation_state cs
+              LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
+              LEFT JOIN LATERAL (
+                SELECT j0.agent_id,j0.event_fingerprint,j0.state,j0.error_code,j0.updated_at,j0.revision
+                FROM saas_ai_agent_jobs j0
+                WHERE j0.tenant_id=cs.tenant_id AND j0.provider=cs.provider
+                  AND j0.conversation_id=cs.conversation_id
+                  AND (cs.provider<>'connect' OR j0.channel_id=%s)
+                ORDER BY j0.updated_at DESC,j0.revision DESC LIMIT 1
+              ) j ON TRUE
+              LEFT JOIN LATERAL (
+                SELECT r0.state,r0.updated_at FROM saas_ai_agent_runs r0
+                WHERE r0.tenant_id=cs.tenant_id AND r0.agent_id=j.agent_id
+                  AND r0.event_fingerprint=j.event_fingerprint
+                ORDER BY r0.revision DESC LIMIT 1
+              ) r ON TRUE
+              LEFT JOIN saas_tenant_webhook_events e ON e.tenant_id=cs.tenant_id
+                AND e.fingerprint=j.event_fingerprint
+              LEFT JOIN LATERAL (
+                SELECT m0.happened_at FROM saas_crm_messages m0
+                WHERE m0.tenant_id=cs.tenant_id AND m0.direction='incoming'
+                  AND m0.external_id=CASE WHEN cs.provider='connect'
+                    THEN 'connect:' || cs.last_inbound_message_id ELSE cs.last_inbound_message_id END
+                ORDER BY m0.happened_at DESC NULLS LAST,m0.created_at DESC LIMIT 1
+              ) m ON TRUE
+              WHERE cs.tenant_id=%s::uuid AND cs.provider=%s AND cs.conversation_id=%s''',
+                        (resolved_channel,tenant,provider,conversation))
             row=cur.fetchone()
-    if not row:return {'conversation_id':conversation,'provider':provider,'channel_id':resolved_channel,'state':'active','reason':'','revision':0}
+            if not row:
+                # It is possible to read a verified Connect conversation
+                # before the first AI state row exists.  Return that fact
+                # rather than silently reporting a made-up disabled agent.
+                cur.execute('''SELECT e.state,e.error_code,e.received_at
+                  FROM saas_tenant_webhook_events e
+                  WHERE e.tenant_id=%s::uuid AND e.provider=%s
+                    AND e.payload->>'conversation_id'=%s
+                    AND (%s<>'connect' OR e.payload->>'channel_id'=%s)
+                  ORDER BY e.received_at DESC LIMIT 1''',
+                            (tenant,provider,conversation,provider,resolved_channel))
+                event = cur.fetchone() or {}
+                result = {'conversation_id':conversation,'provider':provider,'channel_id':resolved_channel,
+                    'state':'active','reason':'','revision':0,'tracked':False,
+                    'latest_event_state':event.get('state') or '',
+                    'latest_event_error':event.get('error_code') or ''}
+                if event.get('received_at'):
+                    result['latest_event_received_at']=event['received_at'].isoformat()
+                if result['latest_event_error']:
+                    result['blocked_reason']=result['latest_event_error']
+                return result
     item=dict(row)
-    item['provider']=provider;item['channel_id']=resolved_channel
-    if item.get('updated_at'):item['updated_at']=item['updated_at'].isoformat()
+    item['provider']=provider;item['channel_id']=resolved_channel;item['tracked']=True
+    for key in ('agent_id',):
+        if item.get(key):item[key]=str(item[key])
+    for key in ('updated_at','last_inbound_at','latest_job_updated_at','latest_run_updated_at','latest_event_received_at'):
+        if item.get(key):item[key]=item[key].isoformat()
+    # Only emit a blocker when it is directly supported by durable state.
+    # In particular, absence of a job is not treated as proof that no agent
+    # is configured: it may simply predate AI processing.
+    if item.get('state') in {'human','paused'}:
+        item['blocked_reason']=item.get('reason') or item['state']
+    elif item.get('latest_job_error') and item.get('latest_job_state') in {'skipped','failed','unknown'}:
+        item['blocked_reason']=item['latest_job_error']
+    elif item.get('latest_event_error') and item.get('latest_event_state') in {'skipped','failed','unknown','superseded'}:
+        item['blocked_reason']=item['latest_event_error']
+    else:
+        item['blocked_reason']=''
     return item
 
 
@@ -682,18 +766,62 @@ def review_draft(profile,draft_id,state):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
-            cur.execute('''UPDATE saas_ai_agent_drafts d SET state=%s WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='pending'
+            cur.execute('''UPDATE saas_ai_agent_drafts d SET state=%s
+              FROM saas_tenant_webhook_events e
+              WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='pending'
+                AND e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
               AND EXISTS (SELECT 1 FROM saas_ai_agent_settings s WHERE s.tenant_id=d.tenant_id
-                AND s.enabled=TRUE AND s.emergency_stop=FALSE AND (s.operating_mode='active' OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations i
+                AND s.enabled=TRUE AND s.emergency_stop=FALSE AND (s.operating_mode='active'
+                  OR (e.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb
+                    WHERE cb.tenant_id=d.tenant_id AND cb.enabled=TRUE AND cb.verified=TRUE AND cb.emergency_stop=FALSE
+                      AND cb.channel_id=(e.payload->>'channel_id') AND cb.conversation_id=d.chat_id
+                      AND (e.payload->>'test_mode')='true'))
+                  OR (e.provider='kommo' AND EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations i
                 ON i.tenant_id=b.tenant_id AND i.provider='kommo' AND i.status='connected'
                 WHERE b.tenant_id=d.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
-                  AND b.account_domain=i.account_domain AND b.lead_id=d.lead_id AND b.talk_id=d.talk_id AND b.chat_id=d.chat_id))
-              RETURNING id,lead_id,chat_id''',(state,tenant,draft))
+                  AND b.account_domain=i.account_domain AND b.lead_id=d.lead_id AND b.talk_id=d.talk_id AND b.chat_id=d.chat_id))))
+              RETURNING d.id,d.lead_id,d.chat_id,e.provider''',(state,tenant,draft))
             row=cur.fetchone()
             if not row:raise TenantLinearError('Draft tapılmadı və ya artıq nəzərdən keçirilib.',409)
             _audit(cur,tenant,actor,'ai_agent_draft_'+state,'ai_agent_draft',draft,{'lead_id':row['lead_id']})
         conn.commit()
     return {'id':str(row['id']),'state':state}
+
+
+def _reserve_connect_draft_send(cur, tenant, draft):
+    """Reserve a reviewed Connect draft without exposing its API key.
+
+    The final Connect send will take the same dialogue row lock immediately
+    before the provider request.  This transaction only verifies the tenant's
+    current ownership, source message and revision, then marks the draft as
+    in-flight so two reviewers cannot send it twice.
+    """
+    from tenant_connect_transport import _schema as ensure_connect_schema
+    ensure_connect_schema(cur.connection)
+    cur.execute('''SELECT d.id,d.agent_id,d.lead_id,d.draft,d.talk_id,d.chat_id,d.source_message_id,
+              d.handoff_after_send,c.connect_channel_id::text AS channel_id,cs.revision
+              FROM saas_ai_agent_drafts d
+              JOIN saas_tenant_webhook_events e ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
+              JOIN saas_ai_agents a ON a.tenant_id=d.tenant_id AND a.id=d.agent_id AND a.enabled=TRUE
+              JOIN saas_ai_agent_settings s ON s.tenant_id=d.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE
+              JOIN saas_tenants t ON t.id=d.tenant_id AND t.status='active'
+              JOIN saas_ai_conversation_state cs ON cs.tenant_id=d.tenant_id AND cs.provider='connect'
+                AND cs.conversation_id=d.chat_id AND cs.state='active' AND cs.last_inbound_message_id=d.source_message_id
+              JOIN saas_connect_conversations c ON c.tenant_id=d.tenant_id AND c.lead_id=d.lead_id
+                AND c.conversation_id=d.chat_id AND c.connect_channel_id::text=(e.payload->>'channel_id')
+              JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
+              JOIN saas_tenant_integrations i ON i.tenant_id=d.tenant_id AND i.provider='connect' AND i.status='connected'
+              WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='pending' AND e.provider='connect'
+                AND s.operating_mode='active' AND (e.payload->>'test_mode') IS DISTINCT FROM 'true'
+              FOR UPDATE OF d,cs,c,a,s,t,i''', (tenant, draft))
+    row = cur.fetchone()
+    if not row:
+        return None
+    cur.execute("UPDATE saas_ai_agent_drafts SET state='sending' WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='pending' RETURNING id",
+                (tenant, draft))
+    if not cur.fetchone():
+        return None
+    return dict(row)
 
 
 def reserve_draft_send(profile,draft_id):
@@ -702,6 +830,28 @@ def reserve_draft_send(profile,draft_id):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
+            # Source provenance is immutable and tenant-scoped.  It is the
+            # only authority for choosing a draft transport; browser input
+            # cannot turn a Kommo draft into a Connect send or vice versa.
+            cur.execute('''SELECT e.provider,COALESCE(e.payload->>'test_mode','false') AS test_mode
+              FROM saas_ai_agent_drafts d JOIN saas_tenant_webhook_events e
+                ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
+              WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='pending' FOR UPDATE OF d''',
+                        (tenant, draft))
+            provenance = cur.fetchone()
+            if not provenance:
+                raise TenantLinearError('Qaralama tapılmadı və ya artıq nəzərdən keçirilib.',409)
+            if str(provenance.get('provider') or '') == 'connect':
+                if str(provenance.get('test_mode') or '').casefold() == 'true':
+                    raise TenantLinearError('Connect Test Mode qaralamaları yalnız simulyasiyadır və WhatsApp-a göndərilmir.',409)
+                row = _reserve_connect_draft_send(cur, tenant, draft)
+                if not row:
+                    raise TenantLinearError('Qaralama köhnəlib, menecerə verilib və ya göndərmə icazəsi yoxdur.',409)
+                _audit(cur,tenant,actor,'ai_agent_draft_send_reserved','ai_agent_draft',draft,{'lead_id':row['lead_id'],'provider':'connect'})
+                conn.commit()
+                return {'tenant_id':tenant,'id':str(row['id']),'lead_id':int(row['lead_id']),'draft':str(row['draft']),
+                  'provider':'connect','conversation_id':str(row['chat_id']),'channel_id':str(row['channel_id']),
+                  'expected_revision':int(row.get('revision') or 0),'handoff_after_send':bool(row.get('handoff_after_send'))}
             cur.execute('''UPDATE saas_ai_agent_drafts d SET state='sending'
               FROM saas_ai_conversation_state cs,saas_ai_agents a,saas_ai_agent_settings s,saas_tenants t
               WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='pending'
@@ -722,7 +872,7 @@ def reserve_draft_send(profile,draft_id):
             if not row:raise TenantLinearError('Qaralama köhnəlib, menecerə verilib və ya artıq nəzərdən keçirilib.',409)
             _audit(cur,tenant,actor,'ai_agent_draft_send_reserved','ai_agent_draft',draft,{'lead_id':row['lead_id']})
         conn.commit()
-    return {'tenant_id':tenant,'id':str(row['id']),'lead_id':int(row['lead_id']),'draft':str(row['draft']),
+    return {'tenant_id':tenant,'id':str(row['id']),'lead_id':int(row['lead_id']),'draft':str(row['draft']),'provider':'kommo',
       'expected_route':{'talk_id':str(row['talk_id']),'chat_id':str(row['chat_id']),
         'message_id':str(row['source_message_id']),'channel_id':str(row.get('channel_id') or ''),
         'agent_id':str(row['agent_id'])},'handoff_after_send':bool(row.get('handoff_after_send'))}
@@ -734,40 +884,68 @@ def finish_draft_send(tenant_id,draft_id,state):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            cur.execute('''SELECT e.provider FROM saas_ai_agent_drafts d
+              JOIN saas_tenant_webhook_events e ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
+              WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid''',(tenant_id,draft_id))
+            provenance=cur.fetchone() or {}
+            provider=str(provenance.get('provider') or 'kommo')
             if state=='blocked':
                 cur.execute('''UPDATE saas_ai_agent_drafts d SET state=CASE WHEN EXISTS (
-                    SELECT 1 FROM saas_ai_conversation_state cs WHERE cs.tenant_id=d.tenant_id AND cs.provider='kommo'
+                    SELECT 1 FROM saas_ai_conversation_state cs WHERE cs.tenant_id=d.tenant_id AND cs.provider=%s
                       AND cs.conversation_id=d.chat_id AND cs.state='active' AND cs.last_inbound_message_id=d.source_message_id)
                     THEN 'pending' ELSE 'superseded' END
-                  WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='sending' RETURNING state''',(tenant_id,draft_id))
+                  WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='sending' RETURNING state''',(provider,tenant_id,draft_id))
                 row=cur.fetchone();final=row['state'] if row else 'superseded'
             else:
                 cur.execute("UPDATE saas_ai_agent_drafts SET state=%s WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='sending' RETURNING chat_id,handoff_after_send",(final,tenant_id,draft_id))
                 row=cur.fetchone()
                 if state=='accepted' and row and row.get('handoff_after_send'):
-                    cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s AND state='active'",(tenant_id,row['chat_id']))
+                    cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND state='active'",(tenant_id,provider,row['chat_id']))
         conn.commit()
     return final
 
 
 def list_handoffs(profile,limit=50):
+    """List tenant-owned dialogue state for the AI console.
+
+    The historical endpoint name is retained for compatibility, but the
+    console needs to see active chats as well as paused/human ones in order to
+    explain why an agent is (or is not) responding.  Only transport metadata,
+    durable state and error codes are returned; never message text or secrets.
+    """
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,_=_authorize(cur,profile)
-            cur.execute('''SELECT cs.provider,cs.conversation_id,cs.reason,cs.updated_at,a.name AS agent_name,
-                j.lead_id,j.talk_id,j.channel_id
+            cur.execute('''SELECT cs.provider,cs.conversation_id,cs.state,cs.reason,cs.updated_at,
+                cs.last_inbound_message_id,cs.last_agent_message_id,a.name AS agent_name,
+                j.lead_id,j.talk_id,j.channel_id,j.state AS latest_job_state,
+                j.error_code AS latest_job_error,j.updated_at AS latest_job_updated_at,
+                inbound.happened_at AS last_inbound_at,agent_message.happened_at AS last_agent_at
               FROM saas_ai_conversation_state cs
               LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
-              LEFT JOIN LATERAL (SELECT lead_id,talk_id,channel_id FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=cs.tenant_id
-                AND j0.provider=cs.provider AND j0.conversation_id=cs.conversation_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
-              WHERE cs.tenant_id=%s::uuid AND cs.state IN ('human','paused')
+              LEFT JOIN LATERAL (SELECT lead_id,talk_id,channel_id,state,error_code,updated_at
+                FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=cs.tenant_id
+                  AND j0.provider=cs.provider AND j0.conversation_id=cs.conversation_id
+                ORDER BY j0.updated_at DESC,j0.revision DESC LIMIT 1) j ON TRUE
+              LEFT JOIN LATERAL (SELECT m.happened_at FROM saas_crm_messages m
+                WHERE m.tenant_id=cs.tenant_id AND m.direction='incoming'
+                  AND m.external_id=CASE WHEN cs.provider='connect'
+                    THEN 'connect:' || cs.last_inbound_message_id ELSE cs.last_inbound_message_id END
+                ORDER BY m.happened_at DESC NULLS LAST,m.created_at DESC LIMIT 1) inbound ON TRUE
+              LEFT JOIN LATERAL (SELECT m.happened_at FROM saas_crm_messages m
+                WHERE m.tenant_id=cs.tenant_id AND m.direction='outgoing'
+                  AND m.external_id=CASE WHEN cs.provider='connect'
+                    THEN 'connect:' || cs.last_agent_message_id ELSE cs.last_agent_message_id END
+                ORDER BY m.happened_at DESC NULLS LAST,m.created_at DESC LIMIT 1) agent_message ON TRUE
+              WHERE cs.tenant_id=%s::uuid
               ORDER BY cs.updated_at DESC LIMIT %s''',(tenant,max(1,min(int(limit),100))))
             rows=cur.fetchall()
     result=[]
     for row in rows:
         item=dict(row)
-        if item.get('updated_at'):item['updated_at']=item['updated_at'].isoformat()
+        for key in ('updated_at','last_inbound_at','last_agent_at','latest_job_updated_at'):
+            if item.get(key):item[key]=item[key].isoformat()
         result.append(item)
     return result
 

@@ -4,7 +4,6 @@ import hashlib
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from tenant_ai_agent_queue import _scope_matches
 from tenant_ai_agent_actions import should_handoff, enabled_triggers, matching_triggers, handoff
@@ -20,6 +19,7 @@ from tenant_chat_reader import read_messages, read_talks
 from tenant_linear_policy import TenantLinearError
 from tenant_ai_agent_test_mode import assert_job_allowed, assert_live_job_allowed
 from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+from tenant_ai_agent_schedule import next_open as _schedule_next_open
 
 
 def _direction(message):
@@ -132,26 +132,7 @@ async def _prepare_agent_media(rows, config, api_key, logger):
 
 
 def _next_open(schedule):
-    if not isinstance(schedule,dict) or not schedule:
-        return None
-    zone = ZoneInfo(schedule.get('timezone') or 'Asia/Baku')
-    now = datetime.now(zone)
-    days = set(schedule.get('days') or range(7))
-    start_h, start_m = (int(value) for value in schedule.get('start','00:00').split(':'))
-    end_h, end_m = (int(value) for value in schedule.get('end','23:59').split(':'))
-    start_time = start_h*60+start_m
-    end_time = end_h*60+end_m
-    current_time = now.hour*60+now.minute
-    if now.weekday() in days and start_time <= current_time < end_time:
-        return None
-    for offset in range(8):
-        day = now.date()+timedelta(days=offset)
-        if day.weekday() not in days:
-            continue
-        candidate = datetime(day.year,day.month,day.day,start_h,start_m,tzinfo=zone)
-        if candidate > now:
-            return candidate.astimezone(timezone.utc)
-    return None
+    return _schedule_next_open(schedule)
 
 
 async def _settle_thread(task):
@@ -456,7 +437,8 @@ async def process_connect_one(job, logger):
     reservation = None
     phase = 'connect_admission'
     try:
-        from tenant_ai_agent_connect import history as connect_history, scope_matches
+        from tenant_ai_agent_connect import (history as connect_history, scope_matches,
+            finish_sent_after_reply_handoff)
         from tenant_ai_agent_run_store import load_agent_config
         from tenant_ai_agent_safety import server_instructions, sanitize_draft
         from tenant_connect_transport import send_ai_reply_if_active
@@ -482,14 +464,30 @@ async def process_connect_one(job, logger):
             await asyncio.to_thread(defer_job, job, open_at)
             return
         triggers = await asyncio.to_thread(enabled_triggers, tenant, job['agent_id'])
-        matched = matching_triggers(triggers, source['body'])
+        payload = job.get('payload') or {}
+        # Connect has no Kommo deal/contact payload.  Its durable conversation
+        # state records whether this is the first inbound message, and an
+        # individual WhatsApp JID proves the contact phone where available.
+        matched = matching_triggers(triggers, source['body'],
+                                   first_inquiry=payload.get('first_inquiry') is True,
+                                   phone=str(payload.get('phone') or ''))
         if should_handoff(source['body']) or any('handoff' in (trigger.get('actions') or []) for trigger in matched):
             await asyncio.to_thread(handoff, job, 'customer_requested_manager')
             return
         model = str(config.get('agent_model') or config['chat_model'])
         phase = 'connect_reserve'
         reservation = await asyncio.to_thread(reserve_run, job, pipeline_id='', stage_id='', model=model)
-        lines, missing = history(rows[-30:], {})
+        # Connect currently stores media type but deliberately has no trusted
+        # downloadable media URL.  ``history`` represents unavailable voice
+        # rather than attempting a provider fetch, so a malformed/expired
+        # attachment can never poison the queue for a later text message.
+        try:
+            lines, missing = history(rows[-30:], {})
+        except (KeyError, TypeError, ValueError):
+            lines = [{'speaker': 'CLIENT',
+                      'text': '[Attachment unavailable: do not infer its contents]',
+                      'at': str(source.get('happened_at') or '')}]
+            missing = 1 if str(source.get('message_type') or '').casefold() in {'audio', 'voice'} else 0
         query = str(source.get('body') or '')[:6000]
         knowledge = await asyncio.to_thread(knowledge_context, tenant, query)
         rules = '\n'.join((str(reservation.get('company_instructions') or ''),
@@ -511,6 +509,13 @@ async def process_connect_one(job, logger):
         if any(row['external_id'] != source_id and row['happened_at'] >= source['happened_at'] for row in current):
             await asyncio.to_thread(finish_superseded, job, reservation, 'connect_conversation_advanced')
             return
+        # The initial schedule check prevents unnecessary model calls.  This
+        # second check is the send boundary: an overnight shift can close
+        # while generation is in progress, and no response may cross it.
+        final_open_at = _next_open(config.get('schedule') or {})
+        if final_open_at:
+            await asyncio.to_thread(defer_job, job, final_open_at, reservation)
+            return
         auto = (reservation['mode'] == 'automatic' and reservation['auto_send_enabled'] is True
                 and runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')
                 and str(config.get('operating_mode') or 'active') == 'active')
@@ -525,7 +530,12 @@ async def process_connect_one(job, logger):
             if not message_id:
                 await asyncio.to_thread(finish_superseded, job, reservation, 'connect_human_takeover')
                 return
-            await asyncio.to_thread(finish_sent, job, reservation, message_id)
+            handoff_after_reply = any('handoff_after_reply' in (trigger.get('actions') or [])
+                                      for trigger in matched)
+            if handoff_after_reply:
+                await asyncio.to_thread(finish_sent_after_reply_handoff, job, reservation, message_id)
+            else:
+                await asyncio.to_thread(finish_sent, job, reservation, message_id)
             return
         await asyncio.to_thread(complete_run, job, reservation, draft[:16000],
                                 [item['source_id'] for item in knowledge],

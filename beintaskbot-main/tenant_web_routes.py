@@ -88,6 +88,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('conversations/{conversation_id}/state', ai_agents_handler(member, origin, logger, 'conversation_state'), ('GET',)),
         ('conversations/for-lead/{lead_id}', ai_agents_handler(member, origin, logger, 'conversation_for_lead'), ('GET',)),
         ('conversations/{conversation_id}/handoff', ai_agents_handler(member, origin, logger, 'handoff'), ('POST',)),
+        ('conversations/{conversation_id}/pause', ai_agents_handler(member, origin, logger, 'pause'), ('POST',)),
         ('conversations/{conversation_id}/resume', ai_agents_handler(member, origin, logger, 'resume'), ('POST',)),
         ('knowledge', ai_agents_handler(member, origin, logger, 'knowledge'), ('GET', 'POST')),
         ('knowledge/upload', ai_agents_handler(member, origin, logger, 'knowledge_upload'), ('POST',)),

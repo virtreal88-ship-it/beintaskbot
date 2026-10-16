@@ -9,7 +9,8 @@ from tenant_ai_agents_store import (delete_agent, delete_knowledge, list_agents,
 from tenant_ai_knowledge_files import extract
 from tenant_linear_policy import TenantLinearError
 from tenant_chat_send_service import run as send_chat_message
-from tenant_ai_agent_test_mode import read_test_mode, save_test_mode, verify_test_mode, discover_test_talks
+from tenant_ai_agent_test_mode import (read_test_mode, save_test_mode, verify_test_mode,
+    discover_test_talks, assert_expected_route)
 from tenant_ai_agent_runtime_flags import (configured as runtime_configured,
     enabled as runtime_flag, staging_mode as runtime_staging_mode)
 
@@ -100,7 +101,12 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 elif resource == 'triggers':
                     result = await asyncio.to_thread(list_triggers,profile,request.match_info['agent_id'])
                 elif resource == 'conversation_state':
-                    result = await asyncio.to_thread(read_conversation_state,profile,request.match_info['conversation_id'])
+                    # Provider/channel originate from a same-origin request but
+                    # are still verified against the authorized tenant in the
+                    # store before any state is read.
+                    result = await asyncio.to_thread(read_conversation_state, profile,
+                        request.match_info['conversation_id'], request.query.get('provider', 'kommo'),
+                        request.query.get('channel_id', ''))
                 elif resource == 'conversation_for_lead':
                     result = await asyncio.to_thread(read_conversation_for_lead,profile,request.match_info['lead_id'])
                 else:
@@ -189,7 +195,23 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 elif resource == 'draft_send' and method == 'POST':
                     reserved=await asyncio.to_thread(reserve_draft_send,profile,request.match_info['draft_id'])
                     try:
-                        result=await send_chat_message(profile,{'request_id':reserved['id'],'lead_id':reserved['lead_id'],'text':reserved['draft']},request_provider,wait_slot,logger,expected_route=reserved['expected_route'])
+                        if reserved.get('provider') == 'connect':
+                            from tenant_connect_transport import send_ai_reply_if_active
+                            message_id = await asyncio.to_thread(send_ai_reply_if_active,
+                                reserved['tenant_id'], reserved['lead_id'], reserved['channel_id'],
+                                reserved['conversation_id'], reserved['draft'], reserved['id'],
+                                reserved['expected_revision'])
+                            if not message_id:
+                                raise TenantLinearError('Qaralama köhnəlib və ya dialoq menecerə verilib.', 409)
+                            result = {'state': 'accepted', 'message_id': message_id, 'origin': 'connect'}
+                        else:
+                            # The reviewed draft must still point to the exact
+                            # live Kommo chat before its normal sender resolves
+                            # a route.  This guard used to be passed as an
+                            # unsupported keyword and therefore never ran.
+                            await assert_expected_route(reserved['tenant_id'], reserved['lead_id'],
+                                reserved['expected_route'], request_provider)
+                            result=await send_chat_message(profile,{'request_id':reserved['id'],'lead_id':reserved['lead_id'],'text':reserved['draft']},request_provider,wait_slot,logger)
                     except TenantLinearError as error:
                         await asyncio.to_thread(finish_draft_send,reserved['tenant_id'],reserved['id'],'unknown' if getattr(error,'keep_request',False) else 'blocked')
                         raise
@@ -199,9 +221,10 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     await asyncio.to_thread(finish_draft_send,reserved['tenant_id'],reserved['id'],'accepted')
                 elif resource == 'handoffs':
                     result = await asyncio.to_thread(list_handoffs,profile,request.query.get('limit',50))
-                elif resource in {'handoff','resume'} and method == 'POST':
+                elif resource in {'handoff','resume','pause'} and method == 'POST':
                     result = await asyncio.to_thread(set_conversation_state,profile,request.match_info['conversation_id'],
-                        'human' if resource=='handoff' else 'active',str(payload.get('reason') or ('manual_handoff' if resource=='handoff' else 'manager_resume')),
+                        {'handoff':'human','resume':'active','pause':'paused'}[resource],
+                        str(payload.get('reason') or {'handoff':'manual_handoff','resume':'manager_resume','pause':'manager_pause'}[resource]),
                         str(payload.get('provider') or 'kommo'),str(payload.get('channel_id') or ''))
                 elif resource == 'knowledge' and method == 'POST':
                     result = await asyncio.to_thread(save_knowledge, profile, payload)

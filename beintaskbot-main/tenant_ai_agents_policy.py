@@ -94,8 +94,12 @@ def agent(data, *, creating=False):
             if (not isinstance(start, str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', start)
                     or not isinstance(end, str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', end)):
                 raise TenantLinearError('İş saatları düzgün deyil.') from None
-            if end <= start:
-                raise TenantLinearError('İş saatları eyni gündə bitməlidir.')
+            # A shift may legitimately cross midnight (for example
+            # 22:00--06:00 for a night-support agent).  Equal endpoints are
+            # still ambiguous and therefore rejected rather than silently
+            # meaning 24 hours.
+            if end == start:
+                raise TenantLinearError('İş saatlarının başlanğıcı və sonu eyni ola bilməz.')
             normalized_schedule = {'timezone': zone, 'days': sorted(set(days)), 'start': start, 'end': end}
         result['schedule'] = normalized_schedule
     if creating or 'scopes' in data:

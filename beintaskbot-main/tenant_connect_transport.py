@@ -293,7 +293,12 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 external = 'connect:' + str(data.get('id') or event_id)
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'incoming',%s,%s,%s,%s,%s,%s::timestamptz,%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
-                            (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,phone,str(data.get('text') or ''),str(data.get('type') or 'text'),' ',occurred,_json(data)))
+                            # Connect does not currently provide a safe
+                            # downloadable media URL in its signed event.  Do
+                            # not store a fake non-empty placeholder: that
+                            # would make every text look like an attachment and
+                            # can incorrectly affect later AI context.
+                            (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,phone,str(data.get('text') or ''),str(data.get('type') or 'text'),'',occurred,_json(data)))
                 conn.commit()
                 accepted = True
                 queued_payload = (tenant, channel_id, conversation, lead_id, str(data.get('id') or event_id), event_id,

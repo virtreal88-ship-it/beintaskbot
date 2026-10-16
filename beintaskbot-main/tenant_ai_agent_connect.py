@@ -7,11 +7,24 @@ was durably written into the tenant's own CRM history.
 from __future__ import annotations
 
 import hashlib
+import re
 
 from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agent_runtime_flags import enabled as runtime_flag
 from tenant_ai_agent_access import tenant_status_allows_ai
 from tenant_platform import _connect, _json
+
+
+def _whatsapp_phone(conversation_id: str) -> str:
+    """Return a usable phone only when Connect's conversation id proves one.
+
+    Group, broadcast and other non-person JIDs must not accidentally satisfy a
+    ``phone_received`` trigger.  A personal WhatsApp JID is a stable source of
+    contact identity even though Connect does not expose a separate contact
+    object in every inbound webhook.
+    """
+    candidate = str(conversation_id or '').split('@', 1)[0]
+    return candidate if re.fullmatch(r'[1-9][0-9]{5,18}', candidate) else ''
 
 
 def scope_matches(scopes, channel_id: str) -> bool:
@@ -84,7 +97,11 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             test_mode = str((cur.fetchone() or {}).get('operating_mode') or 'test') != 'active'
             payload = {'message_id': str(message_id or event_id), 'channel_id': str(channel_id),
                        'conversation_id': str(conversation_id), 'text': str(text or '')[:8000],
-                       'message_type': str(message_type or 'text')[:40], 'test_mode': test_mode}
+                       'message_type': str(message_type or 'text')[:40], 'test_mode': test_mode,
+                       # Filled after the durable conversation-state update.
+                       # A phone is available only for the first inbound event
+                       # in a person-to-person WhatsApp conversation.
+                       'first_inquiry': False, 'phone': ''}
             cur.execute('''INSERT INTO saas_tenant_webhook_events
               (tenant_id,fingerprint,provider,external_id,event_type,payload,state,available_at)
               VALUES(%s::uuid,%s,'connect',%s,'incoming_message',%s::jsonb,'queued',now())
@@ -110,16 +127,45 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             if not agents:
                 reason = 'agent_not_found' if not tenant_agents else 'agent_disabled' if not enabled_agents else 'no_connect_scope'
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code=%s WHERE tenant_id=%s::uuid AND fingerprint=%s", (reason, tenant, fingerprint))
+            if not agents:
+                conn.commit()
+                return queued
+            # ``new_inquiry`` must mean the first customer message actually
+            # stored for this Connect conversation, not merely the first
+            # event received after an agent happened to be configured.  The
+            # CRM copy was committed before enqueue(), so this is durable and
+            # does not rely on a browser-provided flag.
+            cur.execute('''SELECT count(*) AS inbound_count FROM saas_crm_messages
+              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
+                AND direction='incoming' AND external_id<>'' ''',
+                        (tenant, int(lead_id), 'connect:' + str(channel_id)))
+            inbound_count = int((cur.fetchone() or {}).get('inbound_count') or 0)
+            first_inquiry = inbound_count == 1
+            # Human Mode and Pause intentionally survive subsequent customer
+            # messages.  A manager must explicitly resume the dialogue; an
+            # inbound message cannot silently revive the agent.
+            cur.execute('''INSERT INTO saas_ai_conversation_state
+              (tenant_id,provider,conversation_id,agent_id,state,first_inbound_message_id,last_inbound_message_id)
+              VALUES(%s::uuid,'connect',%s,%s::uuid,'active',%s,%s)
+              ON CONFLICT(tenant_id,provider,conversation_id) DO UPDATE SET
+                agent_id=EXCLUDED.agent_id,last_inbound_message_id=EXCLUDED.last_inbound_message_id,
+                revision=saas_ai_conversation_state.revision+1,updated_at=now()
+              WHERE saas_ai_conversation_state.state='active'
+              RETURNING first_inbound_message_id''',
+                        (tenant, conversation_id, agents[0]['id'], payload['message_id'], payload['message_id']))
+            state = cur.fetchone()
+            if not state:
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='conversation_human_or_paused' WHERE tenant_id=%s::uuid AND fingerprint=%s",
+                            (tenant, fingerprint))
+                conn.commit()
+                return 0
+            payload['first_inquiry'] = first_inquiry
+            if payload['first_inquiry']:
+                payload['phone'] = _whatsapp_phone(conversation_id)
+            cur.execute('UPDATE saas_tenant_webhook_events SET payload=%s::jsonb WHERE tenant_id=%s::uuid AND fingerprint=%s',
+                        (_json(payload), tenant, fingerprint))
             for agent in agents:
                 delay = max(0, min(int(agent.get('delay_seconds') or 0), 300))
-                cur.execute('''INSERT INTO saas_ai_conversation_state
-                  (tenant_id,provider,conversation_id,agent_id,state,first_inbound_message_id,last_inbound_message_id)
-                  VALUES(%s::uuid,'connect',%s,%s::uuid,'active',%s,%s)
-                  ON CONFLICT(tenant_id,provider,conversation_id) DO UPDATE SET
-                    agent_id=EXCLUDED.agent_id,last_inbound_message_id=EXCLUDED.last_inbound_message_id,
-                    revision=saas_ai_conversation_state.revision+1,updated_at=now()
-                  WHERE saas_ai_conversation_state.state='active' ''',
-                            (tenant, conversation_id, agent['id'], payload['message_id'], payload['message_id']))
                 cur.execute('''INSERT INTO saas_ai_agent_jobs
                   (tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,channel_id,event_fingerprint,due_at,state)
                   VALUES(%s::uuid,%s::uuid,'connect',%s,%s,'',%s,%s,%s,now()+(%s*interval '1 second'),'queued')
@@ -131,6 +177,36 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 queued += 1
         conn.commit()
     return queued
+
+
+def finish_sent_after_reply_handoff(job: dict, reservation: dict, message_id: str) -> bool:
+    """Persist an accepted Connect reply and atomically hand the chat to staff.
+
+    Connect's send lock guarantees that the message was accepted only while
+    the dialogue was active.  Recording the handoff in the same receipt
+    transaction closes the old gap where a ``handoff_after_reply`` trigger
+    could send a message but leave the AI active after a process restart.
+    """
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE saas_ai_agent_runs SET state='completed',result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",
+                        (_json({'send_state': 'accepted', 'message_id': str(message_id)}),
+                         job['tenant_id'], reservation['run_id']))
+            cur.execute("UPDATE saas_ai_agent_jobs SET state='sent',lease_token=NULL,lease_until=NULL,error_code='',updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider='connect' AND conversation_id=%s AND lease_token=%s AND revision=%s",
+                        (job['tenant_id'], job['agent_id'], job['conversation_id'], job['lease_token'], job['revision']))
+            cur.execute("UPDATE saas_tenant_webhook_events SET state='completed',completed_at=now(),error_code='' WHERE tenant_id=%s::uuid AND fingerprint=%s",
+                        (job['tenant_id'], job['event_fingerprint']))
+            # Do not overwrite a real operator takeover that won the race.
+            cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state='active' RETURNING revision",
+                        (job['tenant_id'], job['conversation_id']))
+            if cur.fetchone():
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='trigger_reply_sent_then_handoff' WHERE tenant_id=%s::uuid AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state IN ('queued','processing'))",
+                            (job['tenant_id'], job['tenant_id'], job['conversation_id']))
+                cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='trigger_reply_sent_then_handoff',updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state IN ('queued','processing')",
+                            (job['tenant_id'], job['conversation_id']))
+        conn.commit()
+    return True
 
 
 def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:

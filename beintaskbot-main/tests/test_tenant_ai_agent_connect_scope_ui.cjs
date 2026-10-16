@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 
 const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'docs/tenant-ai-agents.js'), 'utf8');
+const appSource = fs.readFileSync(path.join(root, 'docs/tenant-app.html'), 'utf8');
 const start = source.indexOf('function renderScopeOptions(agent)');
 const end = source.indexOf('function editAgent(agent', start);
 assert(start >= 0 && end > start, 'AI Agent scope editor must exist');
@@ -62,5 +63,14 @@ const databaseRow = JSON.parse(JSON.stringify({ scopes: submittedScopes }));
 const reloaded = editor(databaseRow);
 assert.equal(reloaded.elements.get('aiAgentProvider').value, 'connect');
 assert.deepEqual(JSON.parse(JSON.stringify(reloaded.context.selectValues('aiChannelId'))), ['wa-channel-42']);
+
+assert.match(source, /provider==='connect'&&!channels\.length/,
+  'the editor must refuse to save a Connect agent without an explicit WhatsApp channel');
+assert.match(source, /aiScheduleEnabled/,
+  'the editor must expose the durable schedule rather than a hidden fixed window');
+assert.match(appSource, /data-ai-section-nav="stopping"/,
+  'the editor must expose a separate stop/handoff section');
+assert.match(source, /data-dialog-action="pause"/,
+  'an active dialogue must offer Pause rather than only a handoff action');
 
 console.log('PASS: Connect provider and selected WhatsApp channel survive editor save/reload flow.');
