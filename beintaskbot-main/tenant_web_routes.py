@@ -24,6 +24,8 @@ from tenant_deal_completion_api import handler as deal_completion_handler
 from tenant_deal_completion_provider import provider as deal_provider
 from tenant_ai_agents_api import handler as ai_agents_handler
 from tenant_support_inbox_api import handler as support_handler
+from tenant_operator_api import handler as operator_handler
+from tenant_night_report_api import handler as night_report_handler
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 MemberReader = Callable[[web.Request], dict | None]
@@ -81,10 +83,16 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('agents/drafts', ai_agents_handler(member, origin, logger, 'drafts'), ('GET',)),
         ('agents/drafts/{draft_id}/review', ai_agents_handler(member, origin, logger, 'draft_review'), ('POST',)),
         ('agents/drafts/{draft_id}/send', ai_agents_handler(member, origin, logger, 'draft_send', context.crm_request, context.wait_slot), ('POST',)),
+        ('dialogs', operator_handler(member, logger, 'dialogs'), ('GET',)),
+        ('dialogs/history', operator_handler(member, logger, 'history'), ('GET',)),
+        ('night-report', night_report_handler(member, logger), ('GET',)),
+        ('night-report/dialog', night_report_handler(member, logger, 'dialog'), ('GET',)),
+        ('night-report/tickets/{ticket_id}', night_report_handler(member, logger, 'ticket'), ('GET',)),
         ('support-tickets', support_handler(member, origin, logger, 'tickets'), ('GET', 'POST')),
         ('support-tickets/{ticket_id}', support_handler(member, origin, logger, 'ticket'), ('GET', 'PATCH')),
         ('support-tickets/{ticket_id}/summary', support_handler(member, origin, logger, 'summary'), ('POST',)),
         ('handoffs', ai_agents_handler(member, origin, logger, 'handoffs'), ('GET',)),
+        ('reliability', ai_agents_handler(member, origin, logger, 'reliability'), ('GET',)),
         ('diagnostics', ai_agents_handler(member, origin, logger, 'diagnostics'), ('GET',)),
         ('agents/{agent_id}', ai_agents_handler(member, origin, logger, 'agent'), ('PATCH', 'DELETE')),
         ('agents/{agent_id}/triggers', ai_agents_handler(member, origin, logger, 'triggers'), ('GET', 'POST')),

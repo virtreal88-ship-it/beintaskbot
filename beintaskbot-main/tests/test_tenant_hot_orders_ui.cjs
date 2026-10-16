@@ -53,6 +53,6 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
   assert.equal($('hotOrderCreate').hidden,true);assert.equal($('hotOrderList').innerHTML,'');
   assert.ok(source.includes('max-height:calc(100dvh - 32px)'));assert.ok(source.includes('position:sticky;bottom:-22px'));
   const app=fs.readFileSync(path.join(__dirname,'../docs/tenant-app.html'),'utf8');
-  assert.ok(app.includes("['tasks','customers','deals','hot_orders','settings']"));assert.ok(app.includes('/assets/tenant-hot-orders.js'));
+  assert.ok(app.includes("['dialogs','support','tasks','customers','deals','hot_orders','settings']"));assert.ok(app.includes('/assets/tenant-hot-orders.js'));
   console.log('PASS: tenant hot-order UI escapes text, follows server actions, paginates, retries exact requests and rejects old-company responses.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

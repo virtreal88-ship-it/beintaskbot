@@ -4,6 +4,9 @@ from pathlib import Path
 from aiohttp import web
 
 ASSETS = (
+    ('/app/night-report', 'tenant-night-report.html', 'no-store'),
+    ('/assets/tenant-night-report.js', 'tenant-night-report.js', 'no-store'),
+    ('/assets/tenant-night-report.css', 'tenant-night-report.css', 'no-store'),
     ('/app/push-sw.js', 'tenant-push-sw.js', 'no-store'),
     ('/assets/tenant-push.js', 'tenant-push.js', 'no-store'),
     ('/assets/task-date-fields.js', 'task-date-fields.js', 'no-store'),
@@ -26,8 +29,14 @@ ASSETS = (
     ('/assets/tenant-deal-completion.js', 'tenant-deal-completion.js', 'no-store'),
     ('/assets/tenant-diagnostics.js', 'tenant-diagnostics.js', 'no-store'),
     ('/assets/tenant-chat-send.js', 'tenant-chat-send.js', 'no-store'),
+    ('/assets/tenant-operator-i18n.js', 'tenant-operator-i18n.js', 'no-store'),
+    ('/assets/tenant-operator-dialogs.js', 'tenant-operator-dialogs.js', 'no-store'),
     ('/assets/tenant-support-inbox.js', 'tenant-support-inbox.js', 'no-store'),
+    ('/assets/tenant-ai-reliability.js', 'tenant-ai-reliability.js', 'no-store'),
+    ('/assets/tenant-night-integration.js', 'tenant-night-integration.js', 'no-store'),
+    ('/assets/tenant-night-l10n.js', 'tenant-night-l10n.js', 'no-store'),
     ('/assets/tenant-ai-agents.js', 'tenant-ai-agents.js', 'no-cache, max-age=0, must-revalidate'),
+    ('/assets/tenant-night-agent-template.js', 'tenant-night-agent-template.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-workflow.js', 'tenant-workflow.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-chakra-ui.js', 'tenant-chakra-ui.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-workspace.js', 'tenant-workspace.js', None),

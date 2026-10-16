@@ -66,6 +66,9 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 if resource == 'settings':
                     result = await asyncio.to_thread(read_settings, profile)
                     result = _attach_runtime_status(result)
+                elif resource == 'reliability':
+                    from tenant_ai_reliability import snapshot
+                    result = await asyncio.to_thread(snapshot, profile, request.query.get('limit', 50))
                 elif resource == 'diagnostics':
                     # Keep diagnostics in the GET dispatch.  The generic GET
                     # fallback below returns the knowledge list, which used
@@ -80,7 +83,7 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     # Use the tenant's existing Kommo adapter, not a browser
                     # supplied account.  This keeps the pick-list current and
                     # prevents saved agent scopes from narrowing it.
-                    if request_provider is not None:
+                    if request_provider is not None and request.query.get('cached') != '1':
                         try:
                             remote = await request_provider(profile['tenant_id'], 'GET', 'leads/pipelines')
                         except Exception:
@@ -154,7 +157,7 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 safe_name, kind, content = await asyncio.to_thread(extract, filename, raw)
                 title = str(fields.get('title') or safe_name).strip()[:180]
                 result = await asyncio.to_thread(save_knowledge, profile,
-                    {'title': title, 'kind': kind, 'content': content, 'active': True})
+                    {'title': title, 'kind': kind, 'content': content, 'active': True, **({'agent_id':fields['agent_id']} if fields.get('agent_id') else {})})
             else:
                 if not _json_body(request):
                     raise TenantLinearError('JSON sorğusu tələb olunur.', 415)

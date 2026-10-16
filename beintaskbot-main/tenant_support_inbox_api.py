@@ -16,7 +16,7 @@ def handler(member_from_request, origin, logger, resource):
             if not profile: raise TenantLinearError('Нет доступа.',403)
             if request.method=='GET':
                 if resource=='tickets':
-                    result = await asyncio.to_thread(listing,profile,request.query.get('status','unresolved'),request.query.get('assignee',''),request.query.get('offset',0))
+                    result = await asyncio.to_thread(listing,profile,request.query.get('status','unresolved'),request.query.get('assignee',''),request.query.get('offset',0),request.query.get('search',''),request.query.get('channel_id',''))
                 else:
                     result = await asyncio.to_thread(detail,profile,request.match_info['ticket_id'],request.query.get('before'))
             else:

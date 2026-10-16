@@ -68,6 +68,18 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
         namespace['list_knowledge'].assert_not_called()
         member.assert_called_once_with(request)
 
+    def test_cached_options_never_contacts_kommo(self):
+        catalog = Mock(return_value={'connect_channels': [{'id': 'tenant-channel'}]})
+        handler, _ = load_handler(configuration_options=catalog)
+        profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
+        remote = Mock(side_effect=AssertionError('Connect must not require Kommo'))
+        response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
+            Mock(), 'options', request_provider=remote)(SimpleNamespace(method='GET', query={'cached': '1'})))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(response.text)['result']['connect_channels'][0]['id'], 'tenant-channel')
+        catalog.assert_called_once_with(profile)
+        remote.assert_not_called()
+
     def test_missing_verified_session_is_an_authorization_error_not_empty_state(self):
         handler, namespace = load_handler()
         member = Mock(return_value=None)

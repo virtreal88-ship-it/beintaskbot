@@ -2,7 +2,7 @@
 
 This module never reads Connect's database or trusts browser supplied routing.
 It is called only after the signed Connect webhook was accepted and the message
-was durably written into the tenant's own CRM history.
+was written into the tenant's own CRM history in the same transaction.
 """
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def test_allowed(cur, tenant: str, channel_id: str, conversation_id: str) -> boo
                 and str(row.get('conversation_id') or '') == str(conversation_id))
 
 
-def allowed(job: dict) -> bool:
+def allowed(job: dict, connection=None) -> bool:
     if str(job.get('provider') or '') != 'connect':
         return False
     if not runtime_flag('AI_AGENTS_ENABLED'):
@@ -59,8 +59,9 @@ def allowed(job: dict) -> bool:
     tenant = str(job.get('tenant_id') or '')
     channel = str(job.get('channel_id') or '')
     conversation = str(job.get('conversation_id') or '')
-    with _connect() as conn:
-        ensure_schema(conn)
+    with (nullcontext(connection) if connection is not None else _connect()) as conn:
+        if connection is None:
+            ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''SELECT s.enabled,s.emergency_stop,s.operating_mode,t.status
               FROM saas_ai_agent_settings s JOIN saas_tenants t ON t.id=s.tenant_id
@@ -82,12 +83,13 @@ def allowed(job: dict) -> bool:
             else:
                 result = bool(tenant_active and connected and settings.get('enabled') is True and settings.get('emergency_stop') is not True
                               and test_allowed(cur, tenant, channel, conversation))
-        conn.commit()
+        if connection is None:
+            conn.commit()
     return result
 
 
 def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
-            message_id: str, event_id: str, text: str, message_type: str = 'text') -> int:
+            message_id: str, event_id: str, text: str, message_type: str = 'text', connection=None) -> int:
     """Queue one inbound Connect message for all matching tenant agents.
 
     The webhook event table + job primary key make Connect retries and Evolution
@@ -95,11 +97,13 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
     """
     fingerprint = hashlib.sha256(('connect:' + str(message_id or event_id)).encode('utf-8')).hexdigest()
     queued = 0
-    with _connect() as conn:
-        ensure_schema(conn)
+    with (nullcontext(connection) if connection is not None else _connect()) as conn:
+        if connection is None:
+            ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('SELECT operating_mode FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid', (tenant,))
-            test_mode = str((cur.fetchone() or {}).get('operating_mode') or 'test') != 'active'
+            cur.execute('SELECT operating_mode,enabled,emergency_stop FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid', (tenant,))
+            settings = cur.fetchone() or {}
+            test_mode = str(settings.get('operating_mode') or 'test') != 'active'
             payload = {'message_id': str(message_id or event_id), 'channel_id': str(channel_id),
                        'conversation_id': str(conversation_id), 'text': str(text or '')[:8000],
                        'message_type': str(message_type or 'text')[:40], 'test_mode': test_mode,
@@ -113,13 +117,17 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
               ON CONFLICT(tenant_id,fingerprint) DO NOTHING RETURNING fingerprint''',
                         (tenant, fingerprint, str(message_id or event_id), _json(payload)))
             if not cur.fetchone():
-                conn.commit()
+                if connection is None:
+                    conn.commit()
                 return 0
-            if not allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel_id,'conversation_id':conversation_id}):
-                reason = 'ai_agents_server_disabled' if not runtime_flag('AI_AGENTS_ENABLED') else 'connect_admission_blocked'
+            if not allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel_id,'conversation_id':conversation_id}, connection=conn):
+                reason = ('ai_agents_server_disabled' if not runtime_flag('AI_AGENTS_ENABLED') else
+                          'company_ai_disabled' if settings.get('enabled') is not True else
+                          'emergency_stop' if settings.get('emergency_stop') else 'connect_admission_blocked')
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code=%s WHERE tenant_id=%s::uuid AND fingerprint=%s",
                             (reason, tenant, fingerprint))
-                conn.commit()
+                if connection is None:
+                    conn.commit()
                 return 0
             cur.execute('''UPDATE saas_tenant_webhook_events SET state='superseded',completed_at=now(),error_code='newer_inbound'
               WHERE tenant_id=%s::uuid AND provider='connect' AND state IN ('queued','processing')
@@ -133,13 +141,14 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 reason = 'agent_not_found' if not tenant_agents else 'agent_disabled' if not enabled_agents else 'no_connect_scope'
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code=%s WHERE tenant_id=%s::uuid AND fingerprint=%s", (reason, tenant, fingerprint))
             if not agents:
-                conn.commit()
+                if connection is None:
+                    conn.commit()
                 return queued
             # ``new_inquiry`` must mean the first customer message actually
             # stored for this Connect conversation, not merely the first
             # event received after an agent happened to be configured.  The
-            # CRM copy was committed before enqueue(), so this is durable and
-            # does not rely on a browser-provided flag.
+            # CRM copy is visible in this transaction and is committed
+            # together with the job; no browser-provided flag is trusted.
             cur.execute('''SELECT count(*) AS inbound_count FROM saas_crm_messages
               WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
                 AND direction='incoming' AND external_id<>'' ''',
@@ -162,7 +171,8 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             if not state:
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='conversation_human_or_paused' WHERE tenant_id=%s::uuid AND fingerprint=%s",
                             (tenant, fingerprint))
-                conn.commit()
+                if connection is None:
+                    conn.commit()
                 return 0
             payload['first_inquiry'] = first_inquiry
             if payload['first_inquiry']:
@@ -180,7 +190,8 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                     state='queued',due_at=EXCLUDED.due_at,lease_token=NULL,lease_until=NULL,attempts=0,error_code='',updated_at=now()''',
                             (tenant, agent['id'], conversation_id, int(lead_id), conversation_id, channel_id, fingerprint, delay))
                 queued += 1
-        conn.commit()
+        if connection is None:
+            conn.commit()
     return queued
 
 

@@ -1,0 +1,36 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const root=path.join(__dirname,'..'),read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const tick=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r));};
+(async()=>{
+ const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?site_lang=ru',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
+ const header=d.createElement('div');header.id='aiAgentsOverview';header.innerHTML='<div class="ai-overview-actions"><button data-ai-overview-diagnostics>Connect</button></div>';d.getElementById('view-ai_agents').prepend(header);
+ const member={tenant_id:'company-a',telegram_id:11,role:'owner'},result=value=>({ok:true,json:async()=>({success:true,result:value})});
+ w.fetch=async(url,init={})=>{const u=new URL(url,'https://crm.test'),data=init.body instanceof w.FormData?Object.fromEntries(init.body):init.body?JSON.parse(init.body):null;calls.push({path:u.pathname,method:init.method||'GET',data});
+  if(u.pathname==='/api/platform/me')return{ok:true,json:async()=>({member,capabilities:{modules:{night_report:true}}})};
+  if(u.pathname.endsWith('/agents/options'))return result({connect_channels:[{id:'channel-a',name:'WhatsApp'}],models:[{id:'test-model',label:'Test model'}]});
+  if(u.pathname.endsWith('/agents/settings'))return result({operating_mode:'active',auto_send_enabled:true});
+  if(u.pathname.endsWith('/knowledge'))return result([]);
+  if(u.pathname.endsWith('/knowledge/upload'))return result({id:'source-a',agent_id:data.agent_id});
+  if(u.pathname.endsWith('/agents'))return result({id:'created-agent',name:data.name,version:1,enabled:false});
+  if(u.pathname.endsWith('/triggers'))return result({id:'trigger-a'});
+  throw Error('Unexpected request '+url);
+ };
+ for(const file of ['tenant-operator-i18n.js','tenant-night-l10n.js','tenant-night-agent-template.js','tenant-ai-reliability.js','tenant-night-integration.js'])w.eval(read('docs/'+file));
+ await tick();assert.equal(d.querySelectorAll('#aiNightTemplateQuick').length,1);assert.equal(d.querySelectorAll('[data-ai-reliability-open]').length,1);assert.equal(d.getElementById('nightReportNav').hidden,false);
+ w.tenantI18n.setLanguage('en');assert.equal(d.getElementById('aiNightTemplateQuick').textContent,'Night operator');assert.equal(d.querySelector('[data-ai-reliability-open]').textContent,'AI status');
+ w.tenantI18n.setLanguage('az');assert.equal(d.getElementById('nightReportNav').textContent.includes('Gecə növbəsi'),true);
+ w.tenantI18n.setLanguage('ru');d.getElementById('aiNightTemplateQuick').click();await tick();
+ assert.equal(d.getElementById('nightAgentMode').value,'manual');assert.equal(d.getElementById('nightAgentLaunch').checked,false);
+ d.getElementById('nightAgentChannel').value='channel-a';
+ const file=new w.File(['router instructions'],'night.txt',{type:'text/plain'});Object.defineProperty(d.getElementById('nightAgentKnowledgeFile'),'files',{value:[file]});
+ for(let i=0;i<9;i++){d.getElementById('nightAgentNext').click();await tick();}
+ d.getElementById('nightAgentCreate').click();await tick();
+ const saved=calls.find(c=>c.path.endsWith('/agents')&&c.method==='POST');assert.equal(saved.data.enabled,false);assert.equal(saved.data.mode,'manual');assert.equal(saved.data.schedule.start,'22:00');assert.equal(saved.data.schedule.end,'06:00');assert.equal(saved.data.scopes[0].channel_id,'channel-a');
+ assert.equal(calls.find(c=>c.path.endsWith('/knowledge/upload')).data.agent_id,'created-agent');
+ assert.equal(calls.filter(c=>c.path.endsWith('/agents/settings')&&c.method!=='GET').length,0);
+ assert.match(d.getElementById('nightAgentNotice').textContent,/Готово/);
+ d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{member:{tenant_id:'company-b',telegram_id:22},capabilities:{modules:{night_report:false}}}}));
+ assert.equal(d.getElementById('nightReportNav').hidden,true);assert.equal(d.getElementById('nightAgentTemplateModal').hidden,true);
+ dom.window.close();console.log('PASS: integrated wizard, scoped upload, disabled Manual default, unchanged company settings, unique buttons, RU/AZ/EN navigation and tenant switch.');
+})().catch(e=>{console.error(e);process.exitCode=1});

@@ -105,11 +105,16 @@ def read_settings(profile):
                 EXISTS(SELECT 1 FROM saas_tenant_integrations WHERE tenant_id=%s::uuid
                   AND provider='connect' AND status='connected') AS connect_connected,
                 (SELECT count(*) FROM saas_connect_channels WHERE tenant_id=%s::uuid AND active=TRUE) AS active_connect_channels,
-                (SELECT count(*) FROM saas_ai_agents WHERE tenant_id=%s::uuid AND enabled=TRUE) AS enabled_agents''',
-                (tenant, tenant, tenant))
+                (SELECT count(*) FROM saas_ai_agents WHERE tenant_id=%s::uuid AND enabled=TRUE) AS enabled_agents,
+                (SELECT metadata->>'daily_limit' FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai') AS daily_ai_limit''',
+                (tenant, tenant, tenant, tenant))
             runtime = dict(cur.fetchone() or {})
+            from tenant_ai_agent_key_policy import platform_token_limit
+            runtime['platform_token_limit']=platform_token_limit(tenant)
             result['runtime'] = {
                 'tenant_id': tenant,
+                'daily_ai_limit':int(runtime.get('daily_ai_limit') or 50),
+                'platform_token_limit':runtime['platform_token_limit'],
                 'connect_connected': runtime.get('connect_connected') is True,
                 'active_connect_channels': int(runtime.get('active_connect_channels') or 0),
                 'enabled_agents': int(runtime.get('enabled_agents') or 0),
@@ -371,13 +376,13 @@ def list_knowledge(profile, source_id=None):
             tenant, _ = _authorize(cur, profile)
             if source_id:
                 source = identifier(source_id)
-                cur.execute('''SELECT id,tenant_id,title,kind,content,active,content_hash,created_at,updated_at
+                cur.execute('''SELECT id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at
                   FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid''', (tenant, source))
                 row = _row(cur.fetchone())
                 if not row:
                     raise TenantLinearError('Bilik mənbəyi tapılmadı.', 404)
                 return row
-            cur.execute('''SELECT id,tenant_id,title,kind,active,content_hash,created_at,updated_at,
+            cur.execute('''SELECT id,tenant_id,agent_id,title,kind,active,content_hash,created_at,updated_at,
               (SELECT count(*) FROM saas_ai_knowledge_chunks c WHERE c.tenant_id=s.tenant_id AND c.source_id=s.id) AS chunks
               FROM saas_ai_knowledge_sources s WHERE tenant_id=%s::uuid ORDER BY created_at DESC,id''', (tenant,))
             return [_row(row) for row in cur.fetchall()]
@@ -385,7 +390,9 @@ def list_knowledge(profile, source_id=None):
 
 def save_knowledge(profile, data, *, source_id=None):
     creating = source_id is None
-    patch = validate_knowledge(data, creating=creating)
+    if not creating and 'agent_id' in data:
+        raise TenantLinearError('Bilik mənbəyinin agenti dəyişdirilə bilməz.')
+    patch = validate_knowledge({k:v for k,v in data.items() if k!='agent_id'} if isinstance(data,dict) else data, creating=creating)
     if not patch:
         raise TenantLinearError('Dəyişdiriləcək bilik ayarı yoxdur.')
     with _connect() as conn:
@@ -393,14 +400,18 @@ def save_knowledge(profile, data, *, source_id=None):
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
             if creating:
+                bound_agent = identifier(data['agent_id']) if data.get('agent_id') else None
+                if bound_agent:
+                    cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE', (tenant,bound_agent))
+                    if not cur.fetchone(): raise TenantLinearError('Agent tapılmadı.',404)
                 cur.execute('SELECT count(*) AS total FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid', (tenant,))
                 if int((cur.fetchone() or {}).get('total') or 0) >= MAX_SOURCES:
                     raise TenantLinearError('Bilik mənbələrinin sayı həddə çatıb.')
                 source = uuid.uuid4()
                 digest = hashlib.sha256(patch['content'].encode('utf-8')).hexdigest()
-                cur.execute('''INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,active,content_hash,created_by)
-                  VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s) RETURNING id,tenant_id,title,kind,content,active,content_hash,created_at,updated_at''',
-                  (source, tenant, patch['title'], patch['kind'], patch['content'], patch['active'], digest, actor))
+                cur.execute('''INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,active,content_hash,created_by,agent_id)
+                  VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid) RETURNING id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at''',
+                  (source, tenant, patch['title'], patch['kind'], patch['content'], patch['active'], digest, actor, bound_agent))
                 result = _row(cur.fetchone())
             else:
                 source = identifier(source_id)
@@ -413,7 +424,7 @@ def save_knowledge(profile, data, *, source_id=None):
                 digest = hashlib.sha256(merged['content'].encode('utf-8')).hexdigest()
                 cur.execute('''UPDATE saas_ai_knowledge_sources SET title=%s,kind=%s,content=%s,active=%s,
                   content_hash=%s,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid
-                  RETURNING id,tenant_id,title,kind,content,active,content_hash,created_at,updated_at''',
+                  RETURNING id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at''',
                   (merged['title'], merged['kind'], merged['content'], merged['active'], digest, tenant, source))
                 result = _row(cur.fetchone())
             if creating or 'content' in patch or (not creating and result['content_hash'] != previous.get('content_hash')):
@@ -734,6 +745,18 @@ def _assert_resume_allowed(cur, tenant, provider, conversation, channel_id):
     return row
 
 
+def _conversation_authorize(cur, profile, provider, conversation, channel_id=''):
+    # Preserve existing configuration authority; ordinary operators get only their routes.
+    try:
+        return _authorize(cur,profile)
+    except TenantLinearError as error:
+        if error.status != 403: raise
+    from tenant_operator_access import access, assert_route
+    tenant,actor,policy=access(cur,profile,'dialogs')
+    assert_route(cur,tenant,policy,provider,conversation,str(channel_id or ''))
+    return tenant,actor
+
+
 def set_conversation_state(profile,conversation_id,state,reason='',provider='kommo',channel_id=''):
     from tenant_support_inbox_store import create_in_transaction, summarize_created
     ticket = None
@@ -744,7 +767,7 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant,actor=_authorize(cur,profile)
+            tenant,actor=_conversation_authorize(cur,profile,provider,conversation,channel_id)
             resolved_channel = _conversation_provider_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
             if state == 'human' and provider == 'connect':
                 cur.execute("SELECT state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s FOR UPDATE", (tenant,conversation))
@@ -785,7 +808,7 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant,_=_authorize(cur,profile)
+            tenant,_=_conversation_authorize(cur,profile,provider,conversation,channel_id)
             resolved_channel = _conversation_provider_read_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
             # The route was verified above against tenant-owned Connect data.
             # Diagnostics below intentionally expose only metadata and safe
@@ -953,7 +976,7 @@ def _reserve_connect_draft_send(cur, tenant, draft):
     row = cur.fetchone()
     if not row:
         return None
-    cur.execute("UPDATE saas_ai_agent_drafts SET state='sending' WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='pending' RETURNING id",
+    cur.execute("UPDATE saas_ai_agent_drafts SET state='sending',send_started_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='pending' RETURNING id",
                 (tenant, draft))
     if not cur.fetchone():
         return None
@@ -989,7 +1012,7 @@ def reserve_draft_send(profile,draft_id):
                   'provider':'connect','conversation_id':str(row['chat_id']),'channel_id':str(row['channel_id']),
                   'expected_revision':int(row.get('revision') or 0),'handoff_after_send':bool(row.get('handoff_after_send')),
                   'source_fingerprint':str(row['source_fingerprint'])}
-            cur.execute('''UPDATE saas_ai_agent_drafts d SET state='sending'
+            cur.execute('''UPDATE saas_ai_agent_drafts d SET state='sending',send_started_at=now()
               FROM saas_ai_conversation_state cs,saas_ai_agents a,saas_ai_agent_settings s,saas_tenants t
               WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='pending'
                 AND a.tenant_id=d.tenant_id AND a.id=d.agent_id AND a.enabled=TRUE

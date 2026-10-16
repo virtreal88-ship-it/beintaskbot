@@ -269,7 +269,7 @@ async def process_one(job, kommo_request, wait_slot, logger):
             focus_media_ids=focus_ids)
         client_query = str(source.get('body') or '')[:6000] or '\n'.join(
             line['text'] for line in lines[-3:] if line['speaker']=='CLIENT')[-6000:]
-        knowledge = await asyncio.to_thread(knowledge_context,tenant,client_query)
+        knowledge = await asyncio.to_thread(knowledge_context,tenant,client_query,agent_id=job['agent_id'])
         source_ids = list(dict.fromkeys(item['source_id'] for item in knowledge))
         business_rules = '\n'.join([str(reservation.get('company_instructions') or ''),
             str(reservation.get('agent_instructions') or ''),str(reservation.get('scope_instructions') or '')]).strip()
@@ -316,7 +316,7 @@ async def process_one(job, kommo_request, wait_slot, logger):
         try:
             phase = 'model_generation'
             generated, usage = await _settle_thread(call)
-            await asyncio.to_thread(record_token_usage, job, reservation, usage)
+            await asyncio.to_thread(record_token_usage, job, reservation, usage, generated=True)
             draft, generated_task_text = _agent_output(generated, needs_task)
             # A generated reply must pass a server-side boundary before it can
             # become either a manual draft or an automatic Kommo message.
@@ -538,7 +538,7 @@ async def process_connect_one(job, logger):
                       'at': str(source.get('happened_at') or '')}]
             missing = 1 if str(source.get('message_type') or '').casefold() in {'audio', 'voice'} else 0
         query = str(source.get('body') or '')[:6000]
-        knowledge = await asyncio.to_thread(knowledge_context, tenant, query)
+        knowledge = await asyncio.to_thread(knowledge_context, tenant, query, agent_id=job['agent_id'])
         rules = '\n'.join((str(reservation.get('company_instructions') or ''),
                            str(reservation.get('agent_instructions') or ''),
                            str(reservation.get('scope_instructions') or ''))).strip()
@@ -555,9 +555,9 @@ async def process_connect_one(job, logger):
             audio_usage = reservation.get('voice_usage') or {}
             combined = {key: int(usage.get(key) or 0) + int(audio_usage.get(key) or 0)
                         for key in ('input_tokens', 'output_tokens', 'total_tokens')}
-            await asyncio.to_thread(record_token_usage, job, reservation, combined, cumulative=True)
+            await asyncio.to_thread(record_token_usage, job, reservation, combined, cumulative=True, generated=True)
         else:
-            await asyncio.to_thread(record_token_usage, job, reservation, usage)
+            await asyncio.to_thread(record_token_usage, job, reservation, usage, generated=True)
         draft = sanitize_draft(str(draft), reservation['agent_language'])
         # A manual reply or a newer inbound message invalidates this run.
         current = await asyncio.to_thread(connect_history, tenant, int(job['lead_id']), str(job['channel_id']))
@@ -603,11 +603,11 @@ async def process_connect_one(job, logger):
         raise
     except TenantLinearError as error:
         if reservation:
-            await asyncio.to_thread(finish_unknown, job, reservation, 'connect_send_or_generation_unknown')
+            await asyncio.to_thread(finish_unknown, job, reservation, 'connect_send_unknown' if phase == 'connect_send' else 'connect_generation_unknown')
         elif getattr(error, 'status', 500) >= 500:
             await asyncio.to_thread(retry_or_fail, job, 'connect_configuration_unavailable')
         else:
-            await asyncio.to_thread(skip_job, job, 'connect_policy_blocked')
+            await asyncio.to_thread(skip_job, job, 'ai_limit_reached' if error.status == 429 else 'connect_policy_blocked')
         logger.warning('Connect AI job stopped safely: tenant=%s agent=%s phase=%s', job.get('tenant_id'), job.get('agent_id'), phase)
     except ChatAIProviderError as error:
         # A provider HTTP rejection is a definite generation failure: no draft
@@ -622,23 +622,32 @@ async def process_connect_one(job, logger):
                      job.get('tenant_id'), job.get('agent_id'), phase, error.status_code, error.category)
     except Exception:
         if reservation:
-            await asyncio.to_thread(finish_unknown, job, reservation, 'connect_result_unknown')
+            await asyncio.to_thread(finish_unknown, job, reservation, 'connect_send_unknown' if phase == 'connect_send' else 'connect_generation_unknown')
         else:
             await asyncio.to_thread(retry_or_fail, job, 'connect_worker_failed')
-        logger.exception('Connect AI job failed: tenant=%s agent=%s phase=%s', job.get('tenant_id'), job.get('agent_id'), phase)
+        logger.warning('Connect AI job failed: tenant=%s agent=%s phase=%s', job.get('tenant_id'), job.get('agent_id'), phase)
 
 
 async def run_worker(kommo_request, logger, wait_slot):
-    """Single process loop; PostgreSQL leases also coordinate extra replicas."""
-    while True:
+    """Durable queue loop plus a content-free liveness heartbeat."""
+    from tenant_ai_reliability import heartbeat_loop
+    heartbeat = asyncio.create_task(heartbeat_loop(logger), name='ai-worker-heartbeat')
+    try:
+        while True:
+            try:
+                job = await asyncio.to_thread(claim_next)
+                if job is None:
+                    await asyncio.sleep(1)
+                    continue
+                await process_one(job,kommo_request,wait_slot,logger)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning('AI agent queue polling failed')
+                await asyncio.sleep(2)
+    finally:
+        heartbeat.cancel()
         try:
-            job = await asyncio.to_thread(claim_next)
-            if job is None:
-                await asyncio.sleep(1)
-                continue
-            await process_one(job,kommo_request,wait_slot,logger)
+            await heartbeat
         except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.warning('AI agent queue polling failed')
-            await asyncio.sleep(2)
+            pass

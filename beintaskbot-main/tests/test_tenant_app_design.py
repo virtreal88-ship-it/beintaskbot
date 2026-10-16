@@ -49,13 +49,16 @@ class AppDesignTests(unittest.TestCase):
         self.assertIn('id="aiAgentsNav" data-view="ai_agents"', app)
         self.assertIn('id="view-ai_agents"', app)
         self.assertIn('/assets/tenant-ai-agents.js', app)
+        self.assertIn('/assets/tenant-night-agent-template.js', app)
+        self.assertIn('id="aiNightTemplateOpen"', app)
         self.assertIn("('agents', ai_agents_handler(member, origin, logger, 'agents'), ('GET', 'POST'))", routes)
         self.assertIn('routes.extend(ai_agent_routes(context))', routes)
         self.assertIn("('/assets/tenant-ai-agents.js', 'tenant-ai-agents.js'", assets)
+        self.assertIn("('/assets/tenant-night-agent-template.js', 'tenant-night-agent-template.js'", assets)
         script = (ROOT / 'docs/tenant-ai-agents.js').read_text(encoding='utf-8')
         self.assertNotIn("if (nav) { nav.hidden = true", script)
         self.assertIn("existing?.scopes||[]", script)
-        self.assertIn('data-ai-overview-create>+ Создать агента</button>', script)
+        self.assertIn("data-ai-overview-create>${t('createAgent')}", script)
 
 
 if __name__ == '__main__':

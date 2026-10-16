@@ -1,7 +1,8 @@
 """Tenant-scoped Connect support queue. Viewing never changes AI conversation state."""
 import uuid
 from tenant_ai_agents_schema import ensure_schema
-from tenant_ai_agents_store import _authorize, _audit
+from tenant_ai_agents_store import _audit, _decorate_conversation_state
+from tenant_operator_access import authorize as _authorize
 from tenant_linear_policy import TenantLinearError, identifier
 from tenant_platform import _connect
 
@@ -9,6 +10,10 @@ STATUSES = {'new', 'waiting', 'in_progress', 'resolved'}
 
 
 def public(row):
+    row=dict(row)
+    if 'ai_state' in row:
+        effective=_decorate_conversation_state({**row,'provider':'connect','state':row.get('ai_state') or 'active'})
+        row['ai_state']=effective['display_state'] if row.get('agent_id') or row.get('ai_state') in {'human','paused'} else 'unmanaged'
     return {key: value.isoformat() if hasattr(value, 'isoformat') else str(value) if isinstance(value, uuid.UUID) else value
             for key, value in dict(row).items()}
 
@@ -99,10 +104,23 @@ def summarize_created(tenant, receipt):
             logging.getLogger(__name__).warning('Support summary unavailable; ticket preserved')
 
 
-_SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_message_at,c.last_message_at) AS last_message_at,ch.name AS channel_name,m.display_name AS assignee_name
+_SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_message_at,c.last_message_at) AS last_message_at,ch.name AS channel_name,m.display_name AS assignee_name,
+ cs.state AS ai_state,cs.reason AS ai_reason,a.name AS agent_name,COALESCE(cs.agent_id,j.agent_id) AS agent_id,
+ a.enabled AS agent_enabled,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,
+ company.status AS tenant_status,j.state AS latest_job_state,j.error_code AS latest_job_error,
+ ch.active AS channel_active,cs.updated_at AS ai_updated_at,
+ (SELECT count(*) FROM saas_connect_conversations other WHERE other.tenant_id=t.tenant_id
+   AND other.conversation_id=t.conversation_id)=1 AS unambiguous
  FROM saas_support_tickets t
  JOIN saas_connect_conversations c ON c.tenant_id=t.tenant_id AND c.connect_channel_id=t.channel_id AND c.conversation_id=t.conversation_id
  JOIN saas_connect_channels ch ON ch.tenant_id=t.tenant_id AND ch.connect_channel_id=t.channel_id
+ JOIN saas_tenants company ON company.id=t.tenant_id
+ LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=t.tenant_id
+ LEFT JOIN LATERAL (SELECT agent_id,state,error_code FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=t.tenant_id
+   AND j0.provider='connect' AND j0.channel_id=t.channel_id::text AND j0.conversation_id=t.conversation_id
+   ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
+ LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect' AND cs.conversation_id=t.conversation_id
+ LEFT JOIN saas_ai_agents a ON a.tenant_id=t.tenant_id AND a.id=COALESCE(cs.agent_id,j.agent_id)
  LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.assigned_to
  LEFT JOIN LATERAL (SELECT COALESCE(happened_at,created_at) AS last_message_at FROM saas_crm_messages
    WHERE tenant_id=t.tenant_id AND kommo_lead_id=c.lead_id AND channel='connect:'||t.channel_id::text
@@ -111,20 +129,20 @@ _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_messag
 
 def eligible_members(cur, tenant):
     cur.execute('''SELECT telegram_id,display_name,role FROM saas_tenant_members m WHERE tenant_id=%s::uuid AND active=TRUE
-      AND (role='owner' OR (role='admin' AND EXISTS (SELECT 1 FROM saas_tenant_workflow_policies p
+      AND (role='owner' OR (role<>'master' AND permissions @> '["support"]'::jsonb) OR (role='admin' AND EXISTS (SELECT 1 FROM saas_tenant_workflow_policies p
         WHERE p.tenant_id=m.tenant_id AND p.policy_key='members'
           AND p.value->(m.telegram_id::text)->>'ai_agents_manage'='true'))) ORDER BY display_name,telegram_id''', (tenant,))
     return [dict(row) for row in cur.fetchall()]
 
 
-def listing(profile, status='unresolved', assignee='', offset=0):
+def listing(profile, status='unresolved', assignee='', offset=0, search='', channel_id=''):
     if status not in STATUSES | {'unresolved','all'}:
         raise TenantLinearError('Некорректный статус.')
     offset = max(0, min(int(offset), 1000000))
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant, _ = _authorize(cur, profile)
+            tenant, actor = _authorize(cur, profile)
             where, args = ['t.tenant_id=%s::uuid'], [tenant]
             if status == 'unresolved':
                 where.append("t.status<>'resolved'")
@@ -133,12 +151,20 @@ def listing(profile, status='unresolved', assignee='', offset=0):
             if assignee == 'unassigned':
                 where.append('t.assigned_to IS NULL')
             elif assignee:
-                where.append('t.assigned_to=%s'); args.append(int(assignee))
+                where.append('t.assigned_to=%s'); args.append(actor if assignee=='me' else int(assignee))
+            if search:
+                where.append("concat_ws(' ',c.contact_name,c.phone,t.description,t.id::text) ILIKE %s");args.append('%'+str(search)[:200]+'%')
+            if channel_id:
+                where.append('t.channel_id=%s::uuid');args.append(identifier(channel_id))
             cur.execute(_SELECT + ' WHERE ' + ' AND '.join(where) + ''' ORDER BY
               (t.status<>'resolved') DESC,(t.source='ai_handoff') DESC,(t.status='waiting') DESC,t.created_at,t.id LIMIT 51 OFFSET %s''', (*args,offset))
             rows = cur.fetchall()
             members = eligible_members(cur, tenant)
-    return {'tickets': [public(row) for row in rows[:50]], 'members': members,
+            cur.execute("SELECT count(*) AS total FROM saas_support_tickets WHERE tenant_id=%s::uuid AND status<>'resolved'",(tenant,))
+            unresolved_count=int(cur.fetchone()['total'])
+            cur.execute('SELECT connect_channel_id::text AS id,name FROM saas_connect_channels WHERE tenant_id=%s::uuid ORDER BY name',(tenant,))
+            channels=[dict(row) for row in cur.fetchall()]
+    return {'tickets': [public(row) for row in rows[:50]], 'members': members, 'channels':channels, 'unresolved_count':unresolved_count,
             'next_offset': offset+50 if len(rows)>50 else None}
 
 

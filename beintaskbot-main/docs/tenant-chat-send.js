@@ -1,9 +1,10 @@
 /* Chat composer outside the page shell; durable UUIDs and stale-view guards. */
 (()=>{
-  function bind({api,identity,leadId,me,isCurrent,reload}){
+  const copy=(key,fallback)=>window.tenantI18n?.t(key)||fallback;
+  function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo'}){
     const button=document.getElementById('sendChat'),input=document.getElementById('chatText');
     const key='tenant-chat-send:'+identity+':'+leadId;
-    try{if(sessionStorage.getItem(key))button.textContent='Vəziyyəti yoxla';}catch(e){button.disabled=true;}
+    try{if(sessionStorage.getItem(key))button.textContent=copy('checkSend','Vəziyyəti yoxla');}catch(e){button.disabled=true;}
     button.onclick=async()=>{
       if(button.disabled||!isCurrent())return;
       let pending;try{pending=JSON.parse(sessionStorage.getItem(key)||'null');}catch(e){alert('Göndərmə yaddaşı oxunmadı.');return;}
@@ -14,12 +15,12 @@
       try{
         const sent=await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify(pending)});
         sessionStorage.removeItem(key);if(!isCurrent())return;
-        if(input.value.trim()===pending.text)input.value='';button.textContent='Göndər';
-        alert(sent.manual_review?'Administrator mesajı Kommo-da tapdığını qeyd edib. Mesaj təkrar göndərilmədi.':'Mesaj Kommo tərəfindən qəbul edildi. Çat tarixçəsində çatdırılmanı yoxlayın.');await reload();
-      }catch(e){if(e.keepRequest===false)sessionStorage.removeItem(key);if(isCurrent()){button.textContent=e.keepRequest===false?'Göndər':'Vəziyyəti yoxla';alert(e.message);}}
+        if(input.value.trim()===pending.text)input.value='';button.textContent=copy('send','Göndər');
+        alert(sent.manual_review?'Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.':copy('sendAccepted','Mesaj qəbul edildi. Tarixçədə çatdırılmanı yoxlayın.'));await reload();
+      }catch(e){if(e.keepRequest===false)sessionStorage.removeItem(key);if(isCurrent()){button.textContent=e.keepRequest===false?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');alert(e.message);}}
       finally{button.disabled=false;button.classList.remove('loading');}
     };
-    bindFile({identity,leadId,me,isCurrent,reload,input,button});
+    if(provider!=='connect')bindFile({identity,leadId,me,isCurrent,reload,input,button});
   }
   function bindFile({identity,leadId,me,isCurrent,reload,input,button}){
     const key='tenant-chat-file:'+identity+':'+leadId;
