@@ -21,13 +21,29 @@ def load(session: dict, lead_id: object, message_id: object) -> dict:
             profile = {**member, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)}
             cur.execute('''SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid
               AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE''', (tenant, lead))
-            if not TenantPolicy(profile).can_access_deal(cur.fetchone()):
+            deal = cur.fetchone()
+            policy = TenantPolicy(profile)
+            is_connect = message_id.startswith('connect:')
+            allowed = policy.allows('dialogs') if is_connect else policy.can_access_deal(deal)
+            if not allowed:
                 raise TenantLinearError('Bu çat üçün icazəniz yoxdur.', 403)
-            cur.execute('''SELECT external_id,media_url,message_type,raw FROM saas_crm_messages
+            cur.execute('''SELECT external_id,channel,direction,media_url,message_type,raw FROM saas_crm_messages
               WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND external_id=%s''', (tenant, lead, message_id))
             row = cur.fetchone()
             if not row:
                 raise TenantLinearError('Fayl tapılmadı.', 404)
+            if is_connect:
+                from tenant_connect_transport import connect_route
+                reference = str(uuid.UUID(message_id.removeprefix('connect:')))
+                route = connect_route(cur, tenant, lead)
+                if (not route or not route.get('api_key') or row.get('channel') != 'connect:' + route['channel_id']
+                        or row.get('message_type') not in {'image', 'audio'}
+                        or row.get('direction') not in {'incoming', 'outgoing'}):
+                    raise TenantLinearError('Fayl bu dialoqda və kanalda mövcud deyil.', 404)
+                raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}
+                if raw.get('conversationId') and raw['conversationId'] != route['conversation_id']:
+                    raise TenantLinearError('Fayl bu dialoqda mövcud deyil.', 404)
+                return {'provider': 'connect', 'row': dict(row), 'route': route, 'message_id': reference}
             cur.execute('''SELECT account_domain,connected_at,status,secrets FROM saas_tenant_integrations
               WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE''', (tenant,))
             connection = cur.fetchone()

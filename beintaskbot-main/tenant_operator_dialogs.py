@@ -47,6 +47,13 @@ def _message(item, *, group=False):
     value['author_name'] = author
     value['participant_jid'] = participant_jid
     value['source'] = 'connect' if str(value.get('channel') or '').startswith('connect:') else 'kommo'
+    if value['source'] == 'connect':
+        # No provider URL or raw webhook payload crosses the browser boundary.
+        value['media_url'] = ''
+        transcript = raw.get('voice_transcription', {}) if isinstance(raw, dict) else {}
+        if (value.get('message_type') == 'audio' and isinstance(transcript, dict)
+                and transcript.get('status') == 'completed' and value.get('body')):
+            value['has_transcription'] = True
     return public(value)
 
 
