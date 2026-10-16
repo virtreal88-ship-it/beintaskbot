@@ -4,6 +4,7 @@ No caller-supplied media URL is ever opened. Bytes live only in memory and a
 private temporary decoder directory. A committed claim is never automatically
 reissued after a crash/timeout: an uncertain paid request must not run twice.
 """
+from tenant_ai_testing_budget import TOKEN_USAGE_SQL
 import io
 import os
 import subprocess
@@ -253,7 +254,5 @@ def generation_budget_available(job, reservation):
         return True
     with _connect() as conn:
         with conn.cursor() as cur:
-            cur.execute("""SELECT COALESCE(sum(total_tokens),0) AS tokens FROM saas_ai_agent_token_usage
-              WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'""",
-                        (job['tenant_id'],))
+            cur.execute(TOKEN_USAGE_SQL, (job['tenant_id'],job['tenant_id']))
             return int((cur.fetchone() or {}).get('tokens') or 0) < cap

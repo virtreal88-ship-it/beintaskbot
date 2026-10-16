@@ -1,4 +1,5 @@
 """Lease, budget and draft receipts for autonomous manual-mode preparation."""
+from tenant_ai_testing_budget import TOKEN_USAGE_SQL
 import json
 import os
 import uuid
@@ -59,11 +60,11 @@ def claim_next():
               AND (t.status='active' OR (j.provider='connect' AND t.status IN ('onboarding','ready_for_integration')))
               AND (cfg.operating_mode='active' OR (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb
                 JOIN saas_tenant_webhook_events ce ON ce.tenant_id=j.tenant_id AND ce.fingerprint=j.event_fingerprint
-                WHERE cb.tenant_id=j.tenant_id AND cb.enabled=TRUE AND cb.verified=TRUE AND cb.emergency_stop=FALSE
+                WHERE cb.tenant_id=j.tenant_id AND cb.enabled=TRUE AND (cb.agent_id IS NULL OR cb.agent_id=j.agent_id) AND cb.verified=TRUE AND cb.emergency_stop=FALSE
                   AND cb.channel_id=j.channel_id AND cb.conversation_id=j.conversation_id AND ce.payload->>'test_mode'='true')) OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
                 JOIN saas_tenant_integrations ki ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
                 JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
-                WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
+                WHERE j.provider='kommo' AND (b.agent_id IS NULL OR b.agent_id=j.agent_id) AND b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                   AND b.account_domain=ki.account_domain AND b.lead_id=j.lead_id AND b.talk_id=j.talk_id
                   AND b.chat_id=j.chat_id AND b.channel_id=j.channel_id
                   AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END))
@@ -130,11 +131,11 @@ def load_agent_config(job, *, with_block_reason=False):
               s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.crm_actions_enabled,i.metadata,i.secrets,t.status AS tenant_status,cs.state AS conversation_state,
               (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb JOIN saas_tenant_webhook_events ce
                 ON ce.tenant_id=j.tenant_id AND ce.fingerprint=j.event_fingerprint WHERE cb.tenant_id=j.tenant_id AND cb.enabled=TRUE
-                AND cb.verified=TRUE AND cb.emergency_stop=FALSE AND cb.channel_id=j.channel_id AND cb.conversation_id=j.conversation_id
+                AND (cb.agent_id IS NULL OR cb.agent_id=j.agent_id) AND cb.verified=TRUE AND cb.emergency_stop=FALSE AND cb.channel_id=j.channel_id AND cb.conversation_id=j.conversation_id
                 AND ce.payload->>'test_mode'='true')) OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
                 ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
                 JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
-                WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
+                WHERE j.provider='kommo' AND (b.agent_id IS NULL OR b.agent_id=j.agent_id) AND b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                   AND b.account_domain=ki.account_domain AND b.lead_id=j.lead_id AND b.talk_id=j.talk_id
                   AND b.chat_id=j.chat_id AND b.channel_id=j.channel_id
                   AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END) AS test_mode_allowed
@@ -345,8 +346,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
                 raise TenantLinearError('Bu hadisə üçün AI sorğusu artıq başlanıb.', 409)
             platform_cap = platform_token_limit(tenant) if use_platform_key else 0
             if platform_cap:
-                cur.execute('''SELECT COALESCE(sum(total_tokens),0) AS tokens FROM saas_ai_agent_token_usage
-                  WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC' ''', (tenant,))
+                cur.execute(TOKEN_USAGE_SQL, (tenant,tenant))
                 if int((cur.fetchone() or {}).get('tokens') or 0) >= platform_cap:
                     raise TenantLinearError('Şirkətin platform AI token limiti dolub.', 429)
             limit = int(config.get('daily_limit') or 50)
@@ -433,11 +433,11 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
               i.updated_at AS config_version,i.metadata,t.status AS tenant_status,
               (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb JOIN saas_tenant_webhook_events ce
                 ON ce.tenant_id=j.tenant_id AND ce.fingerprint=j.event_fingerprint WHERE cb.tenant_id=j.tenant_id AND cb.enabled=TRUE
-                AND cb.verified=TRUE AND cb.emergency_stop=FALSE AND cb.channel_id=j.channel_id AND cb.conversation_id=j.conversation_id
+                AND (cb.agent_id IS NULL OR cb.agent_id=j.agent_id) AND cb.verified=TRUE AND cb.emergency_stop=FALSE AND cb.channel_id=j.channel_id AND cb.conversation_id=j.conversation_id
                 AND ce.payload->>'test_mode'='true')) OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
                 ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
                 JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
-                WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
+                WHERE j.provider='kommo' AND (b.agent_id IS NULL OR b.agent_id=j.agent_id) AND b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                   AND b.account_domain=ki.account_domain AND b.lead_id=j.lead_id AND b.talk_id=j.talk_id
                   AND b.chat_id=j.chat_id AND b.channel_id=j.channel_id
                   AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END) AS test_mode_allowed,

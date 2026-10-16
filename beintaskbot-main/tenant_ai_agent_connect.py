@@ -47,14 +47,15 @@ def scope_matches(scopes, channel_id: str, *, is_group=False) -> bool:
     return False
 
 
-def test_allowed(cur, tenant: str, channel_id: str, conversation_id: str) -> bool:
-    cur.execute('''SELECT enabled,emergency_stop,verified,channel_id,conversation_id
+def test_allowed(cur, tenant: str, channel_id: str, conversation_id: str, *, agent_id=None) -> bool:
+    cur.execute('''SELECT enabled,emergency_stop,verified,channel_id,conversation_id,agent_id
       FROM saas_ai_agent_connect_test_mode WHERE tenant_id=%s::uuid FOR SHARE''', (tenant,))
     row = cur.fetchone() or {}
     return bool(row.get('enabled') is True and row.get('verified') is True
                 and row.get('emergency_stop') is not True
                 and str(row.get('channel_id') or '') == str(channel_id)
-                and str(row.get('conversation_id') or '') == str(conversation_id))
+                and str(row.get('conversation_id') or '') == str(conversation_id)
+                and (not agent_id or not row.get('agent_id') or str(row['agent_id'])==str(agent_id)))
 
 
 def allowed(job: dict, connection=None) -> bool:
@@ -88,7 +89,7 @@ def allowed(job: dict, connection=None) -> bool:
                               and settings.get('emergency_stop') is not True)
             else:
                 result = bool(tenant_active and connected and settings.get('enabled') is True and settings.get('emergency_stop') is not True
-                              and test_allowed(cur, tenant, channel, conversation))
+                              and test_allowed(cur, tenant, channel, conversation, agent_id=job.get('agent_id')))
         if connection is None:
             conn.commit()
     return result
@@ -138,8 +139,9 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             cur.execute('''UPDATE saas_tenant_webhook_events SET state='superseded',completed_at=now(),error_code='newer_inbound'
               WHERE tenant_id=%s::uuid AND provider='connect' AND state IN ('queued','processing')
                 AND payload->>'conversation_id'=%s AND fingerprint<>%s''', (tenant, conversation_id, fingerprint))
-            cur.execute('''SELECT id,scopes,delay_seconds,enabled FROM saas_ai_agents
-              WHERE tenant_id=%s::uuid ORDER BY created_at,id''', (tenant,))
+            from tenant_ai_testing_scope import clause
+            cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.enabled FROM saas_ai_agents a
+              WHERE a.tenant_id=%s::uuid'''+clause('a','connect')+' ORDER BY a.created_at,a.id', (tenant,))
             tenant_agents = cur.fetchall()
             enabled_agents = [row for row in tenant_agents if row.get('enabled') is True]
             channel_agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id)]

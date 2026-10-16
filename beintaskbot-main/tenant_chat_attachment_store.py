@@ -2,6 +2,7 @@
 import uuid
 from tenant_platform import _connect, _read_tenant_workflow, _fernet
 from tenant_policy import TenantPolicy
+from tenant_ai_agent_access import tenant_status_allows_management
 from tenant_linear_policy import TenantLinearError
 
 
@@ -10,20 +11,23 @@ def load(session: dict, lead_id: object, message_id: object) -> dict:
     actor, lead = int(session['telegram_id']), int(str(lead_id))
     if not 0 < lead < 2**63 or not isinstance(message_id, str) or not 0 < len(message_id) <= 500:
         raise ValueError('Invalid attachment identity')
+    is_connect = message_id.startswith('connect:')
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
               JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid
               AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, actor))
             member = cur.fetchone()
-            if not member or member['active'] is not True or member['tenant_status'] != 'active':
+            # Read-only Connect previews follow the same lifecycle gate as Dialogs.
+            status_allowed = bool(member) and (tenant_status_allows_management(member['tenant_status'])
+                if is_connect else member['tenant_status'] == 'active')
+            if not member or member['active'] is not True or not status_allowed:
                 raise TenantLinearError('İcazə yoxdur.', 403)
             profile = {**member, 'tenant_id': tenant, 'workflow': _read_tenant_workflow(cur, tenant)}
             cur.execute('''SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid
               AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE''', (tenant, lead))
             deal = cur.fetchone()
             policy = TenantPolicy(profile)
-            is_connect = message_id.startswith('connect:')
             allowed = policy.allows('dialogs') if is_connect else policy.can_access_deal(deal)
             if not allowed:
                 raise TenantLinearError('Bu çat üçün icazəniz yoxdur.', 403)

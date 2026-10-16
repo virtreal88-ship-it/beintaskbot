@@ -24,6 +24,7 @@ from tenant_deal_completion_api import handler as deal_completion_handler
 from tenant_deal_completion_provider import provider as deal_provider
 from tenant_ai_agents_api import handler as ai_agents_handler
 from tenant_support_inbox_api import handler as support_handler
+from tenant_ai_testing_api import handler as testing_handler
 from tenant_operator_api import handler as operator_handler
 from tenant_night_report_api import handler as night_report_handler
 
@@ -74,6 +75,11 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
     """AI Agents are a tenant product module, independent of message transports."""
     member, origin, logger = context.member, context.origin, context.logger
     routes = [
+        ('testing/kommo-context', testing_handler(member, origin, logger, 'catalog', context.crm_request), ('GET',)),
+        ('testing/sessions', testing_handler(member, origin, logger, 'sessions'), ('GET','POST')),
+        ('testing/sessions/{session_id}', testing_handler(member, origin, logger, 'session'), ('GET',)),
+        ('testing/sessions/{session_id}/turn', testing_handler(member, origin, logger, 'turn'), ('POST',)),
+        ('testing/sessions/{session_id}/control', testing_handler(member, origin, logger, 'control'), ('POST',)),
         ('agents/settings', ai_agents_handler(member, origin, logger, 'settings'), ('GET', 'PATCH')),
         ('agents/test-mode', ai_agents_handler(member, origin, logger, 'test_mode'), ('GET', 'PATCH')),
         ('agents/test-mode/verify', ai_agents_handler(member, origin, logger, 'test_mode_verify', context.crm_request), ('POST',)),

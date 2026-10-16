@@ -39,8 +39,10 @@ def test_operator_connect_media_needs_no_kommo_crm_or_ai(media_db):
     assert media_db.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
 
 
+@pytest.mark.parametrize('tenant_status',['active','onboarding','ready_for_integration'])
 @pytest.mark.parametrize('case',['tenant','channel','conversation','lead','message','permission','inactive','disconnected','disabled'])
-def test_fresh_scope_and_rights(media_db,case):
+def test_fresh_scope_and_rights(media_db,case,tenant_status):
+    media_db.execute("UPDATE saas_tenants SET status=%s WHERE id=%s::uuid",(tenant_status,A))
     person={'tenant_id':A,'telegram_id':33};lead=41;message='connect:'+MID
     if case=='tenant':person={'tenant_id':B,'telegram_id':22}
     elif case=='channel':media_db.execute('UPDATE saas_crm_messages SET channel=%s WHERE tenant_id=%s::uuid',('connect:'+CB,A))
@@ -167,3 +169,23 @@ def test_transport_timeout_has_safe_error(monkeypatch):
     session.get.side_effect=TimeoutError('private-provider-key')
     with pytest.raises(TenantLinearError) as error:run(media.download_media(item()))
     assert error.value.status==502 and 'private-provider-key' not in str(error.value)
+
+
+@pytest.mark.parametrize('status',['active','onboarding','ready_for_integration','suspended','archived'])
+@pytest.mark.parametrize('kind',['image','audio'])
+def test_connect_preview_lifecycle_matches_read_only_dialogs(media_db,status,kind):
+    media_db.execute("UPDATE saas_tenants SET status=%s WHERE id=%s::uuid",(status,A))
+    media_db.execute("UPDATE saas_crm_messages SET message_type=%s WHERE tenant_id=%s::uuid",(kind,A));media_db.commit()
+    person={'tenant_id':A,'telegram_id':33}
+    if status in {'active','onboarding','ready_for_integration'}:
+        assert store.load(person,41,'connect:'+MID)['route']['channel_id']==CA
+    else:
+        with pytest.raises(TenantLinearError) as error:store.load(person,41,'connect:'+MID)
+        assert error.value.status==403
+    assert media_db.execute('SELECT count(*) AS n FROM saas_ai_agent_jobs')[0]['n']==0
+
+
+def test_onboarding_does_not_expand_legacy_attachment_access(media_db):
+    media_db.execute("UPDATE saas_tenants SET status='onboarding' WHERE id=%s::uuid",(A,));media_db.commit()
+    with pytest.raises(TenantLinearError) as error:store.load(PROFILE,41,'kommo-file')
+    assert error.value.status==403

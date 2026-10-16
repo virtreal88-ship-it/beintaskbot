@@ -37,7 +37,7 @@ def _reserve_action(job,key,action_type,payload):
               EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
                 ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
                 JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
-                WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
+                WHERE j.provider='kommo' AND (b.agent_id IS NULL OR b.agent_id=j.agent_id) AND b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                   AND b.account_domain=ki.account_domain AND b.lead_id=j.lead_id AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END
                   AND b.talk_id=j.talk_id AND b.chat_id=j.chat_id AND b.channel_id=j.channel_id) AS test_mode_allowed
               FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
@@ -91,7 +91,7 @@ def _action_still_allowed(job):
                 AND (s.operating_mode='active' OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
                   ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
                   JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
-                  WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
+                  WHERE j.provider='kommo' AND (b.agent_id IS NULL OR b.agent_id=j.agent_id) AND b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                     AND b.account_domain=ki.account_domain AND b.lead_id=j.lead_id AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END
                     AND b.talk_id=j.talk_id AND b.chat_id=j.chat_id AND b.channel_id=j.channel_id))''',
                 (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job['revision'],job['lease_token']))

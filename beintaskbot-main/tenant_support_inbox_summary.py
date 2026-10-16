@@ -1,4 +1,5 @@
 """Optional support summaries through the existing provider and shared AI budgets."""
+from tenant_ai_testing_budget import TOKEN_USAGE_SQL
 import json
 import uuid
 from tenant_platform import _connect, _fernet
@@ -64,7 +65,7 @@ def reserve(tenant, ticket_id, profile=None, retry=False):
                 if model not in allowed: raise TenantLinearError('Модель недоступна.',409)
             cap = platform_token_limit(tenant) if source=='platform' else 0
             if cap:
-                cur.execute("SELECT COALESCE(sum(total_tokens),0) AS tokens FROM saas_ai_agent_token_usage WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'", (tenant,))
+                cur.execute(TOKEN_USAGE_SQL, (tenant,tenant))
                 if int(cur.fetchone()['tokens']) >= cap: raise TenantLinearError('AI token limit.',429)
             cur.execute("SELECT COALESCE(sum(reserved_calls),0) AS calls FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date", (tenant,))
             used = int(cur.fetchone()['calls'])

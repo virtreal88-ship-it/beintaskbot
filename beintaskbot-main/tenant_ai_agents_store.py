@@ -400,6 +400,9 @@ def delete_agent(profile, agent_id):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
+            cur.execute('SELECT 1 FROM saas_ai_test_sessions WHERE tenant_id=%s::uuid AND agent_id=%s::uuid LIMIT 1', (tenant,agent_uuid))
+            if cur.fetchone():
+                raise TenantLinearError('У агента есть история виртуальных тестов. Выключите агента вместо удаления, чтобы сохранить историю и учёт лимитов.',409)
             cur.execute('DELETE FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING id', (tenant, agent_uuid))
             row = cur.fetchone()
             if not row:
@@ -563,11 +566,11 @@ def list_drafts(profile, *, limit=50):
               JOIN saas_ai_agent_settings s ON s.tenant_id=d.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE
               WHERE d.tenant_id=%s::uuid AND (
                   s.operating_mode='active' OR (e.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb
-                WHERE cb.tenant_id=d.tenant_id AND cb.enabled=TRUE AND cb.verified=TRUE AND cb.emergency_stop=FALSE
+                WHERE (cb.agent_id IS NULL OR cb.agent_id=d.agent_id) AND cb.tenant_id=d.tenant_id AND cb.enabled=TRUE AND cb.verified=TRUE AND cb.emergency_stop=FALSE
                   AND cb.channel_id=(e.payload->>'channel_id') AND cb.conversation_id=d.chat_id
                   AND (e.payload->>'test_mode')='true')) OR (e.provider='kommo' AND EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
                 JOIN saas_tenant_integrations i ON i.tenant_id=b.tenant_id AND i.provider='kommo' AND i.status='connected'
-                WHERE b.tenant_id=d.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
+                WHERE (b.agent_id IS NULL OR b.agent_id=d.agent_id) AND b.tenant_id=d.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                   AND b.account_domain=i.account_domain AND b.lead_id=d.lead_id AND b.contact_id=(
                     SELECT CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END FROM saas_tenant_webhook_events e
                     WHERE e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint)
@@ -1034,12 +1037,12 @@ def review_draft(profile,draft_id,state):
               AND EXISTS (SELECT 1 FROM saas_ai_agent_settings s WHERE s.tenant_id=d.tenant_id
                 AND s.enabled=TRUE AND s.emergency_stop=FALSE AND (s.operating_mode='active'
                   OR (e.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb
-                    WHERE cb.tenant_id=d.tenant_id AND cb.enabled=TRUE AND cb.verified=TRUE AND cb.emergency_stop=FALSE
+                    WHERE (cb.agent_id IS NULL OR cb.agent_id=d.agent_id) AND cb.tenant_id=d.tenant_id AND cb.enabled=TRUE AND cb.verified=TRUE AND cb.emergency_stop=FALSE
                       AND cb.channel_id=(e.payload->>'channel_id') AND cb.conversation_id=d.chat_id
                       AND (e.payload->>'test_mode')='true'))
                   OR (e.provider='kommo' AND EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations i
                 ON i.tenant_id=b.tenant_id AND i.provider='kommo' AND i.status='connected'
-                WHERE b.tenant_id=d.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
+                WHERE (b.agent_id IS NULL OR b.agent_id=d.agent_id) AND b.tenant_id=d.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                   AND b.account_domain=i.account_domain AND b.lead_id=d.lead_id AND b.talk_id=d.talk_id AND b.chat_id=d.chat_id))))
               RETURNING d.id,d.lead_id,d.chat_id,e.provider''',(state,tenant,draft))
             row=cur.fetchone()
@@ -1125,7 +1128,7 @@ def reserve_draft_send(profile,draft_id):
                   JOIN saas_tenant_integrations i ON i.tenant_id=b.tenant_id AND i.provider='kommo' AND i.status='connected'
                   JOIN saas_tenant_webhook_events e ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
                   JOIN saas_ai_agent_jobs j ON j.tenant_id=d.tenant_id AND j.agent_id=d.agent_id AND j.conversation_id=d.chat_id
-                  WHERE b.tenant_id=d.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
+                  WHERE (b.agent_id IS NULL OR b.agent_id=d.agent_id) AND b.tenant_id=d.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                     AND b.account_domain=i.account_domain AND b.lead_id=d.lead_id AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END
                     AND b.talk_id=d.talk_id AND b.chat_id=d.chat_id AND b.channel_id=j.channel_id))
               RETURNING d.id,d.agent_id,d.lead_id,d.draft,d.talk_id,d.chat_id,d.source_message_id,d.handoff_after_send,

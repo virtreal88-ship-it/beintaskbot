@@ -184,7 +184,7 @@ def allowed_job(job):
                 'channel_id': job.get('channel_id') or payload.get('channel')}
             ok = active_mode and bool(integration and integration.get('account_domain'))
             if not active_mode:
-                ok = exact_binding(binding, tenant_id=job.get('tenant_id'), account_domain=integration.get('account_domain'), **event)
+                ok = bool((not binding or not binding.get('agent_id') or str(binding['agent_id'])==str(job.get('agent_id'))) and exact_binding(binding, tenant_id=job.get('tenant_id'), account_domain=integration.get('account_domain'), **event))
             if ok and job.get('agent_id'):
                 cur.execute('''SELECT 1 FROM saas_ai_agents a JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id
                   JOIN saas_tenants t ON t.id=a.tenant_id WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid
@@ -285,12 +285,13 @@ def read_test_mode(profile):
                 ON i.tenant_id=b.tenant_id AND i.provider='kommo'
               WHERE b.tenant_id=%s::uuid''', (tenant,))
             row = cur.fetchone()
-            cur.execute('''SELECT enabled,emergency_stop,channel_id,conversation_id,verified,verified_at,updated_at
+            cur.execute('''SELECT enabled,emergency_stop,channel_id,conversation_id,agent_id,verified,verified_at,updated_at
               FROM saas_ai_agent_connect_test_mode WHERE tenant_id=%s::uuid''', (tenant,))
             connect_row = cur.fetchone()
         conn.commit()
     connect = dict(connect_row) if connect_row else {'enabled': False, 'emergency_stop': False,
         'channel_id': '', 'conversation_id': '', 'verified': False, 'verified_at': None}
+    if connect.get('agent_id'):connect['agent_id']=str(connect['agent_id'])
     for key in ('verified_at', 'updated_at'):
         if connect.get(key):
             connect[key] = connect[key].isoformat()
@@ -301,6 +302,7 @@ def read_test_mode(profile):
             'lead_id': None, 'contact_id': None, 'talk_id': '', 'chat_id': '', 'verified_at': None,
             'connect': connect}
     result = dict(row)
+    if result.get('agent_id'):result['agent_id']=str(result['agent_id'])
     for key in ('tenant_id', 'updated_by'):
         result.pop(key, None)
     for key in ('lead_id', 'contact_id'):
@@ -320,7 +322,7 @@ def save_connect_test_mode(profile, data):
     """Bind draft-only Test Mode to an already received Connect conversation."""
     from tenant_ai_agents_store import _authorize, _audit
     from tenant_connect_transport import _schema as ensure_connect_schema
-    if not isinstance(data, dict) or set(data) - {'provider','channel_id','conversation_id','enabled','emergency_stop'}:
+    if not isinstance(data, dict) or set(data) - {'provider','channel_id','conversation_id','enabled','emergency_stop','agent_id'}:
         raise TenantLinearError('Connect Test Mode settings are invalid.')
     with _connect() as conn:
         ensure_schema(conn)
@@ -330,6 +332,8 @@ def save_connect_test_mode(profile, data):
         ensure_connect_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
+            from tenant_ai_testing_scope import selected_agent
+            agent = selected_agent(cur,tenant,data)
             channel, conversation = str(data.get('channel_id') or '').strip(), str(data.get('conversation_id') or '').strip()
             cur.execute('''SELECT 1 FROM saas_connect_conversations c JOIN saas_connect_channels ch
               ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
@@ -340,12 +344,12 @@ def save_connect_test_mode(profile, data):
             if enabled and not verified:
                 raise TenantLinearError('Əvvəlcə bu Connect dialoqundan imzalanmış giriş mesajı alın.', 409)
             cur.execute('''INSERT INTO saas_ai_agent_connect_test_mode
-              (tenant_id,enabled,emergency_stop,channel_id,conversation_id,verified,verified_at,updated_by)
-              VALUES(%s::uuid,%s,%s,%s,%s,%s,CASE WHEN %s THEN now() ELSE NULL END,%s)
+              (tenant_id,enabled,emergency_stop,channel_id,conversation_id,verified,verified_at,updated_by,agent_id)
+              VALUES(%s::uuid,%s,%s,%s,%s,%s,CASE WHEN %s THEN now() ELSE NULL END,%s,%s::uuid)
               ON CONFLICT(tenant_id) DO UPDATE SET enabled=EXCLUDED.enabled,emergency_stop=EXCLUDED.emergency_stop,
                 channel_id=EXCLUDED.channel_id,conversation_id=EXCLUDED.conversation_id,verified=EXCLUDED.verified,
-                verified_at=EXCLUDED.verified_at,updated_by=EXCLUDED.updated_by,updated_at=now()''',
-                        (tenant, enabled, emergency, channel, conversation, verified, verified, actor))
+                verified_at=EXCLUDED.verified_at,updated_by=EXCLUDED.updated_by,agent_id=COALESCE(EXCLUDED.agent_id,saas_ai_agent_connect_test_mode.agent_id),updated_at=now()''',
+                        (tenant, enabled, emergency, channel, conversation, verified, verified, actor, agent))
             _audit(cur, tenant, actor, 'ai_connect_test_mode_updated', 'ai_connect_test_binding', tenant,
                    {'enabled':enabled,'emergency_stop':emergency,'verified':verified})
         conn.commit()
@@ -357,7 +361,7 @@ def save_test_mode(profile, data):
     if isinstance(data, dict) and data.get('provider') == 'connect':
         return save_connect_test_mode(profile, data)
     from tenant_ai_agents_store import _authorize, _audit
-    if not isinstance(data, dict) or set(data) - {'company_phone','company_phone_attested','client_phone','channel_id','lead_id','contact_id','talk_id','chat_id','enabled','emergency_stop'}:
+    if not isinstance(data, dict) or set(data) - {'company_phone','company_phone_attested','client_phone','channel_id','lead_id','contact_id','talk_id','chat_id','enabled','emergency_stop','agent_id'}:
         raise TenantLinearError('Test Mode settings are invalid.')
     with _connect() as conn:
         ensure_schema(conn)
@@ -365,6 +369,8 @@ def save_test_mode(profile, data):
             tenant, actor = _authorize(cur, profile)
             cur.execute("SELECT account_domain,status FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE", (tenant,))
             integration = cur.fetchone()
+            from tenant_ai_testing_scope import selected_agent
+            agent = selected_agent(cur,tenant,data)
             if not integration or integration.get('status') != 'connected' or not integration.get('account_domain'):
                 raise TenantLinearError('A connected Kommo account is required before binding Test Mode.', 409)
             cur.execute('SELECT * FROM saas_ai_agent_test_mode WHERE tenant_id=%s::uuid FOR UPDATE', (tenant,))
@@ -396,17 +402,25 @@ def save_test_mode(profile, data):
                 raise TenantLinearError('Verify the exact Kommo conversation before enabling Test Mode.', 409)
             emergency = data.get('emergency_stop', previous.get('emergency_stop') is True)
             cur.execute('''INSERT INTO saas_ai_agent_test_mode
-              (tenant_id,enabled,emergency_stop,account_domain,company_phone,company_phone_attested,client_phone,channel_id,lead_id,contact_id,talk_id,chat_id,verified,verified_at,updated_by,updated_at)
-              VALUES(%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,CASE WHEN %s THEN COALESCE(%s,now()) ELSE NULL END,%s,now())
+              (tenant_id,enabled,emergency_stop,account_domain,company_phone,company_phone_attested,client_phone,channel_id,lead_id,contact_id,talk_id,chat_id,verified,verified_at,updated_by,updated_at,agent_id)
+              VALUES(%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,CASE WHEN %s THEN COALESCE(%s,now()) ELSE NULL END,%s,now(),%s::uuid)
               ON CONFLICT(tenant_id) DO UPDATE SET enabled=EXCLUDED.enabled,emergency_stop=EXCLUDED.emergency_stop,
                 account_domain=EXCLUDED.account_domain,company_phone=EXCLUDED.company_phone,company_phone_attested=EXCLUDED.company_phone_attested,client_phone=EXCLUDED.client_phone,
                 channel_id=EXCLUDED.channel_id,lead_id=EXCLUDED.lead_id,contact_id=EXCLUDED.contact_id,talk_id=EXCLUDED.talk_id,
-                chat_id=EXCLUDED.chat_id,verified=EXCLUDED.verified,verified_at=EXCLUDED.verified_at,updated_by=EXCLUDED.updated_by,updated_at=now()''',
+                chat_id=EXCLUDED.chat_id,verified=EXCLUDED.verified,verified_at=EXCLUDED.verified_at,updated_by=EXCLUDED.updated_by,agent_id=COALESCE(EXCLUDED.agent_id,saas_ai_agent_test_mode.agent_id),updated_at=now()''',
               (tenant,enabled,emergency,integration['account_domain'],value['company_phone'],company_phone_attested,value['client_phone'],value['channel_id'],
-               value['lead_id'],value['contact_id'],value['talk_id'],value['chat_id'],verified,verified,previous.get('verified_at'),actor))
+               value['lead_id'],value['contact_id'],value['talk_id'],value['chat_id'],verified,verified,previous.get('verified_at'),actor,agent))
             if emergency or not enabled:
-                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='ai_emergency_stop' WHERE tenant_id=%s::uuid AND state IN ('queued','processing') AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND state IN ('queued','processing'))", (tenant,tenant))
-                cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='ai_emergency_stop',updated_at=now() WHERE tenant_id=%s::uuid AND state IN ('queued','processing')", (tenant,))
+                # A test binding must never cancel Active Mode traffic or other contacts.
+                # Workers separately recheck a changed binding before any paid call/action.
+                effective_agent=agent or previous.get('agent_id')
+                scope="""j.tenant_id=%s::uuid AND j.provider='kommo' AND j.state IN ('queued','processing')
+                  AND j.chat_id=%s AND j.lead_id=%s AND j.channel_id=%s
+                  AND (%s::uuid IS NULL OR j.agent_id=%s::uuid)
+                  AND EXISTS (SELECT 1 FROM saas_ai_agent_settings ts WHERE ts.tenant_id=j.tenant_id AND ts.operating_mode='test')"""
+                params=(tenant,value['chat_id'],value['lead_id'],value['channel_id'],effective_agent,effective_agent)
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='ai_emergency_stop' WHERE tenant_id=%s::uuid AND provider='kommo' AND state IN ('queued','processing') AND fingerprint IN (SELECT j.event_fingerprint FROM saas_ai_agent_jobs j WHERE "+scope+")",(tenant,*params))
+                cur.execute("UPDATE saas_ai_agent_jobs j SET state='skipped',revision=j.revision+1,lease_token=NULL,lease_until=NULL,error_code='ai_emergency_stop',updated_at=now() WHERE "+scope,params)
             _audit(cur,tenant,actor,'ai_test_mode_updated','ai_test_binding',tenant,{'enabled':enabled,'emergency_stop':emergency,'verified':verified})
         conn.commit()
     return read_test_mode(profile)
