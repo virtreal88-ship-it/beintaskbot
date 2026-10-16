@@ -5,7 +5,7 @@ from tenant_hot_order_policy import HotOrderPolicy, validate_hot_order_settings
 
 
 ROLE_PERMISSIONS = {
-    'owner': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear', 'ai_agents'],
+    'owner': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear', 'ai_agents', 'night_report'],
     'admin': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear', 'ai_agents'],
     'manager': ['deals', 'tasks', 'customers'],
     'worker': ['tasks'],
@@ -58,6 +58,8 @@ class TenantPolicy:
         # AI Agents is a first-party product module, not a Kommo capability
         # or an onboarding module toggle. Owners always have it; admins only
         # see it after the owner explicitly grants the existing manage flag.
+        if module == 'night_report':
+            return self.profile.get('role') != 'master' and ('night_report' in set(self.profile.get('permissions') or []) or self.allows('ai_agents'))
         if module == 'ai_agents':
             return self.profile.get('role') == 'admin' and self.member_settings.get('ai_agents_manage') is True
         if self.profile.get('role') == 'master' and module != 'hot_orders':
