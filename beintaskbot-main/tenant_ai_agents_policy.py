@@ -11,6 +11,7 @@ MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_EXTRACTED_TEXT = 200_000
 CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 120
+SETUP_KEY = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{11,119}')
 
 # These controls are deliberately non-optional.  The editor exposes them so
 # an owner can understand the boundary, but a browser request cannot weaken it.
@@ -39,11 +40,22 @@ def _text(value, field, limit, *, required=False):
     return value
 
 
+def setup_key(value):
+    """Validate the opaque, browser-generated key used to resume a wizard.
+
+    It is deliberately not a client identifier or a tenant selector.  Store
+    methods always combine it with the authorized tenant and employee.
+    """
+    if not isinstance(value, str) or not SETUP_KEY.fullmatch(value):
+        raise TenantLinearError('Yenidən cəhd açarı düzgün deyil.')
+    return value
+
+
 def agent(data, *, creating=False):
     if not isinstance(data, dict):
         raise TenantLinearError('Agent ayarları düzgün deyil.')
     allowed = {'name', 'instructions', 'enabled', 'mode', 'language', 'style',
-               'delay_seconds', 'schedule', 'scopes', 'model', 'safety'}
+               'delay_seconds', 'schedule', 'scopes', 'model', 'safety', 'setup_key'}
     if set(data) - allowed:
         raise TenantLinearError('Naməlum agent ayarı var.')
     result = {}
@@ -136,6 +148,10 @@ def agent(data, *, creating=False):
         result['model'] = _text(data.get('model', ''), 'Model', 100)
     if creating or 'safety' in data:
         result['safety'] = safety_policy(data.get('safety'))
+    if 'setup_key' in data:
+        if not creating:
+            raise TenantLinearError('Yenidən cəhd açarı dəyişdirilə bilməz.')
+        result['setup_key'] = setup_key(data['setup_key'])
     return result
 
 
@@ -167,7 +183,7 @@ def company_settings(data):
 
 
 def trigger(data, *, creating=False):
-    if not isinstance(data, dict) or set(data) - {'name','trigger_type','condition','actions','enabled','expected_version'}:
+    if not isinstance(data, dict) or set(data) - {'name','trigger_type','condition','actions','enabled','expected_version','setup_key'}:
         raise TenantLinearError('Trigger ayarları düzgün deyil.')
     out = {}
     if creating or 'name' in data:
@@ -203,6 +219,10 @@ def trigger(data, *, creating=False):
         if not isinstance(data.get('enabled',False),bool):
             raise TenantLinearError('Trigger aktivliyi düzgün deyil.')
         out['enabled'] = data.get('enabled',False)
+    if 'setup_key' in data:
+        if not creating:
+            raise TenantLinearError('Yenidən cəhd açarı dəyişdirilə bilməz.')
+        out['setup_key'] = setup_key(data['setup_key'])
     return out
 
 
