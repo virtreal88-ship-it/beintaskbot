@@ -109,7 +109,7 @@ def agent(data, *, creating=False):
         normalized = []
         seen = set()
         for scope in scopes:
-            if not isinstance(scope, dict) or set(scope) - {'provider', 'pipeline_id', 'stage_id', 'channel_id', 'instructions'}:
+            if not isinstance(scope, dict) or set(scope) - {'provider', 'pipeline_id', 'stage_id', 'channel_id', 'instructions', 'allow_group_messages'}:
                 raise TenantLinearError('Agent əhatə dairəsi düzgün deyil.')
             provider = _text(scope.get('provider', 'kommo'), 'provider', 20) or 'kommo'
             if provider not in {'kommo', 'connect'}:
@@ -118,6 +118,11 @@ def agent(data, *, creating=False):
                    for key in ('pipeline_id', 'stage_id', 'channel_id')}
             row['provider'] = provider
             row['instructions'] = _text(scope.get('instructions', ''), 'Mərhələ təlimatı', 5000)
+            if 'allow_group_messages' in scope and not isinstance(scope['allow_group_messages'], bool):
+                raise TenantLinearError('Qrup mesajları üçün icazə düzgün deyil.')
+            # Existing scopes remain safe by default. A group needs an
+            # intentional per-channel opt-in from an AI Agent administrator.
+            row['allow_group_messages'] = scope.get('allow_group_messages') is True
             if provider == 'kommo' and (not row['pipeline_id'] or not row['stage_id']):
                 raise TenantLinearError('Vərəq və mərhələ seçilməlidir.')
             if provider == 'connect' and not row['channel_id']:

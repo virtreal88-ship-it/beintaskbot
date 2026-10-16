@@ -20,3 +20,30 @@ For the first release, Connect's direct message path is text-first.  Existing
 Kommo attachments and histories remain unchanged.  Rich-media forwarding is
 kept behind Connect's provider adapter and must be enabled only when the
 Evolution storage URL contract is configured for the deployment.
+
+## Group identity contract
+
+Connect must preserve the Evolution `remoteJid` as `conversationId`. A JID
+ending in `@g.us` is a WhatsApp group; a JID ending in `@s.whatsapp.net` is a
+direct conversation. For installations where a legacy adapter cannot preserve
+the suffix, signed webhook data must include `isGroup: true` or
+`conversationType: "group"`; a numeric identifier alone is deliberately not
+treated as either a group title or a phone number.
+
+For every `message.inbound.received` / `message.outbound.observed` webhook,
+Connect should additionally send these signed fields when Evolution has them:
+
+- `groupName` (or `conversationName`) — current WhatsApp group subject;
+- `participantJid` and `participantName` — author of an inbound group message;
+- `fromMe` — the Evolution message-direction fact.
+
+Beintaskbot keeps the original signed webhook data for diagnostics, stores the
+group title separately from the conversation JID, and exposes the participant
+per message. If title or participant metadata are absent, the UI uses an
+explicit generic label and keeps the technical identifier only in diagnostics;
+it never invents a group or member name. Historic conversations acquire a
+title only after a new metadata-bearing event or an explicit provider resync.
+
+AI replies to groups are denied by default. A tenant AI Agent administrator
+must explicitly enable **Allow AI replies in WhatsApp groups** for that
+agent's Connect scope before a group event is admitted to the existing queue.

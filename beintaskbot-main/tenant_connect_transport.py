@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -20,6 +21,80 @@ from tenant_member_store import member
 
 CONNECT_URL = str(os.environ.get("CONNECT_PUBLIC_URL") or "https://connect.crm.pro.az").rstrip("/")
 CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed')
+
+
+def _safe_label(value, limit=180):
+    """Keep provider labels display-safe without manufacturing an identity."""
+    if not isinstance(value, str):
+        return ''
+    value = value.strip()
+    if not value or any(ord(char) < 32 for char in value):
+        return ''
+    return value[:limit]
+
+
+def _conversation_metadata(data, conversation):
+    """Normalize only signed Connect/Evolution identity facts.
+
+    Evolution group ids end in ``@g.us``.  Older Connect payloads can omit the
+    suffix, in which case its explicit ``isGroup``/``conversationType`` is the
+    only safe source; a numeric id alone is never treated as a group title or
+    a phone number.
+    """
+    jid = str(conversation or '').strip()
+    explicit_type = str(data.get('conversationType') or data.get('chatType') or '').strip().casefold()
+    if jid.endswith('@g.us') or data.get('isGroup') is True or explicit_type in {'group', 'groupchat'}:
+        kind = 'group'
+    elif jid.endswith('@s.whatsapp.net') or explicit_type in {'contact', 'personal', 'direct'}:
+        kind = 'contact'
+    else:
+        kind = ''
+    if kind == 'group':
+        display_name = next((_safe_label(data.get(key)) for key in ('groupName', 'conversationName', 'chatName')
+                             if _safe_label(data.get(key))), '')
+    else:
+        display_name = next((_safe_label(data.get(key)) for key in ('contactName', 'conversationName')
+                             if _safe_label(data.get(key))), '')
+    participant_jid = next((_safe_label(data.get(key)) for key in ('participantJid', 'senderJid')
+                            if _safe_label(data.get(key))), '')
+    participant_name = next((_safe_label(data.get(key)) for key in ('participantName', 'senderName', 'pushName')
+                             if _safe_label(data.get(key))), '')
+    return {'kind': kind, 'display_name': display_name, 'participant_jid': participant_jid,
+            'participant_name': participant_name}
+
+
+def _phone_from_jid(jid):
+    value = str(jid or '')
+    if '@' in value and not value.endswith('@s.whatsapp.net'):
+        return ''
+    candidate = value.split('@', 1)[0]
+    return candidate if re.fullmatch(r'[1-9][0-9]{5,18}', candidate) else ''
+
+
+def _upsert_conversation(cur, tenant, channel_id, conversation, metadata):
+    """Persist group metadata separately from an individual contact identity."""
+    kind = metadata.get('kind') or ''
+    display_name = metadata.get('display_name') or ''
+    # Keep the established direct-chat phone fallback intact. A group must
+    # never inherit the numeric prefix of its JID as a customer phone.
+    phone = '' if kind == 'group' else _phone_from_jid(conversation)
+    contact_name = display_name if kind == 'contact' else ''
+    cur.execute('''INSERT INTO saas_connect_conversations
+      (tenant_id,connect_channel_id,conversation_id,contact_name,phone,display_name,conversation_kind,last_message_at)
+      VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,now())
+      ON CONFLICT(tenant_id,connect_channel_id,conversation_id) DO UPDATE
+      SET contact_name=CASE WHEN EXCLUDED.contact_name<>'' THEN EXCLUDED.contact_name ELSE saas_connect_conversations.contact_name END,
+          phone=CASE WHEN EXCLUDED.phone<>'' THEN EXCLUDED.phone ELSE saas_connect_conversations.phone END,
+          display_name=CASE WHEN EXCLUDED.display_name<>'' THEN EXCLUDED.display_name ELSE saas_connect_conversations.display_name END,
+          conversation_kind=CASE WHEN EXCLUDED.conversation_kind<>'' THEN EXCLUDED.conversation_kind ELSE saas_connect_conversations.conversation_kind END,
+          last_message_at=now(),updated_at=now()
+      RETURNING lead_id''', (tenant, channel_id, conversation, contact_name, phone, display_name, kind))
+    return int(cur.fetchone()['lead_id'])
+
+
+def _is_ai_message(row):
+    raw = (row or {}).get('raw') or {}
+    return bool((row or {}).get('author_name') == 'AI Agent' or (isinstance(raw, dict) and raw.get('run_id')))
 
 
 def _schema(conn) -> None:
@@ -36,6 +111,8 @@ def _schema(conn) -> None:
           contact_name TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', ai_enabled BOOLEAN NOT NULL DEFAULT TRUE,
           manual_hold BOOLEAN NOT NULL DEFAULT FALSE, last_message_at TIMESTAMPTZ NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY(tenant_id,connect_channel_id,conversation_id), UNIQUE(lead_id))''')
+        cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS conversation_kind TEXT NOT NULL DEFAULT ''")
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_webhook_events (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE, event_id TEXT NOT NULL,
           received_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,event_id))''')
@@ -169,9 +246,6 @@ def sync_webhook_subscriptions() -> int:
     updated = 0
     with _connect() as conn:
         _schema(conn)
-        if event_type == 'message.outbound.observed':
-            from tenant_ai_agents_schema import ensure_schema
-            ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT tenant_id,secrets FROM saas_tenant_integrations WHERE provider='connect' AND status='connected' AND secrets IS NOT NULL")
             rows = cur.fetchall()
@@ -216,6 +290,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
     channel_id, conversation = str(data.get('channelId') or ''), str(data.get('conversationId') or '')
     if not channel_id or not conversation:
         raise TenantPlatformError('Connect webhook kanal məlumatı yoxdur.')
+    metadata = _conversation_metadata(data, conversation)
     accepted = False
     queued_payload = None
     with _connect() as conn:
@@ -240,26 +315,28 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 return False
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
             inserted_event = bool(cur.fetchone())
-            if event_type == 'message.outbound.observed':
-                # Connect emits this only for a fromMe Evolution message that
-                # was not previously recorded by Connect's own send API. It is
-                # therefore a real human takeover from the linked phone.
+            outbound = event_type == 'message.outbound.observed' or data.get('fromMe') is True
+            if outbound:
+                # Direction comes from the signed event/fromMe fact, never the
+                # message text.  A known accepted AI row stays AI even when
+                # Evolution echoes it back through the outbound webhook.
                 if not inserted_event:
                     conn.commit()
                     return True
-                phone = conversation.split('@', 1)[0]
-                cur.execute('''INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,contact_name,phone,last_message_at)
-                  VALUES(%s::uuid,%s::uuid,%s,%s,%s,now()) ON CONFLICT(tenant_id,connect_channel_id,conversation_id) DO UPDATE
-                  SET last_message_at=now(),updated_at=now() RETURNING lead_id''', (tenant,channel_id,conversation,phone,phone))
-                lead_id = int(cur.fetchone()['lead_id'])
+                lead_id = _upsert_conversation(cur, tenant, channel_id, conversation, metadata)
                 occurred = str(event.get('occurred_at') or datetime.now(timezone.utc).isoformat())
                 external = 'connect:' + str(data.get('id') or event_id)
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
                   VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,'WhatsApp operator',%s,%s,'',%s::timestamptz,%s::jsonb)
-                  ON CONFLICT(tenant_id,external_id) DO NOTHING''',
+                  ON CONFLICT(tenant_id,external_id) DO UPDATE SET external_id=saas_crm_messages.external_id
+                  RETURNING author_name,raw''',
                             (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,str(data.get('text') or ''),str(data.get('type') or 'text'),occurred,_json(data)))
-                from tenant_ai_agent_connect import mark_operator_reply
-                mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn)
+                stored = cur.fetchone()
+                # A malformed outbound event with ``fromMe:false`` is kept as
+                # an observable outbound record, but cannot take over a chat.
+                if data.get('fromMe') is not False and not _is_ai_message(stored):
+                    from tenant_ai_agent_connect import mark_operator_reply
+                    mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn)
                 conn.commit()
                 return True
             # A legacy inbound delivery may have committed the durable CRM
@@ -284,16 +361,17 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
             if not continue_processing:
                 pass
             else:
-                phone = conversation.split('@', 1)[0]
-                cur.execute('''INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,contact_name,phone,last_message_at)
-              VALUES(%s::uuid,%s::uuid,%s,%s,%s,now()) ON CONFLICT(tenant_id,connect_channel_id,conversation_id) DO UPDATE
-              SET last_message_at=now(),updated_at=now() RETURNING lead_id''', (tenant,channel_id,conversation,phone,phone))
-                lead_id = int(cur.fetchone()['lead_id'])
+                lead_id = _upsert_conversation(cur, tenant, channel_id, conversation, metadata)
                 occurred = str(event.get('occurred_at') or datetime.now(timezone.utc).isoformat())
+                is_group = metadata.get('kind') == 'group'
+                phone = '' if is_group else _phone_from_jid(conversation)
+                author_name = (metadata.get('participant_name') or _phone_from_jid(metadata.get('participant_jid'))
+                               or phone)
+                deal_name = metadata.get('display_name') or author_name
                 cur.execute('''INSERT INTO saas_crm_deals(tenant_id,kommo_lead_id,name,contact_name,phone,channel,last_message,last_message_at,source_updated_at,raw)
               VALUES(%s::uuid,%s,%s,%s,%s,%s,%s,%s::timestamptz,%s::timestamptz,%s::jsonb)
               ON CONFLICT(tenant_id,kommo_lead_id) DO UPDATE SET contact_name=EXCLUDED.contact_name,phone=EXCLUDED.phone,channel=EXCLUDED.channel,last_message=EXCLUDED.last_message,last_message_at=EXCLUDED.last_message_at,source_updated_at=EXCLUDED.source_updated_at,raw=EXCLUDED.raw,synced_at=now()''',
-                            (tenant,lead_id,phone,phone,phone,'connect:'+channel_id,str(data.get('text') or ''),occurred,occurred,_json({'source':'connect','channel_id':channel_id,'conversation_id':conversation})))
+                            (tenant,lead_id,deal_name,deal_name,phone,'connect:'+channel_id,str(data.get('text') or ''),occurred,occurred,_json({'source':'connect','channel_id':channel_id,'conversation_id':conversation,'conversation_kind':metadata.get('kind') or ''})))
                 external = 'connect:' + str(data.get('id') or event_id)
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'incoming',%s,%s,%s,%s,%s,%s::timestamptz,%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
@@ -302,7 +380,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                             # not store a fake non-empty placeholder: that
                             # would make every text look like an attachment and
                             # can incorrectly affect later AI context.
-                            (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,phone,str(data.get('text') or ''),str(data.get('type') or 'text'),'',occurred,_json(data)))
+                            (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,author_name,str(data.get('text') or ''),str(data.get('type') or 'text'),'',occurred,_json(data)))
                 accepted = True
                 queued_payload = (tenant, channel_id, conversation, lead_id, str(data.get('id') or event_id), event_id,
                                   str(data.get('text') or ''), str(data.get('type') or 'text'))
@@ -312,7 +390,8 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 from tenant_ai_agent_connect import enqueue
                 enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
                         lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
-                        text=queued_payload[6], message_type=queued_payload[7], connection=conn)
+                        text=queued_payload[6], message_type=queued_payload[7],
+                        is_group=metadata.get('kind') == 'group', connection=conn)
             conn.commit()
     return accepted
 

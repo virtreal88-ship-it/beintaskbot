@@ -13,6 +13,43 @@ def public(row):
             for k,v in dict(row).items()}
 
 
+def _safe_group_name(item):
+    """A group title may be absent, but a JID is never a display title."""
+    name = str(item.get('customer_name') or '').strip()
+    conversation = str(item.get('conversation_id') or '').strip()
+    phone = str(item.get('phone') or '').strip()
+    technical = {conversation, conversation.split('@', 1)[0], phone}
+    return '' if name in technical else name
+
+
+def _message(item, *, group=False):
+    value = dict(item)
+    raw = value.pop('raw', None) or {}
+    direction = str(value.get('direction') or '')
+    if direction not in {'incoming', 'outgoing'}:
+        direction = 'system'
+    author = str(value.get('author_name') or '')
+    if direction == 'outgoing':
+        author_type = 'ai' if author == 'AI Agent' or (isinstance(raw, dict) and raw.get('run_id')) else 'operator'
+    elif direction == 'incoming':
+        author_type = 'participant' if group else 'customer'
+    else:
+        author_type = 'system'
+    participant_jid = ''
+    if isinstance(raw, dict):
+        participant_jid = str(raw.get('participantJid') or raw.get('senderJid') or '')[:180]
+    if direction == 'incoming' and group and not author and participant_jid.endswith('@s.whatsapp.net'):
+        candidate = participant_jid.split('@', 1)[0]
+        if candidate.isdecimal():
+            author = candidate
+    value['direction'] = direction
+    value['author_type'] = author_type
+    value['author_name'] = author
+    value['participant_jid'] = participant_jid
+    value['source'] = 'connect' if str(value.get('channel') or '').startswith('connect:') else 'kommo'
+    return public(value)
+
+
 def projection(policy):
     scope,params=[],[]
     if policy.profile.get('role')!='owner':
@@ -24,7 +61,7 @@ def projection(policy):
     kommo_scope='TRUE' if policy.profile.get('role')=='owner' else '('+' OR '.join(scope)+')' if scope else 'FALSE'
     sql='''WITH routes AS (
       SELECT 'connect'::text AS provider,c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
-        COALESCE(NULLIF(c.contact_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.phone,
+        COALESCE(NULLIF(c.display_name,''),NULLIF(c.contact_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.phone,c.conversation_kind,
         ch.name AS channel_name,ch.active AS channel_active,'connect:'||c.connect_channel_id::text AS history_channel,
         COALESCE(j.agent_id,cs.agent_id) AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,
         COALESCE(cs.state,'active') AS state,COALESCE(cs.reason,'') AS reason,cs.updated_at,
@@ -52,7 +89,7 @@ def projection(policy):
       WHERE c.tenant_id=%s::uuid
       UNION ALL
       SELECT 'kommo',COALESCE(j.channel_id,lm.channel,''),COALESCE(j.conversation_id,''),d.kommo_lead_id,
-        COALESCE(NULLIF(d.contact_name,''),NULLIF(d.name,''),d.kommo_lead_id::text),COALESCE(d.phone,''),
+        COALESCE(NULLIF(d.contact_name,''),NULLIF(d.name,''),d.kommo_lead_id::text),COALESCE(d.phone,''),''::text AS conversation_kind,
         COALESCE(NULLIF(lm.channel,''),'Kommo'),TRUE,COALESCE(lm.channel,''),j.agent_id,a.name,a.enabled,
         COALESCE(cs.state,'active'),COALESCE(cs.reason,''),cs.updated_at,cs.tenant_id IS NOT NULL,
         s.enabled,s.emergency_stop,t.status,j.state,COALESCE(j.error_code,''),lm.last_message_at,
@@ -72,8 +109,9 @@ def projection(policy):
         AND NOT EXISTS(SELECT 1 FROM saas_connect_conversations c WHERE c.tenant_id=d.tenant_id AND c.lead_id=d.kommo_lead_id)
     ), visible AS (SELECT routes.*,CASE WHEN state IN ('human','paused') THEN state
       WHEN agent_id IS NULL THEN 'unmanaged'
+      WHEN latest_job_state IN ('failed','unknown') AND latest_job_error<>'' THEN 'error'
       WHEN NOT COALESCE(company_enabled,FALSE) OR COALESCE(company_emergency_stop,FALSE) OR NOT COALESCE(agent_enabled,FALSE)
-        OR NOT %s OR (latest_job_state IN ('failed','unknown','skipped') AND latest_job_error<>'') THEN 'blocked'
+        OR NOT %s OR (latest_job_state='skipped' AND latest_job_error<>'') THEN 'blocked'
       ELSE 'active' END AS display_state FROM routes) '''
     return sql,params
 
@@ -81,25 +119,50 @@ def projection(policy):
 def decorate(row):
     item=dict(row)
     unmanaged=item['display_state']=='unmanaged'
+    execution_error=(item.get('state') == 'active' and item.get('latest_job_state') in {'failed','unknown'}
+                     and bool(item.get('latest_job_error')))
     item=_decorate_conversation_state(item)
     if unmanaged and item['state']=='active':
         item['display_state']='unmanaged';item['display_reason']='agent_not_found'
+    elif execution_error:
+        item['display_state']='error';item['display_reason']=str(item.get('latest_job_error') or '')
+    if item.get('provider') == 'connect' and item.get('conversation_kind') == 'group':
+        item['customer_name'] = _safe_group_name(item)
+        item['phone'] = ''
+    item['customer_kind'] = ('group' if item.get('conversation_kind') == 'group' else
+                             'contact' if item.get('provider') == 'connect' else 'contact')
     item['controls_allowed']=bool(item.get('channel_active') and item.get('unambiguous') and item.get('conversation_id'))
     item['control_block_reason']='channel_inactive' if not item.get('channel_active') else 'ambiguous_channel' if not item.get('unambiguous') else 'untracked_dialog' if not item.get('conversation_id') else ''
     item['can_send']=bool(item.get('channel_active') and item.get('connected') and item.get('tenant_status')=='active')
     item['send_block_reason']='integration_disconnected' if not item.get('connected') else 'channel_inactive' if not item.get('channel_active') else 'tenant_not_active' if item.get('tenant_status')!='active' else ''
+    if item.get('display_state') == 'active':
+        item['ai_availability'] = 'available'
+    elif item.get('display_state') == 'error':
+        item['ai_availability'] = 'error'
+    elif item.get('display_state') == 'unmanaged':
+        item['ai_availability'] = 'unmanaged'
+    elif item.get('state') in {'paused','human'}:
+        item['ai_availability'] = 'stopped'
+    else:
+        item['ai_availability'] = 'blocked'
+    item['available_actions'] = (['pause','handoff'] if item.get('state') == 'active' and item.get('ai_availability') == 'available'
+                                 else ['resume'] if item.get('state') in {'paused','human'} and item.get('resume_allowed') and item.get('controls_allowed')
+                                 else [])
+    item['state_changed_at'] = item.get('updated_at')
     return public(item)
 
 
 def listing(profile,search='',channel='',agent='',state='',offset=0):
-    if state not in {'','active','paused','human','blocked','unmanaged','attention'}: raise TenantLinearError('Некорректный статус.')
+    if state not in {'','active','paused','human','blocked','error','unmanaged','attention'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
     with _connect() as conn:
         ensure_schema(conn)
+        from tenant_connect_transport import _schema as ensure_connect_schema
+        ensure_connect_schema(conn)
         with conn.cursor() as cur:
             tenant,_,policy=access(cur,profile,'dialogs')
             sql,scopes=projection(policy);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
-            cur.execute(sql+"SELECT count(*) FILTER(WHERE display_state IN ('human','paused','blocked')) AS attention_count FROM visible",params)
+            cur.execute(sql+"SELECT count(*) FILTER(WHERE display_state IN ('human','paused','blocked','error')) AS attention_count FROM visible",params)
             count=int(cur.fetchone()['attention_count'])
             cur.execute(sql+"SELECT DISTINCT provider||':'||channel_id AS id,channel_name AS name FROM visible ORDER BY name",params)
             channels=[dict(r) for r in cur.fetchall()]
@@ -110,7 +173,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
             if channel:where.append("provider||':'||channel_id=%s");args.append(str(channel)[:250])
             if agent=='unassigned':where.append('agent_id IS NULL')
             elif agent:where.append('agent_id=%s::uuid');args.append(identifier(agent))
-            if state=='attention':where.append("display_state IN ('human','paused','blocked')")
+            if state=='attention':where.append("display_state IN ('human','paused','blocked','error')")
             elif state:where.append('display_state=%s');args.append(state)
             cur.execute(sql+'SELECT * FROM visible'+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY last_message_at DESC NULLS LAST,provider,lead_id LIMIT 51 OFFSET %s',(*params,*args,offset))
             rows=cur.fetchall()
@@ -122,6 +185,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None):
     lead_id=int(lead_id)
     with _connect() as conn:
         ensure_schema(conn)
+        from tenant_connect_transport import _schema as ensure_connect_schema
+        ensure_connect_schema(conn)
         with conn.cursor() as cur:
             tenant,_,policy=access(cur,profile,'dialogs')
             selected=assert_route(cur,tenant,policy,provider,conversation,str(channel),lead_id)
@@ -142,9 +207,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None):
                 clause=''' AND (COALESCE(happened_at,created_at),id)<(SELECT COALESCE(happened_at,created_at),id FROM saas_crm_messages
                   WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid)'''
                 args += [tenant,lead_id,row['history_channel'],identifier(before)]
-            cur.execute('''SELECT id,external_id,direction,body,message_type,media_url,happened_at,created_at FROM saas_crm_messages
+            cur.execute('''SELECT id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,created_at,raw FROM saas_crm_messages
               WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s'''+clause+'''
               ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 51''',tuple(args))
             messages=cur.fetchall()
-    return {'dialog':dialog,'messages':[public(r) for r in reversed(messages[:50])],
+    return {'dialog':dialog,'messages':[_message(r, group=dialog.get('customer_kind') == 'group') for r in reversed(messages[:50])],
             'next_before':str(messages[49]['id']) if len(messages)>50 else None}

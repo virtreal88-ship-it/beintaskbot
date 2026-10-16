@@ -143,6 +143,66 @@ class TenantConnectHandoffTests(unittest.TestCase):
             transport.record_outbound(TENANT, 42, route, 'AI reply', 'ai-message', author='AI Agent')
         stop.assert_not_called()
 
+    def test_group_identity_and_participant_survive_signed_connect_event(self):
+        cursor = Cursor(
+            rows=[[{'tenant_id': TENANT, 'secrets': b'encrypted'}]],
+            ones=[{'active': True}, {'event_id': 'group-event'}, {'lead_id': 42}],
+        )
+        connection = Connection(cursor)
+        event = {'id': 'group-event', 'type': 'message.inbound.received',
+                 'data': {'id': 'group-message', 'channelId': CHANNEL,
+                          'conversationId': '120363411822115409@g.us', 'isGroup': True,
+                          'groupName': 'Night support', 'participantJid': '994501234567@s.whatsapp.net',
+                          'participantName': 'Leyla', 'fromMe': False, 'type': 'text', 'text': 'Need help'}}
+        cipher = MagicMock(); cipher.decrypt.return_value = json.dumps({'webhook_secret': 'secret'}).encode()
+        with patch.object(transport, '_connect', return_value=connection), \
+             patch.object(transport, '_fernet', return_value=cipher), \
+             patch.object(transport, '_verify_signature', return_value=True), \
+             patch.object(transport, '_schema'), \
+             patch('tenant_ai_agents_schema.ensure_schema'), \
+             patch('tenant_ai_agent_connect.enqueue') as enqueue:
+            self.assertTrue(transport.ingest(b'{}', 'sha256=valid', event))
+        conversation_sql, conversation_params = next((sql, params) for sql, params in cursor.executed
+                                                      if 'display_name,conversation_kind' in sql)
+        self.assertIn('conversation_kind', conversation_sql)
+        self.assertEqual(conversation_params[5:7], ('Night support', 'group'))
+        message_params = next(params for sql, params in cursor.executed if 'saas_crm_messages' in sql)
+        self.assertEqual(message_params[5], 'Leyla')
+        self.assertEqual(json.loads(message_params[-1])['participantJid'], '994501234567@s.whatsapp.net')
+        self.assertTrue(enqueue.call_args.kwargs['is_group'])
+
+    def test_provider_echo_of_existing_ai_message_does_not_take_over_group(self):
+        cursor = Cursor(
+            rows=[[{'tenant_id': TENANT, 'secrets': b'encrypted'}]],
+            ones=[{'active': True}, {'event_id': 'ai-echo'}, {'lead_id': 42},
+                  {'author_name': 'AI Agent', 'raw': {'run_id': 'run-1'}}],
+        )
+        connection = Connection(cursor)
+        event = {'id': 'ai-echo', 'type': 'message.outbound.observed',
+                 'data': {'id': 'ai-message', 'channelId': CHANNEL,
+                          'conversationId': '120363411822115409@g.us', 'isGroup': True,
+                          'fromMe': True, 'type': 'text', 'text': 'AI reply'}}
+        cipher = MagicMock(); cipher.decrypt.return_value = json.dumps({'webhook_secret': 'secret'}).encode()
+        with patch.object(transport, '_connect', return_value=connection), \
+             patch.object(transport, '_fernet', return_value=cipher), \
+             patch.object(transport, '_verify_signature', return_value=True), \
+             patch.object(transport, '_schema'), \
+             patch('tenant_ai_agents_schema.ensure_schema'), \
+             patch('tenant_ai_agent_connect.mark_operator_reply') as stop:
+            self.assertTrue(transport.ingest(b'{}', 'sha256=valid', event))
+        stop.assert_not_called()
+
+    def test_group_scope_requires_explicit_administrator_permission(self):
+        scopes = [{'provider': 'connect', 'channel_id': CHANNEL}]
+        self.assertTrue(transport._conversation_metadata({'isGroup': True}, '120363411822115409')['kind'] == 'group')
+        self.assertFalse(transport._phone_from_jid('120363411822115409@g.us'))
+        from tenant_ai_agent_connect import _whatsapp_phone, scope_matches
+        self.assertFalse(scope_matches(scopes, CHANNEL, is_group=True))
+        self.assertTrue(scope_matches(scopes, CHANNEL), 'direct chats retain the existing scope behavior')
+        scopes[0]['allow_group_messages'] = True
+        self.assertTrue(scope_matches(scopes, CHANNEL, is_group=True))
+        self.assertEqual(_whatsapp_phone('120363411822115409@g.us'), '')
+
     def test_ai_send_is_rejected_after_human_takeover_without_calling_connect(self):
         """The final state/revision check must happen while the send is reserved."""
         row = {

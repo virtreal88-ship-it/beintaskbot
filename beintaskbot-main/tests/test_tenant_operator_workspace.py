@@ -161,3 +161,42 @@ def test_ticket_shows_effective_ai_state_without_changing_it(operator_db):
     assert tickets.detail(PROFILE,ticket)['ticket']['ai_state']=='active'
     assert operator_db.execute('SELECT count(*) AS n FROM saas_ai_conversation_state')[0]['n']==0
     operator_db.commit()
+
+
+def test_group_history_keeps_each_participant_and_outbound_author(operator_db):
+    group='120363411822115409@g.us'
+    operator_db.execute("UPDATE saas_connect_conversations SET conversation_id=%s,display_name='Night support',conversation_kind='group',phone='' WHERE tenant_id=%s::uuid AND lead_id=41",(group,A))
+    for direction,author,body,raw in [
+        ('incoming','Leyla','First request',{'participantJid':'994501234567@s.whatsapp.net'}),
+        ('incoming','Samir','Second request',{'participantJid':'994551112233@s.whatsapp.net'}),
+        ('outgoing','AI Agent','AI response',{'run_id':'run-1'}),
+        ('outgoing','Operator','Operator response',{'source':'connect'}),
+    ]:
+        operator_db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,author_name,body,raw)
+          VALUES(%s,%s::uuid,41,%s,%s,%s,%s,%s,%s::jsonb)''',
+          (str(uuid.uuid4()),A,str(uuid.uuid4()),'connect:'+CA,direction,author,body,json.dumps(raw)))
+    operator_db.commit()
+    page=dialogs.history(PROFILE,'connect',41,CA,group)
+    assert page['dialog']['customer_name']=='Night support'
+    assert page['dialog']['customer_kind']=='group'
+    by_body={message['body']:message for message in page['messages']}
+    assert by_body['First request']['author_type']=='participant'
+    assert by_body['First request']['participant_jid']=='994501234567@s.whatsapp.net'
+    assert by_body['Second request']['author_name']=='Samir'
+    assert by_body['AI response']['direction']=='outgoing' and by_body['AI response']['author_type']=='ai'
+    assert by_body['Operator response']['direction']=='outgoing' and by_body['Operator response']['author_type']=='operator'
+
+
+def test_dialogue_actions_are_derived_from_availability_not_only_storage_state(operator_db):
+    base={'provider':'connect','conversation_id':'client','channel_active':True,'unambiguous':True,'connected':True,
+          'tenant_status':'active','company_enabled':True,'company_emergency_stop':False,'agent_id':AGENT,
+          'agent_enabled':True,'state':'active','reason':'','latest_job_state':'queued','latest_job_error':'',
+          'customer_name':'Client','phone':'994501234567','conversation_kind':'','updated_at':None,'display_state':'active'}
+    active=dialogs.decorate(base)
+    assert active['ai_availability']=='available' and active['available_actions']==['pause','handoff']
+    paused=dialogs.decorate({**base,'state':'paused','reason':'manager_pause'})
+    assert paused['available_actions']==['resume']
+    blocked=dialogs.decorate({**base,'company_emergency_stop':True})
+    assert blocked['ai_availability']=='blocked' and blocked['available_actions']==[]
+    failed=dialogs.decorate({**base,'latest_job_state':'failed','latest_job_error':'connect_policy_blocked'})
+    assert failed['display_state']=='error' and failed['available_actions']==[]

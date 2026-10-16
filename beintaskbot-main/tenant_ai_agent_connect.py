@@ -24,11 +24,16 @@ def _whatsapp_phone(conversation_id: str) -> str:
     contact identity even though Connect does not expose a separate contact
     object in every inbound webhook.
     """
-    candidate = str(conversation_id or '').split('@', 1)[0]
+    jid = str(conversation_id or '')
+    # Evolution's group ids may begin with digits too. Only a direct WhatsApp
+    # JID can prove that the prefix is a customer phone number.
+    if '@' in jid and not jid.endswith('@s.whatsapp.net'):
+        return ''
+    candidate = jid.split('@', 1)[0]
     return candidate if re.fullmatch(r'[1-9][0-9]{5,18}', candidate) else ''
 
 
-def scope_matches(scopes, channel_id: str) -> bool:
+def scope_matches(scopes, channel_id: str, *, is_group=False) -> bool:
     """A Connect scope is explicit; legacy Kommo scopes never bleed across."""
     for scope in scopes if isinstance(scopes, list) else []:
         if not isinstance(scope, dict):
@@ -36,7 +41,8 @@ def scope_matches(scopes, channel_id: str) -> bool:
         if str(scope.get('provider') or '').casefold() != 'connect':
             continue
         selected = str(scope.get('channel_id') or '').casefold()
-        if not selected or selected == str(channel_id or '').casefold():
+        if (not selected or selected == str(channel_id or '').casefold()) and (
+                not is_group or scope.get('allow_group_messages') is True):
             return True
     return False
 
@@ -89,7 +95,7 @@ def allowed(job: dict, connection=None) -> bool:
 
 
 def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
-            message_id: str, event_id: str, text: str, message_type: str = 'text', connection=None) -> int:
+            message_id: str, event_id: str, text: str, message_type: str = 'text', is_group=False, connection=None) -> int:
     """Queue one inbound Connect message for all matching tenant agents.
 
     The webhook event table + job primary key make Connect retries and Evolution
@@ -136,9 +142,11 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
               WHERE tenant_id=%s::uuid ORDER BY created_at,id''', (tenant,))
             tenant_agents = cur.fetchall()
             enabled_agents = [row for row in tenant_agents if row.get('enabled') is True]
-            agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id)]
+            channel_agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id)]
+            agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id, is_group=is_group)]
             if not agents:
-                reason = 'agent_not_found' if not tenant_agents else 'agent_disabled' if not enabled_agents else 'no_connect_scope'
+                reason = ('agent_not_found' if not tenant_agents else 'agent_disabled' if not enabled_agents else
+                          'group_messages_not_allowed' if is_group and channel_agents else 'no_connect_scope')
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code=%s WHERE tenant_id=%s::uuid AND fingerprint=%s", (reason, tenant, fingerprint))
             if not agents:
                 if connection is None:
