@@ -62,8 +62,10 @@ Cherry-picks had no textual conflicts. Integration fixes address behavior:
 
 Full Python suite: 1293 passed, 4 skipped, 240 subtests passed.
 The four skipped cases are existing Kommo webhook tests disabled on Windows
-because of sandbox loopback socketpair behavior; run them on Linux before broad
-rollout. No PostgreSQL integration suite was skipped.
+because of sandbox loopback socketpair behavior. A separate bounded run invoked
+their original test methods without the platform skip wrapper: all five tests
+in that module passed, including all four skipped cases. No test assertions were
+changed for this extra verification. No PostgreSQL integration suite was skipped.
 After the final lock-order change, all 94 affected boundary tests and 14 subtests
 passed again. Isolated PGlite ran real PostgreSQL DDL, SQL, FK constraints,
 unique indexes, commits and rollbacks; no production database was contacted.
