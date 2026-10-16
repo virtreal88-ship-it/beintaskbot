@@ -96,6 +96,8 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                             )
                     else:
                         result = await asyncio.to_thread(configuration_options, profile)
+                elif resource == 'handoffs':
+                    result = await asyncio.to_thread(list_handoffs, profile, request.query.get('limit', 50))
                 elif resource == 'drafts':
                     result = await asyncio.to_thread(list_drafts, profile, limit=request.query.get('limit', 50))
                 elif resource == 'triggers':

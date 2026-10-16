@@ -864,12 +864,7 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
 
 
 def read_conversation_for_lead(profile, lead_id):
-    """Resolve one AI-owned Kommo conversation for the open tenant-scoped lead.
-
-    This intentionally returns nothing until the queue has associated an
-    enabled agent with the conversation.  The browser never supplies a chat
-    id, so it cannot pause another company's or another lead's dialogue.
-    """
+    """Resolve one tenant-owned transport route; ambiguous lead IDs fail closed."""
     try:
         lead = int(lead_id)
     except (TypeError, ValueError):
@@ -880,16 +875,23 @@ def read_conversation_for_lead(profile, lead_id):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, _ = _authorize(cur, profile)
-            cur.execute('''SELECT j.conversation_id,cs.state,cs.reason,cs.revision
+            cur.execute("""SELECT DISTINCT ON (j.provider) j.provider,j.channel_id,j.conversation_id,
+                cs.state,cs.reason,cs.revision
               FROM saas_ai_agent_jobs j
               LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider
                 AND cs.conversation_id=j.conversation_id
-              WHERE j.tenant_id=%s::uuid AND j.provider='kommo' AND j.lead_id=%s
-              ORDER BY j.updated_at DESC LIMIT 1''', (tenant, lead))
-            row = cur.fetchone()
-    if not row:
+              WHERE j.tenant_id=%s::uuid AND j.lead_id=%s
+                AND (j.provider='kommo' OR (j.provider='connect' AND EXISTS (
+                  SELECT 1 FROM saas_connect_conversations c WHERE c.tenant_id=j.tenant_id
+                    AND c.lead_id=j.lead_id AND c.conversation_id=j.conversation_id
+                    AND c.connect_channel_id::text=j.channel_id)))
+              ORDER BY j.provider,j.updated_at DESC LIMIT 2""", (tenant, lead))
+            rows = cur.fetchall()
+    if len(rows) != 1:
         return None
+    row = rows[0]
     return {'conversation_id': str(row['conversation_id']), 'state': row.get('state') or 'active',
+            'provider': row['provider'], 'channel_id': row.get('channel_id') or '',
             'reason': row.get('reason') or '', 'revision': int(row.get('revision') or 0)}
 
 

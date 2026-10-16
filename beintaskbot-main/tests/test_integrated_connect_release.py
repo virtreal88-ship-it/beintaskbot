@@ -262,3 +262,25 @@ def test_operator_webhook_and_human_mode_commit_together_and_retry_after_resume_
     assert transport.ingest(raw,'mock-signature',event)
     assert state(db)=='active'
     f['send'].assert_not_called()
+
+
+def test_connect_lead_control_resolves_provider_channel_and_enforces_tenant(flow):
+    f=flow
+    route=agents.read_conversation_for_lead(PROFILE,41)
+    assert route['provider']=='connect'
+    assert route['channel_id']==CA
+    assert route['conversation_id']=='client'
+    assert agents.read_conversation_for_lead({'tenant_id':B,'telegram_id':22},41) is None
+
+
+def test_ambiguous_cross_provider_lead_control_fails_closed(flow):
+    f=flow;db=f['db']
+    db.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,channel_id,conversation_id,lead_id,state,revision,event_fingerprint,talk_id,chat_id,due_at) SELECT tenant_id,agent_id,'kommo','other-channel','other-chat',lead_id,state,revision,event_fingerprint,talk_id,chat_id,due_at FROM saas_ai_agent_jobs LIMIT 1")
+    db.commit()
+    assert agents.read_conversation_for_lead(PROFILE,41) is None
+
+    db.execute("DELETE FROM saas_ai_agent_jobs WHERE provider='connect'")
+    db.commit()
+    route=agents.read_conversation_for_lead(PROFILE,41)
+    assert route['provider']=='kommo'
+    assert route['conversation_id']=='other-chat'

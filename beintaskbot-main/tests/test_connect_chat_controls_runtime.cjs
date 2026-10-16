@@ -1,0 +1,20 @@
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const source=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant-ai-agents.js'),'utf8');
+const start=source.indexOf('async function syncChatAgentControl(');
+const end=source.indexOf("document.addEventListener('tenant-profile'",start);
+const fn=source.slice(start,end);
+(async()=>{
+ const dom=new JSDOM('<div class="wa-composer"><textarea id="deal-chat-input"></textarea></div>',{url:'https://crm.test',runScripts:'outside-only'});
+ const w=dom.window,calls=[],actions=[]; w.history.replaceState({leadId:41},'');
+ w.api=async path=>{calls.push(path);return path.includes('for-lead')?{conversation_id:'client@s.whatsapp.net',provider:'connect',channel_id:'channel-a'}:{state:'active',agent_name:'Agent'}};
+ w.setConversationAction=async(...args)=>actions.push(args);w.loadHandoffs=async()=>{};
+ w.dialogStateMeta=state=>({state,label:state});w.dialogReason=()=>'';w.dialogTime=String;
+ w.eval("let chatControlInput=null,chatControlLead='',chatControlAttempt=0,chatControlEpoch=0,testMode=null;const $=id=>document.getElementById(id);"+fn+';window.runSync=syncChatAgentControl;');
+ await w.runSync();
+ assert.match(calls[1],/provider=connect/);assert.match(calls[1],/channel_id=channel-a/);
+ await w.document.querySelector('button').onclick();
+ assert.equal(actions[0][0],'client@s.whatsapp.net');assert.equal(actions[0][1],'pause');
+ assert.equal(actions[0][2].provider,'connect');assert.equal(actions[0][2].channelId,'channel-a');
+ w.close();console.log('PASS: Connect chat state and Pause retain the tenant-owned provider/channel route.');
+})().catch(e=>{console.error(e);process.exitCode=1});
