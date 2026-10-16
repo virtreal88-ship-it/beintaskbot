@@ -78,8 +78,8 @@
     const sendAllowed=route.can_send&&hasRight('dialogs');$('sendChat').disabled=!sendAllowed;$('chatText').disabled=!sendAllowed;
     if(sendAllowed&&window.tenantChatSend)window.tenantChatSend.bind({api:rawApi,identity:who,leadId:route.lead_id,me:member,provider:route.provider,isCurrent:same,reload:async()=>{if(same())await openDialog(route);}});
     else $('operatorSendReason').textContent=t(route.send_block_reason||'noAccess');
-    $('operatorEarlier').onclick=async()=>{const button=$('operatorEarlier');button.disabled=true;try{const query=historyQuery(route);query.set('before',page.next_before);const earlier=await api('dialogs/history?'+query);if(!same())return;$('chatRows').insertAdjacentHTML('afterbegin',messageMarkup(earlier.messages));document.dispatchEvent(new CustomEvent('tenant-chat-history-added'));page.next_before=earlier.next_before;button.hidden=!page.next_before;}catch(error){if(same())$('operatorChatError').textContent=error.message;}finally{if(button.isConnected)button.disabled=false;}};
-    document.dispatchEvent(new CustomEvent('tenant-chat-loaded'));
+    $('operatorEarlier').onclick=async()=>{const button=$('operatorEarlier');button.disabled=true;try{const query=historyQuery(route);query.set('before',page.next_before);const earlier=await api('dialogs/history?'+query);if(!same())return;$('chatRows').insertAdjacentHTML('afterbegin',messageMarkup(earlier.messages));document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));page.next_before=earlier.next_before;button.hidden=!page.next_before;}catch(error){if(same())$('operatorChatError').textContent=error.message;}finally{if(button.isConnected)button.disabled=false;}};
+    document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
     $('chatText').focus();
   }
   async function changeState(route,action){

@@ -70,6 +70,8 @@
   document.addEventListener('tenant-chat-open',event=>{clear();lead=event.detail.lead_id;});
   document.addEventListener('tenant-chat-history-reset',clear);
   document.addEventListener('tenant-chat-close',clear);
+  // Operator history only needs preview binding; legacy loaded events carry a different contract.
+  document.addEventListener('tenant-chat-attachments-ready',bind);
   document.addEventListener('tenant-chat-loaded',bind);
   document.addEventListener('tenant-chat-history-added',bind);
   document.getElementById('closeModal')?.addEventListener('click',clear);

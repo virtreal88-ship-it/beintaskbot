@@ -8,7 +8,7 @@ const settle=async()=>{for(let i=0;i<15;i++)await new Promise(r=>setImmediate(r)
 const A='00000000-0000-0000-0000-000000000101',C='00000000-0000-0000-0000-000000000201';
 const pic=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j7l8AAAAASUVORK5CYII=','base64');
 const sound=Buffer.alloc(1644);sound.write('RIFF');sound.writeUInt32LE(1636,4);sound.write('WAVEfmt ',8);sound.writeUInt32LE(16,16);sound.writeUInt16LE(1,20);sound.writeUInt16LE(1,22);sound.writeUInt32LE(8000,24);sound.writeUInt32LE(16000,28);sound.writeUInt16LE(2,32);sound.writeUInt16LE(16,34);sound.write('data',36);sound.writeUInt32LE(1600,40);
-async function setup(previous=false,group=false){
+async function setup(previous=false,group=false,shared=false){
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app/dialogs?site_lang=ru',runScripts:'outside-only'}),w=dom.window,calls=[],revoked=[],errors=[];
  w.addEventListener('error',e=>errors.push(e.error));w.Blob=Blob;w.AbortController=AbortController;w.URL.createObjectURL=()=> 'blob:test/'+Math.random();w.URL.revokeObjectURL=v=>revoked.push(v);
  const member={tenant_id:A,telegram_id:33,role:'worker',permissions:['dialogs'],active:true};
@@ -25,18 +25,21 @@ async function setup(previous=false,group=false){
    let sent=false;return {ok:true,headers:new Headers({'Content-Type':audio?'audio/wav':'image/png','Content-Length':String(bytes.length)}),body:{getReader:()=>({read:async()=>sent?{done:true}:(sent=true,{done:false,value:new Uint8Array(bytes)}),cancel:async()=>{}})}};
   }
   if(String(url).includes('/api/platform/me'))value=profile;
-  else if(String(url).includes('/dialogs/history'))value={success:true,result:{dialog:route,messages,next_before:null}};
+  else if(String(url).includes('/dialogs/history'))value={success:true,result:{dialog:route,messages,next_before:shared?'older':null}};
   else if(String(url).includes('/dialogs'))value={success:true,result:{dialogs:[route],channels:[],agents:[],attention_count:1,next_offset:null}};
   else throw Error('Unexpected side effect: '+url);
   jsonBytes+=Buffer.byteLength(JSON.stringify(value));return {ok:true,json:async()=>value};
  };
- for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-chat-attachments.js','docs/tenant-operator-dialogs.js'])w.eval(previous?baseline(file):read(file));
+ for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-chat-attachments.js',...(shared?['docs/tenant-chat-ai.js','docs/tenant-chat-history.js','docs/tenant-chat-import.js']:[]),'docs/tenant-operator-dialogs.js'])w.eval(previous?baseline(file):read(file));
  w.document.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:profile}));await settle();
  const listCalls=calls.length,listBytes=jsonBytes;
  await w.tenantOperator.openDialog(route);await settle();
  return {dom,w,calls,revoked,errors,route,profile,listCalls,listBytes,historyCalls:calls.length-listCalls,historyBytes:jsonBytes-listBytes,get mediaBytes(){return mediaBytes},setUnavailable:()=>unavailable=true};
 }
 (async()=>{
+ const shared=await setup(false,true,true);assert.deepEqual(shared.errors,[]);
+ await shared.w.document.getElementById('operatorEarlier').onclick();await settle();assert.deepEqual(shared.errors,[]);
+ assert.equal(shared.mediaBytes,0);assert.ok(shared.calls.every(c=>c.method==='GET'));shared.dom.window.close();
  const before=await setup(true,true);assert.equal(before.mediaBytes,0);assert.equal(before.w.document.querySelectorAll('[data-chat-attachment]').length,0);
  const after=await setup(false,true),{w}=after;
  assert.equal(after.mediaBytes,0);assert.equal(after.historyCalls,before.historyCalls);assert.equal(after.listCalls,before.listCalls);assert.equal(after.listBytes,before.listBytes);
