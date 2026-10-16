@@ -20,7 +20,7 @@ class Store(unittest.TestCase):
             {'tenant_platform', 'tenant_chat_send_schema', 'tenant_policy'})
         self.person = {**SESSION, 'active': True, 'tenant_status': 'active', 'role': 'manager'}
         self.integration = {'status': 'connected', 'secrets': b'encrypted', 'account_domain': 'client.kommo.com', 'connected_at': 'version'}
-        self.authority_rows = [self.person, {'tenant_id': TENANT, 'kommo_lead_id': 7}, self.integration]
+        self.authority_rows = [self.person, {'tenant_id': TENANT, 'kommo_lead_id': 7}, None, self.integration]
 
     def reserve(self, existing=None, busy=None):
         self.cur.fetchone.side_effect = [*self.authority_rows, existing, busy]

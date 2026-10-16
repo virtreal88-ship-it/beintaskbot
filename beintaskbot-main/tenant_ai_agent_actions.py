@@ -33,14 +33,19 @@ def matching_triggers(triggers,text,*,first_inquiry=False,phone=''):
 
 
 def handoff(job,reason):
+    from tenant_support_inbox_store import handoff_ticket, summarize_created, handoff_recorded
+    ticket = None
     tenant=str(job['tenant_id']);chat=str(job['chat_id'])
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            if handoff_recorded(cur, job):
+                return False
             cur.execute('''UPDATE saas_ai_conversation_state SET state='human',reason=%s,revision=revision+1,updated_at=now()
               WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND state<>'human' RETURNING agent_id''',
               (str(reason)[:240],tenant,job['provider'],chat))
             changed=cur.fetchone()
+            ticket = handoff_ticket(cur, job, reason)
             if changed:
                 cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='human_handoff',updated_at=now() WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND state IN ('queued','processing')",(tenant,job['provider'],chat))
                 cur.execute("UPDATE saas_ai_agent_runs SET state='superseded',updated_at=now() WHERE tenant_id=%s::uuid AND event_fingerprint=%s AND state='generating'",(tenant,job['event_fingerprint']))
@@ -51,4 +56,5 @@ def handoff(job,reason):
                       VALUES(%s,%s::uuid,%s,%s,'AI: менеджер должен ответить',%s,%s)''',
                       (uuid.uuid4(),tenant,member['telegram_id'],'ai_handoff:'+chat+':'+job['event_fingerprint'],str(reason)[:240],'/app?view=deals&deal_id='+str(job['lead_id'])))
         conn.commit()
+    summarize_created(tenant, ticket)
     return bool(changed)

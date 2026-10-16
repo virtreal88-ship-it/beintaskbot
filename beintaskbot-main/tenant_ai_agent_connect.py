@@ -7,6 +7,7 @@ was durably written into the tenant's own CRM history.
 from __future__ import annotations
 
 import hashlib
+from contextlib import nullcontext
 import re
 
 from tenant_ai_agents_schema import ensure_schema
@@ -67,8 +68,12 @@ def allowed(job: dict) -> bool:
             settings = cur.fetchone() or {}
             cur.execute('''SELECT 1 FROM saas_tenant_integrations i JOIN saas_connect_channels c
               ON c.tenant_id=i.tenant_id AND c.connect_channel_id=%s::uuid AND c.active=TRUE
-              WHERE i.tenant_id=%s::uuid AND i.provider='connect' AND i.status='connected' FOR SHARE OF i,c''',
-                        (channel, tenant))
+              WHERE i.tenant_id=%s::uuid AND i.provider='connect' AND i.status='connected'
+                AND NOT EXISTS (SELECT 1 FROM saas_connect_conversations other
+                  WHERE other.tenant_id=i.tenant_id AND other.conversation_id=%s
+                    AND other.connect_channel_id<>c.connect_channel_id)
+              FOR SHARE OF i,c''',
+                        (channel, tenant, conversation))
             connected = bool(cur.fetchone())
             tenant_active = tenant_status_allows_ai(settings.get('status'), 'connect')
             if settings.get('operating_mode') == 'active':
@@ -187,9 +192,12 @@ def finish_sent_after_reply_handoff(job: dict, reservation: dict, message_id: st
     transaction closes the old gap where a ``handoff_after_reply`` trigger
     could send a message but leave the AI active after a process restart.
     """
+    from tenant_support_inbox_store import handoff_ticket, summarize_created, handoff_recorded
+    ticket = None
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            recorded = handoff_recorded(cur, job)
             cur.execute("UPDATE saas_ai_agent_runs SET state='completed',result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",
                         (_json({'send_state': 'accepted', 'message_id': str(message_id)}),
                          job['tenant_id'], reservation['run_id']))
@@ -197,15 +205,23 @@ def finish_sent_after_reply_handoff(job: dict, reservation: dict, message_id: st
                         (job['tenant_id'], job['agent_id'], job['conversation_id'], job['lease_token'], job['revision']))
             cur.execute("UPDATE saas_tenant_webhook_events SET state='completed',completed_at=now(),error_code='' WHERE tenant_id=%s::uuid AND fingerprint=%s",
                         (job['tenant_id'], job['event_fingerprint']))
+            # The send transaction may already have committed this handoff.
+            # A repeated callback must never undo a subsequent explicit Resume.
+            if recorded:
+                conn.commit()
+                return True
             # Do not overwrite a real operator takeover that won the race.
             cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state='active' RETURNING revision",
                         (job['tenant_id'], job['conversation_id']))
-            if cur.fetchone():
+            changed = cur.fetchone()
+            ticket = handoff_ticket(cur, job, 'trigger_reply_sent_then_handoff')
+            if changed:
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='trigger_reply_sent_then_handoff' WHERE tenant_id=%s::uuid AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state IN ('queued','processing'))",
                             (job['tenant_id'], job['tenant_id'], job['conversation_id']))
                 cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='trigger_reply_sent_then_handoff',updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state IN ('queued','processing')",
                             (job['tenant_id'], job['conversation_id']))
         conn.commit()
+    summarize_created(job['tenant_id'], ticket)
     return True
 
 
@@ -214,21 +230,34 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT external_id,direction,body,message_type,media_url,happened_at
-              FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
-                AND channel=%s ORDER BY happened_at,id LIMIT 80''', (tenant, int(lead_id), 'connect:' + channel_id))
+            cur.execute('''SELECT * FROM (
+              SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,m.id,
+                COALESCE(v.state,'') AS voice_state,
+                NOT EXISTS (SELECT 1 FROM saas_connect_conversations c
+                  JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id
+                    AND cs.provider='connect' AND cs.conversation_id=c.conversation_id
+                  WHERE c.tenant_id=m.tenant_id AND 'connect:' || c.connect_channel_id::text=m.channel
+                    AND c.lead_id=m.kommo_lead_id AND m.created_at<=cs.resumed_at) AS voice_eligible,
+                CASE WHEN v.state='completed' THEN m.body ELSE '' END AS transcript
+              FROM saas_crm_messages m LEFT JOIN saas_connect_voice_receipts v
+                ON v.tenant_id=m.tenant_id AND 'connect:' || v.channel_id::text=m.channel AND v.external_id=m.external_id
+              WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s
+                AND m.channel=%s ORDER BY m.happened_at DESC,m.id DESC LIMIT 80
+              ) recent ORDER BY happened_at,id''', (tenant, int(lead_id), 'connect:' + channel_id))
             rows = cur.fetchall()
     return [{'external_id': str(row.get('external_id') or '').removeprefix('connect:'),
              'direction': str(row.get('direction') or ''), 'body': str(row.get('body') or ''),
              'message_type': str(row.get('message_type') or 'text'), 'media_url': str(row.get('media_url') or ''),
              'has_attachment': bool(row.get('media_url')) or str(row.get('message_type') or 'text') != 'text',
              'happened_at': row['happened_at'].isoformat() if row.get('happened_at') else '',
+             'transcript': str(row.get('transcript') or ''), 'voice_state': str(row.get('voice_state') or ''),
+             'voice_eligible': row.get('voice_eligible') is not False,
              'channel': channel_id} for row in rows]
 
 
-def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation_id: str) -> None:
-    """Human replies stop pending Connect work before it can send."""
-    with _connect() as conn:
+def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation_id: str, *, connection=None) -> None:
+    """Human replies stop pending work atomically with the caller's event receipt."""
+    with (nullcontext(connection) if connection is not None else _connect()) as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,state,reason)
@@ -238,4 +267,5 @@ def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation
             cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',lease_token=NULL,lease_until=NULL,
               error_code='manager_replied',updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
                 AND conversation_id=%s AND state IN ('queued','processing')''', (tenant, conversation_id))
-        conn.commit()
+        if connection is None:
+            conn.commit()

@@ -169,6 +169,15 @@ def ensure_schema(conn):
               FOREIGN KEY(tenant_id,event_fingerprint) REFERENCES saas_tenant_webhook_events(tenant_id,fingerprint) ON DELETE CASCADE)''')
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_ai_agent_runs_usage_idx
               ON saas_ai_agent_runs(tenant_id,created_at) WHERE state IN ('generating','completed','unknown')''')
+            cur.execute("ALTER TABLE saas_ai_agent_runs ADD COLUMN IF NOT EXISTS reserved_calls INTEGER NOT NULL DEFAULT 1")
+            cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_voice_receipts(
+              tenant_id UUID NOT NULL,channel_id UUID NOT NULL,external_id TEXT NOT NULL,
+              run_id UUID NOT NULL,model TEXT NOT NULL,
+              state TEXT NOT NULL CHECK(state IN ('processing','completed','failed')),
+              error_code TEXT NOT NULL DEFAULT '',created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              PRIMARY KEY(tenant_id,channel_id,external_id),
+              FOREIGN KEY(tenant_id,external_id) REFERENCES saas_crm_messages(tenant_id,external_id) ON DELETE CASCADE)''')
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_agent_token_usage(
               tenant_id UUID NOT NULL,
               id UUID NOT NULL,
@@ -252,5 +261,9 @@ def ensure_schema(conn):
               UNIQUE(tenant_id,event_fingerprint,action_key),
               FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE,
               FOREIGN KEY(tenant_id,event_fingerprint) REFERENCES saas_tenant_webhook_events(tenant_id,fingerprint) ON DELETE CASCADE)''')
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE saas_ai_conversation_state ADD COLUMN IF NOT EXISTS resumed_at TIMESTAMPTZ")
+        from tenant_support_inbox_schema import create_schema
+        create_schema(conn)
         conn.commit()
         _ready = True

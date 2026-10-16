@@ -166,6 +166,7 @@
     }catch(e){if(revision===chatRevision&&identity===chatIdentity())alert(e.message);}
   }
   function renderProfile(member){if(!member)return;const roles={owner:'Administrator',manager:'Menecer',worker:'İcraçı'};$('profileName').textContent=member.display_name||'İstifadəçi';$('profileCompany').textContent=member.tenant_name||'—';$('profileRole').textContent=roles[member.role]||member.role||'—';$('company').textContent=member.tenant_name||'Şirkət'}
+  document.addEventListener('tenant-support-open',event=>openDeal(Number(event.detail.lead_id)));
   document.addEventListener('tenant-duplicate-open',event=>openDeal(Number(event.detail.lead_id)));
   async function loadProfile(){try{const d=await api('/api/platform/me');state.me=d.member;renderProfile(d.member)}catch(e){alert(e.message)}}
   async function loadConnectAccess(){try{const d=await api('/api/platform/connect/access');$('connectEntitlement').value=d.entitlement.status||'inactive';$('connectAdminAccess').checked=!!d.entitlement.admin_access;$('connectAccess').innerHTML=(d.members||[]).map(m=>`<div class="member"><div><b>${esc(m.display_name||'Adsız')}</b><small>CRM: ${esc(m.crm_role)} · Connect: ${m.connect_active?esc(m.connect_role||'—'):'giriş yoxdur'}</small></div><div><select data-connect-role="${m.telegram_id}"><option value="">Giriş yoxdur</option><option value="owner">Owner</option><option value="admin">Admin</option><option value="viewer">Viewer</option></select><button class="outline" data-save-connect="${m.telegram_id}">Yadda saxla</button></div></div>`).join('')||'<span class="sub">Əməkdaş yoxdur.</span>';$('connectAccess').querySelectorAll('[data-save-connect]').forEach(b=>b.onclick=async()=>{const actor_id=b.dataset.saveConnect,role=$('connectAccess').querySelector(`[data-connect-role="${actor_id}"]`).value;await api('/api/platform/connect/access',{method:'POST',body:JSON.stringify(role?{action:'member',actor_id,role}:{action:'remove',actor_id})});loadConnectAccess()});for(const member of d.members||[]){const select=$('connectAccess').querySelector(`[data-connect-role="${member.telegram_id}"]`);if(select)select.value=member.connect_active?(member.connect_role||''):''}}catch(e){$('connectAccess').textContent=e.message}}
@@ -211,6 +212,7 @@
 <script src="/assets/tenant-chat-attachments.js"></script>
 <script src="/assets/tenant-chat-send.js"></script>
 <script src="/assets/tenant-ai-agents.js"></script>
+<script src="/assets/tenant-support-inbox.js"></script>
 <script src="/assets/tenant-chat-import.js"></script>
 <script src="/assets/tenant-tasks.js"></script>
 <script src="/assets/tenant-task-completion.js"></script>

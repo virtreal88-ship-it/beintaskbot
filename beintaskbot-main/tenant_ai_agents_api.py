@@ -200,7 +200,8 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                             message_id = await asyncio.to_thread(send_ai_reply_if_active,
                                 reserved['tenant_id'], reserved['lead_id'], reserved['channel_id'],
                                 reserved['conversation_id'], reserved['draft'], reserved['id'],
-                                reserved['expected_revision'])
+                                reserved['expected_revision'], **({'handoff_fingerprint':reserved['source_fingerprint']}
+                                    if reserved.get('handoff_after_send') else {}))
                             if not message_id:
                                 raise TenantLinearError('Qaralama köhnəlib və ya dialoq menecerə verilib.', 409)
                             result = {'state': 'accepted', 'message_id': message_id, 'origin': 'connect'}

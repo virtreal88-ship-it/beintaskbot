@@ -26,6 +26,7 @@ ASSETS = (
     ('/assets/tenant-deal-completion.js', 'tenant-deal-completion.js', 'no-store'),
     ('/assets/tenant-diagnostics.js', 'tenant-diagnostics.js', 'no-store'),
     ('/assets/tenant-chat-send.js', 'tenant-chat-send.js', 'no-store'),
+    ('/assets/tenant-support-inbox.js', 'tenant-support-inbox.js', 'no-store'),
     ('/assets/tenant-ai-agents.js', 'tenant-ai-agents.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-workflow.js', 'tenant-workflow.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-chakra-ui.js', 'tenant-chakra-ui.js', 'no-cache, max-age=0, must-revalidate'),

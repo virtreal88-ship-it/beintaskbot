@@ -169,6 +169,9 @@ def sync_webhook_subscriptions() -> int:
     updated = 0
     with _connect() as conn:
         _schema(conn)
+        if event_type == 'message.outbound.observed':
+            from tenant_ai_agents_schema import ensure_schema
+            ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT tenant_id,secrets FROM saas_tenant_integrations WHERE provider='connect' AND status='connected' AND secrets IS NOT NULL")
             rows = cur.fetchall()
@@ -253,9 +256,9 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                   VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,'WhatsApp operator',%s,%s,'',%s::timestamptz,%s::jsonb)
                   ON CONFLICT(tenant_id,external_id) DO NOTHING''',
                             (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,str(data.get('text') or ''),str(data.get('type') or 'text'),occurred,_json(data)))
-                conn.commit()
                 from tenant_ai_agent_connect import mark_operator_reply
-                mark_operator_reply(tenant, lead_id, channel_id, conversation)
+                mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn)
+                conn.commit()
                 return True
             # A previous inbound delivery may have committed the durable CRM
             # copy just before a transient queue failure. Do not lose the AI
@@ -341,7 +344,7 @@ def send_ai_reply(route: dict, text: str, run_id: str) -> str:
 
 
 def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversation_id: str,
-                            text: str, run_id: str, expected_revision: int) -> str | None:
+                            text: str, run_id: str, expected_revision: int, *, handoff_fingerprint: str = '') -> str | None:
     """Serialize Connect send with an observed human takeover.
 
     The row lock intentionally spans the short Connect request. If the human
@@ -351,6 +354,7 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
     arrives only after an already accepted AI request cannot be recalled; that
     ordering is recorded rather than hidden.
     """
+    ticket = None
     with _connect() as conn:
         _schema(conn)
         with conn.cursor() as cur:
@@ -360,6 +364,8 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
               JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
               JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id
               WHERE c.tenant_id=%s::uuid AND c.lead_id=%s AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s
+                AND NOT EXISTS (SELECT 1 FROM saas_connect_conversations other WHERE other.tenant_id=c.tenant_id
+                  AND other.conversation_id=c.conversation_id AND other.connect_channel_id<>c.connect_channel_id)
               FOR UPDATE OF c,cs''', (tenant, int(lead_id), channel_id, conversation_id))
             row = cur.fetchone()
             if (not row or row.get('state') != 'active' or int(row.get('revision') or 0) != int(expected_revision)):
@@ -378,19 +384,32 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
             cur.execute('''UPDATE saas_ai_conversation_state SET last_agent_message_id=%s,revision=revision+1,updated_at=now()
               WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND state='active' AND revision=%s''',
                         (str(message_id),tenant,conversation_id,int(expected_revision)))
+            if handoff_fingerprint:
+                from tenant_support_inbox_store import handoff_ticket
+                ticket = handoff_ticket(cur, {'tenant_id':tenant,'provider':'connect',
+                    'channel_id':channel_id,'conversation_id':conversation_id,
+                    'event_fingerprint':handoff_fingerprint}, 'trigger_reply_sent_then_handoff')
+                cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s",
+                            (tenant,conversation_id))
         conn.commit()
+    if ticket:
+        from tenant_support_inbox_store import summarize_created
+        summarize_created(tenant,ticket)
     return message_id
 
 
 def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_id: str, author: str = 'Operator') -> None:
     with _connect() as conn:
         _schema(conn)
+        if author != 'AI Agent':
+            from tenant_ai_agents_schema import ensure_schema
+            ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
                         (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending'})))
+        if author != 'AI Agent':
+            from tenant_ai_agent_connect import mark_operator_reply
+            mark_operator_reply(tenant, lead_id, str(route['channel_id']), str(route['conversation_id']), connection=conn)
         conn.commit()
-    if author != 'AI Agent':
-        from tenant_ai_agent_connect import mark_operator_reply
-        mark_operator_reply(tenant, lead_id, str(route['channel_id']), str(route['conversation_id']))
 

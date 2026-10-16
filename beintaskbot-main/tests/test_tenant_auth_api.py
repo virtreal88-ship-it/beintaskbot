@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 import tempfile
 import unittest
 from pathlib import Path
@@ -150,7 +151,7 @@ class TenantAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 404)
 
     async def test_unauthenticated_connect_sso_redirects_to_product_login_and_preserves_request(self):
-        self.context.sso = object()
+        self.api = handlers(replace(self.context,sso=object()))
         self.member.return_value = None
         handler = self.api["sso_authorize"]
         with self.assertRaises(Exception) as raised:
@@ -172,7 +173,7 @@ class TenantAuthTests(unittest.IsolatedAsyncioTestCase):
                                ("/connector/", "connector_page"),
                                ("/connector/login", "auth_page"),
                                ("/app", "app_page")):
-            self.assertIn(f'"{route}", auth_api["{handler}"]', source)
+            self.assertTrue(any(f'"{route}", auth_api[{quote}{handler}{quote}]' in source for quote in ('"', "'")))
         for legacy in ("handle_platform_register", "handle_platform_login", "handle_platform_logout",
                        "handle_platform_me", "serve_platform_onboarding", "redirect_platform_app"):
             self.assertNotIn(f"def {legacy}", source)

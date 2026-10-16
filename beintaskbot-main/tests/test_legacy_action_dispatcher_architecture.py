@@ -77,19 +77,21 @@ class LegacyActionDispatcherArchitectureTests(unittest.TestCase):
     def test_web_server_startup_only_composes_route_groups(self):
         functions = self._functions()
         startup = functions["start_webhook_server"]
-        self.assertLessEqual(startup.end_lineno - startup.lineno + 1, 15)
+        startup_source = ast.get_source_segment((ROOT / "bot.py").read_text(encoding="utf-8-sig"), startup)
+        self.assertIn("_register_legacy_web_routes(app_web)", startup_source)
+        self.assertIn("_register_tenant_web_routes(app_web)", startup_source)
+        self.assertNotIn("app_web.router.add_", startup_source)
+        self.assertIn("asyncio.create_task", startup_source)
         self.assertLessEqual(
             functions["_register_legacy_web_routes"].end_lineno
             - functions["_register_legacy_web_routes"].lineno
             + 1,
             130,
         )
-        self.assertLessEqual(
-            functions["_register_tenant_web_routes"].end_lineno
-            - functions["_register_tenant_web_routes"].lineno
-            + 1,
-            180,
-        )
+        registration = functions["_register_tenant_web_routes"]
+        self.assertFalse(any(isinstance(node, ast.Await) for node in ast.walk(registration)))
+        self.assertIn("register_feature_routes(", ast.get_source_segment(
+            (ROOT / "bot.py").read_text(encoding="utf-8-sig"), registration))
 
     def test_waiting_queue_http_handler_offloads_legacy_sync_work(self):
         functions = self._functions()
