@@ -51,6 +51,56 @@ def run_without_event_loop(coroutine):
 
 
 class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
+    def test_multipart_knowledge_upload_keeps_the_bound_agent_and_retry_key(self):
+        profile = {'tenant_id': '00000000-0000-0000-0000-000000000101', 'telegram_id': 42}
+        captured = Mock(return_value={'id': 'source-a'})
+
+        class Part:
+            def __init__(self, name, value, filename=''):
+                self.name, self.filename, self.chunks = name, filename, [value, b'']
+
+            async def read_chunk(self, _size):
+                return self.chunks.pop(0)
+
+        class Reader:
+            def __init__(self, parts):
+                self.parts = iter(parts)
+
+            async def next(self):
+                return next(self.parts, None)
+
+        class Request:
+            method = 'POST'
+            content_type = 'multipart/form-data; boundary=test'
+            content_length = 1024
+            headers = {'Origin': 'https://crm.pro.az'}
+            query = {}
+            match_info = {}
+
+            async def multipart(self):
+                return Reader([
+                    Part('file', b'Router instructions', 'BeinSystems.txt'),
+                    Part('title', b'BeinSystems'),
+                    Part('agent_id', b'00000000-0000-0000-0000-000000000103'),
+                    Part('setup_key', b'night-wizard-retry-0001-kb-file'),
+                    Part('expected_tenant_id', profile['tenant_id'].encode()),
+                    Part('expected_user_id', str(profile['telegram_id']).encode()),
+                ])
+
+        handler, _ = load_handler(
+            _origin=lambda *_args: None,
+            _expected=lambda *_args: None,
+            extract=Mock(return_value=('BeinSystems.txt', 'txt', 'Router instructions')),
+            save_knowledge=captured,
+        )
+        response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az', Mock(), 'knowledge_upload')(Request()))
+        payload = json.loads(response.text)
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload['success'])
+        submitted = captured.call_args.args[1]
+        self.assertEqual(submitted['agent_id'], '00000000-0000-0000-0000-000000000103')
+        self.assertEqual(submitted['setup_key'], 'night-wizard-retry-0001-kb-file')
+
     def test_invalid_wizard_request_returns_a_field_key_instead_of_a_generic_azerbaijani_error(self):
         profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
 
