@@ -376,13 +376,13 @@ def list_knowledge(profile, source_id=None):
             tenant, _ = _authorize(cur, profile)
             if source_id:
                 source = identifier(source_id)
-                cur.execute('''SELECT id,tenant_id,title,kind,content,active,content_hash,created_at,updated_at
+                cur.execute('''SELECT id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at
                   FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid''', (tenant, source))
                 row = _row(cur.fetchone())
                 if not row:
                     raise TenantLinearError('Bilik mənbəyi tapılmadı.', 404)
                 return row
-            cur.execute('''SELECT id,tenant_id,title,kind,active,content_hash,created_at,updated_at,
+            cur.execute('''SELECT id,tenant_id,agent_id,title,kind,active,content_hash,created_at,updated_at,
               (SELECT count(*) FROM saas_ai_knowledge_chunks c WHERE c.tenant_id=s.tenant_id AND c.source_id=s.id) AS chunks
               FROM saas_ai_knowledge_sources s WHERE tenant_id=%s::uuid ORDER BY created_at DESC,id''', (tenant,))
             return [_row(row) for row in cur.fetchall()]
@@ -390,7 +390,9 @@ def list_knowledge(profile, source_id=None):
 
 def save_knowledge(profile, data, *, source_id=None):
     creating = source_id is None
-    patch = validate_knowledge(data, creating=creating)
+    if not creating and 'agent_id' in data:
+        raise TenantLinearError('Bilik mənbəyinin agenti dəyişdirilə bilməz.')
+    patch = validate_knowledge({k:v for k,v in data.items() if k!='agent_id'} if isinstance(data,dict) else data, creating=creating)
     if not patch:
         raise TenantLinearError('Dəyişdiriləcək bilik ayarı yoxdur.')
     with _connect() as conn:
@@ -398,14 +400,18 @@ def save_knowledge(profile, data, *, source_id=None):
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
             if creating:
+                bound_agent = identifier(data['agent_id']) if data.get('agent_id') else None
+                if bound_agent:
+                    cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE', (tenant,bound_agent))
+                    if not cur.fetchone(): raise TenantLinearError('Agent tapılmadı.',404)
                 cur.execute('SELECT count(*) AS total FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid', (tenant,))
                 if int((cur.fetchone() or {}).get('total') or 0) >= MAX_SOURCES:
                     raise TenantLinearError('Bilik mənbələrinin sayı həddə çatıb.')
                 source = uuid.uuid4()
                 digest = hashlib.sha256(patch['content'].encode('utf-8')).hexdigest()
-                cur.execute('''INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,active,content_hash,created_by)
-                  VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s) RETURNING id,tenant_id,title,kind,content,active,content_hash,created_at,updated_at''',
-                  (source, tenant, patch['title'], patch['kind'], patch['content'], patch['active'], digest, actor))
+                cur.execute('''INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,active,content_hash,created_by,agent_id)
+                  VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid) RETURNING id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at''',
+                  (source, tenant, patch['title'], patch['kind'], patch['content'], patch['active'], digest, actor, bound_agent))
                 result = _row(cur.fetchone())
             else:
                 source = identifier(source_id)
@@ -418,7 +424,7 @@ def save_knowledge(profile, data, *, source_id=None):
                 digest = hashlib.sha256(merged['content'].encode('utf-8')).hexdigest()
                 cur.execute('''UPDATE saas_ai_knowledge_sources SET title=%s,kind=%s,content=%s,active=%s,
                   content_hash=%s,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid
-                  RETURNING id,tenant_id,title,kind,content,active,content_hash,created_at,updated_at''',
+                  RETURNING id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at''',
                   (merged['title'], merged['kind'], merged['content'], merged['active'], digest, tenant, source))
                 result = _row(cur.fetchone())
             if creating or 'content' in patch or (not creating and result['content_hash'] != previous.get('content_hash')):

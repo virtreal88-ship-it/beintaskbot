@@ -157,7 +157,7 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 safe_name, kind, content = await asyncio.to_thread(extract, filename, raw)
                 title = str(fields.get('title') or safe_name).strip()[:180]
                 result = await asyncio.to_thread(save_knowledge, profile,
-                    {'title': title, 'kind': kind, 'content': content, 'active': True})
+                    {'title': title, 'kind': kind, 'content': content, 'active': True, **({'agent_id':fields['agent_id']} if fields.get('agent_id') else {})})
             else:
                 if not _json_body(request):
                     raise TenantLinearError('JSON sorğusu tələb olunur.', 415)

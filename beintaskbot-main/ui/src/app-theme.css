@@ -39,16 +39,16 @@ body[data-app-ui="kwid"] .app-nav-group-title span {font-size:11px}
 body[data-app-ui="kwid"] .app-nav-group[data-collapsed="true"] .app-nav-group-title svg {transform:rotate(-90deg)}
 body[data-app-ui="kwid"] .app-nav-group-items {display:grid;grid-template-rows:1fr;gap:4px}
 body[data-app-ui="kwid"] .app-nav-group[data-collapsed="true"] .app-nav-group-items {display:none}
-body[data-app-ui="kwid"] .nav [data-view] {width:100%;min-height:38px;padding:8px 10px;gap:12px;border-radius:8px;color:var(--app-ink);background:transparent;font-size:13px;font-weight:500;text-align:left;display:flex;align-items:center;margin:0!important;white-space:nowrap;transition:background-color 75ms,color 75ms}
-body[data-app-ui="kwid"] .nav [data-view]:hover {background:var(--app-hover)}
-body[data-app-ui="kwid"] .nav [data-view].active {background:var(--app-hover);color:var(--app-accent)}
-body[data-app-ui="kwid"] .nav [data-view]>span:first-child {width:22px;height:22px;display:grid;place-items:center;flex:none}
+body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link]) {width:100%;min-height:38px;padding:8px 10px;gap:12px;border-radius:8px;color:var(--app-ink);background:transparent;font-size:13px;font-weight:500;text-align:left;display:flex;align-items:center;margin:0!important;white-space:nowrap;transition:background-color 75ms,color 75ms}
+body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link]):hover {background:var(--app-hover)}
+body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link]).active {background:var(--app-hover);color:var(--app-accent)}
+body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link])>span:first-child {width:22px;height:22px;display:grid;place-items:center;flex:none}
 body[data-app-ui="kwid"] .nav svg {width:22px;height:22px;stroke-width:1.5}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-sidebar-header {justify-content:center;padding:0 16px}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .brand,body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-nav-label,body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-nav-group-title {display:none}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .company {font-size:0;margin:24px 16px 20px;text-align:center}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .company::first-letter {font-size:14px}
-body[data-app-ui="kwid"][data-sidebar="collapsed"] .nav [data-view] {justify-content:center;padding:8px}
+body[data-app-ui="kwid"][data-sidebar="collapsed"] .nav :is([data-view],[data-report-link]) {justify-content:center;padding:8px}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-nav-group-items {display:grid!important}
 body[data-app-ui="kwid"] main {padding:96px 32px 32px!important;width:100%;max-width:1440px!important;margin:0 auto;min-width:0}
 body[data-app-ui="kwid"] .app-topbar {position:fixed;top:0;left:var(--app-sidebar);right:0;z-index:35;height:64px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 32px;background:var(--app-surface);border-bottom:1px solid var(--app-line);transition:left var(--app-motion) ease}
@@ -172,7 +172,7 @@ html[data-app-theme="dark"] body[data-app-ui="kwid"] {
   body[data-app-ui="kwid"][data-mobile-menu="open"] .app-sidebar-backdrop {display:block;position:fixed;inset:0;background:#0009;z-index:90;border:0}
   body[data-app-ui="kwid"] main {padding:96px 24px 32px!important}
   body[data-app-ui="kwid"] .nav {flex-direction:column;margin:0}
-  body[data-app-ui="kwid"] .nav [data-view] {font-size:13px;justify-content:flex-start}
+  body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link]) {font-size:13px;justify-content:flex-start}
 }
 @media(max-width:639px) {
   body[data-app-ui="kwid"] main {padding:88px 16px 24px!important}
@@ -201,3 +201,7 @@ html[data-app-theme="dark"] body[data-app-ui="kwid"] {
 .app-language-select{max-width:70px;padding:6px;border:1px solid var(--app-line);border-radius:8px;background:var(--app-surface);color:var(--app-ink);font:inherit}
 body[data-app-ui="kwid"] .nav [data-view="dialogs"],body[data-app-ui="kwid"] .nav [data-view="support"]{position:relative}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] #dialogsAttentionCount,body[data-app-ui="kwid"][data-sidebar="collapsed"] #supportUnresolvedCount{position:absolute;right:2px;top:2px;padding:1px 4px;font-size:9px;max-width:34px}
+
+body[data-app-ui="kwid"] .nav [data-report-link]{box-sizing:border-box;text-decoration:none}
+#aiReliability{overflow-wrap:anywhere;margin:16px 0}
+#aiAgentsOverview .ai-overview-actions{flex-wrap:wrap}

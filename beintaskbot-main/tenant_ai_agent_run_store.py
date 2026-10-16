@@ -249,7 +249,7 @@ def skip_job(job, error_code):
         conn.commit()
 
 
-def knowledge_context(tenant_id, query, *, limit=6):
+def knowledge_context(tenant_id, query, *, limit=6, agent_id=None):
     query = str(query or '').strip()[:1000]
     if not query:
         return []
@@ -260,10 +260,10 @@ def knowledge_context(tenant_id, query, *, limit=6):
               ts_rank(c.search_vector,plainto_tsquery('simple',%s)) AS rank
               FROM saas_ai_knowledge_chunks c JOIN saas_ai_knowledge_sources s
                 ON s.tenant_id=c.tenant_id AND s.id=c.source_id
-              WHERE c.tenant_id=%s::uuid AND s.active=TRUE
+              WHERE c.tenant_id=%s::uuid AND s.active=TRUE AND (s.agent_id IS NULL OR s.agent_id=%s::uuid)
                 AND (c.search_vector @@ plainto_tsquery('simple',%s) OR c.content ILIKE %s)
               ORDER BY rank DESC,s.updated_at DESC,c.chunk_no LIMIT %s''',
-              (query,str(tenant_id),query,'%'+query[:120]+'%',max(1,min(int(limit),8))))
+              (query,str(tenant_id),agent_id,query,'%'+query[:120]+'%',max(1,min(int(limit),8))))
             return [{'source_id':str(row['source_id']),'title':str(row['title']),
                      'content':str(row['content'])[:1800]} for row in cur.fetchall()]
 

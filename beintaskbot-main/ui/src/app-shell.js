@@ -59,7 +59,7 @@ if (document.body.dataset.appUi === 'kwid') {
   document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeUserMenu();mobileMenu(false)}})
   applyTheme()
 
-  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support']},{id:'crm',label:'CRM',pages:['tasks','customers','deals','hot_orders']},{id:'ai',label:'AI',pages:['ai_agents']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['integrations','settings','profile']}]
+  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support','night_report']},{id:'crm',label:'CRM',pages:['tasks','customers','deals','hot_orders']},{id:'ai',label:'AI',pages:['ai_agents']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['integrations','settings','profile']}]
   const containers=new Map()
   for(const group of groups){
     const section=document.createElement('div');section.className='app-nav-group';section.dataset.group=group.id
@@ -68,25 +68,25 @@ if (document.body.dataset.appUi === 'kwid') {
     nav.append(section);containers.set(group.id,section)
   }
   function organizeNav() {
-    for(const button of [...nav.querySelectorAll('[data-view]')]){
+    for(const button of [...nav.querySelectorAll('[data-view],[data-report-link]')]){
       if(!button.querySelector('.app-nav-label')){
         const label=button.querySelector('[data-i18n]')||document.createElement('span');label.className='app-nav-label'
         const text=[...button.childNodes].filter(node=>node.nodeType===Node.TEXT_NODE).map(node=>node.textContent).join('').trim()
-        const translated=t(button.dataset.view);label.textContent=translated!==button.dataset.view?translated:text||button.dataset.view;label.dataset.i18n=button.dataset.view
+        const translated=t((button.dataset.view||button.dataset.reportLink));label.textContent=translated!==(button.dataset.view||button.dataset.reportLink)?translated:text||(button.dataset.view||button.dataset.reportLink);label.dataset.i18n=(button.dataset.view||button.dataset.reportLink)
         for(const node of [...button.childNodes])if(node.nodeType===Node.TEXT_NODE)node.remove()
         if(!label.parentElement)button.append(label);button.title=label.textContent
       }
-      const group=groups.find(group=>group.pages.includes(button.dataset.view))||groups[0], section=containers.get(group.id),items=section.querySelector('.app-nav-group-items')
+      const group=groups.find(group=>group.pages.includes((button.dataset.view||button.dataset.reportLink)))||groups[0], section=containers.get(group.id),items=section.querySelector('.app-nav-group-items')
       if(button.parentElement!==items)items.append(button)
     }
-    for(const section of containers.values()){const hidden=![...section.querySelectorAll('[data-view]')].some(button=>!button.hidden&&button.style.display!=='none');if(section.hidden!==hidden)section.hidden=hidden}
+    for(const section of containers.values()){const hidden=![...section.querySelectorAll('[data-view],[data-report-link]')].some(button=>!button.hidden&&button.style.display!=='none');if(section.hidden!==hidden)section.hidden=hidden}
     const settings=nav.querySelector('[data-view="settings"]')
     topbar.querySelectorAll('[data-app-open="settings"]').forEach(button=>button.hidden=!settings||settings.hidden||settings.style.display==='none')
   }
   const languageSelect=topbar.querySelector('[data-app-language]')
   languageSelect.value=window.tenantI18n?.language||'az'
   languageSelect.addEventListener('change',()=>window.tenantI18n?.setLanguage(languageSelect.value))
-  function updateLanguage(){const company=document.getElementById('company');if(company&&['Şirkət','Компания','Company'].includes(company.textContent))company.textContent=t('company');syncSidebar();mobileButton.setAttribute('aria-label',t('openMenu'));avatar.setAttribute('aria-label',t('userMenu'));backdrop.setAttribute('aria-label',t('closeMenu'));for(const button of topbar.querySelectorAll('[data-app-open=settings]')){button.setAttribute('aria-label',t('settings'));button.title=t('settings');}for(const button of topbar.querySelectorAll('[data-app-theme-choice]')){const label=t(button.dataset.appThemeChoice+'Theme');button.title=label;button.setAttribute('aria-label',label);}languageSelect.value=window.tenantI18n?.language||'az';languageSelect.setAttribute('aria-label',t('language'));for(const button of nav.querySelectorAll('[data-view]')){const label=button.querySelector('.app-nav-label'),value=t(button.dataset.view);if(label&&label.textContent!==value)label.textContent=value;button.title=value;}for(const section of containers.values()){const key={operator:'operatorWorkspace',management:'management',company:'company'}[section.dataset.group];if(key){const label=section.querySelector('.app-nav-group-title span'),value=t(key);if(label.textContent!==value)label.textContent=value;}}updateContext()}
+  function updateLanguage(){const company=document.getElementById('company');if(company&&['Şirkət','Компания','Company'].includes(company.textContent))company.textContent=t('company');syncSidebar();mobileButton.setAttribute('aria-label',t('openMenu'));avatar.setAttribute('aria-label',t('userMenu'));backdrop.setAttribute('aria-label',t('closeMenu'));for(const button of topbar.querySelectorAll('[data-app-open=settings]')){button.setAttribute('aria-label',t('settings'));button.title=t('settings');}for(const button of topbar.querySelectorAll('[data-app-theme-choice]')){const label=t(button.dataset.appThemeChoice+'Theme');button.title=label;button.setAttribute('aria-label',label);}languageSelect.value=window.tenantI18n?.language||'az';languageSelect.setAttribute('aria-label',t('language'));for(const button of nav.querySelectorAll('[data-view],[data-report-link]')){const label=button.querySelector('.app-nav-label'),value=t((button.dataset.view||button.dataset.reportLink));if(label&&label.textContent!==value)label.textContent=value;button.title=value;}for(const section of containers.values()){const key={operator:'operatorWorkspace',management:'management',company:'company'}[section.dataset.group];if(key){const label=section.querySelector('.app-nav-group-title span'),value=t(key);if(label.textContent!==value)label.textContent=value;}}updateContext()}
   document.addEventListener('tenant-language',updateLanguage)
   const navObserver=new MutationObserver(organizeNav)
   navObserver.observe(nav,{childList:true,subtree:true,attributes:true,attributeFilter:['hidden','style']})
@@ -95,7 +95,7 @@ if (document.body.dataset.appUi === 'kwid') {
   function updateContext() {
     const page=document.querySelector('main>.view.active'),title=page?.querySelector('h1')?.textContent||''
     topbar.querySelector('.app-topbar-context').textContent=title
-    nav.querySelectorAll('[data-view]').forEach(button=>button.setAttribute('aria-current',button.classList.contains('active')?'page':'false'))
+    nav.querySelectorAll('[data-view],[data-report-link]').forEach(button=>button.setAttribute('aria-current',button.classList.contains('active')?'page':'false'))
   }
   document.addEventListener('tenant-profile',event=>{
     const member=event.detail.member||{},name=member.display_name||'İstifadəçi'

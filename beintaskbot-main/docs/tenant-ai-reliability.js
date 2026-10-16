@@ -1,9 +1,10 @@
 /* Read-only operator diagnostics. Stale responses cannot cross company changes. */
 (()=>{
  let profile=null,epoch=0;
+ const t=value=>window.tenantNightL10n?.text(value)||value;
  const labels={received:'Получено',queued:'В очереди',processing:'Обрабатывается',generated:'Ответ создан',sent:'Отправлен',error:'Ошибка',skipped:'Пропущено'};
  const node=(tag,text)=>{const e=document.createElement(tag);e.textContent=String(text??'');return e};
- function panel(){let box=document.getElementById('aiReliability');if(!box){const parent=document.getElementById('aiAgentsOverview');if(!parent)return null;box=node('section','');box.id='aiReliability';box.className='panel';box.setAttribute('aria-label','Работоспособность AI');box.setAttribute('aria-live','polite');parent.insertAdjacentElement('afterend',box)}return box}
+ function panel(){let box=document.getElementById('aiReliability');if(!box){const parent=document.getElementById('aiAgentsOverview');if(!parent)return null;box=node('section','');box.id='aiReliability';box.className='panel';box.setAttribute('aria-label','Работоспособность AI');box.setAttribute('aria-live','polite');parent.insertAdjacentElement('afterend',box);new MutationObserver(()=>window.tenantNightL10n?.translate(box)).observe(box,{subtree:true,childList:true,characterData:true})}return box}
  async function refresh(){
   const current=profile,request=++epoch,box=panel();if(!box||!current)return;
   box.replaceChildren(node('h2','Работоспособность AI'),node('p','Проверяю…'));
@@ -19,10 +20,11 @@
    box.append(node('p',`Режим компании: ${health.operating_mode}. Автоотправка: ${health.automatic_send_enabled?'разрешена, зависит также от режима агента':'выключена'}.`));
    const reload=node('button','Обновить диагностику');reload.type='button';reload.onclick=refresh;box.append(reload);
    const list=node('ol','');
-   for(const item of messages){const li=node('li','');li.append(node('strong',`${labels[item.status]||item.status} · ${item.provider} · ${item.message_id}`));li.append(node('p',item.reason||'Ошибок на этом этапе не зафиксировано'));const stages=Object.entries(item.checkpoints).filter(([,done])=>done).map(([key])=>labels[key]||key);li.append(node('small',`${item.received_at} · ${stages.join(' → ')} · Попыток: ${item.attempts}${item.automatic_retry?' · безопасный повтор разрешён':''}`));list.append(li)}
+   for(const item of messages){const li=node('li','');li.append(node('strong',`${t(labels[item.status]||item.status)} · ${item.provider} · ${item.message_id}`));li.append(node('p',item.reason||'Ошибок на этом этапе не зафиксировано'));const stages=Object.entries(item.checkpoints).filter(([,done])=>done).map(([key])=>t(labels[key]||key));li.append(node('small',`${item.received_at} · ${stages.join(' → ')} · ${t('Попыток')}: ${item.attempts}${item.automatic_retry?' · '+t('безопасный повтор разрешён'):''}`));list.append(li)}
    box.append(list);if(!messages.length)box.append(node('p','Входящих AI-событий пока нет.'));
   }catch(error){if(request===epoch&&profile===current)box.replaceChildren(node('h2','Работоспособность AI'),node('p','Диагностика недоступна. Проверьте права администратора и соединение.'))}
  }
+ document.addEventListener('tenant-language',()=>{if(document.getElementById('aiReliability'))refresh()});
  document.addEventListener('tenant-profile',event=>{epoch++;profile=event.detail?.member||null;document.getElementById('aiReliability')?.remove()});
  const anchor=document.querySelector('[data-ai-overview-diagnostics]');
  if(anchor){const open=node('button','Статус AI');open.type='button';open.className='outline';open.setAttribute('data-ai-reliability-open','');anchor.insertAdjacentElement('afterend',open)}

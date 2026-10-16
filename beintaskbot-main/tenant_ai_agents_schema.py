@@ -264,6 +264,7 @@ def ensure_schema(conn):
         with conn.cursor() as cur:
             cur.execute("ALTER TABLE saas_ai_conversation_state ADD COLUMN IF NOT EXISTS resumed_at TIMESTAMPTZ")
         with conn.cursor() as cur:
+            cur.execute("ALTER TABLE saas_ai_knowledge_sources ADD COLUMN IF NOT EXISTS agent_id UUID")
             cur.execute("ALTER TABLE saas_ai_agent_runs ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ")
             cur.execute("ALTER TABLE saas_ai_agent_runs ADD COLUMN IF NOT EXISTS error_code TEXT NOT NULL DEFAULT ''")
             cur.execute("ALTER TABLE saas_ai_agent_drafts ADD COLUMN IF NOT EXISTS send_started_at TIMESTAMPTZ")

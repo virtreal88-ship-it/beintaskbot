@@ -64,10 +64,13 @@ def test_safe_errors(error,status):
     assert json.loads(response.text)['success'] is False
 
 
-def test_report_ui_is_app_only_and_does_not_change_existing_menu():
+def test_report_ui_is_app_only_and_preserves_pilot():
     import subprocess
-    changed=subprocess.check_output(['git','diff','--name-only','77d5312a','--','docs/tenant-app.html','docs/index.html','docs/tenant-webapp.html'],cwd=ROOT,text=True)
+    changed=subprocess.check_output(['git','diff','--name-only','77d5312a','--','docs/index.html','docs/tenant-webapp.html'],cwd=ROOT,text=True)
     assert changed==''
+    app=(ROOT/'docs/tenant-app.html').read_text(encoding='utf-8-sig')
+    assert app.count('id="nightReportNav"') == 1
+    assert 'href="/app/night-report"' in app
     assets=(ROOT/'tenant_web_assets.py').read_text(encoding='utf-8')
     assert "('/app/night-report', 'tenant-night-report.html'" in assets
     script=(ROOT/'docs/tenant-night-report.js').read_text(encoding='utf-8-sig')

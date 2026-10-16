@@ -65,16 +65,31 @@ BASE='''WITH b AS (SELECT %s::uuid AS tenant,%s::timestamptz AS starts,%s::times
    UNION SELECT * FROM ai_activity UNION SELECT * FROM handoffs),
  ai_failure_candidates AS (SELECT a.event_fingerprint AS event_key,a.connect_channel_id AS channel_id,a.conversation_id,
    'ai'::text AS kind,'ai_'||a.state AS code,a.updated_at FROM runs a,b
-   WHERE a.state IN ('failed','unknown') AND a.updated_at>=b.starts AND a.updated_at<b.ends
+   WHERE a.state IN ('failed','unknown') AND a.error_code NOT IN ('connect_send_unknown','send_result_unknown') AND a.updated_at>=b.starts AND a.updated_at<b.ends
    UNION ALL SELECT v.event_key,v.channel_id,v.conversation_id,'ai','voice_failed',v.updated_at FROM voices v,b
      WHERE v.state='failed' AND v.updated_at>=b.starts AND v.updated_at<b.ends
    UNION ALL SELECT j.event_fingerprint,e.connect_channel_id,e.conversation_id,'ai','ai_'||j.state,j.updated_at
      FROM saas_ai_agent_jobs j JOIN events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint,b
      WHERE j.state IN ('failed','unknown') AND j.updated_at>=b.starts AND j.updated_at<b.ends
        AND (j.error_code LIKE 'chat_ai_%%' OR j.error_code IN ('connect_worker_failed','worker_stopped'))),
+ ai_event_failures AS (SELECT e.fingerprint AS event_key,e.connect_channel_id AS channel_id,e.conversation_id,
+   'ai'::text AS kind,'ai_'||e.state AS code,COALESCE(e.completed_at,e.received_at) AS updated_at FROM events e,b
+   WHERE e.state IN ('failed','unknown') AND COALESCE(e.completed_at,e.received_at)>=b.starts AND COALESCE(e.completed_at,e.received_at)<b.ends
+     AND (e.error_code LIKE 'chat_ai_%%' OR e.error_code LIKE 'voice_%%' OR e.error_code IN
+       ('connect_worker_failed','worker_stopped','worker_interrupted','read_or_context_failed','connect_generation_unknown','connect_configuration_unavailable','ai_configuration_unavailable'))),
  ai_failures AS (SELECT DISTINCT ON (event_key) event_key,channel_id,conversation_id,kind,code
-   FROM ai_failure_candidates ORDER BY event_key,updated_at DESC,code),
+   FROM (SELECT * FROM ai_failure_candidates UNION ALL SELECT * FROM ai_event_failures) candidates ORDER BY event_key,updated_at DESC,code),
  connect_failures AS (
+   SELECT 'webhook:'||a.event_fingerprint AS event_key,a.connect_channel_id AS channel_id,a.conversation_id,
+     'connect'::text AS kind,'send_unknown'::text AS code FROM runs a,b
+     WHERE a.state IN ('failed','unknown') AND a.error_code IN ('connect_send_unknown','send_result_unknown')
+       AND a.updated_at>=b.starts AND a.updated_at<b.ends
+   UNION
+   SELECT 'draft:'||d.id::text,e.connect_channel_id,e.conversation_id,'connect','send_unknown'
+   FROM saas_ai_agent_drafts d JOIN events e ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint,b
+   WHERE d.state='unknown' AND COALESCE(d.send_started_at,d.created_at)>=b.starts
+     AND COALESCE(d.send_started_at,d.created_at)<b.ends
+   UNION
    SELECT 'send:'||s.actor_id::text||':'||s.request_id::text AS event_key,r.connect_channel_id AS channel_id,r.conversation_id,
      'connect'::text AS kind,'send_'||s.state AS code
    FROM saas_chat_send_receipts s JOIN routes r ON r.tenant_id=s.tenant_id AND r.lead_id=s.lead_id,b
@@ -85,7 +100,9 @@ BASE='''WITH b AS (SELECT %s::uuid AS tenant,%s::timestamptz AS starts,%s::times
      WHERE j.tenant_id=e.tenant_id AND j.event_fingerprint=e.fingerprint AND j.state IN ('failed','unknown')) job_time ON TRUE,b
    WHERE e.state IN ('failed','unknown') AND COALESCE(job_time.updated_at,e.completed_at,e.received_at)>=b.starts
      AND COALESCE(job_time.updated_at,e.completed_at,e.received_at)<b.ends
-     AND NOT EXISTS(SELECT 1 FROM ai_failures a WHERE a.event_key=e.fingerprint)),
+     AND NOT EXISTS(SELECT 1 FROM ai_failures a WHERE a.event_key=e.fingerprint)
+     AND NOT EXISTS(SELECT 1 FROM runs a WHERE a.event_fingerprint=e.fingerprint
+       AND a.state IN ('failed','unknown') AND a.error_code IN ('connect_send_unknown','send_result_unknown'))),
  failures AS (SELECT * FROM ai_failures UNION SELECT * FROM connect_failures),
  tickets AS (SELECT t.*,r.lead_id,r.contact_name,r.phone,r.channel_name,m.display_name AS assignee_name,
    CASE WHEN history.status IN ('new','waiting','in_progress','resolved') THEN history.status
@@ -124,7 +141,7 @@ def report(profile,day='',zone='',start='',end='',offset=0,*,now=None):
             period=interval(day,zone or defaults['timezone'],start or defaults['start'],end or defaults['end'],now=now)
             if period['state']=='not_started':
                 return {'tenant_id':tenant,'company_name':company['name'],'scope':'connect','period':period,'defaults':defaults,
-                        'generated_at':now.isoformat(),'metrics':{key:0 for key in ('dialogs','ai_dialogs','handed_off','unresolved','ai_errors','connect_errors','taken_in_work','attention_count')},
+                        'data_quality':{'errors_complete':False,'reason':'retained_records_only'},'generated_at':now.isoformat(),'metrics':{key:0 for key in ('dialogs','ai_dialogs','handed_off','unresolved','ai_errors','connect_errors','taken_in_work','attention_count')},
                         'tickets':[],'failures':[],'next_offset':None}
             args=(tenant,period['starts_at_utc'],period['cutoff_at'])
             cur.execute(BASE+'''SELECT (SELECT count(*) FROM activity) AS dialogs,
@@ -142,7 +159,7 @@ def report(profile,day='',zone='',start='',end='',offset=0,*,now=None):
               ON r.connect_channel_id=f.channel_id AND r.conversation_id=f.conversation_id ORDER BY f.kind,f.event_key LIMIT 20''',args)
             failures=[public(r) for r in cur.fetchall()]
     return {'tenant_id':tenant,'company_name':company['name'],'scope':'connect','period':period,'defaults':defaults,
-            'generated_at':now.isoformat(),'metrics':metrics,'tickets':[public(r) for r in rows[:50]],
+            'data_quality':{'errors_complete':False,'reason':'retained_records_only'},'generated_at':now.isoformat(),'metrics':metrics,'tickets':[public(r) for r in rows[:50]],
             'failures':failures,'next_offset':offset+50 if len(rows)>50 else None}
 
 

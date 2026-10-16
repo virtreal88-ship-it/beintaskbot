@@ -269,7 +269,7 @@ async def process_one(job, kommo_request, wait_slot, logger):
             focus_media_ids=focus_ids)
         client_query = str(source.get('body') or '')[:6000] or '\n'.join(
             line['text'] for line in lines[-3:] if line['speaker']=='CLIENT')[-6000:]
-        knowledge = await asyncio.to_thread(knowledge_context,tenant,client_query)
+        knowledge = await asyncio.to_thread(knowledge_context,tenant,client_query,agent_id=job['agent_id'])
         source_ids = list(dict.fromkeys(item['source_id'] for item in knowledge))
         business_rules = '\n'.join([str(reservation.get('company_instructions') or ''),
             str(reservation.get('agent_instructions') or ''),str(reservation.get('scope_instructions') or '')]).strip()
@@ -538,7 +538,7 @@ async def process_connect_one(job, logger):
                       'at': str(source.get('happened_at') or '')}]
             missing = 1 if str(source.get('message_type') or '').casefold() in {'audio', 'voice'} else 0
         query = str(source.get('body') or '')[:6000]
-        knowledge = await asyncio.to_thread(knowledge_context, tenant, query)
+        knowledge = await asyncio.to_thread(knowledge_context, tenant, query, agent_id=job['agent_id'])
         rules = '\n'.join((str(reservation.get('company_instructions') or ''),
                            str(reservation.get('agent_instructions') or ''),
                            str(reservation.get('scope_instructions') or ''))).strip()
