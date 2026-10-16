@@ -51,17 +51,20 @@ class ProbeTests(unittest.TestCase):
         logger = Mock()
         get = Mock(return_value=Response(200, {'data': [{'id': 'gpt-current'}]}))
         post = Mock(return_value=Response(200, {'status': 'completed'}))
-        env = {'AI_AGENTS_OPENAI_PROBE_TENANT_ID': TENANT, 'OPENAI_API_KEY': 'platform-secret',
+        env = {'AI_AGENTS_OPENAI_PROBE_TENANT_ID': TENANT, 'AI_AGENTS_OPENAI_APPLY_MODEL_TENANT_ID': TENANT,
+               'OPENAI_API_KEY': 'platform-secret',
                'OPENAI_HISTORY_REPLY_MODEL': 'gpt-reference'}
         with patch.dict(os.environ, env, clear=False):
             run_probe(TENANT, logger, connect_fn=connect_fn, fernet_fn=Mock(return_value=cipher), get=get, post=post)
-        cur.execute.assert_called_once()
-        self.assertEqual(cur.execute.call_args.args[1], (TENANT, 'Nizam Ai'))
+        self.assertEqual(cur.execute.call_count, 2)
+        self.assertEqual(cur.execute.call_args_list[0].args[1], (TENANT, 'Nizam Ai'))
+        self.assertEqual(cur.execute.call_args_list[1].args[1], ('gpt-reference', TENANT, 'agent-id', 'Nizam Ai', 'gpt-reference'))
         rendered = str(logger.info.call_args)
         self.assertNotIn('company-secret', rendered)
         self.assertNotIn('platform-secret', rendered)
         self.assertNotIn('Return only', rendered)
         self.assertIn('gpt-current', rendered)
+        self.assertIs(logger.info.call_args.args[-1], True)
         self.assertEqual(post.call_count, 3)
 
 

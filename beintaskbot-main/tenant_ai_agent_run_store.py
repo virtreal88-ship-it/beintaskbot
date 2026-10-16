@@ -1,11 +1,13 @@
 """Lease, budget and draft receipts for autonomous manual-mode preparation."""
 import json
+import os
 import uuid
 
 from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agent_access import tenant_status_allows_ai
 from tenant_linear_policy import TenantLinearError
 from tenant_platform import _connect, _fernet, _json
+from tenant_ai_agent_key_policy import platform_key_ready, platform_model, skip_pre_activation_jobs
 
 
 def claim_next():
@@ -16,6 +18,8 @@ def claim_next():
     try:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            # Never replay Connect jobs received before an explicit key cutover.
+            skip_pre_activation_jobs(cur)
             cur.execute('''SELECT j.tenant_id,j.agent_id,j.provider,j.conversation_id,j.revision,j.event_fingerprint
               FROM saas_ai_agent_jobs j WHERE j.state='processing' AND j.lease_until<=now()
               AND NOT EXISTS (SELECT 1 FROM saas_ai_agent_runs r WHERE r.tenant_id=j.tenant_id
@@ -155,7 +159,10 @@ def load_agent_config(job, *, with_block_reason=False):
         reason = 'chat_ai_consent_missing'
     if reason:
         return (None, reason) if with_block_reason else None
-    result = {'scopes':row['scopes'],'agent_model':str(row['agent_model'] or ''),'safety':row.get('safety') or {},
+    selected_model = str(row['agent_model'] or '')
+    if platform_key_ready(job['tenant_id'], job['agent_id'], job.get('provider')):
+        selected_model = platform_model()
+    result = {'scopes':row['scopes'],'agent_model':selected_model,'safety':row.get('safety') or {},
       'chat_model':str(config.get('model') or ''),'schedule':row['schedule'],'mode':row['mode'],
       'crm_actions_enabled':row['crm_actions_enabled'] is True}
     return (result, None) if with_block_reason else result
@@ -232,15 +239,20 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
             if not row:
                 raise TenantLinearError('Agent işi yenilənib.', 409)
             config = row['metadata'] if isinstance(row.get('metadata'), dict) else {}
+            use_platform_key = platform_key_ready(tenant, job['agent_id'], job.get('provider'))
             if (not tenant_status_allows_ai(row['tenant_status'],job.get('provider')) or row['settings_enabled'] is not True or row.get('emergency_stop') is True or row['agent_enabled'] is not True
                     or row['conversation_state'] in {'human','paused'}
-                    or config.get('enabled') is not True or config.get('consent') is not True or not row.get('secrets')):
+                    or config.get('enabled') is not True or config.get('consent') is not True
+                    or (not use_platform_key and not row.get('secrets'))):
                 raise TenantLinearError('AI Agents və mövcud Chat AI ayarları aktiv deyil.', 409)
             allowed_models = [str(item).strip() for item in config.get('models', []) if isinstance(item, str) and item.strip()]
             configured_model = str(config.get('model') or '').strip()
             if configured_model and configured_model not in allowed_models:
                 allowed_models.append(configured_model)
-            if str(model) not in allowed_models or (row.get('configured_model') and row['configured_model'] != model):
+            if use_platform_key:
+                if str(model) != platform_model() or (row.get('configured_model') and row['configured_model'] != platform_model()):
+                    raise TenantLinearError('Platform AI model ayarı dəyişib. Yeniləyin.', 409)
+            elif str(model) not in allowed_models or (row.get('configured_model') and row['configured_model'] != model):
                 raise TenantLinearError('Agent modeli Chat AI ayarları ilə uyğun deyil.', 409)
             scopes = row['scopes'] if isinstance(row['scopes'], list) else []
             provider = str(job.get('provider') or 'kommo')
@@ -255,12 +267,16 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
               AND event_fingerprint=%s AND revision=%s''', (tenant,job['agent_id'],job['event_fingerprint'],job['revision']))
             if cur.fetchone():
                 raise TenantLinearError('Bu hadisə üçün AI sorğusu artıq başlanıb.', 409)
-            try:
-                secret = json.loads(_fernet().decrypt(bytes(row['secrets'])))
-                if secret.get('tenant_id') != tenant or secret.get('provider') != 'chat_ai' or not secret.get('api_key'):
-                    raise ValueError()
-            except Exception:
-                raise TenantLinearError('AI təhlükəsizlik ayarlarını yoxlayın.', 503) from None
+            if use_platform_key:
+                api_key = str(os.environ.get('OPENAI_API_KEY') or '')
+            else:
+                try:
+                    secret = json.loads(_fernet().decrypt(bytes(row['secrets'])))
+                    if secret.get('tenant_id') != tenant or secret.get('provider') != 'chat_ai' or not secret.get('api_key'):
+                        raise ValueError()
+                    api_key = secret['api_key']
+                except Exception:
+                    raise TenantLinearError('AI təhlükəsizlik ayarlarını yoxlayın.', 503) from None
             limit = int(config.get('daily_limit') or 50)
             cur.execute('''SELECT COALESCE(sum(reserved_calls),0) AS calls FROM saas_chat_ai_runs
               WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date''', (tenant,))
@@ -284,7 +300,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
               WHERE saas_ai_conversation_state.state='active' RETURNING revision''',
               (tenant,job['provider'],job['conversation_id'],job['agent_id'],str((job.get('payload') or {}).get('message_id') or ''),str((job.get('payload') or {}).get('message_id') or '')))
             conversation = cur.fetchone()
-            result = {'run_id':str(run_id),'api_key':secret['api_key'],'config':config,
+            result = {'run_id':str(run_id),'api_key':api_key,'config':config,
               'config_version':str(row['config_version']),'company_instructions':row['company_instructions'],
               'settings_version':str(row['settings_version']),
               'agent_name':row['name'],'agent_instructions':row['instructions'],'agent_language':row['language'],

@@ -81,6 +81,17 @@ def run_probe(tenant_id, logger, *, connect_fn=None, fernet_fn=None, get=request
     platform_fallback = None
     if platform_key and platform_model and platform_model != model:
         platform_fallback = _probe_key(platform_key, platform_model, get=get, post=post)
+    apply_tenant = str(os.environ.get('AI_AGENTS_OPENAI_APPLY_MODEL_TENANT_ID') or '').strip()
+    model_updated = False
+    if (apply_tenant == tenant and platform_fallback
+            and platform_fallback['generation_ok'] and platform_model):
+        with connect_fn() as conn:
+            with conn.cursor() as cur:
+                cur.execute('''UPDATE saas_ai_agents SET model=%s,version=version+1,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND name=%s AND model<>%s
+                  RETURNING id''', (platform_model, tenant, row['id'], 'Nizam Ai', platform_model))
+                model_updated = bool(cur.fetchone())
+            conn.commit()
     # Keep this record deliberately allowlisted; never log the row, key, prompt or provider body.
     logger.info('AI OpenAI access probe: tenant=%s agent=%s enabled=%s mode=%s selected_model=%s '
         'company_key_present=%s company_models_http=%s company_model_listed=%s company_generation_http=%s '
@@ -88,7 +99,7 @@ def run_probe(tenant_id, logger, *, connect_fn=None, fernet_fn=None, get=request
         'platform_selected_model_listed=%s platform_selected_generation_http=%s platform_selected_generation_category=%s '
         'platform_selected_generation_ok=%s platform_reference_model=%s platform_reference_models_http=%s '
         'platform_reference_model_listed=%s platform_reference_generation_http=%s platform_reference_generation_category=%s '
-        'platform_reference_generation_ok=%s',
+        'platform_reference_generation_ok=%s model_updated=%s',
         tenant, row['id'], bool(row.get('enabled')), str(row.get('mode') or ''), model,
         company['key_present'], company['models_http'], company['model_listed'], company['generation_http'],
         company['generation_category'], company['generation_ok'], platform_selected['key_present'],
@@ -99,4 +110,4 @@ def run_probe(tenant_id, logger, *, connect_fn=None, fernet_fn=None, get=request
         platform_fallback['model_listed'] if platform_fallback else None,
         platform_fallback['generation_http'] if platform_fallback else None,
         platform_fallback['generation_category'] if platform_fallback else None,
-        platform_fallback['generation_ok'] if platform_fallback else None)
+        platform_fallback['generation_ok'] if platform_fallback else None, model_updated)
