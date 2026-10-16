@@ -18,7 +18,7 @@ const tick=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r));}
  };
  for(const file of ['tenant-operator-i18n.js','tenant-night-l10n.js','tenant-night-agent-template.js','tenant-ai-reliability.js','tenant-night-integration.js'])w.eval(read('docs/'+file));
  await tick();assert.equal(d.querySelectorAll('#aiNightTemplateQuick').length,1);assert.equal(d.querySelectorAll('[data-ai-reliability-open]').length,1);assert.equal(d.getElementById('nightReportNav').hidden,false);
- w.tenantI18n.setLanguage('en');assert.equal(d.getElementById('aiNightTemplateQuick').textContent,'Night operator');assert.equal(d.querySelector('[data-ai-reliability-open]').textContent,'AI status');
+ w.tenantI18n.setLanguage('en');assert.equal(d.getElementById('nightReportNav').getAttribute('href'),'/app/night-report?site_lang=en');assert.equal(d.getElementById('aiNightTemplateQuick').textContent,'Night operator');assert.equal(d.querySelector('[data-ai-reliability-open]').textContent,'AI status');
  w.tenantI18n.setLanguage('az');assert.equal(d.getElementById('nightReportNav').textContent.includes('Gecə növbəsi'),true);
  w.tenantI18n.setLanguage('ru');d.getElementById('aiNightTemplateQuick').click();await tick();
  assert.equal(d.getElementById('nightAgentMode').value,'manual');assert.equal(d.getElementById('nightAgentLaunch').checked,false);
