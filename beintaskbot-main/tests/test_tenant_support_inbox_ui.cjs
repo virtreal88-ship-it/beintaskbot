@@ -9,9 +9,9 @@ const members=[{telegram_id:11,display_name:'Support'}];
 const response=value=>({ok:true,json:async()=>({success:true,result:value})});
 const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));};
 function setup(fetch){
- const dom=new JSDOM('<section id="view-ai_agents"><article id="aiAgentsOverview"></article></section><div id="modalContent"></div>',{url:'https://crm.test/app',runScripts:'outside-only'});
+ const dom=new JSDOM('<section id="view-support"><div id="operatorSupport"></div></section><div id="modalContent"></div>',{url:'https://crm.test/app',runScripts:'outside-only'});
  dom.window.HTMLElement.prototype.scrollIntoView=function(){};
- dom.window.fetch=fetch;dom.window.eval(source);return dom;
+ dom.window.fetch=fetch;dom.window.tenantOperator={hasRight:()=>true};dom.window.eval(fs.readFileSync(path.join(__dirname,'../docs/tenant-operator-i18n.js'),'utf8'));dom.window.eval(source);return dom;
 }
 (async()=>{
  const calls=[];

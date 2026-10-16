@@ -55,7 +55,7 @@ class AppDesignTests(unittest.TestCase):
         script = (ROOT / 'docs/tenant-ai-agents.js').read_text(encoding='utf-8')
         self.assertNotIn("if (nav) { nav.hidden = true", script)
         self.assertIn("existing?.scopes||[]", script)
-        self.assertIn('data-ai-overview-create>+ Создать агента</button>', script)
+        self.assertIn("data-ai-overview-create>${t('createAgent')}", script)
 
 
 if __name__ == '__main__':

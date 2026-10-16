@@ -4,7 +4,7 @@ import uuid
 from tenant_platform import _connect, _fernet
 from tenant_ai_agents_schema import ensure_schema
 from tenant_chat_ai_schema import ensure_schema as ensure_chat_schema
-from tenant_ai_agents_store import _authorize
+from tenant_operator_access import authorize as _authorize
 from tenant_ai_agent_key_policy import choose_api_credential, platform_model, platform_model_allowed, platform_token_limit
 from tenant_chat_ai_policy import history
 from tenant_chat_ai_provider import generate

@@ -43,6 +43,8 @@ class Cursor:
         return {
             'connect_connected': True, 'active_connect_channels': 1,
             'enabled_agents': 1,
+            'daily_ai_limit': 50,
+            'platform_token_limit': 0,
         }
 
 
@@ -80,9 +82,11 @@ class TenantAiAgentSettingsRuntimeTests(unittest.TestCase):
             'connect_connected': True,
             'active_connect_channels': 1,
             'enabled_agents': 1,
+            'daily_ai_limit': 50,
+            'platform_token_limit': 0,
         })
         summary = next(call for call in cursor.calls if 'active_connect_channels' in call[0])
-        self.assertEqual(summary[1], (tenant, tenant, tenant))
+        self.assertEqual(summary[1], (tenant, tenant, tenant, tenant))
         self.assertIn("provider='connect'", summary[0])
         self.assertTrue(connection.committed)
 

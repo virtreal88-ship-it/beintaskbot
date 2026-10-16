@@ -105,11 +105,16 @@ def read_settings(profile):
                 EXISTS(SELECT 1 FROM saas_tenant_integrations WHERE tenant_id=%s::uuid
                   AND provider='connect' AND status='connected') AS connect_connected,
                 (SELECT count(*) FROM saas_connect_channels WHERE tenant_id=%s::uuid AND active=TRUE) AS active_connect_channels,
-                (SELECT count(*) FROM saas_ai_agents WHERE tenant_id=%s::uuid AND enabled=TRUE) AS enabled_agents''',
-                (tenant, tenant, tenant))
+                (SELECT count(*) FROM saas_ai_agents WHERE tenant_id=%s::uuid AND enabled=TRUE) AS enabled_agents,
+                (SELECT metadata->>'daily_limit' FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai') AS daily_ai_limit''',
+                (tenant, tenant, tenant, tenant))
             runtime = dict(cur.fetchone() or {})
+            from tenant_ai_agent_key_policy import platform_token_limit
+            runtime['platform_token_limit']=platform_token_limit(tenant)
             result['runtime'] = {
                 'tenant_id': tenant,
+                'daily_ai_limit':int(runtime.get('daily_ai_limit') or 50),
+                'platform_token_limit':runtime['platform_token_limit'],
                 'connect_connected': runtime.get('connect_connected') is True,
                 'active_connect_channels': int(runtime.get('active_connect_channels') or 0),
                 'enabled_agents': int(runtime.get('enabled_agents') or 0),
@@ -734,6 +739,18 @@ def _assert_resume_allowed(cur, tenant, provider, conversation, channel_id):
     return row
 
 
+def _conversation_authorize(cur, profile, provider, conversation, channel_id=''):
+    # Preserve existing configuration authority; ordinary operators get only their routes.
+    try:
+        return _authorize(cur,profile)
+    except TenantLinearError as error:
+        if error.status != 403: raise
+    from tenant_operator_access import access, assert_route
+    tenant,actor,policy=access(cur,profile,'dialogs')
+    assert_route(cur,tenant,policy,provider,conversation,str(channel_id or ''))
+    return tenant,actor
+
+
 def set_conversation_state(profile,conversation_id,state,reason='',provider='kommo',channel_id=''):
     from tenant_support_inbox_store import create_in_transaction, summarize_created
     ticket = None
@@ -744,7 +761,7 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant,actor=_authorize(cur,profile)
+            tenant,actor=_conversation_authorize(cur,profile,provider,conversation,channel_id)
             resolved_channel = _conversation_provider_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
             if state == 'human' and provider == 'connect':
                 cur.execute("SELECT state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s FOR UPDATE", (tenant,conversation))
@@ -785,7 +802,7 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant,_=_authorize(cur,profile)
+            tenant,_=_conversation_authorize(cur,profile,provider,conversation,channel_id)
             resolved_channel = _conversation_provider_read_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
             # The route was verified above against tenant-owned Connect data.
             # Diagnostics below intentionally expose only metadata and safe

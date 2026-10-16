@@ -80,7 +80,7 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     # Use the tenant's existing Kommo adapter, not a browser
                     # supplied account.  This keeps the pick-list current and
                     # prevents saved agent scopes from narrowing it.
-                    if request_provider is not None:
+                    if request_provider is not None and request.query.get('cached') != '1':
                         try:
                             remote = await request_provider(profile['tenant_id'], 'GET', 'leads/pipelines')
                         except Exception:

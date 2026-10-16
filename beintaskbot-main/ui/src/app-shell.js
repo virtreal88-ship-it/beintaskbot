@@ -21,12 +21,13 @@ if (document.body.dataset.appUi === 'kwid') {
   applyTheme()
   systemTheme.addEventListener('change',applyTheme)
   body.dataset.sidebar=preference('tenant-app-sidebar','expanded')==='collapsed'?'collapsed':'expanded'
+  const t=key=>window.tenantI18n?.t(key)||key
   const originalHeader=sidebar.firstElementChild, brand=originalHeader.querySelector('.brand')
   const header=document.createElement('div');header.className='app-sidebar-header'
   const collapse=document.createElement('button');collapse.type='button';collapse.className='app-icon-button';collapse.innerHTML=icon(icons.chevron)
   header.append(brand,collapse);originalHeader.before(header)
   const topbar=document.createElement('header');topbar.className='app-topbar'
-  topbar.innerHTML=`<button type="button" class="app-icon-button app-mobile-menu" aria-label="Menyunu aç" aria-expanded="false">${icon(icons.menu)}</button><div class="app-topbar-context"></div><div class="app-topbar-actions"><button type="button" class="app-icon-button" data-app-open="settings" aria-label="Tənzimləmələr" title="Tənzimləmələr">${icon(icons.settings)}</button><button type="button" class="app-avatar-button" aria-label="İstifadəçi menyusu" aria-expanded="false" aria-controls="appUserMenu">CS</button></div><div class="app-user-menu" id="appUserMenu" hidden><div class="app-user-name"><span id="appUserName">CRM Smart Assistant</span><small id="appUserCompany"></small></div><button type="button" data-app-open="profile">${icon(icons.profile)} Profil</button><button type="button" data-app-open="settings">${icon(icons.settings)} Tənzimləmələr</button><button type="button" data-app-logout>${icon(icons.exit)} Çıxış et</button><div class="app-theme-options">${['light','dark','system'].map(value=>`<button type="button" data-app-theme-choice="${value}" aria-label="${{light:'İşıqlı görünüş',dark:'Tünd görünüş',system:'Sistem görünüşü'}[value]}" title="${{light:'İşıqlı',dark:'Tünd',system:'Sistem'}[value]}" aria-pressed="false">${icon(icons[value==='light'?'sun':value==='dark'?'moon':'system'])}</button>`).join('')}</div></div>`
+  topbar.innerHTML=`<button type="button" class="app-icon-button app-mobile-menu" aria-label="Menyunu aç" aria-expanded="false">${icon(icons.menu)}</button><div class="app-topbar-context"></div><div class="app-topbar-actions"><select class="app-language-select" aria-label="Interface language" data-app-language><option value="ru">RU</option><option value="az">AZ</option><option value="en">EN</option></select><button type="button" class="app-icon-button" data-app-open="settings" aria-label="Tənzimləmələr" title="Tənzimləmələr">${icon(icons.settings)}</button><button type="button" class="app-avatar-button" aria-label="İstifadəçi menyusu" aria-expanded="false" aria-controls="appUserMenu">CS</button></div><div class="app-user-menu" id="appUserMenu" hidden><div class="app-user-name"><span id="appUserName">CRM Smart Assistant</span><small id="appUserCompany"></small></div><button type="button" data-app-open="profile">${icon(icons.profile)} <span data-i18n="profile">${t('profile')}</span></button><button type="button" data-app-open="settings">${icon(icons.settings)} <span data-i18n="settings">${t('settings')}</span></button><button type="button" data-app-logout>${icon(icons.exit)} <span data-i18n="logout">${t('logout')}</span></button><div class="app-theme-options">${['light','dark','system'].map(value=>`<button type="button" data-app-theme-choice="${value}" aria-label="${{light:'İşıqlı görünüş',dark:'Tünd görünüş',system:'Sistem görünüşü'}[value]}" title="${{light:'İşıqlı',dark:'Tünd',system:'Sistem'}[value]}" aria-pressed="false">${icon(icons[value==='light'?'sun':value==='dark'?'moon':'system'])}</button>`).join('')}</div></div>`
   document.querySelector('.shell').append(topbar)
   const backdrop=document.createElement('button');backdrop.type='button';backdrop.className='app-sidebar-backdrop';backdrop.setAttribute('aria-label','Menyunu bağla');backdrop.tabIndex=-1;body.append(backdrop)
   const avatar=topbar.querySelector('.app-avatar-button'), userMenu=topbar.querySelector('.app-user-menu'), mobileButton=topbar.querySelector('.app-mobile-menu')
@@ -40,7 +41,7 @@ if (document.body.dataset.appUi === 'kwid') {
     else if(wasOpen&&mobile.matches)mobileButton.focus()
   }
   function syncSidebar() {
-    collapse.setAttribute('aria-label',mobile.matches?'Menyunu bağla':body.dataset.sidebar==='collapsed'?'Yan paneli aç':'Yan paneli yığ')
+    collapse.setAttribute('aria-label',t(mobile.matches?'closeMenu':body.dataset.sidebar==='collapsed'?'expandSidebar':'collapseSidebar'))
     collapse.setAttribute('aria-expanded',String(body.dataset.sidebar!=='collapsed'))
     collapse.style.transform=body.dataset.sidebar==='collapsed'?'rotate(180deg)':''
     if(mobile.matches){body.dataset.sidebar='expanded';mobileMenu(false)}
@@ -58,7 +59,7 @@ if (document.body.dataset.appUi === 'kwid') {
   document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeUserMenu();mobileMenu(false)}})
   applyTheme()
 
-  const groups=[{id:'crm',label:'CRM',pages:['tasks','customers','deals','hot_orders']},{id:'ai',label:'AI',pages:['ai_agents']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['integrations','settings','profile']}]
+  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support']},{id:'crm',label:'CRM',pages:['tasks','customers','deals','hot_orders']},{id:'ai',label:'AI',pages:['ai_agents']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['integrations','settings','profile']}]
   const containers=new Map()
   for(const group of groups){
     const section=document.createElement('div');section.className='app-nav-group';section.dataset.group=group.id
@@ -69,11 +70,11 @@ if (document.body.dataset.appUi === 'kwid') {
   function organizeNav() {
     for(const button of [...nav.querySelectorAll('[data-view]')]){
       if(!button.querySelector('.app-nav-label')){
-        const label=document.createElement('span');label.className='app-nav-label'
+        const label=button.querySelector('[data-i18n]')||document.createElement('span');label.className='app-nav-label'
         const text=[...button.childNodes].filter(node=>node.nodeType===Node.TEXT_NODE).map(node=>node.textContent).join('').trim()
-        label.textContent=text||button.dataset.view
+        const translated=t(button.dataset.view);label.textContent=translated!==button.dataset.view?translated:text||button.dataset.view;label.dataset.i18n=button.dataset.view
         for(const node of [...button.childNodes])if(node.nodeType===Node.TEXT_NODE)node.remove()
-        button.append(label);button.title=label.textContent
+        if(!label.parentElement)button.append(label);button.title=label.textContent
       }
       const group=groups.find(group=>group.pages.includes(button.dataset.view))||groups[0], section=containers.get(group.id),items=section.querySelector('.app-nav-group-items')
       if(button.parentElement!==items)items.append(button)
@@ -82,6 +83,11 @@ if (document.body.dataset.appUi === 'kwid') {
     const settings=nav.querySelector('[data-view="settings"]')
     topbar.querySelectorAll('[data-app-open="settings"]').forEach(button=>button.hidden=!settings||settings.hidden||settings.style.display==='none')
   }
+  const languageSelect=topbar.querySelector('[data-app-language]')
+  languageSelect.value=window.tenantI18n?.language||'az'
+  languageSelect.addEventListener('change',()=>window.tenantI18n?.setLanguage(languageSelect.value))
+  function updateLanguage(){const company=document.getElementById('company');if(company&&['Şirkət','Компания','Company'].includes(company.textContent))company.textContent=t('company');syncSidebar();mobileButton.setAttribute('aria-label',t('openMenu'));avatar.setAttribute('aria-label',t('userMenu'));backdrop.setAttribute('aria-label',t('closeMenu'));for(const button of topbar.querySelectorAll('[data-app-open=settings]')){button.setAttribute('aria-label',t('settings'));button.title=t('settings');}for(const button of topbar.querySelectorAll('[data-app-theme-choice]')){const label=t(button.dataset.appThemeChoice+'Theme');button.title=label;button.setAttribute('aria-label',label);}languageSelect.value=window.tenantI18n?.language||'az';languageSelect.setAttribute('aria-label',t('language'));for(const button of nav.querySelectorAll('[data-view]')){const label=button.querySelector('.app-nav-label'),value=t(button.dataset.view);if(label&&label.textContent!==value)label.textContent=value;button.title=value;}for(const section of containers.values()){const key={operator:'operatorWorkspace',management:'management',company:'company'}[section.dataset.group];if(key){const label=section.querySelector('.app-nav-group-title span'),value=t(key);if(label.textContent!==value)label.textContent=value;}}updateContext()}
+  document.addEventListener('tenant-language',updateLanguage)
   const navObserver=new MutationObserver(organizeNav)
   navObserver.observe(nav,{childList:true,subtree:true,attributes:true,attributeFilter:['hidden','style']})
   organizeNav()
@@ -108,6 +114,7 @@ if (document.body.dataset.appUi === 'kwid') {
   const main=document.querySelector('main')
   new MutationObserver(updateContext).observe(main,{attributes:true,subtree:true,attributeFilter:['class']})
   updateContext()
+  updateLanguage()
 
   function installTabPicker(tablist) {
     if(tablist.dataset.appTabReady)return
@@ -142,7 +149,7 @@ if (document.body.dataset.appUi === 'kwid') {
   }
   new MutationObserver(decorate).observe(main,{childList:true,subtree:true})
   document.addEventListener('keydown',event=>{
-    if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return
+    if(event.defaultPrevented||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return
     const tab=event.target.closest('[role="tab"]'),tablist=tab?.closest('[role="tablist"]')
     if(!tablist)return
     const tabs=[...tablist.querySelectorAll('[role="tab"]')].filter(button=>!button.hidden&&!button.disabled)
