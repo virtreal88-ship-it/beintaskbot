@@ -43,7 +43,12 @@
   }
   const historyQuery=route=>new URLSearchParams({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id||'',conversation_id:route.conversation_id||''});
   function messageAuthor(m){if(m.author_type==='ai')return t('aiAgent');if(m.author_type==='operator')return t('operator');if(m.author_type==='participant')return m.author_name||m.participant_jid||t('groupParticipant');if(m.author_type==='customer')return m.author_name||t('customer');return t('system');}
-  function messageMarkup(items){return items.map(m=>`<article class="operator-message" data-direction="${esc(m.direction)}"><div data-user-content>${esc(m.body||t('attachment'))}</div>${m.message_type&&m.message_type!=='text'?`<small>${esc(m.message_type)}</small>`:''}<small>${esc(messageAuthor(m))} · ${esc(i18n.date(m.happened_at||m.created_at))}</small></article>`).join('');}
+  function messageMarkup(items){return items.map(m=>{
+    const media=m.source==='connect'&&['image','audio'].includes(m.message_type)&&m.external_id;
+    const transcript=m.has_transcription?`<details><summary>${t('savedTranscript')}</summary><div data-user-content>${esc(m.body)}</div></details>`:'';
+    return `<article class="operator-message" data-direction="${esc(m.direction)}"><div data-user-content>${esc(m.has_transcription?t('attachment'):(m.body||t('attachment')))}</div>${media?`<div data-chat-attachment="${esc(m.external_id)}" data-connect-media="true"><button type="button" class="outline">${t(m.message_type==='image'?'openPhoto':'openAudio')}</button><span role="status"></span></div>`:''}${transcript}${m.message_type&&m.message_type!=='text'?`<small>${esc(m.message_type)}</small>`:''}<small>${esc(messageAuthor(m))} · ${esc(i18n.date(m.happened_at||m.created_at))}</small></article>`;
+  }).join('');}
+
   async function openDialog(route){
     if(!hasRight('dialogs')){notice(t('noAccess'));return;}
     const revision=++openRevision,version=epoch;
@@ -52,6 +57,7 @@
   }
   function renderDialog(page){
     const route=page.dialog,host=$('modalContent'),modal=$('dealModal');if(!host||!modal)return;
+    document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:route.lead_id}}));
     const revision=openRevision,version=epoch,who=identity(member);
     $('modalTitle').textContent=dialogTitle(route);
     const same=()=>version===epoch&&revision===openRevision&&currentDialog?.lead_id===route.lead_id&&host.querySelector('[data-operator-dialog]');
@@ -72,7 +78,8 @@
     const sendAllowed=route.can_send&&hasRight('dialogs');$('sendChat').disabled=!sendAllowed;$('chatText').disabled=!sendAllowed;
     if(sendAllowed&&window.tenantChatSend)window.tenantChatSend.bind({api:rawApi,identity:who,leadId:route.lead_id,me:member,provider:route.provider,isCurrent:same,reload:async()=>{if(same())await openDialog(route);}});
     else $('operatorSendReason').textContent=t(route.send_block_reason||'noAccess');
-    $('operatorEarlier').onclick=async()=>{const button=$('operatorEarlier');button.disabled=true;try{const query=historyQuery(route);query.set('before',page.next_before);const earlier=await api('dialogs/history?'+query);if(!same())return;$('chatRows').insertAdjacentHTML('afterbegin',messageMarkup(earlier.messages));page.next_before=earlier.next_before;button.hidden=!page.next_before;}catch(error){if(same())$('operatorChatError').textContent=error.message;}finally{if(button.isConnected)button.disabled=false;}};
+    $('operatorEarlier').onclick=async()=>{const button=$('operatorEarlier');button.disabled=true;try{const query=historyQuery(route);query.set('before',page.next_before);const earlier=await api('dialogs/history?'+query);if(!same())return;$('chatRows').insertAdjacentHTML('afterbegin',messageMarkup(earlier.messages));document.dispatchEvent(new CustomEvent('tenant-chat-history-added'));page.next_before=earlier.next_before;button.hidden=!page.next_before;}catch(error){if(same())$('operatorChatError').textContent=error.message;}finally{if(button.isConnected)button.disabled=false;}};
+    document.dispatchEvent(new CustomEvent('tenant-chat-loaded'));
     $('chatText').focus();
   }
   async function changeState(route,action){
@@ -80,7 +87,7 @@
     const result=await api('conversations/'+encodeURIComponent(route.conversation_id)+'/'+action,'POST',{provider:route.provider,channel_id:route.channel_id,reason:'operator_'+action});
     await refresh();document.dispatchEvent(new CustomEvent('tenant-dialog-state',{detail:{route,result}}));if(action==='handoff')document.dispatchEvent(new CustomEvent('tenant-support-changed'));return result;
   }
-  function closeDialog(){openRevision++;currentDialog=null;currentPage=null;}
+  function closeDialog(){document.dispatchEvent(new CustomEvent('tenant-chat-close'));openRevision++;currentDialog=null;currentPage=null;}
   function profileChanged(data){
     const next=data.member||null,changed=identity(next)!==identity(member)||JSON.stringify(next?.permissions)!==JSON.stringify(member?.permissions)||next?.role!==member?.role||next?.active!==member?.active||JSON.stringify(data.capabilities?.modules)!==JSON.stringify(capabilities.modules);
     member=next;capabilities=data.capabilities||{};

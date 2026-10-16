@@ -1,12 +1,13 @@
 /* Explicit bounded downloads. No remote URLs or credentials are put in the DOM. */
 (() => {
   let member, lead, epoch=0;
-  const active=new Set(), urls=new Set();
+  const active=new Set(), urls=new Set(), previews=new Map();
+  const text=(key,fallback)=>globalThis.window?.tenantI18n?.t(key)||fallback;
   const identity=m=>m?.tenant_id+':'+m?.telegram_id;
   function clear(){
     epoch++;
     active.forEach(controller=>controller.abort());active.clear();
-    urls.forEach(url=>URL.revokeObjectURL(url));urls.clear();
+    urls.forEach(url=>URL.revokeObjectURL(url));urls.clear();previews.clear();
     document.querySelectorAll('[data-chat-attachment]').forEach(host=>{
       host.querySelectorAll('img,audio,video,a').forEach(node=>node.remove());
       const button=host.querySelector('button');if(button){button.hidden=false;button.disabled=false;}
@@ -18,8 +19,9 @@
       if(!button)return;
       button.onclick=async()=>{
         if(button.disabled||!member||!lead)return;
+        if(active.size>=3){status.textContent=text('mediaBusy','Bir az sonra yoxlayın.');return;}
         const current=epoch,who=identity(member),selected=lead,controller=new AbortController();
-        active.add(controller);button.disabled=true;button.setAttribute('aria-busy','true');status.textContent=' Yüklənir…';
+        active.add(controller);button.disabled=true;button.setAttribute('aria-busy','true');status.textContent=' '+text('loading','Yüklənir…');
         const valid=()=>current===epoch&&who===identity(member)&&selected===lead&&host.isConnected;
         const timer=setTimeout(()=>controller.abort(),70000);
         let blobUrl;
@@ -28,7 +30,7 @@
             expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
           const response=await fetch('/api/platform/crm/chat/attachment?'+query,
             {credentials:'same-origin',cache:'no-store',signal:controller.signal});
-          if(!response.ok){const data=await response.json();throw Error(data.error||'Fayl yüklənmədi.');}
+          if(!response.ok){const data=await response.json();const key={404:'mediaUnavailable',410:'mediaUnavailable',413:'mediaLarge',415:'mediaInvalid',429:'mediaBusy'}[response.status]||'mediaFailed';throw Error(host.dataset.connectMedia?text(key,data.error||'Fayl yüklənmədi.'):data.error||'Fayl yüklənmədi.');}
           const chunks=[],reader=response.body.getReader(),total=Number(response.headers.get('Content-Length'));
           let size=0;
           while(true){
@@ -45,25 +47,29 @@
           if(['image/jpeg','image/png','image/webp','image/gif'].includes(type)){
             node=document.createElement('img');node.alt='Çat şəkli';node.style='display:block;max-width:100%;max-height:420px';
           }else if(type.startsWith('audio/')||type==='application/ogg'){
-            node=document.createElement('audio');node.controls=true;node.style='max-width:100%';
+            node=document.createElement('audio');node.controls=true;node.preload='none';node.style='max-width:100%';
           }else if(['video/mp4','video/webm'].includes(type)){
             node=document.createElement('video');node.controls=true;node.style='max-width:100%;max-height:420px';
           }else{
             node=document.createElement('a');node.href=blobUrl;node.download='attachment'+(type==='application/pdf'?'.pdf':'');node.textContent='Faylı endir';
           }
           if(node.tagName!=='A'){
-            node.onerror=()=>{if(valid()){node.remove();button.hidden=false;status.textContent=' Fayl açıla bilmədi. Yenidən yoxlayın.';}URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);};
+            node.onerror=()=>{if(valid()){node.remove();button.hidden=false;status.textContent=' '+text('mediaInvalid','Fayl açıla bilmədi. Yenidən yoxlayın.');}URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);};
             node.src=blobUrl;
           }
+          // Keep at most three decoded previews in this tab, not the whole history.
+          if(previews.size>=3){const [oldUrl,old]=previews.entries().next().value;old.node.remove();old.button.hidden=false;URL.revokeObjectURL(oldUrl);urls.delete(oldUrl);previews.delete(oldUrl);}
+          previews.set(blobUrl,{node,button});
           host.append(node);button.hidden=true;status.textContent='';
-        }catch(error){if(valid())status.textContent=controller.signal.aborted?' Yükləmə vaxtı bitdi. Yenidən yoxlayın.':' '+error.message;}
+        }catch(error){if(valid())status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;}
         finally{clearTimeout(timer);active.delete(controller);button.disabled=false;button.setAttribute('aria-busy','false');}
       };
     });
   }
-  document.addEventListener('tenant-profile',event=>{if(identity(member)!==identity(event.detail.member))clear();member=event.detail.member;});
+  document.addEventListener('tenant-profile',event=>{if(identity(member)!==identity(event.detail.member)||JSON.stringify(member?.permissions)!==JSON.stringify(event.detail.member?.permissions)||member?.role!==event.detail.member?.role||member?.active!==event.detail.member?.active)clear();member=event.detail.member;});
   document.addEventListener('tenant-chat-open',event=>{clear();lead=event.detail.lead_id;});
   document.addEventListener('tenant-chat-history-reset',clear);
+  document.addEventListener('tenant-chat-close',clear);
   document.addEventListener('tenant-chat-loaded',bind);
   document.addEventListener('tenant-chat-history-added',bind);
   document.getElementById('closeModal')?.addEventListener('click',clear);
