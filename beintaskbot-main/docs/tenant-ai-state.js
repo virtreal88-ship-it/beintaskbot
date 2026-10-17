@@ -9,6 +9,10 @@
   Object.assign(strings.ru, {hold:'Диалог передан сотруднику или приостановлен',serverOff:'AI выключен на сервере. Обратитесь к администратору.'});
   Object.assign(strings.az, {hold:'Dialoq əməkdaşa ötürülüb və ya dayandırılıb',serverOff:'Serverdə AI söndürülüb. Administratora müraciət edin.'});
   Object.assign(strings.en, {hold:'Dialogue handed to an employee or paused',serverOff:'AI is disabled on the server. Contact an administrator.'});
+  Object.assign(strings.ru,{noData:'Нет данных',stuck:'Зависшие задачи',agentsTitle:'Состояние агентов',eventsTitle:'Последние события',noRecent:'В показанной выборке нет событий.',normalHold:'Это нормальное поведение. AI не вмешивается, пока диалог у сотрудника или на паузе.',stuckHelp:'Задачи в очереди с задержкой более 5 минут и задачи с истёкшим сроком обработки.',errors:'Зарегистрированные ошибки AI за 24 часа'});
+  Object.assign(strings.az,{noData:'Məlumat yoxdur',stuck:'İlişmiş tapşırıqlar',agentsTitle:'Agentlərin vəziyyəti',eventsTitle:'Son hadisələr',noRecent:'Göstərilən nümunədə hadisə yoxdur.',normalHold:'Bu normal davranışdır. Dialoq əməkdaşda və ya fasilədə olduqda AI müdaxilə etmir.',stuckHelp:'Növbədə 5 dəqiqədən çox gecikən və emal müddəti bitmiş tapşırıqlar.',errors:'Son 24 saatda qeydə alınmış AI xətaları'});
+  Object.assign(strings.en,{noData:'No data',stuck:'Stuck jobs',agentsTitle:'Agent state',eventsTitle:'Recent events',noRecent:'No events in the displayed sample.',normalHold:'This is expected. AI does not intervene while an employee owns the dialogue or it is paused.',stuckHelp:'Queued jobs overdue by more than 5 minutes and processing jobs with expired leases.',errors:'Recorded AI errors in 24 hours'});
+  const normalHold = code => ['manager_replied','human_handoff','conversation_human','conversation_human_or_paused','conversation_paused_or_human','conversation_paused','manager_pause','connect_human_takeover','customer_requested_manager','trigger_reply_sent_then_handoff'].includes(code);
   const describe = (code, status, t) => {
     if (['conversation_human_or_paused','conversation_paused_or_human'].includes(code)) return t('hold');
     if (['manager_replied','human_handoff','conversation_human','conversation_human_or_paused','conversation_paused_or_human','connect_human_takeover','customer_requested_manager','trigger_reply_sent_then_handoff'].includes(code)) return t('human');
@@ -32,6 +36,7 @@
     let profile = options.profile, language = options.language || 'ru', epoch = 0, destroyed = false;
     const t = key => (strings[language] || strings.ru)[key] || strings.ru[key] || strings.ru.error;
     const node = (tag, text, className) => { const el = document.createElement(tag); if (text != null) el.textContent = String(text); if (className) el.className = className; return el; };
+    const title = () => options.showTitle === false ? [] : [node('h2',t('title'))];
     const section = node('section', null, 'tenant-ai-state'); section.setAttribute('aria-live', 'polite'); host.replaceChildren(section);
     const current = (revision, tenant, user) => !destroyed && revision === epoch && String(profile?.tenant_id) === tenant && String(profile?.telegram_id) === user;
     async function request(resource, identity) {
@@ -42,8 +47,11 @@
     }
     const time = value => { const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : date.toLocaleString(language === 'az' ? 'az-AZ' : language === 'en' ? 'en-GB' : 'ru-RU'); };
     function renderEvent(event, revision, tenant, user) {
-      const row = node('li'); row.append(node('strong', describe(event.reason_code || '', event.status, t)), node('p', event.channel?.name), node('small', time(event.occurred_at)));
-      if (event.dialog && typeof options.onOpenDialog === 'function') {
+      const row = node('li',null,'tenant-ai-event');
+      row.dataset.tone=normalHold(event.reason_code)?'normal':event.status==='error'?'error':'info';
+      row.append(node('strong', describe(event.reason_code || '', event.status, t)), node('p', [event.agent_name,event.channel?.name].filter(Boolean).join(' · ')), node('small', time(event.occurred_at)));
+      if(normalHold(event.reason_code))row.append(node('p',t('normalHold'),'tenant-ai-event-help'));
+      if (event.dialog && ['connect','kommo'].includes(event.dialog.provider) && Number(event.dialog.lead_id)>0 && (event.dialog.provider!=='connect'||event.dialog.channel_id) && typeof options.onOpenDialog === 'function') {
         const button = node('button', t('open')); button.type = 'button';
         button.onclick = () => { if (current(revision, tenant, user)) options.onOpenDialog({...event.dialog}); };
         row.append(button);
@@ -53,38 +61,45 @@
     async function refresh() {
       if (destroyed) return;
       const revision = ++epoch, tenant = String(profile?.tenant_id || ''), user = String(profile?.telegram_id || '');
-      section.replaceChildren(node('h2', t('title')), node('p', t('loading')));
-      if (!tenant || !user) { section.replaceChildren(node('h2', t('title')), node('p', t('unavailable'))); return; }
+      section.replaceChildren(...title(), node('p', t('loading')));
+      if (!tenant || !user) { section.replaceChildren(...title(), node('p', t('unavailable'))); return; }
       const identity = {expected_tenant_id:tenant,expected_user_id:user,limit:'30'};
       try {
         const data = await request('state', identity); if (!current(revision, tenant, user)) return;
-        section.replaceChildren(node('h2', t('title')));
-        const summary = data.summary;
-        section.append(node('p', t('service') + ': ' + t(summary.service === 'available' ? 'available' : 'unavailableState')));
+        section.replaceChildren(...title());
+        const summary = data.summary || {};
+        const service=node('p',t('service')+': '+t(summary.service==='available'?'available':summary.service==='unavailable'?'unavailableState':'noData'),'tenant-ai-service');service.dataset.state=summary.service||'unknown';section.append(service);
         const counts = node('dl', null, 'tenant-ai-state-counts');
-        for (const [key, value] of [['enabled',summary.enabled_agents],['connected',summary.connected_channels],['errors',summary.ai_errors_24h],['sends',summary.unconfirmed_sends_24h]]) counts.append(node('dt', t(key)), node('dd', value));
-        section.append(counts, node('p', t('conditional')), node('p', t('limited')));
+        for (const [key, value] of [['enabled',summary.enabled_agents],['connected',summary.connected_channels],['errors',summary.ai_errors_24h],['stuck',summary.stuck_jobs],['sends',summary.unconfirmed_sends_24h]]) {
+          const metric=node('div',null,'tenant-ai-metric');metric.dataset.metric=key;
+          metric.append(node('dt',t(key)),node('dd',typeof value==='number'&&Number.isFinite(value)&&value>=0?value:t('noData')));counts.append(metric);
+        }
+        section.append(counts,node('p',t('stuckHelp'),'tenant-ai-note'), node('p', t('conditional'),'tenant-ai-note'), node('p', t('limited'),'tenant-ai-note'));
         if (summary.quarantined_legacy_dialogues) section.append(node('p', t('quarantine') + ': ' + summary.quarantined_legacy_dialogues));
         const reload = node('button', t('refresh')); reload.type = 'button'; reload.onclick = refresh; section.append(reload);
         const cards = node('div', null, 'tenant-ai-state-cards');
-        for (const agent of data.agents) {
-          const card = node('article'); card.append(node('h3', agent.name), node('p', t(agent.enabled ? 'on' : 'off')), node('p', t(agent.mode)), node('p', t(agent.state)));
+        section.append(node('h3',t('agentsTitle')));
+        for (const agent of data.agents || []) {
+          const card = node('article'),heading=node('header'),badge=node('span',t(agent.enabled===true?'on':agent.enabled===false?'off':'noData'),'tenant-ai-badge');badge.dataset.enabled=String(agent.enabled);heading.append(node('h4',agent.name),badge);card.append(heading,node('p',t(agent.mode)));if(agent.state!==agent.mode)card.append(node('p',t(agent.state)));
           const schedule = agent.schedule || {};
           card.append(node('p', schedule.start ? `${schedule.start}–${schedule.end} · ${schedule.timezone} · ${(schedule.days || []).map(day => new Intl.DateTimeFormat(language, {weekday:'short',timeZone:'UTC'}).format(new Date(Date.UTC(2024,0,1+day)))).join(', ')}` : t('allDay')));
           if (agent.next_shift_at) card.append(node('p', t('next') + ': ' + time(agent.next_shift_at)));
-          for (const channel of agent.channels) {
-            const item = node('div', null, 'tenant-ai-state-channel'); item.append(node('strong', channel.name), node('p', t(channel.state)));
-            for (const label of new Set(channel.reason_codes.map(code => describe(code, channel.state, t)))) item.append(node('p', label));
+          for (const channel of agent.channels || []) {
+            const item = node('div', null, 'tenant-ai-state-channel'); item.append(node('strong', channel.name));if(channel.state!==agent.state&&channel.state!==agent.mode)item.append(node('p',t(channel.state)));
+            for (const label of new Set((channel.reason_codes||[]).map(code => describe(code, channel.state, t)))) if(![t(agent.mode),t(agent.state),t(channel.state)].includes(label))item.append(node('p', label));
             if (channel.provider === 'connect') item.append(node('small', t(channel.group_messages_allowed ? 'groups' : 'groupsOff')));
             for (const [key, label] of [['human','humanCount'],['paused','pausedCount']]) if (channel.dialogue_states?.[key]) item.append(node('p', t(label) + ': ' + channel.dialogue_states[key]));
             card.append(item);
           }
-          const list = node('ul'); for (const event of agent.recent_events) list.append(renderEvent(event, revision, tenant, user));
-          card.append(list); if (!agent.recent_events.length) card.append(node('p', t('noEvents'))); cards.append(card);
+          cards.append(card);
         }
         section.append(cards);
-        const unassigned = data.events.filter(event => !event.agent_id);
-        if (unassigned.length) { section.append(node('h3', t('noAgent'))); const list = node('ul'); unassigned.forEach(event => list.append(renderEvent(event, revision, tenant, user))); section.append(list); }
+        if(!data.agents?.length)section.append(node('p',t('noData')));
+        section.append(node('h3',t('eventsTitle')));
+        const events=node('ul',null,'tenant-ai-events');
+        for(const event of data.events||[])events.append(renderEvent(event,revision,tenant,user));
+        section.append(events);
+        if(!data.events?.length)section.append(node('p',t(Array.isArray(data.events)?'noRecent':'noData')));
         if (data.can_view_technical) {
           const details = node('details'), content = node('div'); details.append(node('summary', t('technical')), content); section.append(details);
           let loaded = false;
@@ -101,7 +116,7 @@
             } catch { if (current(revision, tenant, user)) content.replaceChildren(node('p', t('unavailable'))); }
           };
         }
-      } catch { if (current(revision, tenant, user)) section.replaceChildren(node('h2', t('title')), node('p', t('unavailable'))); }
+      } catch { if (current(revision, tenant, user)) section.replaceChildren(...title(), node('p', t('unavailable'))); }
     }
     function destroy() { destroyed = true; ++epoch; section.remove(); document.removeEventListener('tenant-profile', changed); }
     function changed() { destroy(); } // Integrator remounts only for the new identity.

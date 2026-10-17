@@ -258,3 +258,26 @@ def test_api_clamps_limit_and_does_not_promote_query_technical():
         response = asyncio.run(api.handler(lambda _: PROFILE, Mock())(request))
     assert response.status == 200
     read.assert_called_once_with(PROFILE, 100, technical=False)
+
+
+def test_stuck_jobs_count_only_overdue_queue_and_expired_leases(system):
+    f = system; d = f['db']
+    f['incoming'](CA); f['incoming'](CB)
+    d.execute("UPDATE saas_ai_agent_jobs SET due_at=now()-interval '6 minutes' WHERE channel_id=%s", (CA,))
+    d.execute("UPDATE saas_ai_agent_jobs SET state='processing',lease_until=now()-interval '1 minute' WHERE channel_id=%s", (CB,)); d.commit()
+    assert state.snapshot(PROFILE)['summary']['stuck_jobs'] == 2
+    assert state.snapshot({'tenant_id':B,'telegram_id':22})['summary']['stuck_jobs'] == 0
+
+
+def test_missing_metrics_are_unknown_not_zero(system, monkeypatch):
+    read = state.read_snapshot
+    def incomplete(*args, **kwargs):
+        result = read(*args, **kwargs)
+        for key in ('ai_errors_24h','unsuccessful_sends_24h','overdue'):
+            result['metrics'].pop(key, None)
+        return result
+    monkeypatch.setattr(state, 'read_snapshot', incomplete)
+    summary = state.snapshot(PROFILE)['summary']
+    assert summary['ai_errors_24h'] is None
+    assert summary['unconfirmed_sends_24h'] is None
+    assert summary['stuck_jobs'] is None

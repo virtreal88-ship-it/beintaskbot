@@ -227,6 +227,11 @@
    if(run!==flow||version!==epoch)return;
    [options,settings,knowledgeSources]=loaded;channelRows=window.tenantAgentCatalog.parse(loaded[3]);
    knowledgeSources=knowledgeSources.filter(item=>!item.agent_id&&item.active!==false);fillOptions();const recovered=restoreProgress();
+   if(!recovered&&(params.channelIds||[]).length){
+    const chosen=new Set(params.channelIds);
+    if([...chosen].some(id=>!channelRows.some(row=>row.id===id&&row.selectable)))throw new Error('Выбранное подключение больше недоступно. Обновите каталог.');
+    document.querySelectorAll('[name=agentCreationChannel]').forEach(box=>{box.checked=chosen.has(box.value)});syncChannels();
+   }
    if(recovered){hydrateRecoveredAgent();setNotice('Продолжаем незавершённое создание. Повторная отправка не создаст дубликат.','good')}else setNotice('Мастер не меняет общие настройки компании.','good');
    modeHint();scheduleHint();$('nightAgentNext').disabled=false;$('nightAgentName').focus();
   }catch(error){if(run===flow&&version===epoch)showError(error.message)}
@@ -283,7 +288,7 @@
    const label=document.createElement('label');label.className='agent-channel-choice';const box=document.createElement('input');box.type='checkbox';box.name='agentCreationChannel';box.value=row.id;box.dataset.provider=row.provider;box.dataset.channel=row.channel_id;box.disabled=!row.selectable;
    const copy=document.createElement('span'),title=document.createElement('b'),detail=document.createElement('small');title.textContent=window.tenantAgentCatalog.connectionName(row);title.dataset.userContent='';
    const state={connected:'Подключено',disconnected:'Не подключено',disabled:'Выключено',inactive:'Неактивно',unavailable:'Недоступно',connecting:'Подключается',pending_qr:'Ожидает QR-код',reconnecting:'Переподключается',reconnect_required:'Требуется переподключение',error:'Ошибка подключения'}[row.connection?.state]||'Состояние не подтверждено';
-   detail.textContent=`${window.tenantNightL10n?.text(state)||state} · ${row.provider==='connect'?'Connect':'Kommo'} · ${window.tenantNightL10n?.text(row.selectable?'AI поддерживается':'AI недоступен')||(row.selectable?'AI поддерживается':'AI недоступен')}`;
+   detail.textContent=`${window.tenantNightL10n?.text(state)||state} · ${window.tenantNightL10n?.text(row.selectable?'AI поддерживается':'AI недоступен')||(row.selectable?'AI поддерживается':'AI недоступен')}`;
    copy.append(title,detail);label.append(box,copy);box.onchange=syncChannels;host.append(label);
   }
   if(!channelRows.length)host.textContent='Нет доступных поддерживаемых подключений.';
