@@ -23,7 +23,7 @@ const tick = async () => { for (let i=0; i<4; i++) await new Promise(resolve => 
   assert.match(w.document.body.textContent,/Исторические ошибки/); assert.match(w.document.body.textContent,/черновики/);
   assert.equal(w.document.querySelector('img'),null); assert.equal(calls.length,1);
   [...w.document.querySelectorAll('button')].find(b=>b.textContent==='Открыть диалог').click(); assert.equal(opened[0].channel_id,'c1');
-  assert.equal([...w.document.querySelectorAll('.tenant-ai-state article p')].filter(n=>n.textContent==='Готовит черновики — отправляет сотрудник').length,1,'mode/state/reason are not repeated');
+  assert.equal([...w.document.querySelectorAll('.tenant-ai-state-chips span')].filter(n=>n.textContent==='Manual — готовит черновики').length,1,'mode/state/reason are not repeated');
   assert.equal(w.document.querySelectorAll('.tenant-ai-event').length,1,'events appear once, not repeated in each agent');
   assert.equal(w.document.querySelector('.tenant-ai-event').dataset.tone,'normal');
   assert.match(w.document.querySelector('.tenant-ai-event-help').textContent,/нормальн/i);
@@ -53,6 +53,8 @@ const tick = async () => { for (let i=0; i<4; i++) await new Promise(resolve => 
   assert.equal(w.document.querySelectorAll('.tenant-ai-event button').length,2,'unscoped dialogue never gets a navigation button');
   const measured = panel.refresh();pending.shift()(response({...result,summary:{...result.summary,stuck_jobs:2},can_view_technical:false}));await measured;
   assert.equal(w.document.querySelector('[data-metric=stuck] dd').textContent,'2');
+  const automatic = panel.refresh();pending.shift()(response({...result,agents:[{...result.agents[0],mode:'automatic',state:'ready',channels:[{...result.agents[0].channels[0],state:'ready',reason_codes:[]}]}],can_view_technical:false}));await automatic;
+  assert.equal([...w.document.querySelectorAll('.tenant-ai-state-chips span')].filter(n=>n.textContent==='Automatic — replies when permitted').length,1,'Automatic is shown once as a mode, not as repeated diagnostic text');
   const stale = panel.refresh(), staleResponse = pending.shift();
   w.document.dispatchEvent(new w.CustomEvent('tenant-profile', {detail:{member:{tenant_id:'t2',telegram_id:22}}}));
   staleResponse(response(result)); await stale; assert.equal(w.document.querySelector('section'),null);

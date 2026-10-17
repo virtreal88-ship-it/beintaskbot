@@ -26,7 +26,16 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
  d.querySelector('[data-operator-assign-agent]').click();await settle();
  const form=d.querySelector('[data-operator-assignment-form]'),select=form.querySelector('select');
  assert.equal(select.options.length,2);assert.equal(select.options[1].textContent,'<b>Support</b>');assert.equal(form.querySelector('b'),null);
- select.value=AGENT;form.dispatchEvent(new w.Event('submit',{cancelable:true}));await settle();
+ select.value=AGENT;
+ const writesBefore=calls.filter(c=>c.method==='POST').length;
+ d.querySelector('[data-operator-diagnostics]').click();await settle();
+ assert.equal(d.querySelector('#operatorDiagnosticsModal').hidden,false);
+ assert.equal(d.querySelector('.operator-diagnostic-technical'),null);
+ d.querySelector('#operatorDiagnosticsClose').click();
+ assert.equal(d.querySelector('[data-operator-assignment-form]'),form,'diagnostics preserve the assignment form');
+ assert.equal(select.value,AGENT,'diagnostics preserve the selected agent');
+ assert.equal(calls.filter(c=>c.method==='POST').length,writesBefore,'diagnostics are read-only');
+ form.dispatchEvent(new w.Event('submit',{cancelable:true}));await settle();
  assert.match(form.querySelector('[role=status]').textContent,/network failed/);
  form.dispatchEvent(new w.Event('submit',{cancelable:true}));await settle();
  const posts=calls.filter(c=>c.path.endsWith('/agent-assignment')&&c.method==='POST');
@@ -37,6 +46,12 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
  assert.equal(d.querySelector('[data-operator-action=resume]').textContent,'Включить AI');assert.equal(route.state,'human');
  assert.equal(d.querySelector('[data-operator-assign-agent]'),null);
  for(const lang of ['ru','az','en']){w.tenantI18n.setLanguage(lang);assert.notEqual(w.tenantI18n.t('assignAgent'),'assignAgent');assert.notEqual(w.tenantI18n.t('assignmentHint'),'assignmentHint');}
+ d.querySelector('[data-operator-diagnostics]').click();await settle();
+ assert.equal(d.querySelector('#operatorDiagnosticsModal').hidden,false);
+ route.channel_id='00000000-0000-0000-0000-000000000202';route.lead_id=43;
+ await w.tenantOperator.openDialog(route);await settle();
+ assert.equal(d.querySelector('#operatorDiagnosticsModal').hidden,true,'switching channels closes stale diagnostic content');
+ assert.equal(calls.filter(c=>c.path.includes('/resume')||c.path.includes('/chat/send')).length,0);
  route.agent_id=null;route.available_actions=[];route.agent_assignment={allowed:false,reason:'no_eligible_agent'};
  await w.tenantOperator.openDialog(route);assert.equal(d.querySelector('[data-operator-assign-agent]'),null);assert.match(d.querySelector('#operatorActionReason').textContent,/eligible/);
  dom.window.close();console.log('PASS: channel-scoped assignment, XSS escaping, identity, retry token, separate Resume, RU/AZ/EN and safe unavailable state');
