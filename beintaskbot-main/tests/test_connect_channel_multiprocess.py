@@ -54,11 +54,13 @@ def child(dsn,kind,payload,barrier,results,cipher_key=None):
     import tenant_connect_transport as transport
     import tenant_ai_agent_actions as actions
     import tenant_ai_agent_run_store as runs
+    import tenant_operator_assignment as assignment
+    import tenant_ai_agents_store as agents
     import tenant_support_inbox_store as inbox
     from cryptography.fernet import Fernet
     schema._ready=True
     factory=lambda:psycopg.connect(dsn,row_factory=dict_row)
-    for module in (connect,transport,actions,inbox,runs):module._connect=factory
+    for module in (connect,transport,actions,inbox,runs,assignment,agents):module._connect=factory
     inbox.summarize_created=lambda *a:None
     os.environ['AI_AGENTS_ENABLED']='true'
     if cipher_key:transport._fernet=lambda:Fernet(cipher_key)
@@ -73,6 +75,7 @@ def child(dsn,kind,payload,barrier,results,cipher_key=None):
         elif kind=='enqueue':value=connect.enqueue(**payload)
         elif kind=='handoff':value=actions.handoff(payload,'needs operator')
         elif kind=='claim':value=runs.claim_next()
+        elif kind=='assign':value=assignment.assign(PROFILE,payload)
         elif kind=='webhook':
             transport._verify_signature=lambda *a:True
             value=transport.ingest(json.dumps(payload).encode(),'mock-signature',payload)
@@ -92,6 +95,37 @@ def race(db,operations,cipher_key=None):
     finally:
         for process in processes:
             if process.is_alive():process.terminate();process.join(timeout=5)
+
+
+def test_concurrent_assignment_retries_and_other_channel_webhook(channels):
+    from test_tenant_support_inbox import AGENT
+    f=channels;db=f['db']
+    db.execute('DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND channel_id=%s',(A,CA))
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='human',reason='manager_replied' WHERE tenant_id=%s::uuid AND channel_id=%s",(A,CA))
+    revision=db.execute('SELECT revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s',(A,CA))[0]['revision'];db.commit()
+    assignment=dict(provider='connect',lead_id=41,channel_id=CA,conversation_id='client',agent_id=AGENT,request_id=str(uuid.uuid4()),expected_revision=revision)
+    inbound=dict(tenant=A,channel_id=CB,conversation_id='client',lead_id=43,message_id=str(uuid.uuid4()),event_id='new',text='new')
+    values=race(db,[('assign',assignment),('assign',assignment),('enqueue',inbound)])
+    assigned=[v for v in values if isinstance(v,dict)]
+    assert len(assigned)==2 and sorted(v['replayed'] for v in assigned)==[False,True]
+    states={r['channel_id']:r['state'] for r in db.execute('SELECT * FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid',(A,))}
+    assert states=={CA:'human',CB:'active'}
+    assert len(db.execute("SELECT * FROM saas_tenant_audit_events WHERE action='ai_conversation_agent_assigned'"))==1
+    assert not db.execute('SELECT * FROM saas_ai_agent_jobs WHERE channel_id=%s',(CA,))
+    assert not db.execute('SELECT * FROM test_external_sends');db.commit()
+
+
+def test_assignment_racing_new_inbound_keeps_human_and_queues_nothing(channels):
+    from test_tenant_support_inbox import AGENT
+    f=channels;db=f['db']
+    db.execute('DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND channel_id=%s',(A,CA))
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='human' WHERE tenant_id=%s::uuid AND channel_id=%s",(A,CA))
+    revision=db.execute('SELECT revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s',(A,CA))[0]['revision'];db.commit()
+    data=dict(provider='connect',lead_id=41,channel_id=CA,conversation_id='client',agent_id=AGENT,request_id=str(uuid.uuid4()),expected_revision=revision)
+    inbound=dict(tenant=A,channel_id=CA,conversation_id='client',lead_id=41,message_id=str(uuid.uuid4()),event_id='new',text='new')
+    race(db,[('assign',data),('enqueue',inbound)])
+    assert db.execute('SELECT state FROM saas_ai_conversation_state WHERE channel_id=%s',(CA,))[0]['state']=='human'
+    assert not db.execute('SELECT * FROM saas_ai_agent_jobs WHERE channel_id=%s',(CA,));db.commit()
 
 
 def test_concurrent_duplicate_enqueue_preserves_other_channel(channels):

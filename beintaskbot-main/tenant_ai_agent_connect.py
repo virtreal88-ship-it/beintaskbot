@@ -84,8 +84,14 @@ def allowed(job: dict, connection=None) -> bool:
                 AND EXISTS (SELECT 1 FROM saas_connect_conversations route
                   WHERE route.tenant_id=i.tenant_id AND route.connect_channel_id=c.connect_channel_id
                     AND route.conversation_id=%s AND (%s::bigint IS NULL OR route.lead_id=%s))
+                AND NOT EXISTS (SELECT 1 FROM saas_ai_conversation_state bound
+                  WHERE bound.tenant_id=i.tenant_id AND bound.provider='connect'
+                    AND bound.channel_id=c.connect_channel_id::text AND bound.conversation_id=%s
+                    AND bound.agent_assignment_id IS NOT NULL AND %s::uuid IS NOT NULL
+                    AND bound.agent_id IS DISTINCT FROM %s::uuid)
               FOR SHARE OF i,c''',
-                        (channel, tenant, conversation, conversation, job.get('lead_id'), job.get('lead_id')))
+                        (channel, tenant, conversation, conversation, job.get('lead_id'), job.get('lead_id'),
+                         conversation, job.get('agent_id'), job.get('agent_id')))
             connected = bool(cur.fetchone())
             tenant_active = tenant_status_allows_ai(settings.get('status'), 'connect')
             if settings.get('operating_mode') == 'active':
@@ -153,6 +159,15 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.enabled FROM saas_ai_agents a
               WHERE a.tenant_id=%s::uuid'''+clause('a','connect')+' ORDER BY a.created_at,a.id', (tenant,))
             tenant_agents = cur.fetchall()
+            # Explicit assignment is durable across Resume. Never silently
+            # replace it with another matching agent on the next inbound.
+            cur.execute('''SELECT agent_id FROM saas_ai_conversation_state
+              WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+                AND conversation_id=%s AND agent_assignment_id IS NOT NULL''',
+                (tenant, channel_id, conversation_id))
+            bound = cur.fetchone()
+            if bound:
+                tenant_agents = [a for a in tenant_agents if str(a['id']) == str(bound['agent_id'])]
             enabled_agents = [row for row in tenant_agents if row.get('enabled') is True]
             channel_agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id)]
             agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id, is_group=is_group)]

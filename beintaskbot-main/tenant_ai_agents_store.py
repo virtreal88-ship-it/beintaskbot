@@ -401,6 +401,15 @@ def delete_agent(profile, agent_id):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
+            # Serialize with explicit assignment's shared agent lock. Cascading
+            # deletion must not erase its Human Mode and allow another agent in.
+            cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE', (tenant,agent_uuid))
+            if not cur.fetchone():
+                raise TenantLinearError('Agent tapılmadı.', 404)
+            cur.execute('''SELECT 1 FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid
+              AND provider='connect' AND agent_id=%s::uuid AND agent_assignment_id IS NOT NULL LIMIT 1''', (tenant,agent_uuid))
+            if cur.fetchone():
+                raise TenantLinearError('Агент явно назначен диалогам. Выключите его вместо удаления, чтобы сохранить их состояние.',409)
             cur.execute('SELECT 1 FROM saas_ai_test_sessions WHERE tenant_id=%s::uuid AND agent_id=%s::uuid LIMIT 1', (tenant,agent_uuid))
             if cur.fetchone():
                 raise TenantLinearError('У агента есть история виртуальных тестов. Выключите агента вместо удаления, чтобы сохранить историю и учёт лимитов.',409)
