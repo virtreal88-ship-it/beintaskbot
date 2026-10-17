@@ -58,22 +58,24 @@ def _live(cur,job,parent,expected_revision=None):
         or next_open(row['schedule'] or {})):
         raise TenantLinearError('expert_parent_inactive',409)
     authority=None
-    if '@g.us' in job['conversation_id']:
+    if job['provider']=='connect' and '@g.us' in job['conversation_id']:
         expected_revision=expected_revision if expected_revision is not None else (job.get('payload') or {}).get('group_revision')
         event_key=(job.get('payload') or {}).get('group_event_key')
         if type(expected_revision) is not int or not isinstance(event_key,str) or not event_key.strip():
             raise TenantLinearError('expert_coordination_fence_missing',409)
         try:
-            from tenant_ai_group_coordination import authority as group_authority
+            from tenant_ai_group_coordination import authority as group_authority, job_allowed
         except ImportError: raise TenantLinearError('expert_coordination_unavailable',409) from None
         authority=group_authority(cur,job['tenant_id'],job['channel_id'],job['conversation_id'],agent_id=job['agent_id'],expected_revision=expected_revision)
-        if not authority: raise TenantLinearError('expert_coordination_stale',409)
+        if not authority or not job_allowed(cur,job): raise TenantLinearError('expert_coordination_stale',409)
     return row,authority
 
 def reserve(job,parent):
     assert_job_allowed(job)
     with _connect() as conn:
         ensure_schema(conn)
+        # Release additive DDL locks before acquiring dialog/group locks.
+        conn.commit()
         with conn.cursor() as cur:
             lock_dialog(cur,job['tenant_id'],job['provider'],job['channel_id'],job['conversation_id'])
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('tenant-chat-ai:'+job['tenant_id'],))
@@ -146,6 +148,8 @@ def bounded_context(job,config,problem,lines,knowledge,tools,checks=(),previous_
 def _settle(job,parent,reservation,value,usage,status,code,attempted=True):
     with _connect() as conn:
         ensure_schema(conn)
+        # Release additive DDL locks before acquiring dialog/group locks.
+        conn.commit()
         with conn.cursor() as cur:
             try:
                 _live(cur,job,parent,(reservation.get('authority') or {}).get('revision'))
