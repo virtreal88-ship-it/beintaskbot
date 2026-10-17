@@ -24,6 +24,7 @@
   Object.assign(copy,{aiTesting:['Тестирование AI','AI sınağı','AI testing'],enableAgent:['Включить','Aktiv et','Enable'],disableAgent:['Выключить','Söndür','Disable']});
 
   Object.assign(copy,{aiState:['Состояние AI','AI vəziyyəti','AI state']});
+  copy.ai_testing=copy.aiTesting;
   const index={ru:0,az:1,en:2},supported=Object.keys(index);
   let language='ru';
   try{language=new URLSearchParams(location.search).get('site_lang')||new URLSearchParams(location.search).get('lang')||localStorage.getItem('tenant-app-language')||localStorage.getItem('crm.site.language')||document.documentElement.lang||'ru';}catch{}

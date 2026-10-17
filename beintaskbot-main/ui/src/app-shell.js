@@ -59,7 +59,7 @@ if (document.body.dataset.appUi === 'kwid') {
   document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeUserMenu();mobileMenu(false)}})
   applyTheme()
 
-  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support','night_report']},{id:'crm',label:'CRM',pages:['tasks','customers','deals','hot_orders']},{id:'ai',label:'AI',pages:['ai_agents']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['integrations','settings','profile']}]
+  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support','night_report']},{id:'crm',label:'CRM',pages:['tasks','customers','deals','hot_orders']},{id:'ai',label:'AI',pages:['ai_agents','ai_testing']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['integrations','settings','profile']}]
   const containers=new Map()
   for(const group of groups){
     const section=document.createElement('div');section.className='app-nav-group';section.dataset.group=group.id
