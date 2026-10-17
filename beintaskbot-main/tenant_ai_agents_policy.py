@@ -55,10 +55,17 @@ def agent(data, *, creating=False):
     if not isinstance(data, dict):
         raise TenantLinearError('Agent ayarları düzgün deyil.')
     allowed = {'name', 'instructions', 'enabled', 'mode', 'language', 'style',
-               'delay_seconds', 'schedule', 'scopes', 'model', 'safety', 'setup_key'}
+               'delay_seconds', 'schedule', 'scopes', 'model', 'safety', 'setup_key', 'role', 'expert_policy'}
     if set(data) - allowed:
         raise TenantLinearError('Naməlum agent ayarı var.')
     result = {}
+    if creating or 'role' in data:
+        role = data.get('role', 'primary')
+        if role not in {'primary','expert'}: raise TenantLinearError('Invalid agent role.')
+        result['role'] = role
+    if creating or 'expert_policy' in data:
+        from tenant_ai_expert_policy import policy
+        result['expert_policy'] = policy(data.get('expert_policy', {}))
     if creating or 'name' in data:
         result['name'] = _text(data.get('name'), 'Agent adı', 120, required=True)
     if creating or 'instructions' in data:
@@ -205,7 +212,7 @@ def trigger(data, *, creating=False):
         out['condition'] = {'phrase': phrase,'target_stage_id':target_stage,'task_text':task_text}
     if creating or 'actions' in data:
         actions = data.get('actions', [])
-        allowed = {'handoff','handoff_after_reply','create_task','update_phone','move_stage'}
+        allowed = {'handoff','handoff_after_reply','call_expert','create_task','update_phone','move_stage'}
         if not isinstance(actions, list) or len(actions) > 4 or any(action not in allowed for action in actions):
             raise TenantLinearError('Trigger əməliyyatları düzgün deyil.')
         out['actions'] = list(dict.fromkeys(actions))

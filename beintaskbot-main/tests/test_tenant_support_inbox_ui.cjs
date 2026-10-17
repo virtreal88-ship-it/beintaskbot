@@ -21,13 +21,16 @@ function setup(fetch){
    if(url.includes('?'))return response({tickets:[ticket],members,next_offset:null});
    const body=init.body?JSON.parse(init.body):{};
    if(init.method==='PATCH')Object.assign(ticket,body);
-   return response({ticket,messages:[{id:'message-1',direction:'incoming',body:'Не работает интернет',message_type:'text'}],next_before:null});
+   return response({ticket,expert_results:[{id:'internal-expert',expert_name:'Expert <img src=x>',model:'approved',status:'completed',result:{cause:'Требуется проверка линии',evidence:['API не подключён'],confidence:'low',safe_actions:['Уточнить код ошибки'],additional_information:'Версия приложения',requires_human:true,ticket_summary:'Проблема не подтверждена'}}],messages:[{id:'message-1',direction:'incoming',body:'Не работает интернет',message_type:'text'}],next_before:null});
  });
  await settle();const doc=dom.window.document;
  assert.match(doc.querySelector('#supportRows').textContent,/Нет связи/);
  assert.equal(doc.querySelector('#supportRows img'),null,'client names must be escaped');
  doc.querySelector('[data-support-id]').click();await settle();
  assert.match(doc.querySelector('#supportHistory').textContent,/Не работает интернет/);
+ assert.match(doc.querySelector('[data-expert-diagnostics]').textContent,/Диагностика завершена/);
+ assert.match(doc.querySelector('[data-expert-diagnostics]').textContent,/Требуется проверка линии/);
+ assert.equal(doc.querySelector('[data-expert-diagnostics] img'),null);
  assert.equal(calls.filter(x=>x.init.method&&x.init.method!=='GET').length,0,'viewing must be read-only');
  let opened=null;doc.addEventListener('tenant-support-open',e=>opened=e.detail.lead_id);
  doc.querySelector('#supportOpenChat').click();assert.equal(opened,41);

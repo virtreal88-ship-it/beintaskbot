@@ -173,7 +173,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 AND payload->>'conversation_id'=%s AND payload->>'channel_id'=%s AND fingerprint<>%s''', (tenant, conversation_id, channel_id, fingerprint))
             from tenant_ai_testing_scope import clause
             cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.enabled FROM saas_ai_agents a
-              WHERE a.tenant_id=%s::uuid'''+clause('a','connect')+' ORDER BY a.created_at,a.id', (tenant,))
+              WHERE a.role='primary' AND a.tenant_id=%s::uuid'''+clause('a','connect')+' ORDER BY a.created_at,a.id', (tenant,))
             tenant_agents = cur.fetchall()
             # Explicit assignment is durable across Resume. Never silently
             # replace it with another matching agent on the next inbound.

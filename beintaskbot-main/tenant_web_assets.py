@@ -43,6 +43,7 @@ ASSETS = (
     ('/assets/tenant-ai-reliability.js', 'tenant-ai-reliability.js', 'no-store'),
     ('/assets/tenant-night-integration.js', 'tenant-night-integration.js', 'no-store'),
     ('/assets/tenant-night-l10n.js', 'tenant-night-l10n.js', 'no-store'),
+    ('/assets/tenant-ai-expert-editor.js', 'tenant-ai-expert-editor.js', 'no-store'),
     ('/assets/tenant-ai-agents.js', 'tenant-ai-agents.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-night-agent-template.js', 'tenant-night-agent-template.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-workflow.js', 'tenant-workflow.js', 'no-cache, max-age=0, must-revalidate'),

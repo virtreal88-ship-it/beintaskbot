@@ -54,7 +54,7 @@ def claim_next():
               WHERE e.state='processing' AND EXISTS (SELECT 1 FROM saas_ai_agent_jobs j
                 WHERE j.tenant_id=e.tenant_id AND j.event_fingerprint=e.fingerprint AND j.state='unknown')''')
             cur.execute('''SELECT j.* FROM saas_ai_agent_jobs j
-              JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id AND a.enabled=TRUE
+              JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id AND a.enabled=TRUE AND a.role='primary'
               JOIN saas_ai_agent_settings cfg ON cfg.tenant_id=j.tenant_id AND cfg.enabled=TRUE AND cfg.emergency_stop=FALSE
               JOIN saas_tenants t ON t.id=j.tenant_id
               WHERE j.state='queued' AND j.due_at<=now()
@@ -130,7 +130,7 @@ def load_agent_config(job, *, with_block_reason=False):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT a.enabled AS agent_enabled,a.scopes,a.model AS agent_model,a.safety,a.schedule,a.mode,
+            cur.execute('''SELECT a.role,a.enabled AS agent_enabled,a.scopes,a.model AS agent_model,a.safety,a.schedule,a.mode,
               s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.crm_actions_enabled,i.metadata,i.secrets,t.status AS tenant_status,cs.state AS conversation_state,
               (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb JOIN saas_tenant_webhook_events ce
                 ON ce.tenant_id=j.tenant_id AND ce.fingerprint=j.event_fingerprint WHERE cb.tenant_id=j.tenant_id AND cb.enabled=TRUE
@@ -156,7 +156,7 @@ def load_agent_config(job, *, with_block_reason=False):
         reason = 'config_row_missing'
     elif not tenant_status_allows_ai(row['tenant_status'], job.get('provider')):
         reason = 'tenant_inactive'
-    elif row['agent_enabled'] is not True:
+    elif row.get('role','primary')!='primary' or row['agent_enabled'] is not True:
         reason = 'agent_disabled'
     elif row['settings_enabled'] is not True:
         reason = 'company_ai_disabled'
@@ -286,7 +286,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
                 assert_resolved(cur, job["tenant_id"], job["channel_id"], job["conversation_id"])
             tenant = str(job['tenant_id'])
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('tenant-chat-ai:' + tenant,))
-            cur.execute('''SELECT j.*,a.name,a.instructions,a.enabled AS agent_enabled,a.mode,a.version AS agent_version,a.scopes,a.language,a.style,
+            cur.execute('''SELECT j.*,a.role,a.name,a.instructions,a.enabled AS agent_enabled,a.mode,a.version AS agent_version,a.scopes,a.language,a.style,
               a.model AS configured_model,a.safety,s.company_instructions,s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,
               s.auto_send_enabled,s.crm_actions_enabled,s.max_replies_per_chat,s.updated_at AS settings_version,
               cs.state AS conversation_state,cs.revision AS conversation_revision,
@@ -324,7 +324,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
                     raise TenantLinearError('AI təhlükəsizlik ayarlarını yoxlayın.', 503) from None
             api_key, credential_source = choose_api_credential(tenant, job['agent_id'], job.get('provider'), company_key, selected_model)
             use_platform_key = credential_source == 'platform'
-            if (not tenant_status_allows_ai(row['tenant_status'],job.get('provider')) or row['settings_enabled'] is not True or row.get('emergency_stop') is True or row['agent_enabled'] is not True
+            if (not tenant_status_allows_ai(row['tenant_status'],job.get('provider')) or row['settings_enabled'] is not True or row.get('emergency_stop') is True or row['agent_enabled'] is not True or row.get('role','primary')!='primary'
                     or row['conversation_state'] in {'human','paused'}
                     or (not use_platform_key and (config.get('enabled') is not True or config.get('consent') is not True or not company_key))):
                 raise TenantLinearError('AI Agents və mövcud Chat AI ayarları aktiv deyil.', 409)
@@ -438,7 +438,7 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
             lock_dialog(cur, job["tenant_id"], job["provider"], job.get("channel_id"), job["conversation_id"])
             if job["provider"] == "connect":
                 assert_resolved(cur, job["tenant_id"], job["channel_id"], job["conversation_id"])
-            cur.execute('''SELECT j.revision,j.lease_token,j.state,a.enabled AS agent_enabled,a.version AS agent_version,s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.updated_at AS settings_version,
+            cur.execute('''SELECT j.revision,j.lease_token,j.state,a.enabled AS agent_enabled,a.role,a.version AS agent_version,s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.updated_at AS settings_version,
               i.updated_at AS config_version,i.metadata,t.status AS tenant_status,
               (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb JOIN saas_tenant_webhook_events ce
                 ON ce.tenant_id=j.tenant_id AND ce.fingerprint=j.event_fingerprint WHERE cb.tenant_id=j.tenant_id AND cb.enabled=TRUE

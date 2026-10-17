@@ -174,7 +174,7 @@ def list_agents(profile):
         with conn.cursor() as cur:
             tenant, _ = _authorize(cur, profile)
             cur.execute('''SELECT id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,
-              schedule,scopes,model,safety,version,created_at,updated_at FROM saas_ai_agents
+              schedule,scopes,model,safety,role,expert_policy,version,created_at,updated_at FROM saas_ai_agents
               WHERE tenant_id=%s::uuid ORDER BY created_at,id''', (tenant,))
             rows = [_row(row) for row in cur.fetchall()]
     return rows
@@ -280,7 +280,7 @@ def save_agent(profile, data, *, agent_id=None):
             # unfinished wizard.
             if creating and patch.get('setup_key'):
                 cur.execute('''SELECT id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,
-                  schedule,scopes,model,safety,version,created_at,updated_at FROM saas_ai_agents
+                  schedule,scopes,model,safety,role,expert_policy,version,created_at,updated_at FROM saas_ai_agents
                   WHERE tenant_id=%s::uuid AND created_by=%s AND setup_key=%s FOR SHARE''',
                             (tenant, actor, patch['setup_key']))
                 existing = _row(cur.fetchone())
@@ -292,12 +292,13 @@ def save_agent(profile, data, *, agent_id=None):
                 # the failed historical flow recoverable without deleting or
                 # guessing at any existing agent.
                 cur.execute('''SELECT id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,
-                  schedule,scopes,model,safety,version,created_at,updated_at FROM saas_ai_agents
+                  schedule,scopes,model,safety,role,expert_policy,version,created_at,updated_at FROM saas_ai_agents
                   WHERE tenant_id=%s::uuid AND created_by=%s AND setup_key IS NULL
+                    AND role='primary' AND expert_policy='{}'::jsonb AND %s='primary' AND %s::jsonb='{}'::jsonb
                     AND name=%s AND instructions=%s AND enabled=%s AND mode=%s AND language=%s AND style=%s
                     AND delay_seconds=%s AND schedule=%s::jsonb AND scopes=%s::jsonb AND model=%s AND safety=%s::jsonb
                   ORDER BY created_at DESC LIMIT 2 FOR UPDATE''',
-                            (tenant, actor, patch['name'], patch['instructions'], patch['enabled'], patch['mode'],
+                            (tenant, actor, patch['role'], _json(patch['expert_policy']), patch['name'], patch['instructions'], patch['enabled'], patch['mode'],
                              patch['language'], patch['style'], patch['delay_seconds'], _json(patch['schedule']),
                              _json(patch['scopes']), patch['model'], _json(patch['safety'])))
                 legacy = cur.fetchall()
@@ -305,7 +306,7 @@ def save_agent(profile, data, *, agent_id=None):
                     cur.execute('''UPDATE saas_ai_agents SET setup_key=%s
                       WHERE tenant_id=%s::uuid AND id=%s::uuid AND setup_key IS NULL
                       RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,
-                        schedule,scopes,model,safety,version,created_at,updated_at''',
+                        schedule,scopes,model,safety,role,expert_policy,version,created_at,updated_at''',
                                 (patch['setup_key'], tenant, legacy[0]['id']))
                     recovered = _row(cur.fetchone())
                     if recovered:
@@ -339,6 +340,8 @@ def save_agent(profile, data, *, agent_id=None):
                 if not cur.fetchone():
                     raise TenantLinearError('Seçilmiş mənbə və ya kanal bu şirkətdə aktiv deyil.')
             if creating:
+                from tenant_ai_expert_policy import validate_binding
+                validate_binding(cur,tenant,None,patch)
                 cur.execute('SELECT count(*) AS total FROM saas_ai_agents WHERE tenant_id=%s::uuid', (tenant,))
                 if int((cur.fetchone() or {}).get('total') or 0) >= MAX_AGENTS:
                     raise TenantLinearError('Agent sayı həddə çatıb.')
@@ -354,11 +357,11 @@ def save_agent(profile, data, *, agent_id=None):
                         raise TenantLinearError('Əvvəlcə AI Agents və mövcud Chat AI ayarlarını tamamlayın.', 409)
                 agent_uuid = uuid.uuid4()
                 cur.execute('''INSERT INTO saas_ai_agents(id,tenant_id,name,instructions,enabled,mode,language,style,
-                  delay_seconds,schedule,scopes,model,safety,created_by,setup_key) VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s,%s)
-                  RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,schedule,scopes,model,safety,version,created_at,updated_at''',
+                  delay_seconds,schedule,scopes,model,safety,created_by,setup_key,role,expert_policy) VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s,%s,%s,%s::jsonb)
+                  RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,schedule,scopes,model,safety,role,expert_policy,version,created_at,updated_at''',
                   (agent_uuid, tenant, patch['name'], patch['instructions'], patch['enabled'], patch['mode'], patch['language'], patch['style'],
                    patch['delay_seconds'], _json(patch['schedule']), _json(patch['scopes']), patch['model'], _json(patch['safety']), actor,
-                   patch.get('setup_key')))
+                   patch.get('setup_key'),patch['role'],_json(patch['expert_policy'])))
                 result = _row(cur.fetchone())
                 _audit(cur, tenant, actor, 'ai_agent_created', 'ai_agent', agent_uuid, {'name': patch['name']})
             else:
@@ -369,8 +372,10 @@ def save_agent(profile, data, *, agent_id=None):
                     raise TenantLinearError('Agent tapılmadı.', 404)
                 if previous['version'] != data['expected_version']:
                     raise TenantLinearError('Agent dəyişib. Səhifəni yeniləyin.', 409)
-                merged = {key: previous[key] for key in ('name','instructions','enabled','mode','language','style','delay_seconds','schedule','scopes','model','safety')}
+                merged = {key: previous[key] for key in ('name','instructions','enabled','mode','language','style','delay_seconds','schedule','scopes','model','safety','role','expert_policy')}
                 merged.update(patch)
+                from tenant_ai_expert_policy import validate_binding
+                validate_binding(cur,tenant,agent_uuid,merged,previous)
                 merged['safety'] = safety_policy(merged.get('safety'))
                 if merged['enabled']:
                     _ensure_no_active_scope_overlap(cur,tenant,merged['scopes'],exclude_agent=agent_uuid)
@@ -384,11 +389,11 @@ def save_agent(profile, data, *, agent_id=None):
                     if readiness.get('enabled') is not True or (not platform_selected and (not readiness.get('secrets') or metadata.get('enabled') is not True or metadata.get('consent') is not True)):
                         raise TenantLinearError('Əvvəlcə AI Agents və mövcud Chat AI ayarlarını tamamlayın.', 409)
                 cur.execute('''UPDATE saas_ai_agents SET name=%s,instructions=%s,enabled=%s,mode=%s,language=%s,
-                  style=%s,delay_seconds=%s,schedule=%s::jsonb,scopes=%s::jsonb,model=%s,safety=%s::jsonb,version=version+1,updated_at=now()
+                  style=%s,delay_seconds=%s,schedule=%s::jsonb,scopes=%s::jsonb,model=%s,safety=%s::jsonb,role=%s,expert_policy=%s::jsonb,version=version+1,updated_at=now()
                   WHERE tenant_id=%s::uuid AND id=%s::uuid
-                  RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,schedule,scopes,model,safety,version,created_at,updated_at''',
+                  RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,schedule,scopes,model,safety,role,expert_policy,version,created_at,updated_at''',
                   (merged['name'], merged['instructions'], merged['enabled'], merged['mode'], merged['language'], merged['style'], merged['delay_seconds'],
-                  _json(merged['schedule']), _json(merged['scopes']), merged['model'], _json(merged['safety']), tenant, agent_uuid))
+                  _json(merged['schedule']), _json(merged['scopes']), merged['model'], _json(merged['safety']), merged['role'],_json(merged['expert_policy']),tenant, agent_uuid))
                 result = _row(cur.fetchone())
                 _audit(cur, tenant, actor, 'ai_agent_updated', 'ai_agent', agent_uuid, {'version': result['version']})
         conn.commit()
@@ -587,7 +592,7 @@ def list_drafts(profile, *, limit=50):
                   AND b.talk_id=d.talk_id AND b.chat_id=d.chat_id
                   AND b.channel_id=(SELECT j.channel_id FROM saas_ai_agent_jobs j
                     WHERE j.tenant_id=d.tenant_id AND j.agent_id=d.agent_id AND j.provider='kommo' AND j.conversation_id=d.chat_id))))
-              AND a.enabled=TRUE
+              AND a.enabled=TRUE AND a.role='primary'
               ORDER BY d.created_at DESC,d.id LIMIT %s''',
               (tenant, max(1, min(int(limit), 100))))
             rows = cur.fetchall()
@@ -1120,7 +1125,7 @@ def _reserve_connect_draft_send(cur, tenant, draft):
               d.handoff_after_send,d.source_fingerprint,c.connect_channel_id::text AS channel_id,cs.revision
               FROM saas_ai_agent_drafts d
               JOIN saas_tenant_webhook_events e ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
-              JOIN saas_ai_agents a ON a.tenant_id=d.tenant_id AND a.id=d.agent_id AND a.enabled=TRUE
+              JOIN saas_ai_agents a ON a.tenant_id=d.tenant_id AND a.id=d.agent_id AND a.enabled=TRUE AND a.role='primary'
               JOIN saas_ai_agent_settings s ON s.tenant_id=d.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE
               JOIN saas_tenants t ON t.id=d.tenant_id AND t.status='active'
               JOIN saas_ai_conversation_state cs ON cs.tenant_id=d.tenant_id AND cs.provider='connect'
@@ -1190,7 +1195,7 @@ def reserve_draft_send(profile,draft_id):
             cur.execute('''UPDATE saas_ai_agent_drafts d SET state='sending',send_started_at=now()
               FROM saas_ai_conversation_state cs,saas_ai_agents a,saas_ai_agent_settings s,saas_tenants t
               WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='pending'
-                AND a.tenant_id=d.tenant_id AND a.id=d.agent_id AND a.enabled=TRUE
+                AND a.tenant_id=d.tenant_id AND a.id=d.agent_id AND a.enabled=TRUE AND a.role='primary'
                 AND s.tenant_id=d.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE AND t.id=d.tenant_id AND t.status='active'
                 AND cs.tenant_id=d.tenant_id AND cs.provider='kommo' AND cs.conversation_id=d.chat_id
                 AND cs.state='active' AND cs.last_inbound_message_id=d.source_message_id
