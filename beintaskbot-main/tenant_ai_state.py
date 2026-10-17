@@ -202,8 +202,9 @@ def snapshot(profile, limit=30, *, technical=False, now=None):
                         if channel['provider'] == state['provider'] and channel['channel_id'] == state['channel_id']:
                             channel.setdefault('dialogue_states', {})[state['state']] = int(state['n'])
     metrics = reliability['metrics']
-    errors = int(metrics.get('ai_errors_24h') or 0)
-    sends = int(metrics.get('unsuccessful_sends_24h') or 0)
+    errors = int(metrics['ai_errors_24h']) if metrics.get('ai_errors_24h') is not None else None
+    sends = int(metrics['unsuccessful_sends_24h']) if metrics.get('unsuccessful_sends_24h') is not None else None
+    stuck = sum(int(metrics[key]) for key in ('overdue','expired_leases')) if all(metrics.get(key) is not None for key in ('overdue','expired_leases')) else None
     attention = bool(errors or sends or metrics.get('overdue') or metrics.get('expired_leases'))
     ready_count = sum(a['state'] in {'ready', 'manual', 'test'} for a in agents.values())
     result = {'schema_version': 1, 'generated_at': now.isoformat(),
@@ -213,6 +214,7 @@ def snapshot(profile, limit=30, *, technical=False, now=None):
                           'eligible_agents': ready_count,
                           'connected_channels': sum(c['connection']['state'] == 'connected' for c in channels.values()),
                           'ai_errors_24h': errors, 'unconfirmed_sends_24h': sends,
+                          'stuck_jobs': stuck,
                           'quarantined_legacy_dialogues': quarantined},
               'agents': list(agents.values()), 'events': events,
               'can_view_technical': policy.allows('ai_agents'),

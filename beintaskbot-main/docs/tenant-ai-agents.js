@@ -38,7 +38,7 @@
   if(!profile||!window.tenantAIState)return;
   let host=$('aiUnifiedState');if(!host){host=document.createElement('div');host.id='aiUnifiedState';host.hidden=true;$('view-ai_agents').append(host)}
   openModalContent(host,t('aiState'));
-  aiStatePanel=window.tenantAIState.mount(host,{profile,language:window.tenantI18n?.language||'ru',onOpenDialog:route=>{closeModal();return window.tenantOperator?.openDialog(route)}});
+  aiStatePanel=window.tenantAIState.mount(host,{profile,showTitle:false,language:window.tenantI18n?.language||'ru',onOpenDialog:route=>{closeModal();return window.tenantOperator?.openDialog(route)}});
  }
 
   function openContent(id,title){const node=$(id);if(!node)return;openModalContent(node,title)}

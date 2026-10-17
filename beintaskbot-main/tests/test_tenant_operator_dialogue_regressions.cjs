@@ -19,8 +19,8 @@ assert.doesNotMatch(ui,/m\.author_name\|\|m\.participant_jid\|\|t\('groupPartici
 assert.match(ui,/operatorEditConversationName/,'contact and group names must be edited from the compact title');
 assert.match(ui,/operator-participant-edit/,'group participant editing must be a compact pencil action');
 assert.doesNotMatch(ui,/Изменить имя участника/,'the message body must not render the former large participant edit button');
-assert.match(ui,/replyMyself/,'an active AI conversation must expose the human handoff as its primary action');
-assert.match(ui,/returnAI/,'a human handoff must use a contextual Return AI label');
+assert.match(ui,/stopDialogueAI/,'an active AI conversation exposes Pause as Stop AI');
+assert.match(ui,/enableDialogueAI/,'a resumable dialogue exposes Enable AI');
 assert.match(ui,/operator-more-actions/,'secondary controls belong in the compact overflow menu');
 assert.match(ui,/data-chat-attachment/,'media stays behind the existing explicit preview control');
 assert.doesNotMatch(ui,/\$\{esc\(m\.message_type\)\}<\/small>/,'technical media types must not be rendered in message cards');
