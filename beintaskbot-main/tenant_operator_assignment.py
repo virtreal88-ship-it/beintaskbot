@@ -29,6 +29,9 @@ def identity(data):
 
 def context(cur, profile, data, *, writing=False):
     channel, conversation, lead = identity(data)
+    from tenant_ai_group_coordination import group_jid
+    if group_jid(conversation):
+        raise TenantLinearError('Для группы используйте назначение основного агента и канала.', 409)
     tenant, actor, policy = access(cur, profile, 'dialogs')
     if writing:
         lock_dialog(cur, tenant, 'connect', channel, conversation)

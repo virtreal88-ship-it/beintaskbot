@@ -41,7 +41,7 @@
   const dialogTitle=row=>row.customer_name||(row.customer_kind==='group'?t('whatsappGroup'):row.phone||t('whatsappContact'));
   const dialogIdentity=row=>row.customer_kind==='group'?`${t('technicalId')}: ${row.conversation_id||'—'}`:row.phone||`${t('technicalId')}: ${row.conversation_id||'—'}`;
   function renderRows(){
-    $('operatorRows').innerHTML=rows.map((row,index)=>`<article class="operator-row"><div><b data-user-content>${esc(dialogTitle(row))}</b><small data-user-content>${esc(dialogIdentity(row))}</small></div><div><b data-user-content>${esc(row.channel_name||row.channel_id)}</b><small>${t('agent')}: <span data-user-content>${esc(row.agent_name||t('noAgent'))}</span></small></div><div><span class="operator-state" data-state="${esc(row.display_state)}">${t(row.display_state)}</span><small>${t('reason')}: ${esc(dialogReason(row))}</small><small>${t('lastMessage')}: ${esc(i18n.date(row.last_message_at))}</small><small>${t('assignee')}: ${esc(row.assignee_name||t('unassigned'))}</small></div><button type="button" class="outline" data-open-operator="${index}">${t('openChat')}</button></article>`).join('')||`<p>${t('empty')}</p>`;
+    $('operatorRows').innerHTML=rows.map((row,index)=>`<article class="operator-row"><div><b data-user-content>${esc(dialogTitle(row))}</b><small data-user-content>${esc(dialogIdentity(row))}</small></div><div><b data-user-content>${esc(row.group_coordination?row.group_coordination.channels.map(c=>c.channel_name||c.channel_id).join(' · '):row.channel_name||row.channel_id)}</b><small>${t('agent')}: <span data-user-content>${esc(row.agent_name||t('noAgent'))}</span></small></div><div><span class="operator-state" data-state="${esc(row.display_state)}">${t(row.display_state)}</span><small>${t('reason')}: ${esc(dialogReason(row))}</small><small>${t('lastMessage')}: ${esc(i18n.date(row.last_message_at))}</small><small>${t('assignee')}: ${esc(row.assignee_name||t('unassigned'))}</small></div><button type="button" class="outline" data-open-operator="${index}">${t('openChat')}</button></article>`).join('')||`<p>${t('empty')}</p>`;
     $('operatorMore').hidden=nextOffset===null;$('operatorMore').textContent=t('more');$('operatorRows').querySelectorAll('[data-open-operator]').forEach(button=>button.onclick=()=>openDialog(rows[Number(button.dataset.openOperator)]));
   }
   const historyQuery=route=>new URLSearchParams({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id||'',conversation_id:route.conversation_id||''});
@@ -123,6 +123,24 @@
     const actions=new Set(route.available_actions||[]),primaryHost=$('operatorPrimaryAction'),moreHost=$('operatorMoreActions');
     const actionButton=(label,action,primary=false)=>{const button=document.createElement('button');button.type='button';button.className=primary?'primary':'outline';button.textContent=t(label);button.dataset.operatorAction=action;button.disabled=!route.controls_allowed;button.onclick=async()=>{button.disabled=true;try{await changeState(route,action);if(same())await openDialog(route);}catch(error){if(same())$('operatorChatError').textContent=error.message;}finally{if(button.isConnected)button.disabled=!route.controls_allowed;}};return button;};
     let primaryAction='';if(actions.has('pause')){primaryAction='pause';primaryHost.append(actionButton('stopDialogueAI','pause',true));}else if(actions.has('resume')){primaryAction='resume';primaryHost.append(actionButton('enableDialogueAI','resume',true));}
+    if(route.group_coordination){
+      const g=route.group_coordination,box=document.createElement('section');box.className='operator-assignment-form';
+      const channels=document.createElement('select');channels.setAttribute('aria-label',t('channel'));
+      for(const c of g.channels){const o=document.createElement('option');o.value=c.channel_id;o.textContent=c.channel_name||c.channel_id;channels.append(o);}channels.value=route.channel_id;
+      channels.onchange=()=>{const c=g.channels.find(x=>x.channel_id===channels.value);if(c)openDialog({...route,channel_id:c.channel_id,lead_id:c.lead_id});};box.append(channels);
+      const status=document.createElement('p');status.textContent='AI: '+t(g.state)+' · '+(g.primary_agent_id?g.primary_agent_name||t('noAgent'):t('groupMissing'))+' · '+(g.reason?i18n.reason(g.reason):'');box.append(status);
+      if(g.can_configure){const button=document.createElement('button');button.type='button';button.textContent=t('groupConfigure');button.onclick=()=>{
+        button.disabled=true;const form=document.createElement('form'),inputs=[];
+        for(let n=0;n<Math.max(2,g.assignments.length);n++){const select=document.createElement('select');select.setAttribute('aria-label',t('groupPrimary')+' '+(n+1));select.append(new Option(t('groupNone'),''));
+          for(const a of g.agents||[])for(const c of g.channels){if((a.scopes||[]).some(s=>s.provider==='connect'&&(!s.channel_id||s.channel_id===c.channel_id)&&s.allow_group_messages===true)){const key=a.id+'|'+c.channel_id;select.append(new Option(a.name+' — '+c.channel_name,key));}}
+          const saved=g.assignments[n];if(saved)select.value=saved.agent_id+'|'+saved.channel_id;
+          const priority=document.createElement('input');priority.type='number';priority.min='0';priority.max='100';priority.value=String(saved?.priority??(n?20:10));priority.setAttribute('aria-label',t('groupPriority')+' '+(n+1));form.append(select,priority);inputs.push([select,priority]);}
+        const hint=document.createElement('p');hint.textContent=t('groupHint');form.append(hint);
+        const save=document.createElement('button');save.type='submit';save.textContent=t('groupSave');const error=document.createElement('p');error.setAttribute('role','status');form.append(save,error);
+        form.onsubmit=async event=>{event.preventDefault();save.disabled=true;try{const assignments=inputs.filter(([s])=>s.value).map(([s,p])=>({agent_id:s.value.split('|')[0],channel_id:s.value.split('|')[1],priority:Number(p.value)}));await api('dialogs/group-coordination','POST',{conversation_id:g.group_jid,expected_revision:g.revision,assignments});if(same())await openDialog(route);}catch(e){error.textContent=e.message;}finally{save.disabled=false;}};box.append(form);
+      };box.append(button);}
+      $('chatRows').before(box);
+    }
     if(route.provider==='connect'&&!route.agent_id&&route.agent_assignment?.allowed){
       $('operatorActionReason').hidden=false;$('operatorActionReason').textContent=t('assignmentAvailable');
       const assign=document.createElement('button');assign.type='button';assign.className='outline';assign.textContent=t('assignAgent');assign.dataset.operatorAssignAgent='true';primaryHost.append(assign);

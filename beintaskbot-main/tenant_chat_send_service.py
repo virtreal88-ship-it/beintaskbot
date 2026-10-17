@@ -31,7 +31,7 @@ async def run(session, data, request, wait_slot, logger):
         external_started = True
         message_id = await asyncio.to_thread(send_connect, credentials, item['command']['text'], item['command']['request_id']) if is_connect else await asyncio.to_thread(send, credentials, route, item['command']['text'], wait_slot)
         if is_connect:
-            await asyncio.to_thread(record_connect_outbound, tenant, lead_id, credentials, item['command']['text'], message_id)
+            await asyncio.to_thread(record_connect_outbound, tenant, lead_id, credentials, item['command']['text'], message_id, actor=profile['telegram_id'])
         await asyncio.to_thread(finish, item, 'accepted', message_id)
         return {'state': 'accepted', 'message_id': message_id, 'origin': route['origin']}
     except TenantLinearError:

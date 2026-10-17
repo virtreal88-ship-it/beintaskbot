@@ -18,6 +18,9 @@ def job_scope(job):
 
 def lock_dialog(cur, tenant, provider, channel, conversation):
     scope = channel_scope(provider, channel)
+    if provider == 'connect':
+        from tenant_ai_group_coordination import lock_group
+        lock_group(cur, tenant, conversation)
     # JSON avoids delimiter collisions. Lock includes tenant/provider/channel/JID.
     import json
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',

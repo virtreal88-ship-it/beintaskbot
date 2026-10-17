@@ -67,6 +67,8 @@ def allowed(job: dict, connection=None) -> bool:
     tenant = str(job.get('tenant_id') or '')
     channel = str(job.get('channel_id') or '')
     conversation = str(job.get('conversation_id') or '')
+    from tenant_ai_group_coordination import group_jid
+    bound_agent = None if group_jid(conversation) else job.get('agent_id')
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
         if connection is None:
             ensure_schema(conn)
@@ -91,7 +93,7 @@ def allowed(job: dict, connection=None) -> bool:
                     AND bound.agent_id IS DISTINCT FROM %s::uuid)
               FOR SHARE OF i,c''',
                         (channel, tenant, conversation, conversation, job.get('lead_id'), job.get('lead_id'),
-                         conversation, job.get('agent_id'), job.get('agent_id')))
+                         conversation, bound_agent, bound_agent))
             connected = bool(cur.fetchone())
             tenant_active = tenant_status_allows_ai(settings.get('status'), 'connect')
             if settings.get('operating_mode') == 'active':
@@ -100,13 +102,18 @@ def allowed(job: dict, connection=None) -> bool:
             else:
                 result = bool(tenant_active and connected and settings.get('enabled') is True and settings.get('emergency_stop') is not True
                               and test_allowed(cur, tenant, channel, conversation, agent_id=job.get('agent_id')))
+            from tenant_ai_group_coordination import group_jid, authority, job_allowed
+            if group_jid(conversation):
+                result = result and bool(authority(cur, tenant, channel, conversation, job.get('agent_id')))
+                if job.get('agent_id'):
+                    result = result and job_allowed(cur, job)
         if connection is None:
             conn.commit()
     return result
 
 
 def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
-            message_id: str, event_id: str, text: str, message_type: str = 'text', is_group=False, connection=None) -> int:
+            message_id: str, event_id: str, text: str, message_type: str = 'text', is_group=False, provider_message_id=None, connection=None) -> int:
     """Queue one inbound Connect message for all matching tenant agents.
 
     The webhook event table + job primary key make Connect retries and Evolution
@@ -130,6 +137,15 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                        # A phone is available only for the first inbound event
                        # in a person-to-person WhatsApp conversation.
                        'first_inquiry': False, 'phone': ''}
+            from tenant_ai_group_coordination import group_jid, admit
+            group_fence = None
+            if is_group and not group_jid(conversation_id):
+                return 0
+            if group_jid(conversation_id):
+                group_fence = admit(cur, tenant, channel_id, conversation_id, provider_message_id, message_id)
+                if not group_fence:
+                    return 0
+                payload.update(group_fence)
             cur.execute('''INSERT INTO saas_tenant_webhook_events
               (tenant_id,fingerprint,provider,external_id,event_type,payload,state,available_at)
               VALUES(%s::uuid,%s,'connect',%s,'incoming_message',%s::jsonb,'queued',now())
@@ -166,8 +182,10 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 AND conversation_id=%s AND agent_assignment_id IS NOT NULL''',
                 (tenant, channel_id, conversation_id))
             bound = cur.fetchone()
-            if bound:
+            if bound and not group_fence:
                 tenant_agents = [a for a in tenant_agents if str(a['id']) == str(bound['agent_id'])]
+            if group_fence:
+                tenant_agents = [a for a in tenant_agents if str(a['id']) == group_fence['primary_agent_id']]
             enabled_agents = [row for row in tenant_agents if row.get('enabled') is True]
             channel_agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id)]
             agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id, is_group=is_group)]
@@ -243,6 +261,7 @@ def finish_sent_after_reply_handoff(job: dict, reservation: dict, message_id: st
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            lock_dialog(cur,job['tenant_id'],'connect',job['channel_id'],job['conversation_id'])
             recorded = handoff_recorded(cur, job)
             cur.execute("UPDATE saas_ai_agent_runs SET state='completed',result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",
                         (_json({'send_state': 'accepted', 'message_id': str(message_id)}),
@@ -256,6 +275,9 @@ def finish_sent_after_reply_handoff(job: dict, reservation: dict, message_id: st
             if recorded:
                 conn.commit()
                 return True
+            from tenant_ai_group_coordination import stop
+            lock_dialog(cur,job['tenant_id'],'connect',job['channel_id'],job['conversation_id'])
+            stop(cur,job['tenant_id'],job['conversation_id'],reason='trigger_reply_sent_then_handoff')
             # Do not overwrite a real operator takeover that won the race.
             cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s AND state='active' RETURNING revision",
                         (job['tenant_id'], job['conversation_id'], job_scope(job)))
@@ -301,7 +323,7 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
              'channel': channel_id} for row in rows]
 
 
-def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation_id: str, *, connection=None) -> None:
+def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation_id: str, *, connection=None, actor=None) -> None:
     """Human replies stop pending work atomically with the caller's event receipt."""
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
         ensure_schema(conn)
@@ -310,6 +332,8 @@ def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation
             cur.execute("SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s AND lead_id=%s", (tenant, channel_id, conversation_id, int(lead_id)))
             if not cur.fetchone():
                 raise ValueError("Connect dialogue route mismatch")
+            from tenant_ai_group_coordination import stop
+            stop(cur, tenant, conversation_id, actor=actor)
             cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,channel_id,state,reason)
               VALUES(%s::uuid,'connect',%s,%s,'human','manager_replied')
               ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE SET state='human',reason='manager_replied',

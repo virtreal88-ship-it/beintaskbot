@@ -69,6 +69,8 @@ def _message(item, *, group=False, participant_names=None):
         author_type = 'participant' if group else 'customer'
     else:
         author_type = 'system'
+    if group and isinstance(raw,dict) and raw.get('ai_authored') is True:
+        author_type='ai'
     participant_jid, participant_alt, whatsapp_name = _participant_fields(raw)
     if direction == 'incoming' and group:
         # Resolution is intentionally exact-JID scoped.  Do not conflate a
@@ -112,7 +114,7 @@ def projection(policy):
         COALESCE(NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
         ch.name AS channel_name,ch.active AS channel_active,'connect:'||c.connect_channel_id::text AS history_channel,
         COALESCE(cs.agent_id,j.agent_id) AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,
-        COALESCE(cs.state,'active') AS state,COALESCE(cs.reason,'') AS reason,cs.updated_at,
+        COALESCE(gc.state,cs.state,'active') AS state,COALESCE(gc.reason,cs.reason,'') AS reason,COALESCE(gc.updated_at,cs.updated_at) AS updated_at,
         cs.tenant_id IS NOT NULL AS tracked,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,
         t.status AS tenant_status,j.state AS latest_job_state,COALESCE(j.error_code,'') AS latest_job_error,
         COALESCE(lm.last_message_at,c.last_message_at,c.created_at) AS last_message_at,
@@ -122,6 +124,7 @@ def projection(policy):
       FROM saas_connect_conversations c
       JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id
       JOIN saas_tenants t ON t.id=c.tenant_id
+      LEFT JOIN saas_ai_group_coordination gc ON gc.tenant_id=c.tenant_id AND gc.provider='connect' AND gc.group_jid=c.conversation_id
       LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id AND cs.channel_id=c.connect_channel_id::text
       LEFT JOIN LATERAL(SELECT j0.* FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=c.tenant_id AND j0.provider='connect'
         AND j0.channel_id=c.connect_channel_id::text AND j0.conversation_id=c.conversation_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
@@ -201,6 +204,24 @@ def decorate(row):
     return public(item)
 
 
+def apply_group_view(cur,tenant,dialog):
+    from tenant_ai_group_coordination import view
+    from tenant_ai_agent_access import tenant_status_allows_ai
+    g=view(cur,tenant,dialog['conversation_id']);dialog['group_coordination']=g
+    cur.execute('SELECT name FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,g['primary_agent_id']))
+    name=(cur.fetchone() or {}).get('name');g['primary_agent_name']=name
+    cur.execute('SELECT display_name FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',(tenant,g['assigned_to']))
+    assignee=(cur.fetchone() or {}).get('display_name')
+    usable=bool(g['primary_agent_id'] and dialog.get('controls_allowed') and dialog.get('company_enabled') and not dialog.get('company_emergency_stop') and dialog.get('connected') and runtime_flag('AI_AGENTS_ENABLED') and tenant_status_allows_ai(dialog.get('tenant_status'),'connect'))
+    state=g['state'];display=state if state!='active' or usable else 'blocked'
+    dialog.update(agent_id=g['primary_agent_id'],agent_name=name,assignee_name=assignee,
+                  state=state,display_state=display,display_reason=g['reason'],
+                  ai_availability='available' if display=='active' else 'stopped' if display in ('human','paused') else 'blocked',
+                  resume_allowed=usable and state!='active',
+                  available_actions=['pause','handoff'] if state=='active' and dialog.get('controls_allowed') else ['resume'] if usable else [])
+    return dialog
+
+
 def listing(profile,search='',channel='',agent='',state='',offset=0):
     if state not in {'','active','paused','human','blocked','error','unmanaged','attention'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
@@ -211,7 +232,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
         with conn.cursor() as cur:
             tenant,_,policy=access(cur,profile,'dialogs')
             sql,scopes=projection(policy);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
-            cur.execute(sql+"SELECT count(*) FILTER(WHERE display_state IN ('human','paused','blocked','error')) AS attention_count FROM visible",params)
+            cur.execute(sql+"SELECT count(DISTINCT CASE WHEN provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$' THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END) FILTER(WHERE display_state IN ('human','paused','blocked','error')) AS attention_count FROM visible",params)
             count=int(cur.fetchone()['attention_count'])
             cur.execute(sql+"SELECT DISTINCT provider||':'||channel_id AS id,channel_name AS name FROM visible ORDER BY name",params)
             channels=[dict(r) for r in cur.fetchall()]
@@ -224,9 +245,14 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
             elif agent:where.append('agent_id=%s::uuid');args.append(identifier(agent))
             if state=='attention':where.append("display_state IN ('human','paused','blocked','error')")
             elif state:where.append('display_state=%s');args.append(state)
-            cur.execute(sql+'SELECT * FROM visible'+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY last_message_at DESC NULLS LAST,provider,lead_id LIMIT 51 OFFSET %s',(*params,*args,offset))
+            cur.execute(sql+"SELECT * FROM (SELECT visible.*,row_number() OVER(PARTITION BY CASE WHEN provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$' THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END ORDER BY last_message_at DESC NULLS LAST,lead_id) AS logical_rank FROM visible"+(' WHERE '+' AND '.join(where) if where else '')+') folded WHERE logical_rank=1 ORDER BY last_message_at DESC NULLS LAST,provider,lead_id LIMIT 51 OFFSET %s',(*params,*args,offset))
             rows=cur.fetchall()
-    return {'dialogs':[decorate(r) for r in rows[:50]],'channels':channels,'agents':agents,
+            from tenant_ai_group_coordination import group_jid,view as group_view
+            rows=[decorate(r) for r in rows]
+            for r in rows:
+                if r['provider']=='connect' and group_jid(r['conversation_id']):
+                    apply_group_view(cur,tenant,r)
+    return {'dialogs':rows[:50],'channels':channels,'agents':agents,
             'attention_count':count,'next_offset':offset+50 if len(rows)>50 else None}
 
 
@@ -247,7 +273,18 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None):
             row=cur.fetchone()
             if not row:raise TenantLinearError('Диалог не найден.',404)
             dialog=decorate(row)
-            if provider=='connect' and not dialog.get('agent_id'):
+            from tenant_ai_group_coordination import group_jid, view as group_view
+            if provider=='connect' and group_jid(conversation):
+                apply_group_view(cur,tenant,dialog)
+                try:
+                    from tenant_ai_agents_store import _authorize
+                    _authorize(cur,profile)
+                    dialog['group_coordination']['can_configure']=True
+                    cur.execute('SELECT id,name,scopes,schedule FROM saas_ai_agents WHERE tenant_id=%s::uuid AND enabled=TRUE',(tenant,))
+                    dialog['group_coordination']['agents']=[public(r) for r in cur.fetchall()]
+                except TenantLinearError:
+                    dialog['group_coordination']['can_configure']=False
+            if provider=='connect' and not group_jid(conversation) and not dialog.get('agent_id'):
                 if dialog.get('unambiguous') and dialog.get('controls_allowed'):
                     from tenant_operator_assignment import options_in_transaction
                     dialog['agent_assignment']=options_in_transaction(cur,profile,{

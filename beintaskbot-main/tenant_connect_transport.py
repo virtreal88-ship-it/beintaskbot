@@ -318,6 +318,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
         from tenant_ai_agents_schema import ensure_schema
         ensure_schema(conn)
         _schema(conn)
+        conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
             cur.execute("SELECT tenant_id,secrets FROM saas_tenant_integrations WHERE provider='connect' AND status='connected' AND secrets IS NOT NULL")
             matches = []
@@ -338,6 +339,33 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
             inserted_event = bool(cur.fetchone())
             outbound = event_type == 'message.outbound.observed' or data.get('fromMe') is True
+            from tenant_ai_group_coordination import group_jid, known_ai_origin, verified_employee, stop as stop_group
+            coordinated = bool(group_jid(conversation))
+            ai_origin = coordinated and known_ai_origin(cur,tenant,data)
+            uncertain_origin = coordinated and data.get('authorshipUncertain') is True and not ai_origin
+            employee = verified_employee(cur,tenant,data) if coordinated and not ai_origin and not uncertain_origin else None
+            if coordinated and (ai_origin or employee is not None or uncertain_origin):
+                # A repeated employee event must not undo a later explicit Resume.
+                cur.execute('SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND channel=%s',
+                            (tenant,'connect:'+str(data.get('id') or event_id),'connect:'+channel_id))
+                if not inserted_event or cur.fetchone():
+                    conn.commit()
+                    return True
+            control_replayed=False
+            if coordinated and (employee is not None or uncertain_origin):
+                from tenant_ai_group_coordination import claim_control_event
+                if not claim_control_event(cur,tenant,channel_id,conversation,data.get('externalMessageId')):
+                    employee=None
+                    uncertain_origin=False
+                    control_replayed=True  # Persist history without replaying control.
+            if uncertain_origin:
+                from tenant_ai_group_coordination import read as read_group
+                if read_group(cur,tenant,conversation).get('state')!='human':
+                    stop_group(cur,tenant,conversation,state='paused',reason='group_authorship_unresolved')
+
+            if ai_origin:
+                data={**data,'ai_authored':True}
+
             if outbound:
                 # Direction comes from the signed event/fromMe fact, never the
                 # message text.  A known accepted AI row stays AI even when
@@ -358,9 +386,9 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                     raise TenantPlatformError('Connect message scope mismatch.')
                 # A malformed outbound event with ``fromMe:false`` is kept as
                 # an observable outbound record, but cannot take over a chat.
-                if data.get('fromMe') is not False and not _is_ai_message(stored):
+                if data.get('fromMe') is not False and not _is_ai_message(stored) and not ai_origin and (not coordinated or employee is not None):
                     from tenant_ai_agent_connect import mark_operator_reply
-                    mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn)
+                    mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn, actor=employee)
                 conn.commit()
                 return True
             # A legacy inbound delivery may have committed the durable CRM
@@ -411,6 +439,11 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
             # The CRM copy, dedup receipt and AI admission commit together.
             # A failed queue write rolls back the webhook, so Connect can retry.
             if accepted and queued_payload:
+                if coordinated and (ai_origin or employee is not None or uncertain_origin or control_replayed):
+                    if employee is not None:
+                        stop_group(cur,tenant,conversation,reason='verified_employee_reply',actor=employee)
+                    conn.commit()
+                    return True
                 cur.execute("SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND kommo_lead_id=%s AND channel=%s AND direction='incoming'",
                             (tenant, 'connect:' + queued_payload[4], queued_payload[3], 'connect:' + channel_id))
                 if not cur.fetchone():
@@ -419,7 +452,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
                         lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
                         text=queued_payload[6], message_type=queued_payload[7],
-                        is_group=metadata.get('kind') == 'group', connection=conn)
+                        is_group=metadata.get('kind') == 'group', provider_message_id=data.get('externalMessageId'), connection=conn)
             conn.commit()
     return accepted
 
@@ -448,6 +481,13 @@ def send_ai_reply(route: dict, text: str, run_id: str) -> str:
         client_message_id = str(uuid.UUID(str(run_id)))
     except (ValueError, TypeError, AttributeError):
         raise TenantPlatformError('AI cavabının sorğu ID-si düzgün deyil.') from None
+    from tenant_ai_group_coordination import group_jid
+    if group_jid(route.get('conversation_id')):
+        result = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + '/group-messages',
+                          {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':client_message_id})
+        if result.get('status') != 'sent' or not result.get('id'):
+            raise TenantPlatformError('Connect group delivery was not confirmed.')
+        return str(result['id'])
     return send(route, text, client_message_id)
 
 
@@ -462,11 +502,33 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
     arrives only after an already accepted AI request cannot be recalled; that
     ordering is recorded rather than hidden.
     """
+    from tenant_ai_group_coordination import group_jid, reserve_delivery, delivery_source, job_allowed
+    coordinated = bool(group_jid(conversation_id))
+    if coordinated and not reserve_delivery(tenant, channel_id, conversation_id, run_id):
+        return None
     ticket = None
     with _connect() as conn:
         _schema(conn)
+        conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, "connect", channel_id, conversation_id)
+            if coordinated:
+                # Lock candidate settings before choosing the scheduled speaker.
+                cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid ORDER BY id FOR SHARE',(tenant,))
+                cur.fetchall()
+                source = delivery_source(cur, tenant, run_id)
+                if not source or not job_allowed(cur, {**source, 'tenant_id':tenant, 'provider':'connect', 'channel_id':channel_id, 'conversation_id':conversation_id}):
+                    return None
+                if source['source_kind']=='run':
+                    from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+                    cur.execute('SELECT a.mode,s.auto_send_enabled FROM saas_ai_agents a JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid FOR SHARE OF s',(tenant,source['agent_id']))
+                    send_policy=cur.fetchone() or {}
+                    if send_policy.get('mode')!='automatic' or send_policy.get('auto_send_enabled') is not True or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'):
+                        return None
+                from tenant_ai_agent_connect import allowed
+                if not allowed({**source,'tenant_id':tenant,'provider':'connect','channel_id':channel_id,'conversation_id':conversation_id,'lead_id':lead_id},connection=conn):
+                    return None
+
             cur.execute('''SELECT c.connect_channel_id,c.conversation_id,i.secrets,cs.revision,cs.state
               FROM saas_connect_conversations c
               JOIN saas_tenant_integrations i ON i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected'
@@ -494,6 +556,8 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
               WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s AND state='active' AND revision=%s''',
                         (str(message_id),tenant,conversation_id,channel_id,int(expected_revision)))
             if handoff_fingerprint:
+                from tenant_ai_group_coordination import stop
+                stop(cur, tenant, conversation_id, reason='trigger_reply_sent_then_handoff')
                 from tenant_support_inbox_store import handoff_ticket
                 ticket = handoff_ticket(cur, {'tenant_id':tenant,'provider':'connect',
                     'channel_id':channel_id,'conversation_id':conversation_id,
@@ -507,12 +571,13 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
     return message_id
 
 
-def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_id: str, author: str = 'Operator') -> None:
+def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_id: str, author: str = 'Operator', *, actor=None) -> None:
     with _connect() as conn:
         if author != 'AI Agent':
             from tenant_ai_agents_schema import ensure_schema
             ensure_schema(conn)
         _schema(conn)
+        conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, "connect", route["channel_id"], route["conversation_id"])
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
@@ -520,6 +585,6 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
                         (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending'})))
         if author != 'AI Agent':
             from tenant_ai_agent_connect import mark_operator_reply
-            mark_operator_reply(tenant, lead_id, str(route['channel_id']), str(route['conversation_id']), connection=conn)
+            mark_operator_reply(tenant, lead_id, str(route['channel_id']), str(route['conversation_id']), connection=conn, actor=actor)
         conn.commit()
 

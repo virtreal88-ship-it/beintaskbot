@@ -715,8 +715,6 @@ def delete_trigger(profile,agent_id,trigger_id):
 def _conversation_provider_allowed(cur, tenant, provider, conversation, channel_id=''):
     """Verify the server-owned tenant/provider route before changing a chat."""
     if provider == 'connect':
-        from tenant_connect_transport import _schema as connect_schema
-        connect_schema(cur.connection)
         if channel_id:
             cur.execute('''SELECT c.connect_channel_id::text AS channel_id FROM saas_connect_conversations c
               JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
@@ -883,10 +881,27 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
         raise TenantLinearError('Söhbət vəziyyəti düzgün deyil.')
     with _connect() as conn:
         ensure_schema(conn)
+        if provider=='connect':
+            from tenant_connect_transport import _schema as connect_schema
+            connect_schema(conn)
+            conn.commit()  # Finish DDL before acquiring group/dialogue locks.
         with conn.cursor() as cur:
             tenant,actor=_conversation_authorize(cur,profile,provider,conversation,channel_id)
             resolved_channel = _conversation_provider_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
             lock_dialog(cur, tenant, provider, resolved_channel, conversation)
+            from tenant_ai_group_coordination import group_jid, transition, read as read_group
+            if provider == 'connect' and group_jid(conversation):
+                previous_group = read_group(cur,tenant,conversation)
+                transition(cur,tenant,conversation,state,str(reason)[:240],actor)
+                _audit(cur,tenant,actor,'ai_group_'+state,'conversation',conversation,{'channel_id':resolved_channel})
+                result = read_group(cur,tenant,conversation)
+                if state=='human' and previous_group.get('state')!='human':
+                    ticket=create_in_transaction(cur,tenant,resolved_channel,conversation,reason,
+                        'group-handoff:'+conversation+':'+str(result['revision']),actor=actor)
+                conn.commit()
+                summarize_created(tenant,ticket)
+                return {'provider':provider,'channel_id':resolved_channel,'conversation_id':conversation,'state':result['state'],'reason':result['reason']}
+
             if state == 'human' and provider == 'connect':
                 cur.execute("SELECT state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s FOR UPDATE", (tenant,conversation,resolved_channel))
                 current = cur.fetchone() or {}
@@ -919,6 +934,17 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
     return {'conversation_id':conversation,'provider':provider,'channel_id':resolved_channel,'state':state,'reason':str(reason)[:240]}
 
 
+def _group_state_overlay(item,group):
+    if not group:return item
+    item=dict(item)
+    item.update(state=group['state'],reason=group['reason'],agent_id=group['primary_agent_id'],
+                group_coordination=group,group_revision=group['revision'])
+    item['display_state']=group['state'] if group['state']!='active' or group['primary_agent_id'] else 'blocked'
+    item['display_reason']=group['reason'];item['blocked_reason']=group['reason']
+    item['resume_allowed']=bool(group['primary_agent_id']) and group['state']!='active' and item.get('resume_allowed',False)
+    return item
+
+
 def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=''):
     conversation=str(conversation_id or '').strip()
     provider=str(provider or 'kommo').strip().lower()
@@ -937,6 +963,8 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
                         'state':'blocked','display_state':'blocked','reason':'legacy_channel_ambiguous',
                         'display_reason':'legacy_channel_ambiguous','blocked_reason':'legacy_channel_ambiguous',
                         'resume_allowed':False,'resume_block_reason':'legacy_channel_ambiguous','tracked':True}
+            from tenant_ai_group_coordination import group_jid,view as group_view
+            group_snapshot=group_view(cur,tenant,conversation) if provider=='connect' and group_jid(conversation) else None
             # The route was verified above against tenant-owned Connect data.
             # Diagnostics below intentionally expose only metadata and safe
             # state/error codes; message bodies and external secrets never
@@ -1002,7 +1030,7 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
                 if result['latest_event_error']:
                     result['blocked_reason']=result['latest_event_error']
                     result['display_reason']=result['latest_event_error']
-                return result
+                return _group_state_overlay(result,group_snapshot)
     item=dict(row)
     item['provider']=provider;item['channel_id']=resolved_channel;item['tracked']=True
     for key in ('updated_at','last_inbound_at','latest_job_updated_at','latest_run_updated_at','latest_event_received_at'):
@@ -1011,7 +1039,7 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
     # clear operator-facing explanation without exposing message text.
     item = _decorate_conversation_state(item)
     item['blocked_reason'] = item['display_reason']
-    return item
+    return _group_state_overlay(item,group_snapshot)
 
 
 def read_conversation_for_lead(profile, lead_id):
@@ -1088,8 +1116,6 @@ def _reserve_connect_draft_send(cur, tenant, draft):
     current ownership, source message and revision, then marks the draft as
     in-flight so two reviewers cannot send it twice.
     """
-    from tenant_connect_transport import _schema as ensure_connect_schema
-    ensure_connect_schema(cur.connection)
     cur.execute('''SELECT d.id,d.agent_id,d.lead_id,d.draft,d.talk_id,d.chat_id,d.source_message_id,
               d.handoff_after_send,d.source_fingerprint,c.connect_channel_id::text AS channel_id,cs.revision
               FROM saas_ai_agent_drafts d
@@ -1122,8 +1148,22 @@ def reserve_draft_send(profile,draft_id):
     draft=identifier(draft_id)
     with _connect() as conn:
         ensure_schema(conn)
+        from tenant_connect_transport import _schema as ensure_connect_schema
+        ensure_connect_schema(conn)
+        conn.commit()  # DDL must finish before any draft/group locks.
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
+            cur.execute('''SELECT e.provider,e.payload,d.agent_id FROM saas_ai_agent_drafts d
+              JOIN saas_tenant_webhook_events e ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
+              WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid''',(tenant,draft))
+            group_source=cur.fetchone() or {}
+            from tenant_ai_group_coordination import group_jid,job_allowed
+            source_payload=group_source.get('payload') or {}
+            if group_source.get('provider')=='connect' and group_jid(source_payload.get('conversation_id')):
+                lock_dialog(cur,tenant,'connect',source_payload.get('channel_id'),source_payload['conversation_id'])
+                if not job_allowed(cur,{'tenant_id':tenant,'provider':'connect','channel_id':source_payload.get('channel_id'),
+                                       'conversation_id':source_payload['conversation_id'],'agent_id':group_source['agent_id'],'payload':source_payload}):
+                    raise TenantLinearError('Групповой черновик устарел или AI остановлен.',409)
             # Source provenance is immutable and tenant-scoped.  It is the
             # only authority for choosing a draft transport; browser input
             # cannot turn a Kommo draft into a Connect send or vice versa.
@@ -1187,6 +1227,11 @@ def finish_draft_send(tenant_id,draft_id,state):
             provenance=cur.fetchone() or {}
             provider=str(provenance.get('provider') or 'kommo')
             scope = channel_scope(provider, (provenance.get('payload') or {}).get('channel_id'))
+            group_conversation=(provenance.get('payload') or {}).get('conversation_id')
+            from tenant_ai_group_coordination import group_jid,job_allowed
+            coordinated=provider=='connect' and group_jid(group_conversation)
+            if coordinated:
+                lock_dialog(cur,tenant_id,provider,scope,group_conversation)
             if state=='blocked':
                 cur.execute('''UPDATE saas_ai_agent_drafts d SET state=CASE WHEN EXISTS (
                     SELECT 1 FROM saas_ai_conversation_state cs WHERE cs.tenant_id=d.tenant_id AND cs.provider=%s AND cs.channel_id=%s
@@ -1194,6 +1239,9 @@ def finish_draft_send(tenant_id,draft_id,state):
                     THEN 'pending' ELSE 'superseded' END
                   WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='sending' RETURNING state''',(provider,scope,tenant_id,draft_id))
                 row=cur.fetchone();final=row['state'] if row else 'superseded'
+                if coordinated and not job_allowed(cur,{'tenant_id':tenant_id,'provider':provider,'channel_id':scope,'conversation_id':group_conversation,'payload':provenance.get('payload')}):
+                    cur.execute("UPDATE saas_ai_agent_drafts SET state='superseded' WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='pending'",(tenant_id,draft_id))
+                    final='superseded'
             else:
                 cur.execute("UPDATE saas_ai_agent_drafts SET state=%s WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='sending' RETURNING chat_id,handoff_after_send",(final,tenant_id,draft_id))
                 row=cur.fetchone()

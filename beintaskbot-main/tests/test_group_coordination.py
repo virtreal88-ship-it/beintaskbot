@@ -1,0 +1,273 @@
+import json
+from datetime import datetime, timezone
+import pytest
+from test_tenant_support_inbox import database, db, A, B, CA, CB, AGENT, PROFILE
+from test_integrated_connect_release import flow
+from test_connect_channel_isolation import channels, AGENT2
+import tenant_ai_group_coordination as groups
+import tenant_ai_agents_store as agents
+import tenant_ai_agent_connect as connect
+from tenant_linear_policy import TenantLinearError
+
+G='120363431037910651@g.us'
+
+@pytest.fixture
+def group(channels,monkeypatch):
+    f=channels; d=f['db'];monkeypatch.setattr(groups,'_connect',lambda:d)
+    for channel,agent in [(CA,AGENT),(CB,AGENT2)]:
+        d.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,conversation_kind,lead_id) VALUES(%s::uuid,%s::uuid,%s,'group',%s)",(A,channel,G,1001 if channel==CA else 1002))
+        d.execute('UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE id=%s::uuid',(json.dumps([{'provider':'connect','channel_id':channel,'allow_group_messages':True}]),agent))
+    d.commit();return f
+
+def config(**kw):
+    return {'conversation_id':G,'expected_revision':0,'assignments':[{'agent_id':AGENT,'channel_id':CA,'priority':10}],**kw}
+
+def test_no_assignment_fails_closed(group):
+    with group['db'].cursor() as c:
+        assert groups.authority(c,A,CA,G) is None
+        assert groups.admit(c,A,CA,G,'SAME_EVENT') is None
+
+def test_configuration_pauses_resume_and_cross_channel_dedup(group):
+    d=group['db']; groups.configure(PROFILE,config())
+    with d.cursor() as c:assert groups.authority(c,A,CA,G) is None
+    d.commit();agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CB)
+    with d.cursor() as c:
+        assert groups.authority(c,A,CA,G,AGENT)
+        assert groups.authority(c,A,CB,G,AGENT2) is None
+        assert groups.admit(c,A,CB,G,'SAME_EVENT') is None
+        assert groups.admit(c,A,CA,G,'SAME_EVENT')
+        assert groups.admit(c,A,CA,G,'SAME_EVENT') is None
+    d.commit()
+
+def test_human_on_either_channel_fences_group_only(group):
+    d=group['db'];groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    before=d.execute("SELECT * FROM saas_ai_conversation_state WHERE conversation_id='client'");d.commit()
+    with d.cursor() as c:
+        old=groups.admit(c,A,CA,G,'BEFORE_HUMAN');groups.stop(c,A,G)
+        assert not groups.job_allowed(c,{'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':G,'agent_id':AGENT,'payload':old})
+    d.commit();agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CB)
+    with d.cursor() as c:
+        assert groups.admit(c,A,CA,G,'BEFORE_HUMAN') is None
+        assert not groups.job_allowed(c,{'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':G,'agent_id':AGENT,'payload':old})
+        assert groups.admit(c,A,CA,G,'AFTER_HUMAN')
+    assert d.execute("SELECT * FROM saas_ai_conversation_state WHERE conversation_id='client'")==before
+    d.commit();group['send'].assert_not_called()
+
+def test_schedule_priority_and_midnight():
+    slots=[{'agent_id':'day','channel_id':CA,'priority':10},{'agent_id':'night','channel_id':CA,'priority':10}]
+    def agent(schedule):return {'enabled':True,'scopes':[{'provider':'connect','channel_id':CA,'allow_group_messages':True}],'schedule':schedule}
+    aa={'day':agent({'timezone':'UTC','days':[0],'start':'08:00','end':'22:00'}),'night':agent({'timezone':'UTC','days':[0],'start':'22:00','end':'08:00'})}
+    assert groups.choose(slots,aa,now=datetime(2026,10,20,2,tzinfo=timezone.utc))['agent_id']=='night'
+    aa['day']['schedule']={};aa['night']['schedule']={}
+    assert groups.choose(slots,aa) is None
+    slots[1]['priority']=20
+    assert groups.choose(slots,aa)['agent_id']=='night'
+
+@pytest.mark.parametrize('jid',['same name','123@lid','123@s.whatsapp.net','abc@g.us','120363431037910651@g.us.attacker'])
+def test_unverified_identity(jid):assert groups.group_jid(jid) is None
+
+@pytest.mark.parametrize('patch',[{'channel_id':CB},{'agent_id':AGENT2}])
+def test_scope_mismatch_rejected(group,patch):
+    data=config();data['assignments'][0].update(patch)
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,data)
+
+def test_tenant_and_legacy_quarantine(group):
+    with pytest.raises(TenantLinearError):groups.configure({**PROFILE,'tenant_id':B},config())
+    group['db'].execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,state) VALUES(%s::uuid,'connect','',%s,'human')",(A,G));group['db'].commit()
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,config())
+
+def test_stale_config_and_old_jobs(group):
+    groups.configure(PROFILE,config())
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,config())
+    with group['db'].cursor() as c:
+        assert not groups.job_allowed(c,{'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':G,'agent_id':AGENT})
+        assert groups.job_allowed(c,{'provider':'kommo','conversation_id':G})
+
+
+def incoming(f,channel,external):
+    import uuid
+    d=f['db'];mid=str(uuid.uuid5(uuid.NAMESPACE_URL,channel+external))
+    lead=d.execute('SELECT lead_id FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s',(A,channel,G))[0]['lead_id']
+    d.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,%s,%s,%s,'incoming','Question','text',clock_timestamp()) ON CONFLICT DO NOTHING",(mid,A,lead,'connect:'+mid,'connect:'+channel));d.commit()
+    return connect.enqueue(A,channel_id=channel,conversation_id=G,lead_id=lead,message_id=mid,event_id=mid,text='Question',is_group=True,provider_message_id=external)
+
+
+@pytest.mark.parametrize('mode',['manual','automatic'])
+def test_worker_one_group_two_channels(group,mode):
+    f=group;d=f['db'];d.execute("UPDATE saas_ai_agents SET mode=%s WHERE tenant_id=%s::uuid",(mode,A));d.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid",(A,));d.commit()
+    groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    assert incoming(f,CB,'PROVIDER_SHARED')==0
+    assert incoming(f,CA,'PROVIDER_SHARED')==1
+    assert incoming(f,CA,'PROVIDER_SHARED')==0
+    f['process']()
+    assert f['generate'].call_count==1
+    assert f['send'].call_count==(1 if mode=='automatic' else 0)
+    drafts=d.execute('SELECT * FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid',(A,));d.commit()
+    assert len(drafts)==(1 if mode=='manual' else 0)
+
+
+def test_delivery_reservation_is_durable_and_scope_checked(group):
+    f=group;d=f['db'];d.execute("UPDATE saas_ai_agents SET mode='manual' WHERE tenant_id=%s::uuid",(A,));d.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid",(A,));d.commit()
+    groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    assert incoming(f,CA,'SEND_ONCE_ONLY')==1
+    f['process']()
+    draft=d.execute('SELECT id FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid',(A,))[0]['id'];d.commit()
+    assert not groups.reserve_delivery(A,CB,G,draft)
+    assert groups.reserve_delivery(A,CA,G,draft)
+    assert not groups.reserve_delivery(A,CA,G,draft)
+    assert not groups.reserve_delivery(B,CA,G,draft)
+
+
+def test_pre_resume_event_seen_on_secondary_never_replayed(group):
+    f=group;groups.configure(PROFILE,config())
+    assert incoming(f,CB,'BEFORE_RESUME')==0
+    agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    assert incoming(f,CA,'BEFORE_RESUME')==0
+
+
+def test_worker_stops_when_human_takes_over_during_generation(group):
+    f=group;d=f['db'];d.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid",(A,));d.commit()
+    groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    incoming(f,CA,'HUMAN_RACE')
+    def generate(*args):
+        agents.set_conversation_state(PROFILE,G,'human',provider='connect',channel_id=CB)
+        return ('stale',{'total_tokens':1})
+    f['generate'].side_effect=generate;f['process']();f['send'].assert_not_called()
+    assert not d.execute('SELECT 1 FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid',(A,));d.commit()
+
+
+def test_logical_group_keeps_channel_history_and_permissions(group,monkeypatch):
+    import tenant_operator_dialogs as dialogs
+    from test_tenant_operator_workspace import employee
+    d=group['db'];monkeypatch.setattr(dialogs,'_connect',lambda:d)
+    groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    rows=[r for r in dialogs.listing(PROFILE)['dialogs'] if r['conversation_id']==G]
+    assert len(rows)==1 and len(rows[0]['group_coordination']['channels'])==2
+    assert rows[0]['agent_id']==AGENT and rows[0]['display_state']=='active'
+    person=employee(d,['dialogs','support'])
+    lead=d.execute('SELECT lead_id FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s',(A,CB,G))[0]['lead_id'];d.commit()
+    page=dialogs.history(person,'connect',lead,CB,G)
+    assert not page['dialog']['group_coordination']['can_configure']
+    assert page['dialog']['channel_id']==CB
+    with pytest.raises(TenantLinearError):groups.configure(person,config(expected_revision=2))
+    with pytest.raises(TenantLinearError):dialogs.history({**PROFILE,'tenant_id':B},'connect',lead,CB,G)
+
+
+@pytest.mark.parametrize('source',['employee','unknown','ai','uncertain'])
+@pytest.mark.parametrize('outbound',[False,True])
+def test_signed_group_authorship(group,monkeypatch,source,outbound):
+    import uuid
+    import tenant_connect_transport as transport
+    d=group['db'];groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    incoming(group,CA,'READY_FOR_TAKEOVER')
+    d.execute('INSERT INTO saas_ai_group_staff(tenant_id,channel_id,jid,member_id,verified_by) VALUES(%s::uuid,%s::uuid,%s,11,11)',(A,CA,'994500000000@s.whatsapp.net'));d.commit()
+    monkeypatch.setattr(transport,'_verify_signature',lambda *a:True)
+    data={'id':str(uuid.uuid4()),'externalMessageId':'STAFF_EVENT_ID','channelId':CB,'conversationId':G,'isGroup':True,'conversationType':'group','fromMe':outbound,'participantJid':'994500000000@s.whatsapp.net','type':'text','text':'local test'}
+    if source=='unknown':data['participantJid']='994599999999@s.whatsapp.net'
+    if source=='ai':
+        group['process']()
+        data['originClientMessageId']=str(d.execute('SELECT id FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid',(A,))[0]['id']);d.commit()
+    if source=='uncertain':data['authorshipUncertain']=True
+    event={'id':str(uuid.uuid4()),'type':'message.inbound.received','data':data}
+    assert transport.ingest(json.dumps(event).encode(),'test',event)
+    assert transport.ingest(json.dumps(event).encode(),'test',event)
+    row=d.execute('SELECT state,assigned_to FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid',(A,))[0];d.commit()
+    assert row['state']=={'employee':'human','uncertain':'paused'}.get(source,'active')
+    assert row['assigned_to']==(11 if source=='employee' else None)
+    if source=='employee':
+        agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+        replay={**event,'id':str(uuid.uuid4())}
+        assert transport.ingest(json.dumps(replay).encode(),'test',replay)
+        with d.cursor() as c:assert groups.read(c,A,G)['state']=='active'
+        d.commit()
+        other={**event,'id':str(uuid.uuid4()),'data':{**data,'id':str(uuid.uuid4()),'channelId':CA}}
+        assert transport.ingest(json.dumps(other).encode(),'test',other)
+        with d.cursor() as c:assert groups.read(c,A,G)['state']=='active'
+        d.commit()
+    if source in ('employee','uncertain'):
+        assert not d.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND conversation_id=%s AND state IN ('queued','processing')",(A,G));d.commit()
+
+
+def test_manual_group_handoff_is_idempotent_across_channels(group):
+    d=group['db'];groups.configure(PROFILE,config())
+    agents.set_conversation_state(PROFILE,G,'human',provider='connect',channel_id=CA)
+    agents.set_conversation_state(PROFILE,G,'human',provider='connect',channel_id=CB)
+    assert len(d.execute('SELECT id FROM saas_support_tickets WHERE tenant_id=%s::uuid',(A,)))==1;d.commit()
+
+
+def test_schedule_switch_never_resumes_human_group(group,monkeypatch):
+    d=group['db'];slots=[{'agent_id':AGENT,'channel_id':CA,'priority':10},{'agent_id':AGENT2,'channel_id':CB,'priority':20}]
+    groups.configure(PROFILE,config(assignments=slots));agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    assert incoming(group,CA,'NON_PRIMARY')==0
+    assert incoming(group,CB,'NIGHT_PRIMARY')==1
+    agents.set_conversation_state(PROFILE,G,'human',provider='connect',channel_id=CA)
+    d.execute('UPDATE saas_ai_agents SET enabled=FALSE WHERE id=%s::uuid',(AGENT2,));d.commit()
+    assert incoming(group,CA,'DAY_AFTER_HANDOFF')==0
+    with d.cursor() as c:assert groups.read(c,A,G)['state']=='human'
+    d.commit()
+
+
+@pytest.mark.parametrize('mode',['manual','automatic'])
+def test_group_reply_handoff_and_late_callback_preserve_resume(group,monkeypatch,mode):
+    import tenant_ai_agent_worker as worker
+    import tenant_connect_transport as transport
+    d=group['db'];d.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid",(A,));d.execute('UPDATE saas_ai_agents SET mode=%s WHERE tenant_id=%s::uuid',(mode,A));d.commit()
+    groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    monkeypatch.setattr(worker,'enabled_triggers',lambda *a:[{'trigger_type':'phrase','condition':{'phrase':'Question'},'actions':['handoff_after_reply']}])
+    incoming(group,CA,'HANDOFF_REPLY');group['process']()
+    if mode=='manual':
+        draft=d.execute('SELECT id FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid',(A,))[0]['id'];d.commit()
+        reserved=agents.reserve_draft_send(PROFILE,draft)
+        assert transport.send_ai_reply_if_active(A,1001,CA,G,reserved['draft'],reserved['id'],reserved['expected_revision'],handoff_fingerprint=reserved['source_fingerprint'])
+    with d.cursor() as c:assert groups.read(c,A,G)['state']=='human'
+    d.commit()
+    agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CB)
+    if mode=='manual':
+        agents.finish_draft_send(A,draft,'accepted');agents.finish_draft_send(A,draft,'accepted')
+    with d.cursor() as c:assert groups.read(c,A,G)['state']=='active'
+    assert len(d.execute('SELECT id FROM saas_support_tickets WHERE tenant_id=%s::uuid',(A,)))==1;d.commit()
+    group['send'].assert_called_once()
+
+
+def test_staff_registration_requires_owner_and_observed_company_identity(group):
+    import uuid
+    d=group['db'];data={'channel_id':CA,'jid':'994500000000@s.whatsapp.net','member_id':11}
+    with pytest.raises(TenantLinearError):groups.register_employee(PROFILE,data)
+    d.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,raw) VALUES(%s::uuid,%s::uuid,1001,'staff-proof',%s,'outgoing','test',%s::jsonb)",(str(uuid.uuid4()),A,'connect:'+CA,json.dumps({'fromMe':True,'source':'linked_phone','participantJid':data['jid']})));d.commit()
+    assert groups.register_employee(PROFILE,data)=={'verified':True}
+    with d.cursor() as c:
+        assert groups.verified_employee(c,A,{'participantJid':data['jid']})==11
+        assert groups.verified_employee(c,B,{'participantJid':data['jid']}) is None
+    d.commit()
+
+
+def test_schedule_does_not_clear_old_channel_human_state(group):
+    d=group['db'];groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    d.execute("UPDATE saas_ai_conversation_state SET state='human' WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id=%s",(A,CA,G));d.commit()
+    assert incoming(group,CA,'KEEP_CHANNEL_HUMAN')==0
+    with d.cursor() as c:
+        assert groups.view(c,A,G)['reason']=='group_channel_requires_resume'
+        assert groups.view(c,A,G)['state']=='human'
+    d.commit()
+
+
+def test_old_stored_message_without_coordination_receipt_never_requeues(group):
+    import uuid
+    d=group['db'];mid=str(uuid.uuid4())
+    d.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,happened_at) VALUES(%s::uuid,%s::uuid,1001,%s,%s,'incoming','old',now()-interval '1 day')",(mid,A,'connect:'+mid,'connect:'+CA));d.commit()
+    groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    assert connect.enqueue(A,channel_id=CA,conversation_id=G,lead_id=1001,message_id=mid,event_id=mid,text='old',is_group=True,provider_message_id='OLD_DELAYED_EVENT')==0
+
+
+def test_authenticated_operator_claim_stops_ai_before_external_send(group,monkeypatch):
+    import uuid
+    import tenant_chat_send_store as sender
+    d=group['db'];monkeypatch.setattr(sender,'_connect',lambda:d)
+    groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    incoming(group,CA,'PENDING_BEFORE_OPERATOR')
+    item=sender.reserve(PROFILE,{'lead_id':1002,'request_id':str(uuid.uuid4()),'text':'local manual response'})
+    sender.mark_sending(item,{'origin':'connect'})
+    with d.cursor() as c:
+        state=groups.read(c,A,G);assert state['state']=='human' and state['assigned_to']==11
+    assert not d.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND conversation_id=%s AND state IN ('queued','processing')",(A,G));d.commit()
+    group['send'].assert_not_called()

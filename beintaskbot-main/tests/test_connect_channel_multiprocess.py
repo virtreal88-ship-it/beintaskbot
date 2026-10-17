@@ -55,12 +55,13 @@ def child(dsn,kind,payload,barrier,results,cipher_key=None):
     import tenant_ai_agent_actions as actions
     import tenant_ai_agent_run_store as runs
     import tenant_operator_assignment as assignment
+    import tenant_ai_group_coordination as groups
     import tenant_ai_agents_store as agents
     import tenant_support_inbox_store as inbox
     from cryptography.fernet import Fernet
     schema._ready=True
     factory=lambda:psycopg.connect(dsn,row_factory=dict_row)
-    for module in (connect,transport,actions,inbox,runs,assignment,agents):module._connect=factory
+    for module in (connect,transport,actions,inbox,runs,assignment,agents,groups):module._connect=factory
     inbox.summarize_created=lambda *a:None
     os.environ['AI_AGENTS_ENABLED']='true'
     if cipher_key:transport._fernet=lambda:Fernet(cipher_key)
@@ -76,6 +77,14 @@ def child(dsn,kind,payload,barrier,results,cipher_key=None):
         elif kind=='handoff':value=actions.handoff(payload,'needs operator')
         elif kind=='claim':value=runs.claim_next()
         elif kind=='assign':value=assignment.assign(PROFILE,payload)
+        elif kind=='group_reserve':value=groups.reserve_delivery(**payload)
+        elif kind=='group_state':value=agents.set_conversation_state(PROFILE,**payload)
+        elif kind=='group_draft':
+            from tenant_linear_policy import TenantLinearError
+            try:value=agents.reserve_draft_send(PROFILE,payload['draft_id'])
+            except TenantLinearError as error:
+                if error.status!=409:raise
+                value=None
         elif kind=='webhook':
             transport._verify_signature=lambda *a:True
             value=transport.ingest(json.dumps(payload).encode(),'mock-signature',payload)

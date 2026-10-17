@@ -43,6 +43,9 @@ def handoff(job,reason):
             lock_dialog(cur, tenant, job["provider"], job.get("channel_id"), chat)
             if handoff_recorded(cur, job):
                 return False
+            if job['provider'] == 'connect':
+                from tenant_ai_group_coordination import stop
+                stop(cur, tenant, chat, reason=reason)
             cur.execute('''UPDATE saas_ai_conversation_state SET state='human',reason=%s,revision=revision+1,updated_at=now()
               WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND channel_id=%s AND state<>'human' RETURNING agent_id''',
               (str(reason)[:240],tenant,job['provider'],chat,job_scope(job)))

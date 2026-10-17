@@ -462,6 +462,9 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
               -- result if the Chat AI configuration changed while generating.
               FOR UPDATE OF j,a,s''', (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job_scope(job)))
             current = cur.fetchone()
+            from tenant_ai_group_coordination import job_allowed
+            if not job_allowed(cur, job):
+                current = None
             config = current.get('metadata') if current and isinstance(current.get('metadata'),dict) else {}
             if (not current or current['state']!='processing' or current['lease_token']!=job['lease_token']
                     or current['revision']!=job['revision'] or current['agent_enabled'] is not True

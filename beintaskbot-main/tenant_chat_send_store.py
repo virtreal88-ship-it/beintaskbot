@@ -66,13 +66,21 @@ def reserve(session, command):
 
 def mark_sending(item, route):
     with _connect() as conn:
+        from tenant_ai_group_coordination import group_jid,stop as stop_group
+        is_group=item.get('connection',[None])[0]=='connect' and group_jid(item['connection'][2])
+        if is_group:
+            from tenant_ai_agents_schema import ensure_schema as ensure_ai_schema
+            ensure_ai_schema(conn)
         ensure_schema(conn)
+        if is_group:conn.commit()
         with conn.cursor() as cur:
             profile, connection, integration = authority(cur, {'tenant_id': item['key'][0], 'telegram_id': item['key'][1]}, item['command']['lead_id'])
             if connection != item['connection']:
                 raise TenantLinearError('Kommo bağlantısı dəyişib.', 409)
             if integration.get('provider') == 'connect':
                 credentials = integration['route']
+                if is_group:
+                    stop_group(cur,profile['tenant_id'],credentials['conversation_id'],reason='verified_employee_reply',actor=profile['telegram_id'])
             else:
                 tokens = json.loads(_fernet().decrypt(bytes(integration['secrets'])).decode('utf-8'))
                 if not isinstance(tokens, dict) or not tokens.get('access_token'):
