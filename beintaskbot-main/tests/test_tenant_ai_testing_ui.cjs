@@ -32,7 +32,7 @@ function setup(){
 }
 async function test(){
  const app=setup(),{w,calls}=app,d=w.document,$=id=>d.getElementById(id);await settle();await w.tenantAITesting.open();await settle();
- assert.ok($('aiAgentsModalBody').contains($('aiTestingCenter')));assert.equal($('testingTabVirtual').getAttribute('aria-selected'),'true');assert.equal($('testingReal').hidden,true);w.tenantI18n.setLanguage('en');await settle();assert.equal($('aiAgentsModalTitle').textContent,'Тестирование AI Agents');w.tenantI18n.setLanguage('ru');await settle();
+ assert.ok($('view-ai_testing').classList.contains('active'));assert.equal($('aiTestingCenter').parentElement.id,'aiTestingPage');assert.ok(!$('aiAgentsModalBody').contains($('aiTestingCenter')));assert.equal($('testingTabVirtual').getAttribute('aria-selected'),'true');assert.equal($('testingReal').hidden,true);w.tenantI18n.setLanguage('en');await settle();assert.equal($('aiTestingCenter').querySelector('h1').textContent,'AI testing');w.tenantI18n.setLanguage('ru');await settle();
  assert.equal($('testingVirtualAgent').value,AGENT);assert.match($('aiTestingCenter').textContent,/Test Mode/);assert.match($('aiTestingCenter').textContent,/Active Mode/);
  $('testingNewSession').click();await settle();assert.equal($('testingSessionHost').hidden,false);
  let create=calls.find(c=>c.method==='POST'&&c.path.endsWith('/testing/sessions'));assert.equal(create.body.agent_id,AGENT);assert.equal(create.body.expected_tenant_id,A);assert.equal(create.body.scope_index,null);
