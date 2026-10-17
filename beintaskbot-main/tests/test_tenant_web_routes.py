@@ -19,7 +19,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('agents/test-mode/verify', ('POST',)), ('agents/test-mode/discover', ('POST',)),
     ('agents', ('GET','POST')), ('agents/options', ('GET',)), ('agents/drafts', ('GET',)),
     ('agents/drafts/{draft_id}/review', ('POST',)), ('agents/drafts/{draft_id}/send', ('POST',)),
-    ('dialogs', ('GET',)), ('dialogs/history', ('GET',)),
+    ('dialogs', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/display-name', ('POST',)),
     ('night-report', ('GET',)), ('night-report/dialog', ('GET',)),
     ('night-report/tickets/{ticket_id}', ('GET',)),
     ('support-tickets', ('GET','POST')), ('support-tickets/{ticket_id}', ('GET','PATCH')),

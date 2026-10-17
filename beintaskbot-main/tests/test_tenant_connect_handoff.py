@@ -152,7 +152,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
         event = {'id': 'group-event', 'type': 'message.inbound.received',
                  'data': {'id': 'group-message', 'channelId': CHANNEL,
                           'conversationId': '120363411822115409@g.us', 'isGroup': True,
-                          'groupName': 'Night support', 'participantJid': '994501234567@s.whatsapp.net',
+                          'groupSubject': 'Night support', 'participantAlt': '994501234567@s.whatsapp.net',
                           'participantName': 'Leyla', 'fromMe': False, 'type': 'text', 'text': 'Need help'}}
         cipher = MagicMock(); cipher.decrypt.return_value = json.dumps({'webhook_secret': 'secret'}).encode()
         with patch.object(transport, '_connect', return_value=connection), \
@@ -168,7 +168,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
         self.assertEqual(conversation_params[5:7], ('Night support', 'group'))
         message_params = next(params for sql, params in cursor.executed if 'saas_crm_messages' in sql)
         self.assertEqual(message_params[5], 'Leyla')
-        self.assertEqual(json.loads(message_params[-1])['participantJid'], '994501234567@s.whatsapp.net')
+        self.assertEqual(json.loads(message_params[-1])['participantAlt'], '994501234567@s.whatsapp.net')
         self.assertTrue(enqueue.call_args.kwargs['is_group'])
 
     def test_provider_echo_of_existing_ai_message_does_not_take_over_group(self):

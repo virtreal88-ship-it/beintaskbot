@@ -51,12 +51,15 @@ def _conversation_metadata(data, conversation):
     else:
         kind = ''
     if kind == 'group':
-        display_name = next((_safe_label(data.get(key)) for key in ('groupName', 'conversationName', 'chatName')
+        # Evolution has used both groupName and groupSubject.  Connect normally
+        # maps the latter to groupName, but accepting both here keeps a signed
+        # delivery compatible while Connect is rolling forward.
+        display_name = next((_safe_label(data.get(key)) for key in ('groupName', 'groupSubject', 'conversationName', 'chatName')
                              if _safe_label(data.get(key))), '')
     else:
         display_name = next((_safe_label(data.get(key)) for key in ('contactName', 'conversationName')
                              if _safe_label(data.get(key))), '')
-    participant_jid = next((_safe_label(data.get(key)) for key in ('participantJid', 'senderJid')
+    participant_jid = next((_safe_label(data.get(key)) for key in ('participantJid', 'participantAlt', 'senderJid')
                             if _safe_label(data.get(key))), '')
     participant_name = next((_safe_label(data.get(key)) for key in ('participantName', 'senderName', 'pushName')
                              if _safe_label(data.get(key))), '')
@@ -114,6 +117,21 @@ def _schema(conn) -> None:
           PRIMARY KEY(tenant_id,connect_channel_id,conversation_id), UNIQUE(lead_id))''')
         cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS conversation_kind TEXT NOT NULL DEFAULT ''")
+        # This is a local presentation override only.  It never changes the
+        # WhatsApp group subject or an Evolution contact record.
+        cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS manual_display_name TEXT NOT NULL DEFAULT ''")
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_participant_display_names (
+          tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+          connect_channel_id UUID NOT NULL,
+          conversation_id TEXT NOT NULL,
+          participant_jid TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          updated_by BIGINT NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,connect_channel_id,conversation_id,participant_jid),
+          FOREIGN KEY(tenant_id,connect_channel_id,conversation_id)
+            REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) ON DELETE CASCADE
+        )''')
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_webhook_events (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE, event_id TEXT NOT NULL,
           received_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,event_id))''')

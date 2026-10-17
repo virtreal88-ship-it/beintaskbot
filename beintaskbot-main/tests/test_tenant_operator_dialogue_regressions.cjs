@@ -11,6 +11,11 @@ assert.match(ui,/data-direction="\$\{esc\(m\.direction\)\}"/,'message alignment 
 assert.match(ui,/available_actions/,'controls must come from effective server availability');
 assert.doesNotMatch(ui,/if\(route\.state==='active'\)add\('pause','pause'\)/,'a blocked active row must not offer Pause');
 assert.match(backend,/participant_jid/,'the history API must surface the signed participant JID for diagnostics');
+assert.match(backend,/saas_connect_participant_display_names/,'manual participant names need tenant/channel-scoped storage');
+assert.match(backend,/manual_display_name/,'manual group and contact names need a persisted override');
+assert.match(ui,/dialogs\/display-name/,'the operator UI must save names through the tenant API');
+assert.match(ui,/displayNameHint/,'manual names need a localized explanation');
+assert.doesNotMatch(ui,/m\.author_name\|\|m\.participant_jid\|\|t\('groupParticipant'\)/,'a raw participant JID must not be shown as a guessed display name');
 assert.match(backend,/display_state']='error'/,'job failure must be distinct from a policy block');
 for(const code of ['connect_policy_blocked','group_messages_not_allowed','manager_pause','human_handoff'])assert.match(l10n,new RegExp(code),'known reason codes need a localization mapping');
 for(const phrase of ['AI остановлен или ограничен','AI dayandırılıb və ya məhdudlaşdırılıb','AI is stopped or restricted'])assert.match(l10n,new RegExp(phrase),'unknown codes need a safe RU/AZ/EN fallback');

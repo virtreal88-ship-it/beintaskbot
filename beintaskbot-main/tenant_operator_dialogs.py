@@ -22,7 +22,26 @@ def _safe_group_name(item):
     return '' if name in technical else name
 
 
-def _message(item, *, group=False):
+def _manual_label(value):
+    if not isinstance(value, str):
+        raise TenantLinearError('Отображаемое имя должно быть текстом.')
+    value = value.strip()
+    if len(value) > 180 or any(ord(char) < 32 for char in value):
+        raise TenantLinearError('Отображаемое имя содержит недопустимые символы или слишком длинное.')
+    return value
+
+
+def _participant_fields(raw):
+    """Return provider facts without resolving or joining LID identities."""
+    if not isinstance(raw, dict):
+        return '', '', ''
+    jid = str(raw.get('participantJid') or raw.get('participantAlt') or raw.get('senderJid') or '')[:180]
+    alt = str(raw.get('participantAlt') or '')[:180]
+    whatsapp_name = str(raw.get('participantName') or raw.get('senderName') or raw.get('pushName') or '')[:180]
+    return jid, alt, whatsapp_name
+
+
+def _message(item, *, group=False, participant_names=None):
     value = dict(item)
     raw = value.pop('raw', None) or {}
     direction = str(value.get('direction') or '')
@@ -35,9 +54,11 @@ def _message(item, *, group=False):
         author_type = 'participant' if group else 'customer'
     else:
         author_type = 'system'
-    participant_jid = ''
-    if isinstance(raw, dict):
-        participant_jid = str(raw.get('participantJid') or raw.get('senderJid') or '')[:180]
+    participant_jid, participant_alt, whatsapp_name = _participant_fields(raw)
+    if direction == 'incoming' and group:
+        # Resolution is intentionally exact-JID scoped.  Do not conflate a
+        # privacy LID with a phone JID, even if both are visible in one event.
+        author = str((participant_names or {}).get(participant_jid) or author or whatsapp_name or '')
     if direction == 'incoming' and group and not author and participant_jid.endswith('@s.whatsapp.net'):
         candidate = participant_jid.split('@', 1)[0]
         if candidate.isdecimal():
@@ -46,6 +67,7 @@ def _message(item, *, group=False):
     value['author_type'] = author_type
     value['author_name'] = author
     value['participant_jid'] = participant_jid
+    value['participant_alt'] = participant_alt
     value['source'] = 'connect' if str(value.get('channel') or '').startswith('connect:') else 'kommo'
     if value['source'] == 'connect':
         # No provider URL or raw webhook payload crosses the browser boundary.
@@ -68,7 +90,7 @@ def projection(policy):
     kommo_scope='TRUE' if policy.profile.get('role')=='owner' else '('+' OR '.join(scope)+')' if scope else 'FALSE'
     sql='''WITH routes AS (
       SELECT 'connect'::text AS provider,c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
-        COALESCE(NULLIF(c.display_name,''),NULLIF(c.contact_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.phone,c.conversation_kind,
+        COALESCE(NULLIF(c.manual_display_name,''),NULLIF(c.contact_name,''),NULLIF(c.display_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
         ch.name AS channel_name,ch.active AS channel_active,'connect:'||c.connect_channel_id::text AS history_channel,
         COALESCE(j.agent_id,cs.agent_id) AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,
         COALESCE(cs.state,'active') AS state,COALESCE(cs.reason,'') AS reason,cs.updated_at,
@@ -95,7 +117,7 @@ def projection(policy):
       WHERE c.tenant_id=%s::uuid
       UNION ALL
       SELECT 'kommo',COALESCE(j.channel_id,lm.channel,''),COALESCE(j.conversation_id,''),d.kommo_lead_id,
-        COALESCE(NULLIF(d.contact_name,''),NULLIF(d.name,''),d.kommo_lead_id::text),COALESCE(d.phone,''),''::text AS conversation_kind,
+        COALESCE(NULLIF(d.contact_name,''),NULLIF(d.name,''),d.kommo_lead_id::text),''::text AS manual_display_name,COALESCE(d.phone,''),''::text AS conversation_kind,
         COALESCE(NULLIF(lm.channel,''),'Kommo'),TRUE,COALESCE(lm.channel,''),j.agent_id,a.name,a.enabled,
         COALESCE(cs.state,'active'),COALESCE(cs.reason,''),cs.updated_at,cs.tenant_id IS NOT NULL,
         s.enabled,s.emergency_stop,t.status,j.state,COALESCE(j.error_code,''),lm.last_message_at,
@@ -219,5 +241,74 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None):
               WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s'''+clause+'''
               ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 51''',tuple(args))
             messages=cur.fetchall()
-    return {'dialog':dialog,'messages':[_message(r, group=dialog.get('customer_kind') == 'group') for r in reversed(messages[:50])],
+            participant_names={}
+            if provider == 'connect' and dialog.get('customer_kind') == 'group':
+                # The override's primary key includes the tenant, exact Connect
+                # channel and exact conversation/JID.  This deliberately does
+                # not build a global LID/phone contact directory.
+                participant_ids=[]
+                for message in messages:
+                    participant_jid, _, _ = _participant_fields(message.get('raw'))
+                    if participant_jid and participant_jid not in participant_ids:
+                        participant_ids.append(participant_jid)
+                if participant_ids:
+                    cur.execute('''SELECT participant_jid,display_name FROM saas_connect_participant_display_names
+                      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s
+                        AND participant_jid=ANY(%s::text[])''',(tenant,channel,conversation,participant_ids))
+                    participant_names={str(item['participant_jid']):str(item['display_name']) for item in cur.fetchall()
+                                       if str(item.get('display_name') or '')}
+    return {'dialog':dialog,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names)
+                                        for r in reversed(messages[:50])],
             'next_before':str(messages[49]['id']) if len(messages)>50 else None}
+
+
+def save_display_name(profile, payload):
+    """Save a tenant/channel-local display override for one existing route."""
+    if not isinstance(payload, dict):
+        raise TenantLinearError('Некорректный запрос.')
+    if str(payload.get('provider') or '') != 'connect':
+        raise TenantLinearError('Имя можно изменить только для WhatsApp-диалога.')
+    kind=str(payload.get('kind') or '')
+    if kind not in {'conversation','participant'}:
+        raise TenantLinearError('Некорректный тип отображаемого имени.')
+    try:
+        lead_id=int(payload.get('lead_id'))
+    except (TypeError,ValueError):
+        raise TenantLinearError('Диалог не найден.',404) from None
+    channel=str(payload.get('channel_id') or '').strip()
+    conversation=str(payload.get('conversation_id') or '').strip()
+    label=_manual_label(payload.get('display_name'))
+    with _connect() as conn:
+        ensure_schema(conn)
+        from tenant_connect_transport import _schema as ensure_connect_schema
+        ensure_connect_schema(conn)
+        with conn.cursor() as cur:
+            tenant,actor,policy=access(cur,profile,'dialogs')
+            selected=assert_route(cur,tenant,policy,'connect',conversation,channel,lead_id)
+            if kind == 'conversation':
+                cur.execute('''UPDATE saas_connect_conversations SET manual_display_name=%s,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s
+                  RETURNING manual_display_name''',(label,tenant,selected['connect_channel_id'],selected['conversation_id']))
+                saved=cur.fetchone()
+                if not saved: raise TenantLinearError('Диалог не найден.',404)
+                result={'kind':'conversation','display_name':str(saved['manual_display_name'] or '')}
+            else:
+                participant_jid=str(payload.get('participant_jid') or '').strip()
+                if not participant_jid or len(participant_jid)>180 or any(ord(char)<32 for char in participant_jid):
+                    raise TenantLinearError('Укажите участника группы.')
+                if str(selected.get('conversation_kind') or '') != 'group':
+                    raise TenantLinearError('Участника можно изменить только в WhatsApp-группе.')
+                if label:
+                    cur.execute('''INSERT INTO saas_connect_participant_display_names
+                      (tenant_id,connect_channel_id,conversation_id,participant_jid,display_name,updated_by)
+                      VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s)
+                      ON CONFLICT(tenant_id,connect_channel_id,conversation_id,participant_jid) DO UPDATE
+                      SET display_name=EXCLUDED.display_name,updated_by=EXCLUDED.updated_by,updated_at=now()''',
+                      (tenant,selected['connect_channel_id'],selected['conversation_id'],participant_jid,label,actor))
+                else:
+                    cur.execute('''DELETE FROM saas_connect_participant_display_names WHERE tenant_id=%s::uuid
+                      AND connect_channel_id=%s::uuid AND conversation_id=%s AND participant_jid=%s''',
+                      (tenant,selected['connect_channel_id'],selected['conversation_id'],participant_jid))
+                result={'kind':'participant','participant_jid':participant_jid,'display_name':label}
+            conn.commit()
+    return result

@@ -188,6 +188,50 @@ def test_group_history_keeps_each_participant_and_outbound_author(operator_db):
     assert by_body['Operator response']['direction']=='outgoing' and by_body['Operator response']['author_type']=='operator'
 
 
+def test_group_and_participant_manual_names_persist_per_tenant_and_channel(operator_db):
+    group='120363411822115409@g.us'
+    second=str(uuid.uuid4())
+    operator_db.execute("UPDATE saas_connect_conversations SET conversation_id=%s,display_name='Evolution subject',conversation_kind='group',phone='' WHERE tenant_id=%s::uuid AND lead_id=41",(group,A))
+    operator_db.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'Second')",(A,second))
+    operator_db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,display_name,conversation_kind) VALUES(%s::uuid,%s::uuid,%s,43,'Other subject','group')",(A,second,group))
+    for lead,channel,body in [(41,CA,'First channel'),(43,second,'Second channel')]:
+        operator_db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,author_name,body,raw)
+          VALUES(%s,%s::uuid,%s,%s,%s,'incoming','WhatsApp name',%s,%s::jsonb)''',
+          (str(uuid.uuid4()),A,lead,str(uuid.uuid4()),'connect:'+channel,body,json.dumps({'participantJid':'994501234567@s.whatsapp.net','participantAlt':'lid-123@lid','pushName':'WhatsApp name'})))
+    operator_db.commit()
+    dialogs.save_display_name(PROFILE,{'provider':'connect','kind':'conversation','lead_id':41,'channel_id':CA,'conversation_id':group,'display_name':'Night support'})
+    dialogs.save_display_name(PROFILE,{'provider':'connect','kind':'participant','lead_id':41,'channel_id':CA,'conversation_id':group,'participant_jid':'994501234567@s.whatsapp.net','display_name':'Leyla'})
+    # A fresh listing/history read models a browser reload.
+    first=dialogs.history(PROFILE,'connect',41,CA,group)
+    again=dialogs.history(PROFILE,'connect',41,CA,group)
+    second_page=dialogs.history(PROFILE,'connect',43,second,group)
+    assert first['dialog']['customer_name']==again['dialog']['customer_name']=='Night support'
+    assert next(item for item in first['messages'] if item['body']=='First channel')['author_name']=='Leyla'
+    assert next(item for item in first['messages'] if item['body']=='First channel')['participant_alt']=='lid-123@lid'
+    assert second_page['dialog']['customer_name']=='Other subject'
+    assert next(item for item in second_page['messages'] if item['body']=='Second channel')['author_name']=='WhatsApp name'
+
+
+def test_manual_display_names_require_dialog_access_and_exact_route(operator_db):
+    saved=dialogs.save_display_name(PROFILE,{'provider':'connect','kind':'conversation','lead_id':41,'channel_id':CA,'conversation_id':'client','display_name':'Saved contact'})
+    assert saved['display_name']=='Saved contact'
+    assert dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['customer_name']=='Saved contact'
+    person=employee(operator_db,['support'])
+    with pytest.raises(TenantLinearError):
+        dialogs.save_display_name(person,{'provider':'connect','kind':'conversation','lead_id':41,'channel_id':CA,'conversation_id':'client','display_name':'No access'})
+    with pytest.raises(TenantLinearError):
+        dialogs.save_display_name(PROFILE,{'provider':'connect','kind':'conversation','lead_id':41,'channel_id':CB,'conversation_id':'client','display_name':'Wrong channel'})
+
+
+def test_group_participant_name_priority_is_manual_then_saved_then_whatsapp_then_number():
+    raw={'participantJid':'994501234567@s.whatsapp.net','participantAlt':'lid-1@lid','pushName':'WhatsApp name'}
+    stored={'direction':'incoming','author_name':'Saved name','raw':raw}
+    assert dialogs._message(stored,group=True,participant_names={'994501234567@s.whatsapp.net':'Manual name'})['author_name']=='Manual name'
+    assert dialogs._message(stored,group=True)['author_name']=='Saved name'
+    assert dialogs._message({'direction':'incoming','author_name':'','raw':raw},group=True)['author_name']=='WhatsApp name'
+    assert dialogs._message({'direction':'incoming','author_name':'','raw':{'participantJid':'994501234567@s.whatsapp.net'}},group=True)['author_name']=='994501234567'
+
+
 def test_dialogue_actions_are_derived_from_availability_not_only_storage_state(operator_db):
     base={'provider':'connect','conversation_id':'client','channel_active':True,'unambiguous':True,'connected':True,
           'tenant_status':'active','company_enabled':True,'company_emergency_stop':False,'agent_id':AGENT,
