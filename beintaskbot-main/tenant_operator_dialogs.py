@@ -109,7 +109,7 @@ def projection(policy):
     kommo_scope='TRUE' if policy.profile.get('role')=='owner' else '('+' OR '.join(scope)+')' if scope else 'FALSE'
     sql='''WITH routes AS (
       SELECT 'connect'::text AS provider,c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
-        COALESCE(NULLIF(c.manual_display_name,''),NULLIF(c.contact_name,''),NULLIF(c.display_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
+        COALESCE(NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
         ch.name AS channel_name,ch.active AS channel_active,'connect:'||c.connect_channel_id::text AS history_channel,
         COALESCE(j.agent_id,cs.agent_id) AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,
         COALESCE(cs.state,'active') AS state,COALESCE(cs.reason,'') AS reason,cs.updated_at,

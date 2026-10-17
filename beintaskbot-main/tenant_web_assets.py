@@ -7,6 +7,9 @@ ASSETS = (
     ('/assets/tenant-agent-catalog.js', 'tenant-agent-catalog.js', 'no-store'),
     ('/assets/tenant-agent-library.js', 'tenant-agent-library.js', 'no-store'),
     ('/assets/tenant-agent-library.css', 'tenant-agent-library.css', 'no-store'),
+    ('/assets/tenant-ai-state.js', 'tenant-ai-state.js', 'no-store'),
+    ('/assets/tenant-ai-state.css', 'tenant-ai-state.css', 'no-store'),
+
     ('/assets/tenant-ai-testing.js', 'tenant-ai-testing.js', 'no-store'),
     ('/assets/tenant-ai-testing.css', 'tenant-ai-testing.css', 'no-store'),
     ('/app/night-report', 'tenant-night-report.html', 'no-store'),

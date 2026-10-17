@@ -25,6 +25,7 @@ from tenant_deal_completion_provider import provider as deal_provider
 from tenant_ai_agents_api import handler as ai_agents_handler
 from tenant_support_inbox_api import handler as support_handler
 from tenant_ai_testing_api import handler as testing_handler
+from tenant_ai_state_api import handler as ai_state_handler
 from tenant_operator_api import handler as operator_handler
 from tenant_night_report_api import handler as night_report_handler
 
@@ -99,6 +100,9 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('support-tickets/{ticket_id}', support_handler(member, origin, logger, 'ticket'), ('GET', 'PATCH')),
         ('support-tickets/{ticket_id}/summary', support_handler(member, origin, logger, 'summary'), ('POST',)),
         ('handoffs', ai_agents_handler(member, origin, logger, 'handoffs'), ('GET',)),
+        ('channels', ai_state_handler(member, logger, 'channels'), ('GET',)),
+        ('state', ai_state_handler(member, logger), ('GET',)),
+        ('state/technical', ai_state_handler(member, logger, 'technical'), ('GET',)),
         ('reliability', ai_agents_handler(member, origin, logger, 'reliability'), ('GET',)),
         ('diagnostics', ai_agents_handler(member, origin, logger, 'diagnostics'), ('GET',)),
         ('agents/{agent_id}', ai_agents_handler(member, origin, logger, 'agent'), ('PATCH', 'DELETE')),
