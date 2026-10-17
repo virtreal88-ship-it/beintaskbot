@@ -14,8 +14,17 @@ assert.match(backend,/participant_jid/,'the history API must surface the signed 
 assert.match(backend,/saas_connect_participant_display_names/,'manual participant names need tenant/channel-scoped storage');
 assert.match(backend,/manual_display_name/,'manual group and contact names need a persisted override');
 assert.match(ui,/dialogs\/display-name/,'the operator UI must save names through the tenant API');
-assert.match(ui,/displayNameHint/,'manual names need a localized explanation');
+assert.match(l10n,/displayNameHint/,'manual-name guidance remains localized without a permanent editor block');
 assert.doesNotMatch(ui,/m\.author_name\|\|m\.participant_jid\|\|t\('groupParticipant'\)/,'a raw participant JID must not be shown as a guessed display name');
+assert.match(ui,/operatorEditConversationName/,'contact and group names must be edited from the compact title');
+assert.match(ui,/operator-participant-edit/,'group participant editing must be a compact pencil action');
+assert.doesNotMatch(ui,/Изменить имя участника/,'the message body must not render the former large participant edit button');
+assert.match(ui,/replyMyself/,'an active AI conversation must expose the human handoff as its primary action');
+assert.match(ui,/returnAI/,'a human handoff must use a contextual Return AI label');
+assert.match(ui,/operator-more-actions/,'secondary controls belong in the compact overflow menu');
+assert.match(ui,/data-chat-attachment/,'media stays behind the existing explicit preview control');
+assert.doesNotMatch(ui,/\$\{esc\(m\.message_type\)\}<\/small>/,'technical media types must not be rendered in message cards');
+assert.match(ui,/@media\(max-width:600px\)/,'the compact dialog has a mobile layout breakpoint');
 assert.match(backend,/display_state']='error'/,'job failure must be distinct from a policy block');
 for(const code of ['connect_policy_blocked','group_messages_not_allowed','manager_pause','human_handoff'])assert.match(l10n,new RegExp(code),'known reason codes need a localization mapping');
 for(const phrase of ['AI остановлен или ограничен','AI dayandırılıb və ya məhdudlaşdırılıb','AI is stopped or restricted'])assert.match(l10n,new RegExp(phrase),'unknown codes need a safe RU/AZ/EN fallback');

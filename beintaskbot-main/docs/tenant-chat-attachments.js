@@ -45,13 +45,13 @@
           blobUrl=URL.createObjectURL(blob);urls.add(blobUrl);
           const type=blob.type.split(';')[0];let node;
           if(['image/jpeg','image/png','image/webp','image/gif'].includes(type)){
-            node=document.createElement('img');node.alt='Çat şəkli';node.style='display:block;max-width:100%;max-height:420px';
+            node=document.createElement('img');node.alt=text('photo','Chat photo');node.style='display:block;max-width:100%;max-height:420px';
           }else if(type.startsWith('audio/')||type==='application/ogg'){
             node=document.createElement('audio');node.controls=true;node.preload='none';node.style='max-width:100%';
           }else if(['video/mp4','video/webm'].includes(type)){
             node=document.createElement('video');node.controls=true;node.style='max-width:100%;max-height:420px';
           }else{
-            node=document.createElement('a');node.href=blobUrl;node.download='attachment'+(type==='application/pdf'?'.pdf':'');node.textContent='Faylı endir';
+            node=document.createElement('a');node.href=blobUrl;node.download='attachment'+(type==='application/pdf'?'.pdf':'');node.textContent=text('downloadAttachment','Download attachment');
           }
           if(node.tagName!=='A'){
             node.onerror=()=>{if(valid()){node.remove();button.hidden=false;status.textContent=' '+text('mediaInvalid','Fayl açıla bilmədi. Yenidən yoxlayın.');}URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);};

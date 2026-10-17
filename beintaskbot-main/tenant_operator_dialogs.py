@@ -41,6 +41,21 @@ def _participant_fields(raw):
     return jid, alt, whatsapp_name
 
 
+def _audio_duration(raw):
+    """Expose a bounded provider duration only when the incoming event has one."""
+    if not isinstance(raw, dict):
+        return None
+    for key in ('durationSeconds', 'duration_seconds', 'seconds', 'duration'):
+        value = raw.get(key)
+        try:
+            seconds = int(float(value))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if 0 <= seconds <= 24 * 60 * 60:
+            return seconds
+    return None
+
+
 def _message(item, *, group=False, participant_names=None):
     value = dict(item)
     raw = value.pop('raw', None) or {}
@@ -76,6 +91,10 @@ def _message(item, *, group=False, participant_names=None):
         if (value.get('message_type') == 'audio' and isinstance(transcript, dict)
                 and transcript.get('status') == 'completed' and value.get('body')):
             value['has_transcription'] = True
+        if value.get('message_type') == 'audio':
+            duration = _audio_duration(raw)
+            if duration is not None:
+                value['duration_seconds'] = duration
     return public(value)
 
 
