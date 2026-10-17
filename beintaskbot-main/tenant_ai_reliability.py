@@ -11,6 +11,11 @@ from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agent_runtime_flags import enabled
 
 REASONS = {
+    'manager_replied': 'AI не ответил, потому что сотрудник ответил вручную',
+    'manager_pause': 'AI в диалоге приостановлен сотрудником',
+    'human_handoff': 'Диалог передан сотруднику',
+    'group_messages_not_allowed': 'Групповые сообщения не включены для этого канала агента',
+
     "legacy_channel_ambiguous": "Старое состояние диалога не привязано к каналу; требуется безопасная проверка администратором",
     'agent_disabled': 'Агент выключен', 'agent_not_found': 'Подходящий агент не найден',
     'company_ai_disabled': 'AI компании выключен', 'ai_agents_server_disabled': 'Worker выключен на сервере',
@@ -213,61 +218,66 @@ def snapshot(profile, limit=50):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,_ = _authorize(cur,profile)
-            cur.execute("SELECT last_seen_at, last_seen_at>now()-interval '90 seconds' AS alive FROM saas_ai_worker_health WHERE worker='ai_agents'")
-            worker = cur.fetchone() or {}
-            cur.execute('''SELECT count(*) FILTER(WHERE state='queued') AS queued,
-                count(*) FILTER(WHERE state='processing') AS processing,
-                count(*) FILTER(WHERE state='queued' AND due_at<now()-interval '5 minutes') AS overdue,
-                count(*) FILTER(WHERE state='processing' AND lease_until<now()) AS expired_leases,
-                COALESCE(EXTRACT(EPOCH FROM now()-min(due_at) FILTER(WHERE state='queued' AND due_at<now())),0)::int AS oldest_due_seconds
-              FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid''',(tenant,))
-            metrics = dict(cur.fetchone())
-            cur.execute('''SELECT count(*) FILTER(WHERE state IN ('failed','unknown')) AS ai_errors_24h,
-                count(*) FILTER(WHERE error_code IN ('connect_send_unknown','send_result_unknown')) AS unsuccessful_sends_24h
-              FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND created_at>now()-interval '24 hours' ''',(tenant,))
-            metrics.update(cur.fetchone())
-            cur.execute('''SELECT count(*) AS count FROM saas_tenant_webhook_events e
-              WHERE e.tenant_id=%s::uuid AND e.event_type='incoming_message' AND e.state='failed'
-                AND e.received_at>now()-interval '24 hours' AND NOT EXISTS (
-                  SELECT 1 FROM saas_ai_agent_runs r WHERE r.tenant_id=e.tenant_id AND r.event_fingerprint=e.fingerprint)''',(tenant,))
-            metrics['ai_errors_24h'] += cur.fetchone()['count']
-            cur.execute("SELECT count(*) AS count FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND state='unknown' AND created_at>now()-interval '24 hours'",(tenant,))
-            metrics['unsuccessful_sends_24h'] += cur.fetchone()['count']
-            cur.execute("SELECT enabled,emergency_stop,operating_mode,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(tenant,))
-            settings = cur.fetchone() or {}
-            cur.execute("SELECT count(*) AS count FROM saas_ai_agents WHERE tenant_id=%s::uuid AND enabled=TRUE",(tenant,))
-            active_agents = cur.fetchone()['count']
-            # History remains inspectable when the coalescing job has advanced to
-            # another message. No payload/body/result is returned to the browser.
-            cur.execute('''SELECT e.external_id AS message_id,e.provider,COALESCE(e.payload->>'channel_id',e.payload->>'channel') AS channel_id,
-                e.received_at,e.state AS event_state,e.error_code AS event_error,
-                j.state AS job_state,j.error_code AS job_error,j.attempts,j.due_at,
-                COALESCE(j.agent_id,r.agent_id) AS agent_id,a.enabled AS agent_enabled,a.mode AS agent_mode,
-                s.enabled AS company_enabled,s.emergency_stop,s.operating_mode,cs.state AS conversation_state,
-                EXISTS(SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=e.tenant_id
-                  AND e.provider='connect' AND legacy.provider='connect' AND legacy.channel_id=''
-                  AND legacy.conversation_id=e.payload->>'conversation_id') AS legacy_scope_unresolved,
-                r.state AS run_state,r.error_code AS run_error,r.generated_at,
-                (SELECT d.state FROM saas_ai_agent_drafts d WHERE d.tenant_id=e.tenant_id AND d.source_fingerprint=e.fingerprint ORDER BY d.created_at DESC LIMIT 1) AS draft_state,
-                EXISTS(SELECT 1 FROM saas_ai_agent_drafts d WHERE d.tenant_id=e.tenant_id AND d.source_fingerprint=e.fingerprint) AS drafted,
-                EXISTS(SELECT 1 FROM saas_ai_agent_runs sr WHERE sr.tenant_id=e.tenant_id AND sr.event_fingerprint=e.fingerprint
-                    AND sr.result->>'send_state'='accepted') OR EXISTS (
-                    SELECT 1 FROM saas_ai_agent_drafts d JOIN saas_crm_messages sm ON sm.tenant_id=d.tenant_id
-                      AND sm.kommo_lead_id=d.lead_id AND sm.channel='connect:'||(e.payload->>'channel_id')
-                      AND sm.direction='outgoing' AND sm.author_name='AI Agent'
-                      AND sm.raw->>'run_id'=d.id::text AND sm.raw->>'status'='accepted'
-                    WHERE d.tenant_id=e.tenant_id AND d.source_fingerprint=e.fingerprint) AS sent
-              FROM saas_tenant_webhook_events e
-              LEFT JOIN LATERAL (SELECT * FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=e.tenant_id AND j0.event_fingerprint=e.fingerprint ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
-              LEFT JOIN LATERAL (SELECT * FROM saas_ai_agent_runs r0 WHERE r0.tenant_id=e.tenant_id AND r0.event_fingerprint=e.fingerprint ORDER BY r0.created_at DESC LIMIT 1) r ON TRUE
-              LEFT JOIN saas_ai_agents a ON a.tenant_id=e.tenant_id AND a.id=COALESCE(j.agent_id,r.agent_id)
-              LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=e.tenant_id
-              LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=e.tenant_id AND cs.provider=e.provider
-                AND cs.conversation_id=COALESCE(e.payload->>'conversation_id',e.payload->>'chat_id')
-                AND cs.channel_id=CASE WHEN e.provider='connect' THEN e.payload->>'channel_id' ELSE '' END
-              WHERE e.tenant_id=%s::uuid AND e.event_type='incoming_message'
-              ORDER BY e.received_at DESC,e.fingerprint LIMIT %s''',(tenant,max(1,min(int(limit),100))))
-            messages = [_message(row) for row in cur.fetchall()]
+            return read_snapshot(cur, tenant, limit)
+
+
+def read_snapshot(cur, tenant, limit=50):
+    """Internal projection; caller must authorize and hold membership locks."""
+    cur.execute("SELECT last_seen_at, last_seen_at>now()-interval '90 seconds' AS alive FROM saas_ai_worker_health WHERE worker='ai_agents'")
+    worker = cur.fetchone() or {}
+    cur.execute('''SELECT count(*) FILTER(WHERE state='queued') AS queued,
+        count(*) FILTER(WHERE state='processing') AS processing,
+        count(*) FILTER(WHERE state='queued' AND due_at<now()-interval '5 minutes') AS overdue,
+        count(*) FILTER(WHERE state='processing' AND lease_until<now()) AS expired_leases,
+        COALESCE(EXTRACT(EPOCH FROM now()-min(due_at) FILTER(WHERE state='queued' AND due_at<now())),0)::int AS oldest_due_seconds
+      FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid''',(tenant,))
+    metrics = dict(cur.fetchone())
+    cur.execute('''SELECT count(*) FILTER(WHERE state IN ('failed','unknown')) AS ai_errors_24h,
+        count(*) FILTER(WHERE error_code IN ('connect_send_unknown','send_result_unknown')) AS unsuccessful_sends_24h
+      FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND created_at>now()-interval '24 hours' ''',(tenant,))
+    metrics.update(cur.fetchone())
+    cur.execute('''SELECT count(*) AS count FROM saas_tenant_webhook_events e
+      WHERE e.tenant_id=%s::uuid AND e.event_type='incoming_message' AND e.state='failed'
+        AND e.received_at>now()-interval '24 hours' AND NOT EXISTS (
+          SELECT 1 FROM saas_ai_agent_runs r WHERE r.tenant_id=e.tenant_id AND r.event_fingerprint=e.fingerprint)''',(tenant,))
+    metrics['ai_errors_24h'] += cur.fetchone()['count']
+    cur.execute("SELECT count(*) AS count FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND state='unknown' AND created_at>now()-interval '24 hours'",(tenant,))
+    metrics['unsuccessful_sends_24h'] += cur.fetchone()['count']
+    cur.execute("SELECT enabled,emergency_stop,operating_mode,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(tenant,))
+    settings = cur.fetchone() or {}
+    cur.execute("SELECT count(*) AS count FROM saas_ai_agents WHERE tenant_id=%s::uuid AND enabled=TRUE",(tenant,))
+    active_agents = cur.fetchone()['count']
+    # History remains inspectable when the coalescing job has advanced to
+    # another message. No payload/body/result is returned to the browser.
+    cur.execute('''SELECT e.external_id AS message_id,e.provider,COALESCE(e.payload->>'channel_id',e.payload->>'channel') AS channel_id,
+        e.received_at,e.state AS event_state,e.error_code AS event_error,
+        j.state AS job_state,j.error_code AS job_error,j.attempts,j.due_at,
+        COALESCE(j.agent_id,r.agent_id) AS agent_id,a.enabled AS agent_enabled,a.mode AS agent_mode,
+        s.enabled AS company_enabled,s.emergency_stop,s.operating_mode,cs.state AS conversation_state,
+        EXISTS(SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=e.tenant_id
+          AND e.provider='connect' AND legacy.provider='connect' AND legacy.channel_id=''
+          AND legacy.conversation_id=e.payload->>'conversation_id') AS legacy_scope_unresolved,
+        r.state AS run_state,r.error_code AS run_error,r.generated_at,
+        (SELECT d.state FROM saas_ai_agent_drafts d WHERE d.tenant_id=e.tenant_id AND d.source_fingerprint=e.fingerprint AND d.agent_id=COALESCE(j.agent_id,r.agent_id) ORDER BY d.created_at DESC LIMIT 1) AS draft_state,
+        EXISTS(SELECT 1 FROM saas_ai_agent_drafts d WHERE d.tenant_id=e.tenant_id AND d.source_fingerprint=e.fingerprint AND d.agent_id=COALESCE(j.agent_id,r.agent_id)) AS drafted,
+        EXISTS(SELECT 1 FROM saas_ai_agent_runs sr WHERE sr.tenant_id=e.tenant_id AND sr.event_fingerprint=e.fingerprint
+            AND sr.agent_id=COALESCE(j.agent_id,r.agent_id) AND sr.result->>'send_state'='accepted') OR EXISTS (
+            SELECT 1 FROM saas_ai_agent_drafts d JOIN saas_crm_messages sm ON sm.tenant_id=d.tenant_id
+              AND sm.kommo_lead_id=d.lead_id AND sm.channel='connect:'||(e.payload->>'channel_id')
+              AND sm.direction='outgoing' AND sm.author_name='AI Agent'
+              AND sm.raw->>'run_id'=d.id::text AND sm.raw->>'status'='accepted'
+            WHERE d.tenant_id=e.tenant_id AND d.source_fingerprint=e.fingerprint AND d.agent_id=COALESCE(j.agent_id,r.agent_id)) AS sent
+      FROM saas_tenant_webhook_events e
+      LEFT JOIN LATERAL (SELECT * FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=e.tenant_id AND j0.event_fingerprint=e.fingerprint ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
+      LEFT JOIN LATERAL (SELECT * FROM saas_ai_agent_runs r0 WHERE r0.tenant_id=e.tenant_id AND r0.event_fingerprint=e.fingerprint AND (j.agent_id IS NULL OR r0.agent_id=j.agent_id) ORDER BY r0.created_at DESC LIMIT 1) r ON TRUE
+      LEFT JOIN saas_ai_agents a ON a.tenant_id=e.tenant_id AND a.id=COALESCE(j.agent_id,r.agent_id)
+      LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=e.tenant_id
+      LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=e.tenant_id AND cs.provider=e.provider
+        AND cs.conversation_id=COALESCE(e.payload->>'conversation_id',e.payload->>'chat_id')
+        AND cs.channel_id=CASE WHEN e.provider='connect' THEN e.payload->>'channel_id' ELSE '' END
+      WHERE e.tenant_id=%s::uuid AND e.event_type='incoming_message'
+      ORDER BY e.received_at DESC,e.fingerprint LIMIT %s''',(tenant,max(1,min(int(limit),100))))
+    messages = [_message(row) for row in cur.fetchall()]
     blockers=[]
     if not enabled('AI_AGENTS_ENABLED'): blockers.append('ai_agents_server_disabled')
     if not settings.get('enabled'): blockers.append('company_ai_disabled')

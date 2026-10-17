@@ -1,0 +1,10 @@
+.tenant-ai-state { padding: 1rem; overflow-wrap: anywhere; }
+.tenant-ai-state-counts { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .4rem 1rem; }
+.tenant-ai-state-counts dd { margin: 0; font-weight: 600; }
+.tenant-ai-state-cards { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,20rem),1fr)); gap: 1rem; margin-top: 1rem; }
+.tenant-ai-state article,.tenant-ai-state details { padding: 1rem; border: 1px solid #94a3b8; border-radius: .7rem; min-width: 0; }
+.tenant-ai-state-channel { border-top: 1px solid #cbd5e1; padding-block: .75rem; }
+.tenant-ai-state button { min-height: 44px; padding: .5rem .8rem; margin: .25rem; max-width: 100%; white-space: normal; }
+.tenant-ai-state pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
+.tenant-ai-state summary { cursor: pointer; min-height: 44px; }
+.tenant-ai-state li { margin-bottom: .75rem; }

@@ -4,6 +4,8 @@ from pathlib import Path
 from aiohttp import web
 
 ASSETS = (
+    ('/assets/tenant-ai-state.js', 'tenant-ai-state.js', 'no-store'),
+    ('/assets/tenant-ai-state.css', 'tenant-ai-state.css', 'no-store'),
     ('/assets/tenant-ai-testing.js', 'tenant-ai-testing.js', 'no-store'),
     ('/assets/tenant-ai-testing.css', 'tenant-ai-testing.css', 'no-store'),
     ('/app/night-report', 'tenant-night-report.html', 'no-store'),

@@ -29,7 +29,7 @@ def _scope_matches(scopes, pipeline, stage, channel):
     if not isinstance(scopes, list):
         return False
     for scope in scopes:
-        if not isinstance(scope, dict):
+        if not isinstance(scope, dict) or scope.get('provider', 'kommo') != 'kommo':
             continue
         if str(scope.get('pipeline_id') or '') != str(pipeline) or str(scope.get('stage_id') or '') != str(stage):
             continue
@@ -110,7 +110,7 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
                 # Queue stage/channel candidates and let the worker verify the
                 # exact Talk and live deal against Kommo before using the AI.
                 matches = [agent for agent in agents if isinstance(agent['scopes'],list) and any(
-                    isinstance(scope,dict) for scope in agent['scopes'])]
+                    isinstance(scope,dict) and scope.get('provider', 'kommo') == 'kommo' for scope in agent['scopes'])]
                 if not matches:
                     reasons.add('no_enabled_agent')
                 fingerprint = hashlib.sha256(('kommo:' + event['message_id']).encode('utf-8')).hexdigest()
