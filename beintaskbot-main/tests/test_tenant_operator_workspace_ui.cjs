@@ -27,7 +27,8 @@ function setup(role='owner'){
    else if(u.pathname.endsWith('/agents/settings')){if(method==='PATCH')settings={...settings,...body};payload=result(settings);}
    else if(u.pathname.endsWith('/agents/test-mode')){if(method==='PATCH'){if(body.provider==='connect')binding.connect={...binding.connect,...body};else binding={...binding,...body};}payload=result(binding);}
    else if(u.pathname.endsWith('/agents/options'))payload=result({pipelines:[],stages:[],channels:[],connect_channels:[{id:CA,name:'Night WhatsApp'}],models:['test-model']});
-   else if(u.pathname.endsWith('/agents'))payload=result([agent,secondAgent]);
+   else if(u.pathname.endsWith('/ai/state'))payload=result({schema_version:1,summary:{service:'available',state:'conditional'},agents:[],events:[],can_view_technical:false});
+    else if(u.pathname.endsWith('/agents'))payload=result([agent,secondAgent]);
    else if(u.pathname.endsWith('/agents/'+AGENT)||u.pathname.endsWith('/agents/'+AGENT_TWO)){const current=u.pathname.endsWith('/'+AGENT)?agent:secondAgent,saved={...current,...body,version:current.version+1};if(saved.id===AGENT)agent=saved;else secondAgent=saved;payload=result(saved);}
    else if(u.pathname.includes('/knowledge')||u.pathname.endsWith('/triggers')||u.pathname.endsWith('/drafts'))payload=result([]);
    else if(u.pathname.endsWith('/dialogs/display-name')){if(displayNameFailure)return{ok:false,status:400,json:async()=>({success:false,error:'Name rejected'})};if(body.kind==='conversation'){dialog.manual_display_name=body.display_name;}else messages.forEach(message=>{if(message.participant_jid===body.participant_jid)message.author_name=body.display_name||'Али';});payload=result({kind:body.kind,display_name:body.display_name||''});}
@@ -45,7 +46,7 @@ function setup(role='owner'){
  };
  w.eval(read('docs/tenant-operator-i18n.js'));
  const inline=[...w.document.querySelectorAll('script:not([src])')][0];w.eval(inline.textContent);
- for(const file of ['tenant-chat-send.js','tenant-ai-agents.js','tenant-ai-testing.js','tenant-operator-dialogs.js','tenant-support-inbox.js'])w.eval(read('docs/'+file));
+ for(const file of ['tenant-chat-send.js','tenant-ai-state.js','tenant-ai-agents.js','tenant-ai-testing.js','tenant-operator-dialogs.js','tenant-support-inbox.js'])w.eval(read('docs/'+file));
  return{dom,w,calls,alerts,errors,member,modules,dialog,ticket,setDisplayNameFailure:value=>displayNameFailure=value,setSettings(value){settings={...settings,...value}},get agent(){return agent},get agents(){return[agent,secondAgent]},get binding(){return binding}};
 
 }
@@ -53,6 +54,16 @@ function setup(role='owner'){
  const app=setup(),{w,calls}=app,d=w.document;
  await waitFor(()=>d.querySelectorAll('[data-edit-agent]').length===2&&!d.querySelector('[data-ai-overview-settings]').disabled&&d.querySelector('[data-support-id]'),'workspace bootstrap');
  assert.equal(app.errors.length,0,String(app.errors[0]));
+ assert.equal(d.querySelector('script[src="/assets/tenant-ai-reliability.js"]'),null);
+ assert.equal(d.querySelector('#aiAgentsNav').nextElementSibling.id,'aiTestingNav');
+ assert.deepEqual([...d.querySelectorAll('.ai-overview-actions button:not([hidden])')].map(b=>b.textContent),['Создать агента','Настройки компании','Состояние AI']);
+ assert.equal(calls.filter(c=>c.url.includes('/ai/state')).length,0,'AI state is lazy');
+ d.querySelector('[data-ai-overview-state]').click();await settle();
+ assert.equal(d.querySelector('#aiAgentsModalTitle').textContent,'Состояние AI');
+ assert.ok(d.querySelector('#aiUnifiedState .tenant-ai-state'));
+ assert.ok(calls.some(c=>c.url.includes('/ai/state?')&&c.url.includes('expected_tenant_id='+A)&&c.url.includes('expected_user_id=11')));
+ d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{member:app.member,capabilities:{modules:app.modules}}}));await settle();assert.equal(d.querySelector('#aiAgentsModal').hidden,true);assert.equal(d.querySelector('#aiUnifiedState .tenant-ai-state'),null);
+
  d.querySelector('[data-view=dialogs]').click();await settle();assert.ok(d.querySelector('#view-dialogs').classList.contains('active'));assert.equal(d.querySelector('#operatorRows img'),null);d.querySelector('#operatorFiltersToggle').click();assert.equal(d.querySelector('#operatorFiltersToggle').getAttribute('aria-expanded'),'true');
  d.querySelector('[data-view=support]').click();await settle();assert.ok(d.querySelector('#view-support').classList.contains('active'));assert.ok(!d.querySelector('#view-ai_agents #supportInbox'));
  d.querySelector('[data-support-id]').click();await settle();const prior=calls.filter(call=>call.url.includes('/conversations/')&&call.method==='POST').length;

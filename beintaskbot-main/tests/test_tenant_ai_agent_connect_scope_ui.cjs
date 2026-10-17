@@ -74,7 +74,7 @@ assert.match(source, /aiScheduleEnabled/,
   'the editor must expose the durable schedule rather than a hidden fixed window');
 assert.match(appSource, /data-ai-section-nav="stopping"/,
   'the editor must expose a separate stop/handoff section');
-assert.match(fs.readFileSync(path.join(root,'docs/tenant-operator-dialogs.js'),'utf8'), /add\('pause','pause'\)/,
+assert.match(fs.readFileSync(path.join(root,'docs/tenant-operator-dialogs.js'),'utf8'), /actions\.has\('pause'\).*actionButton\('pause','pause'\)/,
   'an active dialogue must offer Pause rather than only a handoff action');
 assert.match(appSource, /id="aiAllowGroupMessages"/,
   'the administrator must explicitly opt in before an AI Agent can handle group messages');

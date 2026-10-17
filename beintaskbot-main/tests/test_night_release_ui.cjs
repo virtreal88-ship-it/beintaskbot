@@ -17,9 +17,9 @@ const tick=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r));}
   if(u.pathname.endsWith('/triggers'))return result({id:'trigger-a'});
   throw Error('Unexpected request '+url);
  };
- for(const file of ['tenant-operator-i18n.js','tenant-night-l10n.js','tenant-agent-catalog.js','tenant-night-agent-template.js','tenant-agent-library.js','tenant-ai-reliability.js','tenant-night-integration.js'])w.eval(read('docs/'+file));
- await tick();assert.equal(d.querySelectorAll('#aiNightTemplateQuick').length,0);assert.equal(d.querySelectorAll('[data-ai-reliability-open]').length,1);assert.equal(d.getElementById('nightReportNav').hidden,false);
- w.tenantI18n.setLanguage('en');assert.equal(d.getElementById('nightReportNav').getAttribute('href'),'/app/night-report?site_lang=en');assert.equal(d.querySelector('[data-ai-reliability-open]').textContent,'AI status');
+ for(const file of ['tenant-operator-i18n.js','tenant-night-l10n.js','tenant-agent-catalog.js','tenant-night-agent-template.js','tenant-agent-library.js','tenant-night-integration.js'])w.eval(read('docs/'+file));
+ await tick();assert.equal(d.querySelectorAll('#aiNightTemplateQuick').length,0);assert.equal(d.querySelectorAll('[data-ai-reliability-open]').length,0);assert.equal(d.getElementById('nightReportNav').hidden,false);
+ w.tenantI18n.setLanguage('en');assert.equal(d.getElementById('nightReportNav').getAttribute('href'),'/app/night-report?site_lang=en');assert.equal(d.querySelector('script[src="/assets/tenant-ai-reliability.js"]'),null);
  w.tenantI18n.setLanguage('az');assert.equal(d.getElementById('nightReportNav').textContent.includes('Gecə növbəsi'),true);
  w.tenantI18n.setLanguage('ru');await w.tenantAgentLibrary.open();await tick();d.querySelector('[data-agent-template]').click();await tick();
  assert.equal(d.getElementById('nightAgentMode').value,'manual');assert.equal(d.getElementById('nightAgentLaunch').checked,false);
