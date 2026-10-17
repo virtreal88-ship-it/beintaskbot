@@ -52,7 +52,7 @@ def _provider_error_category(response):
     return 'unknown'
 
 
-def generate(key, model, mode, lines, draft, *, instructions=None, extra_context=None, images=None, with_usage=False):
+def generate(key, model, mode, lines, draft, *, instructions=None, extra_context=None, images=None, with_usage=False, max_output_tokens=1800, request_timeout=60):
     """Generate one draft for both the Chat AI and the existing AI Agents.
 
     Agents add tenant-scoped instructions, knowledge context and verified image
@@ -74,9 +74,9 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
         content.append({'type': 'input_image', 'image_url': data_url, 'detail': 'auto'})
     request_input = text_input if not images else [{'role': 'user', 'content': content}]
     response = requests.post('https://api.openai.com/v1/responses', headers={'Authorization': 'Bearer ' + key},
-        json={'model': model, 'store': False, 'max_output_tokens': 1800, 'instructions': prompt,
+        json={'model': model, 'store': False, 'max_output_tokens': max(16,min(1800,int(max_output_tokens))), 'instructions': prompt,
               'input': request_input},
-        timeout=(5, 60), allow_redirects=False)
+        timeout=(min(5,request_timeout), request_timeout), allow_redirects=False)
     if response.status_code != 200:
         raise ChatAIProviderError(response.status_code, _provider_error_category(response))
     payload = response.json()

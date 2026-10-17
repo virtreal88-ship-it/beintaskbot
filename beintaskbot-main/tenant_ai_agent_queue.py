@@ -98,7 +98,7 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
             tenant = str(connections[0]['tenant_id'])
             from tenant_ai_testing_scope import clause
             cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.mode FROM saas_ai_agents a
-              WHERE a.tenant_id=%s::uuid AND a.enabled=TRUE'''+clause('a','kommo')+' ORDER BY a.created_at,a.id', (tenant,))
+              WHERE a.role='primary' AND a.tenant_id=%s::uuid AND a.enabled=TRUE'''+clause('a','kommo')+' ORDER BY a.created_at,a.id', (tenant,))
             agents = cur.fetchall()
             for event in normalized:
                 # Test Mode is deliberately fail-closed: Kommo webhook must

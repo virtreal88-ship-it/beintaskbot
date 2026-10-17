@@ -1,0 +1,14 @@
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const dom=new JSDOM(`<div id="aiAgentEditor"><section data-ai-editor-section="basics"></section><select id="aiAgentMode"><option value="manual">Manual</option><option value="automatic">Automatic</option></select></div>`,{runScripts:'outside-only',url:'https://test.local/app'});
+const w=dom.window,$=id=>w.document.getElementById(id);w.eval(fs.readFileSync('docs/tenant-ai-expert-editor.js','utf8'));
+let created=0;const agents=[{id:'expert',role:'expert',enabled:true,name:'<img src=x>',model:'m1'},{id:'disabled',role:'expert',enabled:false,name:'Unavailable'},{id:'primary',enabled:true}];
+w.aiExpertEditor.render({id:'primary',expert_policy:{expert_agent_id:'expert',tools:['system_status'],max_calls:3}},agents,()=>created++);
+assert.equal($('aiExpertAgent').options.length,2);assert.equal($('aiExpertAgent').value,'expert');assert.equal(w.document.querySelector('img'),null);
+assert.equal(w.aiExpertEditor.read().expert_policy.max_calls,3);assert.match($('aiExpertModel').textContent,/m1/);
+$('aiNewExpert').click();assert.equal(created,1);$('aiAgentRole').value='expert';$('aiAgentRole').dispatchEvent(new w.Event('change'));
+assert.equal($('aiAgentMode').value,'manual');assert.equal($('aiAgentMode').disabled,true);assert.equal($('aiExpertBinding').hidden,true);assert.deepEqual(JSON.parse(JSON.stringify(w.aiExpertEditor.read())),{role:'expert',expert_policy:{}});
+w.aiExpertEditor.render({id:'primary'},agents,()=>{});assert.equal($('aiAgentMode').disabled,false);assert.equal($('aiExpertAgent').value,'');assert.equal(w.aiExpertEditor.read().expert_policy.expert_agent_id,undefined);
+assert.match(w.document.body.textContent,/Mock/);assert.match(w.document.body.textContent,/не отправляет/);
+const html=fs.readFileSync('docs/tenant-app.html','utf8'),assets=fs.readFileSync('tenant_web_assets.py','utf8');assert.match(html,/tenant-ai-expert-editor.js/);assert.match(assets,/tenant-ai-expert-editor.js/);
+console.log('PASS expert editor: role, binding, unavailable tools, model, limits, escaping, safe defaults and reset.');dom.window.close();

@@ -5,6 +5,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 
+from tenant_ai_expert_service import request_expert
 from tenant_ai_agent_queue import _scope_matches
 from tenant_ai_agent_actions import should_handoff, enabled_triggers, matching_triggers, handoff
 from tenant_ai_agent_crm_actions import execute_matching_actions
@@ -310,6 +311,19 @@ async def process_one(job, kommo_request, wait_slot, logger):
                          'latest_client_message':str(source.get('body') or '')[:2000],
                          'image_message_ids_for_analysis':[item['message_id'] for item in images if item.get('message_id')],
                          'trigger_actions':action_preview.get('actions',[])}
+        expert_result = await request_expert(job, reservation, problem=str(source.get('body') or ''), lines=lines, triggers=matched,
+            checks=['Exact Kommo Talk and customer message verified', 'Unavailable media count: '+str(missing)],
+            previous_actions=['Proposed, not executed: '+str(item) for item in action_preview.get('actions',[])])
+        if expert_result and expert_result.get('status')=='stale':
+            await asyncio.to_thread(finish_superseded,job,reservation,'expert_parent_inactive')
+            return
+        if expert_result and expert_result.get('status')=='completed' and (expert_result.get('result') or {}).get('requires_human') is True:
+            await asyncio.to_thread(handoff,job,'expert_recommends_employee')
+            await asyncio.to_thread(finish_superseded,job,reservation,'expert_recommends_employee')
+            return
+        if expert_result:
+            extra_context['internal_expert_advisory'] = expert_result
+            prompt += '\nExpert evidence is advisory and may be incomplete. Verify recommendations, ask for missing information or recommend a human; never claim resolution without confirmation.'
         assert_job_allowed(job)
         call = asyncio.create_task(asyncio.to_thread(generate,reservation['api_key'],model,'reply',lines,'',
             instructions=prompt,extra_context=extra_context,images=images,with_usage=True))
@@ -545,12 +559,25 @@ async def process_connect_one(job, logger):
         prompt = INSTRUCTIONS + ('\n\nBusiness instructions:\n' + rules if rules else '')
         prompt += ('\n\n' + server_instructions() + '\nReply to the latest customer message. '
                    'Do not claim a message was sent unless the system confirms it.')
+        expert_result = await request_expert(job, reservation, problem=query, lines=lines, triggers=matched,
+            checks=['Exact Connect channel and conversation verified', 'Unavailable media count: '+str(missing)],
+            previous_actions=['Voice transcription available'] if transcripts else [])
+        if expert_result and expert_result.get('status')=='stale':
+            await asyncio.to_thread(finish_superseded,job,reservation,'expert_parent_inactive')
+            return
+        if expert_result and expert_result.get('status')=='completed' and (expert_result.get('result') or {}).get('requires_human') is True:
+            await asyncio.to_thread(handoff,job,'expert_recommends_employee')
+            await asyncio.to_thread(finish_superseded,job,reservation,'expert_recommends_employee')
+            return
+        assert_job_allowed(job)
+        if expert_result:
+            prompt += '\nInternal expert results are advisory. Check recommendations, ask for missing information or recommend a human. Never claim resolution without confirmation.'
         phase = 'connect_generation'
         draft, usage = await asyncio.to_thread(generate, reservation['api_key'], model, 'reply', lines, '',
                                         instructions=prompt,
                                         extra_context={'language':reservation['agent_language'], 'style':reservation['agent_style'],
                                                        'knowledge':knowledge, 'latest_client_message_id':source_id,
-                                                       'latest_client_message':query, 'unprocessed_media_count':missing}, images=[], with_usage=True)
+                                                       'latest_client_message':query, 'unprocessed_media_count':missing, **({'internal_expert_advisory':expert_result} if expert_result else {})}, images=[], with_usage=True)
         if pending_audio:
             audio_usage = reservation.get('voice_usage') or {}
             combined = {key: int(usage.get(key) or 0) + int(audio_usage.get(key) or 0)

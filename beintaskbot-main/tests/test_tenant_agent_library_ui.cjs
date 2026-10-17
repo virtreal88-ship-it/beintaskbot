@@ -39,7 +39,7 @@ function setup({role='owner',channels,denied=false}={}){
   if(u.pathname.endsWith('/triggers')||u.pathname.endsWith('/drafts'))return result([]);
   throw Error('Unexpected request '+url);
  };
- for(const file of ['tenant-operator-i18n.js','tenant-ai-agents.js','tenant-night-l10n.js','tenant-agent-catalog.js','tenant-night-agent-template.js','tenant-agent-library.js'])w.eval(read('docs/'+file));
+ for(const file of ['tenant-operator-i18n.js','tenant-ai-expert-editor.js','tenant-ai-agents.js','tenant-night-l10n.js','tenant-agent-catalog.js','tenant-night-agent-template.js','tenant-agent-library.js'])w.eval(read('docs/'+file));
  return {w,d,calls,errors,agents,triggers,knowledge,member,company,dom,setChannels(value){rows=value},failAgent(){failAgent=true},failUpload(){failUpload=true},delayAgent(){delayAgent=true},release(){release()},failCatalog(value){failCatalog=value}};
 }
 function choose(app,id){const box=app.d.querySelector(`[name=agentCreationChannel][value="${id}"]`);assert.ok(box,'real connection exists');assert.equal(box.disabled,false);box.checked=true;box.dispatchEvent(new app.w.Event('change'));}

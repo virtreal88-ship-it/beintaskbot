@@ -193,7 +193,13 @@ def detail(profile, ticket_id, before=None):
               WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s''' + clause + '''
               ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 51''', tuple(args))
             rows = cur.fetchall()
-    return {'ticket':public(ticket), 'messages':[public(row) for row in reversed(rows[:50])],
+            cur.execute('''SELECT e.id,e.status,e.result,e.error_code,e.created_at,a.name AS expert_name,r.model
+              FROM saas_ai_expert_tasks e JOIN saas_ai_agents a ON a.tenant_id=e.tenant_id AND a.id=e.expert_agent_id
+              JOIN saas_ai_agent_runs r ON r.tenant_id=e.tenant_id AND r.id=e.id
+              WHERE e.tenant_id=%s::uuid AND e.provider='connect' AND e.channel_id=%s AND e.conversation_id=%s
+              ORDER BY e.created_at DESC LIMIT 10''',(tenant,str(ticket['channel_id']),ticket['conversation_id']))
+            expert_results=[public(row) for row in cur.fetchall()]
+    return {'expert_results':expert_results,'ticket':public(ticket), 'messages':[public(row) for row in reversed(rows[:50])],
             'next_before':str(rows[49]['id']) if len(rows)>50 else None}
 
 

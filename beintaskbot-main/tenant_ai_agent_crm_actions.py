@@ -203,7 +203,7 @@ async def execute_matching_actions(job,source,request,*,automatic,crm_enabled,cr
     outcomes=[]
     for trigger in matching:
         for index,action in enumerate(trigger.get('actions') or []):
-            if action=='handoff':continue
+            if action in {'handoff','call_expert'}:continue
             status=await _execute_one(job,trigger,index,action,source.get('body'),phone,request,
                                       generated_task_text)
             outcomes.append({'trigger':trigger['name'],'action':action,'state':status})
