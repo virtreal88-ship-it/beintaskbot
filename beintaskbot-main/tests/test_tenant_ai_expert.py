@@ -201,6 +201,8 @@ def test_group_contract_revision_fencing(expert,monkeypatch):
         if expected_revision!=revision[0]:return None
         return {'revision':revision[0],'primary_agent_id':AGENT,'sending_channel_id':CA}
     monkeypatch.setitem(sys.modules,'tenant_ai_group_coordination',types.SimpleNamespace(authority=authority))
+    job['payload']={'group_revision':4}
+    with pytest.raises(TenantLinearError):service.reserve(job,parent)
     job['payload']={'group_revision':4,'group_event_key':'server-verified'}
     receipt=service.reserve(job,parent)
     assert calls[-1]==(A,CA,group,AGENT,4)

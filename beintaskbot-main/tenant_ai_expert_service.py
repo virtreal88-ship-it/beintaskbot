@@ -60,7 +60,8 @@ def _live(cur,job,parent,expected_revision=None):
     authority=None
     if '@g.us' in job['conversation_id']:
         expected_revision=expected_revision if expected_revision is not None else (job.get('payload') or {}).get('group_revision')
-        if type(expected_revision) is not int:
+        event_key=(job.get('payload') or {}).get('group_event_key')
+        if type(expected_revision) is not int or not isinstance(event_key,str) or not event_key.strip():
             raise TenantLinearError('expert_coordination_fence_missing',409)
         try:
             from tenant_ai_group_coordination import authority as group_authority
