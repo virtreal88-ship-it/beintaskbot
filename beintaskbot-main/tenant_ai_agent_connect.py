@@ -172,7 +172,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
               WHERE tenant_id=%s::uuid AND provider='connect' AND state IN ('queued','processing')
                 AND payload->>'conversation_id'=%s AND payload->>'channel_id'=%s AND fingerprint<>%s''', (tenant, conversation_id, channel_id, fingerprint))
             from tenant_ai_testing_scope import clause
-            cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.enabled FROM saas_ai_agents a
+            cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.enabled,a.schedule FROM saas_ai_agents a
               WHERE a.role='primary' AND a.tenant_id=%s::uuid'''+clause('a','connect')+' ORDER BY a.created_at,a.id', (tenant,))
             tenant_agents = cur.fetchall()
             # Explicit assignment is durable across Resume. Never silently
@@ -189,6 +189,8 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             enabled_agents = [row for row in tenant_agents if row.get('enabled') is True]
             channel_agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id)]
             agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id, is_group=is_group)]
+            from tenant_ai_agent_schedule import current_candidates
+            agents = current_candidates(agents)
             if not agents:
                 reason = ('agent_not_found' if not tenant_agents else 'agent_disabled' if not enabled_agents else
                           'group_messages_not_allowed' if is_group and channel_agents else 'no_connect_scope')

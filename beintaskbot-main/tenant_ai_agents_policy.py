@@ -65,7 +65,7 @@ def agent(data, *, creating=False):
         result['role'] = role
     if creating or 'expert_policy' in data:
         from tenant_ai_expert_policy import policy
-        result['expert_policy'] = policy(data.get('expert_policy', {}))
+        result['expert_policy'] = policy(data.get('expert_policy', {}) or ({'internal':True} if creating and data.get('role')=='expert' else {}))
     if creating or 'name' in data:
         result['name'] = _text(data.get('name'), 'Agent adı', 120, required=True)
     if creating or 'instructions' in data:
@@ -202,7 +202,7 @@ def trigger(data, *, creating=False):
         out['trigger_type'] = kind
     if creating or 'condition' in data:
         condition = data.get('condition', {})
-        if not isinstance(condition, dict) or set(condition) - {'phrase','target_stage_id','task_text'}:
+        if not isinstance(condition, dict) or set(condition) - {'phrase','target_stage_id','task_text','expert_agent_ids'}:
             raise TenantLinearError('Trigger şərti düzgün deyil.')
         phrase = _text(condition.get('phrase',''), 'Açar ifadə', 200)
         if data.get('trigger_type', '') == 'phrase' and not phrase:
@@ -210,6 +210,9 @@ def trigger(data, *, creating=False):
         target_stage=_text(condition.get('target_stage_id',''),'Hədəf mərhələ',120)
         task_text=_text(condition.get('task_text',''),'Tapşırıq mətni',500)
         out['condition'] = {'phrase': phrase,'target_stage_id':target_stage,'task_text':task_text}
+        if 'expert_agent_ids' in condition:
+            from tenant_ai_expert_policy import ids
+            out['condition']['expert_agent_ids']=ids(condition['expert_agent_ids'])
     if creating or 'actions' in data:
         actions = data.get('actions', [])
         allowed = {'handoff','handoff_after_reply','call_expert','create_task','update_phone','move_stage'}

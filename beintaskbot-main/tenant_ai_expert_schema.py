@@ -18,3 +18,7 @@ def create_schema(conn):
           FOREIGN KEY(tenant_id,principal_agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE,
           FOREIGN KEY(tenant_id,expert_agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE)""")
         cur.execute("CREATE INDEX IF NOT EXISTS saas_ai_expert_dialog_idx ON saas_ai_expert_tasks(tenant_id,provider,channel_id,conversation_id,created_at DESC)")
+
+        # Preserve old receipts while allowing one durable call per specialist.
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS saas_ai_expert_parent_specialist ON saas_ai_expert_tasks(tenant_id,parent_run_id,expert_agent_id)")
+        cur.execute("ALTER TABLE saas_ai_expert_tasks DROP CONSTRAINT IF EXISTS saas_ai_expert_tasks_tenant_id_parent_run_id_key")

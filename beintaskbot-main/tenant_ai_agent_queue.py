@@ -97,7 +97,7 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
                 return result(0, 'company_settings_unavailable')
             tenant = str(connections[0]['tenant_id'])
             from tenant_ai_testing_scope import clause
-            cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.mode FROM saas_ai_agents a
+            cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.mode,a.schedule FROM saas_ai_agents a
               WHERE a.role='primary' AND a.tenant_id=%s::uuid AND a.enabled=TRUE'''+clause('a','kommo')+' ORDER BY a.created_at,a.id', (tenant,))
             agents = cur.fetchall()
             for event in normalized:
@@ -126,6 +126,8 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
                 cur.execute('''UPDATE saas_tenant_webhook_events SET state='superseded',completed_at=now()
                   WHERE tenant_id=%s::uuid AND provider='kommo' AND state IN ('queued','processing')
                     AND payload->>'chat_id'=%s AND fingerprint<>%s''', (tenant,event['chat_id'],fingerprint))
+                from tenant_ai_agent_schedule import current_candidates
+                matches = current_candidates(matches)
                 matched_ids = {str(agent['id']) for agent in matches}
                 cur.execute('''SELECT agent_id FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='kommo'
                   AND conversation_id=%s AND state IN ('queued','processing')''', (tenant,event['chat_id']))

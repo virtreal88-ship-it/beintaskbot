@@ -72,8 +72,8 @@ def _scopes_overlap(left, right):
             if not isinstance(a,dict) or not isinstance(b,dict):
                 continue
             if (str(a.get('provider') or 'kommo')==str(b.get('provider') or 'kommo')
-                    and str(a.get('pipeline_id'))==str(b.get('pipeline_id'))
-                    and str(a.get('stage_id'))==str(b.get('stage_id'))):
+                    and str(a.get('pipeline_id') or '')==str(b.get('pipeline_id') or '')
+                    and str(a.get('stage_id') or '')==str(b.get('stage_id') or '')):
                 channel_a=str(a.get('channel_id') or '').casefold()
                 channel_b=str(b.get('channel_id') or '').casefold()
                 if not channel_a or not channel_b or channel_a==channel_b:
@@ -81,11 +81,41 @@ def _scopes_overlap(left, right):
     return False
 
 
-def _ensure_no_active_scope_overlap(cur, tenant, selected_scopes, exclude_agent=None):
-    cur.execute('''SELECT id,scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND enabled=TRUE
+def _explicit_assignment_separates(cur,tenant,agent_id,other,selected_scopes):
+    """Existing exact dialogue bindings/group coordinator can arbitrate shared scopes.
+
+    Unbound private dialogues with multiple current candidates fail closed in admission.
+    A group still needs its own coordinator; this does not grant any group authority.
+    """
+    if not agent_id: return False
+    checked=False
+    for left in selected_scopes:
+        for right in other.get('scopes') or []:
+            if not _scopes_overlap([left],[right]): continue
+            if left.get('provider','kommo')!='connect' or not left.get('channel_id'): return False
+            channel=left['channel_id'];checked=True
+            cur.execute("""SELECT DISTINCT agent_id::text AS agent FROM saas_ai_conversation_state
+              WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND agent_assignment_id IS NOT NULL
+              AND agent_id IN (%s::uuid,%s::uuid)""",(tenant,channel,str(agent_id),str(other['id'])))
+            if {r['agent'] for r in cur.fetchall()}=={str(agent_id),str(other['id'])}: continue
+            if left.get('allow_group_messages') and right.get('allow_group_messages'):
+                cur.execute("SELECT assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND provider='connect'",(tenant,))
+                safe=False
+                for row in cur.fetchall():
+                    slots=[x for x in row['assignments'] if x.get('channel_id')==channel and x.get('agent_id') in {str(agent_id),str(other['id'])}]
+                    if len(slots)==2 and len({x['agent_id'] for x in slots})==2 and slots[0]['priority']!=slots[1]['priority']: safe=True
+                if safe: continue
+            return False
+    return checked
+
+
+def _ensure_no_active_scope_overlap(cur, tenant, selected_scopes, exclude_agent=None, schedule=None):
+    cur.execute('''SELECT id,scopes,schedule FROM saas_ai_agents WHERE tenant_id=%s::uuid AND enabled=TRUE AND role='primary'
       AND (%s::uuid IS NULL OR id<>%s::uuid)''', (tenant,exclude_agent,exclude_agent))
-    if any(_scopes_overlap(selected_scopes,row.get('scopes')) for row in cur.fetchall()):
-        raise TenantLinearError('Aktiv agentlərin vərəq, mərhələ və kanal sahələri üst-üstə düşə bilməz.',409)
+    from tenant_ai_agent_schedule import overlaps
+    if any(_scopes_overlap(selected_scopes,row.get('scopes')) and overlaps(schedule or {},row.get('schedule') or {})
+           and not _explicit_assignment_separates(cur,tenant,exclude_agent,row,selected_scopes) for row in list(cur.fetchall())):
+        raise TenantLinearError('AI_PRIMARY_SCHEDULE_CONFLICT: overlapping active primary scopes and shifts.',409)
 
 
 def read_settings(profile):
@@ -274,6 +304,7 @@ def save_agent(profile, data, *, agent_id=None):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
+            cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('ai-agent-config:'+tenant,))
             # A retry after a browser/network interruption must return the
             # original disabled agent.  The key is also employee-scoped so an
             # administrator cannot accidentally resume another employee's
@@ -346,7 +377,7 @@ def save_agent(profile, data, *, agent_id=None):
                 if int((cur.fetchone() or {}).get('total') or 0) >= MAX_AGENTS:
                     raise TenantLinearError('Agent sayı həddə çatıb.')
                 if patch['enabled']:
-                    _ensure_no_active_scope_overlap(cur,tenant,patch['scopes'])
+                    _ensure_no_active_scope_overlap(cur,tenant,patch['scopes'],schedule=patch['schedule'])
                     cur.execute('''SELECT s.enabled,i.secrets,i.metadata FROM saas_ai_agent_settings s
                       LEFT JOIN saas_tenant_integrations i ON i.tenant_id=s.tenant_id AND i.provider='chat_ai'
                       WHERE s.tenant_id=%s::uuid''', (tenant,))
@@ -378,7 +409,7 @@ def save_agent(profile, data, *, agent_id=None):
                 validate_binding(cur,tenant,agent_uuid,merged,previous)
                 merged['safety'] = safety_policy(merged.get('safety'))
                 if merged['enabled']:
-                    _ensure_no_active_scope_overlap(cur,tenant,merged['scopes'],exclude_agent=agent_uuid)
+                    _ensure_no_active_scope_overlap(cur,tenant,merged['scopes'],exclude_agent=agent_uuid,schedule=merged['schedule'])
                 if merged['enabled'] and not previous['enabled']:
                     cur.execute('''SELECT s.enabled,i.secrets,i.metadata FROM saas_ai_agent_settings s
                       LEFT JOIN saas_tenant_integrations i ON i.tenant_id=s.tenant_id AND i.provider='chat_ai'
@@ -639,8 +670,13 @@ def save_trigger(profile,agent_id,data,*,trigger_id=None):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
-            cur.execute("SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,agent))
-            if not cur.fetchone():raise TenantLinearError('Agent tapılmadı.',404)
+            cur.execute("SELECT role,expert_policy FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,agent))
+            principal=cur.fetchone()
+            if not principal:raise TenantLinearError('Agent tapılmadı.',404)
+            if principal['role']!='primary':raise TenantLinearError('Internal agents cannot run client triggers.',409)
+            from tenant_ai_expert_policy import helper_ids
+            if not set((patch.get('condition') or {}).get('expert_agent_ids',[]))<=set(helper_ids(principal['expert_policy'] or {})):
+                raise TenantLinearError('Select only this primary agent’s internal helpers.',409)
             existing = None
             if creating and patch.get('setup_key'):
                 cur.execute('''SELECT id,agent_id,name,trigger_type,condition,actions,enabled,version,created_at,updated_at
