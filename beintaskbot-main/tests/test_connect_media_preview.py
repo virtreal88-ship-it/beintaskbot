@@ -62,9 +62,9 @@ def test_group_media_preserves_route_and_saved_transcript(media_db):
     media_db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid",(json.dumps({'conversationId':'g@g.us'}),A));media_db.commit()
     assert store.load(PROFILE,41,'connect:'+MID)['route']['conversation_id']=='g@g.us'
     result=dialogs._message({'channel':'connect:'+CA,'direction':'incoming','message_type':'audio','body':'Salam! Привет!',
-                            'media_url':'https://private-provider/secret','raw':{'participantJid':'person@s.whatsapp.net','voice_transcription':{'status':'completed'}}},group=True)
+                             'media_url':'https://private-provider/secret','raw':{'participantJid':'person@s.whatsapp.net','durationSeconds':65,'voice_transcription':{'status':'completed'}}},group=True)
     assert result['author_type']=='participant' and result['has_transcription'] is True and result['body']=='Salam! Привет!'
-    assert result['media_url']=='' and 'raw' not in result
+    assert result['media_url']=='' and result['duration_seconds']==65 and 'raw' not in result
     assert 'has_transcription' not in dialogs._message({'channel':'connect:'+CA,'message_type':'audio','body':'','raw':{'voice_transcription':{'status':'failed'}}})
 
 

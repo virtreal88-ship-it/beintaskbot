@@ -15,7 +15,7 @@ async function setup(previous=false,group=false,shared=false){
  const profile={member,capabilities:{modules:{dialogs:true}}};w.tenantProfileSnapshot=profile;
  const route={provider:'connect',lead_id:41,channel_id:C,conversation_id:group?'group@g.us':'direct@s.whatsapp.net',customer_kind:group?'group':'contact',customer_name:group?'Test group':'Test customer',display_state:'human',state:'human',ai_availability:'stopped',available_actions:[],can_send:false};
  const messages=[{external_id:'connect:00000000-0000-0000-0000-000000000501',source:'connect',direction:'incoming',message_type:'image',body:'Photo',author_type:group?'participant':'customer',author_name:'Alice'},
- {external_id:'connect:00000000-0000-0000-0000-000000000502',source:'connect',direction:'outgoing',message_type:'audio',body:'Salam! Привет!',...(previous?{}:{has_transcription:true}),author_type:'operator',author_name:'Operator'}];
+ {external_id:'connect:00000000-0000-0000-0000-000000000502',source:'connect',direction:'outgoing',message_type:'audio',body:'Salam! Привет!',duration_seconds:42,...(previous?{}:{has_transcription:true}),author_type:'operator',author_name:'Operator'}];
  let unavailable=false,mediaBytes=0,jsonBytes=0;
  w.fetch=async(url,options={})=>{
   calls.push({url:String(url),method:options.method||'GET'});let value;
@@ -44,7 +44,7 @@ async function setup(previous=false,group=false,shared=false){
  const after=await setup(false,true),{w}=after;
  assert.equal(after.mediaBytes,0);assert.equal(after.historyCalls,before.historyCalls);assert.equal(after.listCalls,before.listCalls);assert.equal(after.listBytes,before.listBytes);
  assert.equal(w.document.querySelectorAll('[data-chat-attachment]').length,2);
- assert.match(w.document.getElementById('chatRows').textContent,/Alice/);assert.equal(w.document.querySelectorAll('[data-direction="outgoing"]').length,1);
+ assert.match(w.document.getElementById('chatRows').textContent,/Alice/);assert.match(w.document.getElementById('chatRows').textContent,/0:42/);assert.equal(w.document.querySelectorAll('[data-direction="outgoing"]').length,1);
  const details=w.document.querySelector('#chatRows details');const n=after.calls.length;details.open=true;await settle();assert.equal(after.calls.length,n);assert.match(details.textContent,/Salam! Привет!/);
  const buttons=[...w.document.querySelectorAll('[data-chat-attachment] button')];await buttons[0].onclick();assert.equal(w.document.querySelectorAll('#chatRows img').length,1);
  await buttons[1].onclick();const audio=w.document.querySelector('#chatRows audio');assert.ok(audio.controls);assert.equal(audio.preload,'none');assert.equal(audio.autoplay,false);
