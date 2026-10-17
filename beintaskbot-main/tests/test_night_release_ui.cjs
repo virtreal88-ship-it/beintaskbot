@@ -8,21 +8,22 @@ const tick=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r));}
  const member={tenant_id:'company-a',telegram_id:11,role:'owner'},result=value=>({ok:true,json:async()=>({success:true,result:value})});
  w.fetch=async(url,init={})=>{const u=new URL(url,'https://crm.test'),data=init.body instanceof w.FormData?Object.fromEntries(init.body):init.body?JSON.parse(init.body):null;calls.push({path:u.pathname,method:init.method||'GET',data});
   if(u.pathname==='/api/platform/me')return{ok:true,json:async()=>({member,capabilities:{modules:{night_report:true}}})};
+  if(u.pathname.endsWith('/channels'))return result({schema_version:1,channels:[{id:'connect:channel-a',provider:'connect',channel_id:'channel-a',name:'Техническая поддержка',type:'whatsapp',scope:{provider:'connect',channel_id:'channel-a'},connection:{state:'connected'},ai:{supported:true,available:true},capabilities:{text_replies:true}}]});
   if(u.pathname.endsWith('/agents/options'))return result({connect_channels:[{id:'channel-a',name:'WhatsApp'}],models:[{id:'test-model',label:'Test model'}]});
   if(u.pathname.endsWith('/agents/settings'))return result({operating_mode:'active',auto_send_enabled:true});
   if(u.pathname.endsWith('/knowledge'))return result([]);
   if(u.pathname.endsWith('/knowledge/upload'))return result({id:'source-a',agent_id:data.agent_id});
-  if(u.pathname.endsWith('/agents'))return result({id:'created-agent',name:data.name,version:1,enabled:false});
+  if(u.pathname.endsWith('/agents'))return result({...data,id:'created-agent',name:data.name,version:1,enabled:false});
   if(u.pathname.endsWith('/triggers'))return result({id:'trigger-a'});
   throw Error('Unexpected request '+url);
  };
- for(const file of ['tenant-operator-i18n.js','tenant-night-l10n.js','tenant-night-agent-template.js','tenant-ai-reliability.js','tenant-night-integration.js'])w.eval(read('docs/'+file));
- await tick();assert.equal(d.querySelectorAll('#aiNightTemplateQuick').length,1);assert.equal(d.querySelectorAll('[data-ai-reliability-open]').length,1);assert.equal(d.getElementById('nightReportNav').hidden,false);
- w.tenantI18n.setLanguage('en');assert.equal(d.getElementById('nightReportNav').getAttribute('href'),'/app/night-report?site_lang=en');assert.equal(d.getElementById('aiNightTemplateQuick').textContent,'Night operator');assert.equal(d.querySelector('[data-ai-reliability-open]').textContent,'AI status');
+ for(const file of ['tenant-operator-i18n.js','tenant-night-l10n.js','tenant-agent-catalog.js','tenant-night-agent-template.js','tenant-agent-library.js','tenant-ai-reliability.js','tenant-night-integration.js'])w.eval(read('docs/'+file));
+ await tick();assert.equal(d.querySelectorAll('#aiNightTemplateQuick').length,0);assert.equal(d.querySelectorAll('[data-ai-reliability-open]').length,1);assert.equal(d.getElementById('nightReportNav').hidden,false);
+ w.tenantI18n.setLanguage('en');assert.equal(d.getElementById('nightReportNav').getAttribute('href'),'/app/night-report?site_lang=en');assert.equal(d.querySelector('[data-ai-reliability-open]').textContent,'AI status');
  w.tenantI18n.setLanguage('az');assert.equal(d.getElementById('nightReportNav').textContent.includes('Gecə növbəsi'),true);
- w.tenantI18n.setLanguage('ru');d.getElementById('aiNightTemplateQuick').click();await tick();
+ w.tenantI18n.setLanguage('ru');await w.tenantAgentLibrary.open();await tick();d.querySelector('[data-agent-template]').click();await tick();
  assert.equal(d.getElementById('nightAgentMode').value,'manual');assert.equal(d.getElementById('nightAgentLaunch').checked,false);
- d.getElementById('nightAgentChannel').value='channel-a';
+ d.querySelector('[name=agentCreationChannel]').checked=true;d.getElementById('nightAgentStart').value='22:00';d.getElementById('nightAgentEnd').value='06:00';
  const file=new w.File(['router instructions'],'night.txt',{type:'text/plain'});Object.defineProperty(d.getElementById('nightAgentKnowledgeFile'),'files',{value:[file]});
  for(let i=0;i<9;i++){d.getElementById('nightAgentNext').click();await tick();}
  d.getElementById('nightAgentCreate').click();await tick();

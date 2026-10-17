@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>CRM Smart Assistant</title>
+  <link rel="stylesheet" href="/assets/tenant-agent-library.css">
   <link rel="stylesheet" href="/assets/tenant-ai-testing.css">
   <style>
     :root{--ink:#102621;--muted:#698079;--line:#e6eeea;--paper:#f7faf8;--brand:#0a926e;--brand-deep:#086e55;--danger:#b42318;--card:#fff}
@@ -48,6 +49,7 @@
         <button type="button" class="primary" id="aiSaveSettings" data-i18n="save">Сохранить</button><h3 data-i18n="serverLimits">Серверные ограничения — только просмотр</h3><p id="aiKillSwitch" class="sub"></p>
       </article>
       <article class="panel" id="aiAgentManagement" hidden><h2>Агенты</h2><p>Новый агент создаётся в режиме Manual. Ответы остаются черновиками до ручной проверки.</p><div id="aiAgentList"></div><button class="primary" id="aiNewAgent">+ Создать агента</button><button class="outline" id="aiNightTemplateOpen" hidden>Шаблон: Ночная техническая поддержка</button><button class="outline" id="aiLoadDrafts">Последние черновики</button></article>
+
       <article class="panel" id="aiAgentEditor" hidden style="margin-top:16px"><h2 class="ai-editor-heading" id="aiEditorTitle">Новый агент</h2><input id="aiAgentId" type="hidden"><input id="aiAgentVersion" type="hidden">
         <nav class="ai-editor-section-nav" aria-label="Разделы настроек агента">
           <button type="button" class="is-active" data-ai-section-nav="basics"><b data-i18n="behavior">Поведение агента</b></button>
@@ -234,7 +236,9 @@
 <script src="/assets/tenant-ai-agents.js"></script>
 <script src="/assets/tenant-ai-testing.js"></script>
 <script src="/assets/tenant-night-l10n.js"></script>
+<script src="/assets/tenant-agent-catalog.js"></script>
 <script src="/assets/tenant-night-agent-template.js"></script>
+<script src="/assets/tenant-agent-library.js"></script>
 <script src="/assets/tenant-operator-dialogs.js"></script>
 <script src="/assets/tenant-support-inbox.js"></script>
 <script src="/assets/tenant-ai-reliability.js"></script>

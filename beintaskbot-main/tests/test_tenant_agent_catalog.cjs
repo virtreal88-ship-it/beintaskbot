@@ -1,0 +1,16 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
+const source=fs.readFileSync(path.join(__dirname,'../docs/tenant-agent-catalog.js'),'utf8');
+const context={window:{}};vm.runInNewContext(source,context);const catalog=context.window.tenantAgentCatalog;
+const row={id:'connect:channel',provider:'connect',channel_id:'channel',type:'whatsapp',name:'Support',connection:{state:'connected'},ai:{available:true,supported:true},capabilities:{text_replies:true},scope:{provider:'connect',channel_id:'channel'}};
+const parse=rows=>catalog.parse({schema_version:1,channels:rows});
+assert.throws(()=>catalog.parse({schema_version:2,channels:[]}),/недоступен/);
+assert.equal(parse([{...row,type:'instagram'}]).length,0);assert.equal(parse([{...row,scope:{provider:'connect',channel_id:'foreign'}}]).length,0);
+assert.equal(parse([{...row,provider:'telegram'}]).length,0);assert.equal(parse([{...row,id:'plain-id'}]).length,0);
+assert.equal(parse([row,row]).length,1);assert.equal(parse([{...row,ai:{supported:false,available:true}}])[0].selectable,false);assert.equal(parse([{...row,capabilities:{text_replies:false}}])[0].selectable,false);
+const rows=parse([row]);const scope=catalog.scopes(rows,['connect:channel'])[0];assert.equal(scope.channel_id,'channel');assert.equal(scope.provider,'connect');assert.equal(scope.allow_group_messages,false);assert.notEqual(scope.channel_id,row.id);
+assert.throws(()=>catalog.scopes(rows,[]),/Выберите/);assert.throws(()=>catalog.scopes(rows,['connect:foreign']),/недоступно/);
+const kommo={...row,id:'kommo:wa',provider:'kommo',type:'unknown',channel_id:'wa',connection:{state:'unknown'},scope:{provider:'kommo',channel_id:'wa'}};
+const withKommo=parse([row,kommo]);assert.equal(withKommo[1].selectable,true,'runtime admission does not invent a live connected status');assert.equal(withKommo[1].connection.state,'unknown');assert.throws(()=>catalog.scopes(withKommo,['kommo:wa']),/воронку/);assert.equal(catalog.scopes(withKommo,['kommo:wa'],'10','11')[0].stage_id,'11');
+assert.equal(catalog.categories.length,4);assert.equal(catalog.templates.length,1);assert.equal(catalog.matching(rows,'sales').length,0);assert.equal(catalog.matching(rows,'support','kommo').length,0);assert.equal(catalog.matching(withKommo,'support','kommo').length,1);
+assert.equal(catalog.available(parse([{...row,ai:{supported:true,available:false}}])).length,0);
+console.log('PASS: agreed catalog v1, specific runtime IDs, unsupported/inactive channels, explicit Kommo scope, categories and provider filters.');
