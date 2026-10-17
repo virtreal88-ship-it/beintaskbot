@@ -21,8 +21,8 @@ function fixture(){
 }
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
-  let f=fixture();assert.equal(f.calls.length,0);await f.button.onclick();
-  assert.equal(f.calls.length,1);assert.ok(f.calls[0].url.includes('message_id=message-id'));
+  let f=fixture();f.host.dataset.attachmentLeadId='1002';assert.equal(f.calls.length,0);await f.button.onclick();
+  assert.equal(f.calls.length,1);assert.ok(f.calls[0].url.includes('message_id=message-id'));assert.ok(f.calls[0].url.includes('lead_id=1002'));
   assert.ok(!f.calls[0].url.includes('drive-'));assert.equal(f.host.children[0].tagName,'IMG');
   assert.equal(f.button.hidden,true);assert.equal(f.status.textContent,'');
   f.events['close:click']();assert.deepEqual(f.revoked,['blob:local']);

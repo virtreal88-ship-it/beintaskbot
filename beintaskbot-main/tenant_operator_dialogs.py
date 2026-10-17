@@ -72,10 +72,12 @@ def _message(item, *, group=False, participant_names=None):
     if group and isinstance(raw,dict) and raw.get('ai_authored') is True:
         author_type='ai'
     participant_jid, participant_alt, whatsapp_name = _participant_fields(raw)
-    if direction == 'incoming' and group:
+    if group and direction=='outgoing' and author in {'Operator','WhatsApp operator'} and whatsapp_name:
+        author=whatsapp_name
+    if direction in {'incoming','outgoing'} and group and author_type!='ai':
         # Resolution is intentionally exact-JID scoped.  Do not conflate a
         # privacy LID with a phone JID, even if both are visible in one event.
-        author = str((participant_names or {}).get(participant_jid) or author or whatsapp_name or '')
+        author = str((participant_names or {}).get((str(value.get('source_channel_id') or value.get('channel','').removeprefix('connect:')),participant_jid)) or (participant_names or {}).get(participant_jid) or author or whatsapp_name or '')
     if direction == 'incoming' and group and not author and participant_jid.endswith('@s.whatsapp.net'):
         candidate = participant_jid.split('@', 1)[0]
         if candidate.isdecimal():
@@ -295,15 +297,19 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None):
                 from tenant_ai_agent_test_mode import conversation_allowed
                 if not conversation_allowed(cur,tenant,conversation):
                     dialog['controls_allowed']=False;dialog['control_block_reason']='test_binding_required'
-            args=[tenant,lead_id,row['history_channel']];clause=''
-            if before:
-                clause=''' AND (COALESCE(happened_at,created_at),id)<(SELECT COALESCE(happened_at,created_at),id FROM saas_crm_messages
-                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid)'''
-                args += [tenant,lead_id,row['history_channel'],identifier(before)]
-            cur.execute('''SELECT id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,created_at,raw FROM saas_crm_messages
-              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s'''+clause+'''
-              ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 51''',tuple(args))
-            messages=cur.fetchall()
+            if provider=='connect' and group_jid(conversation):
+                from tenant_connect_group_history import page as group_history
+                messages=group_history(cur,tenant,conversation,before=identifier(before) if before else None)
+            else:
+                args=[tenant,lead_id,row['history_channel']];clause=''
+                if before:
+                    clause=''' AND (COALESCE(happened_at,created_at),id)<(SELECT COALESCE(happened_at,created_at),id FROM saas_crm_messages
+                      WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid)'''
+                    args += [tenant,lead_id,row['history_channel'],identifier(before)]
+                cur.execute('''SELECT id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,created_at,raw FROM saas_crm_messages
+                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s'''+clause+'''
+                  ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 51''',tuple(args))
+                messages=cur.fetchall()
             participant_names={}
             if provider == 'connect' and dialog.get('customer_kind') == 'group':
                 # The override's primary key includes the tenant, exact Connect
@@ -315,10 +321,10 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None):
                     if participant_jid and participant_jid not in participant_ids:
                         participant_ids.append(participant_jid)
                 if participant_ids:
-                    cur.execute('''SELECT participant_jid,display_name FROM saas_connect_participant_display_names
-                      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s
-                        AND participant_jid=ANY(%s::text[])''',(tenant,channel,conversation,participant_ids))
-                    participant_names={str(item['participant_jid']):str(item['display_name']) for item in cur.fetchall()
+                    cur.execute('''SELECT connect_channel_id::text AS channel_id,participant_jid,display_name FROM saas_connect_participant_display_names
+                      WHERE tenant_id=%s::uuid AND connect_channel_id::text=ANY(%s::text[]) AND conversation_id=%s
+                        AND participant_jid=ANY(%s::text[])''',(tenant,list({m.get('source_channel_id',channel) for m in messages}),conversation,participant_ids))
+                    participant_names={(str(item['channel_id']),str(item['participant_jid'])):str(item['display_name']) for item in cur.fetchall()
                                        if str(item.get('display_name') or '')}
     return {'dialog':dialog,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names)
                                         for r in reversed(messages[:50])],

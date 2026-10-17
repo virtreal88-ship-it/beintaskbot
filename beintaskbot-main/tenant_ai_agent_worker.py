@@ -542,10 +542,16 @@ async def process_connect_one(job, logger):
             reservation = await asyncio.to_thread(reserve_run, job, pipeline_id='', stage_id='', model=model)
         # Cached voice text is used in later text/voice turns without another
         # provider call. The history formatter preserves the audio marker.
-        transcripts = {row['external_id']: row['transcript'] for row in rows if row.get('transcript')}
-        context_rows = [{**row, 'body': ''} if row.get('transcript') else row for row in rows]
+        from tenant_ai_agent_connect import group_context
+        context = await asyncio.to_thread(group_context, job, rows, source['happened_at'])
+        transcripts = {row['external_id']: row['transcript'] for row in context if row.get('transcript')}
+        context_rows = [{**row, 'body': ''} if row.get('transcript') else row for row in context]
         try:
             lines, missing = history(context_rows[-30:], transcripts)
+            for line, item in zip(lines, context_rows[-30:]):
+                if 'source_channels' in item:
+                    line['sender'] = item.get('author_name', '')
+                    line['source_channels'] = item['source_channels']
         except (KeyError, TypeError, ValueError):
             lines = [{'speaker': 'CLIENT',
                       'text': '[Attachment unavailable: do not infer its contents]',

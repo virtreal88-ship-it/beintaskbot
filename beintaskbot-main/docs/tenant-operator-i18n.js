@@ -1,6 +1,8 @@
 /* RU/AZ/EN for the operator and AI settings; honours the existing site language preference. */
 (()=>{
   const copy={
+    receivedVia:['Получено','Qəbul edilib','Received'],
+    sentVia:['Отправлено','Göndərilib','Sent'],
     groupChannelResume:['Выбранный канал ранее остановлен. Требуется явное включение AI.','Seçilmiş kanal əvvəl dayandırılıb. AI-ni ayrıca aktivləşdirin.','The selected channel was previously stopped. Enable AI explicitly.'],
     groupMissing:['Назначение отсутствует или неоднозначно','Təyinat yoxdur və ya qeyri-müəyyəndir','Assignment missing or ambiguous'],
     groupConfigure:['Основные агенты и канал','Əsas agentlər və kanal','Primary agents and channel'],

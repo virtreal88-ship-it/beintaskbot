@@ -343,3 +343,33 @@ def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation
                 AND conversation_id=%s AND channel_id=%s AND state IN ('queued','processing')''', (tenant, conversation_id, channel_id))
         if connection is None:
             conn.commit()
+
+
+def group_context(job, rows, through):
+    """Read-only shared group evidence; admission/transcription/send stay channel-local."""
+    from tenant_ai_group_coordination import group_jid
+    if not group_jid(job.get('conversation_id')):
+        return rows
+    from tenant_connect_group_history import page
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute('''SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid
+              AND connect_channel_id=%s::uuid AND conversation_id=%s AND lead_id=%s''',
+              (job['tenant_id'],job['channel_id'],job['conversation_id'],job['lead_id']))
+            if not cur.fetchone(): return []
+            merged=page(cur,job['tenant_id'],job['conversation_id'],limit=80,through=through)
+    local={r['external_id']:r for r in rows}
+    result=[]
+    for row in reversed(merged):
+        raw=row.get('raw') or {};external=str(row['external_id']).removeprefix('connect:')
+        transcript=(raw.get('voice_transcription') or {})
+        cached=str(row.get('body') or '') if transcript.get('status')=='completed' else ''
+        own=local.get(external,{})
+        result.append({'external_id':external,'body':str(row.get('body') or ''),
+          'direction':'outgoing' if raw.get('ai_authored') is True or any(s['direction']=='outgoing' for s in row['sources']) else row['direction'],
+          'message_type':row['message_type'],'media_url':row.get('media_url') or '',
+          'happened_at':row['happened_at'].isoformat() if row.get('happened_at') else '',
+          'transcript':own.get('transcript') or cached,
+          'author_name':str(row.get('author_name') or raw.get('participantName') or '')[:180],
+          'source_channels':list(dict.fromkeys(str(s['channel_name'])[:80] for s in row['sources']))[:3]})
+    return result

@@ -26,7 +26,7 @@
         const timer=setTimeout(()=>controller.abort(),70000);
         let blobUrl;
         try{
-          const query=new URLSearchParams({lead_id:selected,message_id:host.dataset.chatAttachment,
+          const query=new URLSearchParams({lead_id:host.dataset.attachmentLeadId||selected,message_id:host.dataset.chatAttachment,
             expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
           const response=await fetch('/api/platform/crm/chat/attachment?'+query,
             {credentials:'same-origin',cache:'no-store',signal:controller.signal});
