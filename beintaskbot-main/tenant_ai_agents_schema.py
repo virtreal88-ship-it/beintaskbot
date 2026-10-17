@@ -272,6 +272,9 @@ def ensure_schema(conn):
               FOREIGN KEY(tenant_id,event_fingerprint) REFERENCES saas_tenant_webhook_events(tenant_id,fingerprint) ON DELETE CASCADE)''')
         with conn.cursor() as cur:
             cur.execute("ALTER TABLE saas_ai_conversation_state ADD COLUMN IF NOT EXISTS resumed_at TIMESTAMPTZ")
+            # NULL preserves automatic routing for existing dialogues. A token
+            # records an explicit operator binding and deduplicates its retries.
+            cur.execute("ALTER TABLE saas_ai_conversation_state ADD COLUMN IF NOT EXISTS agent_assignment_id UUID NULL")
         with conn.cursor() as cur:
             cur.execute("ALTER TABLE saas_ai_knowledge_sources ADD COLUMN IF NOT EXISTS agent_id UUID")
             cur.execute("ALTER TABLE saas_ai_knowledge_sources ADD COLUMN IF NOT EXISTS setup_key TEXT NULL")

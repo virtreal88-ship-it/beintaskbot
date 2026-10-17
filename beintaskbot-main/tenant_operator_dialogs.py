@@ -111,7 +111,7 @@ def projection(policy):
       SELECT 'connect'::text AS provider,c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
         COALESCE(NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
         ch.name AS channel_name,ch.active AS channel_active,'connect:'||c.connect_channel_id::text AS history_channel,
-        COALESCE(j.agent_id,cs.agent_id) AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,
+        COALESCE(cs.agent_id,j.agent_id) AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,
         COALESCE(cs.state,'active') AS state,COALESCE(cs.reason,'') AS reason,cs.updated_at,
         cs.tenant_id IS NOT NULL AS tracked,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,
         t.status AS tenant_status,j.state AS latest_job_state,COALESCE(j.error_code,'') AS latest_job_error,
@@ -125,7 +125,7 @@ def projection(policy):
       LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id AND cs.channel_id=c.connect_channel_id::text
       LEFT JOIN LATERAL(SELECT j0.* FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=c.tenant_id AND j0.provider='connect'
         AND j0.channel_id=c.connect_channel_id::text AND j0.conversation_id=c.conversation_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
-      LEFT JOIN saas_ai_agents a ON a.tenant_id=c.tenant_id AND a.id=COALESCE(j.agent_id,cs.agent_id)
+      LEFT JOIN saas_ai_agents a ON a.tenant_id=c.tenant_id AND a.id=COALESCE(cs.agent_id,j.agent_id)
       LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=c.tenant_id
       LEFT JOIN LATERAL(SELECT COALESCE(m.happened_at,m.created_at) AS last_message_at FROM saas_crm_messages m
         WHERE m.tenant_id=c.tenant_id AND m.kommo_lead_id=c.lead_id AND m.channel='connect:'||c.connect_channel_id::text
@@ -247,6 +247,13 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None):
             row=cur.fetchone()
             if not row:raise TenantLinearError('Диалог не найден.',404)
             dialog=decorate(row)
+            if provider=='connect' and not dialog.get('agent_id'):
+                if dialog.get('unambiguous') and dialog.get('controls_allowed'):
+                    from tenant_operator_assignment import options_in_transaction
+                    dialog['agent_assignment']=options_in_transaction(cur,profile,{
+                        'provider':'connect','lead_id':lead_id,'channel_id':channel,'conversation_id':conversation})
+                else:
+                    dialog['agent_assignment']={'allowed':False,'reason':dialog.get('control_block_reason'),'agents':[]}
             if provider=='kommo' and dialog['controls_allowed']:
                 from tenant_ai_agent_test_mode import conversation_allowed
                 if not conversation_allowed(cur,tenant,conversation):

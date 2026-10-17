@@ -1,0 +1,43 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const root=path.join(__dirname,'..'),read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const settle=async()=>{for(let i=0;i<20;i++)await new Promise(r=>setImmediate(r));};
+const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-000000000201',AGENT='00000000-0000-0000-0000-000000000301';
+(async()=>{
+ const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?site_lang=ru',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
+ const member={tenant_id:A,telegram_id:11,role:'manager',permissions:['dialogs','support'],active:true};
+ w.tenantProfileSnapshot={member,capabilities:{modules:{dialogs:true,support:true}}};w.confirm=()=>true;
+ const choices={allowed:true,reason:'',revision:7,agents:[{id:AGENT,name:'<b>Support</b>',mode:'manual'}]};
+ const route={provider:'connect',channel_id:CA,conversation_id:'same-client',lead_id:41,customer_name:'Test contact',channel_name:'Second WhatsApp',state:'human',display_state:'human',display_reason:'manager_replied',controls_allowed:true,agent_id:null,can_send:true,available_actions:[],agent_assignment:choices};
+ let failOnce=true;
+ w.fetch=async(url,opts={})=>{
+  const u=new URL(url,w.location),body=opts.body?JSON.parse(opts.body):null;calls.push({path:u.pathname,query:u.search,method:opts.method||'GET',body});let result={};
+  if(u.pathname.endsWith('/dialogs/history'))result={dialog:route,messages:[],next_before:null};
+  else if(u.pathname.endsWith('/dialogs/agent-assignment')){
+   if(body){if(failOnce){failOnce=false;throw new Error('network failed');}route.agent_id=AGENT;route.agent_name='<b>Support</b>';route.agent_assignment=null;route.resume_allowed=true;route.available_actions=['resume'];result={agent_id:AGENT,state:'human'};}
+   else result=choices;
+  }else if(u.pathname.endsWith('/dialogs'))result={dialogs:[route],channels:[],agents:[],attention_count:1};
+  return{ok:true,status:200,json:async()=>({success:true,result:structuredClone(result)})};
+ };
+ w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await settle();
+ await w.tenantOperator.openDialog(route);await settle();
+ assert.equal(d.querySelector('[data-operator-assign-agent]').textContent,'Назначить AI-агента');
+ assert.ok(d.querySelector('[data-operator-create-ticket]'));
+ d.querySelector('[data-operator-assign-agent]').click();await settle();
+ const form=d.querySelector('[data-operator-assignment-form]'),select=form.querySelector('select');
+ assert.equal(select.options.length,2);assert.equal(select.options[1].textContent,'<b>Support</b>');assert.equal(form.querySelector('b'),null);
+ select.value=AGENT;form.dispatchEvent(new w.Event('submit',{cancelable:true}));await settle();
+ assert.match(form.querySelector('[role=status]').textContent,/network failed/);
+ form.dispatchEvent(new w.Event('submit',{cancelable:true}));await settle();
+ const posts=calls.filter(c=>c.path.endsWith('/agent-assignment')&&c.method==='POST');
+ assert.equal(posts.length,2);assert.equal(posts[0].body.request_id,posts[1].body.request_id);
+ assert.equal(posts[0].body.expected_tenant_id,A);assert.equal(posts[0].body.expected_user_id,11);
+ assert.equal(posts[0].body.channel_id,CA);assert.equal(posts[0].body.conversation_id,'same-client');assert.equal(posts[0].body.expected_revision,7);
+ assert.equal(calls.filter(c=>c.path.includes('/resume')||c.path.includes('/chat/send')).length,0);
+ assert.equal(d.querySelector('[data-operator-action=resume]').textContent,'Включить AI');assert.equal(route.state,'human');
+ assert.equal(d.querySelector('[data-operator-assign-agent]'),null);
+ for(const lang of ['ru','az','en']){w.tenantI18n.setLanguage(lang);assert.notEqual(w.tenantI18n.t('assignAgent'),'assignAgent');assert.notEqual(w.tenantI18n.t('assignmentHint'),'assignmentHint');}
+ route.agent_id=null;route.available_actions=[];route.agent_assignment={allowed:false,reason:'no_eligible_agent'};
+ await w.tenantOperator.openDialog(route);assert.equal(d.querySelector('[data-operator-assign-agent]'),null);assert.match(d.querySelector('#operatorActionReason').textContent,/eligible/);
+ dom.window.close();console.log('PASS: channel-scoped assignment, XSS escaping, identity, retry token, separate Resume, RU/AZ/EN and safe unavailable state');
+})().catch(e=>{console.error(e);process.exitCode=1;});

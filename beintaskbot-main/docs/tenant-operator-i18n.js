@@ -1,6 +1,13 @@
 /* RU/AZ/EN for the operator and AI settings; honours the existing site language preference. */
 (()=>{
   const copy={
+    assignAgent:['Назначить AI-агента','AI agentini təyin et','Assign AI agent'],
+    chooseAgent:['Выберите агента','Agent seçin','Choose an agent'],
+    assignmentAvailable:['В диалоге нет привязки AI-агента. Вы можете назначить подходящего агента, сохранив остановку AI.','Dialoqa AI agenti təyin edilməyib. AI-ni dayandırılmış saxlayaraq uyğun agent təyin edə bilərsiniz.','This dialogue has no AI agent binding. Assign an eligible agent while keeping AI stopped.'],
+    assignmentHint:['Назначение не включает AI и не отправляет сообщения. Затем отдельно нажмите «Включить AI» — только для новых входящих сообщений.','Təyinat AI-ni aktivləşdirmir və mesaj göndərmir. Sonra ayrıca AI-ni aktivləşdirin — yalnız yeni daxil olan mesajlar üçün.','Assignment keeps AI stopped and sends nothing. Enable AI separately afterwards, for new incoming messages only.'],
+    assignmentSaved:['Агент назначен. AI остаётся остановленным до отдельного включения.','Agent təyin edildi. AI ayrıca aktivləşdirilənə qədər dayandırılmış qalır.','Agent assigned. AI stays stopped until explicitly enabled.'],
+    no_eligible_agent:['Для этого канала нет доступного включённого агента. Проверьте канал, разрешение групп и Test Mode в настройках агента.','Bu kanal üçün uyğun aktiv agent yoxdur. Kanalı, qrup icazəsini və Test Mode ayarlarını yoxlayın.','No enabled agent is eligible for this channel. Check channel scope, group permission and Test Mode.'],
+    agent_already_assigned:['Диалог уже связан с агентом. Обновите его; замена агента этим действием недоступна.','Dialoq artıq agentə bağlıdır. Yeniləyin; bu əməliyyat agenti əvəz etmir.','The dialogue already has an agent binding. Refresh it; this action cannot replace an agent.'],
     reasonLegacyChannel:['Старое состояние диалога не привязано к каналу. Требуется проверка администратором.','Dialoqun köhnə vəziyyəti kanala bağlı deyil. Administrator yoxlaması tələb olunur.','The legacy dialogue state has no channel binding. Administrator review is required.'],
     openPhoto:['Открыть фото','Şəkli aç','View photo'],openAudio:['Прослушать','Dinlə','Listen'],savedTranscript:['Сохранённая транскрипция','Saxlanılmış transkripsiya','Saved transcription'],
     mediaUnavailable:['Файл недоступен. Возможно, WhatsApp больше не хранит его.','Fayl əlçatan deyil. WhatsApp onu artıq saxlamaya bilər.','File unavailable. WhatsApp may no longer retain it.'],
