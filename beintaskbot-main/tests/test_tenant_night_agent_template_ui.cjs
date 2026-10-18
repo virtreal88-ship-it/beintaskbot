@@ -36,6 +36,11 @@ assert.equal(disabled.auto_send_enabled, undefined, 'The template must not enabl
 const confirmedAutomatic = helpers.nightAgentPayload({...base, mode: 'automatic', confirmedLaunch: true, model: 'gpt-5.6'});
 assert.equal(confirmedAutomatic.mode, 'automatic');
 assert.equal(confirmedAutomatic.enabled, true, 'Automatic can only be enabled after an explicit confirmation.');
+const internal = helpers.nightAgentPayload({...base, role: 'expert', scopes: [], mode: 'automatic'});
+assert.equal(internal.role, 'expert', 'The internal wizard path must use the existing server-supported expert role.');
+assert.equal(internal.mode, 'manual', 'An internal agent must not acquire external automatic sending.');
+assert.deepEqual(JSON.parse(JSON.stringify(internal.scopes)), [], 'An internal agent must not acquire a WhatsApp scope.');
+assert.deepEqual(JSON.parse(JSON.stringify(internal.expert_policy)), {internal: true, allowed_primary_ids: []}, 'Internal permissions remain explicit and tenant-scoped.');
 const retryPayload = helpers.nightAgentPayload({...base, setupKey: 'night-wizard-retry-0001'});
 assert.equal(retryPayload.setup_key, 'night-wizard-retry-0001', 'A resumed wizard must send its opaque retry key.');
 assert.throws(() => helpers.nightAgentScope(''), /WhatsApp/, 'A missing Connect channel must fail before saving.');
@@ -49,6 +54,10 @@ assert.match(source, /provider:'connect'/, 'The template must work through Conne
 assert.match(source, /actions:\['handoff'\]/, 'Complex/unsolved requests must use the existing handoff action.');
 assert.match(source, /knowledge\/upload/, 'Knowledge files must use the existing upload endpoint.');
 assert.match(source, /localStorage\.setItem/, 'An interrupted setup must be recoverable after a reload.');
+assert.match(source, /data-night-entry="0"/, 'The existing wizard must start by selecting the agent type.');
+assert.match(source, /data-night-entry="1"/, 'The existing wizard must then select a template or a blank start.');
+assert.match(source, /agentRole==='expert'\?\[\]/, 'Internal agents must skip external channel scopes.');
+assert.match(source, /confirm\('Закрыть мастер/, 'Closing a dirty wizard must require confirmation.');
 assert.match(source, /setup_key/, 'Agent, handoff and knowledge retries must use idempotency keys.');
 assert.match(source, /never.*Active Mode|не меняет этот режим/i,
   'The UI must explain that it does not silently enable company Active Mode.');
