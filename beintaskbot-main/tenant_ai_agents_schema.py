@@ -299,6 +299,8 @@ def ensure_schema(conn):
         from tenant_ai_legacy_permit import schema as permit_schema
         with conn.cursor() as cur:
             permit_schema(cur)
+            from tenant_ai_draft_review import schema as draft_review_schema
+            draft_review_schema(cur)
         from tenant_ai_group_coordination import create_schema as create_group_schema
         create_group_schema(conn)
         conn.commit()

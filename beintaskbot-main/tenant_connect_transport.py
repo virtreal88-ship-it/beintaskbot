@@ -504,7 +504,7 @@ def send_ai_reply(route: dict, text: str, run_id: str) -> str:
 
 
 def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversation_id: str,
-                            text: str, run_id: str, expected_revision: int, *, handoff_fingerprint: str = '') -> str | None:
+                            text: str, run_id: str, expected_revision: int, *, handoff_fingerprint: str = '', draft_review=None) -> str | None:
     """Serialize Connect send with an observed human takeover.
 
     The row lock intentionally spans the short Connect request. If the human
@@ -524,6 +524,14 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
         conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, "connect", channel_id, conversation_id)
+            if draft_review is not None:
+                from tenant_ai_draft_review import snapshot
+                view,d,_,_=snapshot(cur,draft_review['profile'],run_id,locked=True)
+                if (d['state']!='sending' or d['mode']!='manual' or not d['enabled'] or d['role']!='primary'
+                    or not d['company_enabled'] or d['emergency_stop'] or d['operating_mode']!='active' or d['tenant_status']!='active'
+                    or d['version']!=draft_review['expected_version'] or d['draft']!=text
+                    or view['context_token']!=draft_review['expected_context_token']):
+                    return None
             if coordinated:
                 # Lock candidate settings before choosing the scheduled speaker.
                 cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid ORDER BY id FOR SHARE',(tenant,))
