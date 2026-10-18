@@ -128,6 +128,9 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                         result = await asyncio.to_thread(configuration_options, profile)
                 elif resource == 'handoffs':
                     result = await asyncio.to_thread(list_handoffs, profile, request.query.get('limit', 50))
+                elif resource == 'draft_detail':
+                    from tenant_ai_draft_review import read
+                    result = await asyncio.to_thread(read,profile,request.match_info['draft_id'])
                 elif resource == 'drafts':
                     result = await asyncio.to_thread(list_drafts, profile, limit=request.query.get('limit', 50))
                 elif resource == 'triggers':
@@ -224,17 +227,22 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     result = await asyncio.to_thread(save_trigger,profile,request.match_info['agent_id'],payload,trigger_id=request.match_info['trigger_id'])
                 elif resource == 'trigger' and method == 'DELETE':
                     result = await asyncio.to_thread(delete_trigger,profile,request.match_info['agent_id'],request.match_info['trigger_id'])
+                elif resource == 'draft_edit' and method == 'POST':
+                    from tenant_ai_draft_review import edit
+                    result=await asyncio.to_thread(edit,profile,request.match_info['draft_id'],payload)
                 elif resource == 'draft_review' and method == 'POST':
-                    result = await asyncio.to_thread(review_draft,profile,request.match_info['draft_id'],payload.get('state'))
+                    if type(payload.get('expected_version')) is not int:raise TenantLinearError('draft_version_required',409)
+                    result = await asyncio.to_thread(review_draft,profile,request.match_info['draft_id'],payload.get('state'),payload['expected_version'])
                 elif resource == 'draft_send' and method == 'POST':
-                    reserved=await asyncio.to_thread(reserve_draft_send,profile,request.match_info['draft_id'])
+                    if type(payload.get('expected_version')) is not int or not payload.get('expected_context_token'):raise TenantLinearError('draft_review_required',409)
+                    reserved=await asyncio.to_thread(reserve_draft_send,profile,request.match_info['draft_id'],payload)
                     try:
                         if reserved.get('provider') == 'connect':
                             from tenant_connect_transport import send_ai_reply_if_active
                             message_id = await asyncio.to_thread(send_ai_reply_if_active,
                                 reserved['tenant_id'], reserved['lead_id'], reserved['channel_id'],
                                 reserved['conversation_id'], reserved['draft'], reserved['id'],
-                                reserved['expected_revision'], **({'handoff_fingerprint':reserved['source_fingerprint']}
+                                reserved['expected_revision'], draft_review={'profile':profile,'expected_version':payload['expected_version'],'expected_context_token':payload['expected_context_token']}, **({'handoff_fingerprint':reserved['source_fingerprint']}
                                     if reserved.get('handoff_after_send') else {}))
                             if not message_id:
                                 raise TenantLinearError('Qaralama köhnəlib və ya dialoq menecerə verilib.', 409)

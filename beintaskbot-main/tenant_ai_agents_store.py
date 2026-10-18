@@ -628,6 +628,11 @@ def list_drafts(profile, *, limit=50):
               ORDER BY d.created_at DESC,d.id LIMIT %s''',
               (tenant, max(1, min(int(limit), 100))))
             rows = cur.fetchall()
+            enriched={}
+            from tenant_ai_draft_review import snapshot
+            for row in rows:
+                try:enriched[str(row['id'])]=snapshot(cur,profile,str(row['id']))[0]
+                except TenantLinearError:pass
     result = []
     for row in rows:
         item = dict(row)
@@ -642,6 +647,10 @@ def list_drafts(profile, *, limit=50):
                                     and str(item.get('operating_mode') or '') != 'active')
         if item.get('created_at'):
             item['created_at'] = item['created_at'].isoformat()
+        if item['id'] not in enriched:continue
+        send_allowed=item['send_allowed']
+        item.update(enriched[item['id']])
+        item['send_allowed']=send_allowed and item['send_allowed']
         result.append(item)
     return result
 
@@ -1124,13 +1133,17 @@ def read_conversation_for_lead(profile, lead_id):
             'reason': row.get('reason') or '', 'revision': int(row.get('revision') or 0)}
 
 
-def review_draft(profile,draft_id,state):
+def review_draft(profile,draft_id,state,expected_version=None):
     draft=identifier(draft_id)
     if state not in {'approved','rejected'}:raise TenantLinearError('Draft status düzgün deyil.')
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
+            if expected_version is not None:
+                from tenant_ai_draft_review import snapshot
+                _,checked,_,_=snapshot(cur,profile,draft,locked=True)
+                if checked['version']!=expected_version:raise TenantLinearError('draft_version_conflict',409)
             cur.execute('''UPDATE saas_ai_agent_drafts d SET state=%s
               FROM saas_tenant_webhook_events e
               WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='pending'
@@ -1153,7 +1166,7 @@ def review_draft(profile,draft_id,state):
     return {'id':str(row['id']),'state':state}
 
 
-def _reserve_connect_draft_send(cur, tenant, draft):
+def _reserve_connect_draft_send(cur, tenant, draft, reviewed_message_id=""):
     """Reserve a reviewed Connect draft without exposing its API key.
 
     The final Connect send will take the same dialogue row lock immediately
@@ -1169,7 +1182,7 @@ def _reserve_connect_draft_send(cur, tenant, draft):
               JOIN saas_ai_agent_settings s ON s.tenant_id=d.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE
               JOIN saas_tenants t ON t.id=d.tenant_id AND t.status='active'
               JOIN saas_ai_conversation_state cs ON cs.tenant_id=d.tenant_id AND cs.provider='connect'
-                AND cs.conversation_id=d.chat_id AND cs.channel_id=(e.payload->>'channel_id') AND cs.state='active' AND cs.last_inbound_message_id=d.source_message_id
+                AND cs.conversation_id=d.chat_id AND cs.channel_id=(e.payload->>'channel_id') AND cs.state='active' AND (cs.last_inbound_message_id=d.source_message_id OR (%s<>'' AND cs.last_inbound_message_id=%s))
               JOIN saas_connect_conversations c ON c.tenant_id=d.tenant_id AND c.lead_id=d.lead_id
                 AND c.conversation_id=d.chat_id AND c.connect_channel_id::text=(e.payload->>'channel_id')
               JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
@@ -1177,7 +1190,7 @@ def _reserve_connect_draft_send(cur, tenant, draft):
               WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='pending' AND e.provider='connect'
                 AND s.operating_mode='active' AND (e.payload->>'test_mode') IS DISTINCT FROM 'true'
                 AND NOT ai_legacy_blocked(d.tenant_id,c.connect_channel_id::text,d.chat_id,d.source_fingerprint)
-              FOR UPDATE OF d,cs,c,a,s,t,i''', (tenant, draft))
+              FOR UPDATE OF d,cs,c,a,s,t,i''', (reviewed_message_id,reviewed_message_id,tenant, draft))
     row = cur.fetchone()
     if not row:
         return None
@@ -1188,7 +1201,7 @@ def _reserve_connect_draft_send(cur, tenant, draft):
     return dict(row)
 
 
-def reserve_draft_send(profile,draft_id):
+def reserve_draft_send(profile,draft_id,review=None):
     draft=identifier(draft_id)
     with _connect() as conn:
         ensure_schema(conn)
@@ -1203,6 +1216,12 @@ def reserve_draft_send(profile,draft_id):
             group_source=cur.fetchone() or {}
             from tenant_ai_group_coordination import group_jid,job_allowed
             source_payload=group_source.get('payload') or {}
+            if group_source.get('provider')=='connect':
+                lock_dialog(cur,tenant,'connect',source_payload.get('channel_id'),source_payload.get('conversation_id'))
+            reviewed_message_id=''
+            if review is not None:
+                from tenant_ai_draft_review import validate_send
+                reviewed_message_id=validate_send(cur,profile,draft,review)
             if group_source.get('provider')=='connect' and group_jid(source_payload.get('conversation_id')):
                 lock_dialog(cur,tenant,'connect',source_payload.get('channel_id'),source_payload['conversation_id'])
                 if not job_allowed(cur,{'tenant_id':tenant,'provider':'connect','channel_id':source_payload.get('channel_id'),
@@ -1222,7 +1241,7 @@ def reserve_draft_send(profile,draft_id):
             if str(provenance.get('provider') or '') == 'connect':
                 if str(provenance.get('test_mode') or '').casefold() == 'true':
                     raise TenantLinearError('Connect Test Mode qaralamaları yalnız simulyasiyadır və WhatsApp-a göndərilmir.',409)
-                row = _reserve_connect_draft_send(cur, tenant, draft)
+                row = _reserve_connect_draft_send(cur, tenant, draft, reviewed_message_id)
                 if not row:
                     raise TenantLinearError('Qaralama köhnəlib, menecerə verilib və ya göndərmə icazəsi yoxdur.',409)
                 _audit(cur,tenant,actor,'ai_agent_draft_send_reserved','ai_agent_draft',draft,{'lead_id':row['lead_id'],'provider':'connect'})

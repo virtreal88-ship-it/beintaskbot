@@ -22,7 +22,7 @@ def handler(member_from_request,origin,logger,resource):
                 if resource=='dialogs':
                     result=await asyncio.to_thread(listing,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
                 elif resource=='history':
-                    result=await asyncio.to_thread(history,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),query.get('before'))
+                    result=await asyncio.to_thread(history,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),query.get('before'),query.get('anchor'))
                 elif resource=='agent_assignment':
                     result=await asyncio.to_thread(assignment_options,profile,dict(query))
                 elif resource in {'legacy_recovery','legacy_continuation'}:

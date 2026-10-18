@@ -266,7 +266,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
             'attention_count':count,'next_offset':offset+50 if len(rows)>50 else None}
 
 
-def history(profile,provider,lead_id,channel='',conversation='',before=None):
+def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None):
     lead_id=int(lead_id)
     with _connect() as conn:
         ensure_schema(conn)
@@ -318,11 +318,23 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None):
                 from tenant_ai_agent_test_mode import conversation_allowed
                 if not conversation_allowed(cur,tenant,conversation):
                     dialog['controls_allowed']=False;dialog['control_block_reason']='test_binding_required'
+            anchor_at=None
+            if anchor and not before:
+                # Resolve anchor only within the authorized route / exact tenant group.
+                cur.execute('''SELECT COALESCE(m.happened_at,m.created_at) AS at FROM saas_crm_messages m
+                  WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid AND ((m.kommo_lead_id=%s AND m.channel=%s)
+                    OR (%s AND EXISTS(SELECT 1 FROM saas_connect_conversations c WHERE c.tenant_id=m.tenant_id
+                      AND c.conversation_id=%s AND c.lead_id=m.kommo_lead_id AND m.channel='connect:'||c.connect_channel_id::text)))''',
+                  (tenant,identifier(anchor),lead_id,row['history_channel'],bool(provider=='connect' and group_jid(conversation)),conversation))
+                anchor_at=(cur.fetchone() or {}).get('at')
             if provider=='connect' and group_jid(conversation):
                 from tenant_connect_group_history import page as group_history
-                messages=group_history(cur,tenant,conversation,before=identifier(before) if before else None)
+                messages=group_history(cur,tenant,conversation,before=identifier(before) if before else None,through=anchor_at)
             else:
                 args=[tenant,lead_id,row['history_channel']];clause=''
+                if anchor_at:
+                    clause=' AND COALESCE(happened_at,created_at)<=%s'
+                    args.append(anchor_at)
                 if before:
                     clause=''' AND (COALESCE(happened_at,created_at),id)<(SELECT COALESCE(happened_at,created_at),id FROM saas_crm_messages
                       WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid)'''

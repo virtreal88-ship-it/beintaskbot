@@ -188,3 +188,16 @@ def test_conflicting_aliases_fail_closed(history_db):
     for n,jid in [(2,'994500000001@s.whatsapp.net'),(3,'994500000002@s.whatsapp.net')]:
         add(d,n,CB,event='SHARED',participant=jid,raw_patch={'participantIdentity':{'lid':lid,'jid':jid}})
     assert len(dialogs.history(PROFILE,'connect',1001,CA,G)['messages'])==3
+
+
+
+def test_anchor_scoped_group_history_and_foreign_fallback(history_db):
+    d=history_db
+    for n in range(60):add(d,n,CA if n%2 else CB)
+    anchor=str(uuid.UUID(int=10020))
+    result=dialogs.history(PROFILE,'connect',1001,CA,G,anchor=anchor)
+    assert anchor in {m['id'] for m in result['messages']}
+    assert {m['source_channel_id'] for m in result['messages']}=={CA,CB}
+    alien=d.execute('SELECT id FROM saas_crm_messages WHERE kommo_lead_id=41')[0]['id'];d.commit()
+    fallback=dialogs.history(PROFILE,'connect',1001,CA,G,anchor=str(alien))
+    assert len(fallback['messages'])==50 and str(alien) not in {m['id'] for m in fallback['messages']}
