@@ -1,5 +1,8 @@
 # WhatsApp knowledge candidates — stage 1
 
+Extension: see whatsapp-case-batches.md for optional period bounds, the paginated
+company review queue, needs_clarification and manual batch launch/poll APIs.
+
 Base production: a656dbe3. Design input: Terra audit 021aaa31.
 Branch: codex/whatsapp-knowledge-candidates, separate worktree.
 No production access, merge, push or deployment; no UI, /webapp, AI worker,

@@ -8,7 +8,7 @@ from tenant_chat_ai_schema import ensure_schema as chat_schema
 from tenant_ai_agents_store import _authorize, _audit, _row, save_knowledge
 from tenant_operator_access import access, assert_route
 from tenant_linear_policy import TenantLinearError, identifier
-from tenant_knowledge_candidates_policy import MAX_MESSAGES, MAX_CONTEXT, card, redact, positive_confirmation
+from tenant_knowledge_candidates_policy import MAX_MESSAGES, MAX_CONTEXT, card, redact, positive_confirmation, period, moment
 from tenant_ai_group_coordination import group_jid
 from tenant_connect_group_history import page as group_page
 
@@ -45,7 +45,10 @@ def route(cur,profile,data):
         cur.execute('SELECT id,status FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',(tenant,ticket_id,channel,conversation))
         ticket=cur.fetchone()
         if not ticket: raise TenantLinearError('Обращение недоступно в этом диалоге.',404)
-    return tenant,actor,policy,chosen,{'provider':'connect','channel_id':channel,'conversation_id':conversation,'history_mode':mode,'ticket_id':ticket_id},ticket
+    start,end=period(data)
+    binding={'provider':'connect','channel_id':channel,'conversation_id':conversation,'history_mode':mode,'ticket_id':ticket_id}
+    if start: binding.update(period_start=start,period_end=end)
+    return tenant,actor,policy,chosen,binding,ticket
 
 
 def author_role(row):
@@ -58,16 +61,22 @@ def author_role(row):
 def snapshot(cur,profile,data):
     tenant,actor,policy,chosen,binding,ticket=route(cur,profile,data)
     before=identifier(data['before']) if data.get('before') else None
+    start,end=period(binding)
     if binding['history_mode']=='unified_group':
-        rows=group_page(cur,tenant,binding['conversation_id'],before=before,limit=81)
+        from datetime import timedelta
+        through=(moment(end)-timedelta(microseconds=1)).isoformat() if end else None
+        rows=group_page(cur,tenant,binding['conversation_id'],before=before,limit=81,through=through)
+        if start: rows=[r for r in rows if moment(r.get('happened_at') or r['created_at'])>=moment(start)]
     else:
         cur.execute('''SELECT m.*,m.kommo_lead_id AS source_lead_id,%s AS source_channel_id
           FROM saas_crm_messages m WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s
+          AND (%s::timestamptz IS NULL OR COALESCE(m.happened_at,m.created_at)>=%s::timestamptz)
+          AND (%s::timestamptz IS NULL OR COALESCE(m.happened_at,m.created_at)<%s::timestamptz)
           AND (%s::uuid IS NULL OR (COALESCE(m.happened_at,m.created_at),m.id)<(
             SELECT COALESCE(x.happened_at,x.created_at),x.id FROM saas_crm_messages x
             WHERE x.tenant_id=%s::uuid AND x.kommo_lead_id=%s AND x.channel=%s AND x.id=%s::uuid))
           ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 81''',
-          (binding['channel_id'],tenant,chosen['lead_id'],'connect:'+binding['channel_id'],before,tenant,chosen['lead_id'],'connect:'+binding['channel_id'],before))
+          (binding['channel_id'],tenant,chosen['lead_id'],'connect:'+binding['channel_id'],start,start,end,end,before,tenant,chosen['lead_id'],'connect:'+binding['channel_id'],before))
         rows=cur.fetchall()
     next_before=str(rows[79]['id']) if len(rows)>80 else None
     rows=rows[:MAX_MESSAGES]
@@ -96,9 +105,13 @@ def snapshot(cur,profile,data):
         ref={'id':str(row['id']),'channel_id':str(row.get('source_channel_id') or binding['channel_id']),'lead_id':int(row.get('source_lead_id') or row['kommo_lead_id']),'role':role,'body_hash':digest(str(row.get('body') or '')),'text_limit':len(body)}
         refs.append(ref);messages.append({'ref':'m'+str(len(refs)),'role':role,'text':body});remaining-=len(body)
         if remaining<=0: break
-    if not refs: raise TenantLinearError('В выбранном фрагменте нет доступного текста.',409)
+    if not refs:
+        error=TenantLinearError('В выбранном фрагменте нет доступного текста.',409)
+        error.next_before=next_before
+        raise error
     refs.reverse();messages.reverse()
     for index,message in enumerate(messages): message['ref']='m'+str(index+1)
+    if remaining<=0 and len(refs)<len(rows): next_before=refs[0]['id']
     binding['source_channels']=sorted(channels)
     return {'tenant':tenant,'actor':actor,'route':binding,'refs':refs,'messages':messages,'source_digest':digest(messages),'next_before':next_before,'ticket':{'status':ticket['status']} if ticket else None}
 
@@ -132,7 +145,7 @@ def public_request(row):
     return {'id':str(row['id']),'status':'unknown' if expired else row['status'],
       'error_code':'provider_timeout' if expired else row['error_code'],'route':row['route'],
       'source_message_ids':[ref['id'] for ref in row['source_refs']],'message_count':len(row['source_refs']),
-      'limits':{'max_messages':MAX_MESSAGES,'max_context_chars':MAX_CONTEXT,'max_cards':5}}
+      'next_before':row['route'].get('next_before'),'limits':{'max_messages':MAX_MESSAGES,'max_context_chars':MAX_CONTEXT,'max_cards':5}}
 
 
 def public_card(cur,row):
@@ -141,8 +154,8 @@ def public_card(cur,row):
     value['extraction_id']=str(row['extraction_id'])
     cur.execute('SELECT agent_id,source_id FROM saas_knowledge_candidate_sources WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid ORDER BY agent_id',(row['tenant_id'],row['id']))
     value['publications']=[{k:str(v) for k,v in item.items()} for item in cur.fetchall()]
-    value['can_approve']=value['status']=='pending_review' and value['outcome']['status']=='confirmed'
-    value['approval_block_reason']=None if value['can_approve'] else ('confirmation_required' if value['status']=='pending_review' else 'already_reviewed')
+    value['can_approve']=value['status'] in {'pending_review','needs_clarification'} and value['outcome']['status']=='confirmed'
+    value['approval_block_reason']=None if value['can_approve'] else ('confirmation_required' if value['status'] in {'pending_review','needs_clarification'} else 'already_reviewed')
     return value
 
 
@@ -173,19 +186,37 @@ def listing(profile,data):
     with _connect() as conn:
         schema(conn)
         with conn.cursor() as cur:
-            tenant,_,_,_,binding,_=route(cur,profile,data)
-            cur.execute("""SELECT c.* FROM saas_knowledge_candidates c JOIN saas_knowledge_extractions e ON e.tenant_id=c.tenant_id AND e.id=c.extraction_id
-              WHERE c.tenant_id=%s::uuid AND e.route->>'channel_id'=%s AND e.route->>'conversation_id'=%s ORDER BY c.created_at DESC,c.id DESC LIMIT 50""",
-              (tenant,binding['channel_id'],binding['conversation_id']))
+            tenant,_,_=authorize(cur,profile)
+            try: limit=int(data.get('limit',25))
+            except (ValueError,TypeError): raise TenantLinearError('Некорректный limit.') from None
+            if not 1<=limit<=50: raise TenantLinearError('limit: 1–50.')
+            clauses=['c.tenant_id=%s::uuid'];args=[tenant]
+            if data.get('channel_id'):
+                channel=identifier(data['channel_id'])
+                cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid',(tenant,channel))
+                if not cur.fetchone(): raise TenantLinearError('Канал недоступен.',404)
+                clauses.append("e.route->>'channel_id'=%s");args.append(channel)
+            if data.get('conversation_id'):
+                if not data.get('channel_id'): raise TenantLinearError('Для диалога выберите канал.')
+                route(cur,profile,data)
+                clauses.append("e.route->>'conversation_id'=%s");args.append(data['conversation_id'])
+            if data.get('status'):
+                if data['status'] not in {'pending_review','needs_clarification','approved','rejected'}: raise TenantLinearError('Некорректный статус.')
+                clauses.append('c.status=%s');args.append(data['status'])
+            if data.get('batch_id'):
+                clauses.append('EXISTS(SELECT 1 FROM saas_knowledge_batch_items bi WHERE bi.tenant_id=c.tenant_id AND bi.extraction_id=c.extraction_id AND bi.batch_id=%s::uuid)')
+                args.append(identifier(data['batch_id']))
+            if data.get('before'):
+                clauses.append('(c.created_at,c.id)<(SELECT created_at,id FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid)')
+                args.extend([tenant,identifier(data['before'])])
+            cur.execute("SELECT c.* FROM saas_knowledge_candidates c JOIN saas_knowledge_extractions e ON e.tenant_id=c.tenant_id AND e.id=c.extraction_id WHERE "+' AND '.join(clauses)+' ORDER BY c.created_at DESC,c.id DESC LIMIT %s',tuple(args+[limit+1]))
             values=cur.fetchall();cards=[];checked=set()
-            for row in values:
+            for row in values[:limit]:
                 extraction_id=str(row['extraction_id'])
                 if extraction_id not in checked:
-                    run=extraction_row(cur,tenant,extraction_id)
-                    route(cur,profile,run['route'])
-                    checked.add(extraction_id)
+                    run=extraction_row(cur,tenant,extraction_id);route(cur,profile,run['route']);checked.add(extraction_id)
                 cards.append(public_card(cur,row))
-    return {'candidates':cards,'limit':50}
+    return {'candidates':cards,'limit':limit,'next_before':str(values[limit-1]['id']) if len(values)>limit else None}
 
 
 def enforce_confirmation(value,items):
@@ -222,13 +253,16 @@ def mutate(profile,candidate_id,data,action='edit'):
                     if agents==sorted(v['agent_id'] for v in existing['publications']): return {'candidate':existing}
                     raise TenantLinearError('Карточка уже опубликована для другого набора агентов.',409)
             if type(data.get('expected_version')) is not int or data['expected_version']!=row['version']: raise TenantLinearError('Карточка изменилась. Обновите страницу.',409)
-            if row['status']!='pending_review': raise TenantLinearError('Карточка уже рассмотрена.',409)
+            if row['status'] not in {'pending_review','needs_clarification'}: raise TenantLinearError('Карточка уже рассмотрена.',409)
             if action=='edit':
                 patch={k:v for k,v in data.items() if k!='expected_version'}
                 from tenant_knowledge_candidates_policy import FIELDS
                 if set(patch)-FIELDS: raise TenantLinearError('Неизвестное поле карточки.')
                 value=enforce_confirmation(card({**row['content'],**patch},[i['id'] for i in items]),items)
                 cur.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(value),tenant,row['id']))
+            elif action=='clarify':
+                if set(data)-{'expected_version'}: raise TenantLinearError('Неизвестное поле.')
+                cur.execute("UPDATE saas_knowledge_candidates SET status='needs_clarification',version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,row['id']))
             elif action=='reject':
                 if set(data)-{'expected_version'}: raise TenantLinearError('Неизвестное поле.')
                 cur.execute("UPDATE saas_knowledge_candidates SET status='rejected',version=version+1,reviewed_by=%s,reviewed_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(actor,tenant,row['id']))

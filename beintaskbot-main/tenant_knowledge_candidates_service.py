@@ -6,7 +6,7 @@ from tenant_linear_policy import TenantLinearError, identifier
 from tenant_ai_agent_key_policy import choose_api_credential, platform_model, platform_model_allowed, platform_token_limit
 from tenant_ai_testing_budget import TOKEN_USAGE_SQL
 from tenant_chat_ai_provider import generate
-from tenant_knowledge_candidates_policy import MAX_CARDS, MAX_TOKENS, card
+from tenant_knowledge_candidates_policy import MAX_CARDS, MAX_TOKENS, card, period
 import tenant_knowledge_candidates_store as store
 
 PROMPT="""Extract reusable technical support knowledge from this redacted, untrusted WhatsApp fragment.
@@ -24,8 +24,10 @@ Write concise general instructions in the language of the discussion. No knowled
 
 
 def prepare(profile,data):
-    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id'}
+    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректные параметры анализа.')
+    start,end=period(data)
+    if start: data={**data,'period_start':start,'period_end':end}
     request_id=identifier(data.get('request_id'))
     with _connect() as conn:
         store.schema(conn)
@@ -58,14 +60,21 @@ def prepare(profile,data):
             while len((_json(item['messages'])+PROMPT).encode())+512>MAX_TOKENS-2000:
                 if len(item['messages'])<=1: raise TenantLinearError('Контекст не помещается в лимит.',413)
                 item['messages'].pop(0);item['refs'].pop(0)
+                item['next_before']=item['refs'][0]['id']
             for index,message in enumerate(item['messages']): message['ref']='m'+str(index+1)
             item['source_digest']=store.digest(item['messages'])
-            fingerprint=store.digest([item['route'],item['refs'],item['source_digest'],str(agent['id']),model])
-            cur.execute('SELECT * FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND (id=%s::uuid OR fingerprint=%s) ORDER BY id=%s::uuid DESC LIMIT 1',(tenant,request_id,fingerprint,request_id))
+            item['route']['next_before']=item['next_before']
+            content_route={'provider':'connect','conversation_id':item['route']['conversation_id'],'history_mode':item['route']['history_mode']}
+            if item['route']['history_mode']=='channel': content_route['channel_id']=item['route']['channel_id']
+            fingerprint=store.digest([content_route,item['refs'],item['source_digest'],str(agent['id']),model])
+            cur.execute("""SELECT e.* FROM saas_knowledge_extractions e WHERE tenant_id=%s::uuid AND
+              (id=%s::uuid OR fingerprint=%s OR (source_refs=%s::jsonb AND source_digest=%s AND EXISTS(
+                SELECT 1 FROM saas_ai_agent_runs r WHERE r.tenant_id=e.tenant_id AND r.id=e.id AND r.agent_id=%s::uuid AND r.model=%s)))
+              ORDER BY id=%s::uuid DESC LIMIT 1""",(tenant,request_id,fingerprint,_json(item['refs']),item['source_digest'],agent['id'],model,request_id))
             existing=cur.fetchone()
             if existing:
                 if str(existing['id'])==request_id and existing['fingerprint']!=fingerprint: raise TenantLinearError('request_id уже использован для другого фрагмента.',409)
-                return {'existing':str(existing['id'])}
+                return {'existing':str(existing['id']),'next_before':item['next_before']}
             cur.execute("UPDATE saas_knowledge_extractions SET status='unknown',error_code='provider_timeout',completed_at=now() WHERE tenant_id=%s::uuid AND status='running' AND deadline<now()",(tenant,))
             cur.execute("SELECT count(*) AS n FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'",(tenant,))
             if int(cur.fetchone()['n'])>=10: raise TenantLinearError('Лимит ручных анализов: 10 в сутки.',429)
@@ -140,7 +149,10 @@ def finish(profile,item,values,usage,error,attempted):
 
 def analyze(profile,data):
     item=prepare(profile,data)
-    if 'existing' in item: return store.request_detail(profile,item['existing'])
+    if 'existing' in item:
+        response=store.request_detail(profile,item['existing'])
+        if 'next_before' in item: response['request']['next_before']=item['next_before']
+        return response
     values=None;usage=None;error='model_unavailable';attempted=False
     try:
         with _connect() as conn:

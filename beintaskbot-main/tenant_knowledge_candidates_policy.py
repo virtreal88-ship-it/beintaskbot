@@ -66,3 +66,21 @@ def card(data,allowed_ids):
 def positive_confirmation(value):
     if '?' in value or re.search(r'\b(?:не|нет|not|never|yox|işləmir|если|возможно|кажется|попробуйте|проверьте|if|check|maybe|should|might|бы|должно|может|наверное)\b',value,re.I): return False
     return bool(re.search(r'(?:заработал[оа]?|вс[её] работает|теперь работает|проблема решена|помогло|it works|working now|\bresolved\b|\bfixed\b|\bdüzəldi\b|\bişləyir\b)',value,re.I))
+
+
+
+def moment(value):
+    from datetime import datetime
+    if not isinstance(value,str): value=str(value)
+    try: parsed=datetime.fromisoformat(value.replace('Z','+00:00'))
+    except ValueError: raise TenantLinearError('Период должен быть RFC3339 с часовым поясом.') from None
+    if parsed.tzinfo is None: raise TenantLinearError('Укажите часовой пояс периода.')
+    return parsed
+
+
+def period(data,required=False):
+    from datetime import timedelta,timezone
+    if not required and not data.get('period_start') and not data.get('period_end'): return None,None
+    start,end=moment(data.get('period_start')),moment(data.get('period_end'))
+    if not start<end or end-start>timedelta(days=31): raise TenantLinearError('Период должен быть от 1 секунды до 31 дня.')
+    return start.astimezone(timezone.utc).isoformat(),end.astimezone(timezone.utc).isoformat()
