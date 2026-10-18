@@ -71,7 +71,7 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
         if content_type not in {'image/jpeg', 'image/png', 'image/webp', 'image/gif'} or not raw or len(raw) > 20 * 1024 * 1024:
             raise ValueError('Invalid image input')
         data_url = 'data:' + content_type + ';base64,' + base64.b64encode(raw).decode('ascii')
-        content.append({'type': 'input_image', 'image_url': data_url, 'detail': 'auto'})
+        content.append({'type': 'input_image', 'image_url': data_url, 'detail': image.get('detail','auto') if image.get('detail','auto') in {'low','high','auto'} else 'low'})
     request_input = text_input if not images else [{'role': 'user', 'content': content}]
     response = requests.post('https://api.openai.com/v1/responses', headers={'Authorization': 'Bearer ' + key},
         json={'model': model, 'store': False, 'max_output_tokens': max(16,min(1800,int(max_output_tokens))), 'instructions': prompt,

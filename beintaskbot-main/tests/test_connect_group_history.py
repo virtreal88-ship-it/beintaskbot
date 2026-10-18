@@ -127,3 +127,15 @@ def test_read_does_not_mutate_jobs_state_or_drafts_and_requires_permission(histo
     assert before==after
     denied=employee(d,[],actor=34)
     with pytest.raises(TenantLinearError):dialogs.history(denied,'connect',1001,CA,G)
+
+
+def test_photo_duplicate_uses_current_channel_replica(history_db,monkeypatch):
+ d=history_db;monkeypatch.setattr(connect,'_connect',lambda:d)
+ add(d,1,CA,event='PHOTO_EVENT',body='Synthetic caption');add(d,2,CB,event='PHOTO_EVENT',body='Synthetic caption')
+ ids=[str(uuid.UUID(int=9001)),str(uuid.UUID(int=9002))]
+ for lead,key in [(1001,ids[0]),(1002,ids[1])]:d.execute("UPDATE saas_crm_messages SET message_type='image',external_id=%s WHERE kommo_lead_id=%s",('connect:'+key,lead))
+ d.commit();rows=connect.history(A,1002,CB)
+ merged=connect.group_context({'tenant_id':A,'channel_id':CB,'lead_id':1002,'conversation_id':G},rows,'2026-10-18T01:00:00Z')
+ photo=next(r for r in merged if r['message_type']=='image');assert photo['photo_message_id']==ids[1] and photo['channel']==CB
+ assert len([r for r in merged if r['message_type']=='image'])==1
+ assert len(photo['source_channels'])==2
