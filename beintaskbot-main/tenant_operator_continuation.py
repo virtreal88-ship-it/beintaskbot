@@ -63,16 +63,18 @@ def grant(profile,data):
     if data.get('confirmed') is not True:raise TenantLinearError('Требуется подтверждение администратора.',409)
     agent=str(uuid.UUID(str(data.get('agent_id'))))
     with _connect() as conn:
-        with conn.cursor() as cur:admin(cur,profile)
+        with conn.cursor() as cur:tenant,_,_=admin(cur,profile)
         conn.commit()
         with conn.cursor() as cur:
             cur.execute("SET LOCAL lock_timeout='1500ms'")
             cur.execute("SET LOCAL statement_timeout='5000ms'")
-            # Lock before snapshot/evidence reads, including RC ingestion writers.
-            cur.execute('LOCK TABLE saas_ai_conversation_state,saas_connect_conversations,saas_ai_agent_jobs,saas_ai_agent_drafts,saas_ai_agent_runs,saas_tenant_webhook_events,saas_ai_agents IN SHARE ROW EXCLUSIVE MODE')
+            # Match ingestion's dialogue-first order. Never wait for broad table
+            # locks while another channel writer may hold a conflicting row lock.
+            channel,conversation,_=identity(data)
+            lock_dialog(cur,tenant,'connect',channel,conversation)
+            cur.execute('LOCK TABLE saas_ai_conversation_state,saas_connect_conversations,saas_ai_agent_jobs,saas_ai_agent_drafts,saas_ai_agent_runs,saas_tenant_webhook_events,saas_ai_agents IN SHARE ROW EXCLUSIVE MODE NOWAIT')
             result,values=inspect(cur,profile,data)
             tenant,actor,channel,conversation,current,old=values
-            lock_dialog(cur,tenant,'connect',channel,conversation)
             if not result['allowed'] or result['expected_token']!=data.get('expected_token') or not any(a['id']==agent for a in result['agents']):
                 raise TenantLinearError('Данные изменились или агент недоступен. Повторите проверку.',409)
             cur.execute('''INSERT INTO saas_ai_channel_legacy_state(tenant_id,provider,conversation_id,original,reason)
