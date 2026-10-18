@@ -64,3 +64,46 @@ def next_open(schedule: dict, *, now: datetime | None = None) -> datetime | None
         if candidate > local:
             return candidate.astimezone(timezone.utc)
     return None
+
+
+def overlaps(left,right,*,now=None):
+    """Compare UTC intervals across the next 400 days, including DST and overnight shifts.
+
+    Runtime admission independently rejects ambiguous current winners; future timezone
+    rule changes never grant a second sender.
+    """
+    if not left or not right: return True
+    start=(now or datetime.now(timezone.utc)).date()-timedelta(days=1)
+    def intervals(schedule):
+        zone,days,begin,end=_values(schedule)
+        rows=[]
+        for offset in range(402):
+            day=start+timedelta(days=offset)
+            if day.weekday() not in days: continue
+            stop=day+timedelta(days=int(end<begin))
+            # Both folds: a repeated clock hour must never hide an overlap.
+            starts=[datetime(day.year,day.month,day.day,begin//60,begin%60,tzinfo=zone,fold=f).astimezone(timezone.utc) for f in (0,1)]
+            ends=[datetime(stop.year,stop.month,stop.day,end//60,end%60,tzinfo=zone,fold=f).astimezone(timezone.utc) for f in (0,1)]
+            rows.append((min(starts),max(ends)))
+        return sorted(rows)
+    a,b=intervals(left),intervals(right);i=j=0
+    while i<len(a) and j<len(b):
+        if max(a[i][0],b[j][0])<min(a[i][1],b[j][1]): return True
+        if a[i][1]<=b[j][1]: i+=1
+        else: j+=1
+    return False
+
+
+def current_candidates(agents,*,now=None):
+    """Only change overlapping scopes; retain legacy single-agent deferral.
+
+    Conflicting simultaneous winners fail closed. Disjoint scopes retain their
+    existing CRM verification and outside-schedule handling.
+    """
+    from tenant_ai_agents_store import _scopes_overlap
+    result=[]
+    for agent in agents:
+        peers=[other for other in agents if str(other['id'])!=str(agent['id']) and _scopes_overlap(agent.get('scopes'),other.get('scopes'))]
+        if not peers or (is_open(agent.get('schedule') or {},now=now) and not any(is_open(other.get('schedule') or {},now=now) for other in peers)):
+            result.append(agent)
+    return result

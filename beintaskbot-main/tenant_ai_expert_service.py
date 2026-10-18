@@ -9,7 +9,7 @@ import uuid
 from tenant_platform import _connect, _json, _fernet
 from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_dialog_scope import lock_dialog
-from tenant_ai_expert_policy import policy, result as validate_result
+from tenant_ai_expert_policy import policy, helper_ids, effective, result as validate_result
 from tenant_ai_expert_tools import diagnose
 from tenant_ai_agent_key_policy import choose_api_credential, platform_model, platform_model_allowed, platform_token_limit
 from tenant_ai_testing_budget import TOKEN_USAGE_SQL
@@ -70,7 +70,7 @@ def _live(cur,job,parent,expected_revision=None):
         if not authority or not job_allowed(cur,job): raise TenantLinearError('expert_coordination_stale',409)
     return row,authority
 
-def reserve(job,parent):
+def reserve(job,parent,expert_id=None):
     assert_job_allowed(job)
     with _connect() as conn:
         ensure_schema(conn)
@@ -82,18 +82,37 @@ def reserve(job,parent):
             row,authority=_live(cur,job,parent)
             cfg=policy(row['expert_policy'])
             if not cfg: return None
-            cur.execute('SELECT id,status,result,expert_version,expert_agent_id FROM saas_ai_expert_tasks WHERE tenant_id=%s::uuid AND parent_run_id=%s::uuid',(job['tenant_id'],parent['run_id']))
+            selected=helper_ids(cfg)
+            expert_id=expert_id or selected[0]
+            if expert_id not in selected: raise TenantLinearError('expert_not_bound',409)
+            shared=dict(cfg)
+            cur.execute('SELECT id,status,result,expert_version,expert_agent_id FROM saas_ai_expert_tasks WHERE tenant_id=%s::uuid AND parent_run_id=%s::uuid AND expert_agent_id=%s::uuid',(job['tenant_id'],parent['run_id'],expert_id))
             receipt=cur.fetchone()
-            cur.execute("SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND role='expert' AND enabled=TRUE FOR SHARE",(job['tenant_id'],cfg['expert_agent_id']))
+            cur.execute("SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND role='expert' AND enabled=TRUE FOR SHARE",(job['tenant_id'],expert_id))
             expert=cur.fetchone()
-            if not expert or expert['scopes'] or expert['mode']!='manual' or expert['expert_policy'] or next_open(expert['schedule'] or {}):
+            if not expert or expert['scopes'] or expert['mode']!='manual' or next_open(expert['schedule'] or {}):
                 raise TenantLinearError('expert_unavailable',409)
+            cfg=effective(cfg,expert,job['agent_id'])
             if receipt:
                 fresh=receipt['expert_version']==expert['version'] and str(receipt['expert_agent_id'])==str(expert['id'])
                 return {'existing':{'task_id':str(receipt['id']),'status':receipt['status'] if fresh else 'stale','result':receipt['result'] if fresh else None}}
             cur.execute('SELECT count(*) AS n FROM saas_ai_expert_tasks WHERE tenant_id=%s::uuid AND principal_agent_id=%s::uuid AND provider=%s AND channel_id=%s AND conversation_id=%s',
                 (job['tenant_id'],job['agent_id'],job['provider'],job['channel_id'],job['conversation_id']))
             if int(cur.fetchone()['n'])>=cfg['max_calls']: raise TenantLinearError('expert_call_limit',429)
+            cur.execute("SELECT count(*) AS n FROM saas_ai_expert_tasks WHERE tenant_id=%s::uuid AND expert_agent_id=%s::uuid AND provider=%s AND channel_id=%s AND conversation_id=%s",(job['tenant_id'],expert_id,job['provider'],job['channel_id'],job['conversation_id']))
+            internal=expert.get('expert_policy') or {}
+            individual_calls=int(cur.fetchone()['n'])
+            if internal and individual_calls>=internal['max_calls']: raise TenantLinearError('expert_individual_call_limit',429)
+            cur.execute("""SELECT count(*) AS n,COALESCE(sum(GREATEST(u.total_tokens,u.input_tokens+u.output_tokens)+u.reserved_tokens),0) AS tokens,
+              COALESCE(extract(epoch FROM now()-min(t.created_at)),0) AS elapsed,
+              count(*) FILTER(WHERE t.status IN ('running','timeout')) AS uncertain
+              FROM saas_ai_expert_tasks t JOIN saas_ai_agent_token_usage u ON u.tenant_id=t.tenant_id AND u.run_id=t.id
+              WHERE t.tenant_id=%s::uuid AND t.parent_run_id=%s::uuid""",(job['tenant_id'],parent['run_id']))
+            budget=cur.fetchone()
+            if int(budget['uncertain']) or int(budget['n'])>=shared['max_calls']: raise TenantLinearError('expert_run_call_limit',429)
+            cfg['max_tokens']=min(cfg['max_tokens'],shared['max_tokens']-int(budget['tokens']))
+            cfg['timeout_seconds']=min(cfg['timeout_seconds'],shared['timeout_seconds']-float(budget['elapsed']))
+            if cfg['max_tokens']<2048 or cfg['timeout_seconds']<1: raise TenantLinearError('expert_run_budget',429)
             meta=row['metadata'] or {};company_key=''
             if row['secrets']:
                 secret=json.loads(_fernet().decrypt(bytes(row['secrets'])))
@@ -173,10 +192,23 @@ def _settle(job,parent,reservation,value,usage,status,code,attempted=True):
         conn.commit()
     return {'task_id':reservation['task_id'],'status':status,'result':value}
 
+def _expert_live(cur,job,reservation):
+    cur.execute("SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE",(job['tenant_id'],str(reservation['expert']['id'])))
+    current=cur.fetchone()
+    if (not current or not current['enabled'] or current['role']!='expert' or current['scopes'] or current['mode']!='manual'
+        or current['version']!=reservation['expert']['version'] or next_open(current['schedule'] or {})):
+        raise TenantLinearError('expert_unavailable',409)
+    effective(reservation['config'],current,job['agent_id'])
+
+
 def execute(job,parent,reservation,problem,lines,checks=(),previous_actions=()):
     usage=None;value=None;status='failed';code='expert_model_error';attempted=False
     try:
         cfg=reservation['config'];expert=reservation['expert']
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                _live(cur,job,parent,(reservation.get('authority') or {}).get('revision'))
+                _expert_live(cur,job,reservation)
         tools=[diagnose(tool,tenant_id=job['tenant_id'],channel_id=job['channel_id'],conversation_id=job['conversation_id']) for tool in cfg['tools']]
         knowledge=knowledge_context(job['tenant_id'],problem,agent_id=str(expert['id']))
         context=bounded_context(job,cfg,problem,lines,knowledge,tools,checks,previous_actions)
@@ -192,7 +224,9 @@ def execute(job,parent,reservation,problem,lines,checks=(),previous_actions=()):
             else: raise ValueError('expert_context_budget')
         assert_job_allowed(job)
         with _connect() as conn:
-            with conn.cursor() as cur: _live(cur,job,parent,(reservation.get('authority') or {}).get('revision'))
+            with conn.cursor() as cur:
+                _live(cur,job,parent,(reservation.get('authority') or {}).get('revision'))
+                _expert_live(cur,job,reservation)
         attempted=True
         raw,usage=generate(reservation['key'],reservation['model'],'expert',[],'',instructions=prompt,extra_context=context,
             with_usage=True,max_output_tokens=output,request_timeout=cfg['timeout_seconds'])
@@ -210,10 +244,10 @@ def mark_timeout(tenant,task_id):
             cur.execute("UPDATE saas_ai_expert_tasks SET status='timeout',error_code='expert_timeout',completed_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND status='running'",(tenant,task_id))
         conn.commit()
 
-async def request_expert(job,parent,*,problem,lines,triggers,checks=(),previous_actions=()):
+async def _request_one(job,parent,*,problem,lines,triggers,checks=(),previous_actions=(),expert_id=None):
     if not any('call_expert' in (x.get('actions') or []) for x in triggers): return None
     try:
-        reservation=await asyncio.to_thread(reserve,job,parent)
+        reservation=await asyncio.to_thread(reserve,job,parent,expert_id) if expert_id else await asyncio.to_thread(reserve,job,parent)
         if not reservation: return {'status':'not_configured'}
         if 'existing' in reservation: return reservation['existing']
         task=asyncio.create_task(asyncio.to_thread(execute,job,parent,reservation,problem,lines,checks,previous_actions))
@@ -226,3 +260,53 @@ async def request_expert(job,parent,*,problem,lines,triggers,checks=(),previous_
             return {'task_id':reservation['task_id'],'status':'timeout'}
     except TenantLinearError as error:
         return {'status':'unavailable','error_code':'expert_limit' if error.status==429 else 'expert_blocked'}
+
+
+def selected_helpers(job,parent,results=()):
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            row,_=_live(cur,job,parent)
+            cfg=policy(row['expert_policy'])
+            for value in results:
+                if value.get('status')!='completed': continue
+                cur.execute('''SELECT a.*,t.expert_version FROM saas_ai_expert_tasks t
+                  JOIN saas_ai_agents a ON a.tenant_id=t.tenant_id AND a.id=t.expert_agent_id
+                  WHERE t.tenant_id=%s::uuid AND t.parent_run_id=%s::uuid AND t.id=%s::uuid
+                  FOR SHARE OF a''',(job['tenant_id'],parent['run_id'],value['task_id']))
+                expert=cur.fetchone()
+                if (not expert or not expert['enabled'] or expert['role']!='expert'
+                    or expert['mode']!='manual' or expert['scopes']
+                    or expert['version']!=expert['expert_version'] or next_open(expert['schedule'] or {})):
+                    raise TenantLinearError('expert_result_stale',409)
+                effective(cfg,expert,job['agent_id'])
+            return helper_ids(cfg)
+
+
+async def request_expert(job,parent,*,problem,lines,triggers,checks=(),previous_actions=()):
+    if not any('call_expert' in (x.get('actions') or []) for x in triggers): return None
+    try: selected=await asyncio.to_thread(selected_helpers,job,parent)
+    except TenantLinearError: return {'status':'stale','result':None}
+    requested=[]
+    targeted=False
+    for trigger in triggers:
+        if 'call_expert' not in (trigger.get('actions') or []): continue
+        targets=(trigger.get('condition') or {}).get('expert_agent_ids')
+        if targets:
+            targeted=True
+            if not set(targets)<=set(selected): return {'status':'unavailable','error_code':'expert_not_bound'}
+            requested.extend(targets)
+        else: requested.extend(selected)
+    selected=[item for item in selected if item in requested]
+    if len(selected)<=1:
+        return await _request_one(job,parent,problem=problem,lines=lines,triggers=triggers,checks=checks,previous_actions=previous_actions,expert_id=selected[0] if targeted and selected else None)
+    results=[]
+    for expert_id in selected:
+        value=await _request_one(job,parent,problem=problem,lines=lines,triggers=triggers,checks=checks,previous_actions=previous_actions,expert_id=expert_id)
+        results.append(value)
+        if value.get('status') in {'stale','timeout','running'}: return {**value,'specialists':results}
+        if value.get('status')=='completed' and (value.get('result') or {}).get('requires_human'):
+            return {**value,'specialists':results}
+    # Recheck the parent after all calls, including cached results.
+    try: await asyncio.to_thread(selected_helpers,job,parent,results)
+    except TenantLinearError: return {'status':'stale','result':None}
+    return {'status':'completed','result':{'requires_human':False},'specialists':results}

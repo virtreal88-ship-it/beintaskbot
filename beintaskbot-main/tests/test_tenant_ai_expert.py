@@ -169,6 +169,7 @@ def test_ticket_history_is_internal_tenant_and_channel_scoped(expert):
     assert inbox.detail(PROFILE,ticket)['expert_results']==[]
 
 def test_request_only_explicit_trigger_and_hard_timeout(monkeypatch):
+    monkeypatch.setattr(service,'selected_helpers',lambda *a: [EXPERT])
     async def scenario():
         called=[]
         def reserve(*a):called.append(True);return {'task_id':'test','config':{'timeout_seconds':0.01}}
