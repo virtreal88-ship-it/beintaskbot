@@ -18,40 +18,10 @@ pdfmetrics.registerFont(TTFont('AZ',str(FONT/'arial.ttf')))
 pdfmetrics.registerFont(TTFont('AZBold',str(FONT/'arialbd.ttf')))
 BLUE='#006E9C';RED='#BC3434'
 # Rectangles are callouts over original pixels, never reconstructed UI.
-STEPS=[
-('01-navigation.jpg','Yerdəyişmələr bölməsini açın',
- 'Əvvəlcə sağ yuxarıda Bein Demo şirkətini yoxlayın. Məhsullar bölməsində Yerdəyişmələr alt bölməsini açın. Sonra + Yerdəyişmə düyməsini seçin.',
- 'Mavi çərçivələr keçidi göstərir: Məhsullar → Yerdəyişmələr → + Yerdəyişmə. Mövcud sənədləri açmaq və dəyişmək lazım deyil.',
- [(230,1,96,57,BLUE),(362,60,137,49,BLUE),(187,140,115,33,BLUE),(695,10,105,27,BLUE)]),
-('02-new-form.jpg','Yeni sənədin formasını yoxlayın',
- 'Yeni Yerdəyişmə forması açılır. Yerdəyişmə № və Tarix sahələrini yoxlayın. Bu nümunədə sistemin verdiyi nömrə və tarix dəyişdirilməyib.',
- 'Anbardan və Anbara ulduzla işarələnmiş seçim sahələridir. Yadda saxla düyməsini bu təlim nümunəsində basmayın.',
- [(17,98,204,80,BLUE),(316,98,207,79,BLUE)]),
-('03-source-warehouse.jpg','Göndərən anbarı seçin',
- 'Anbardan sahəsini açın və məhsulun göndəriləcəyi anbarı seçin. Bu demo nümunəsində Test Anbar seçilib.',
- 'Seçimdən sonra anbarın adı sahədə görünməlidir. Yanındakı + düyməsi bu ssenari üçün lazım deyil; yeni anbar yaratmayın.',
- [(317,98,182,30,BLUE)]),
-('04-destination-warehouse.jpg','Qəbul edən anbarı seçin',
- 'Anbara sahəsində məhsulun qəbul ediləcəyi anbarı seçin. Nümunə: test üçün. Seçilmiş adın həqiqətən sahədə göründüyünü yoxlayın.',
- 'Göndərən və qəbul edən anbarlar fərqli olmalıdır: Test Anbar → test üçün. Bu mərhələdə hələ heç bir yerdəyişmə saxlanılmır.',
- [(316,49,184,29,BLUE),(316,97,184,29,BLUE)]),
-('05-product-search.jpg','Test məhsulunu tapın və əlavə edin',
- 'Məhsul əlavə et sahəsində ad, barkod və ya artkod üzrə axtarın. Nümunədə Beta TEST yazılıb; nəticələrdən Beta TEST Sud seçilib.',
- 'Axtarış nəticəsində 0 əd görünürdü. Bu nümunə yalnız formanı göstərir: real əməliyyatdan əvvəl göndərən anbardakı mövcud qalığı ayrıca yoxlayın.',
- [(74,366,188,36,BLUE),(42,407,285,79,BLUE)]),
-('06-quantity.jpg','Miqdarı daxil edin',
- 'Əlavə edilmiş məhsul sətrində Miqdar xanasını seçin və lazım olan sayını yazın. Nümunədə 2 daxil edilib. Tab ilə xanadan çıxın.',
- 'Ekranın aşağı hissəsində Miqdar: 2 əd göstərilməsi yoxlanılıb. Bu, forma üzrə cəmdir; anbar qalığının dəyişdiyini göstərmir.',
- [(603,314,58,38,BLUE),(615,468,125,30,BLUE)]),
-('07-final-check.jpg','Saxlamadan əvvəl məlumatları yoxlayın',
- 'İki anbarı, məhsulu, miqdarı və tarixi yenidən yoxlayın. Digər bölməsində Status, Cavabdeh, Şöbə və Təsdiqlənib sahələri görünür.',
- 'Təsdiqlənib nümunədə əvvəlcədən işarəli idi və dəyişdirilmədi. Saxlamanın və bu işarənin anbar uçotuna təsiri yoxlanılmayıb. Qırmızı çərçivədəki Yadda saxla düyməsini basmayın.',
- [(18,9,99,35,RED),(317,49,182,78,BLUE),(609,201,86,29,RED),(122,8,61,36,BLUE)]),
-('08-discard-changes.jpg','Təlimi yadda saxlamadan bağlayın',
- 'Bağla düyməsini basın. Dəyişikliklər yadda saxlanılmayacaq xəbərdarlığı açılır. Dəyişiklikləri saxlamadan çıxmaq üçün Ok seçin.',
- 'Bu addım real olaraq yoxlanılıb: Ok seçildikdən sonra Yerdəyişmələr siyahısına qayıdıldı. Xəbərdarlıqdakı Yadda saxla seçilməyib. Sənəd saxlanılmayıb və keçirilməyib.',
- [(298,175,278,33,BLUE),(637,237,45,36,BLUE),(188,236,101,37,RED)])
-]
+LESSON=json.loads((Path(__file__).parent/'warehouse-transfer.lesson.json').read_text(encoding='utf-8'))
+STEPS=[(s['image']['asset_id'],s['title'],s['explanation'],s['note'],
+        [(a['x'],a['y'],a['width'],a['height'],RED if a['intent']=='warning' else BLUE) for a in s['areas']])
+       for s in LESSON['slides']]
 
 PDF=OUT/'beinsystems-anbar-yerdeyishme-az.pdf'
 c=Canvas(str(PDF),pagesize=(720,900),pageCompression=1)
