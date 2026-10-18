@@ -221,3 +221,26 @@ The range control rounds to 10ms, so completion assertions also wait for stopped
 play state, rather than treating rounded slider maximum as completion. Targeted
 media tests cover pitch preservation, hash/word metadata, stall timeout and error
 fallback. The 48 existing Python tests pass. No claim of native-speaker audio QA.
+
+
+### Subtitle-only pilot (current; supersedes narration)
+
+AZ TTS was rejected after listening review. Audio playback, sound controls, the
+8 MP3s, narration metadata, generation script and audio-specific test pages have
+been removed. The offline HTML contains JPEGs and text only; no audio requests or
+TTS dependencies are used. Playback defaults to 1.75×.
+
+`warehouse-transfer.subtitles.json` supplies short AZ cues on the same lesson
+clock as autofocus and crossfade. Pause retains the current cue; seek selects it
+deterministically. Caption changes wait for the new screenshot to decode. The
+translucent caption strip reserves its own space directly below the screenshot,
+so it never overlays important ERP controls. Captions fit one or two lines at
+320/390px. Full original explanations and cautions remain under Ətraflı izah.
+Eight screenshots, step titles and original source lesson data are unchanged.
+Reduced-motion, keyboard, native-resolution ceiling and compact controls remain.
+
+Verification: real-clock localhost browser regression PASS for the full 1.75×
+lesson, crossfade Pause/Resume, subtitle retention, matching seek cue and all eight
+steps. 320/390px checks confirm one/two-line text in the reserved strip (no image
+overlap or horizontal overflow). Targeted Node tests and all 48 Python contract
+regressions pass. Rebuild needs only Python standard library, JPEGs and cue JSON.

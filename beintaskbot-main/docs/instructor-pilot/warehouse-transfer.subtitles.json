@@ -1,0 +1,125 @@
+{
+  "language": "az",
+  "slides": [
+    [
+      {
+        "at_ms": 0,
+        "text": "Bein Demo şirkətini yoxlayın."
+      },
+      {
+        "at_ms": 5000,
+        "text": "Məhsullar → Yerdəyişmələr bölməsini açın."
+      },
+      {
+        "at_ms": 8500,
+        "text": "+ Yerdəyişmə düyməsinə basın."
+      }
+    ],
+    [
+      {
+        "at_ms": 0,
+        "text": "Yeni yerdəyişmə formasını yoxlayın."
+      },
+      {
+        "at_ms": 1400,
+        "text": "Sənədin nömrəsini və tarixini yoxlayın."
+      },
+      {
+        "at_ms": 6500,
+        "text": "Göndərən və qəbul edən anbarları seçin."
+      }
+    ],
+    [
+      {
+        "at_ms": 0,
+        "text": "Göndərən anbarı seçin."
+      },
+      {
+        "at_ms": 1400,
+        "text": "Anbardan sahəsində Test Anbar seçin."
+      },
+      {
+        "at_ms": 8000,
+        "text": "Seçilmiş ad sahədə görünməlidir."
+      }
+    ],
+    [
+      {
+        "at_ms": 0,
+        "text": "Qəbul edən anbarı seçin."
+      },
+      {
+        "at_ms": 1400,
+        "text": "Anbara sahəsində test üçün seçin."
+      },
+      {
+        "at_ms": 8000,
+        "text": "İki anbarın fərqli olduğunu yoxlayın."
+      }
+    ],
+    [
+      {
+        "at_ms": 0,
+        "text": "Test məhsulunu axtarın."
+      },
+      {
+        "at_ms": 1400,
+        "text": "Beta TEST yazın və Beta TEST Sud seçin."
+      },
+      {
+        "at_ms": 10000,
+        "text": "Sıfır qalıq özlüyündə xəta deyil."
+      },
+      {
+        "at_ms": 13000,
+        "text": "Mənfi qalığa icazə ayarlardan asılıdır."
+      }
+    ],
+    [
+      {
+        "at_ms": 0,
+        "text": "Məhsulun miqdarını daxil edin."
+      },
+      {
+        "at_ms": 1400,
+        "text": "Miqdar xanasına 2 yazın və Tab basın."
+      },
+      {
+        "at_ms": 8000,
+        "text": "Forma üzrə cəmi yoxlayın: 2 əd."
+      }
+    ],
+    [
+      {
+        "at_ms": 0,
+        "text": "Anbarları, məhsulu və miqdarı yoxlayın."
+      },
+      {
+        "at_ms": 1400,
+        "text": "Sənədi yadda saxlamayın və keçirməyin."
+      },
+      {
+        "at_ms": 11000,
+        "text": "Anbar qalıqlarına təsir yoxlanılmayıb."
+      }
+    ],
+    [
+      {
+        "at_ms": 0,
+        "text": "Təlimi dəyişiklikləri saxlamadan bağlayın."
+      },
+      {
+        "at_ms": 1400,
+        "text": "Bağla düyməsini basın, sonra Ok seçin."
+      },
+      {
+        "at_ms": 10000,
+        "text": "Yadda saxla seçimini basmayın."
+      },
+      {
+        "at_ms": 13000,
+        "text": "Sənəd saxlanılmayıb və keçirilməyib."
+      }
+    ]
+  ]
+}
