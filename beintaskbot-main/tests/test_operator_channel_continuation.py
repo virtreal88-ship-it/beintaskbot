@@ -192,3 +192,53 @@ def test_existing_archive_is_never_overwritten(stopped):
     before=d.execute('SELECT * FROM saas_ai_channel_legacy_state');d.commit()
     continuation.grant(PROFILE,request())
     assert d.execute('SELECT * FROM saas_ai_channel_legacy_state')==before;d.commit()
+
+
+def seed_test_unknowns(f):
+    import uuid
+    d=f['db']
+    mid,_=f['incoming'](CA)
+    event=d.execute("SELECT fingerprint FROM saas_tenant_webhook_events WHERE payload->>'message_id'=%s",(mid,))[0]['fingerprint']
+    for revision in range(100,105):
+        d.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,created_at) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,'test','unknown',now()-interval '2 days')",(A,str(uuid.uuid4()),AGENT,event,revision))
+    d.commit()
+    return mid
+
+
+def test_owner_close_atomic_preserves_budget_and_second_channel(stopped):
+    f=stopped;d=f['db'];mid=seed_test_unknowns(f)
+    preview=continuation.options(PROFILE,DATA)
+    assert not preview['allowed'] and preview['test_close_count']==5
+    assert not continuation.options(PROFILE,{**DATA,'channel_id':CB,'lead_id':43})['test_close_allowed']
+    with pytest.raises(TenantLinearError):continuation.grant(PROFILE,request())
+    data={**request(),'test_owner_confirmed':True}
+    continuation.grant(PROFILE,data)
+    rows=d.execute("SELECT state,result FROM saas_ai_agent_runs")
+    assert len(rows)==5 and all(r['state']=='unknown' and r['result']['test_owner_closed'] for r in rows)
+    assert all(r['state']=='human' for r in d.execute('SELECT state FROM saas_ai_conversation_state'))
+    d.commit()
+    assert not blocked(d) and blocked(d,CB)
+    with pytest.raises(TenantLinearError):continuation.grant(PROFILE,data)
+    assert f['process']() is None
+    agents.set_conversation_state(PROFILE,'client','active','resume','connect',CA)
+    assert f['incoming'](CA,mid=mid)[1]==0 and f['incoming'](CB)[1]==0
+    assert f['process']() is None
+    assert f['incoming'](CA)[1]==1
+    f['process']();f['send'].assert_not_called()
+    assert len(d.execute("SELECT id FROM saas_ai_agent_drafts WHERE state='pending'"))==1
+    d.commit()
+
+
+@pytest.mark.parametrize('change',['fresh','send_reserved','other_channel','automatic','stale'])
+def test_owner_close_rejects_unsafe_or_changed_snapshot(stopped,change):
+    d=stopped['db'];seed_test_unknowns(stopped);data={**request(),'test_owner_confirmed':True}
+    if change=='fresh':d.execute("UPDATE saas_ai_agent_runs SET created_at=now()")
+    elif change=='send_reserved':d.execute("UPDATE saas_ai_agent_runs SET result='{\"send_state\":\"reserved\"}'::jsonb")
+    elif change=='other_channel':data.update(channel_id=CB,lead_id=43,agent_id=AGENT2)
+    elif change=='automatic':d.execute("UPDATE saas_ai_agents SET mode='automatic' WHERE id=%s::uuid",(AGENT,))
+    else:d.execute("UPDATE saas_ai_conversation_state SET revision=revision+1 WHERE channel_id=%s",(CA,))
+    d.commit()
+    with pytest.raises(TenantLinearError):continuation.grant(PROFILE,data)
+    assert not d.execute('SELECT * FROM saas_ai_legacy_permits')
+    assert len(d.execute("SELECT id FROM saas_ai_agent_runs WHERE COALESCE(result->>'test_owner_closed','')<>'true'"))==5
+    d.commit();stopped['send'].assert_not_called()

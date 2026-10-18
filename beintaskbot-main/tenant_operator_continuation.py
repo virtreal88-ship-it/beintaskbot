@@ -31,20 +31,35 @@ def inspect(cur,profile,data):
       WHERE d.tenant_id=%s::uuid AND e.provider='connect' AND d.chat_id=%s
         AND d.state IN ('pending','sending','unknown') ORDER BY d.id""",(tenant,conversation))
     drafts=[dict(r) for r in cur.fetchall()]
-    cur.execute("""SELECT r.id,r.state,r.result FROM saas_ai_agent_runs r JOIN saas_tenant_webhook_events e
+    cur.execute("""SELECT r.id,r.state,r.result,e.payload->>'channel_id' AS source_channel,
+      (r.created_at < now()-interval '3 minutes') AS old_enough,
+      EXISTS(SELECT 1 FROM saas_ai_agent_jobs j WHERE j.tenant_id=r.tenant_id
+        AND j.agent_id=r.agent_id AND j.event_fingerprint=r.event_fingerprint AND j.revision=r.revision) AS has_job,
+      EXISTS(SELECT 1 FROM saas_ai_agent_drafts d WHERE d.tenant_id=r.tenant_id
+        AND d.source_fingerprint=r.event_fingerprint) AS has_draft FROM saas_ai_agent_runs r JOIN saas_tenant_webhook_events e
       ON e.tenant_id=r.tenant_id AND e.fingerprint=r.event_fingerprint
       WHERE r.tenant_id=%s::uuid AND e.provider='connect'
         AND (e.payload->>'conversation_id'=%s OR EXISTS (
           SELECT 1 FROM saas_ai_agent_jobs j WHERE j.tenant_id=r.tenant_id AND j.provider='connect'
             AND j.event_fingerprint=r.event_fingerprint AND j.conversation_id=%s))
-        AND (r.state IN ('generating','unknown') OR r.result->>'send_state' IN ('reserved','unknown')) ORDER BY r.id""",(tenant,conversation,conversation))
+        AND (r.state IN ('generating','unknown') OR r.result->>'send_state' IN ('reserved','unknown'))
+        AND NOT (r.state='unknown' AND COALESCE(r.result->>'test_owner_closed','')='true') ORDER BY r.id""",(tenant,conversation,conversation))
     runs=[dict(r) for r in cur.fetchall()]
     reason=('missing_state' if not old or not current else 'must_be_stopped' if current['state'] not in {'human','paused'} else
       'outstanding_work' if drafts or runs or any(j['state'] in {'queued','processing','unknown','drafted'} for j in jobs) else
       'no_eligible_agent' if not agents else '')
+    # Narrow owner-confirmed abandonment, not delivery reconciliation. Keep unknown
+    # and budget accounting; never label an uncertain historical send as successful.
+    closable=(reason=='outstanding_work' and 0<len(runs)<=5 and not drafts
+      and current['state']=='human'
+      and not any(j['state'] in {'queued','processing','unknown','drafted'} for j in jobs)
+      and all(r['state']=='unknown' and r['result'] is None and r['source_channel']==channel
+        and r['old_enough'] and not r['has_job'] and not r['has_draft'] for r in runs))
     token=hashlib.sha256(json.dumps([states,jobs,drafts,runs,agents],default=str,sort_keys=True).encode()).hexdigest()
     return {'allowed':not reason,'reason':reason,'expected_token':token,
-      'agents':[{'id':str(a['id']),'name':a['name']} for a in agents]},(tenant,actor,channel,conversation,current,old)
+      'test_close_allowed':bool(closable),'test_close_count':len(runs) if closable else 0,
+      'close_run_ids':[str(r['id']) for r in runs] if closable else [],
+      'agents':[{'id':str(a['id']),'name':a['name'],'mode':a['mode']} for a in agents]},(tenant,actor,channel,conversation,current,old)
 
 
 def options(profile,data):
@@ -75,8 +90,19 @@ def grant(profile,data):
             cur.execute('LOCK TABLE saas_ai_conversation_state,saas_connect_conversations,saas_ai_agent_jobs,saas_ai_agent_drafts,saas_ai_agent_runs,saas_tenant_webhook_events,saas_ai_agents IN SHARE ROW EXCLUSIVE MODE NOWAIT')
             result,values=inspect(cur,profile,data)
             tenant,actor,channel,conversation,current,old=values
-            if not result['allowed'] or result['expected_token']!=data.get('expected_token') or not any(a['id']==agent for a in result['agents']):
+            closing=data.get('test_owner_confirmed') is True and result['test_close_allowed']
+            if (not result['allowed'] and not closing) or result['expected_token']!=data.get('expected_token') or not any(a['id']==agent for a in result['agents']):
                 raise TenantLinearError('Данные изменились или агент недоступен. Повторите проверку.',409)
+            if closing:
+                if not any(a['id']==agent and a['mode']=='manual' for a in result['agents']):
+                    raise TenantLinearError('Тестовое продолжение требует Manual.',409)
+                cur.execute('''UPDATE saas_ai_agent_runs SET result=jsonb_build_object(
+                  'test_owner_closed',true,'closed_by',%s::bigint,'closed_at',clock_timestamp(),
+                  'closed_channel',%s::text),updated_at=clock_timestamp()
+                  WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) AND state='unknown' AND result IS NULL''',
+                  (actor,channel,tenant,result['close_run_ids']))
+                _audit(cur,tenant,actor,'ai_test_unknown_closed','conversation',conversation,
+                  {'channel_id':channel,'run_ids':result['close_run_ids'],'no_retry':True})
             cur.execute('''INSERT INTO saas_ai_channel_legacy_state(tenant_id,provider,conversation_id,original,reason)
               VALUES(%s::uuid,'connect',%s,%s::jsonb,'channel_continuation_without_migration') ON CONFLICT DO NOTHING''',(tenant,conversation,json.dumps(old,default=str)))
             cur.execute('''UPDATE saas_ai_conversation_state SET agent_id=%s::uuid,agent_assignment_id=%s::uuid,
