@@ -31,5 +31,6 @@ ENV/
 !railpack.json
 .support-test-deps/
 
-# Local instructor narration generation dependencies
+# Local instructor verification dependencies
 .instructor-tts-deps/
+.instruction-test-deps/

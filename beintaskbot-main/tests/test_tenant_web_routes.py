@@ -10,7 +10,15 @@ from tenant_notice_transport import TelegramBot
 from tenant_web_assets import ASSETS, register_assets
 
 EXPECTED_API = (("POST","/api/platform/crm/deals/complete"),("GET","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/chat/send"),("POST","/api/platform/crm/chat/send-file"),("GET","/api/platform/diagnostics"),("GET","/api/platform/crm/chat/history"),("GET","/api/platform/crm/chat/attachment"),("GET","/api/platform/crm/chat/receipts"),("POST","/api/platform/crm/chat/receipts"),("GET","/api/platform/finance"),("POST","/api/platform/finance"),("GET","/api/platform/linear/settings"),("POST","/api/platform/linear/settings"),("GET","/api/platform/linear/tasks"),("POST","/api/platform/linear/tasks"),("GET","/api/platform/news"),("POST","/api/platform/news"),("GET","/api/platform/news/ai"),("POST","/api/platform/news/ai"),("GET","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai"),("GET","/api/platform/news/telegram/settings"),("POST","/api/platform/news/telegram/settings"),("GET","/api/platform/news/telegram"),("POST","/api/platform/news/telegram"),("GET","/api/platform/news/public/{company}"))
+EXPECTED_API += tuple((method,path) for path,methods in [
+ ('/api/platform/instructions',('GET','POST')),
+ ('/api/platform/instructions/{lesson_id}',('GET','POST')),
+ ('/api/platform/instructions/{lesson_id}/assets/{asset_id}',('GET',)),
+ ('/api/instructions/shared/{token}',('GET',)),
+ ('/api/instructions/shared/{token}/assets/{asset_id}',('GET',))] for method in methods)
 EXPECTED_ASSETS = ["/assets/tenant-ai-expert-editor.js","/assets/tenant-ai-state.js","/assets/tenant-ai-state.css","/assets/tenant-agent-catalog.js","/assets/tenant-agent-library.js","/assets/tenant-agent-library.css","/assets/tenant-ai-testing.js","/assets/tenant-ai-testing.css","/assets/tenant-night-l10n.js","/assets/tenant-night-integration.js","/app/night-report","/assets/tenant-night-report.js","/assets/tenant-night-report.css","/assets/tenant-ai-reliability.js","/app/push-sw.js","/assets/tenant-push.js","/assets/task-date-fields.js","/assets/tenant-chat-import.js","/assets/tenant-chat-history.js","/assets/tenant-chat-attachments.js","/assets/tenant-chat-review.js","/assets/tenant-finance.js","/assets/tenant-chat-ai.js","/assets/tenant-chat-ai-settings.js","/assets/tenant-news-telegram-settings.js","/updates/{company}","/assets/tenant-news.js","/assets/tenant-news-ai-settings.js","/assets/tenant-linear-settings.js","/assets/tenant-linear-board.js","/assets/tenant-linear-rules.js","/assets/tenant-task-approvals.js","/assets/tenant-task-completion.js","/assets/tenant-deal-completion.js","/assets/tenant-diagnostics.js","/assets/tenant-chat-send.js","/assets/tenant-ai-agents.js","/assets/tenant-night-agent-template.js","/assets/tenant-support-inbox.js","/assets/tenant-operator-i18n.js","/assets/tenant-operator-dialogs.js","/assets/tenant-knowledge-candidates.js","/assets/tenant-workflow.js","/assets/tenant-chakra-ui.js","/assets/tenant-workspace.js","/assets/tenant-hot-order-settings.js","/assets/tenant-hot-orders.js","/assets/tenant-hot-order-completion.js","/assets/tenant-crm-sync.js","/assets/tenant-tasks.js"]
+
+EXPECTED_ASSETS += ['/app/instructions','/assets/tenant-instructions.js','/assets/tenant-instructions.css','/assets/tenant-instructor-lesson.js','/assets/tenant-instructor-lesson.css']
 
 AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('testing/kommo-context', ('GET',)), ('testing/sessions', ('GET','POST')),
@@ -47,7 +55,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('knowledge', ('GET','POST')), ('knowledge/upload', ('POST',)),
     ('knowledge/{source_id}', ('PATCH','DELETE')),
 ] for method in methods)
-FACTORIES = ('finance_handler', 'linear_handler', 'tasks_handler', 'news_handler',
+FACTORIES = ('instruction_handler', 'finance_handler', 'linear_handler', 'tasks_handler', 'news_handler',
     'news_telegram_handler', 'chat_ai_handler', 'chat_send_handler', 'chat_upload_handler',
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler',
     'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'night_report_handler', 'testing_handler', 'ai_state_handler')
@@ -80,7 +88,7 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         expected |= {('HEAD', path) for method, path in AI_API if method == 'GET'}
         self.assertEqual(actual, expected)
         for method, path in EXPECTED_API:
-            request, match = await self.resolve(method, path.replace('{company}', 'demo'))
+            request, match = await self.resolve(method, path.replace('{company}', 'demo').replace('{lesson_id}', '00000000-0000-0000-0000-000000000001').replace('{token}', 'testtoken').replace('{asset_id}', 'test.jpg'))
             self.assertIsNone(match.http_exception)
             self.assertEqual((await match.handler(request)).status, 200)
 

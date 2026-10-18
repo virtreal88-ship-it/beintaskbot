@@ -1,0 +1,23 @@
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const fs=require('node:fs'),assert=require('node:assert/strict'),crypto=require('node:crypto');
+const dom=new JSDOM('<main id="instructions"></main>',{url:'https://example.test/app/instructions?site_lang=en',runScripts:'outside-only'}),w=dom.window;
+w.confirm=()=>true;w.structuredClone=structuredClone;Object.defineProperty(w.crypto,'randomUUID',{value:crypto.randomUUID});w.HTMLCanvasElement.prototype.getContext=()=>({clearRect(){},strokeRect(){}});
+w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};w.HTMLDialogElement.prototype.close=function(){this.open=false;this.onclose?.();};
+const id='00000000-0000-0000-0000-000000000001',asset='00000000-0000-0000-0000-000000000002.jpg';
+let record={id,version:1,state:'draft',doc:{schema_version:1,title:'Lesson',language:'en',operation:'inventory.warehouse_transfer',review_status:'pending_review',slides:[{id:'s',order:1,title:'Step',explanation:'Explanation',note:'No save',image:{asset_id:asset,width:100,height:100,sha256:'a'.repeat(64)},areas:[],playback:{duration_ms:6000,transition_ms:650,focus:[],return_to_overview:true}}],subtitles:{slides:[{at_ms:0,text:'First'}].map(c=>[c])}}};const calls=[];let mounted=null;
+w.BeinLesson={mount:(_r,doc,options)=>{mounted={doc,options};return{destroy(){}};}};
+w.fetch=async(url,options={})=>{url=String(url);const payload=options.body?JSON.parse(options.body):null;calls.push({url,payload});let result;
+ if(url.includes('/me'))return{ok:true,json:async()=>({member:{tenant_id:id,telegram_id:11}})};
+ if(url.includes('/ai/agents'))result=[];
+ else if(payload){assert.equal(payload.expected_tenant_id,id);assert.equal(payload.expected_user_id,'11');assert.equal(payload.expected_version,record.version);record={...record,version:record.version+1,doc:payload.doc||record.doc,state:payload.action==='submit'?'pending_review':'draft'};result=record;}
+ else if(url.includes('/instructions/'+id))result=record;
+ else result={items:[{id,title:'Lesson',state:'draft',language:'en'}],next_offset:null};
+ return{ok:true,json:async()=>({success:true,result})};};
+w.eval(fs.readFileSync('docs/tenant-instructions.js','utf8'));
+const settle=()=>new Promise(r=>setImmediate(r)),root=w.document.getElementById('instructions');
+const click=text=>{const b=[...root.querySelectorAll('button')].find(b=>b.textContent===text);assert(b,'Button '+text);b.click();};
+(async()=>{await settle();await settle();assert(root.textContent.includes('Instructions'));click('Edit');await settle();assert(root.textContent.includes('v1'));
+ const title=[...root.querySelectorAll('label')].find(l=>l.firstChild.textContent==='Title').querySelector('input');title.value='<script>safe</script>';title.dispatchEvent(new w.Event('input'));assert(root.textContent.includes('Unsaved changes'));const event=new w.Event('beforeunload',{cancelable:true});w.dispatchEvent(event);assert(event.defaultPrevented);
+ click('Save');await settle();assert.equal(record.doc.title,'<script>safe</script>');assert.equal(root.querySelectorAll('script').length,0);click('Preview');assert(mounted);assert.equal(mounted.doc.slides.length,1);assert(mounted.options.resolveAsset(asset).includes('expected_tenant_id'));
+ root.querySelector('dialog').close();click('Submit');await settle();assert(root.textContent.includes('In review'));assert(root.textContent.includes('I reviewed'));
+ w.document.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{}}));assert(root.textContent.includes('Company changed'));dom.window.close();console.log('PASS: library/edit/save/preview/review, identity, XSS-safe text, unsaved guard and company reset');})().catch(e=>{console.error(e);process.exitCode=1;dom.window.close();});

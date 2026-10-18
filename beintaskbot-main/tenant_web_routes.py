@@ -28,6 +28,7 @@ from tenant_support_inbox_api import handler as support_handler
 from tenant_ai_testing_api import handler as testing_handler
 from tenant_ai_state_api import handler as ai_state_handler
 from tenant_operator_api import handler as operator_handler
+from tenant_instruction_library_api import handler as instruction_handler
 from tenant_night_report_api import handler as night_report_handler
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
@@ -49,6 +50,12 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
     """Build before mounting so a factory error cannot leave a partial group."""
     member, origin, logger = context.member, context.origin, context.logger
     bindings = [
+        ('/api/platform/instructions', instruction_handler(member,origin,logger), ('GET','POST')),
+        ('/api/platform/instructions/{lesson_id}', instruction_handler(member,origin,logger), ('GET','POST')),
+        ('/api/platform/instructions/{lesson_id}/assets/{asset_id}', instruction_handler(member,origin,logger), ('GET',)),
+        ('/api/instructions/shared/{token}', instruction_handler(member,origin,logger,'public'), ('GET',)),
+        ('/api/instructions/shared/{token}/assets/{asset_id}', instruction_handler(member,origin,logger,'public'), ('GET',)),
+
         ('/api/platform/finance', finance_handler(member, origin, logger), ('GET', 'POST')),
         ('/api/platform/linear/settings', linear_handler(member, origin, logger), ('GET', 'POST')),
         ('/api/platform/linear/tasks', tasks_handler(member, origin, logger), ('GET', 'POST')),
