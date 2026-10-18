@@ -18,10 +18,11 @@ def snapshot(cur, profile, draft_id, *, locked=False):
     from tenant_ai_agents_store import _authorize
     tenant,actor=_authorize(cur,profile)
     _,_,policy=access(cur,profile,'dialogs')
-    cur.execute('''SELECT d.*,a.name AS agent_name,a.mode,a.enabled,a.role,a.scopes,a.version AS agent_version,e.provider,e.payload
+    cur.execute('''SELECT d.*,a.name AS agent_name,a.mode,a.enabled,a.role,a.scopes,a.version AS agent_version,s.enabled AS company_enabled,s.emergency_stop,s.operating_mode,t.status AS tenant_status,e.provider,e.payload
       FROM saas_ai_agent_drafts d JOIN saas_ai_agents a ON a.tenant_id=d.tenant_id AND a.id=d.agent_id
+      JOIN saas_ai_agent_settings s ON s.tenant_id=d.tenant_id JOIN saas_tenants t ON t.id=d.tenant_id
       JOIN saas_tenant_webhook_events e ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
-      WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid'''+(' FOR UPDATE OF d' if locked else ''),(tenant,identifier(draft_id)))
+      WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid'''+(' FOR UPDATE OF d FOR SHARE OF a,s' if locked else ''),(tenant,identifier(draft_id)))
     row=cur.fetchone()
     if not row:raise TenantLinearError('draft_not_found',404)
     d=dict(row);payload=d['payload'] or {};provider=d['provider'];channel=str(payload.get('channel_id') or '')
@@ -71,7 +72,7 @@ def snapshot(cur, profile, draft_id, *, locked=False):
       source_messages=messages,source_known=bool(messages),reason={'code':reason},has_new_messages=newer,context_token=token,
       dialog_route={'provider':provider,'channel_id':channel,'conversation_id':d['chat_id'],'lead_id':d['lead_id'],
                     'source_message_id':str(source['id']) if source else None},
-      edit_allowed=d['state']=='pending',send_allowed=d['state']=='pending' and d['enabled'] and d['role']=='primary' and d['mode']=='manual' and state.get('state')=='active' and not payload.get('test_mode'))
+      edit_allowed=d['state']=='pending',send_allowed=d['state']=='pending' and d['enabled'] and d['role']=='primary' and d['mode']=='manual' and state.get('state')=='active' and (not group or coordination.get('state')=='active') and (provider!='connect' or bool(source)) and d['company_enabled'] and not d['emergency_stop'] and d['operating_mode']=='active' and d['tenant_status']=='active' and not payload.get('test_mode'))
     return view,d,state,(tenant,actor)
 
 

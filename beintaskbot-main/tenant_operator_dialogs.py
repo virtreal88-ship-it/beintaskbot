@@ -318,15 +318,15 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 from tenant_ai_agent_test_mode import conversation_allowed
                 if not conversation_allowed(cur,tenant,conversation):
                     dialog['controls_allowed']=False;dialog['control_block_reason']='test_binding_required'
-            anchor_at=None
+            anchor_at=None;anchor_row={}
             if anchor and not before:
                 # Resolve anchor only within the authorized route / exact tenant group.
-                cur.execute('''SELECT COALESCE(m.happened_at,m.created_at) AS at FROM saas_crm_messages m
+                cur.execute('''SELECT m.id,m.external_id,COALESCE(m.happened_at,m.created_at) AS at FROM saas_crm_messages m
                   WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid AND ((m.kommo_lead_id=%s AND m.channel=%s)
                     OR (%s AND EXISTS(SELECT 1 FROM saas_connect_conversations c WHERE c.tenant_id=m.tenant_id
                       AND c.conversation_id=%s AND c.lead_id=m.kommo_lead_id AND m.channel='connect:'||c.connect_channel_id::text)))''',
                   (tenant,identifier(anchor),lead_id,row['history_channel'],bool(provider=='connect' and group_jid(conversation)),conversation))
-                anchor_at=(cur.fetchone() or {}).get('at')
+                anchor_row=dict(cur.fetchone() or {});anchor_at=anchor_row.get('at')
             if provider=='connect' and group_jid(conversation):
                 from tenant_connect_group_history import page as group_history
                 messages=group_history(cur,tenant,conversation,before=identifier(before) if before else None,through=anchor_at)
@@ -359,7 +359,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                         AND participant_jid=ANY(%s::text[])''',(tenant,list({m.get('source_channel_id',channel) for m in messages}),conversation,participant_ids))
                     participant_names={(str(item['channel_id']),str(item['participant_jid'])):str(item['display_name']) for item in cur.fetchall()
                                        if str(item.get('display_name') or '')}
-    return {'dialog':dialog,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,
+    anchor_target=next((str(m['id']) for m in messages[:50] if anchor_row and (str(m['id'])==str(anchor_row['id']) or any(s.get('external_id')==anchor_row['external_id'] for s in m.get('sources',[])))),None)
+    return {'dialog':dialog,'anchor_message_id':anchor_target,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,
                                          contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '')
                                         for r in reversed(messages[:50])],
             'next_before':str(messages[49]['id']) if len(messages)>50 else None}

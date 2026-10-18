@@ -112,6 +112,7 @@ def test_group_review_cross_channel_context_and_human_fence(group,monkeypatch):
     assert incoming(f,CB,'DRAFT_GROUP_SECOND')==0
     latest=review.read(PROFILE,draft_id);assert latest['has_new_messages'] and latest['context_token']!=v['context_token']
     store.set_conversation_state(PROFILE,G,'human',provider='connect',channel_id=CB)
+    assert review.read(PROFILE,draft_id)['send_allowed'] is False
     with pytest.raises(TenantLinearError):store.reserve_draft_send(PROFILE,draft_id,approval(latest,confirm_new_messages=True))
     f['send'].assert_not_called()
 
@@ -168,3 +169,15 @@ def test_http_contract_edit_send_and_reject(draft):
     status,_=invoke('draft_send','POST',approval(v));assert status==200
     assert invoke('draft_send','POST',approval(v))[0]==409
     assert f['send'].call_count==1 and f['send'].call_args.args[1]=='Edited via HTTP'
+
+
+def test_reviewed_reply_handoff_keeps_one_ticket(draft):
+    from test_tenant_support_inbox import store as inbox
+    f=draft;d=f['db'];d.execute('UPDATE saas_ai_agent_drafts SET handoff_after_send=TRUE');d.commit()
+    v=review.read(PROFILE,f['draft_id']);assert v['reason']['code']=='handoff'
+    r=store.reserve_draft_send(PROFILE,v['id'],approval(v))
+    assert transport.send_ai_reply_if_active(A,41,CA,'client',r['draft'],r['id'],r['expected_revision'],draft_review={'profile':PROFILE,**approval(v)},handoff_fingerprint=r['source_fingerprint'])
+    store.finish_draft_send(A,v['id'],'accepted');store.finish_draft_send(A,v['id'],'accepted')
+    assert len(inbox.listing(PROFILE)['tickets'])==1
+    assert d.execute("SELECT state FROM saas_ai_conversation_state WHERE channel_id=%s",(CA,))[0]['state']=='human'
+    d.commit();assert f['send'].call_count==1

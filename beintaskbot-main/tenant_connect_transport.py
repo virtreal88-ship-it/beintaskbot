@@ -528,6 +528,7 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
                 from tenant_ai_draft_review import snapshot
                 view,d,_,_=snapshot(cur,draft_review['profile'],run_id,locked=True)
                 if (d['state']!='sending' or d['mode']!='manual' or not d['enabled'] or d['role']!='primary'
+                    or not d['company_enabled'] or d['emergency_stop'] or d['operating_mode']!='active' or d['tenant_status']!='active'
                     or d['version']!=draft_review['expected_version'] or d['draft']!=text
                     or view['context_token']!=draft_review['expected_context_token']):
                     return None
