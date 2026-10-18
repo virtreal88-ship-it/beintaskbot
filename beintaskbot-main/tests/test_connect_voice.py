@@ -122,6 +122,12 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
         self.send.assert_called_once()
         self.completed.assert_called_once()
 
+    async def test_english_voice_keeps_original_language(self):
+        self.transcribe.return_value = ('The application shows a synchronization error.', {})
+        await self.process()
+        self.assertIn('synchronization error', str(self.generate.call_args))
+        self.assertNotIn('language', self.transcribe.call_args.kwargs)
+
     async def test_russian_voice_keeps_original_language(self):
         self.transcribe.return_value = ('Здравствуйте, сколько стоит программа?', {})
         await self.process()

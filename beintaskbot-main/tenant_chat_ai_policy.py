@@ -74,8 +74,9 @@ def media_address(url, hosts):
     return parsed
 
 
-def history(rows, transcripts):
+def history(rows, transcripts, *, analyzed_media=None, focus_media_ids=None):
     lines, missing = [], 0
+    analyzed_media=set(analyzed_media or [])
     for row in rows[-30:]:
         role = {'incoming': 'CLIENT', 'outgoing': 'SALES MANAGER'}.get(row.get('direction'), 'UNKNOWN SPEAKER')
         text = str(row.get('body') or '')[:2000]
@@ -86,7 +87,11 @@ def history(rows, transcripts):
             else:
                 missing += 1
                 text += '\n[Audio unavailable: do not infer its contents]'
-        elif row.get('media_url'):
-            text += '\n[Attachment not analyzed]'
+        elif row.get('media_url') or row.get('has_attachment') or str(row.get('message_type') or 'text').lower() not in {'','text'}:
+            if str(row.get('external_id') or '') in analyzed_media:
+                text += '\n[Image supplied for analysis: '+str(row.get('external_id') or '')+']'
+            else:
+                missing += 1
+                text += '\n[Attachment unavailable or not analyzed: do not infer its contents]'
         lines.append({'speaker': role, 'text': text, 'at': str(row.get('happened_at') or '')})
     return lines, missing

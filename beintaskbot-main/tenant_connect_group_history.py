@@ -26,7 +26,7 @@ def page(cur, tenant, conversation, *, before=None, limit=51, through=None):
     ), ranked AS (
       SELECT scoped.*,row_number() OVER(PARTITION BY event_identity ORDER BY created_at,id) AS copy_rank,
         jsonb_agg(jsonb_build_object('channel_id',source_channel_id,'channel_name',source_channel_name,
-          'lead_id',source_lead_id,'direction',direction,'author_name',author_name))
+          'lead_id',source_lead_id,'external_id',external_id,'direction',direction,'author_name',author_name))
           OVER(PARTITION BY event_identity ORDER BY created_at,id
             ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS sources
       FROM scoped

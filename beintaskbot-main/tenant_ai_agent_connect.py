@@ -373,5 +373,7 @@ def group_context(job, rows, through):
           'happened_at':row['happened_at'].isoformat() if row.get('happened_at') else '',
           'transcript':own.get('transcript') or cached,
           'author_name':str(row.get('author_name') or raw.get('participantName') or '')[:180],
+          'channel': str(job['channel_id']) if any(str(s['channel_id'])==str(job['channel_id']) for s in row['sources']) else str(row['source_channel_id']),
+          'photo_message_id': next((str(s['external_id']).removeprefix('connect:') for s in row['sources'] if str(s['channel_id'])==str(job['channel_id']) and s.get('external_id')),None),
           'source_channels':list(dict.fromkeys(str(s['channel_name'])[:80] for s in row['sources']))[:3]})
     return result
