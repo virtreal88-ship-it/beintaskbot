@@ -931,6 +931,8 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
             tenant,actor=_conversation_authorize(cur,profile,provider,conversation,channel_id)
             resolved_channel = _conversation_provider_allowed(cur,tenant,provider,conversation,str(channel_id or ''))
             lock_dialog(cur, tenant, provider, resolved_channel, conversation)
+            if provider=='connect':
+                assert_resolved(cur,tenant,resolved_channel,conversation)
             from tenant_ai_group_coordination import group_jid, transition, read as read_group
             if provider == 'connect' and group_jid(conversation):
                 previous_group = read_group(cur,tenant,conversation)
@@ -961,6 +963,9 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
                 resumed_at=CASE WHEN EXCLUDED.state='active' THEN clock_timestamp() ELSE saas_ai_conversation_state.resumed_at END,
                 updated_at=now()''',
               (tenant,provider,conversation,resolved_channel,state,str(reason)[:240]))
+            if provider=='connect' and state=='active':
+                from tenant_ai_legacy_permit import renew
+                renew(cur,tenant,resolved_channel,conversation)
             if state in {'human','paused'}:
                 stop_code = 'manager_pause' if state == 'paused' else 'human_handoff'
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code=%s WHERE tenant_id=%s::uuid AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s AND state IN ('queued','processing'))",(stop_code,tenant,tenant,provider,conversation,resolved_channel))
@@ -1098,9 +1103,7 @@ def read_conversation_for_lead(profile, lead_id):
             tenant, _ = _authorize(cur, profile)
             cur.execute("""SELECT DISTINCT ON (j.provider) j.provider,j.channel_id,j.conversation_id,
                 cs.state,cs.reason,cs.revision,
-                EXISTS(SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=j.tenant_id
-                  AND j.provider='connect' AND legacy.provider='connect' AND legacy.channel_id=''
-                  AND legacy.conversation_id=j.conversation_id) AS legacy_scope_unresolved
+                (j.provider='connect' AND ai_legacy_blocked(j.tenant_id,j.channel_id,j.conversation_id)) AS legacy_scope_unresolved
               FROM saas_ai_agent_jobs j
               LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider
                 AND cs.conversation_id=j.conversation_id AND cs.channel_id=j.scope_channel_id
@@ -1173,8 +1176,7 @@ def _reserve_connect_draft_send(cur, tenant, draft):
               JOIN saas_tenant_integrations i ON i.tenant_id=d.tenant_id AND i.provider='connect' AND i.status='connected'
               WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='pending' AND e.provider='connect'
                 AND s.operating_mode='active' AND (e.payload->>'test_mode') IS DISTINCT FROM 'true'
-                AND NOT EXISTS (SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=d.tenant_id
-                  AND legacy.provider='connect' AND legacy.conversation_id=d.chat_id AND legacy.channel_id='')
+                AND NOT ai_legacy_blocked(d.tenant_id,c.connect_channel_id::text,d.chat_id,d.source_fingerprint)
               FOR UPDATE OF d,cs,c,a,s,t,i''', (tenant, draft))
     row = cur.fetchone()
     if not row:

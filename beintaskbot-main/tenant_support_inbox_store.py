@@ -114,7 +114,7 @@ _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_messag
  a.enabled AS agent_enabled,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,
  company.status AS tenant_status,j.state AS latest_job_state,j.error_code AS latest_job_error,
  ch.active AS channel_active,cs.updated_at AS ai_updated_at,
- NOT EXISTS (SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=t.tenant_id AND legacy.provider='connect' AND legacy.channel_id='' AND legacy.conversation_id=t.conversation_id) AS unambiguous
+ NOT ai_legacy_blocked(t.tenant_id,t.channel_id::text,t.conversation_id) AS unambiguous
  FROM saas_support_tickets t
  JOIN saas_connect_conversations c ON c.tenant_id=t.tenant_id AND c.connect_channel_id=t.channel_id AND c.conversation_id=t.conversation_id
  JOIN saas_connect_channels ch ON ch.tenant_id=t.tenant_id AND ch.connect_channel_id=t.channel_id
