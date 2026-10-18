@@ -56,14 +56,22 @@ def _conversation_metadata(data, conversation):
         # delivery compatible while Connect is rolling forward.
         display_name = next((_safe_label(data.get(key)) for key in ('groupName', 'groupSubject', 'conversationName', 'chatName')
                              if _safe_label(data.get(key))), '')
+        contact_name = False
     else:
-        display_name = next((_safe_label(data.get(key)) for key in ('contactName', 'conversationName')
-                             if _safe_label(data.get(key))), '')
+        # A Connect contact label is the most useful durable provider fact.
+        # Evolution often has only pushName for an inbound direct message;
+        # retain it as a lower-priority fallback, but never use an outbound
+        # echo's sender name as the customer's name.
+        contact_name = any(_safe_label(data.get(key)) for key in ('contactName', 'conversationName'))
+        contact_keys = ('contactName', 'conversationName')
+        if data.get('fromMe') is not True:
+            contact_keys += ('participantName', 'senderName', 'pushName')
+        display_name = next((_safe_label(data.get(key)) for key in contact_keys if _safe_label(data.get(key))), '')
     participant_jid = next((_safe_label(data.get(key)) for key in ('participantJid', 'participantAlt', 'senderJid')
                             if _safe_label(data.get(key))), '')
     participant_name = next((_safe_label(data.get(key)) for key in ('participantName', 'senderName', 'pushName')
                              if _safe_label(data.get(key))), '')
-    return {'kind': kind, 'display_name': display_name, 'participant_jid': participant_jid,
+    return {'kind': kind, 'display_name': display_name, 'contact_name': contact_name, 'participant_jid': participant_jid,
             'participant_name': participant_name}
 
 
@@ -87,12 +95,16 @@ def _upsert_conversation(cur, tenant, channel_id, conversation, metadata):
       (tenant_id,connect_channel_id,conversation_id,contact_name,phone,display_name,conversation_kind,last_message_at)
       VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,now())
       ON CONFLICT(tenant_id,connect_channel_id,conversation_id) DO UPDATE
-      SET contact_name=CASE WHEN EXCLUDED.contact_name<>'' THEN EXCLUDED.contact_name ELSE saas_connect_conversations.contact_name END,
+      SET contact_name=CASE WHEN EXCLUDED.contact_name='' THEN saas_connect_conversations.contact_name
+                            WHEN %s THEN EXCLUDED.contact_name
+                            WHEN saas_connect_conversations.contact_name<>'' THEN saas_connect_conversations.contact_name
+                            ELSE EXCLUDED.contact_name END,
           phone=CASE WHEN EXCLUDED.phone<>'' THEN EXCLUDED.phone ELSE saas_connect_conversations.phone END,
           display_name=CASE WHEN EXCLUDED.display_name<>'' THEN EXCLUDED.display_name ELSE saas_connect_conversations.display_name END,
           conversation_kind=CASE WHEN EXCLUDED.conversation_kind<>'' THEN EXCLUDED.conversation_kind ELSE saas_connect_conversations.conversation_kind END,
           last_message_at=now(),updated_at=now()
-      RETURNING lead_id''', (tenant, channel_id, conversation, contact_name, phone, display_name, kind))
+      RETURNING lead_id''', (tenant, channel_id, conversation, contact_name, phone, display_name, kind,
+                             bool(metadata.get('contact_name'))))
     return int(cur.fetchone()['lead_id'])
 
 

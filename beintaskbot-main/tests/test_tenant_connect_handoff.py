@@ -203,6 +203,18 @@ class TenantConnectHandoffTests(unittest.TestCase):
         self.assertTrue(scope_matches(scopes, CHANNEL, is_group=True))
         self.assertEqual(_whatsapp_phone('120363411822115409@g.us'), '')
 
+    def test_direct_contact_name_uses_saved_provider_name_then_inbound_push_name(self):
+        conversation = '994501234567@s.whatsapp.net'
+        named = transport._conversation_metadata({'contactName': 'Saved contact', 'pushName': 'WhatsApp name'}, conversation)
+        pushed = transport._conversation_metadata({'pushName': 'WhatsApp name', 'fromMe': False}, conversation)
+        outbound = transport._conversation_metadata({'pushName': 'Our operator', 'fromMe': True}, conversation)
+        self.assertEqual(named['kind'], 'contact')
+        self.assertEqual(named['display_name'], 'Saved contact')
+        self.assertTrue(named['contact_name'])
+        self.assertEqual(pushed['display_name'], 'WhatsApp name')
+        self.assertFalse(pushed['contact_name'])
+        self.assertEqual(outbound['display_name'], '')
+
     def test_ai_send_is_rejected_after_human_takeover_without_calling_connect(self):
         """The final state/revision check must happen while the send is reserved."""
         row = {
