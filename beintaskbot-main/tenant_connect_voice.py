@@ -96,7 +96,7 @@ def download_audio(job, message_id):
             connection.close()
 
 
-def validate_audio(content, extension, mime):
+def validate_audio(content, extension, mime, *, max_seconds=MAX_SECONDS):
     """Decode locally to measure real duration, rejecting corruption/playlists.
 
     OpenAI accepts OGG/Opus directly. Only raw AAC is converted to WAV.
@@ -115,12 +115,12 @@ def validate_audio(content, extension, mime):
                 '-protocol_whitelist', 'file,pipe',
                 '-format_whitelist', 'ogg,mp3,wav,mov,matroska,webm,flac,aac',
                 '-i', str(path), '-map', '0:a:0', '-vn', '-sn', '-dn',
-                '-t', str(MAX_SECONDS + 1), '-ac', '1', '-ar', '16000',
+                '-t', str(min(MAX_SECONDS,max_seconds) + 1), '-ac', '1', '-ar', '16000',
                 '-f', 's16le', 'pipe:1'], capture_output=True, timeout=20, check=False)
         if decoded.returncode or not decoded.stdout:
             raise VoiceError('voice_invalid_audio')
         seconds = len(decoded.stdout) / 32000
-        if seconds > MAX_SECONDS:
+        if seconds > min(MAX_SECONDS,max_seconds):
             raise VoiceError('voice_duration_limit')
         if extension == 'aac':
             output = io.BytesIO()

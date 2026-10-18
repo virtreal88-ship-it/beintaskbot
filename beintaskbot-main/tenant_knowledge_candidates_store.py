@@ -47,6 +47,8 @@ def route(cur,profile,data):
         if not ticket: raise TenantLinearError('Обращение недоступно в этом диалоге.',404)
     start,end=period(data)
     binding={'language':language(data.get('language'),profile),'provider':'connect','channel_id':channel,'conversation_id':conversation,'history_mode':mode,'ticket_id':ticket_id}
+    for flag in ('allow_external_media','allow_paid_asr'):
+        if flag in data: binding[flag]=data[flag]
     if start: binding.update(period_start=start,period_end=end)
     return tenant,actor,policy,chosen,binding,ticket
 
@@ -97,12 +99,14 @@ def snapshot(cur,profile,data):
             names.extend([source.get('contact_name'),source.get('phone')]);channels.add(channel)
     refs=[];messages=[];remaining=MAX_CONTEXT
     for row in rows:
-        if row.get('message_type') not in ('text','audio','voice') and not row.get('body'): continue
         body=redact(row.get('body'),names)[:min(1500,remaining)]
-        if not body.strip(): continue
+        kind=row.get('message_type') or 'text'
+        if not body.strip() and kind=='text': continue
+        if kind!='text': body=(body+'\n[Attachment pending_processing: contents not read]').strip()
         raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
         role=author_role(row)
         ref={'id':str(row['id']),'channel_id':str(row.get('source_channel_id') or binding['channel_id']),'lead_id':int(row.get('source_lead_id') or row['kommo_lead_id']),'role':role,'body_hash':digest(str(row.get('body') or '')),'text_limit':len(body)}
+        if kind!='text': ref.update(media_kind=kind,external_id=row.get('external_id'),happened_at=str(row.get('happened_at') or row.get('created_at') or ''))
         refs.append(ref);messages.append({'ref':'m'+str(len(refs)),'role':role,'text':body});remaining-=len(body)
         if remaining<=0: break
     if not refs:
@@ -129,8 +133,9 @@ def evidence(cur,profile,extraction,names_out=None):
         raw=row.get('raw') or {};names.extend(raw.get(k) for k in ('participantName','pushName','senderName','contactName'))
         items.append((ref,row))
     if names_out is not None: names_out.extend(names)
+    transcripts={r['id']:r.get('transcript','') for r in extraction.get('media_results',[]) if (r.get('status')=='processed' and r.get('code')=='transcribed') or r.get('audio_status')=='processed'}
     return [{'id':ref['id'],'channel_id':ref['channel_id'],'lead_id':ref['lead_id'],'provider':'connect','conversation_id':extraction['route']['conversation_id'],
-      'text':redact(row['body'],names)[:ref['text_limit']],'role':'ai' if ref.get('role')=='ai' else author_role(row)}
+      'text':redact(row['body'],names)[:ref['text_limit']]+('\n[Transcript] '+redact(transcripts[ref['id']],names)[:4000] if ref['id'] in transcripts else ''),'role':'ai' if ref.get('role')=='ai' else author_role(row)}
       for ref,row in items]
 
 
@@ -146,7 +151,7 @@ def public_request(row):
     return {'id':str(row['id']),'status':'unknown' if expired else row['status'],
       'error_code':'provider_timeout' if expired else row['error_code'],'route':row['route'],
       'source_message_ids':[ref['id'] for ref in row['source_refs']],'message_count':len(row['source_refs']),
-      'next_before':row['route'].get('next_before'),'limits':{'max_messages':MAX_MESSAGES,'max_context_chars':MAX_CONTEXT,'max_cards':5}}
+      'media_results':row.get('media_results') or [],'next_before':row['route'].get('next_before'),'limits':{'max_messages':MAX_MESSAGES,'max_context_chars':MAX_CONTEXT,'max_cards':5}}
 
 
 def public_card(cur,row):

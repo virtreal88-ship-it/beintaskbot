@@ -41,7 +41,7 @@ def load(session: dict, lead_id: object, message_id: object) -> dict:
                 reference = str(uuid.UUID(message_id.removeprefix('connect:')))
                 route = connect_route(cur, tenant, lead)
                 if (not route or not route.get('api_key') or row.get('channel') != 'connect:' + route['channel_id']
-                        or row.get('message_type') not in {'image', 'audio'}
+                        or row.get('message_type') not in {'image', 'audio', 'video', 'document'}
                         or row.get('direction') not in {'incoming', 'outgoing'}):
                     raise TenantLinearError('Fayl bu dialoqda və kanalda mövcud deyil.', 404)
                 raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}

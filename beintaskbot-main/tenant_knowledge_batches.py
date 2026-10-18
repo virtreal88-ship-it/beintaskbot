@@ -12,7 +12,7 @@ MAX_DIALOGS=4
 
 
 def start(profile,data):
-    allowed={'request_id','provider','channel_id','conversation_id','period_start','period_end','history_mode','analysis_agent_id','before','language'}
+    allowed={'request_id','provider','channel_id','conversation_id','period_start','period_end','history_mode','analysis_agent_id','before','language','allow_external_media','allow_paid_asr'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректный пакет.')
     if data.get('provider','connect')!='connect': raise TenantLinearError('Поддерживается только WhatsApp.')
     request_id=identifier(data.get('request_id'));channel=identifier(data.get('channel_id'));start,end=period(data,True)
@@ -22,6 +22,11 @@ def start(profile,data):
     mode=data.get('history_mode','channel')
     if mode not in {'channel','unified_group'}: raise TenantLinearError('Некорректный режим истории.')
     params={'language':language(data.get('language'),profile),'channel_id':channel,'period_start':start,'period_end':end,'history_mode':mode}
+    for flag in ('allow_external_media','allow_paid_asr'):
+        if flag in data:
+            if type(data[flag]) is not bool: raise TenantLinearError('Некорректное разрешение медиа.')
+            params[flag]=data[flag]
+    if params.get('allow_paid_asr') and not params.get('allow_external_media'): raise TenantLinearError('Требуется разрешение передачи медиа.')
     selected_language=params['language']
     if 'language' not in data and selected_language=='ru': params.pop('language')
     if conversation: params['conversation_id']=conversation

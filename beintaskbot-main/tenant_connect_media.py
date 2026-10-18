@@ -19,7 +19,10 @@ class PublicResolver(aiohttp.resolver.DefaultResolver):
         return addresses
 
 
-async def download_media(item):
+VIDEO_TYPES={'video/mp4','video/webm'}
+DOCUMENT_TYPES={'application/pdf','text/plain','application/vnd.openxmlformats-officedocument.wordprocessingml.document'}
+
+async def download_media(item, *, max_bytes=None):
     route = item['route']
     channel, message = str(uuid.UUID(route['channel_id'])), str(uuid.UUID(item['message_id']))
     origin = urlsplit(CONNECT_URL)
@@ -32,8 +35,10 @@ async def download_media(item):
         literal = None
     if literal is not None and not literal.is_global:
         raise TenantLinearError('Connect bağlantısını yoxlayın.', 503)
-    image = item['row']['message_type'] == 'image'
-    cap, types = (8 * 1024 * 1024, IMAGE_TYPES) if image else (10 * 1024 * 1024, AUDIO_TYPES)
+    kind = item['row']['message_type']
+    cap,types={'image':(8*1024*1024,IMAGE_TYPES),'audio':(10*1024*1024,AUDIO_TYPES),'voice':(10*1024*1024,AUDIO_TYPES),'video':(16*1024*1024,VIDEO_TYPES),'document':(5*1024*1024,DOCUMENT_TYPES)}.get(kind,(0,set()))
+    if max_bytes is not None: cap=min(cap,max(0,int(max_bytes)))
+    if not cap: raise TenantLinearError('Fayl formatı dəstəklənmir.',415)
     url = (CONNECT_URL.rstrip('/') + '/v1/channels/' + channel + '/messages/' + message +
            '/media?' + urlencode({'conversationId': route['conversation_id']}))
     try:
