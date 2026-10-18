@@ -290,8 +290,21 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None):
                     from tenant_ai_agents_store import _authorize
                     _authorize(cur,profile)
                     dialog['group_coordination']['can_configure']=True
-                    cur.execute('SELECT id,name,scopes,schedule FROM saas_ai_agents WHERE tenant_id=%s::uuid AND enabled=TRUE',(tenant,))
-                    dialog['group_coordination']['agents']=[public(r) for r in cur.fetchall()]
+                    cur.execute('SELECT id,name,role,scopes,schedule,expert_policy FROM saas_ai_agents WHERE tenant_id=%s::uuid AND enabled=TRUE',(tenant,))
+                    team={str(r['id']):dict(r) for r in cur.fetchall()}
+                    from tenant_ai_expert_policy import helper_ids
+                    primary=[]
+                    for agent in team.values():
+                        if agent['role']!='primary':continue
+                        helpers=[]
+                        for helper_id in helper_ids(agent.get('expert_policy') or {}):
+                            helper=team.get(str(helper_id))
+                            if not helper or helper['role']!='expert':continue
+                            helper_policy=helper.get('expert_policy') or {}
+                            if helper_policy and (not helper_policy.get('internal') or str(agent['id']) not in helper_policy.get('allowed_primary_ids',[])):continue
+                            helpers.append(helper['name'])
+                        primary.append({**public({k:agent[k] for k in ('id','name','scopes','schedule')}),'role':'primary','helpers':helpers})
+                    dialog['group_coordination']['agents']=primary
                 except TenantLinearError:
                     dialog['group_coordination']['can_configure']=False
             if provider=='connect' and not group_jid(conversation) and not dialog.get('agent_id'):
