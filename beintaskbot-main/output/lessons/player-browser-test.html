@@ -12,6 +12,7 @@ frame.onload=async()=>{try{
  const pos=()=>Number(slider.value),shape=()=>$('.lesson-plane').style.transform;
  const seek=value=>{slider.value=value;slider.dispatchEvent(new w.Event('input',{bubbles:true}));};
  check($('img').naturalWidth===855,'Real screenshot decoded');
+ if($('[data-sound]')?.getAttribute('aria-pressed')==='true')$('[data-sound]').click();
  check(speed.value==='1.75','Default playback rate is 1.75');
  const initial=shape();button.click();await until(()=>pos()>2400);
  check(pos()>2400,'Play advances actual DOM time');check(shape()!==initial,'Autofocus changes actual image transform');

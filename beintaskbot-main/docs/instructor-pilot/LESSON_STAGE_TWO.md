@@ -179,3 +179,45 @@ Browser result: PASS for real mid-crossfade Pause/Resume, live seek and speed
 changes, all eight steps in a complete default-rate run, and sampled image/native
 scale checks. Mobile 320/390px checks show no horizontal overflow and a 57px bar.
 The 48 Python contract tests and targeted Node player suite pass.
+
+
+### Azerbaijani narration pilot
+
+Eight separate `output/lessons/audio/step-01.mp3` … `step-08.mp3` clips use Microsoft
+az-AZ-BanuNeural via the local edge-tts generation tool. Only the short public
+instructional scripts are transmitted, never screenshots, credentials, company
+records or chat history. No live TTS request happens in the delivered HTML.
+`audio/narration.json` contains scripts, duration, SHA-256, word timings and focus
+cues. The generated narration is a pilot awaiting native-speaker listening review,
+including Məhsullar, Yerdəyişmələr, Anbardan, Anbara and Miqdar; naturalness is not
+claimed as independently verified. Voice support reference:
+https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support
+
+The offline bundle embeds all JPEGs and MP3s as local Blob resources under CSP.
+No CDN, external runtime request or new service is required. The sound button is
+accessible and the only added control. Narration defaults to 1×; silent viewing
+to 1.75×, with explicit user speed selections retained when toggling sound.
+Pitch preservation is enabled. The original eight step texts/images are unchanged.
+
+With narration enabled the decoded audio currentTime is the lesson clock, followed
+by a one-second tail for return to overview and transition. Focus cues use TTS word
+boundaries where the relevant UI term is present. Pause/Resume and seeking update
+both media position and visuals. Audio failures, rejected playback and eight-second
+loading/stall timeout pause the lesson with an instruction to use silent viewing.
+The next clip is preloaded. Silent lesson timings stay unchanged.
+
+Rebuild: generate_narration.py (edge-tts/mutagen locally; reuses existing files),
+then build_lesson_bundle.py. Generation dependencies are excluded from Git and
+production requirements. Open with launch_lesson.py or the existing loopback URL.
+The full voice browser regression is built by tests/build_instructor_voice_browser_test.py;
+open voice-browser-test.html and click Start voice test (real user gesture required
+by browser audio policy). It tests the actual MP3 clock, full eight-clip playback,
+Pause/Resume, seek and rate changes. Fake-media targeted tests separately cover
+media errors and fallback without claiming an external provider was exercised.
+
+Voice browser result: PASS, all eight real MP3 clips advance in a complete 1×
+run and finish at 1:39; real Pause/Resume, seek, rate change and silent toggle pass.
+The range control rounds to 10ms, so completion assertions also wait for stopped
+play state, rather than treating rounded slider maximum as completion. Targeted
+media tests cover pitch preservation, hash/word metadata, stall timeout and error
+fallback. The 48 existing Python tests pass. No claim of native-speaker audio QA.

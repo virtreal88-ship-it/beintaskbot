@@ -30,3 +30,6 @@ ENV/
 .venv-integration/
 !railpack.json
 .support-test-deps/
+
+# Local instructor narration generation dependencies
+.instructor-tts-deps/
