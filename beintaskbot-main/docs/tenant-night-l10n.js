@@ -1,6 +1,8 @@
 /* RU/AZ/EN for the integrated night setup and reliability controls. */
 (()=>{
  const copy={
+  'Тип агента':['Agent növü','Agent type'],'Способ создания':['Yaratma üsulu','Creation method'],
+  'Закрыть мастер? Несохранённые настройки останутся в черновике этого сотрудника.':['Ustanı bağlamaq? Yadda saxlanmamış ayarlar bu əməkdaşın qaralamasında qalacaq.','Close the wizard? Unsaved settings will remain in this employee’s draft.'],
   'Ночная техническая поддержка':['Gecə texniki dəstəyi','Night technical support'],
   'Ночной оператор':['Gecə operatoru','Night operator'], 'Статус AI':['AI vəziyyəti','AI status'],
   'Название':['Ad','Name'],'WhatsApp-канал':['WhatsApp kanalı','WhatsApp channel'],'Часовой пояс':['Saat qurşağı','Time zone'],

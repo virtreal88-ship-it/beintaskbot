@@ -7,9 +7,9 @@ const body = source.split('button.onclick=async()=>{')[1].split('\n    };')[0];
 
 function fixture() {
   const storage = new Map(), sent = [], alerts = [];
-  const input = {value:'Salam'}, button = {disabled:false,textContent:'Göndər',classList:{add(){},remove(){}}};
+  const input = {value:'Salam',dispatchEvent(){}}, button = {disabled:false,textContent:'Göndər',classList:{add(){},remove(){}}};
   const env = {
-    copy:(_key,fallback)=>fallback,button,input,key:'tenant-chat-send:tenant:20:7',leadId:7,me:{tenant_id:'tenant',telegram_id:20},
+    Event:class{constructor(type){this.type=type}},onAccepted:text=>{env.accepted=text;},copy:(_key,fallback)=>fallback,button,input,key:'tenant-chat-send:tenant:20:7',leadId:7,me:{tenant_id:'tenant',telegram_id:20},
     isCurrent:()=>env.chatIdentity()==='tenant:20',reload:async()=>{},
     $:id=>id==='chatText'?input:button, x:{kommo_lead_id:7},
     identity:'tenant:20',revision:1,chatRevision:1,chatIdentity:()=>env.identity,
@@ -24,7 +24,7 @@ function fixture() {
 (async()=>{
   let f=fixture(); await f.click();
   assert.equal(f.sent.length,1);assert.equal(f.sent[0].expected_user_id,20);assert.equal(f.sent[0].expected_tenant_id,'tenant');
-  assert.equal(f.storage.size,0);assert.equal(f.input.value,'');
+  assert.equal(f.storage.size,0);assert.equal(f.input.value,'');assert.equal(f.env.accepted,'Salam');
   f=fixture();f.env.api=async(url,options)=>{f.sent.push(JSON.parse(options.body));throw new Error('network lost');};
   await f.click();assert.equal(f.storage.size,1);assert.equal(f.input.value,'Salam');assert.equal(f.button.textContent,'Vəziyyəti yoxla');
   const first=JSON.stringify(f.sent[0]);

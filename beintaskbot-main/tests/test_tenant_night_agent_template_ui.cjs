@@ -57,7 +57,7 @@ assert.match(source, /localStorage\.setItem/, 'An interrupted setup must be reco
 assert.match(source, /data-night-entry="0"/, 'The existing wizard must start by selecting the agent type.');
 assert.match(source, /data-night-entry="1"/, 'The existing wizard must then select a template or a blank start.');
 assert.match(source, /agentRole==='expert'\?\[\]/, 'Internal agents must skip external channel scopes.');
-assert.match(source, /confirm\('Закрыть мастер/, 'Closing a dirty wizard must require confirmation.');
+assert.match(source, /confirm\(window\.tenantNightL10n\.text\('Закрыть мастер/, 'Closing a dirty wizard must require confirmation.');
 assert.match(source, /setup_key/, 'Agent, handoff and knowledge retries must use idempotency keys.');
 assert.match(source, /never.*Active Mode|не меняет этот режим/i,
   'The UI must explain that it does not silently enable company Active Mode.');

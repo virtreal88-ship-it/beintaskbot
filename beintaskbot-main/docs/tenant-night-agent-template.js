@@ -147,7 +147,7 @@
   $('nightAgentExistingKnowledge').textContent=knowledgeSources.length?`Уже доступно источников базы знаний: ${knowledgeSources.length}.`:'В компании пока нет источников базы знаний: загрузите файл на этом шаге.';
  }
  function hydrateRecoveredAgent(){
-  const agent=frozen?.payload||createdAgent||recoveredDraft;if(!agent)return;const schedule=agent.schedule||{},scopes=agent.scopes||[];
+  const agent=frozen?.payload||createdAgent||recoveredDraft;if(!agent)return;const schedule=agent.schedule||(agent.scheduleEnabled?{timezone:agent.timezone,days:agent.days,start:agent.start,end:agent.end}:{}),scopes=agent.scopes||[];
   $('nightAgentName').value=agent.name||$('nightAgentName').value;
   $('nightAgentInstructions').value=agent.instructions||$('nightAgentInstructions').value;
   $('nightAgentTimezone').value=schedule.timezone||$('nightAgentTimezone').value;
@@ -155,11 +155,11 @@
   document.querySelectorAll('[name=nightAgentDay]').forEach(node=>{node.checked=(schedule.days||[]).includes(Number(node.value))});
   $('nightAgentScheduleEnabled').checked=Object.keys(schedule).length>0;
   document.querySelectorAll('[name=agentCreationChannel]').forEach(box=>box.checked=scopes.some(scope=>scope.provider===box.dataset.provider&&String(scope.channel_id)===box.dataset.channel)||(agent.channelIds||[]).includes(box.value));
-  const kommo=scopes.find(scope=>scope.provider==='kommo');if(kommo){$('nightAgentPipeline').value=kommo.pipeline_id;renderKommoStages();$('nightAgentStage').value=kommo.stage_id;}
+  const kommo=scopes.find(scope=>scope.provider==='kommo')||(agent.pipeline_id?agent:null);if(kommo){$('nightAgentPipeline').value=kommo.pipeline_id;renderKommoStages();$('nightAgentStage').value=kommo.stage_id;}
   syncChannels();
   const savedModel=agent.model||DEFAULT_MODEL;if(![...$('nightAgentModel').options].some(option=>option.value===savedModel))$('nightAgentModel').append(option((agent.model||'Default')+' (сохранено)',savedModel));$('nightAgentModel').value=savedModel;
   $('nightAgentMode').value=agentRole==='expert'?'manual':agent.mode==='automatic'?'automatic':'manual';$('nightAgentLaunch').checked=false;
-  if(frozen?.form?.handoff!==undefined)$('nightAgentHandoff').value=frozen.form.handoff;
+  if((frozen?.form||recoveredDraft)?.handoff!==undefined)$('nightAgentHandoff').value=(frozen?.form||recoveredDraft).handoff;
   if(frozen)lockDraft();
  }
  function modeHint(){
@@ -179,7 +179,7 @@
   const suffix=start&&end&&end<start?' следующего дня':'';
   $('nightAgentScheduleHint').textContent=days.length&&start&&end&&start!==end?`Смена: ${start}–${end}${suffix}; дни означают дату начала смены.`:'Выберите хотя бы один день и разные часы.';
  }
- function values(){return {name:$('nightAgentName').value,instructions:$('nightAgentInstructions').value,channelIds:selectedChannels(),scheduleEnabled:$('nightAgentScheduleEnabled').checked,
+ function values(){return {name:$('nightAgentName').value,instructions:$('nightAgentInstructions').value,channelIds:selectedChannels(),pipeline_id:$('nightAgentPipeline').value,stage_id:$('nightAgentStage').value,scheduleEnabled:$('nightAgentScheduleEnabled').checked,
   timezone:$('nightAgentTimezone').value,days:selectedDays(),start:$('nightAgentStart').value,end:$('nightAgentEnd').value,
   model:modelValue(),mode:$('nightAgentMode').value,confirmedLaunch:$('nightAgentLaunch').checked,handoff:$('nightAgentHandoff').value.trim(),setupKey:setupKey}}
  function validate(step){
@@ -220,10 +220,10 @@
  }
  function currentStep(){return Number($('nightAgentWizard').dataset.step||'0')}
  function renderEntry(stage){entryStage=stage;$('nightAgentEntry').hidden=false;$('nightAgentProgress').hidden=true;document.querySelectorAll('[data-night-step]').forEach(node=>node.hidden=true);document.querySelectorAll('[data-night-entry]').forEach(node=>node.hidden=Number(node.dataset.nightEntry)!==stage);$('nightAgentPrevious').hidden=stage===0;$('nightAgentNext').hidden=false;$('nightAgentCreate').hidden=true;$('nightAgentNext').textContent=stage===1?'Перейти к настройкам':'Продолжить';$('nightAgentStepTitle').textContent=stage===0?'1. Тип агента':'2. Способ создания';}
- function close(force=false){if(!force&&dirty&&!completed&&!confirm('Закрыть мастер? Несохранённые настройки останутся в черновике этого сотрудника.'))return;flow++;saving=false;const modal=$('nightAgentTemplateModal');modal.hidden=true;document.body.removeAttribute('data-night-agent-template-open');returnFocus?.focus?.();returnFocus=null}
+ function close(force=false){if(!force&&dirty&&!completed&&!confirm(window.tenantNightL10n.text('Закрыть мастер? Несохранённые настройки останутся в черновике этого сотрудника.')))return;flow++;saving=false;const modal=$('nightAgentTemplateModal');modal.hidden=true;document.body.removeAttribute('data-night-agent-template-open');returnFocus?.focus?.();returnFocus=null}
  async function open(params={}){
   if(params.templateId&&!['blank','technical-support'].includes(params.templateId))throw new Error('Шаблон недоступен.');
-  templateId=params.templateId==='blank'?'blank':'technical-support';agentRole='primary';entryStage=0;flow++;const run=flow,version=epoch;
+  templateId=params.templateId==='blank'?'blank':'technical-support';agentRole='primary';document.querySelector('[name=nightAgentRole][value=primary]').checked=true;entryStage=0;flow++;const run=flow,version=epoch;
   returnFocus=document.activeElement;$('nightAgentTemplateModal').hidden=false;$('nightAgentTemplateModal').querySelector('[role=dialog]').focus();document.body.dataset.nightAgentTemplateOpen='true';setupForm();document.querySelector(`[name=nightAgentTemplateChoice][value="${templateId}"]`).checked=true;renderEntry(0);setNotice('Загружаю доступные каналы, модели и базу знаний…');
   $('nightAgentNext').disabled=true;
   try{
@@ -253,7 +253,7 @@
    if(frozen.knowledge&&!uploadedFileSignature&&(!file||fileSignature(file)!==frozen.knowledge.signature))throw new Error('Повторно выберите исходный файл базы знаний. Сохранённый агент не будет создан заново.');
    saveProgress();saving=true;lockDraft();$('nightAgentCreate').disabled=true;$('nightAgentCreate').textContent='Сохраняю…';setNotice('Сохраняю стандартную конфигурацию AI Agent…');
    const activate=$('nightAgentLaunch').checked;
-   if(!createdAgent){
+   if(!createdAgent&&frozen.payload.role!=='expert'){
     const fresh=window.tenantAgentCatalog.parse(await api('channels'));
     if(run!==flow||version!==epoch)return;
     const selected=frozen.form.channelIds||frozen.payload.scopes.map(scope=>scope.provider+':'+scope.channel_id);
@@ -314,7 +314,7 @@
   $('nightAgentNotice').insertAdjacentElement('afterend',entry);modal.querySelector('.night-agent-progress').id='nightAgentProgress';
   const localize=()=>window.tenantNightL10n?.translate(modal);new MutationObserver(localize).observe(modal,{subtree:true,childList:true,characterData:true});localize();
   opener?.addEventListener('click',()=>{if(!$('aiAgentsModal')?.hidden)$('aiAgentsModalClose')?.click();open()});
-  modal.querySelectorAll('[data-night-close]').forEach(node=>node.addEventListener('click',close));
+  modal.querySelectorAll('[data-night-close]').forEach(node=>node.addEventListener('click',()=>close()));
   document.addEventListener('keydown',event=>{if(modal.hidden)return;if(event.key==='Escape')close();if(event.key==='Tab'){const nodes=[...modal.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled])')].filter(node=>!node.closest('[hidden]')),first=nodes[0],last=nodes.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}}});
   $('nightAgentPrevious').addEventListener('click',()=>{if(entryStage<2){renderEntry(0);return}if(currentStep()===0){renderEntry(1);return}render(currentStep()-1,-1)});
   $('nightAgentNext').addEventListener('click',()=>{if(entryStage===0){agentRole=document.querySelector('[name=nightAgentRole]:checked')?.value==='expert'?'expert':'primary';dirty=true;renderEntry(1);return}if(entryStage===1){const chosen=document.querySelector('[name=nightAgentTemplateChoice]:checked')?.value==='blank'?'blank':'technical-support';if(chosen!==templateId){templateId=chosen;setupForm();}entryStage=2;render(0);setNotice('Мастер не меняет общие настройки компании.','good');return}try{validate(currentStep());dirty=true;saveProgress();setNotice('');render(currentStep()+1,1)}catch(error){showError(error.message)}});

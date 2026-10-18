@@ -32,6 +32,16 @@ const tick=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r));}
  assert.equal(calls.find(c=>c.path.endsWith('/knowledge/upload')).data.agent_id,'created-agent');assert.match(calls.find(c=>c.path.endsWith('/knowledge/upload')).data.setup_key,/-kb-/);
  assert.equal(calls.filter(c=>c.path.endsWith('/agents/settings')&&c.method!=='GET').length,0);
  assert.match(d.getElementById('nightAgentNotice').textContent,/Готово/);
+ w.confirm=()=>true;
+ await w.tenantAgentWizard.open({templateId:'blank'});await tick();
+ d.querySelector('[name=nightAgentRole][value=expert]').checked=true;d.getElementById('nightAgentNext').click();d.querySelector('[name=nightAgentTemplateChoice][value=blank]').checked=true;d.getElementById('nightAgentNext').click();
+ d.getElementById('nightAgentName').value='Internal test';d.getElementById('nightAgentInstructions').value='Internal instructions';d.getElementById('nightAgentScheduleEnabled').checked=true;d.getElementById('nightAgentStart').value='21:30';d.getElementById('nightAgentEnd').value='07:15';d.getElementById('nightAgentHandoff').value='special reason';d.getElementById('nightAgentName').dispatchEvent(new w.Event('input'));
+ d.querySelector('[data-night-close]').click();await w.tenantAgentWizard.open({templateId:'blank'});await tick();
+ assert.equal(d.getElementById('nightAgentName').value,'Internal test');assert.equal(d.getElementById('nightAgentStart').value,'21:30');assert.equal(d.getElementById('nightAgentEnd').value,'07:15');assert.equal(d.getElementById('nightAgentHandoff').value,'special reason');assert.equal(d.getElementById('nightAgentLaunch').checked,false);
+ for(let n=0;n<10;n++){d.getElementById('nightAgentNext').click();await tick();}
+ const beforeTriggers=calls.filter(c=>c.path.endsWith('/triggers')).length;
+ d.getElementById('nightAgentCreate').click();await tick();const expert=calls.filter(c=>c.path.endsWith('/agents')&&c.method==='POST').at(-1).data;
+ assert.equal(expert.role,'expert',d.getElementById('nightAgentNotice').textContent);assert.equal(expert.mode,'manual');assert.deepEqual(expert.scopes,[]);assert.equal(expert.expert_policy.internal,true);assert.equal(calls.filter(c=>c.path.endsWith('/triggers')).length,beforeTriggers);
  d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{member:{tenant_id:'company-b',telegram_id:22},capabilities:{modules:{night_report:false}}}}));
  assert.equal(d.getElementById('nightReportNav').hidden,true);assert.equal(d.getElementById('nightAgentTemplateModal').hidden,true);
  dom.window.close();console.log('PASS: integrated wizard, scoped upload, disabled Manual default, unchanged company settings, unique buttons, RU/AZ/EN navigation and tenant switch.');

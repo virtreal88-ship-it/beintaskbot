@@ -1,7 +1,7 @@
 /* Chat composer outside the page shell; durable UUIDs and stale-view guards. */
 (()=>{
   const copy=(key,fallback)=>window.tenantI18n?.t(key)||fallback;
-  function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo'}){
+  function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo',onAccepted=()=>{}}){
     const button=document.getElementById('sendChat'),input=document.getElementById('chatText');
     const key='tenant-chat-send:'+identity+':'+leadId;
     try{if(sessionStorage.getItem(key))button.textContent=copy('checkSend','Vəziyyəti yoxla');}catch(e){button.disabled=true;}
@@ -14,8 +14,8 @@
       button.disabled=true;button.classList.add('loading');
       try{
         const sent=await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify(pending)});
-        sessionStorage.removeItem(key);if(!isCurrent())return;
-        if(input.value.trim()===pending.text)input.value='';button.textContent=copy('send','Göndər');
+        sessionStorage.removeItem(key);onAccepted(pending.text);if(!isCurrent())return;
+        if(input.value.trim()===pending.text){input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));}button.textContent=copy('send','Göndər');
         alert(sent.manual_review?'Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.':copy('sendAccepted','Mesaj qəbul edildi. Tarixçədə çatdırılmanı yoxlayın.'));await reload();
       }catch(e){if(e.keepRequest===false)sessionStorage.removeItem(key);if(isCurrent()){button.textContent=e.keepRequest===false?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');alert(e.message);}}
       finally{button.disabled=false;button.classList.remove('loading');}
@@ -54,7 +54,7 @@
         if(!response.ok||!result.success){if(result.keep_request===false)sessionStorage.removeItem(key);throw new Error(result.error||'Nəticəni yoxlayın.');}
         sessionStorage.removeItem(key);if(!isCurrent())return;
         status.textContent='Kommo faylı qəbul etdi. Tarixçədə çatdırılmanı yoxlayın.';
-        if(input.value.trim()===pending.text)input.value='';file=null;picker.value='';send.hidden=true;await reload();
+        if(input.value.trim()===pending.text){input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));}file=null;picker.value='';send.hidden=true;await reload();
       }catch(error){if(isCurrent())status.textContent=error.message;}
       finally{busy=false;button.disabled=false;choose.disabled=false;send.disabled=false;input.disabled=false;}
     };
