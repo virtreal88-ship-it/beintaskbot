@@ -22,7 +22,7 @@
 <body data-app-ui="kwid">
 <div class="shell">
   <aside><div><div class="brand"><span class="mark">C</span> CRM Smart Assistant</div><div id="company" class="company">Yüklənir…</div></div>
-    <nav class="nav"><button class="active" data-view="tasks"><span>☷</span> Tapşırıqlar</button><button data-view="customers"><span>◉</span> Müştərilər</button><button data-view="deals"><span>▣</span> Sövdələşmələr</button><button id="dialogsNav" data-view="dialogs" hidden style="display:none"><span>☏</span> <span data-i18n="dialogs">Диалоги</span><b id="dialogsAttentionCount" class="badge" hidden>0</b></button><button id="supportNav" data-view="support" hidden style="display:none"><span>☷</span> <span data-i18n="support">Обращения</span><b id="supportUnresolvedCount" class="badge" hidden>0</b></button><a id="nightReportNav" data-report-link="night_report" href="/app/night-report" hidden style="display:none"><span>☾</span><span data-i18n="night_report">Отчёт ночной смены</span></a><button id="aiAgentsNav" data-view="ai_agents"><span>✦</span> AI Agents</button><button id="aiTestingNav" data-view="ai_testing"><span>◫</span> <span data-i18n="aiTesting">Тестирование AI</span></button><button data-view="hot_orders" hidden style="display:none"><span>♨</span> İsti sifarişlər</button><button data-view="approvals" hidden style="display:none"><span>✓</span> Təsdiq</button><button data-view="finance" hidden style="display:none"><span>₼</span> Maliyyə</button><button data-view="integrations" hidden style="display:none"><span>◇</span> İnteqrasiyalar</button><button class="settings" data-view="settings"><span>⚙</span> Tənzimləmələr</button><button data-view="profile"><span>◌</span> Profil</button></nav>
+    <nav class="nav"><button class="active" data-view="tasks"><span>☷</span> Tapşırıqlar</button><button data-view="customers"><span>◉</span> Müştərilər</button><button data-view="deals"><span>▣</span> Sövdələşmələr</button><button id="dialogsNav" data-view="dialogs" hidden style="display:none"><span>☏</span> <span data-i18n="dialogs">Диалоги</span><b id="dialogsAttentionCount" class="badge" hidden>0</b></button><button id="supportNav" data-view="support" hidden style="display:none"><span>☷</span> <span data-i18n="support">Обращения</span><b id="supportUnresolvedCount" class="badge" hidden>0</b></button><a id="nightReportNav" data-report-link="night_report" href="/app/night-report" hidden style="display:none"><span>☾</span><span data-i18n="night_report">Отчёт ночной смены</span></a><button id="aiAgentsNav" data-view="ai_agents"><span>✦</span> AI Agents</button><button id="supportCasesNav" data-view="support_cases" hidden style="display:none"><span>▤</span> <span>Кейсы поддержки</span><b id="supportCasesPending" class="badge" hidden>0</b></button><button id="aiTestingNav" data-view="ai_testing"><span>◫</span> <span data-i18n="aiTesting">Тестирование AI</span></button><button data-view="hot_orders" hidden style="display:none"><span>♨</span> İsti sifarişlər</button><button data-view="approvals" hidden style="display:none"><span>✓</span> Təsdiq</button><button data-view="finance" hidden style="display:none"><span>₼</span> Maliyyə</button><button data-view="integrations" hidden style="display:none"><span>◇</span> İnteqrasiyalar</button><button class="settings" data-view="settings"><span>⚙</span> Tənzimləmələr</button><button data-view="profile"><span>◌</span> Profil</button></nav>
   </aside>
   <main>
     <section class="view" id="view-finance"><div class="top"><div><h1>Maliyyə</h1><p id="financeBalance">Balans: —</p></div><div class="hot-buttons"><select id="financeMember" hidden></select><button class="primary" id="financeCredit" hidden>+ Mədaxil</button><button class="outline" id="financeDebit" hidden>Məxaric</button><button class="refresh" id="financeRefresh">Yenilə</button></div></div><p class="sub">SaaS əməliyyat jurnalı. Köhnə kabinetin balansları buraya köçürülməyib. Real bank köçürməsi edilmir.</p><div id="financeNotice" class="notice" role="status"></div><div id="financeEntries" class="hot-list"></div><div class="hot-pages"><button class="outline" id="financePrev">← Əvvəlki</button><span id="financePage"></span><button class="outline" id="financeNext">Növbəti →</button></div></section>
@@ -33,6 +33,7 @@
     <section class="view" id="view-deals"><div class="top"><div><div class="eyebrow">KOMMO</div><h1>Sövdələşmələr</h1><p id="dealCount">Yüklənir…</p></div><button class="refresh" id="dealsRefresh"><i class="spinner"></i>Yenilə</button></div><div class="toolbar"><input id="dealSearch" class="search" placeholder="Sövdələşmə, müştəri və ya mərhələ axtarın"></div><div id="dealsNotice" class="notice"></div><div id="dealsList" class="table"><div class="empty">Sövdələşmələr yüklənir…</div></div></section>
     <section class="view" id="view-dialogs"><div id="operatorDialogs"></div></section>
     <section class="view" id="view-support"><div id="operatorSupport"></div></section>
+    <section class="view" id="view-support_cases"><div id="supportCases"></div></section>
     <section class="view" id="view-ai_agents">
       <div class="top"><div><div class="eyebrow">AVTONOM MÜŞTƏRİ DƏSTƏYİ</div><h1>AI Agents</h1><p>Agentlər və müştəri dialoqları üçün təhlükəsiz AI köməkçisi.</p></div></div>
       <div id="aiAgentsNotice" class="notice" role="status"></div>
@@ -127,7 +128,7 @@
     window.tenantProfileSnapshot=data;
     state.me=data.member;state.capabilities=data.capabilities||{};state.rolePermissions=data.role_permissions||{};
     const modules={...(state.capabilities.modules||{})};
-    modules.approvals=['owner','admin'].includes(state.me.role)&&!!(modules.tasks||modules.hot_orders||modules.deals);modules.ai_testing=!!modules.ai_agents;
+    modules.approvals=['owner','admin'].includes(state.me.role)&&!!(modules.tasks||modules.hot_orders||modules.deals);modules.ai_testing=!!modules.ai_agents;modules.support_cases=!!modules.ai_agents&&['owner','admin'].includes(state.me.role);
     document.querySelectorAll('.nav [data-view]').forEach(button=>{
       const key=button.dataset.view;
       button.hidden=key!=='profile'&&!modules[key];
@@ -244,6 +245,7 @@
 <script src="/assets/tenant-agent-library.js"></script>
 <script src="/assets/tenant-operator-dialogs.js"></script>
 <script src="/assets/tenant-support-inbox.js"></script>
+<script src="/assets/tenant-knowledge-candidates.js"></script>
 
 <script src="/assets/tenant-night-integration.js"></script>
 <script src="/assets/tenant-chat-import.js"></script>
