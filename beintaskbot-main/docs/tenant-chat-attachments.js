@@ -4,21 +4,24 @@
   const active=new Set(), urls=new Set(), previews=new Map();
   const text=(key,fallback)=>globalThis.window?.tenantI18n?.t(key)||fallback;
   const identity=m=>m?.tenant_id+':'+m?.telegram_id;
-  const size=value=>{const bytes=Number(value);if(!Number.isFinite(bytes)||bytes<0)return '';if(bytes<1024)return `${bytes} B`;if(bytes<1024*1024)return `${Math.round(bytes/1024)} KB`;return `${(bytes/(1024*1024)).toFixed(1)} MB`;};
-  const duration=value=>{const seconds=Number(value);if(!Number.isFinite(seconds)||seconds<0)return '';return `${Math.floor(seconds/60)}:${String(Math.round(seconds)%60).padStart(2,'0')}`;};
+  const formatSize=value=>{const bytes=Number(value);if(!Number.isFinite(bytes)||bytes<0)return '';if(bytes<1024)return `${bytes} B`;if(bytes<1024*1024)return `${Math.round(bytes/1024)} KB`;return `${(bytes/(1024*1024)).toFixed(1)} MB`;};
+  const duration=value=>{const seconds=Number(value);if(!Number.isFinite(seconds)||seconds<0)return '';const whole=Math.round(seconds);return `${Math.floor(whole/60)}:${String(whole%60).padStart(2,'0')}`;};
   function audioPlayer(url,seconds){
     const wrap=document.createElement('div'),audio=document.createElement('audio'),play=document.createElement('button'),range=document.createElement('input'),clock=document.createElement('span');
     wrap.className='operator-media-audio';if(wrap.dataset)wrap.dataset.mediaPreview='audio';audio.preload='none';audio.src=url;play.type='button';play.className='outline';play.textContent='▶';play.setAttribute('aria-label',text('playMedia','Play'));
     range.type='range';range.min='0';range.max='1000';range.value='0';range.setAttribute('aria-label',text('mediaProgress','Progress'));clock.className='operator-audio-duration';clock.textContent=duration(seconds)||'—';
-    play.onclick=()=>{if(audio.paused){audio.play?.().catch(()=>{});play.textContent='❚❚';play.setAttribute('aria-label',text('pauseMedia','Pause'));}else{audio.pause?.();play.textContent='▶';play.setAttribute('aria-label',text('playMedia','Play'));}};
+    const sync=()=>{play.textContent=audio.paused?'▶':'❚❚';play.setAttribute('aria-label',text(audio.paused?'playMedia':'pauseMedia',audio.paused?'Play':'Pause'));};
+    play.onclick=async()=>{try{if(audio.paused)await audio.play();else audio.pause();}catch(_error){const status=wrap.parentElement?.querySelector('[role="status"]');if(status)status.textContent=text('mediaInvalid','Media cannot be played.');}sync();};
+    audio.addEventListener?.('play',sync);audio.addEventListener?.('pause',sync);
     audio.addEventListener?.('timeupdate',()=>{if(Number.isFinite(audio.duration)&&audio.duration>0){range.value=String(Math.round(audio.currentTime/audio.duration*1000));clock.textContent=`${duration(audio.currentTime)} / ${duration(audio.duration)}`;}});
-    audio.addEventListener?.('ended',()=>{play.textContent='▶';range.value='0';});range.oninput=()=>{if(Number.isFinite(audio.duration)&&audio.duration>0)audio.currentTime=Number(range.value)/1000*audio.duration;};
+    audio.addEventListener?.('ended',()=>{sync();range.value='0';});range.oninput=()=>{if(Number.isFinite(audio.duration)&&audio.duration>0)audio.currentTime=Number(range.value)/1000*audio.duration;};
     wrap.append(play,range,clock,audio);return {node:wrap,media:audio};
   }
+  const stop=media=>{if(media&&['AUDIO','VIDEO'].includes(media.tagName))media.pause?.();};
   function clear(){
     epoch++;
     active.forEach(controller=>controller.abort());active.clear();
-    urls.forEach(url=>URL.revokeObjectURL(url));urls.clear();previews.clear();
+    urls.forEach(url=>URL.revokeObjectURL(url));urls.clear();previews.forEach(preview=>stop(preview.media));previews.clear();
     document.querySelectorAll('[data-chat-attachment]').forEach(host=>{
       host.querySelectorAll('[data-media-preview],img,audio,video,a').forEach(node=>node.remove());
       const button=host.querySelector('button');if(button){button.hidden=false;button.disabled=false;}
@@ -55,7 +58,7 @@
           const blob=new Blob(chunks,{type:contentType});if(!valid())return;
           if(!blob.size||blob.size>20*1024*1024)throw Error('Fayl ölçüsü düzgün deyil.');
           blobUrl=URL.createObjectURL(blob);urls.add(blobUrl);
-          const type=blob.type.split(';')[0],kind=host.dataset.mediaKind;let node,media;
+          const type=blob.type.split(';')[0];let node,media;
           if(['image/jpeg','image/png','image/webp','image/gif'].includes(type)){
             node=document.createElement('img');if(node.dataset)node.dataset.mediaPreview='image';node.className='operator-media-preview';node.alt=text('photo','Chat photo');node.title=text('openOriginal','Open original');node.onclick=()=>node.classList?.toggle('is-expanded');media=node;
           }else if(type.startsWith('audio/')||type==='application/ogg'){
@@ -64,15 +67,15 @@
             node=document.createElement('video');if(node.dataset)node.dataset.mediaPreview='video';node.className='operator-media-video';node.controls=true;node.preload='metadata';media=node;
           }else{
             node=document.createElement('a');if(node.dataset)node.dataset.mediaPreview='file';node.href=blobUrl;node.download='attachment'+(type==='application/pdf'?'.pdf':'');node.textContent=text('downloadAttachment','Download attachment');
-            const meta=host.querySelector('[data-media-meta]');if(meta?.dataset)meta.textContent=[type==='application/pdf'?'PDF':type,size(contentLength||blob.size)].filter(Boolean).join(' · ');
+            const meta=host.querySelector('[data-media-meta]');if(meta?.dataset)meta.textContent=[type==='application/pdf'?'PDF':type,formatSize(contentLength||blob.size)].filter(Boolean).join(' · ');
           }
           if(node.tagName!=='A'){
-            media.onerror=()=>{if(valid()){node.remove();button.hidden=false;status.textContent=' '+text('mediaInvalid','Fayl açıla bilmədi. Yenidən yoxlayın.');}URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);};
-            if(kind!=='audio')media.src=blobUrl;
+            media.onerror=()=>{stop(media);previews.delete(blobUrl);if(valid()){node.remove();button.hidden=false;status.textContent=' '+text('mediaInvalid','Fayl açıla bilmədi. Yenidən yoxlayın.');}URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);};
+            if(media.tagName!=='AUDIO')media.src=blobUrl;
           }
           // Keep at most three decoded previews in this tab, not the whole history.
-          if(previews.size>=3){const [oldUrl,old]=previews.entries().next().value;old.node.remove();old.button.hidden=false;URL.revokeObjectURL(oldUrl);urls.delete(oldUrl);previews.delete(oldUrl);}
-          previews.set(blobUrl,{node,button});
+          if(previews.size>=3){const [oldUrl,old]=previews.entries().next().value;stop(old.media);old.node.remove();old.button.hidden=false;URL.revokeObjectURL(oldUrl);urls.delete(oldUrl);previews.delete(oldUrl);}
+          previews.set(blobUrl,{node,button,media});
           host.append(node);button.hidden=true;status.textContent='';
         }catch(error){if(valid())status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;}
         finally{clearTimeout(timer);active.delete(controller);button.disabled=false;button.setAttribute('aria-busy','false');}
