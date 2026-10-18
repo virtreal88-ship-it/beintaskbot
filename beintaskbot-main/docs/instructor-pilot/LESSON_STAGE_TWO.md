@@ -88,3 +88,29 @@ rendered and inspected after wording update; document remains eight pages.
 Integration steps remaining: actual employee review/publish endpoint extension and private
 artifact storage, exact known UI build, sidecar wiring into existing call_expert, and secured
 /app viewer routing. Do not register browser access or customer sending while doing that.
+
+
+## Timeline player update
+
+The standalone HTML now has a global 0:00–1:48 seek bar. Default speed is 1.25×
+(about 86 seconds of playback); supported rates are 0.75×, 1×, 1.25×, 1.5× and 2×.
+Each slide's idle tail is two seconds shorter. The original eight images and AZ copy
+remain unchanged. PDF stays the supplementary export and is not regenerated.
+
+Focus geometry and slide fade are computed from one deterministic lesson clock;
+there are no independently running CSS transitions. Pause freezes both. Seeking
+reconstructs focus, including the middle of a transition. Image loading suspends
+clock advancement; pausing during loading cancels automatic continuation. Seeking
+and manual slide navigation pause playback. Changing speed preserves position.
+
+Keyboard: Space/K toggles playback outside form controls, arrows seek ±5 seconds,
+Home/End seek to lesson bounds. Native range/select/button keyboard interaction is
+preserved. Reduced-motion uses immediate focus and disables fades. Mobile controls
+remain fixed at the bottom. Geometry is capped at one CSS pixel per source pixel.
+
+Targeted verification: fake-clock player tests cover every speed, live speed change,
+all eight slides, forward/backward seek, interpolated focus, frozen pause/resume,
+loading cancellation, replay and automatic end, mobile/native ceiling, reduced
+motion, keyboard, asset failures/origin protection and timer cleanup. The existing
+48 Python contract/isolation tests also pass. Browser QA confirmed 0:50 → step 5,
+1:48 total, 1.25× default and mobile controls without horizontal overflow.
