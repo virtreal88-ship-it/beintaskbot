@@ -1,0 +1,12 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const root=path.join(__dirname,'..'),read=file=>fs.readFileSync(path.join(root,file),'utf8');
+const app=read('docs/tenant-app.html'),ui=read('docs/tenant-knowledge-candidates.js');
+assert.match(app,/data-view="support_cases"/);
+assert.match(app,/id="view-support_cases"/);
+assert.match(app,/tenant-knowledge-candidates\.js/);
+assert.match(ui,/\/api\/platform\/ai\/knowledge-candidates/);
+assert.match(ui,/expected_tenant_id/);assert.match(ui,/expected_user_id/);assert.match(ui,/expected_version/);
+assert.match(ui,/pending_review/);assert.match(ui,/needs_clarification/);assert.match(ui,/approved/);assert.match(ui,/rejected/);
+assert.match(ui,/analysisUnavailable/);assert.match(ui,/No fabricated results/);
+assert.match(ui,/tenant-support-open/);
+console.log('PASS: support cases view, safe route/identity fields, review actions, statuses and batch-analysis integration.');
