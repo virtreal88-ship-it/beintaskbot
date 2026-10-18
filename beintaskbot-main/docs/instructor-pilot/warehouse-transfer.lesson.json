@@ -1,0 +1,422 @@
+{
+  "schema_version": 1,
+  "id": "beinsystems-warehouse-transfer-az-v1",
+  "operation": "inventory.warehouse_transfer",
+  "language": "az",
+  "title": "Anbarlar arasında yerdəyişmə",
+  "review_status": "pending_review",
+  "verification": {
+    "status": "form_preparation_only",
+    "checked_at": "2026-10-18",
+    "environment": "Bein Demo",
+    "ui_version": "unreported",
+    "unverified": [
+      "save",
+      "post",
+      "stock_effects",
+      "negative_stock_policy"
+    ]
+  },
+  "limits": {
+    "max_slides": 8,
+    "max_duration_ms": 144000
+  },
+  "slides": [
+    {
+      "id": "step-1",
+      "order": 1,
+      "title": "Yerdəyişmələr bölməsini açın",
+      "explanation": "Əvvəlcə sağ yuxarıda Bein Demo şirkətini yoxlayın. Məhsullar bölməsində Yerdəyişmələr alt bölməsini açın. Sonra + Yerdəyişmə düyməsini seçin.",
+      "note": "Mavi çərçivələr keçidi göstərir: Məhsullar → Yerdəyişmələr → + Yerdəyişmə. Mövcud sənədləri açmaq və dəyişmək lazım deyil.",
+      "image": {
+        "asset_id": "01-navigation.jpg",
+        "width": 855,
+        "height": 656,
+        "sha256": "16bf108dc5493fae76fd1dcac545ea48ac609d2745493c433c4f64f0763f607c"
+      },
+      "areas": [
+        {
+          "id": "area-1",
+          "x": 230,
+          "y": 1,
+          "width": 96,
+          "height": 57,
+          "intent": "focus"
+        },
+        {
+          "id": "area-2",
+          "x": 362,
+          "y": 60,
+          "width": 137,
+          "height": 49,
+          "intent": "focus"
+        },
+        {
+          "id": "area-3",
+          "x": 187,
+          "y": 140,
+          "width": 115,
+          "height": 33,
+          "intent": "focus"
+        },
+        {
+          "id": "area-4",
+          "x": 695,
+          "y": 10,
+          "width": 105,
+          "height": 27,
+          "intent": "focus"
+        }
+      ],
+      "playback": {
+        "duration_ms": 12000,
+        "transition_ms": 650,
+        "focus": [
+          {
+            "at_ms": 1400,
+            "area_id": "area-1",
+            "padding": 50,
+            "only_below_scale": 0.6
+          },
+          {
+            "at_ms": 5000,
+            "area_id": "area-2",
+            "padding": 50,
+            "only_below_scale": 0.6
+          },
+          {
+            "at_ms": 8500,
+            "area_id": "area-3",
+            "padding": 50,
+            "only_below_scale": 0.6
+          }
+        ],
+        "return_to_overview": true
+      }
+    },
+    {
+      "id": "step-2",
+      "order": 2,
+      "title": "Yeni sənədin formasını yoxlayın",
+      "explanation": "Yeni Yerdəyişmə forması açılır. Yerdəyişmə № və Tarix sahələrini yoxlayın. Bu nümunədə sistemin verdiyi nömrə və tarix dəyişdirilməyib.",
+      "note": "Anbardan və Anbara ulduzla işarələnmiş seçim sahələridir. Yadda saxla düyməsini bu təlim nümunəsində basmayın.",
+      "image": {
+        "asset_id": "02-new-form.jpg",
+        "width": 855,
+        "height": 656,
+        "sha256": "066c791891a6ea38d88460430bc938bbd5538367d6f6c517f19ffc4058b475b4"
+      },
+      "areas": [
+        {
+          "id": "area-1",
+          "x": 17,
+          "y": 98,
+          "width": 204,
+          "height": 80,
+          "intent": "focus"
+        },
+        {
+          "id": "area-2",
+          "x": 316,
+          "y": 98,
+          "width": 207,
+          "height": 79,
+          "intent": "focus"
+        }
+      ],
+      "playback": {
+        "duration_ms": 12000,
+        "transition_ms": 650,
+        "focus": [
+          {
+            "at_ms": 1400,
+            "area_id": "area-1",
+            "padding": 50,
+            "only_below_scale": 0.6
+          },
+          {
+            "at_ms": 6500,
+            "area_id": "area-2",
+            "padding": 50,
+            "only_below_scale": 0.6
+          }
+        ],
+        "return_to_overview": true
+      }
+    },
+    {
+      "id": "step-3",
+      "order": 3,
+      "title": "Göndərən anbarı seçin",
+      "explanation": "Anbardan sahəsini açın və məhsulun göndəriləcəyi anbarı seçin. Bu demo nümunəsində Test Anbar seçilib.",
+      "note": "Seçimdən sonra anbarın adı sahədə görünməlidir. Yanındakı + düyməsi bu ssenari üçün lazım deyil; yeni anbar yaratmayın.",
+      "image": {
+        "asset_id": "03-source-warehouse.jpg",
+        "width": 855,
+        "height": 656,
+        "sha256": "2ee27139a6521c0578f6aa1a4c533a9ec60347bbacee6021f56381f5daaac580"
+      },
+      "areas": [
+        {
+          "id": "area-1",
+          "x": 317,
+          "y": 98,
+          "width": 182,
+          "height": 30,
+          "intent": "focus"
+        }
+      ],
+      "playback": {
+        "duration_ms": 12000,
+        "transition_ms": 650,
+        "focus": [
+          {
+            "at_ms": 1400,
+            "area_id": "area-1",
+            "padding": 50
+          }
+        ],
+        "return_to_overview": true
+      }
+    },
+    {
+      "id": "step-4",
+      "order": 4,
+      "title": "Qəbul edən anbarı seçin",
+      "explanation": "Anbara sahəsində məhsulun qəbul ediləcəyi anbarı seçin. Nümunə: test üçün. Seçilmiş adın həqiqətən sahədə göründüyünü yoxlayın.",
+      "note": "Göndərən və qəbul edən anbarlar fərqli olmalıdır: Test Anbar → test üçün. Bu mərhələdə hələ heç bir yerdəyişmə saxlanılmır.",
+      "image": {
+        "asset_id": "04-destination-warehouse.jpg",
+        "width": 855,
+        "height": 656,
+        "sha256": "593df93eadc8860ffafe3319934c902193e24564a9497a4847ef32b35774d80f"
+      },
+      "areas": [
+        {
+          "id": "area-1",
+          "x": 316,
+          "y": 49,
+          "width": 184,
+          "height": 29,
+          "intent": "focus"
+        },
+        {
+          "id": "area-2",
+          "x": 316,
+          "y": 97,
+          "width": 184,
+          "height": 29,
+          "intent": "focus"
+        }
+      ],
+      "playback": {
+        "duration_ms": 12000,
+        "transition_ms": 650,
+        "focus": [
+          {
+            "at_ms": 1400,
+            "area_id": "area-1",
+            "padding": 50
+          }
+        ],
+        "return_to_overview": true
+      }
+    },
+    {
+      "id": "step-5",
+      "order": 5,
+      "title": "Test məhsulunu tapın və əlavə edin",
+      "explanation": "Məhsul əlavə et sahəsində ad, barkod və ya artkod üzrə axtarın. Nümunədə Beta TEST yazılıb; nəticələrdən Beta TEST Sud seçilib.",
+      "note": "Axtarışda 0 əd görünür. Bu, özlüyündə xəta demək deyil: mənfi qalığa icazə şirkət ayarlarından asılı ola bilər. Bu ayarlar və saxlamanın nəticəsi yoxlanılmayıb.",
+      "image": {
+        "asset_id": "05-product-search.jpg",
+        "width": 855,
+        "height": 656,
+        "sha256": "5dbf8a2be22cac257989eddbfb0d936a38d29054fcd0fed4c9da546ace430fbf"
+      },
+      "areas": [
+        {
+          "id": "area-1",
+          "x": 74,
+          "y": 366,
+          "width": 188,
+          "height": 36,
+          "intent": "focus"
+        },
+        {
+          "id": "area-2",
+          "x": 42,
+          "y": 407,
+          "width": 285,
+          "height": 79,
+          "intent": "focus"
+        }
+      ],
+      "playback": {
+        "duration_ms": 16000,
+        "transition_ms": 650,
+        "focus": [
+          {
+            "at_ms": 1400,
+            "area_id": "area-1",
+            "padding": 50
+          }
+        ],
+        "return_to_overview": true
+      }
+    },
+    {
+      "id": "step-6",
+      "order": 6,
+      "title": "Miqdarı daxil edin",
+      "explanation": "Əlavə edilmiş məhsul sətrində Miqdar xanasını seçin və lazım olan sayını yazın. Nümunədə 2 daxil edilib. Tab ilə xanadan çıxın.",
+      "note": "Ekranın aşağı hissəsində Miqdar: 2 əd göstərilməsi yoxlanılıb. Bu, forma üzrə cəmdir; anbar qalığının dəyişdiyini göstərmir.",
+      "image": {
+        "asset_id": "06-quantity.jpg",
+        "width": 855,
+        "height": 656,
+        "sha256": "cc5d1ce6487ef4afa05ba4dddd3cf26238c4269e9b0758ffe2347f30cae2ab1f"
+      },
+      "areas": [
+        {
+          "id": "area-1",
+          "x": 603,
+          "y": 314,
+          "width": 58,
+          "height": 38,
+          "intent": "focus"
+        },
+        {
+          "id": "area-2",
+          "x": 615,
+          "y": 444,
+          "width": 125,
+          "height": 32,
+          "intent": "focus"
+        }
+      ],
+      "playback": {
+        "duration_ms": 12000,
+        "transition_ms": 650,
+        "focus": [
+          {
+            "at_ms": 1400,
+            "area_id": "area-1",
+            "padding": 50
+          }
+        ],
+        "return_to_overview": true
+      }
+    },
+    {
+      "id": "step-7",
+      "order": 7,
+      "title": "Saxlamadan əvvəl məlumatları yoxlayın",
+      "explanation": "İki anbarı, məhsulu, miqdarı və tarixi yenidən yoxlayın. Digər bölməsində Status, Cavabdeh, Şöbə və Təsdiqlənib sahələri görünür.",
+      "note": "Təsdiqlənib nümunədə əvvəlcədən işarəli idi və dəyişdirilmədi. Saxlamanın və bu işarənin anbar uçotuna təsiri yoxlanılmayıb. Qırmızı çərçivədəki Yadda saxla düyməsini basmayın.",
+      "image": {
+        "asset_id": "07-final-check.jpg",
+        "width": 855,
+        "height": 656,
+        "sha256": "5d5a836672dab430c8505c5f92f78ac9a99625805d9bd6efa74156de654724bf"
+      },
+      "areas": [
+        {
+          "id": "area-1",
+          "x": 18,
+          "y": 9,
+          "width": 99,
+          "height": 35,
+          "intent": "warning"
+        },
+        {
+          "id": "area-2",
+          "x": 317,
+          "y": 49,
+          "width": 182,
+          "height": 78,
+          "intent": "focus"
+        },
+        {
+          "id": "area-3",
+          "x": 609,
+          "y": 201,
+          "width": 86,
+          "height": 29,
+          "intent": "warning"
+        },
+        {
+          "id": "area-4",
+          "x": 122,
+          "y": 8,
+          "width": 61,
+          "height": 36,
+          "intent": "focus"
+        }
+      ],
+      "playback": {
+        "duration_ms": 16000,
+        "transition_ms": 650,
+        "focus": [
+          {
+            "at_ms": 1400,
+            "area_id": "area-3",
+            "padding": 50
+          }
+        ],
+        "return_to_overview": true
+      }
+    },
+    {
+      "id": "step-8",
+      "order": 8,
+      "title": "Təlimi yadda saxlamadan bağlayın",
+      "explanation": "Bağla düyməsini basın. Dəyişikliklər yadda saxlanılmayacaq xəbərdarlığı açılır. Dəyişiklikləri saxlamadan çıxmaq üçün Ok seçin.",
+      "note": "Bu addım real olaraq yoxlanılıb: Ok seçildikdən sonra Yerdəyişmələr siyahısına qayıdıldı. Xəbərdarlıqdakı Yadda saxla seçilməyib. Sənəd saxlanılmayıb və keçirilməyib.",
+      "image": {
+        "asset_id": "08-discard-changes.jpg",
+        "width": 870,
+        "height": 668,
+        "sha256": "18bd66a9dfe7e6c3240e24de303fd84448f5f8d60062a94c2b76c5e49718ba23"
+      },
+      "areas": [
+        {
+          "id": "area-1",
+          "x": 298,
+          "y": 175,
+          "width": 278,
+          "height": 33,
+          "intent": "focus"
+        },
+        {
+          "id": "area-2",
+          "x": 637,
+          "y": 237,
+          "width": 45,
+          "height": 36,
+          "intent": "focus"
+        },
+        {
+          "id": "area-3",
+          "x": 188,
+          "y": 236,
+          "width": 101,
+          "height": 37,
+          "intent": "warning"
+        }
+      ],
+      "playback": {
+        "duration_ms": 16000,
+        "transition_ms": 650,
+        "focus": [
+          {
+            "at_ms": 1400,
+            "area_id": "area-1",
+            "padding": 50
+          }
+        ],
+        "return_to_overview": true
+      }
+    }
+  ]
+}
