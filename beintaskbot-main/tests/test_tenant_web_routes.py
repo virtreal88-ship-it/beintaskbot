@@ -36,13 +36,21 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('conversations/{conversation_id}/handoff', ('POST',)),
     ('conversations/{conversation_id}/pause', ('POST',)),
     ('conversations/{conversation_id}/resume', ('POST',)),
+    ('knowledge-candidates', ('GET','POST')),
+    ('knowledge-candidates/batches', ('POST',)),
+    ('knowledge-candidates/batches/{batch_id}', ('GET',)),
+    ('knowledge-candidates/{candidate_id}/clarify', ('POST',)),
+    ('knowledge-candidates/requests/{request_id}', ('GET',)),
+    ('knowledge-candidates/{candidate_id}', ('GET','PATCH')),
+    ('knowledge-candidates/{candidate_id}/approve', ('POST',)),
+    ('knowledge-candidates/{candidate_id}/reject', ('POST',)),
     ('knowledge', ('GET','POST')), ('knowledge/upload', ('POST',)),
     ('knowledge/{source_id}', ('PATCH','DELETE')),
 ] for method in methods)
 FACTORIES = ('finance_handler', 'linear_handler', 'tasks_handler', 'news_handler',
     'news_telegram_handler', 'chat_ai_handler', 'chat_send_handler', 'chat_upload_handler',
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler',
-    'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'support_handler', 'operator_handler', 'night_report_handler', 'testing_handler', 'ai_state_handler')
+    'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'night_report_handler', 'testing_handler', 'ai_state_handler')
 
 
 class Routes(unittest.IsolatedAsyncioTestCase):

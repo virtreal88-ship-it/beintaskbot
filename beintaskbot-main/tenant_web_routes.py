@@ -23,6 +23,7 @@ from tenant_diagnostics_api import handler as diagnostics_handler
 from tenant_deal_completion_api import handler as deal_completion_handler
 from tenant_deal_completion_provider import provider as deal_provider
 from tenant_ai_agents_api import handler as ai_agents_handler
+from tenant_knowledge_candidates_api import handler as knowledge_candidates_handler
 from tenant_support_inbox_api import handler as support_handler
 from tenant_ai_testing_api import handler as testing_handler
 from tenant_ai_state_api import handler as ai_state_handler
@@ -116,6 +117,14 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('conversations/{conversation_id}/handoff', ai_agents_handler(member, origin, logger, 'handoff'), ('POST',)),
         ('conversations/{conversation_id}/pause', ai_agents_handler(member, origin, logger, 'pause'), ('POST',)),
         ('conversations/{conversation_id}/resume', ai_agents_handler(member, origin, logger, 'resume'), ('POST',)),
+        ('knowledge-candidates', knowledge_candidates_handler(member, origin, logger), ('GET','POST')),
+        ('knowledge-candidates/batches', knowledge_candidates_handler(member, origin, logger, 'batches'), ('POST',)),
+        ('knowledge-candidates/batches/{batch_id}', knowledge_candidates_handler(member, origin, logger, 'batch'), ('GET',)),
+        ('knowledge-candidates/{candidate_id}/clarify', knowledge_candidates_handler(member, origin, logger, 'clarify'), ('POST',)),
+        ('knowledge-candidates/requests/{request_id}', knowledge_candidates_handler(member, origin, logger, 'request'), ('GET',)),
+        ('knowledge-candidates/{candidate_id}', knowledge_candidates_handler(member, origin, logger, 'candidate'), ('GET','PATCH')),
+        ('knowledge-candidates/{candidate_id}/approve', knowledge_candidates_handler(member, origin, logger, 'approve'), ('POST',)),
+        ('knowledge-candidates/{candidate_id}/reject', knowledge_candidates_handler(member, origin, logger, 'reject'), ('POST',)),
         ('knowledge', ai_agents_handler(member, origin, logger, 'knowledge'), ('GET', 'POST')),
         ('knowledge/upload', ai_agents_handler(member, origin, logger, 'knowledge_upload'), ('POST',)),
         ('knowledge/{source_id}', ai_agents_handler(member, origin, logger, 'knowledge_item'), ('PATCH', 'DELETE')),
