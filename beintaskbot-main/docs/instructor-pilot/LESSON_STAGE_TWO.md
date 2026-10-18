@@ -244,3 +244,23 @@ lesson, crossfade Pause/Resume, subtitle retention, matching seek cue and all ei
 steps. 320/390px checks confirm one/two-line text in the reserved strip (no image
 overlap or horizontal overflow). Targeted Node tests and all 48 Python contract
 regressions pass. Rebuild needs only Python standard library, JPEGs and cue JSON.
+
+
+### Compact overlay captions (current)
+
+The full-width strip is replaced with a centered, text-sized translucent rounded
+box inside the image. Height is content-driven and capped at two lines. Placement
+uses the currently interpolated image transform and all visible highlight bounds,
+trying the bottom first, then safe positions above/below fields. If no safe space
+exists in the image, it reserves a small space immediately below it. Screenshots,
+focus paths, crossfades, cue text/times, lesson steps and controls are unchanged.
+
+Opacity uses the lesson clock (180ms fade in/out), so Pause freezes it along with
+the image. Seeking shows the selected cue immediately; reduced-motion skips fades.
+No independent CSS transition continues during Pause. Node regression coverage
+adds collision/fallback placement, frozen fade and immediate seek visibility.
+The browser test samples caption/highlight intersections and text clipping during
+the full lesson in addition to existing playback checks.
+
+Verification: targeted Node suite PASS; real localhost full playback PASS, including
+caption collision and two-line clipping checks. Mobile 320/390px visually checked.

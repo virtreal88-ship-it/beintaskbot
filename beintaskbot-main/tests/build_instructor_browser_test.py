@@ -37,9 +37,9 @@ frame.onload=async()=>{try{
  check($('.lesson-count').textContent.includes('8 / 8'),'Completion uses step 8');
  check(errors.length===0,'No JavaScript runtime errors');
  seek(0);await until(()=>!button.disabled);speed.value='1.75';speed.dispatchEvent(new w.Event('change',{bubbles:true}));button.click();
- let blank=false,overscale=false;const steps=new Set(),captions=new Set();
- await until(()=>{steps.add($('.lesson-count').textContent);captions.add($('[data-subtitle]').textContent);const image=$('img');if(!image.complete||!image.naturalWidth){if(!$('.lesson-outgoing'))blank=true;}const matrix=new w.DOMMatrix(getComputedStyle($('.lesson-plane')).transform);if(matrix.a>1.00001)overscale=true;return pos()===108000&&button.getAttribute('aria-pressed')==='false';},75000);
- check(steps.size===8&&captions.size>=20,'Full 1.75 playback visits eight steps and timed captions');check(!blank&&!overscale,'No blank image frames or scaling beyond native resolution');
+ let blank=false,overscale=false,overlap=false,clipped=false;const steps=new Set(),captions=new Set();
+ await until(()=>{steps.add($('.lesson-count').textContent);captions.add($('[data-subtitle]').textContent);const cap=$('.lesson-subtitles').getBoundingClientRect(),stage=$('.lesson-stage').getBoundingClientRect(),p=$('[data-subtitle]');if(p.scrollHeight>p.clientHeight+1)clipped=true;for(const node of d.querySelectorAll('.lesson-plane .lesson-area')){const r=node.getBoundingClientRect();if(r.right>stage.left&&r.left<stage.right&&r.bottom>stage.top&&r.top<stage.bottom&&cap.left<r.right&&cap.right>r.left&&cap.top<r.bottom&&cap.bottom>r.top)overlap=true;}const image=$('img');if(!image.complete||!image.naturalWidth){if(!$('.lesson-outgoing'))blank=true;}const matrix=new w.DOMMatrix(getComputedStyle($('.lesson-plane')).transform);if(matrix.a>1.00001)overscale=true;return pos()===108000&&button.getAttribute('aria-pressed')==='false';},75000);
+ check(steps.size===8&&captions.size>=20,'Full 1.75 playback visits eight steps and timed captions');check(!blank&&!overscale,'No blank image frames or scaling beyond native resolution');check(!overlap&&!clipped,'Captions avoid highlighted fields and fit two lines');
  result.textContent='PASS\n'+checks.join('\n');
  }catch(e){result.textContent='FAIL: '+e.message+'\n'+checks.join('\n');}};
 frame.src='beinsystems-warehouse-transfer-az.html';
