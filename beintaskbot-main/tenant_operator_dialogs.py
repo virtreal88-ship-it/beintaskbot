@@ -56,7 +56,7 @@ def _audio_duration(raw):
     return None
 
 
-def _message(item, *, group=False, participant_names=None):
+def _message(item, *, group=False, participant_names=None, contact_name=''):
     value = dict(item)
     raw = value.pop('raw', None) or {}
     direction = str(value.get('direction') or '')
@@ -82,6 +82,14 @@ def _message(item, *, group=False, participant_names=None):
         candidate = participant_jid.split('@', 1)[0]
         if candidate.isdecimal():
             author = candidate
+    # A direct conversation has one customer.  The route projection has
+    # already resolved its tenant/channel-local name in the safe order
+    # manual override -> saved provider name -> pushName -> phone.  Use that
+    # display fact for its incoming message footer rather than the persisted
+    # transport fallback (usually a phone/JID).  Group participants, AI and
+    # operator authors intentionally remain on their independent branches.
+    if not group and direction == 'incoming' and author_type == 'customer' and str(contact_name).strip():
+        author = str(contact_name).strip()
     value['direction'] = direction
     value['author_type'] = author_type
     value['author_name'] = author
@@ -326,7 +334,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None):
                         AND participant_jid=ANY(%s::text[])''',(tenant,list({m.get('source_channel_id',channel) for m in messages}),conversation,participant_ids))
                     participant_names={(str(item['channel_id']),str(item['participant_jid'])):str(item['display_name']) for item in cur.fetchall()
                                        if str(item.get('display_name') or '')}
-    return {'dialog':dialog,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names)
+    return {'dialog':dialog,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,
+                                         contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '')
                                         for r in reversed(messages[:50])],
             'next_before':str(messages[49]['id']) if len(messages)>50 else None}
 

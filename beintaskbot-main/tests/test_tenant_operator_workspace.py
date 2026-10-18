@@ -223,6 +223,14 @@ def test_manual_display_names_require_dialog_access_and_exact_route(operator_db)
         dialogs.save_display_name(PROFILE,{'provider':'connect','kind':'conversation','lead_id':41,'channel_id':CB,'conversation_id':'client','display_name':'Wrong channel'})
 
 
+def test_direct_inbound_message_uses_the_route_contact_name_without_changing_other_authors():
+    incoming={'direction':'incoming','author_name':'994501234567','raw':{}}
+    outgoing={'direction':'outgoing','author_name':'Operator','raw':{}}
+    assert dialogs._message(incoming,contact_name='Saved contact')['author_name']=='Saved contact'
+    assert dialogs._message(incoming,contact_name='WhatsApp pushName')['author_name']=='WhatsApp pushName'
+    assert dialogs._message(outgoing,contact_name='Saved contact')['author_name']=='Operator'
+
+
 def test_group_participant_name_priority_is_manual_then_saved_then_whatsapp_then_number():
     raw={'participantJid':'994501234567@s.whatsapp.net','participantAlt':'lid-1@lid','pushName':'WhatsApp name'}
     stored={'direction':'incoming','author_name':'Saved name','raw':raw}
