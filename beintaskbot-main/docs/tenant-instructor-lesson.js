@@ -27,7 +27,7 @@ function mount(root,lesson,options={}){
  const total=offsets.at(-1),rates=[.75,1,1.25,1.5,2];
  let index=-1,position=0,started=0,rate=1.25,playing=false,ready=false,dead=false,timer=null,geometry=null,focus=null;
  root.classList.add('instructor-lesson');
- root.innerHTML='<header><span class="lesson-tag">BEIN DEMO · AZ</span><h1></h1><p class="lesson-review"></p></header><section aria-label="Dərsin addımı"><p class="lesson-count" aria-live="polite"></p><h2></h2><p class="lesson-explanation"></p><div class="lesson-stage" tabindex="0" aria-label="Real ekran görüntüsü"><div class="lesson-plane"><img alt=""><div class="lesson-areas"></div></div></div><p class="lesson-focus"></p><p class="lesson-note"></p></section><nav aria-label="Dərs idarəetməsi"><div class="lesson-timeline"><time data-current>0:00</time><input data-seek type="range" min="0" step="10" aria-label="Dərsin vaxtı"><time data-total></time></div><button type="button" data-back>Əvvəlki</button><button type="button" data-play>Başlat</button><button type="button" data-next>Növbəti</button><label class="lesson-speed">Sürət <select data-speed aria-label="Nümayiş sürəti"><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25" selected>1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label><span class="lesson-status" aria-live="polite"></span></nav>';
+ root.innerHTML='<header><span class="lesson-tag">BEIN DEMO · AZ</span><h1></h1><p class="lesson-review"></p></header><section aria-label="Dərsin addımı"><p class="lesson-count" aria-live="polite"></p><h2></h2><p class="lesson-explanation"></p><div class="lesson-stage" tabindex="0" aria-label="Real ekran görüntüsü"><div class="lesson-plane"><img alt=""><div class="lesson-areas"></div></div></div><p class="lesson-focus"></p><p class="lesson-note"></p></section><nav aria-label="Dərs idarəetməsi"><button type="button" data-play aria-label="Başlat"><span aria-hidden="true">▶</span></button><div class="lesson-timeline"><input data-seek type="range" min="0" step="10" aria-label="Dərsin vaxtı"><span class="lesson-time"><time data-current>0:00</time><span aria-hidden="true"> / </span><time data-total></time></span></div><label class="lesson-speed"><select data-speed aria-label="Nümayiş sürəti"><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25" selected>1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label><span class="lesson-status" aria-live="polite"></span></nav>';
  const $=s=>root.querySelector(s),stage=$('.lesson-stage'),plane=$('.lesson-plane'),img=$('img'),seekbar=$('[data-seek]');
  const motion=win.matchMedia?.('(prefers-reduced-motion: reduce)');
  const format=t=>{const n=Math.floor(t/1000);return Math.floor(n/60)+':'+String(n%60).padStart(2,'0');};
@@ -37,20 +37,21 @@ function mount(root,lesson,options={}){
  const time=()=>Math.min(total,position+(playing&&ready?(clock.now()-started)*rate:0));
  const clear=()=>{if(timer!==null)clock.clear(timer);timer=null;};
  function status(){
-  $('[data-play]').textContent=playing?'Pauza':position>=total?'Yenidən başlat':position?'Davam et':'Başlat';$('[data-play]').disabled=!ready;
+  const label=playing?'Pauza':position>=total?'Yenidən başlat':position?'Davam et':'Başlat';
+  $('[data-play] span').textContent=playing?'Ⅱ':'▶';$('[data-play]').setAttribute('aria-label',label);$('[data-play]').title=label;$('[data-play]').disabled=!ready;
   $('[data-play]').setAttribute('aria-pressed',String(playing));
   $('.lesson-status').textContent=position>=total?'Dərs tamamlandı':playing?'Avtomatik nümayiş':'Nümayiş dayandırılıb';
-  $('[data-back]').disabled=index===0;$('[data-next]').disabled=index===lesson.slides.length-1;
+
  }
  function loadSlide(next){
-  index=next;ready=false;const s=lesson.slides[index];
+  index=next;ready=false;$('.lesson-status').classList.remove('lesson-error');const s=lesson.slides[index];
   $('h2').textContent=s.title;$('.lesson-count').textContent=`Addım ${index+1} / ${lesson.slides.length}`;
   $('.lesson-explanation').textContent=s.explanation;$('.lesson-note').textContent=s.note;
   plane.style.width=s.image.width+'px';plane.style.height=s.image.height+'px';
   $('.lesson-areas').replaceChildren();for(const a of s.areas){const box=doc.createElement('span');box.className='lesson-area '+(a.intent==='warning'?'warning':'');Object.assign(box.style,{left:a.x+'px',top:a.y+'px',width:a.width+'px',height:a.height+'px'});$('.lesson-areas').append(box);}
   img.alt=`${index+1}. ${s.title} — Bein Demo real ekran görüntüsü`;
   img.onload=()=>{if(dead||index!==next)return;if(img.naturalWidth!==s.image.width||img.naturalHeight!==s.image.height){img.onerror();return;}ready=true;started=clock.now();render();status();tick();};
-  img.onerror=()=>{ready=false;pause();$('.lesson-status').textContent='Ekran görüntüsü yüklənmədi. Nümayiş dayandırıldı.';};
+  img.onerror=()=>{ready=false;pause();$('.lesson-status').classList.add('lesson-error');$('.lesson-status').textContent='Ekran görüntüsü yüklənmədi. Nümayiş dayandırıldı.';};
   const url=(options.resolveAsset||((id)=>id))(s.image.asset_id),resolved=new URL(url,win.location.href);
   if(!['http:','https:','blob:'].includes(resolved.protocol)||resolved.origin!==win.location.origin)throw Error('Asset origin forbidden');img.src=url;
  }
@@ -86,7 +87,7 @@ function mount(root,lesson,options={}){
  function speed(value){const n=Number(value);if(!rates.includes(n))return;position=time();started=clock.now();rate=n;$('[data-speed]').value=n;render();tick();}
  const manual=e=>{if(e.target.closest?.('[data-play],[data-speed]'))return;pause();};
  root.addEventListener('wheel',manual,{passive:true});root.addEventListener('pointerdown',manual);
- $('[data-back]').onclick=()=>go(index-1);$('[data-next]').onclick=()=>go(index+1);$('[data-play]').onclick=play;
+ $('[data-play]').onclick=play;
  seekbar.oninput=()=>{const value=seekbar.value;pause();seek(value);};$('[data-speed]').onchange=e=>speed(e.target.value);
  const keys=e=>{if(e.target.matches('input,textarea,select,button'))return;
   if(['ArrowRight','ArrowLeft','Home','End',' ','k'].includes(e.key)){e.preventDefault();

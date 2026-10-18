@@ -20,7 +20,9 @@ player.seek(1725);assert.deepEqual(player.snapshot().geometry,halfway,'seek reco
 // Actual range event, backward/forward across all eight images, and manual controls.
 const slider=root.querySelector('[data-seek]');slider.value=25000;slider.dispatchEvent(new w.Event('input'));load();assert.equal(player.snapshot().position,25000);assert.equal(player.snapshot().index,2);
 for(let i=0,offset=0;i<8;i++){player.seek(offset+2000);load();assert.equal(player.snapshot().index,i);assert.equal(root.querySelector('h2').textContent,data.slides[i].title);assert(player.snapshot().geometry.scale<=1);offset+=data.slides[i].playback.duration_ms;}
-root.querySelector('[data-back]').click();load();assert.equal(player.snapshot().position,76000);assert(!player.snapshot().playing);
+assert.equal(root.querySelectorAll('nav button').length,1,'one compact play control');assert.equal(root.querySelector('[data-back]'),null);assert.equal(root.querySelector('[data-next]'),null);
+player.go(6);load();assert.equal(player.snapshot().position,76000);assert(!player.snapshot().playing);
+assert.equal(root.querySelector('[data-play]').getAttribute('aria-label'),'Davam et');root.querySelector('[data-play]').click();assert.equal(root.querySelector('[data-play]').getAttribute('aria-label'),'Pauza');player.pause();
 player.seek(11990);load();player.play();advance(20);assert.equal(player.snapshot().index,1);player.pause();load();assert(!player.snapshot().playing,'pause during loading cancels continuation');
 player.seek(108000);load();assert(!player.snapshot().playing);assert.equal(root.querySelector('[data-current]').textContent,'1:48');player.play();load();assert.equal(player.snapshot().index,0);player.pause();
 width=900;player.seek(2000);load();assert.equal(player.snapshot().focus,null,'desktop overview avoids needless zoom');

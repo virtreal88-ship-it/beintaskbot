@@ -114,3 +114,15 @@ loading cancellation, replay and automatic end, mobile/native ceiling, reduced
 motion, keyboard, asset failures/origin protection and timer cleanup. The existing
 48 Python contract/isolation tests also pass. Browser QA confirmed 0:50 → step 5,
 1:48 total, 1.25× default and mobile controls without horizontal overflow.
+
+
+### Compact control bar
+
+The bottom bar now uses one icon Play/Pause button, seek slider, elapsed/total time
+and a small speed selector. Previous/next buttons and visible routine status text
+were removed; screen readers still receive status and AZ action labels. Asset errors
+remain visible. All controls retain native keyboard support and 44px touch targets.
+Browser checks at 390px and 320px widths show a single approximately 57px row with
+no horizontal overflow. Timeline/focus/motion behavior and eight-step content are
+unchanged. Targeted player tests pass, including single-button structure and dynamic
+accessible Play/Pause labels.
