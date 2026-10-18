@@ -16,6 +16,12 @@ from test_connect_images import PNG
 
 @pytest.fixture
 def context(monkeypatch):
+    import tenant_knowledge_media_cache as cache
+    def unit_asr(profile,item,model,media,invoke):
+        item['asr_attempted']=True
+        text,usage=invoke(item['key'],model,*media,with_usage=True)
+        return text,usage,True
+    monkeypatch.setattr(cache,'transcribe_once',unit_asr)
     item={'tenant':'tenant','model':'gpt-4.1-2025-04-14','route':{'conversation_id':'demo@g.us'},'refs':[], 'messages':[]}
     def add(kind='image',channel='one'):
         index=len(item['refs'])+1

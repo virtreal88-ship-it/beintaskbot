@@ -677,6 +677,8 @@ async def run_worker(kommo_request, logger, wait_slot):
     """Durable queue loop plus a content-free liveness heartbeat."""
     from tenant_ai_reliability import heartbeat_loop
     heartbeat = asyncio.create_task(heartbeat_loop(logger), name='ai-worker-heartbeat')
+    from tenant_knowledge_campaign_worker import run as run_campaigns
+    campaigns = asyncio.create_task(run_campaigns(logger), name='knowledge-campaigns')
     try:
         while True:
             try:
@@ -691,6 +693,11 @@ async def run_worker(kommo_request, logger, wait_slot):
                 logger.warning('AI agent queue polling failed')
                 await asyncio.sleep(2)
     finally:
+        campaigns.cancel()
+        try:
+            await campaigns
+        except asyncio.CancelledError:
+            pass
         heartbeat.cancel()
         try:
             await heartbeat

@@ -88,7 +88,7 @@ def get(profile,batch_id):
                 if item['extraction_id']: item['extraction_id']=str(item['extraction_id'])
     return {'batch':{'id':str(row['id']),'status':'interrupted' if row['status']=='running' and row['expired'] else row['status'],
         'params':row['params'],'items':items,'continuations':row['continuations'],'routes_truncated':row['routes_truncated'],
-        'message_count':sum(i['message_count'] for i in items),'error_code':'batch_interrupted' if row['status']=='running' and row['expired'] else '','limits':{'max_dialogs':4,'max_fragments':4,'max_messages':320,'max_reserved_tokens':64000},
+        'message_count':sum(i['message_count'] for i in items),'error_code':'batch_interrupted' if row['status']=='running' and row['expired'] else '','limits':{'max_dialogs':4,'max_fragments':2 if row['params'].get('allow_paid_asr') else 4,'max_messages':160 if row['params'].get('allow_paid_asr') else 320,'max_reserved_tokens':48000 if row['params'].get('allow_paid_asr') else 64000},
         'candidates_query':{'batch_id':str(row['id'])}}}
 
 
@@ -102,7 +102,8 @@ def process(profile,batch_id):
             cur.execute('SELECT routes FROM saas_knowledge_batches WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,batch_id))
             queue=list(cur.fetchone()['routes'])
     errors=False;success=False
-    for ordinal in range(MAX_FRAGMENTS):
+    fragment_limit=2 if state['params'].get('allow_paid_asr') else MAX_FRAGMENTS
+    for ordinal in range(fragment_limit):
         if not queue: break
         route=queue.pop(0)
         payload={k:v for k,v in route.items() if k not in {'provider'}}

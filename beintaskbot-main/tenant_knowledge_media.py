@@ -110,8 +110,9 @@ def collect(profile,item):
                 if load(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
                 from tenant_knowledge_candidates_service import check_active
                 check_active(profile,item)
-                asr_used=True;item['asr_attempted']=True
-                text,usage=transcribe(item['key'],model,*media,with_usage=True)
+                asr_used=True
+                from tenant_knowledge_media_cache import transcribe_once
+                text,usage,_=transcribe_once(profile,item,model,media,transcribe)
                 item['asr_usage']=usage
                 text=redact(text,names)[:4000]
                 receipt.update(status='processed',code='transcribed',transcript=text,model=model)
@@ -155,8 +156,9 @@ def collect(profile,item):
                         if not model: raise LookupError('asr_model_unavailable')
                         if load(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
                         check_active(profile,item)
-                        asr_used=True;item['asr_attempted']=True
-                        text,usage=transcribe(item['key'],model,*track,with_usage=True)
+                        asr_used=True
+                        from tenant_knowledge_media_cache import transcribe_once
+                        text,usage,_=transcribe_once(profile,item,model,track,transcribe)
                         item['asr_usage']=usage;text=redact(text,names)[:4000]
                         receipt.update(audio_status='processed',transcript=text,model=model)
                         message['text']+='\n[Video audio transcript] '+text

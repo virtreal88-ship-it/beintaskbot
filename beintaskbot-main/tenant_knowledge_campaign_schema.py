@@ -30,3 +30,11 @@ def create_schema(conn):
           FOREIGN KEY(tenant_id,extraction_id) REFERENCES saas_knowledge_extractions(tenant_id,id))""")
         cur.execute("""CREATE INDEX IF NOT EXISTS saas_knowledge_campaign_pending_idx
           ON saas_knowledge_campaign_fragments(tenant_id,campaign_id,created_at,id) WHERE status='pending'""")
+
+        cur.execute("""CREATE TABLE IF NOT EXISTS saas_knowledge_campaign_sources(
+          tenant_id UUID NOT NULL,campaign_id UUID NOT NULL,source_key TEXT NOT NULL,
+          channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,history_mode TEXT NOT NULL,
+          period_start TIMESTAMPTZ NOT NULL,period_end TIMESTAMPTZ NOT NULL,
+          next_start TIMESTAMPTZ NOT NULL,status TEXT NOT NULL DEFAULT 'pending',
+          PRIMARY KEY(tenant_id,campaign_id,source_key),
+          FOREIGN KEY(tenant_id,campaign_id) REFERENCES saas_knowledge_campaigns(tenant_id,id))""")

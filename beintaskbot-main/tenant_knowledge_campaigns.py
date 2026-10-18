@@ -110,12 +110,12 @@ def claim(tenant, campaign_id):
             fragment=cur.fetchone()
             if not fragment: return None
             store.route(cur,profile,fragment['route'])
-            if campaign['reserved_calls']+1>campaign['max_calls'] or campaign['reserved_tokens']+MAX_TOKENS>campaign['max_tokens']:
+            if campaign['reserved_calls']+2>campaign['max_calls'] or campaign['reserved_tokens']+MAX_TOKENS+8000>campaign['max_tokens']:
                 cur.execute("UPDATE saas_knowledge_campaigns SET status='budget_exhausted',version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,campaign_id))
                 conn.commit();return None
             token=str(uuid.uuid4())
-            cur.execute('UPDATE saas_knowledge_campaigns SET reserved_calls=reserved_calls+1,reserved_tokens=reserved_tokens+%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(MAX_TOKENS,tenant,campaign_id))
-            cur.execute("UPDATE saas_knowledge_campaign_fragments SET status='running',lease_token=%s::uuid,lease_until=now()+interval '180 seconds',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(token,tenant,fragment['id']))
+            cur.execute('UPDATE saas_knowledge_campaigns SET reserved_calls=reserved_calls+2,reserved_tokens=reserved_tokens+%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(MAX_TOKENS+8000,tenant,campaign_id))
+            cur.execute("UPDATE saas_knowledge_campaign_fragments SET status='running',lease_token=%s::uuid,lease_until=now()+interval '360 seconds',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(token,tenant,fragment['id']))
         conn.commit()
     return {**fragment,'lease_token':token,'profile':profile}
 
@@ -140,18 +140,34 @@ def get(profile, campaign_id=None):
               WHERE u.tenant_id=%s::uuid AND u.run_id IN (SELECT extraction_id FROM saas_knowledge_campaign_fragments
               WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid)''',(tenant,tenant,row['id']))
             tokens=cur.fetchone()['tokens']
+            cur.execute('''SELECT count(DISTINCT r->>'id') AS messages FROM saas_knowledge_extractions e,
+              LATERAL jsonb_array_elements(e.source_refs) r WHERE e.tenant_id=%s::uuid AND e.status='completed'
+              AND e.id IN (SELECT extraction_id FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid)''',(tenant,tenant,row['id']))
+            messages=cur.fetchone()['messages']
+            cur.execute('''SELECT count(*) FILTER(WHERE m->>'status'='processed') AS processed,
+              count(*) FILTER(WHERE m->>'status'<>'processed') AS unavailable FROM
+              (SELECT DISTINCT ON (m->>'channel_id',m->>'id') m FROM saas_knowledge_extractions e,
+              LATERAL jsonb_array_elements(e.media_results) m WHERE e.tenant_id=%s::uuid
+              AND e.id IN (SELECT extraction_id FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid)
+              ORDER BY m->>'channel_id',m->>'id',e.created_at DESC) evidence''',(tenant,tenant,row['id']))
+            media=cur.fetchone()
+            cur.execute('''SELECT c.status,count(DISTINCT c.id) AS n FROM saas_knowledge_candidates c
+              WHERE c.tenant_id=%s::uuid AND c.extraction_id IN (SELECT extraction_id FROM saas_knowledge_campaign_fragments
+              WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid) GROUP BY c.status''',(tenant,tenant,row['id']))
+            reviews={r['status']:r['n'] for r in cur.fetchall()}
+
     return {'campaign':{'id':str(row['id']),'version':row['version'],'status':row['status'],
       'channel_ids':row['sources'],'fragments':counts,'cards':cards,
       'reserved_calls':row['reserved_calls'],'reserved_tokens':row['reserved_tokens'],
       'used_tokens':int(tokens),'cost':None,'max_calls':row['max_calls'],'max_tokens':row['max_tokens'],
-      'progress':row['progress'],'media_processed':None,'media_unavailable':None,'processed_messages':None}}
+      'progress':row['progress'],'media_processed':media['processed'],'media_unavailable':media['unavailable'],'processed_messages':messages,'reviews':reviews}}
 
 
 def complete(claimed, response):
     """Fence completion by lease; partial media never becomes completed history."""
     request=response['request'];tenant=str(claimed['tenant_id'])
     media=request.get('media_results')
-    missing=media is None or any(m.get('status')!='processed' for m in media)
+    missing=media is None or any(m.get('status')!='processed' or m.get('kind')=='video' or m.get('audio_status')=='unavailable_or_error' for m in media)
     state=request['status']
     if state=='completed' and missing:state='partial'
     if state not in {'completed','partial','failed','unknown'}:state='unknown'
@@ -160,10 +176,12 @@ def complete(claimed, response):
         with conn.cursor() as cur:
             cur.execute('''UPDATE saas_knowledge_campaign_fragments SET status=%s,extraction_id=%s::uuid,
               result=%s::jsonb,error_code=%s,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid
-              AND status='running' AND lease_token=%s::uuid RETURNING id''',
+              AND status IN ('running','unknown') AND lease_token=%s::uuid RETURNING id''',
               (state,request['id'],_json({'message_count':request.get('message_count'),'media_results':media}),
                code,tenant,claimed['id'],claimed['lease_token']))
             if not cur.fetchone():return False
+            if str(request['id'])!=str(claimed['id']):
+                cur.execute('UPDATE saas_knowledge_campaigns SET reserved_calls=reserved_calls-2,reserved_tokens=reserved_tokens-24000 WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,claimed['campaign_id']))
             # Completed text can advance while unavailable attachments remain a
             # durable partial fragment for an explicit, budgeted later retry.
             if request.get('next_before') and state in {'completed','partial'}:
@@ -174,3 +192,26 @@ def complete(claimed, response):
                 enqueue(cur,claimed['profile'],campaign,route)
         conn.commit()
     return True
+
+
+def approve(profile,campaign_id,data):
+    """Explicit source/budget confirmation, never called by deployment/startup."""
+    if set(data)!={'expected_version','channel_ids','max_calls','max_tokens','confirm_external_processing'} or data['confirm_external_processing'] is not True:
+        raise TenantLinearError('Подтвердите источники и бюджет внешней обработки.')
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            tenant,actor,_=store.authorize(cur,profile)
+            cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,identifier(campaign_id)))
+            row=cur.fetchone()
+            if not row:raise TenantLinearError('Процесс не найден.',404)
+            if row['status']!='awaiting_budget' or row['version']!=data['expected_version']:
+                raise TenantLinearError('Обновите план перед подтверждением.',409)
+            if row['sources']!=sorted(set(data['channel_ids'])) or row['max_calls']!=data['max_calls'] or row['max_tokens']!=data['max_tokens']:
+                raise TenantLinearError('Источники или бюджет изменились.',409)
+            if row['max_calls']<2 or row['max_tokens']<24000:raise TenantLinearError('Бюджет должен покрывать хотя бы один мультимодальный фрагмент.')
+            from tenant_knowledge_campaign_discovery import seed
+            seed(cur,profile,row)
+            cur.execute("UPDATE saas_knowledge_campaigns SET status='running',approved_by=%s,approved_at=now(),version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid",(actor,tenant,campaign_id))
+            store._audit(cur,tenant,actor,'knowledge_campaign_budget_approved','knowledge_campaign',campaign_id)
+        conn.commit()
+    return get(profile,campaign_id)

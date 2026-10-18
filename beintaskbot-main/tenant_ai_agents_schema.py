@@ -288,6 +288,8 @@ def ensure_schema(conn):
             cur.execute("CREATE TABLE IF NOT EXISTS saas_ai_worker_health (worker TEXT PRIMARY KEY,last_seen_at TIMESTAMPTZ NOT NULL)")
         from tenant_knowledge_candidates_schema import create_schema as create_candidates_schema
         create_candidates_schema(conn)
+        from tenant_knowledge_campaign_schema import create_schema as create_campaign_schema
+        create_campaign_schema(conn)
         from tenant_ai_expert_schema import create_schema as create_expert_schema
         create_expert_schema(conn)
         from tenant_ai_testing_schema import create_schema as create_testing_schema
