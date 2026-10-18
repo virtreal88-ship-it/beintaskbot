@@ -11,6 +11,8 @@ from tenant_knowledge_candidates_policy import MAX_TOKENS
 def campaign(ready,monkeypatch):
     d,provider,_=ready
     monkeypatch.setattr(campaigns,'_connect',lambda:d)
+    import tenant_knowledge_quality as quality
+    monkeypatch.setattr(quality,'_connect',lambda:d)
     data={'request_id':str(uuid.uuid4()),'channel_ids':[CA],'analysis_agent_id':AGENT,'max_calls':2,'max_tokens':2*(MAX_TOKENS+8000)}
     key=campaigns.prepare(PROFILE,data)
     return d,provider,data,key
@@ -25,7 +27,7 @@ def add(d,key,n=0):
     d.commit();return result
 
 def approve_fixture(d,key):
-    # Test-only authorization. Production has no approval/start endpoint yet.
+    # Test-only shortcut; explicit production approval is tested separately.
     d.execute("UPDATE saas_knowledge_campaigns SET status='running',approved_at=now(),approved_by=11 WHERE id=%s::uuid",(key,));d.commit()
 
 def test_prepare_is_unapproved_and_idempotent(campaign):
@@ -181,3 +183,90 @@ def test_recovery_reuses_finished_receipt_without_another_call(campaign,monkeypa
     worker.reconcile(PROFILE,key);worker.reconcile(PROFILE,key)
     assert provider.call_count==1
     assert d.execute('SELECT status FROM saas_knowledge_campaign_fragments')[0]['status']=='completed'
+
+def test_published_knowledge_uses_virtual_test_and_shared_budget(campaign,monkeypatch):
+    import tenant_knowledge_campaign_worker as worker
+    import tenant_knowledge_quality as quality
+    import tenant_knowledge_candidates_store as candidates
+    import tenant_ai_testing_store as testing
+    import tenant_ai_testing_service as virtual
+    from unittest.mock import Mock
+    d,_,_,key=campaign
+    monkeypatch.setattr(worker,'_connect',lambda:d);monkeypatch.setattr(testing,'_connect',lambda:d)
+    for name,value in [('runtime_flag',lambda _:True),('platform_service_ready',lambda:True),('platform_model',lambda:'fixture'),('platform_model_allowed',lambda _:True),('platform_token_limit',lambda _:0),('choose_api_credential',lambda *a:('mock','platform'))]:monkeypatch.setattr(testing,name,value)
+    generation=Mock(return_value=('Проверить соединение Повторить синхронизацию',{'total_tokens':30}))
+    monkeypatch.setattr(virtual,'generate',generation)
+    d.execute('UPDATE saas_knowledge_campaigns SET max_calls=4,max_tokens=48000');d.commit()
+    approve_fixture(d,key);worker.tick();worker.tick()
+    card=candidates.listing(PROFILE,{})['candidates'][0]
+    assert quality.tick(PROFILE,key) is False
+    candidates.mutate(PROFILE,card['id'],{'expected_version':card['version'],'agent_ids':[AGENT]},'approve')
+    assert quality.tick(PROFILE,key)
+    assert not quality.tick(PROFILE,key)
+    assert generation.call_count==1
+    d.execute("UPDATE saas_knowledge_quality_checks SET state='running',retrieval_state='pending',response_state='pending'");d.commit()
+    quality.reconcile(PROFILE,key)
+    assert not quality.tick(PROFILE,key)
+    assert generation.call_count==1
+    check=d.execute('SELECT state,retrieval_state,response_state FROM saas_knowledge_quality_checks')[0]
+    assert check=={'state':'completed','retrieval_state':'found','response_state':'exact_supported'}
+    assert row(d,key)['reserved_calls']==3
+    assert not d.execute('SELECT * FROM saas_ai_agent_drafts')
+
+
+def test_quality_never_labels_missing_sources_or_extra_steps_as_supported():
+    from tenant_knowledge_quality import verdict
+    assert verdict({'state':'completed','response':'Approved'},'source',['Approved'])==('missing_source','not_checked')
+    turn={'state':'completed','trace':{'knowledge':[{'source_id':'source'}]},'response':'Approved and delete all files'}
+    assert verdict(turn,'source',['Approved'])==('found','requires_review')
+    assert verdict({**turn,'response':'Approved'},'source',['Approved','Second step'])==('found','requires_review')
+
+
+def test_budget_renewal_keeps_progress_and_requires_explicit_consent(campaign):
+    d,_,data,key=campaign
+    d.execute("UPDATE saas_knowledge_campaigns SET status='budget_exhausted',progress='{"+'"phase":"history"'+"}'::jsonb");d.commit()
+    approval={'expected_version':1,'channel_ids':[CA],'max_calls':4,'max_tokens':72000,'confirm_external_processing':False}
+    with pytest.raises(TenantLinearError):campaigns.approve(PROFILE,key,approval)
+    result=campaigns.approve(PROFILE,key,{**approval,'confirm_external_processing':True})['campaign']
+    assert result['status']=='running' and result['progress']['phase']=='waiting_completion'
+
+@pytest.mark.parametrize('kinds,expected',[(['image']*10,2),(['audio']*5,1),(['document']*4,1),(['video','voice'],1)])
+def test_campaign_media_pages_do_not_strand_older_attachments(kinds,expected):
+    from tenant_knowledge_campaign_discovery import bound_context
+    item={'refs':[{'id':str(i),'media_kind':kind} for i,kind in enumerate(kinds)],'messages':[{'text':str(i)} for i in range(len(kinds))],'next_before':None}
+    bound_context(item)
+    assert len(item['refs'])==expected
+    assert item['next_before']==item['refs'][0]['id']
+    assert item['messages'][0]['text']==item['refs'][0]['id']
+
+def test_group_inventory_merges_only_verified_identity_and_requires_all_sources(campaign):
+    import tenant_knowledge_campaign_discovery as discovery
+    from test_knowledge_candidates import GROUP
+    d,provider,_,key=campaign;second=str(uuid.uuid4())
+    d.execute('UPDATE saas_connect_conversations SET conversation_id=%s WHERE tenant_id=%s::uuid',(GROUP,A))
+    d.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'Second')",(A,second))
+    d.execute('INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,%s,43)',(A,second,GROUP))
+    d.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,43,'copy',%s,'incoming','Synthetic group message')",(A,str(uuid.uuid4()),'connect:'+second));d.commit()
+    with pytest.raises(TenantLinearError):
+        with d.cursor() as cur:discovery.seed(cur,PROFILE,row(d,key))
+    d.rollback()
+    import json
+    d.execute('UPDATE saas_knowledge_campaigns SET sources=%s::jsonb',(json.dumps([CA,second]),));d.commit()
+    with d.cursor() as cur:discovery.seed(cur,PROFILE,row(d,key))
+    d.commit()
+    planned=d.execute('SELECT history_mode FROM saas_knowledge_campaign_sources')
+    assert planned==[{'history_mode':'unified_group'}]
+    assert row(d,key)['progress']['source_count']==1
+    provider.assert_not_called()
+
+
+def test_inventory_keyset_reads_more_than_one_page(campaign):
+    import tenant_knowledge_campaign_discovery as discovery
+    d,provider,_,key=campaign
+    for n in range(101):
+        d.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,%s,%s)",(A,CA,'history-'+str(n),1000+n))
+        d.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,%s,%s,%s,'incoming','Synthetic')",(A,str(uuid.uuid4()),1000+n,'history-'+str(n),'connect:'+CA))
+    d.commit()
+    with d.cursor() as cur:rows=discovery.inventory(cur,PROFILE,[CA])
+    assert len(rows)==102 and len({r['conversation_id'] for r in rows})==102
+    provider.assert_not_called()

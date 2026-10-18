@@ -112,7 +112,7 @@ def collect(profile,item):
                 check_active(profile,item)
                 asr_used=True
                 from tenant_knowledge_media_cache import transcribe_once
-                text,usage,_=transcribe_once(profile,item,model,media,transcribe)
+                text,usage,asr_used=transcribe_once(profile,item,model,media,transcribe)
                 item['asr_usage']=usage
                 text=redact(text,names)[:4000]
                 receipt.update(status='processed',code='transcribed',transcript=text,model=model)
@@ -158,7 +158,7 @@ def collect(profile,item):
                         check_active(profile,item)
                         asr_used=True
                         from tenant_knowledge_media_cache import transcribe_once
-                        text,usage,_=transcribe_once(profile,item,model,track,transcribe)
+                        text,usage,asr_used=transcribe_once(profile,item,model,track,transcribe)
                         item['asr_usage']=usage;text=redact(text,names)[:4000]
                         receipt.update(audio_status='processed',transcript=text,model=model)
                         message['text']+='\n[Video audio transcript] '+text

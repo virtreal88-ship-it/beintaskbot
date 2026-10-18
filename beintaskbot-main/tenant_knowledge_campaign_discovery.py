@@ -10,16 +10,25 @@ import tenant_knowledge_candidates_store as store
 
 def inventory(cur, profile, channels):
     tenant,_,_=store.authorize(cur,profile)
-    # No message bodies or author identifiers leave this query.
-    cur.execute('''SELECT c.connect_channel_id AS channel_id,c.conversation_id,
-      min(COALESCE(m.happened_at,m.created_at)) AS earliest,
-      max(COALESCE(m.happened_at,m.created_at)) AS latest,
-      count(*) AS messages, count(*) FILTER(WHERE m.message_type<>'text') AS attachments
-      FROM saas_connect_conversations c JOIN saas_crm_messages m ON m.tenant_id=c.tenant_id
-      AND m.kommo_lead_id=c.lead_id AND m.channel='connect:'||c.connect_channel_id::text
-      WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=ANY(%s::uuid[])
-      GROUP BY c.connect_channel_id,c.conversation_id ORDER BY c.connect_channel_id,c.conversation_id''',(tenant,channels))
-    return cur.fetchall()
+    # Bounded keyset pages; initial metadata snapshot commits atomically with
+    # durable per-source cursors. A crash here repeats reads, never AI calls.
+    rows=[];after_channel='00000000-0000-0000-0000-000000000000';after_conversation=''
+    while True:
+        cur.execute("""SELECT c.connect_channel_id AS channel_id,c.conversation_id,
+          min(COALESCE(m.happened_at,m.created_at)) AS earliest,
+          max(COALESCE(m.happened_at,m.created_at)) AS latest,
+          count(*) AS messages,count(*) FILTER(WHERE m.message_type<>'text') AS attachments
+          FROM saas_connect_conversations c JOIN saas_crm_messages m ON m.tenant_id=c.tenant_id
+          AND m.kommo_lead_id=c.lead_id AND m.channel='connect:'||c.connect_channel_id::text
+          WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=ANY(%s::uuid[])
+          AND (c.connect_channel_id,c.conversation_id)>(%s::uuid,%s)
+          GROUP BY c.connect_channel_id,c.conversation_id
+          ORDER BY c.connect_channel_id,c.conversation_id LIMIT 100""",
+          (tenant,channels,after_channel,after_conversation))
+        page=cur.fetchall();rows.extend(page)
+        if len(page)<100:return rows
+        after_channel=str(page[-1]['channel_id']);after_conversation=page[-1]['conversation_id']
+
 
 
 def seed(cur, profile, campaign):
@@ -89,3 +98,15 @@ def discover_resolved(cur, profile, campaign):
       VALUES(%s::uuid,%s::uuid,'ticket:'||%s::text||':'||%s::timestamptz::text,%s::uuid,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
       (campaign['tenant_id'],campaign['id'],ticket['id'],ticket['resolved_at'],ticket['channel_id'],ticket['conversation_id'],
        'unified_group' if group_jid(ticket['conversation_id']) else 'channel',start,end,start))
+
+def bound_context(item):
+    """Advance by actually admitted evidence; never strand media behind a page cursor."""
+    def over():
+        kinds=[r.get('media_kind') for r in item['refs']]
+        return (sum(bool(k) for k in kinds)>4 or
+          sum({'image':1,'video':2,'document':2}.get(k,0) for k in kinds)>2 or
+          sum(k in {'audio','voice','video'} for k in kinds)>1)
+    trimmed=False
+    while len(item['refs'])>1 and over():
+        item['refs'].pop(0);item['messages'].pop(0);trimmed=True
+    if trimmed:item['next_before']=item['refs'][0]['id']

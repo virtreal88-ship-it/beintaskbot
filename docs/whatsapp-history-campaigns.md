@@ -1,47 +1,57 @@
-# WhatsApp history campaign foundation — NOT a deployable release
+# Continuous WhatsApp knowledge accumulation — release candidate
 
-Base: origin/main 3debb64e. Branch: codex/whatsapp-knowledge-backfill.
+Base: production main 3debb64e. Branch: codex/whatsapp-knowledge-backfill.
 
-Implemented and tested independently of the in-progress multimodal branch:
-- Additive, opt-in campaign and fragment tables; existing message/candidate tables untouched.
-- Preparation records selected tenant-owned channels, analysis agent and hard call/token caps.
-- Preparation always remains awaiting_budget; no paid operation is started.
-- Server authorization, idempotent preparation/enqueue, optimistic control versions.
-- PostgreSQL tenant advisory lock + row lock reserve one fragment and its budget atomically.
-- Pause/Resume/Stop preserve records; Resume cannot approve an unapproved campaign.
-- Expired in-flight attempts become unknown, retain their reservation and block automatic replay.
-- Completion is lease-fenced. Missing/nonprocessed media marks a fragment partial.
-- Successful fragment continuations reuse the existing authorized extraction route and cursor.
-- Unknown media/message/currency metrics remain null, never presented as observed zero.
+## Implemented
+- Integrates Sol Beintaskbot 89e296b1 as 55ff595b; protected video/document support requires Connect c2dd3f6 first.
+- Opt-in campaigns reuse existing extraction, Support Cases, Knowledge Sources and private virtual AI tests.
+- Selected channels and call/token caps require separate versioned owner/admin consent. Deployment never starts a campaign.
+- Keyset source inventory, durable source checkpoints, <=30-day windows and existing <=80-message pages; no age cutoff.
+- Verified group identity only, all participating channels must be explicitly approved; original media source routes preserved.
+- New ingestion requires an explicitly resolved support ticket stable for 30 minutes. Inactivity does not resolve a ticket. New messages after resolution require another explicit resolution.
+- Atomic tenant reservations, one fragment at a time, lease fencing, durable completed-receipt recovery. Unknown paid attempts retain reservations and are never automatically replayed.
+- Pause/Resume/Stop and emergency-stop checks. Resume may retry bounded failed/incomplete fragments with known receipts; it never retries unknown calls.
+- Tenant-scoped ASR receipts prevent repeat transcription, including concurrent processes. Existing group read deduplication remains unchanged.
+- Photo/audio/video/PDF/TXT/DOCX use bounded existing media handling. Missing media stays partial. Sampled video is explicitly partial, never full analysis.
+- Exact evidence/card duplicate suppression and deterministic possible-conflict hints. No automatic approval or publication.
+- Published candidate sources can trigger a budgeted private virtual check; retrieval failure and answer-review status are separate. This never invokes customer transports.
+- Support Cases UI includes explicit source/budget confirmation, progress, controls and quality results in RU/AZ/EN.
 
-## Integration boundary / release blockers
+## Exact additive migration
+Five new tables: saas_knowledge_campaigns, saas_knowledge_campaign_fragments,
+saas_knowledge_campaign_sources, saas_knowledge_media_cache, saas_knowledge_quality_checks.
+Two campaign indexes (one active campaign per tenant; pending-fragment index),
+plus primary/unique indexes and foreign keys on the new tables.
+Existing extraction: media_results JSONB NOT NULL DEFAULT '[]'.
+Existing candidate: quality_flags JSONB NOT NULL DEFAULT '[]'.
+No message/history deletion, no agent-setting updates or state transfer.
+Existing candidate schema code retains its pre-existing status constraint refresh.
+Local disposable PostgreSQL compatibility and preservation tests pass; production
+schema/inventory checks still require working authenticated Console access.
 
-This is a preparatory commit, not the requested finished automatic process.
-The schema is intentionally NOT wired into production startup, and no new public
-API, background runner or approval endpoint is registered. No production change.
+## Deployment / rollback
+Connect c2dd3f6 protected historical media first, then Beintaskbot/worker.
+Verify ffmpeg and optional pdftoppm; missing tooling must produce explicit unsupported/partial media.
+Do not create services or campaigns as part of deployment.
+Before application rollback pause campaigns and drain/record in-flight receipts;
+retain all additive tables/columns and reservations. Never replay unknown receipts.
+Do not remove schema to roll back the application.
 
-Sol is currently implementing codex/history-media on the same base. There is no
-finished commit to integrate yet. His media_results contract needs final tests.
-A fragment with new audio transcription can consume more than the one model call
-reserved by this foundation. Before enabling execution, reserve the STRICT upper
-bound of all model/ASR calls and token/media budgets, including unknown results.
-Never pass allow_paid_asr through this one-call reservation.
+## Validation / remaining release gate
+153 combined targeted Python tests passed before final bounded-discovery/recovery tightening.
+Real PostgreSQL two-process claim and ASR-cache races passed.
+Four JS suites passed (campaign controls, existing cases, batch UI, card refinement).
+Chrome used real local assets and API with disposable PostgreSQL and mock AI:
+prepare, explicit consent, background candidate creation, pause and retained state.
+This is not a production or real-provider test.
+Railway production remains 3debb64e / c7ee7807-9783-4198-bf15-776227ecd0b1.
+Authenticated Console renders Connected but browser input fails with CDP timeouts;
+no production SELECT was confirmed and no deployment was attempted.
 
-Remaining work:
-1. Integrate Sol's completed commit and verify media provenance/completeness and
-   all paid-call/token accounting. Text completion must not hide pending media.
-2. Add bounded, durable all-history discovery with authoritative source checkpoint,
-   month/window splitting within existing <=31-day limits, and subsequent ingestion.
-   Deal with late-arriving messages, unified-group duplicate routes and empty pages.
-3. Add receipt reconciliation after restart (reuse completed receipts; never retry
-   uncertain paid calls). Retry only failed/incomplete evidence with explicit caps.
-4. Wire existing worker, explicit budget/source confirmation and authorized status/
-   control API; build progress panel inside existing Support Cases, RU/AZ/EN.
-5. Aggregate unique evidence/message/media counts, actual usage and unknown costs.
-6. Validate contradiction handling and cross-fragment candidate deduplication.
-7. Real multi-process PostgreSQL concurrency tests plus integrated browser checks.
-
-Tests: 9 new disposable PostgreSQL/PGlite tests passed. Existing knowledge batch
-regressions: 17 passed. Providers are mocks; no real AI calls or customer sends.
-No runtime full-history scan, production SQL, migration, merge or deployment.
-No agent settings, sessions, Connect or /webapp modifications.
+## Honest limitations
+- Currency cost is unknown, not zero: call/token reservations are not a monetary invoice. A model/source/media inventory and proposed budget must be approved before real processing.
+- ASR max60s, visuals detail low, bounded video frames/PDF pages; no claim of full long-video/document coverage.
+- Conflict detection is deterministic, not semantic proof. Virtual answer checking only accepts exact supported steps automatically; paraphrases/additional claims require employee review.
+- Initial metadata inventory is paginated but committed atomically; a crash during inventory repeats reads, not AI calls. Source/message processing progress is durable.
+- Continuous mode depends on explicit resolved support tickets. Ordinary unfinished chats remain unprocessed as completed solutions.
+- No real messages/media were sent to AI or customers. No production source counts or price estimate are asserted without evidence.

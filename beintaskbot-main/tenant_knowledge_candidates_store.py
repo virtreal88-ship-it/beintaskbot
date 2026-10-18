@@ -49,6 +49,7 @@ def route(cur,profile,data):
     binding={'language':language(data.get('language'),profile),'provider':'connect','channel_id':channel,'conversation_id':conversation,'history_mode':mode,'ticket_id':ticket_id}
     for flag in ('allow_external_media','allow_paid_asr'):
         if flag in data: binding[flag]=data[flag]
+    if data.get('retry_of'):binding['retry_of']=identifier(data['retry_of'])
     if start: binding.update(period_start=start,period_end=end)
     return tenant,actor,policy,chosen,binding,ticket
 

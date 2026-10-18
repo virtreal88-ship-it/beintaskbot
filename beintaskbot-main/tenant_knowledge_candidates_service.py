@@ -30,7 +30,7 @@ Write concise general instructions in the requested output_language (ru, az or e
 
 
 def prepare(profile,data,review=None):
-    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr'}
+    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректные параметры анализа.')
     for flag in ('allow_external_media','allow_paid_asr'):
         if flag in data and type(data[flag]) is not bool: raise TenantLinearError('Некорректное разрешение медиа.')
@@ -57,6 +57,17 @@ def prepare(profile,data,review=None):
                 if replay['request_key']!=request_key: raise TenantLinearError('request_id уже использован для другого запроса.',409)
                 return {'existing':request_id}
             item=review['snapshot'] if review else store.snapshot(cur,profile,data)
+            cur.execute('SELECT 1 FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,request_id))
+            if cur.fetchone():
+                from tenant_knowledge_campaign_discovery import bound_context
+                bound_context(item)
+            if data.get('retry_of'):
+                old=store.extraction_row(cur,tenant,identifier(data['retry_of']))
+                if not old or old['status'] not in {'failed','completed'}:raise TenantLinearError('Неопределённые запросы не повторяются.',409)
+                if old['route']['channel_id']!=item['route']['channel_id'] or old['route']['conversation_id']!=item['route']['conversation_id']:raise TenantLinearError('Источник не совпадает.',409)
+                if old['status']=='completed' and not any(m.get('status')!='processed' or m.get('audio_status')=='unavailable_or_error' for m in old.get('media_results') or []):raise TenantLinearError('Фрагмент уже обработан.',409)
+                store.evidence(cur,profile,old)
+
             if review: item['route']={**item['route'],'review':review['key'],'language':data['language']}
             cur.execute('SELECT a.*,s.enabled AS settings_enabled,s.emergency_stop,i.secrets,i.metadata FROM saas_ai_agents a JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id LEFT JOIN saas_tenant_integrations i ON i.tenant_id=a.tenant_id AND i.provider=%s WHERE a.tenant_id=%s::uuid AND (%s::uuid IS NULL OR a.id=%s::uuid) ORDER BY a.created_at,a.id LIMIT 1 FOR SHARE OF a,s',
                 ('chat_ai',tenant,identifier(data['analysis_agent_id']) if data.get('analysis_agent_id') else None,identifier(data['analysis_agent_id']) if data.get('analysis_agent_id') else None))
@@ -82,11 +93,12 @@ def prepare(profile,data,review=None):
             content_route={'provider':'connect','conversation_id':item['route']['conversation_id'],'history_mode':item['route']['history_mode']}
             if item['route']['history_mode']=='channel': content_route['channel_id']=item['route']['channel_id']
             content_route.update({flag:data[flag] for flag in ('allow_external_media','allow_paid_asr') if flag in data})
+            if data.get('retry_of'):content_route['retry_of']=identifier(data['retry_of'])
             fingerprint=store.digest([content_route,item['refs'],item['source_digest'],str(agent['id']),model,data['language'],review['key'] if review else None])
             cur.execute("""SELECT e.* FROM saas_knowledge_extractions e WHERE tenant_id=%s::uuid AND
-              (id=%s::uuid OR fingerprint=%s OR (source_refs=%s::jsonb AND source_digest=%s AND route->>'history_mode'=%s AND (%s='unified_group' OR route->>'channel_id'=%s) AND COALESCE(route->>'language','ru')=%s AND COALESCE(route->'review','null'::jsonb)=%s::jsonb AND COALESCE(route->>'allow_external_media','false')=%s AND COALESCE(route->>'allow_paid_asr','false')=%s AND EXISTS(
+              (id=%s::uuid OR fingerprint=%s OR (source_refs=%s::jsonb AND source_digest=%s AND route->>'history_mode'=%s AND (%s='unified_group' OR route->>'channel_id'=%s) AND COALESCE(route->>'language','ru')=%s AND COALESCE(route->'review','null'::jsonb)=%s::jsonb AND COALESCE(route->>'allow_external_media','false')=%s AND COALESCE(route->>'allow_paid_asr','false')=%s AND COALESCE(route->>'retry_of','')=%s AND EXISTS(
                 SELECT 1 FROM saas_ai_agent_runs r WHERE r.tenant_id=e.tenant_id AND r.id=e.id AND r.agent_id=%s::uuid AND r.model=%s)))
-              ORDER BY id=%s::uuid DESC LIMIT 1""",(tenant,request_id,fingerprint,_json(item['refs']),item['source_digest'],item['route']['history_mode'],item['route']['history_mode'],item['route']['channel_id'],data['language'],_json(review['key']) if review else 'null',str(data.get('allow_external_media',False)).lower(),str(data.get('allow_paid_asr',False)).lower(),agent['id'],model,request_id))
+              ORDER BY id=%s::uuid DESC LIMIT 1""",(tenant,request_id,fingerprint,_json(item['refs']),item['source_digest'],item['route']['history_mode'],item['route']['history_mode'],item['route']['channel_id'],data['language'],_json(review['key']) if review else 'null',str(data.get('allow_external_media',False)).lower(),str(data.get('allow_paid_asr',False)).lower(),str(data.get('retry_of') or ''),agent['id'],model,request_id))
             existing=cur.fetchone()
             if existing:
                 if str(existing['id'])==request_id and existing['fingerprint']!=fingerprint: raise TenantLinearError('request_id уже использован для другого фрагмента.',409)
@@ -177,8 +189,11 @@ def finish(profile,item,values,usage,error,attempted,proposal=None):
             if values is not None:
                 for value in values:
                     value=store.enforce_confirmation(value,evidence)
-                    cur.execute("INSERT INTO saas_knowledge_candidates(tenant_id,id,extraction_id,content,content_hash,status) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::jsonb,%s,%s) ON CONFLICT(tenant_id,extraction_id,content_hash) DO NOTHING",
-                        (tenant,str(uuid.uuid4()),request_id,_json(value),store.digest(value),'needs_clarification' if approval_reason(value) else 'pending_review'))
+                    from tenant_knowledge_quality_policy import check as check_quality
+                    duplicate,flags=check_quality(cur,tenant,item['route'],value,item['refs'])
+                    if duplicate:continue
+                    cur.execute("INSERT INTO saas_knowledge_candidates(tenant_id,id,extraction_id,content,content_hash,status,quality_flags) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::jsonb,%s,%s,%s::jsonb) ON CONFLICT(tenant_id,extraction_id,content_hash) DO NOTHING",
+                        (tenant,str(uuid.uuid4()),request_id,_json(value),store.digest(value),'needs_clarification' if approval_reason(value) else 'pending_review',_json(flags)))
             if proposal is not None and status=='completed':
                 cur.execute('UPDATE saas_ai_agent_runs SET result=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(proposal),tenant,request_id))
             if 'media_results' in item:
@@ -213,6 +228,7 @@ def analyze(profile,data):
         return response
     values=None;usage=None;error='model_unavailable';attempted=False
     try:
+        check_active(profile,item)
         with _connect() as conn:
             with conn.cursor() as cur:
                 row=store.extraction_row(cur,item['tenant'],item['id']);names=[];store.evidence(cur,profile,row,names)

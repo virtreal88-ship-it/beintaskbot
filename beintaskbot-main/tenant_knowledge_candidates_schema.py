@@ -20,6 +20,7 @@ def create_schema(conn):
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY(tenant_id,id),UNIQUE(tenant_id,extraction_id,content_hash),
           FOREIGN KEY(tenant_id,extraction_id) REFERENCES saas_knowledge_extractions(tenant_id,id) ON DELETE CASCADE)""")
+        cur.execute("ALTER TABLE saas_knowledge_candidates ADD COLUMN IF NOT EXISTS quality_flags JSONB NOT NULL DEFAULT '[]'::jsonb")
         cur.execute("ALTER TABLE saas_knowledge_candidates DROP CONSTRAINT IF EXISTS saas_knowledge_candidates_status_check")
         cur.execute("ALTER TABLE saas_knowledge_candidates ADD CONSTRAINT saas_knowledge_candidates_status_check CHECK(status IN ('pending_review','needs_clarification','approved','rejected'))")
         from tenant_knowledge_batch_schema import create_schema as batches_schema
