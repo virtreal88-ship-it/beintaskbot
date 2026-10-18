@@ -44,7 +44,7 @@ def card(data,allowed_ids):
     result={key:text(data[key],180 if key=='title' else 120, key=='title') for key in ('title','product','product_version')}
     for key in ('symptoms','resolution_steps'):
         values=data[key]
-        if not isinstance(values,list) or not 1<=len(values)<=10: raise TenantLinearError('Нужны симптомы и шаги решения.')
+        if not isinstance(values,list) or not (1 if key=='symptoms' else 0)<=len(values)<=10: raise TenantLinearError('Нужны симптомы и шаги решения.')
         result[key]=[text(v,800,True) for v in values]
     cause=data['cause'];outcome=data['outcome']
     if not isinstance(cause,dict) or set(cause)!={'status','text'} or cause['status'] not in ('confirmed','suspected','unknown'): raise TenantLinearError('Некорректная причина.')
@@ -60,6 +60,8 @@ def card(data,allowed_ids):
     result['outcome']={'status':outcome['status'],'text':text(outcome['text'],1200),'message_ids':ids(outcome['message_ids'])}
     if set(result['outcome']['message_ids'])-set(result['source_message_ids']): raise TenantLinearError('Подтверждение должно входить в исходные сообщения.')
     if result['outcome']['status']=='confirmed' and not result['outcome']['message_ids']: raise TenantLinearError('Нужна ссылка на подтверждающее сообщение.')
+    if result['outcome']['status']=='confirmed' and not result['resolution_steps']:
+        raise TenantLinearError('Подтверждённое решение требует шагов.')
     return result
 
 

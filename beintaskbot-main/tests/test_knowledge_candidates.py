@@ -285,3 +285,38 @@ def test_same_request_replay_keeps_original_window_after_new_messages(ready):
     assert replay['request']['id']==first['request']['id']
     assert replay['request']['source_message_ids']==first['request']['source_message_ids']
     generation.assert_called_once()
+
+
+@pytest.mark.parametrize('steps',[[],['Проверить соединение']])
+def test_unresolved_problem_retained_for_clarification_without_publication(ready,steps):
+    db,generation,data=ready
+    value=model_card(confirmed=False)
+    value['resolution_steps']=steps
+    value['outcome']={'status':'unknown','text':'Результат неизвестен','message_ids':[]}
+    generation.return_value=(json.dumps({'cards':[value]}),{'input_tokens':40,'output_tokens':20,'total_tokens':60})
+    first=service.analyze(PROFILE,data)
+    result=first['candidates'][0]
+    assert first['request']['status']=='completed'
+    assert result['status']=='needs_clarification'
+    assert result['resolution_steps']==steps and not result['can_approve']
+    assert service.analyze(PROFILE,data)['candidates'][0]['id']==result['id']
+    generation.assert_called_once()
+    with pytest.raises(TenantLinearError,match='confirmation_required'):
+        store.mutate(PROFILE,result['id'],{'expected_version':1,'agent_ids':[AGENT]},'approve')
+    assert not db.execute('SELECT id FROM saas_ai_knowledge_sources')
+
+
+def test_confirmed_card_without_solution_rejected():
+    value=model_card();value['resolution_steps']=[]
+    ids=[str(uuid.UUID(int=i)) for i in (1,2,3)]
+    value['source_message_ids']=ids;value['outcome']['message_ids']=[ids[-1]]
+    with pytest.raises(TenantLinearError):policy.card(value,ids)
+
+
+def test_empty_model_result_completes_without_persistence(ready):
+    db,generation,data=ready
+    generation.return_value=('{'+'"cards":[]}',{'input_tokens':399,'output_tokens':5,'total_tokens':404})
+    result=service.analyze(PROFILE,data)
+    assert result['request']['status']=='completed' and result['candidates']==[]
+    assert service.analyze(PROFILE,data)['candidates']==[]
+    generation.assert_called_once()
