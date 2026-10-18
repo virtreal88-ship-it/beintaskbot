@@ -151,3 +151,31 @@ It serves only the artifact directory on 127.0.0.1 using an automatically alloca
 port and opens the lesson in the default browser. No external dependencies or
 production service are needed; Ctrl+C stops it. Keep the window/tab visible:
 visibility changes and manual wheel interaction intentionally pause playback.
+
+
+### Final smooth playback (supersedes earlier speed/fade notes)
+
+Default rate is 1.75×; choices are 0.75×, 1×, 1.25×, 1.5×, 1.75× and 2×.
+The 108-second lesson takes about 62 seconds at the default rate. Each slide
+returns to overview in its final second (650ms smooth focus transition). A real
+650ms crossfade on the lesson clock then blends the previous overview behind the
+incoming image; the next focus starts at 1400ms. Rates scale all these timings.
+There is no fade to an empty background. Both layers and focus are driven by the
+same clock, so Pause freezes their opacity and transform. Reduced-motion disables
+crossfade and interpolated focus. Seeking discards the outgoing layer immediately.
+
+The next original JPEG is preloaded and decoded; during a late image load the
+previous screenshot remains visible and the lesson clock waits. New captions are
+committed with the decoded new slide. Source dimensions, eight images and AZ copy
+are unchanged. No image scale exceeds 1.0. Preloads are restricted to the same
+validated asset resolver/origin used by the player.
+
+Regression coverage includes all six speeds, pause in mid-crossfade, cleanup of
+the outgoing layer, native-size ceiling and existing keyboard/reduced-motion
+checks. The real-browser test also performs an uninterrupted full 1.75× run,
+records all eight steps, and samples image availability and actual DOM transforms.
+
+Browser result: PASS for real mid-crossfade Pause/Resume, live seek and speed
+changes, all eight steps in a complete default-rate run, and sampled image/native
+scale checks. Mobile 320/390px checks show no horizontal overflow and a 57px bar.
+The 48 Python contract tests and targeted Node player suite pass.
