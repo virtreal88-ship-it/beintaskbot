@@ -80,9 +80,7 @@ def allowed(job: dict, connection=None) -> bool:
             cur.execute('''SELECT 1 FROM saas_tenant_integrations i JOIN saas_connect_channels c
               ON c.tenant_id=i.tenant_id AND c.connect_channel_id=%s::uuid AND c.active=TRUE
               WHERE i.tenant_id=%s::uuid AND i.provider='connect' AND i.status='connected'
-                AND NOT EXISTS (SELECT 1 FROM saas_ai_conversation_state legacy
-                  WHERE legacy.tenant_id=i.tenant_id AND legacy.provider='connect' AND legacy.conversation_id=%s
-                    AND legacy.channel_id='')
+                AND NOT ai_legacy_blocked(i.tenant_id,c.connect_channel_id::text,%s,%s)
                 AND EXISTS (SELECT 1 FROM saas_connect_conversations route
                   WHERE route.tenant_id=i.tenant_id AND route.connect_channel_id=c.connect_channel_id
                     AND route.conversation_id=%s AND (%s::bigint IS NULL OR route.lead_id=%s))
@@ -92,7 +90,7 @@ def allowed(job: dict, connection=None) -> bool:
                     AND bound.agent_assignment_id IS NOT NULL AND %s::uuid IS NOT NULL
                     AND bound.agent_id IS DISTINCT FROM %s::uuid)
               FOR SHARE OF i,c''',
-                        (channel, tenant, conversation, conversation, job.get('lead_id'), job.get('lead_id'),
+                        (channel, tenant, conversation, job.get('event_fingerprint'), conversation, job.get('lead_id'), job.get('lead_id'),
                          conversation, bound_agent, bound_agent))
             connected = bool(cur.fetchone())
             tenant_active = tenant_status_allows_ai(settings.get('status'), 'connect')
@@ -159,7 +157,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 if connection is None:
                     conn.commit()
                 return 0
-            if not allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel_id,'conversation_id':conversation_id,'lead_id':lead_id}, connection=conn):
+            if not allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel_id,'conversation_id':conversation_id,'lead_id':lead_id,'event_fingerprint':fingerprint}, connection=conn):
                 reason = ('ai_agents_server_disabled' if not runtime_flag('AI_AGENTS_ENABLED') else
                           'company_ai_disabled' if settings.get('enabled') is not True else
                           'emergency_stop' if settings.get('emergency_stop') else 'connect_admission_blocked')
@@ -229,6 +227,8 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 if connection is None:
                     conn.commit()
                 return 0
+            from tenant_ai_legacy_permit import renew
+            renew(cur,tenant,channel_id,conversation_id)
             payload['first_inquiry'] = first_inquiry
             if payload['first_inquiry']:
                 payload['phone'] = _whatsapp_phone(conversation_id)

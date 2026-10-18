@@ -9,7 +9,7 @@ const event={agent_id:route.agent_id,agent_name:route.agent_name,channel:{id:'co
 const state=technical=>({schema_version:1,summary:{service:'available',state:'conditional',enabled_agents:1,connected_channels:1,ai_errors_24h:0,stuck_jobs:0},agents:technical==='unknown'?[]:[agent],events:technical==='unknown'?[]:[event],can_view_technical:technical!==false});
 (async()=>{
  const dom=new JSDOM('<div id="operatorDialogs"></div><div id="dealModal"><div class="modal-head"><b id="modalTitle">Old</b></div><div id="modalContent"></div></div>',{url:'https://crm.test/app?site_lang=ru',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
- let mode=true,recoveryAllowed=false,recoveryBody=null;
+ let mode=true,recoveryAllowed=false,recoveryBody=null,continuationBody=null;
  w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=function(){};
  const result=value=>({success:true,result:value});
  w.fetch=async(url,init={})=>{const target=new URL(String(url),'https://crm.test'),method=init.method||'GET';calls.push({url:target.toString(),method});let payload;
@@ -17,6 +17,7 @@ const state=technical=>({schema_version:1,summary:{service:'available',state:'co
    else if(target.pathname.endsWith('/ai/dialogs'))payload=result({dialogs:[route],channels:[{id:'connect:'+route.channel_id,name:route.channel_name}],agents:[{id:route.agent_id,name:route.agent_name}],attention_count:1,next_offset:null});
    else if(target.pathname.endsWith('/ai/dialogs/history'))payload=result({dialog:route,messages:[{id:'m1',direction:'incoming',body:'Need help',message_type:'text',happened_at:'2026-10-17T12:00:00Z'}],next_before:null});
    else if(target.pathname.endsWith('/ai/dialogs/legacy-recovery')){if(method==='POST'){recoveryBody=JSON.parse(init.body);payload=result({recovered:true,resume_required:true});}else {assert.equal(target.searchParams.get('expected_tenant_id'),member.tenant_id);payload=result({allowed:recoveryAllowed,reason:recoveryAllowed?'unique_verified_route':'multiple_channels',expected_token:'checked-evidence'});}}
+   else if(target.pathname.endsWith('/ai/dialogs/legacy-continuation')){if(method==='POST'){continuationBody=JSON.parse(init.body);payload=result({resume_required:true});}else payload=result({allowed:true,expected_token:'channel-preview',channels:[{channel_id:route.channel_id,lead_id:41,name:'Main WhatsApp'},{channel_id:'other-channel',lead_id:43,name:'Support'}],agents:[{id:route.agent_id,name:route.agent_name}]});}
    else if(target.pathname.endsWith('/ai/state/technical'))payload=result({...state(mode),technical:{worker_last_seen_at:'2026-10-17T11:59:00Z',deployment_id:'safe-deployment',server_flags:{ai_agents_enabled:true},queue:{queued:0},reason_codes:['group_messages_not_allowed'],secret:'MUST_NOT_RENDER'} });
    else if(target.pathname.endsWith('/ai/state'))payload=result(state(mode));
    else payload={success:true};
@@ -50,5 +51,15 @@ const state=technical=>({schema_version:1,summary:{service:'available',state:'co
  w.confirm=()=>false;recoveryButton('Restore binding').click();await tick();assert.equal(recoveryBody,null);
  w.confirm=()=>true;recoveryButton('Restore binding').click();await tick();assert.equal(recoveryBody.confirmed,true);assert.equal(recoveryBody.expected_token,'checked-evidence');assert.equal(recoveryBody.channel_id,route.channel_id);assert.match(modal.textContent,/Resume remains a separate action/);
  assert.equal(calls.filter(c=>c.method==='POST'&&c.url.includes('/conversations/')).length,0);
+ d.querySelector('#operatorDiagnosticsClose').click();route.conversation_id='client@s.whatsapp.net';await w.tenantOperator.openDialog(route);d.querySelector('[data-operator-diagnostics]').click();await tick();
+ recoveryButton('Continue on the existing channel state').click();await tick();
+ const channel=d.querySelector('[data-continuation-channel]'),primary=d.querySelector('[data-continuation-agent]'),save=d.querySelector('[data-continuation-save]');
+ assert.equal(channel.value,'');assert.equal(primary.value,'');assert.equal(save.disabled,true);
+ channel.value='other-channel';channel.dispatchEvent(new w.Event('change'));await tick();assert.equal(primary.value,'');assert.equal(save.disabled,true);
+ primary.value=route.agent_id;primary.dispatchEvent(new w.Event('change'));assert.equal(save.disabled,false);
+ w.confirm=()=>false;save.click();await tick();assert.equal(continuationBody,null);
+ w.confirm=()=>true;save.click();await tick();assert.equal(continuationBody.channel_id,'other-channel');assert.equal(continuationBody.lead_id,43);assert.equal(continuationBody.agent_id,route.agent_id);assert.equal(continuationBody.expected_token,'channel-preview');assert.equal(continuationBody.confirmed,true);assert.match(modal.textContent,/AI remains stopped/);
+ assert.equal(calls.filter(c=>c.method==='POST'&&c.url.includes('/conversations/')).length,0);
+ d.querySelector('#operatorDiagnosticsClose').click();mode=false;d.querySelector('[data-operator-diagnostics]').click();await tick();assert.equal(recoveryButton('Continue on the existing channel state'),undefined);
  w.close();console.log('PASS: diagnostic permissions, localization, recovery confirmation, ambiguity and separate Resume.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
