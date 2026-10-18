@@ -139,3 +139,52 @@ def test_photo_duplicate_uses_current_channel_replica(history_db,monkeypatch):
  photo=next(r for r in merged if r['message_type']=='image');assert photo['photo_message_id']==ids[1] and photo['channel']==CB
  assert len([r for r in merged if r['message_type']=='image'])==1
  assert len(photo['source_channels'])==2
+
+
+@pytest.mark.parametrize('out_first',[False,True])
+def test_company_echo_alias_and_ai_context(history_db,monkeypatch,out_first):
+    d=history_db;monkeypatch.setattr(connect,'_connect',lambda:d)
+    lid='123456789012345@lid';jid='994500000001@s.whatsapp.net'
+    add(d,1 if out_first else 2,CA,event='COMPANY_ECHO',participant=lid,direction='outgoing')
+    add(d,2 if out_first else 1,CB,event='COMPANY_ECHO',participant=jid,
+        raw_patch={'participantIdentity':{'lid':lid,'jid':jid}})
+    result=dialogs.history(PROFILE,'connect',1001,CA,G)['messages']
+    assert len(result)==1 and result[0]['author_type']=='operator'
+    assert result[0]['direction']=='outgoing' and result[0]['source_channel_id']==CA
+    assert {x['direction'] for x in result[0]['sources']}=={'incoming','outgoing'}
+    own=connect.history(A,1001,CA)
+    ctx=connect.group_context({'tenant_id':A,'channel_id':CA,'conversation_id':G,'lead_id':1001},own,'2026-10-19T00:00:00Z')
+    assert len(ctx)==1 and ctx[0]['direction']=='outgoing'
+    assert d.execute('SELECT count(*) n FROM saas_crm_messages WHERE kommo_lead_id IN (1001,1002)')[0]['n']==2
+
+
+def test_alias_is_event_scoped_not_text_or_author_guess(history_db):
+    d=history_db;lid='123456789012345@lid';jid='994500000001@s.whatsapp.net'
+    add(d,1,CA,event='PROVED',participant=lid,direction='outgoing')
+    add(d,2,CB,event='PROVED',participant=jid,raw_patch={'participantIdentity':{'lid':lid,'jid':jid}})
+    # Same text and same event ID from another author remains separate.
+    add(d,3,CB,event='PROVED',participant='994500000002@s.whatsapp.net')
+    # Alias evidence from another event cannot repair ambiguous legacy copies.
+    add(d,4,CA,event='LEGACY',participant=lid,direction='outgoing')
+    add(d,5,CB,event='LEGACY',participant=jid)
+    assert len(dialogs.history(PROFILE,'connect',1001,CA,G)['messages'])==4
+
+
+@pytest.mark.parametrize('patch',[
+    {'participantIdentity':{'lid':'bad@lid','jid':'994500000001@s.whatsapp.net'}},
+    {'participantIdentity':{'lid':'123456789012345@lid','jid':'994500000001@s.whatsapp.net'},'channelId':CA},
+    {'participantIdentity':{'lid':'123456789012345@lid','jid':'994500000001@s.whatsapp.net'},'conversationId':'120363999999999@g.us'},
+])
+def test_bad_alias_or_scope_never_merges(history_db,patch):
+    d=history_db
+    add(d,1,CA,event='SHARED',participant='123456789012345@lid',direction='outgoing')
+    add(d,2,CB,event='SHARED',raw_patch=patch)
+    assert len(dialogs.history(PROFILE,'connect',1001,CA,G)['messages'])==2
+
+
+def test_conflicting_aliases_fail_closed(history_db):
+    d=history_db;lid='123456789012345@lid'
+    add(d,1,CA,event='SHARED',participant=lid,direction='outgoing')
+    for n,jid in [(2,'994500000001@s.whatsapp.net'),(3,'994500000002@s.whatsapp.net')]:
+        add(d,n,CB,event='SHARED',participant=jid,raw_patch={'participantIdentity':{'lid':lid,'jid':jid}})
+    assert len(dialogs.history(PROFILE,'connect',1001,CA,G)['messages'])==3
