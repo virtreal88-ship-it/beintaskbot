@@ -34,6 +34,8 @@ const settle=()=>new Promise(resolve=>setTimeout(resolve,0));
   const summary=document.getElementById('casesBatch').textContent;
   assert.match(summary,/Texniki Dəstək/);assert.match(summary,/объединённая история группы/);assert.match(summary,/Обработано сообщений: 18/);assert.match(summary,/Найдено карточек: 0/);
   assert.match(document.getElementById('casesList').textContent,/Карточки-кандидаты не найдены/);
+  document.getElementById('casesStatus').value='approved';document.getElementById('casesStatus').onchange();await settle();await settle();
+  assert.doesNotMatch(document.getElementById('casesList').textContent,/Карточки-кандидаты не найдены/,'A status filter must not imply the whole batch had no candidates');
   assert.doesNotMatch(script,/cache(?:d)?[_-](?:result|response)|from_cache/i,'UI must not invent a cache indicator absent from the batch contract');
   console.log('PASS: batch UI sends unified history and inclusive date range, then renders actual batch metadata and a zero-candidate result.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
