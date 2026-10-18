@@ -1,5 +1,9 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const source=fs.readFileSync('docs/tenant-chat-attachments.js','utf8');
+assert.match(source,/function audioPlayer/, 'voice notes must use the compact lazy audio player');
+assert.match(source,/preload='metadata'/, 'video metadata must not be eagerly downloaded');
+assert.match(source,/data-media-preview/, 'decoded previews must be removable when tenant or dialog changes');
+assert.match(source,/expected_tenant_id:member\.tenant_id/, 'each media request must stay tenant scoped');
 function fixture(){
   const events={},calls=[],revoked=[];let response;
   const button={disabled:false,setAttribute(){}},status={textContent:''};
