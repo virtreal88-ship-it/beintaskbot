@@ -58,8 +58,7 @@ def claim_next():
               JOIN saas_ai_agent_settings cfg ON cfg.tenant_id=j.tenant_id AND cfg.enabled=TRUE AND cfg.emergency_stop=FALSE
               JOIN saas_tenants t ON t.id=j.tenant_id
               WHERE j.state='queued' AND j.due_at<=now()
-              AND NOT EXISTS (SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=j.tenant_id
-                AND j.provider='connect' AND legacy.provider=j.provider AND legacy.channel_id='' AND legacy.conversation_id=j.conversation_id)
+              AND (j.provider<>'connect' OR NOT ai_legacy_blocked(j.tenant_id,j.channel_id,j.conversation_id,j.event_fingerprint))
               AND (t.status='active' OR (j.provider='connect' AND t.status IN ('onboarding','ready_for_integration')))
               AND (cfg.operating_mode='active' OR (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb
                 JOIN saas_tenant_webhook_events ce ON ce.tenant_id=j.tenant_id AND ce.fingerprint=j.event_fingerprint
@@ -283,7 +282,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
         with conn.cursor() as cur:
             lock_dialog(cur, job["tenant_id"], job["provider"], job.get("channel_id"), job["conversation_id"])
             if job["provider"] == "connect":
-                assert_resolved(cur, job["tenant_id"], job["channel_id"], job["conversation_id"])
+                assert_resolved(cur, job["tenant_id"], job["channel_id"], job["conversation_id"], job.get("event_fingerprint") or "")
             tenant = str(job['tenant_id'])
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('tenant-chat-ai:' + tenant,))
             cur.execute('''SELECT j.*,a.role,a.name,a.instructions,a.enabled AS agent_enabled,a.mode,a.version AS agent_version,a.scopes,a.language,a.style,
@@ -437,7 +436,7 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
         with conn.cursor() as cur:
             lock_dialog(cur, job["tenant_id"], job["provider"], job.get("channel_id"), job["conversation_id"])
             if job["provider"] == "connect":
-                assert_resolved(cur, job["tenant_id"], job["channel_id"], job["conversation_id"])
+                assert_resolved(cur, job["tenant_id"], job["channel_id"], job["conversation_id"], job.get("event_fingerprint") or "")
             cur.execute('''SELECT j.revision,j.lease_token,j.state,a.enabled AS agent_enabled,a.role,a.version AS agent_version,s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.updated_at AS settings_version,
               i.updated_at AS config_version,i.metadata,t.status AS tenant_status,
               (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb JOIN saas_tenant_webhook_events ce

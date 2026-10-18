@@ -547,9 +547,8 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
               JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
               JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id AND cs.channel_id=c.connect_channel_id::text
               WHERE c.tenant_id=%s::uuid AND c.lead_id=%s AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s
-                AND NOT EXISTS (SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=c.tenant_id
-                  AND legacy.provider='connect' AND legacy.conversation_id=c.conversation_id AND legacy.channel_id='')
-              FOR UPDATE OF c,cs''', (tenant, int(lead_id), channel_id, conversation_id))
+                AND NOT ai_legacy_blocked(c.tenant_id,c.connect_channel_id::text,c.conversation_id,COALESCE((SELECT event_fingerprint FROM saas_ai_agent_runs WHERE tenant_id=c.tenant_id AND id=%s::uuid),(SELECT source_fingerprint FROM saas_ai_agent_drafts WHERE tenant_id=c.tenant_id AND id=%s::uuid),''))
+              FOR UPDATE OF c,cs''', (tenant, int(lead_id), channel_id, conversation_id,run_id,run_id))
             row = cur.fetchone()
             if (not row or row.get('state') != 'active' or int(row.get('revision') or 0) != int(expected_revision)):
                 conn.rollback()
@@ -567,6 +566,8 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
             cur.execute('''UPDATE saas_ai_conversation_state SET last_agent_message_id=%s,revision=revision+1,updated_at=now()
               WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s AND state='active' AND revision=%s''',
                         (str(message_id),tenant,conversation_id,channel_id,int(expected_revision)))
+            from tenant_ai_legacy_permit import renew
+            renew(cur, tenant, channel_id, conversation_id)
             if handoff_fingerprint:
                 from tenant_ai_group_coordination import stop
                 stop(cur, tenant, conversation_id, reason='trigger_reply_sent_then_handoff')

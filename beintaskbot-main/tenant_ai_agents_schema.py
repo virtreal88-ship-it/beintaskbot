@@ -296,6 +296,9 @@ def ensure_schema(conn):
         create_schema(conn)
         from tenant_ai_channel_schema import migrate
         migrate(conn)
+        from tenant_ai_legacy_permit import schema as permit_schema
+        with conn.cursor() as cur:
+            permit_schema(cur)
         from tenant_ai_group_coordination import create_schema as create_group_schema
         create_group_schema(conn)
         conn.commit()

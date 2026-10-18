@@ -25,11 +25,16 @@ def lock_dialog(cur, tenant, provider, channel, conversation):
     import json
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
                 ('ai-dialog:' + json.dumps([str(tenant), provider, scope, conversation]),))
+    if provider == 'connect':
+        # Keep the legacy revision stable through the operation, including network send.
+        # Cross-channel readers can coexist; legacy changes wait for these readers.
+        cur.execute("SELECT revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id='' AND conversation_id=%s FOR SHARE", (tenant, conversation))
+        cur.fetchall()
     return scope
 
 
-def assert_resolved(cur, tenant, channel, conversation):
+def assert_resolved(cur, tenant, channel, conversation, fingerprint=None):
     channel_scope('connect', channel)
-    cur.execute("SELECT 1 FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id='' AND conversation_id=%s", (tenant, conversation))
+    cur.execute("SELECT 1 WHERE ai_legacy_blocked(%s::uuid,%s,%s,%s)", (tenant, channel, conversation, fingerprint))
     if cur.fetchone():
         raise TenantLinearError('Legacy dialogue channel is ambiguous; manual resolution is required.', 409)

@@ -254,9 +254,7 @@ def read_snapshot(cur, tenant, limit=50):
         j.state AS job_state,j.error_code AS job_error,j.attempts,j.due_at,
         COALESCE(j.agent_id,r.agent_id) AS agent_id,a.enabled AS agent_enabled,a.mode AS agent_mode,
         s.enabled AS company_enabled,s.emergency_stop,s.operating_mode,cs.state AS conversation_state,
-        EXISTS(SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=e.tenant_id
-          AND e.provider='connect' AND legacy.provider='connect' AND legacy.channel_id=''
-          AND legacy.conversation_id=e.payload->>'conversation_id') AS legacy_scope_unresolved,
+        (e.provider='connect' AND ai_legacy_blocked(e.tenant_id,e.payload->>'channel_id',e.payload->>'conversation_id',e.fingerprint)) AS legacy_scope_unresolved,
         r.state AS run_state,r.error_code AS run_error,r.generated_at,
         (SELECT d.state FROM saas_ai_agent_drafts d WHERE d.tenant_id=e.tenant_id AND d.source_fingerprint=e.fingerprint AND d.agent_id=COALESCE(j.agent_id,r.agent_id) ORDER BY d.created_at DESC LIMIT 1) AS draft_state,
         EXISTS(SELECT 1 FROM saas_ai_agent_drafts d WHERE d.tenant_id=e.tenant_id AND d.source_fingerprint=e.fingerprint AND d.agent_id=COALESCE(j.agent_id,r.agent_id)) AS drafted,
