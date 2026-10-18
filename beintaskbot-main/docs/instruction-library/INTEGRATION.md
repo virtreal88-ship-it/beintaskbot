@@ -3,7 +3,7 @@
 Base production main: b109ebe1. Library/editor c5a51dd2; latest Sol player
 304a9aa9 (including e7523974 compact captions). One shared player file.
 Conflicts: retained both local dependency ignores; retained Sol player with
-library generic 1-32 slides and RU/AZ/EN. Explicit default 1.75x in runtime,
+library generic 1-32 slides and RU/AZ/EN. Release default 1.25x in runtime,
 select control and tests. Rebuilt offline preview from that same source.
 Sticky controls now remain above transformed slide layers inside dialogs.
 
@@ -50,3 +50,33 @@ Real-clock Chrome regression: PASS on repeat uninterrupted run, all eight slides
 at 1.75x, no blank frames/upscaling, compact captions clear of focus rectangles.
 Initial full replay was interrupted by a pause and timed out; no product bypass
 was introduced. Desktop/mobile control and pause behavior remain intact.
+
+## Release readiness recheck (2026-10-18)
+
+Latest fetched production main remains b109ebe1; no intervening commits to merge.
+Default restored to the latest user-approved 1.25x in the shared player, selected
+control, offline bundle and default-rate assertions. Other selectable speeds remain.
+
+Equivalent safe schema check instead of Railway staging deployment:
+- Production PostgreSQL queried through its existing trusted Railway console with
+  default_transaction_read_only=on and 10-second statement timeout; SELECT only.
+- Neither lesson table nor the share index exists yet; zero existing Knowledge
+  Sources carry instruction_id. The seven tenant records are not rewritten.
+- Referenced tenant ID and source tenant/agent IDs are UUID; source content is TEXT,
+  active is BOOLEAN and provenance is JSONB, matching the additive migration.
+- Isolated PostgreSQL/WASM executes schema initialization twice over existing seeded
+  tenant/agent/settings/jobs/state/source/lesson/asset rows. All rows remain identical,
+  public link remains valid, unique partial share index is present exactly once.
+- No production DDL, data update, package installation or deployment was executed.
+
+39 targeted Python tests and three Node/JSDOM suites pass in this recheck, including
+publication/review, private/public/revoked links, rights/isolation, expert lookup,
+Human Mode and coordination. Pillow 12.3.0 used by image tests. Real Chrome desktop
+and 390px mobile previews decode screenshots and play with default 1.25x.
+The prior 92-test integration run remains recorded above; no full audit repeated.
+
+READY for controlled release of the library/player/internal lookup, not for live
+ERP browser automation (adapter remains unavailable). Deployment must install the
+existing declared Pillow dependency and retain tables on application rollback.
+Manual/Automatic, Human Mode, group coordination, Connect, /webapp and live settings
+are unchanged. No customer messages and no ERP exploration.

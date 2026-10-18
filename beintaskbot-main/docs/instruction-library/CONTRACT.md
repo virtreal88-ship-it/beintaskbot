@@ -8,7 +8,7 @@ library/editor implementation was found. No merge, push or deployment performed.
 
 /app/instructions is linked from /app. It uses the Sol player source from
 codex/beinsystems-instructor / 304a9aa9, including compact collision-aware captions,
-focus, crossfade, seek, rates and reduced motion. Integration default is 1.75x, explicitly selected for this release. No second player implementation was added.
+focus, crossfade, seek, rates and reduced motion. Release default is 1.25x, explicitly selected for this release. No second player implementation was added.
 The same player accepts 1–32 slides and localizes controls RU/AZ/EN. Cue structure,
 image dimensions/hash, areas and playback remain compatible with the eight-step
 pilot. The integration adds opt-in instruction_library evidence to call_expert;

@@ -101,3 +101,20 @@ def test_foreign_agent_rolls_back_entire_publication(ready):
  with pytest.raises(TenantLinearError):mutate(r,'publish',agent_ids=[AGENT,uid()])
  assert db.execute('SELECT count(*) AS n FROM saas_ai_knowledge_sources')[0]['n']==0;db.commit()
  assert lib.operation(PROFILE,'read',lesson_id=r['id'])['state']=='approved'
+
+
+def test_additive_schema_is_idempotent_and_preserves_existing_data(ready):
+ db,_=ready
+ row=save(ready)
+ row=mutate(mutate(row,'submit'),'approve',review_confirmed=True)
+ row=mutate(row,'publish',agent_ids=[AGENT])
+ token=mutate(row,'share')['token']
+ tables=['saas_tenants','saas_ai_agents','saas_ai_agent_settings','saas_ai_agent_jobs',
+         'saas_ai_conversation_state','saas_ai_knowledge_sources','saas_instruction_lessons','saas_instruction_assets']
+ before={t:db.execute('SELECT * FROM '+t) for t in tables};db.commit()
+ lib.schema(db);lib.schema(db);db.commit()
+ assert {t:db.execute('SELECT * FROM '+t) for t in tables}==before
+ indexes=db.execute("SELECT indexdef FROM pg_indexes WHERE indexname='saas_instruction_share_idx'")
+ assert len(indexes)==1 and 'UNIQUE' in indexes[0]['indexdef'] and 'WHERE' in indexes[0]['indexdef']
+ db.commit()
+ assert lib.shared(token)['doc']['title']=='Test lesson'
