@@ -74,6 +74,7 @@ class Routes(unittest.IsolatedAsyncioTestCase):
     async def test_exact_previous_api_methods_and_automatic_head(self):
         actual = {(route.method, route.resource.canonical) for route in self.app.router.routes()}
         expected = set(EXPECTED_API)
+        expected.add(('POST','/api/platform/ai/knowledge-candidates/{candidate_id}/improve'))
         expected |= {('HEAD', path) for method, path in EXPECTED_API if method == 'GET'}
         expected |= set(AI_API)
         expected |= {('HEAD', path) for method, path in AI_API if method == 'GET'}

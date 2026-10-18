@@ -5,7 +5,14 @@ MAX_MESSAGES=80
 MAX_CONTEXT=12000
 MAX_TOKENS=16000
 MAX_CARDS=5
-FIELDS={'title','symptoms','cause','resolution_steps','outcome','source_message_ids','product','product_version'}
+BASE_FIELDS={'title','symptoms','cause','resolution_steps','outcome','source_message_ids','product','product_version'}
+FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','case_kind'}
+
+def language(value=None,profile=None):
+    profile=profile or {}
+    value=value or profile.get('language') or profile.get('language_code') or profile.get('company_language') or 'ru'
+    if value not in {'ru','az','en'}: raise TenantLinearError('Язык: ru, az или en.')
+    return value
 
 
 def redact(text,names=()):
@@ -40,8 +47,13 @@ def text(value,limit,required=False):
 
 
 def card(data,allowed_ids):
-    if not isinstance(data,dict) or set(data)!=FIELDS: raise TenantLinearError('Некорректная структура карточки.')
-    result={key:text(data[key],180 if key=='title' else 120, key=='title') for key in ('title','product','product_version')}
+    if not isinstance(data,dict) or not BASE_FIELDS<=set(data) or set(data)-FIELDS: raise TenantLinearError('Некорректная структура карточки.')
+    method=data.get('resolution_method','unknown');kind=data.get('case_kind','technical')
+    actions=data.get('operator_actions',[])
+    if method not in {'chat','remote','phone','unknown'} or kind not in {'technical','informational'}: raise TenantLinearError('Некорректный тип кейса или способ решения.')
+    if not isinstance(actions,list) or len(actions)>10: raise TenantLinearError('Некорректные действия сотрудника.')
+    result={'resolution_method':method,'case_kind':kind,'operator_actions':[text(v,800,True) for v in actions]}
+    result.update({key:text(data[key],180 if key=='title' else 120, key=='title') for key in ('title','product','product_version')})
     for key in ('symptoms','resolution_steps'):
         values=data[key]
         if not isinstance(values,list) or not (1 if key=='symptoms' else 0)<=len(values)<=10: raise TenantLinearError('Нужны симптомы и шаги решения.')
@@ -60,14 +72,15 @@ def card(data,allowed_ids):
     result['outcome']={'status':outcome['status'],'text':text(outcome['text'],1200),'message_ids':ids(outcome['message_ids'])}
     if set(result['outcome']['message_ids'])-set(result['source_message_ids']): raise TenantLinearError('Подтверждение должно входить в исходные сообщения.')
     if result['outcome']['status']=='confirmed' and not result['outcome']['message_ids']: raise TenantLinearError('Нужна ссылка на подтверждающее сообщение.')
-    if result['outcome']['status']=='confirmed' and not result['resolution_steps']:
+    if result['outcome']['status']=='confirmed' and not result['resolution_steps'] and kind!='informational' and method not in {'remote','phone'}:
         raise TenantLinearError('Подтверждённое решение требует шагов.')
     return result
 
 
-def positive_confirmation(value):
+def positive_confirmation(value,informational=False):
     if '?' in value or re.search(r'\b(?:не|нет|not|never|yox|işləmir|если|возможно|кажется|попробуйте|проверьте|if|check|maybe|should|might|бы|должно|может|наверное)\b',value,re.I): return False
-    return bool(re.search(r'(?:заработал[оа]?|вс[её] работает|теперь работает|проблема решена|помогло|it works|working now|\bresolved\b|\bfixed\b|\bdüzəldi\b|\bişləyir\b)',value,re.I))
+    if informational and re.search(r'понятно|спасибо.{0,40}информац|thank.{0,20}information|aydındır|məlumat.{0,40}təşəkkür',value,re.I): return True
+    return bool(re.search(r'(?:исправлен[оа]?|həll olundu|aradan qaldırıldı|заработал[оа]?|вс[её] работает|теперь работает|проблема решена|помогло|it works|working now|\bresolved\b|\bfixed\b|\bdüzəldi\b|\bişləyir\b)',value,re.I))
 
 
 
@@ -86,3 +99,10 @@ def period(data,required=False):
     start,end=moment(data.get('period_start')),moment(data.get('period_end'))
     if not start<end or end-start>timedelta(days=31): raise TenantLinearError('Период должен быть от 1 секунды до 31 дня.')
     return start.astimezone(timezone.utc).isoformat(),end.astimezone(timezone.utc).isoformat()
+
+
+def approval_reason(value):
+    if value['outcome']['status']!='confirmed': return 'confirmation_required'
+    if value.get('resolution_method') in {'remote','phone'} and not value.get('operator_actions'): return 'operator_actions_required'
+    if value.get('case_kind','technical')=='technical' and not value['resolution_steps']: return 'solution_required'
+    return None

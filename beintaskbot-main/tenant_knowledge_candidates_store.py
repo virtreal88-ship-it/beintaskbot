@@ -8,7 +8,7 @@ from tenant_chat_ai_schema import ensure_schema as chat_schema
 from tenant_ai_agents_store import _authorize, _audit, _row, save_knowledge
 from tenant_operator_access import access, assert_route
 from tenant_linear_policy import TenantLinearError, identifier
-from tenant_knowledge_candidates_policy import MAX_MESSAGES, MAX_CONTEXT, card, redact, positive_confirmation, period, moment
+from tenant_knowledge_candidates_policy import MAX_MESSAGES, MAX_CONTEXT, card, redact, positive_confirmation, period, moment, approval_reason, language
 from tenant_ai_group_coordination import group_jid
 from tenant_connect_group_history import page as group_page
 
@@ -46,7 +46,7 @@ def route(cur,profile,data):
         ticket=cur.fetchone()
         if not ticket: raise TenantLinearError('Обращение недоступно в этом диалоге.',404)
     start,end=period(data)
-    binding={'provider':'connect','channel_id':channel,'conversation_id':conversation,'history_mode':mode,'ticket_id':ticket_id}
+    binding={'language':language(data.get('language'),profile),'provider':'connect','channel_id':channel,'conversation_id':conversation,'history_mode':mode,'ticket_id':ticket_id}
     if start: binding.update(period_start=start,period_end=end)
     return tenant,actor,policy,chosen,binding,ticket
 
@@ -116,7 +116,7 @@ def snapshot(cur,profile,data):
     return {'tenant':tenant,'actor':actor,'route':binding,'refs':refs,'messages':messages,'source_digest':digest(messages),'next_before':next_before,'ticket':{'status':ticket['status']} if ticket else None}
 
 
-def evidence(cur,profile,extraction):
+def evidence(cur,profile,extraction,names_out=None):
     tenant,_,policy,_,_,_=route(cur,profile,extraction['route'])
     items=[];names=[]
     for ref in extraction['source_refs']:
@@ -128,6 +128,7 @@ def evidence(cur,profile,extraction):
         names.extend([source.get('contact_name'),source.get('phone'),row.get('author_name')])
         raw=row.get('raw') or {};names.extend(raw.get(k) for k in ('participantName','pushName','senderName','contactName'))
         items.append((ref,row))
+    if names_out is not None: names_out.extend(names)
     return [{'id':ref['id'],'channel_id':ref['channel_id'],'lead_id':ref['lead_id'],'provider':'connect','conversation_id':extraction['route']['conversation_id'],
       'text':redact(row['body'],names)[:ref['text_limit']],'role':'ai' if ref.get('role')=='ai' else author_role(row)}
       for ref,row in items]
@@ -154,8 +155,12 @@ def public_card(cur,row):
     value['extraction_id']=str(row['extraction_id'])
     cur.execute('SELECT agent_id,source_id FROM saas_knowledge_candidate_sources WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid ORDER BY agent_id',(row['tenant_id'],row['id']))
     value['publications']=[{k:str(v) for k,v in item.items()} for item in cur.fetchall()]
-    value['can_approve']=value['status'] in {'pending_review','needs_clarification'} and value['outcome']['status']=='confirmed'
-    value['approval_block_reason']=None if value['can_approve'] else ('confirmation_required' if value['status'] in {'pending_review','needs_clarification'} else 'already_reviewed')
+    value.setdefault('resolution_method','unknown');value.setdefault('operator_actions',[]);value.setdefault('case_kind','technical')
+    reason=approval_reason(value)
+    value['result_confirmed']=value['outcome']['status']=='confirmed'
+    value['clarification_status']='required' if reason else 'not_required'
+    value['can_approve']=value['status'] in {'pending_review','needs_clarification'} and not reason
+    value['approval_block_reason']=None if value['can_approve'] else (reason if value['status'] in {'pending_review','needs_clarification'} else 'already_reviewed')
     return value
 
 
@@ -221,17 +226,27 @@ def listing(profile,data):
 
 def enforce_confirmation(value,items):
     by_id={item['id']:item for item in items}
-    confirmed=any(by_id[i]['role'] in {'customer','operator'} and positive_confirmation(by_id[i]['text']) for i in value['outcome']['message_ids'])
+    source_text='\n'.join(by_id[i]['text'] for i in value['source_message_ids'])
+    import re
+    if value.get('resolution_method','unknown')=='unknown':
+        if re.search(r'any\s*desk|удал[её]н|remote desktop',source_text,re.I): value['resolution_method']='remote'
+        elif re.search(r'телефон|звон|phone|zəng',source_text,re.I): value['resolution_method']='phone'
+    # Missing remote/phone diagnostics must never become a reusable invented instruction.
+    if value.get('resolution_method') in {'remote','phone'} and not value.get('operator_actions'):
+        value['resolution_steps']=[]
+    confirmed=any(by_id[i]['role'] in {'customer','operator'} and positive_confirmation(by_id[i]['text'],value.get('case_kind')=='informational') for i in value['outcome']['message_ids'])
     if value['outcome']['status']=='confirmed' and not confirmed: value['outcome']['status']='unconfirmed'
     if value['cause']['status']=='confirmed' and not any(by_id[i]['role'] in {'customer','operator'} for i in value['source_message_ids']): value['cause']['status']='suspected'
     return value
 
 
 def publication_text(value):
-    return '\n'.join([value['title'],'Симптомы: '+ '; '.join(value['symptoms']),
+    return '\n'.join([value['title'],'Тип кейса: '+value.get('case_kind','technical'),'Симптомы: '+ '; '.join(value['symptoms']),
       'Причина ('+value['cause']['status']+'): '+value['cause']['text'],
       'Решение:\n'+'\n'.join(str(i+1)+'. '+s for i,s in enumerate(value['resolution_steps'])),
       'Результат подтверждён в исходной переписке: '+value['outcome']['text'],
+      'Способ решения: '+value.get('resolution_method','unknown'),
+      'Действия сотрудника: '+'; '.join(value.get('operator_actions',[])),
       'Продукт: '+value['product']+'; версия: '+value['product_version']])
 
 
@@ -269,7 +284,8 @@ def mutate(profile,candidate_id,data,action='edit'):
             elif action=='approve':
                 if set(data)-{'expected_version','agent_ids'}: raise TenantLinearError('Неизвестное поле.')
                 value=enforce_confirmation(card(row['content'],[i['id'] for i in items]),items)
-                if value['outcome']['status']!='confirmed': raise TenantLinearError('confirmation_required',409)
+                reason=approval_reason(value)
+                if reason: raise TenantLinearError(reason,409)
                 for agent_id in agents:
                     cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,agent_id))
                     if not cur.fetchone(): raise TenantLinearError('Агент недоступен в этой компании.',404)

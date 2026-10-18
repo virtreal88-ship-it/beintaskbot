@@ -11,6 +11,7 @@ async def _run_batch(profile,batch_id,logger):
 from tenant_ai_agents_api import _expected, _origin
 from tenant_linear_policy import TenantLinearError
 from tenant_knowledge_candidates_service import analyze
+from tenant_knowledge_improve import improve
 from tenant_knowledge_candidates_store import detail, listing, mutate, request_detail
 
 def handler(member_from_request,canonical_origin,logger,resource='collection'):
@@ -39,6 +40,7 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                         _batch_tasks.add(task);task.add_done_callback(_batch_tasks.discard)
                     result=await asyncio.to_thread(batches.get,profile,receipt['id'])
                     return web.json_response({'success':True,'result':result},status=202,headers=headers)
+                elif resource=='improve': result=await asyncio.to_thread(improve,profile,request.match_info['candidate_id'],data)
                 elif resource=='collection': result=await asyncio.to_thread(analyze,profile,data)
                 else: result=await asyncio.to_thread(mutate,profile,request.match_info['candidate_id'],data,'edit' if resource=='candidate' else resource)
             return web.json_response({'success':True,'result':result},headers=headers)

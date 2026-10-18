@@ -3,7 +3,7 @@ import uuid
 from tenant_platform import _connect,_json
 from tenant_linear_policy import TenantLinearError,identifier
 from tenant_ai_group_coordination import group_jid
-from tenant_knowledge_candidates_policy import period
+from tenant_knowledge_candidates_policy import period,language
 import tenant_knowledge_candidates_store as store
 from tenant_knowledge_candidates_service import analyze
 
@@ -12,7 +12,7 @@ MAX_DIALOGS=4
 
 
 def start(profile,data):
-    allowed={'request_id','provider','channel_id','conversation_id','period_start','period_end','history_mode','analysis_agent_id','before'}
+    allowed={'request_id','provider','channel_id','conversation_id','period_start','period_end','history_mode','analysis_agent_id','before','language'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректный пакет.')
     if data.get('provider','connect')!='connect': raise TenantLinearError('Поддерживается только WhatsApp.')
     request_id=identifier(data.get('request_id'));channel=identifier(data.get('channel_id'));start,end=period(data,True)
@@ -21,7 +21,9 @@ def start(profile,data):
     if data.get('before') and not conversation: raise TenantLinearError('Курсор требует конкретного диалога.')
     mode=data.get('history_mode','channel')
     if mode not in {'channel','unified_group'}: raise TenantLinearError('Некорректный режим истории.')
-    params={'channel_id':channel,'period_start':start,'period_end':end,'history_mode':mode}
+    params={'language':language(data.get('language'),profile),'channel_id':channel,'period_start':start,'period_end':end,'history_mode':mode}
+    selected_language=params['language']
+    if 'language' not in data and selected_language=='ru': params.pop('language')
     if conversation: params['conversation_id']=conversation
     if data.get('before'): params['before']=identifier(data['before'])
     if data.get('analysis_agent_id'): params['analysis_agent_id']=identifier(data['analysis_agent_id'])
@@ -57,7 +59,7 @@ def start(profile,data):
                 found=cur.fetchall();conversations=[r['conversation_id'] for r in found[:MAX_DIALOGS]];truncated=len(found)>MAX_DIALOGS
             routes=[]
             for value in conversations:
-                scoped={**params,'provider':'connect','conversation_id':value,'history_mode':'unified_group' if mode=='unified_group' and group_jid(value) else 'channel'}
+                scoped={**params,'language':selected_language,'provider':'connect','conversation_id':value,'history_mode':'unified_group' if mode=='unified_group' and group_jid(value) else 'channel'}
                 store.route(cur,profile,scoped);routes.append(scoped)
             cur.execute("INSERT INTO saas_knowledge_batches(tenant_id,id,created_by,params,request_key,status,routes,routes_truncated) VALUES(%s::uuid,%s::uuid,%s,%s::jsonb,%s,%s,%s::jsonb,%s)",
                 (tenant,request_id,actor,_json(params),key,'running' if routes else 'completed',_json(routes),truncated))
