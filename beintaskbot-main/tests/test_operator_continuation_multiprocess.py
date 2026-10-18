@@ -35,3 +35,15 @@ def test_grant_racing_inbound_never_resumes_or_sends(stopped):
     assert all(r['state']=='human' for r in d.execute('SELECT state FROM saas_ai_conversation_state'))
     assert not d.execute("SELECT * FROM saas_ai_agent_jobs WHERE state IN ('queued','processing')")
     assert not d.execute('SELECT * FROM test_external_sends');d.commit()
+
+
+def test_owner_abandonment_is_atomic_between_administrators(stopped):
+    from test_operator_channel_continuation import seed_test_unknowns
+    d=stopped['db'];seed_test_unknowns(stopped)
+    payload={**request(),'test_owner_confirmed':True}
+    values=race(d,[('continue_channel',payload)]*2)
+    assert sum(isinstance(v,dict) for v in values)==1
+    assert len(d.execute("SELECT id FROM saas_ai_agent_runs WHERE result->>'test_owner_closed'='true'"))==5
+    assert len(d.execute("SELECT * FROM saas_tenant_audit_events WHERE action='ai_test_unknown_closed'"))==1
+    assert blocked(d,CB)
+    assert not d.execute('SELECT * FROM test_external_sends');d.commit()

@@ -126,12 +126,15 @@
         const item=(initial.channels||[]).find(c=>c.channel_id===channel.value);if(!item)return;
         const selected={...route,channel_id:item.channel_id,lead_id:item.lead_id};
         try{const checked=await read(selected);if(!isCurrent()||current!==epoch)return;preview=checked;selection=selected;note.textContent=copy[checked.reason]||'';
-          if(!checked.allowed)return;for(const a of checked.agents||[])option(agent,a.id,a.name);agent.disabled=false;
+          if(!checked.allowed&&!checked.test_close_allowed)return;
+          if(checked.test_close_allowed)note.textContent=({ru:'Будут закрыты без повторной обработки старые неизвестные запуски: ',az:'Təkrar icra edilmədən bağlanacaq köhnə naməlum icralar: ',en:'Old unknown runs to close without retry: '}[window.tenantI18n?.language||'ru'])+checked.test_close_count;
+          for(const a of checked.agents||[])if(!checked.test_close_allowed||a.mode==='manual')option(agent,a.id,a.name);agent.disabled=false;
         }catch(error){if(isCurrent()&&current===epoch)note.textContent=error.message;}
       };
-      agent.onchange=()=>{save.disabled=!preview?.allowed||!agent.value;};
-      save.onclick=async()=>{if(!isCurrent()||!selection||!preview?.allowed||!agent.value||!window.confirm(copy.confirm))return;save.disabled=true;channel.disabled=true;agent.disabled=true;
-        try{await api('dialogs/legacy-continuation','POST',{provider:'connect',channel_id:selection.channel_id,conversation_id:selection.conversation_id,lead_id:selection.lead_id,agent_id:agent.value,expected_token:preview.expected_token,confirmed:true});if(isCurrent()){note.textContent=copy.saved;save.remove();}}
+      agent.onchange=()=>{save.disabled=!(preview?.allowed||preview?.test_close_allowed)||!agent.value;};
+      save.onclick=async()=>{if(!isCurrent()||!selection||!(preview?.allowed||preview?.test_close_allowed)||!agent.value||!window.confirm(copy.confirm))return;if(preview.test_close_allowed&&!window.confirm(({ru:'Подтверждаю: это мой тестовый диалог. Закрыть старые неизвестные запуски без повторной обработки и разрешить продолжение только на выбранном канале. Human Mode и Manual сохранятся.',az:'Təsdiq edirəm: bu mənim test dialoqumdur. Köhnə naməlum icraları təkrarlamadan bağla və yalnız seçilmiş kanalda davam etməyə icazə ver. Human Mode və Manual saxlanılır.',en:'I confirm this is my own test dialogue. Close old unknown runs without retry and permit only the selected channel. Human Mode and Manual remain unchanged.'})[window.tenantI18n?.language||'ru']))return;
+        save.disabled=true;channel.disabled=true;agent.disabled=true;
+        try{await api('dialogs/legacy-continuation','POST',{provider:'connect',channel_id:selection.channel_id,conversation_id:selection.conversation_id,lead_id:selection.lead_id,agent_id:agent.value,expected_token:preview.expected_token,confirmed:true,test_owner_confirmed:preview.test_close_allowed===true});if(isCurrent()){note.textContent=copy.saved;save.remove();}}
         catch(error){if(isCurrent()){note.textContent=error.message;channel.disabled=false;preview=null;}}
       };
     }catch(error){if(isCurrent()){note.textContent=error.message;start.disabled=false;}}};
