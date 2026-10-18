@@ -48,6 +48,7 @@
   Object.assign(copy,{aiTesting:['Тестирование AI','AI sınağı','AI testing'],enableAgent:['Включить','Aktiv et','Enable'],disableAgent:['Выключить','Söndür','Disable']});
 
   Object.assign(copy,{aiState:['Состояние AI','AI vəziyyəti','AI state']});
+  copy.support_cases=['Кейсы поддержки','Dəstək halları','Support cases'];
   copy.ai_testing=copy.aiTesting;
   Object.assign(copy,{stopDialogueAI:['Остановить AI','AI-ni dayandır','Stop AI'],enableDialogueAI:['Включить AI','AI-ni aktiv et','Enable AI'],reasonAgentNotFound:['Для диалога нет сохранённой привязки AI-агента. Назначение канала в настройках агента не привязывает старый диалог автоматически. Обратитесь к администратору.','Dialoq üçün saxlanmış AI agent bağlantısı yoxdur. Agent ayarlarında kanal seçimi köhnə dialoqu avtomatik bağlamır. Administratora müraciət edin.','This dialogue has no saved AI agent binding. Configuring an agent’s channel does not automatically bind an older dialogue. Contact an administrator.'],tenant_not_active:['Ручная отправка недоступна: компания ещё не активирована. Обратитесь к администратору платформы; режим AI не меняет это ограничение.','Əl ilə göndəriş mümkün deyil: şirkət hələ aktivləşdirilməyib. Platforma administratoruna müraciət edin; AI rejimi bu məhdudiyyəti dəyişmir.','Manual sending is unavailable: the company is not activated. Contact the platform administrator; changing AI mode does not remove this restriction.']});
   const index={ru:0,az:1,en:2},supported=Object.keys(index);

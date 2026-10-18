@@ -3,7 +3,7 @@ const fs=require('fs'),assert=require('node:assert/strict');
 const dom=new JSDOM('<div id="supportCases"></div><b id="supportCasesPending"></b>',{url:'https://example.test/app',runScripts:'outside-only'});
 const w=dom.window,calls=[];let page=0;
 w.tenantProfileSnapshot={member:{tenant_id:'tenant-a',telegram_id:7,role:'owner'}};
-w.fetch=async(url,opt={})=>{calls.push({url,opt});let result={};
+w.fetch=async(url,opt={})=>{calls.push({url,opt});let result={};if(url.includes('/ai/channels')){const q=new URL(url,'https://example.test').searchParams;if(q.get('expected_tenant_id')!=='tenant-a'||q.get('expected_user_id')!=='7')return {ok:false,status:409,json:async()=>({success:false,error_code:'identity_changed'})};}
 if(url.includes('/ai/dialogs'))result={dialogs:[{provider:'connect',channel_id:'channel-a',conversation_id:'group@g.us',customer_name:'Group'}]};
 else if(url.includes('/ai/agents'))result={agents:[]};
 else if(url.includes('/ai/channels'))result={channels:[{provider:'connect',channel_id:'channel-a',name:'First'},{provider:'connect',channel_id:'channel-b',name:'Second'}]};
