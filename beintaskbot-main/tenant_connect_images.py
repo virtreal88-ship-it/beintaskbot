@@ -8,7 +8,7 @@ from tenant_connect_voice import active,generation_budget_available
 from tenant_ai_group_coordination import job_allowed
 
 # Exact IDs only; no prefix inference. Operator overrides are server-owned.
-KNOWN_VISION={'gpt-4o','gpt-4o-mini','gpt-4.1','gpt-4.1-mini','gpt-4.1-nano'}
+KNOWN_VISION={'gpt-4o','gpt-4o-mini','gpt-4.1','gpt-4.1-2025-04-14','gpt-4.1-mini','gpt-4.1-nano'}
 MAX_IMAGES=2
 MAX_TOTAL_BYTES=8*1024*1024
 TURN_SECONDS=35

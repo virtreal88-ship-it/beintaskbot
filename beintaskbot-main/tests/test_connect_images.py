@@ -8,6 +8,7 @@ import tenant_ai_agent_worker as worker
 import tenant_ai_agent_connect as adapter
 from tenant_chat_ai_policy import history
 from tenant_chat_ai_provider import generate
+REAL_SUPPORTS_IMAGES=photos.supports_images
 PNG=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6cN8AAAAASUVORK5CYII=')
 
 @pytest.mark.parametrize('kind',['image','video','document'])
@@ -16,7 +17,7 @@ def test_unavailable_without_url_counted(kind):
  assert missing==1 and 'caption' in lines[0]['text'] and 'do not infer' in lines[0]['text']
  assert history([row(kind='image')],{},analyzed_media={MESSAGE})[1]==0
 
-@pytest.mark.parametrize('model,expected',[('gpt-4o',True),('gpt-4o-mini',True),('gpt-4.1',True),('gpt-4o-fake',False),('unknown',False)])
+@pytest.mark.parametrize('model,expected',[('gpt-4o',True),('gpt-4o-mini',True),('gpt-4.1',True),('gpt-4.1-2025-04-14',True),('gpt-4.1-2025-04-14-fake',False),('gpt-4.1-2099-01-01',False),('gpt-4o-fake',False),('unknown',False)])
 def test_exact_model_capabilities(model,expected):
  with patch.dict(os.environ,{},clear=True):assert photos.supports_images(model)==expected
  with patch.dict(os.environ,{'AI_AGENTS_VISION_MODELS':''}):assert not photos.supports_images(model)
@@ -35,6 +36,11 @@ class PhotoWorker(WorkerVoice):
   assert kw['extra_context']['unprocessed_media_count']==0
   assert 'Synthetic error caption' in str(self.generate.call_args.args[3]);assert self.generate.call_args.args[3][0]['speaker']=='CLIENT'
   self.transcribe.assert_not_called();self.reserve.assert_called_once();self.send.assert_called_once()
+ async def test_nizam_snapshot_uses_real_capability_gate(self):
+  with patch.dict(os.environ,{},clear=True),patch.object(photos,'supports_images',side_effect=REAL_SUPPORTS_IMAGES),patch.dict(CONFIG,{'agent_model':'gpt-4.1-2025-04-14'}):
+   await self.process()
+  assert self.generate.call_args.args[1]=='gpt-4.1-2025-04-14'
+  assert len(self.generate.call_args.kwargs['images'])==1
  async def test_unavailable_photo_explicit_and_no_images(self):
   self.photo_download.side_effect=ValueError('unavailable');await self.process()
   assert self.generate.call_args.kwargs['images']==[];assert self.generate.call_args.kwargs['extra_context']['unprocessed_media_count']==1
@@ -62,10 +68,14 @@ for _name in list(WorkerVoice.__dict__):
  if _name.startswith('test_') and _name not in PhotoWorker.__dict__:setattr(PhotoWorker,_name,None)
 
 
-def test_provider_low_detail_is_transmitted():
+@pytest.mark.parametrize('model',['gpt-4o-mini','gpt-4.1-2025-04-14'])
+def test_provider_low_detail_is_transmitted(model):
  response=Mock(status_code=200);response.json.return_value={'status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':'Synthetic answer'}]}]}
  with patch('tenant_chat_ai_provider.requests.post',return_value=response) as post:
-  generate('synthetic-key','gpt-4o-mini','reply',[],'',images=[{'content':PNG,'content_type':'image/png','detail':'low'}])
+  generate('synthetic-key',model,'reply',[],'',images=[{'content':PNG,'content_type':'image/png','detail':'low'}])
+ assert post.call_args.args[0]=='https://api.openai.com/v1/responses'
+ assert post.call_args.kwargs['json']['model']==model
+ assert post.call_args.kwargs['json']['input'][0]['content'][1]['type']=='input_image'
  assert post.call_args.kwargs['json']['input'][0]['content'][1]['detail']=='low'
 
 

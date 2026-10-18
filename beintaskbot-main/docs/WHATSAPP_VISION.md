@@ -25,7 +25,7 @@ Video/PDF/document analysis is not enabled.
 
 ## Models and budgets
 
-Exact reviewed OpenAI IDs: gpt-4o, gpt-4o-mini, gpt-4.1, gpt-4.1-mini, gpt-4.1-nano.
+Exact reviewed OpenAI IDs: gpt-4o, gpt-4o-mini, gpt-4.1, gpt-4.1-2025-04-14, gpt-4.1-mini, gpt-4.1-nano.
 No model is switched automatically. Unknown/date/custom IDs remain text-only until
 operator-confirmed via server-only AI_AGENTS_VISION_MODELS (comma-separated exact
 IDs; an explicitly empty value disables photo processing). This is a capability
@@ -71,3 +71,10 @@ synthetic vision/ASR quality smoke test. No production deploy is included here.
 Verification: 194 passed, 5 skipped, 2 deselected, 19 subtests passed. The two
 deselected wizard failures were reproduced in a clean archive of 39cac3d9.
 
+
+Snapshot fix: gpt-4.1-2025-04-14 is an exact supported ID for the existing
+OpenAI Responses image input. Agent model strings pass unchanged from a.model
+through load_agent_config and the worker to the request model field. No live
+agent settings were read or modified; Nizam Ai ID is owner-reported. Explicit
+AI_AGENTS_VISION_MODELS overrides still replace defaults and must include this ID
+if configured. Capability source: https://developers.openai.com/api/docs/models/gpt-4.1
