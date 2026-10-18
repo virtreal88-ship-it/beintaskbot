@@ -23,7 +23,7 @@ for(let i=0,offset=0;i<8;i++){player.seek(offset+2000);load();assert.equal(playe
 assert.equal(root.querySelectorAll('nav button').length,1,'one compact play control');assert.equal(root.querySelector('[data-back]'),null);assert.equal(root.querySelector('[data-next]'),null);
 player.go(6);load();assert.equal(player.snapshot().position,76000);assert(!player.snapshot().playing);
 assert.equal(root.querySelector('[data-play]').getAttribute('aria-label'),'Davam et');root.querySelector('[data-play]').click();assert.equal(root.querySelector('[data-play]').getAttribute('aria-label'),'Pauza');player.pause();
-player.seek(11990);load();player.play();advance(20);assert.equal(player.snapshot().index,1);player.pause();load();assert(!player.snapshot().playing,'pause during loading cancels continuation');
+player.seek(11990);load();player.play();advance(20);assert.equal(player.snapshot().index,1);assert(!root.querySelector('[data-play]').disabled,'Pause remains available while next image loads');root.querySelector('[data-play]').click();load();assert(!player.snapshot().playing,'pause button during loading cancels continuation');
 player.seek(108000);load();assert(!player.snapshot().playing);assert.equal(root.querySelector('[data-current]').textContent,'1:48');player.play();load();assert.equal(player.snapshot().index,0);player.pause();
 width=900;player.seek(2000);load();assert.equal(player.snapshot().focus,null,'desktop overview avoids needless zoom');
 width=360;reduced=true;player.seek(1401);assert.equal(player.snapshot().geometry.scale,1,'reduced motion has no interpolated zoom');assert.equal(root.querySelector('.lesson-plane').style.opacity,'1');reduced=false;

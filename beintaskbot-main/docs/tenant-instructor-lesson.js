@@ -38,7 +38,7 @@ function mount(root,lesson,options={}){
  const clear=()=>{if(timer!==null)clock.clear(timer);timer=null;};
  function status(){
   const label=playing?'Pauza':position>=total?'Yenidən başlat':position?'Davam et':'Başlat';
-  $('[data-play] span').textContent=playing?'Ⅱ':'▶';$('[data-play]').setAttribute('aria-label',label);$('[data-play]').title=label;$('[data-play]').disabled=!ready;
+  $('[data-play] span').textContent=playing?'Ⅱ':'▶';$('[data-play]').setAttribute('aria-label',label);$('[data-play]').title=label;$('[data-play]').disabled=!ready&&!playing;
   $('[data-play]').setAttribute('aria-pressed',String(playing));
   $('.lesson-status').textContent=position>=total?'Dərs tamamlandı':playing?'Avtomatik nümayiş':'Nümayiş dayandırılıb';
 
@@ -82,7 +82,7 @@ function mount(root,lesson,options={}){
   let next=0;while(next<lesson.slides.length-1&&position>=offsets[next+1])next++;
   if(next!==index)loadSlide(next);if(position===total)playing=false;render();status();tick();
  }
- function play(){if(!ready||dead)return;if(playing){pause();return;}if(position>=total)seek(0);playing=true;started=clock.now();status();tick();}
+ function play(){if(dead)return;if(playing){pause();return;}if(!ready)return;if(position>=total)seek(0);playing=true;started=clock.now();status();tick();}
  function go(next){pause();seek(offsets[Math.max(0,Math.min(next,lesson.slides.length-1))]);}
  function speed(value){const n=Number(value);if(!rates.includes(n))return;position=time();started=clock.now();rate=n;$('[data-speed]').value=n;render();tick();}
  const manual=e=>{if(e.target.closest?.('[data-play],[data-speed]'))return;pause();};
