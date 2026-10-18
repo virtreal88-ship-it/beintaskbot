@@ -477,7 +477,7 @@ def list_knowledge(profile, source_id=None):
             return [_row(row) for row in cur.fetchall()]
 
 
-def save_knowledge(profile, data, *, source_id=None):
+def save_knowledge(profile, data, *, source_id=None, connection=None):
     creating = source_id is None
     if not isinstance(data, dict):
         raise TenantLinearError('Bilik mənbəyi düzgün deyil.')
@@ -489,7 +489,8 @@ def save_knowledge(profile, data, *, source_id=None):
     patch = validate_knowledge({k:v for k,v in data.items() if k not in {'agent_id','setup_key'}}, creating=creating)
     if not patch:
         raise TenantLinearError('Dəyişdiriləcək bilik ayarı yoxdur.')
-    with _connect() as conn:
+    from contextlib import nullcontext
+    with (nullcontext(connection) if connection is not None else _connect()) as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
@@ -528,7 +529,7 @@ def save_knowledge(profile, data, *, source_id=None):
                         recovered = _row(cur.fetchone())
                         if recovered:
                             _audit(cur, tenant, actor, 'ai_knowledge_setup_recovered', 'knowledge_source', recovered['id'])
-                            conn.commit()
+                            if connection is None: conn.commit()
                             return recovered
                 cur.execute('SELECT count(*) AS total FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid', (tenant,))
                 if int((cur.fetchone() or {}).get('total') or 0) >= MAX_SOURCES:
@@ -559,7 +560,7 @@ def save_knowledge(profile, data, *, source_id=None):
                                 (tenant, source, index, chunk))
             _audit(cur, tenant, actor, 'ai_knowledge_created' if creating else 'ai_knowledge_updated', 'knowledge_source', source,
                    {'kind': result['kind'], 'content_hash': result['content_hash']})
-        conn.commit()
+        if connection is None: conn.commit()
     return result
 
 
