@@ -209,7 +209,18 @@ def execute(job,parent,reservation,problem,lines,checks=(),previous_actions=()):
             with conn.cursor() as cur:
                 _live(cur,job,parent,(reservation.get('authority') or {}).get('revision'))
                 _expert_live(cur,job,reservation)
-        tools=[diagnose(tool,tenant_id=job['tenant_id'],channel_id=job['channel_id'],conversation_id=job['conversation_id']) for tool in cfg['tools']]
+        tools=[]
+        # Read approved primary-scoped lessons before any prospective browser
+        # fallback. Existing live/expert/settlement fences remain authoritative.
+        if 'instruction_library' in cfg['tools']:
+            from tenant_instruction_library import expert_lookup
+            with _connect() as conn:
+                with conn.cursor() as cur:
+                    _live(cur,job,parent,(reservation.get('authority') or {}).get('revision'))
+                    _expert_live(cur,job,reservation)
+                    tools.append(expert_lookup(cur,job['tenant_id'],job['agent_id'],problem))
+        tools.extend(diagnose(tool,tenant_id=job['tenant_id'],channel_id=job['channel_id'],conversation_id=job['conversation_id'])
+                     for tool in cfg['tools'] if tool!='instruction_library')
         knowledge=knowledge_context(job['tenant_id'],problem,agent_id=str(expert['id']))
         context=bounded_context(job,cfg,problem,lines,knowledge,tools,checks,previous_actions)
         prompt=RESULT_INSTRUCTION+'\nCompany instructions:\n'+str(reservation.get('company_instructions') or '')+'\nAgent instructions:\n'+str(expert['instructions'])+'\nUse the internal-only JSON contract above. Reply language: '+str(expert.get('language') or 'auto')

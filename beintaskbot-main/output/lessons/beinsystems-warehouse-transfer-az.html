@@ -10,6 +10,10 @@
 .lesson-plane{z-index:1}.lesson-outgoing{position:absolute;left:0;top:0;transform-origin:0 0;z-index:0;pointer-events:none}.lesson-outgoing img{display:block;width:100%;height:100%}.lesson-outgoing .lesson-areas{position:absolute;inset:0}
 
 .lesson-visual{position:relative}.lesson-subtitles{position:absolute;z-index:2;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100% - 24px);background:rgba(15,24,31,.74);color:white;padding:6px 10px;border-radius:6px;text-align:center;font-size:16px;line-height:1.4;pointer-events:none;text-shadow:0 1px 2px #0008}.lesson-subtitles p{margin:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}.lesson-stage{border-radius:14px}.lesson-details{margin-top:12px}.lesson-details summary{cursor:pointer;color:#547084}.lesson-focus{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}@media(max-width:600px){.lesson-subtitles{font-size:15px}.instructor-lesson h2{min-height:2.4em}}
+
+/* Keep sticky controls above transformed slide layers in the library dialog. */
+.instructor-lesson nav{z-index:3}
+@media(max-width:600px){.instructor-lesson nav{z-index:10}}
 </style><main id="lesson"></main><script>/* Internal lesson player. No customer transport, browser execution or publication. */
 (function(global){'use strict';
 function transform(image,view,area,padding=50){
@@ -22,7 +26,7 @@ function transform(image,view,area,padding=50){
  return {scale,x,y};
 }
 function validate(lesson){
- if(lesson.schema_version!==1||!Array.isArray(lesson.slides)||lesson.slides.length!==8)throw Error('Invalid lesson');
+ if(lesson.schema_version!==1||!Array.isArray(lesson.slides)||(lesson.slides.length<1||lesson.slides.length>32))throw Error('Invalid lesson');
  const ids=new Set();let total=0;
  lesson.slides.forEach((s,i)=>{
   if(s.order!==i+1||ids.has(s.id)||!s.id)throw Error('Invalid order');ids.add(s.id);
@@ -30,7 +34,7 @@ function validate(lesson){
   if(s.playback.duration_ms<4000||s.playback.duration_ms>30000)throw Error('Invalid duration');total+=s.playback.duration_ms;
   for(const a of s.areas){if(![a.x,a.y,a.width,a.height].every(Number.isFinite)||a.x<0||a.y<0||a.width<=0||a.height<=0||a.x+a.width>s.image.width||a.y+a.height>s.image.height)throw Error('Invalid area');}
   for(const f of s.playback.focus){if(!s.areas.some(a=>a.id===f.area_id)||f.at_ms<0||f.at_ms>s.playback.duration_ms-2000)throw Error('Invalid focus');}
- });if(total>144000)throw Error('Lesson too long');return lesson;
+ });if(total>960000)throw Error('Lesson too long');return lesson;
 }
 // Place captions in stage coordinates, avoiding every visible highlighted rectangle.
 function captionPosition(view,box,areas){
@@ -42,16 +46,17 @@ function captionPosition(view,box,areas){
  return {y:y??view.height+8,outside:y===undefined};
 }
 function mount(root,lesson,options={}){
- validate(lesson);const subtitles=options.subtitles?.slides||lesson.slides.map(s=>[{at_ms:0,text:s.title}]);
+ validate(lesson);const ui={"Əvvəlki": ["Назад", "Back"], "Növbəti": ["Далее", "Next"], "Başlat": ["Воспроизвести", "Play"], "Pauza": ["Пауза", "Pause"], "Davam et": ["Продолжить", "Resume"], "Yenidən başlat": ["Сначала", "Replay"], "Dərsin addımı": ["Шаг урока", "Lesson step"], "Real ekran görüntüsü": ["Скриншот интерфейса", "Interface screenshot"], "Azərbaycan dilində subtitrlər": ["Субтитры", "Subtitles"], "Ətraflı izah": ["Подробнее", "Details"], "Dərs idarəetməsi": ["Управление уроком", "Lesson controls"], "Dərsin vaxtı": ["Время урока", "Lesson timeline"], "Nümayiş sürəti": ["Скорость", "Playback speed"], "Dərs tamamlandı": ["Урок завершён", "Lesson completed"], "Avtomatik nümayiş": ["Воспроизведение", "Playing"], "Nümayiş dayandırılıb": ["Пауза", "Paused"], "Vacib sahə avtomatik göstərilir.": ["Важная область увеличена", "Important area in focus"], "Ümumi görünüş": ["Общий вид", "Overview"], "Ekran görüntüsü yüklənmədi. Nümayiş dayandırıldı.": ["Изображение недоступно. Пауза.", "Image unavailable. Playback paused."], "Əməkdaş tərəfindən təsdiqlənib": ["Утверждено сотрудником", "Employee approved"], "Yoxlama üçün layihə · Saxlama və anbar qalıqlarına təsir təsdiqlənməyib": ["Черновик · Сохранение и влияние на остатки не проверены", "Draft · Saving and stock effects not verified"], "Addım": ["Шаг", "Step"]};const tr=text=>ui[text]?.[lesson.language==='ru'?0:lesson.language==='en'?1:2]||text;const subtitles=options.subtitles?.slides||lesson.slides.map(s=>[{at_ms:0,text:s.title}]);
  if(subtitles.length!==lesson.slides.length)throw Error('Invalid subtitles');
  subtitles.forEach((rows,i)=>{if(!rows.length||rows[0].at_ms!==0)throw Error('Invalid subtitle start');rows.forEach((row,j)=>{if(!Number.isFinite(row.at_ms)||row.at_ms<0||row.at_ms>=lesson.slides[i].playback.duration_ms||(j&&row.at_ms<=rows[j-1].at_ms)||typeof row.text!=='string'||!row.text.trim()||row.text.length>120)throw Error('Invalid subtitle cue');});});
  const win=root.ownerDocument.defaultView,doc=root.ownerDocument;
  const clock=options.clock||{now:()=>win.performance.now(),set:(f,t)=>win.setTimeout(f,t),clear:id=>win.clearTimeout(id)};
  const offsets=[0];for(const s of lesson.slides)offsets.push(offsets.at(-1)+s.playback.duration_ms);
  const total=offsets.at(-1),rates=[.75,1,1.25,1.5,1.75,2];
- let index=-1,position=0,started=0,rate=1.25,playing=false,ready=false,dead=false,timer=null,geometry=null,focus=null,captionCut=true;
+ let index=-1,position=0,started=0,rate=1.75,playing=false,ready=false,dead=false,timer=null,geometry=null,focus=null,captionCut=true;
  root.classList.add('instructor-lesson');
- root.innerHTML='<header><span class="lesson-tag">BEIN DEMO · AZ</span><h1></h1><p class="lesson-review"></p></header><section aria-label="Dərsin addımı"><p class="lesson-count" aria-live="polite"></p><h2></h2><div class="lesson-visual"><div class="lesson-stage" tabindex="0" aria-label="Real ekran görüntüsü"><div class="lesson-plane"><img alt=""><div class="lesson-areas"></div></div></div><div class="lesson-subtitles" aria-label="Azərbaycan dilində subtitrlər"><p data-subtitle></p></div></div><details class="lesson-details"><summary>Ətraflı izah</summary><p class="lesson-explanation"></p><p class="lesson-note"></p></details><p class="lesson-focus"></p></section><nav aria-label="Dərs idarəetməsi"><button type="button" data-play aria-label="Başlat"><span aria-hidden="true">▶</span></button><div class="lesson-timeline"><input data-seek type="range" min="0" step="10" aria-label="Dərsin vaxtı"><span class="lesson-time"><time data-current>0:00</time><span aria-hidden="true"> / </span><time data-total></time></span></div><label class="lesson-speed"><select data-speed aria-label="Nümayiş sürəti"><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25" selected>1.25×</option><option value="1.5">1.5×</option><option value="1.75">1.75×</option><option value="2">2×</option></select></label><span class="lesson-status" aria-live="polite"></span></nav>';
+ root.innerHTML='<header><span class="lesson-tag">BEIN DEMO · AZ</span><h1></h1><p class="lesson-review"></p></header><section aria-label="Dərsin addımı"><p class="lesson-count" aria-live="polite"></p><h2></h2><div class="lesson-visual"><div class="lesson-stage" tabindex="0" aria-label="Real ekran görüntüsü"><div class="lesson-plane"><img alt=""><div class="lesson-areas"></div></div></div><div class="lesson-subtitles" aria-label="Azərbaycan dilində subtitrlər"><p data-subtitle></p></div></div><details class="lesson-details"><summary>Ətraflı izah</summary><p class="lesson-explanation"></p><p class="lesson-note"></p></details><p class="lesson-focus"></p></section><nav aria-label="Dərs idarəetməsi"><button type="button" data-play aria-label="Başlat"><span aria-hidden="true">▶</span></button><div class="lesson-timeline"><input data-seek type="range" min="0" step="10" aria-label="Dərsin vaxtı"><span class="lesson-time"><time data-current>0:00</time><span aria-hidden="true"> / </span><time data-total></time></span></div><label class="lesson-speed"><select data-speed aria-label="Nümayiş sürəti"><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="1.75" selected>1.75×</option><option value="2">2×</option></select></label><span class="lesson-status" aria-live="polite"></span></nav>';
+ root.querySelectorAll('[aria-label]').forEach(e=>e.setAttribute('aria-label',tr(e.getAttribute('aria-label'))));root.querySelector('summary').textContent=tr('Ətraflı izah');root.querySelector('.lesson-tag').textContent=(lesson.verification?.environment||'BEIN SYSTEMS')+' · '+lesson.language.toUpperCase();
  const $=s=>root.querySelector(s),stage=$('.lesson-stage'),plane=$('.lesson-plane'),img=$('img'),seekbar=$('[data-seek]');
  let outgoing=null;const preloads=new Map(),fadeMs=650;
  function asset(id){const url=(options.resolveAsset||((id)=>id))(id),resolved=new URL(url,win.location.href);if(!['http:','https:','blob:'].includes(resolved.protocol)||resolved.origin!==win.location.origin)throw Error('Asset origin forbidden');return url;}
@@ -60,15 +65,15 @@ function mount(root,lesson,options={}){
  const motion=win.matchMedia?.('(prefers-reduced-motion: reduce)');
  const format=t=>{const n=Math.floor(t/1000);return Math.floor(n/60)+':'+String(n%60).padStart(2,'0');};
  $('h1').textContent=lesson.title;
- $('.lesson-review').textContent=lesson.review_status==='approved'?'Əməkdaş tərəfindən təsdiqlənib':'Yoxlama üçün layihə · Saxlama və anbar qalıqlarına təsir təsdiqlənməyib';
+ $('.lesson-review').textContent=lesson.review_status==='approved'?tr('Əməkdaş tərəfindən təsdiqlənib'):tr('Yoxlama üçün layihə · Saxlama və anbar qalıqlarına təsir təsdiqlənməyib');
  seekbar.max=total;$('[data-total]').textContent=format(total);
  const time=()=>Math.min(total,position+(playing&&ready?(clock.now()-started)*rate:0));
  const clear=()=>{if(timer!==null)clock.clear(timer);timer=null;};
  function status(){
-  const label=playing?'Pauza':position>=total?'Yenidən başlat':position?'Davam et':'Başlat';
+  const label=playing?tr('Pauza'):position>=total?tr('Yenidən başlat'):position?tr('Davam et'):tr('Başlat');
   $('[data-play] span').textContent=playing?'Ⅱ':'▶';$('[data-play]').setAttribute('aria-label',label);$('[data-play]').title=label;$('[data-play]').disabled=!ready&&!playing;
   $('[data-play]').setAttribute('aria-pressed',String(playing));
-  $('.lesson-status').textContent=position>=total?'Dərs tamamlandı':playing?'Avtomatik nümayiş':'Nümayiş dayandırılıb';
+  $('.lesson-status').textContent=position>=total?tr('Dərs tamamlandı'):playing?tr('Avtomatik nümayiş'):tr('Nümayiş dayandırılıb');
 
  }
  function loadSlide(next,automatic=false){
@@ -79,10 +84,10 @@ function mount(root,lesson,options={}){
   plane.style.width=s.image.width+'px';plane.style.height=s.image.height+'px';
   $('.lesson-areas').replaceChildren();for(const a of s.areas){const box=doc.createElement('span');box.className='lesson-area '+(a.intent==='warning'?'warning':'');Object.assign(box.style,{left:a.x+'px',top:a.y+'px',width:a.width+'px',height:a.height+'px'});$('.lesson-areas').append(box);}
   img.alt=`${index+1}. ${s.title} — Bein Demo real ekran görüntüsü`;
-  img.onload=()=>{if(dead||index!==next)return;if(img.naturalWidth!==s.image.width||img.naturalHeight!==s.image.height){img.onerror();return;}ready=true;started=clock.now();  $('h2').textContent=s.title;$('.lesson-count').textContent=`Addım ${index+1} / ${lesson.slides.length}`;
+  img.onload=()=>{if(dead||index!==next)return;if(img.naturalWidth!==s.image.width||img.naturalHeight!==s.image.height){img.onerror();return;}ready=true;started=clock.now();  $('h2').textContent=s.title;$('.lesson-count').textContent=`${tr('Addım')} ${index+1} / ${lesson.slides.length}`;
   $('.lesson-explanation').textContent=s.explanation;$('.lesson-note').textContent=s.note;
 preload(next+1);render();status();tick();};
-  img.onerror=()=>{ready=false;pause();$('.lesson-status').classList.add('lesson-error');$('.lesson-status').textContent='Ekran görüntüsü yüklənmədi. Nümayiş dayandırıldı.';};
+  img.onerror=()=>{ready=false;pause();$('.lesson-status').classList.add('lesson-error');$('.lesson-status').textContent=tr('Ekran görüntüsü yüklənmədi. Nümayiş dayandırıldı.');};
   img.src=asset(s.image.asset_id);
  }
  function render(){
@@ -106,7 +111,7 @@ preload(next+1);render();status();tick();};
   const placement=captionPosition(bounds,size,areas);captionBox.style.top=placement.y+'px';$('.lesson-visual').style.paddingBottom=placement.outside?(size.height+16)+'px':'0px';
   const cueIndex=subtitles[index].indexOf(caption),end=subtitles[index][cueIndex+1]?.at_ms??s.playback.duration_ms;
   const alpha=motion?.matches||captionCut?1:Math.max(0,Math.min(1,(local-caption.at_ms)/180,(end-local)/180));captionBox.style.opacity=String(alpha);
-  $('.lesson-focus').textContent=active?'Vacib sahə avtomatik göstərilir.':'Ümumi görünüş';
+  $('.lesson-focus').textContent=active?tr('Vacib sahə avtomatik göstərilir.'):tr('Ümumi görünüş');
  }
  function tick(){clear();if(!playing||!ready||dead)return;
   timer=clock.set(()=>{timer=null;position=time();started=clock.now();

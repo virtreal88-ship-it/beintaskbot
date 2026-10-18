@@ -32,4 +32,7 @@ async def agents(_):return web.json_response({'success':True,'result':[{'id':age
 app.router.add_get('/api/platform/me',me);app.router.add_get('/api/platform/ai/agents',agents)
 for path,res in [('/api/platform/instructions','collection'),('/api/platform/instructions/{lesson_id}','collection'),('/api/platform/instructions/{lesson_id}/assets/{asset_id}','collection'),('/api/instructions/shared/{token}','public'),('/api/instructions/shared/{token}/assets/{asset_id}','public')]:
  app.router.add_route('*',path,handler(lambda _:profile,origin,logging.getLogger('demo'),res))
+async def mobile(_):
+ return web.Response(text='<html><meta name="viewport" content="width=device-width"><title>Local mobile check</title><iframe title="390px instruction library" src="/app/instructions?site_lang=en" style="width:390px;height:820px;border:0"></iframe></html>',content_type='text/html')
+app.router.add_get('/mobile',mobile)
 web.run_app(app,host='127.0.0.1',port=8890,access_log=None)

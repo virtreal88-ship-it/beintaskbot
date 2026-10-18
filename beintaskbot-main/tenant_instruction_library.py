@@ -167,3 +167,52 @@ def private_asset(profile,lesson_id,asset_id):
             tenant,_=_authorize(c,profile);c.execute('SELECT doc FROM saas_instruction_lessons WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,identifier(lesson_id)));r=c.fetchone()
             if not r: raise TenantLinearError('Not found',404)
             return asset(c,tenant,r['doc'],asset_id)
+
+
+def expert_lookup(cur,tenant_id,primary_agent_id,query):
+    """Internal evidence only. Caller holds live parent/expert/group authority.
+
+    Never creates schema, tokens, public links, browser actions or customer sends.
+    Match active agent-scoped Knowledge Sources against their published snapshot.
+    Search results are candidates, not proof of UI-version compatibility.
+    """
+    tenant=identifier(tenant_id);agent=identifier(primary_agent_id)
+    result={'tool':'instruction_library','read_only':True,'customer_send_allowed':False,
+            'status':'not_found','evidence':[]}
+    cur.execute("SELECT to_regclass('saas_instruction_lessons') IS NOT NULL AS available")
+    if not cur.fetchone()['available']:
+        return {**result,'status':'library_unavailable'}
+    query=str(query or '').strip()[:1000]
+    if query:
+        cur.execute("""SELECT k.id AS source_id,k.content,l.id,l.published_doc FROM saas_ai_knowledge_sources k
+          JOIN saas_instruction_lessons l ON l.tenant_id=k.tenant_id AND l.id::text=k.provenance->>'instruction_id'
+          JOIN saas_tenants t ON t.id=k.tenant_id
+          JOIN saas_ai_agents a ON a.tenant_id=k.tenant_id AND a.id=k.agent_id
+          WHERE k.tenant_id=%s::uuid AND k.agent_id=%s::uuid AND a.role='primary'
+            AND t.status='active' AND k.active=TRUE AND l.state='published'
+            AND k.provenance->>'review_status'='approved' AND k.provenance->>'approved_by' IS NOT NULL
+            AND l.published_doc->>'review_status'='approved'
+            AND (to_tsvector('simple',k.title||' '||k.content) @@ plainto_tsquery('simple',%s)
+                 OR l.published_doc->>'operation'=%s)
+          ORDER BY l.updated_at DESC,l.id LIMIT 1""",(tenant,agent,query,query))
+        row=cur.fetchone()
+        if row:
+            doc=row['published_doc']
+            try: matches=json.loads(row['content'])==doc
+            except (ValueError,TypeError): matches=False
+            if not matches: return {**result,'status':'source_changed'}
+            verification=doc.get('verification') or {}
+            # Bounded excerpt for existing expert context/token budgets; full lesson
+            # stays behind the existing authorized library route.
+            steps=[{'title':s['title'][:100],'text':s['explanation'][:160],'caution':s['note'][:80]} for s in doc['slides'][:2]]
+            result.update(status='approved_candidate',evidence=[{
+                'source_id':str(row['source_id']),'lesson_id':str(row['id']),
+                'title':doc['title'][:120],'operation':doc['operation'],'language':doc['language'],
+                'ui_version':str(verification.get('ui_version') or 'unreported')[:80],
+                'compatibility':'requires_verification','excerpt_only':True,'steps':steps}])
+            return result
+    # No runtime browser adapter is installed. This is an honest blocked fallback,
+    # reached only after the approved-source search; never launch user sessions.
+    from tenant_ai_instructor_contract import availability
+    result['browser_fallback']=availability()['status']
+    return result

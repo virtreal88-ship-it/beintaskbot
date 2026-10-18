@@ -1,7 +1,7 @@
 """Strict configuration and public result contract for internal diagnostics."""
 import uuid
 from tenant_linear_policy import TenantLinearError
-TOOLS = ('system_status', 'application_errors', 'sync_status', 'database_metrics', 'cash_register', 'previous_incidents')
+TOOLS = ('system_status', 'application_errors', 'sync_status', 'database_metrics', 'cash_register', 'previous_incidents', 'instruction_library')
 DEFAULTS = {'max_calls': 2, 'timeout_seconds': 20, 'max_context_chars': 6000, 'max_tokens': 12000}
 BOUNDS = {'max_calls': (1,5), 'timeout_seconds': (1,30), 'max_context_chars': (500,12000), 'max_tokens': (2048,20000)}
 
