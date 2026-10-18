@@ -271,3 +271,19 @@ def test_authenticated_operator_claim_stops_ai_before_external_send(group,monkey
         state=groups.read(c,A,G);assert state['state']=='human' and state['assigned_to']==11
     assert not d.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND conversation_id=%s AND state IN ('queued','processing')",(A,G));d.commit()
     group['send'].assert_not_called()
+
+
+def test_settings_projection_only_primary_agents_and_authorized_helpers(group,monkeypatch):
+    import uuid
+    import tenant_operator_dialogs as dialogs
+    d=group['db'];monkeypatch.setattr(dialogs,'_connect',lambda:d)
+    helper,denied,foreign,disabled=[str(uuid.UUID(int=n)) for n in (801,802,803,804)]
+    for agent,tenant,name,enabled,policy in [(helper,A,'Internal',True,{'internal':True,'allowed_primary_ids':[AGENT]}),(denied,A,'Denied',True,{'internal':True,'allowed_primary_ids':[AGENT2]}),(foreign,B,'Foreign',True,{}),(disabled,A,'Disabled',False,{})]:
+        d.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,role,enabled,created_by,expert_policy) VALUES(%s::uuid,%s::uuid,%s,'expert',%s,%s,%s::jsonb)",(tenant,agent,name,enabled,11 if tenant==A else 22,json.dumps(policy)))
+    d.execute('UPDATE saas_ai_agents SET expert_policy=%s::jsonb WHERE id=%s::uuid',(json.dumps({'expert_agent_ids':[helper,denied,foreign,disabled]}),AGENT));d.commit()
+    result=dialogs.history(PROFILE,'connect',1001,CA,G)['dialog']['group_coordination']['agents']
+    assert {r['id'] for r in result}=={AGENT,AGENT2}
+    primary=next(r for r in result if r['id']==AGENT)
+    assert primary['helpers']==['Internal'] and primary['role']=='primary'
+    assert all('expert_policy' not in r for r in result)
+    group['send'].assert_not_called()
