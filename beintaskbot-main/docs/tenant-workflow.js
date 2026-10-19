@@ -56,16 +56,18 @@ return `<h3>Bildirişlər</h3><div class="wf-notifications"><div class="wf-notif
         <button class="outline" data-wf-tab="pipelines" role="tab" aria-selected="true">Vərəqlər və mərhələlər</button>
         <button class="outline" data-wf-tab="members" role="tab" aria-selected="false">Əməkdaş hüquqları</button>
         <button class="outline" data-wf-tab="rules" role="tab" aria-selected="false">İş qaydaları</button>
-      </div><div id="wf-pipelines" class="wf-pane"></div><div id="wf-members" class="wf-pane" hidden></div><div id="wf-rules" class="wf-pane" hidden></div>
+      </div><div id="wf-pipelines" class="wf-pane"></div><div id="wf-members" class="wf-pane" hidden></div><div id="wf-rules" class="wf-pane" hidden></div><button class="outline" id="wfAddLocalPipeline" type="button">+ Beintaskbot vərəqi yarat</button>
       <div class="wf-footer"><button class="primary" id="wfSave">Ayarları saxla</button><span class="wf-hint">Dəyişikliklər növbəti sorğudan etibarən tətbiq olunur.</span></div></div>
       <div id="wfResult" class="wf-result" role="status" aria-live="polite"></div></article>`);
     const invite = $('inviteRole');
     if(invite && ![...invite.options].some(option => option.value === 'admin')) invite.insertAdjacentHTML('beforeend','<option value="admin">Administrator</option>');
     $('wfLoad').onclick = load;
     $('wfSave').onclick = save;
+    $('wfAddLocalPipeline').onclick = addLocalPipeline;
     $('workflowPanel').querySelectorAll('[data-wf-tab]').forEach(button => button.onclick = () => {
       $('workflowPanel').querySelectorAll('[data-wf-tab]').forEach(tab => tab.setAttribute('aria-selected',String(tab === button)));
       $('workflowPanel').querySelectorAll('.wf-pane').forEach(pane => {pane.hidden = pane.id !== 'wf-'+button.dataset.wfTab;});
+      $('wfAddLocalPipeline').hidden=button.dataset.wfTab!=='pipelines';
     });
   }
   function combinedPipelines() {
@@ -77,7 +79,7 @@ return `<h3>Bildirişlər</h3><div class="wf-notifications"><div class="wf-notif
       const prior = saved.get(String(row.pipeline_id));
       const stageMap = new Map((row.stages || []).map(stage => [String(stage.stage_id), stage]));
       for(const stage of config.stages || []) if(String(stage.pipeline_id) === String(row.pipeline_id)) stageMap.set(String(stage.stage_id),stage);
-      return {...row, ...prior, active:prior ? prior.active : selected.has(String(row.pipeline_id)),
+      return {...row, ...prior, active:prior ? prior.active : (row.native ? true : selected.has(String(row.pipeline_id))),
         stages:[...stageMap.values()].map(stage => ({...stage, settings:{...(stage.settings || {}), visible: stage.settings?.visible ?? (!selected.get(String(row.pipeline_id))?.stage_ids?.length || selected.get(String(row.pipeline_id)).stage_ids.includes(Number(stage.stage_id)))}}))};
     });
   }
@@ -95,19 +97,25 @@ return `<h3>Bildirişlər</h3><div class="wf-notifications"><div class="wf-notif
   function render() {
     const rows=combinedPipelines(), rules=policies(), members=(session.members || []).filter(member => member.active);
     const memberOptions=members.map(member => `<option value="${escape(member.telegram_id)}">${escape(member.display_name)}</option>`).join('');
+    const taskMemberOptions=members.filter(member=>member.role==='owner'||(member.permissions||[]).includes('tasks')).map(member=>`<option value="${escape(member.telegram_id)}">${escape(member.display_name)}</option>`).join('');
     $('wf-pipelines').innerHTML=rows.map(row => `<details class="wf-card" data-pipeline="${escape(row.pipeline_id)}">
       <summary>${escape(row.name)}</summary>${check('active','Bu vərəq aktivdir',row.active)}
       <label>Vərəqin sahibi<select data-owner><option value="">Təyin edilməyib</option>${memberOptions}</select></label>
-      <p class="wf-hint">Mərhələ görünüşü yalnız bu kabinetə aiddir. Kommo-da mərhələlər dəyişmir.</p>
+      <p class="wf-hint">Bu tenant vərəqi Beintaskbot-da saxlanılır; Kommo dəyişdirilmir.</p><button class="outline" type="button" data-add-stage="${escape(row.pipeline_id)}">+ Mərhələ</button>
       ${(row.stages || []).map(stage => `<div class="wf-grid wf-card" data-stage="${escape(stage.stage_id)}">
         <div>${check('visible',stage.name,stage.settings?.visible !== false)}</div>
         <label>Sıra<input type="number" data-sort value="${Number(stage.sort_order) || 0}" min="0"></label>
-        <label>Növ<select data-stage-type><option value="open">İşdə</option><option value="won">Uğurlu</option><option value="lost">İmtina</option></select></label></div>`).join('')}</details>`).join('') || '<p>Kommo-ya qoşulun və vərəqləri yaradın. Sonra siyahını yeniləyin.</p>';
+        <label>Növ<select data-stage-type><option value="open">İşdə</option><option value="won">Uğurlu</option><option value="lost">İmtina</option></select></label>
+        <label class="wf-wide"><input type="checkbox" data-native-task-enabled ${stage.settings?.native_task?.enabled ? 'checked' : ''}> Mərhələyə daxil olduqda Beintaskbot tapşırığı yarat</label>
+        <label class="wf-wide">Tapşırıq mətni<input data-native-task-text maxlength="3500" value="${escape(stage.settings?.native_task?.text || '')}" placeholder="Müştəri ilə əlaqə saxla"></label>
+        <label>İcraçı<select data-native-task-responsible><option value="">Sövdələşmənin məsulu</option>${taskMemberOptions}</select></label>
+        <label>Son tarix (gün)<input type="number" data-native-task-days min="0" max="365" value="${Number(stage.settings?.native_task?.due_days ?? 1)}"></label></div>`).join('')}</details>`).join('') || '<p>Beintaskbot vərəqi yaradın; Kommo bağlantısı tələb olunmur.</p>';
     rows.forEach(row => {
       const element=$('wf-pipelines').querySelector(`[data-pipeline="${CSS.escape(String(row.pipeline_id))}"]`);
       element.querySelector('[data-owner]').value=String(row.owner_telegram_id || '');
       (row.stages || []).forEach(stage => {element.querySelector(`[data-stage="${CSS.escape(String(stage.stage_id))}"] [data-stage-type]`).value=stage.stage_type || 'open';});
     });
+    $('wf-pipelines').querySelectorAll('[data-add-stage]').forEach(button=>button.onclick=()=>{const pipeline=rows.find(row=>String(row.pipeline_id)===button.dataset.addStage);if(!pipeline)return;pipeline.stages.push({stage_id:String(nextLocalId()),name:'Yeni mərhələ',sort_order:pipeline.stages.length,stage_type:'open',settings:{visible:true}});catalog.pipelines=[...catalog.pipelines.filter(row=>String(row.pipeline_id)!==String(pipeline.pipeline_id)),pipeline];render();});
     $('wf-members').innerHTML=members.map(member => {
       const settings=(rules.members || {})[String(member.telegram_id)] || {}, owner=member.role === 'owner';
       return `<details class="wf-card" data-member="${escape(member.telegram_id)}"><summary>${escape(member.display_name)} · ${escape(roles[member.role])}</summary>
@@ -147,6 +155,9 @@ return `<h3>Bildirişlər</h3><div class="wf-notifications"><div class="wf-notif
     window.tenantHotOrderSettings.install($('wf-rules').querySelector('[data-hot-rules]'));
     refreshNotificationChoices();
   }
+  let localIdCounter=0;
+  function nextLocalId(){localIdCounter++;return Math.floor(1000000000+Math.random()*8000000000000000);}
+  function addLocalPipeline(){const name=prompt('Yeni Beintaskbot vərəqinin adı:');if(!name||!name.trim())return;const id=String(nextLocalId()),stage={stage_id:String(nextLocalId()),name:'Yeni',sort_order:0,stage_type:'open',settings:{visible:true}};catalog.pipelines.push({pipeline_id:id,name:name.trim().slice(0,180),active:true,owner_telegram_id:null,stages:[stage],settings:{provider:'beintaskbot'},native:true});render();}
   const flags = root => Object.fromEntries([...root.querySelectorAll('input[data-wf]')].map(input => [input.dataset.wf,input.checked]));
   async function save() {
     if(!loaded || loading) return;
@@ -158,7 +169,7 @@ return `<h3>Bildirişlər</h3><div class="wf-notifications"><div class="wf-notif
         nextPipelines.push({...row,stages:undefined,active:card.querySelector('[data-wf="active"]').checked,owner_telegram_id:Number(card.querySelector('[data-owner]').value) || null});
         card.querySelectorAll('[data-stage]').forEach(stage => {
           const original=row.stages.find(s=>String(s.stage_id)===stage.dataset.stage);
-          nextStages.push({...original,pipeline_id:row.pipeline_id,sort_order:Number(stage.querySelector('[data-sort]').value),stage_type:stage.querySelector('[data-stage-type]').value,settings:{...original.settings,visible:stage.querySelector('[data-wf="visible"]').checked}});
+          nextStages.push({...original,pipeline_id:row.pipeline_id,sort_order:Number(stage.querySelector('[data-sort]').value),stage_type:stage.querySelector('[data-stage-type]').value,settings:{...original.settings,visible:stage.querySelector('[data-wf="visible"]').checked,native_task:{enabled:stage.querySelector('[data-native-task-enabled]').checked,text:stage.querySelector('[data-native-task-text]').value.trim(),responsible_id:Number(stage.querySelector('[data-native-task-responsible]').value)||null,due_days:Number(stage.querySelector('[data-native-task-days]').value||1)}}});
         });
       });
       nextRules.members={...nextRules.members};

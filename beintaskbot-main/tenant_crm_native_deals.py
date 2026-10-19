@@ -79,6 +79,8 @@ def create_deal(tenant_id, title, pipeline_id, stage_id, *, contact_id=None, res
                 cur.execute("SELECT id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,created_at,updated_at FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL", (tenant_id, ident))
                 row = cur.fetchone()
                 if not row or (row['title'],row['pipeline_id'],row['stage_id'],str(row['contact_id'] or ''),row['responsible_id'],str(row['channel_id'] or ''),row['conversation_id'],row['description']) != (fields[0],fields[1],fields[2],fields[3] or '',fields[4],fields[5] or '',fields[6],fields[7]): raise ValueError('deal id conflict')
+            from tenant_crm_native_tasks import maybe_create_stage_task
+            maybe_create_stage_task(cur,tenant_id,row,event_key='deal-created:'+str(row['id']))
         conn.commit()
     return row
 
@@ -135,12 +137,18 @@ def update_deal(tenant_id, deal_id, title, pipeline_id, stage_id, *, contact_id=
         _ensure_schema(conn)
         with conn.cursor() as cur:
             _related(cur,tenant_id,fields)
+            cur.execute("SELECT stage_id FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE",(tenant_id,ident))
+            previous=cur.fetchone()
             cur.execute("""UPDATE saas_crm_native_deals SET title=%s,pipeline_id=%s,stage_id=%s,contact_id=%s::uuid,
                 responsible_id=%s,channel_id=%s::uuid,conversation_id=%s,description=%s,updated_at=now()
                 WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL
                 RETURNING id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,created_at,updated_at""",
                 (*fields[:3], fields[3],fields[4],fields[5],fields[6],fields[7],tenant_id,ident))
             row=cur.fetchone()
+            if row and previous and str(previous['stage_id']) != str(row['stage_id']):
+                from tenant_crm_native_tasks import maybe_create_stage_task
+                stamp=row['updated_at'].isoformat() if row.get('updated_at') else str(uuid.uuid4())
+                maybe_create_stage_task(cur,tenant_id,row,event_key=f"stage-entered:{row['id']}:{previous['stage_id']}:{row['stage_id']}:{stamp}")
         conn.commit()
     return row
 

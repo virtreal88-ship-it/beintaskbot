@@ -213,18 +213,32 @@ def validate_workflow_patch(pipelines: object, stages: object, policies: object)
         raise ValueError('Workflow qaydaları düzgün deyil.')
     for item in pipelines or []:
         if not isinstance(item, dict) or not positive_id(item.get('pipeline_id')):
-            raise ValueError('Kommo vərəq ID-si düzgün deyil.')
+            raise ValueError('Vərəq ID-si düzgün deyil.')
         if 'active' in item and not isinstance(item['active'], bool):
             raise ValueError('Vərəqin aktivliyi düzgün deyil.')
         if not isinstance(item.get('settings', {}), dict):
             raise ValueError('Vərəq ayarları düzgün deyil.')
     for item in stages or []:
         if not isinstance(item, dict) or not positive_id(item.get('pipeline_id')) or not positive_id(item.get('stage_id')):
-            raise ValueError('Kommo mərhələ ID-si düzgün deyil.')
+            raise ValueError('Mərhələ ID-si düzgün deyil.')
         if item.get('stage_type', 'open') not in {'open', 'won', 'lost'}:
             raise ValueError('Mərhələ növü düzgün deyil.')
         if not isinstance(item.get('settings', {}), dict):
             raise ValueError('Mərhələ ayarları düzgün deyil.')
+        native_task=(item.get('settings') or {}).get('native_task')
+        if native_task is not None:
+            if not isinstance(native_task,dict) or set(native_task)-{'enabled','text','responsible_id','due_days'}:
+                raise ValueError('Mərhələnin tapşırıq qaydası düzgün deyil.')
+            if not isinstance(native_task.get('enabled',False),bool):
+                raise ValueError('Mərhələnin tapşırıq qaydası düzgün deyil.')
+            text=str(native_task.get('text') or '').strip()
+            if len(text)>3500 or (native_task.get('enabled') and not text):
+                raise ValueError('Avtomatik tapşırıq üçün mətn tələb olunur.')
+            due=native_task.get('due_days',1)
+            if not isinstance(due,int) or isinstance(due,bool) or due<0 or due>365:
+                raise ValueError('Tapşırığın müddəti 0–365 gün olmalıdır.')
+            if native_task.get('responsible_id') is not None and not positive_id(native_task.get('responsible_id')):
+                raise ValueError('Tapşırığın icraçısı düzgün deyil.')
         if not isinstance(item.get('sort_order', 0), int):
             raise ValueError('Mərhələ sırası düzgün deyil.')
         if 'visible' in (item.get('settings') or {}) and not isinstance(item['settings']['visible'], bool):

@@ -124,6 +124,11 @@ class TenantPolicyTests(unittest.TestCase):
             with self.subTest(payload=(pipelines,stages,policies)),self.assertRaises(ValueError):
                 validate_workflow_patch(pipelines,stages,policies)
 
+    def test_native_task_trigger_is_opt_in_and_validated(self):
+        validate_workflow_patch([], [{'pipeline_id':10,'stage_id':100,'settings':{'native_task':{'enabled':True,'text':'Call','responsible_id':20,'due_days':2}}}], {})
+        with self.assertRaises(ValueError):
+            validate_workflow_patch([], [{'pipeline_id':10,'stage_id':100,'settings':{'native_task':{'enabled':True,'text':''}}}], {})
+
 
 if __name__=='__main__':
     unittest.main()
