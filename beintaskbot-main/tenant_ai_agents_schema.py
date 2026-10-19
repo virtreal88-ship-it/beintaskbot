@@ -60,6 +60,9 @@ def ensure_schema(conn):
             cur.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_auto_send_enabled_check')
             cur.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_crm_actions_enabled_check')
             cur.execute('ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS max_replies_per_chat INTEGER NOT NULL DEFAULT 20')
+            # Native CRM writes have their own tenant opt-in, defaulting off;
+            # legacy Kommo and agent settings are not changed by this rollout.
+            cur.execute('ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS native_crm_actions_enabled BOOLEAN NOT NULL DEFAULT FALSE')
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_agents(
               id UUID PRIMARY KEY,
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -260,6 +263,7 @@ def ensure_schema(conn):
               updated_by BIGINT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               FOREIGN KEY(tenant_id,updated_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
               CHECK(NOT enabled OR (verified AND channel_id<>'' AND conversation_id<>'')))''')
+            cur.execute("ALTER TABLE saas_ai_agent_connect_test_mode ADD COLUMN IF NOT EXISTS agent_id UUID NULL")
             cur.execute("ALTER TABLE saas_ai_conversation_state ADD COLUMN IF NOT EXISTS first_inbound_message_id TEXT NOT NULL DEFAULT ''")
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_agent_action_runs(
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,

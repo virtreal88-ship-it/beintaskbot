@@ -130,7 +130,7 @@ def load_agent_config(job, *, with_block_reason=False):
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''SELECT a.role,a.enabled AS agent_enabled,a.scopes,a.model AS agent_model,a.safety,a.schedule,a.mode,
-              s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.crm_actions_enabled,i.metadata,i.secrets,t.status AS tenant_status,cs.state AS conversation_state,
+              s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.crm_actions_enabled,s.native_crm_actions_enabled,i.metadata,i.secrets,t.status AS tenant_status,cs.state AS conversation_state,
               (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb JOIN saas_tenant_webhook_events ce
                 ON ce.tenant_id=j.tenant_id AND ce.fingerprint=j.event_fingerprint WHERE cb.tenant_id=j.tenant_id AND cb.enabled=TRUE
                 AND (cb.agent_id IS NULL OR cb.agent_id=j.agent_id) AND cb.verified=TRUE AND cb.emergency_stop=FALSE AND cb.channel_id=j.channel_id AND cb.conversation_id=j.conversation_id
@@ -187,7 +187,8 @@ def load_agent_config(job, *, with_block_reason=False):
     result = {'scopes':row['scopes'],'agent_model':selected_model,'safety':row.get('safety') or {},
       'chat_model':str(config.get('model') or ''),'schedule':row['schedule'],'mode':row['mode'],
       'operating_mode':row.get('operating_mode'),
-      'crm_actions_enabled':row['crm_actions_enabled'] is True}
+      'crm_actions_enabled':row['crm_actions_enabled'] is True,
+      'native_crm_actions_enabled':row.get('native_crm_actions_enabled') is True}
     return (result, None) if with_block_reason else result
 
 

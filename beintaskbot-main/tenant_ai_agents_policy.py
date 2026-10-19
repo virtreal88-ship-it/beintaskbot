@@ -1,5 +1,6 @@
 """Validation for tenant-owned AI agent settings and knowledge sources."""
 import re
+import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from tenant_linear_policy import TenantLinearError
 
@@ -163,12 +164,12 @@ def agent(data, *, creating=False):
 
 
 def company_settings(data):
-    if not isinstance(data, dict) or set(data) - {'company_instructions', 'enabled', 'auto_send_enabled', 'crm_actions_enabled','max_replies_per_chat','operating_mode','emergency_stop'}:
+    if not isinstance(data, dict) or set(data) - {'company_instructions', 'enabled', 'auto_send_enabled', 'crm_actions_enabled','native_crm_actions_enabled','max_replies_per_chat','operating_mode','emergency_stop'}:
         raise TenantLinearError('AI Agents ayarları düzgün deyil.')
     result = {}
     if 'company_instructions' in data:
         result['company_instructions'] = _text(data['company_instructions'], 'Şirkət təlimatı', 20_000)
-    for key in ('enabled', 'auto_send_enabled', 'crm_actions_enabled'):
+    for key in ('enabled', 'auto_send_enabled', 'crm_actions_enabled','native_crm_actions_enabled'):
         if key in data:
             if not isinstance(data[key], bool):
                 raise TenantLinearError('AI Agents ayarları düzgün deyil.')
@@ -202,7 +203,8 @@ def trigger(data, *, creating=False):
         out['trigger_type'] = kind
     if creating or 'condition' in data:
         condition = data.get('condition', {})
-        if not isinstance(condition, dict) or set(condition) - {'phrase','target_stage_id','task_text','expert_agent_ids'}:
+        native_fields={'native_company_name','native_deal_title','native_pipeline_id','native_stage_id','native_responsible_id','native_task_text','native_task_id'}
+        if not isinstance(condition, dict) or set(condition) - ({'phrase','target_stage_id','task_text','expert_agent_ids'}|native_fields):
             raise TenantLinearError('Trigger şərti düzgün deyil.')
         phrase = _text(condition.get('phrase',''), 'Açar ifadə', 200)
         if data.get('trigger_type', '') == 'phrase' and not phrase:
@@ -210,12 +212,21 @@ def trigger(data, *, creating=False):
         target_stage=_text(condition.get('target_stage_id',''),'Hədəf mərhələ',120)
         task_text=_text(condition.get('task_text',''),'Tapşırıq mətni',500)
         out['condition'] = {'phrase': phrase,'target_stage_id':target_stage,'task_text':task_text}
+        for field,limit in (('native_company_name',240),('native_deal_title',240),('native_pipeline_id',120),('native_stage_id',120),('native_task_text',500),('native_task_id',36)):
+            if field in condition: out['condition'][field]=_text(condition[field],field,limit)
+        if 'native_responsible_id' in condition:
+            value=condition['native_responsible_id']
+            if value in ('',None):out['condition']['native_responsible_id']=''
+            elif type(value) is int and value>0:out['condition']['native_responsible_id']=value
+            else:raise TenantLinearError('Native CRM məsul əməkdaşı düzgün deyil.')
         if 'expert_agent_ids' in condition:
             from tenant_ai_expert_policy import ids
             out['condition']['expert_agent_ids']=ids(condition['expert_agent_ids'])
     if creating or 'actions' in data:
         actions = data.get('actions', [])
-        allowed = {'handoff','handoff_after_reply','call_expert','create_task','update_phone','move_stage'}
+        allowed = {'handoff','handoff_after_reply','call_expert','create_task','update_phone','move_stage',
+            'native_find_create_contact','native_find_create_company','native_find_create_deal','native_move_stage',
+            'native_assign_responsible','native_create_task','native_get_deal_status','native_get_task_status'}
         if not isinstance(actions, list) or len(actions) > 4 or any(action not in allowed for action in actions):
             raise TenantLinearError('Trigger əməliyyatları düzgün deyil.')
         out['actions'] = list(dict.fromkeys(actions))
@@ -225,6 +236,18 @@ def trigger(data, *, creating=False):
         raise TenantLinearError('Mərhələ dəyişmək üçün hədəf mərhələni seçin.')
     if 'create_task' in actions and not condition.get('task_text'):
         raise TenantLinearError('Tapşırıq yaratmaq üçün tapşırıq mətnini daxil edin.')
+    required_native={'native_find_create_company':'native_company_name','native_find_create_deal':'native_deal_title',
+        'native_move_stage':'native_stage_id','native_assign_responsible':'native_responsible_id','native_create_task':'native_task_text',
+        'native_get_task_status':'native_task_id'}
+    for action,field in required_native.items():
+        if action in actions and not condition.get(field):raise TenantLinearError(f'{field} tələb olunur.')
+    if ('native_find_create_deal' in actions or 'native_move_stage' in actions) and not (condition.get('native_pipeline_id') and condition.get('native_stage_id')):
+        raise TenantLinearError('Native deal üçün pipeline və stage tələb olunur.')
+    if 'native_get_deal_status' in actions and not condition.get('native_pipeline_id'):
+        raise TenantLinearError('Native deal status üçün pipeline tələb olunur.')
+    if 'native_get_task_status' in actions:
+        try: uuid.UUID(str(condition.get('native_task_id') or ''))
+        except (ValueError,TypeError,AttributeError): raise TenantLinearError('Native task UUID düzgün deyil.') from None
     if creating or 'enabled' in data:
         if not isinstance(data.get('enabled',False),bool):
             raise TenantLinearError('Trigger aktivliyi düzgün deyil.')
