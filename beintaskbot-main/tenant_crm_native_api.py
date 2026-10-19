@@ -57,9 +57,9 @@ def handler(member_from_request, origin, logger):
                         raise ValueError('invalid fields')
                     result = await asyncio.to_thread(update_contact, tenant_id, contact_id,
                         body['name'], body.get('phone', ''), body.get('email', ''))
-                elif request.method == 'DELETE' and contact_id:
-                    if body:
-                        raise ValueError('unexpected body')
+                elif request.method == 'POST' and contact_id:
+                    if body != {'action': 'archive'}:
+                        raise ValueError('invalid archive action')
                     result = await asyncio.to_thread(archive_contact, tenant_id, contact_id)
                 else:
                     return web.json_response({'success': False, 'error': 'method_not_allowed'}, status=405)
