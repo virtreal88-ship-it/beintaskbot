@@ -2,9 +2,11 @@
 
 from tenant_crm_deletion_schema import migrate_crm_deletions
 from tenant_crm_identity_schema import migrate_crm_identity_schema
+from tenant_crm_native_schema import migrate_native_contacts
 
 def migrate_crm_schema(cur) -> None:
     migrate_crm_identity_schema(cur)
+    migrate_native_contacts(cur)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS crm_linear_news (
             id UUID PRIMARY KEY,
