@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import uuid
+from urllib.parse import urlsplit, urlunsplit
 from tenant_ai_dialog_scope import lock_dialog
 from datetime import datetime, timezone
 
@@ -219,24 +220,95 @@ def status(profile: dict) -> dict:
             row = cur.fetchone()
             cur.execute("SELECT connect_channel_id,name,status,active FROM saas_connect_channels WHERE tenant_id=%s::uuid ORDER BY name", (tenant,))
             channels = [_public_channel(channel) for channel in cur.fetchall()]
-    # Existing Connect installations predate observed outbound events. The
-    # stored subscription belongs to this tenant alone, so an owner/admin
-    # opening its settings safely upgrades just that webhook without touching
-    # another CRM subscriber or another tenant.
-    if row and row.get('status') == 'connected' and profile.get('role') in {'owner', 'admin'}:
-        try:
-            credentials = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode()) if row.get('secrets') else {}
-            webhook_id = str(credentials.get('webhook_id') or '')
-            if webhook_id:
-                _request(str(credentials.get('api_key') or ''), 'PATCH', '/v1/webhooks/' + webhook_id,
-                         {'events': list(CONNECT_WEBHOOK_EVENTS)})
-        except Exception:
-            # Do not make a read-only settings page fail during a temporary
-            # Connect outage. configure() always applies the complete list.
-            pass
     return {'connected': bool(row and row['status'] == 'connected'), 'channels': channels,
             'updated_at': row['updated_at'].isoformat() if row and row.get('updated_at') else None,
             'metadata': (row or {}).get('metadata') or {}}
+
+
+def _diagnostic_url(value: str) -> str:
+    """Omit credentials and query values that might be embedded in a URL."""
+    try:
+        parsed = urlsplit(str(value or ''))
+        host = parsed.hostname or ''
+        if parsed.port:
+            host += ':' + str(parsed.port)
+        return urlunsplit((parsed.scheme, host, parsed.path, '', ''))
+    except (TypeError, ValueError):
+        return ''
+
+
+def _diagnostic_error(value) -> str:
+    """Expose only Connect's known safe status/code format, never raw errors."""
+    match = re.fullmatch(r'subscriber returned ([1-5][0-9]{2})(?: \(([A-Za-z0-9_.-]{1,80})\))?', str(value or ''))
+    if match:
+        return 'HTTP ' + match.group(1) + (': ' + match.group(2) if match.group(2) else '')
+    if 'timeout' in str(value or '').casefold():
+        return 'Çatdırılma vaxtı bitdi'
+    return 'Çatdırılma uğursuz oldu'
+
+
+def diagnostics(profile: dict) -> dict:
+    """Read tenant-owned Connect diagnostics without changing remote state."""
+    _owner(profile)
+    tenant = str(profile['tenant_id'])
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='connect'", (tenant,))
+            integration = cur.fetchone()
+            cur.execute("SELECT name FROM saas_connect_channels WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY name", (tenant,))
+            channel_names = [str(row.get('name') or '') for row in cur.fetchall()]
+    if not integration or integration.get('status') != 'connected' or not integration.get('secrets'):
+        return {'connected': False, 'subscriptions': []}
+    try:
+        credentials = json.loads(_fernet().decrypt(bytes(integration['secrets'])).decode())
+        key = str(credentials.get('api_key') or '')
+        hooks_response = _request(key, 'GET', '/v1/webhooks')
+    except Exception as exc:
+        if isinstance(exc, TenantPlatformError):
+            raise
+        raise TenantPlatformError('Connect diaqnostikası oxunmadı.') from exc
+    hooks = hooks_response.get('data', [])
+    if not isinstance(hooks, list):
+        raise TenantPlatformError('Connect diaqnostikası oxunmadı.')
+    subscriptions = []
+    for hook in hooks:
+        if not isinstance(hook, dict) or not re.fullmatch(r'[0-9a-fA-F-]{36}', str(hook.get('id') or '')):
+            continue
+        webhook_id = str(hook['id'])
+        try:
+            summary = _request(key, 'GET', '/v1/webhooks/' + webhook_id + '/diagnostics')
+            recent = _request(key, 'GET', '/v1/webhooks/' + webhook_id + '/deliveries').get('data', [])
+        except TenantPlatformError:
+            summary, recent = {}, []
+        recent = recent if isinstance(recent, list) else []
+        deliveries = []
+        for item in recent[:10]:
+            if not isinstance(item, dict):
+                continue
+            error = item.get('lastError')
+            deliveries.append({
+                'status': str(item.get('status') or 'unknown'),
+                'attempts': item.get('attempts') if isinstance(item.get('attempts'), int) else None,
+                'createdAt': str(item.get('createdAt') or ''),
+                'deliveredAt': str(item.get('deliveredAt') or ''),
+                'error': _diagnostic_error(error) if error else '',
+            })
+        counts = summary.get('counts') if isinstance(summary.get('counts'), dict) else {}
+        last_delivery = next((item.get('deliveredAt') or item.get('createdAt') for item in recent
+                              if isinstance(item, dict) and (item.get('deliveredAt') or item.get('createdAt'))), '')
+        subscriptions.append({
+            'id': webhook_id,
+            'active': bool(hook.get('active')),
+            'url': _diagnostic_url(hook.get('url') or ''),
+            'channels': channel_names,
+            'counts': {key: counts.get(key) if isinstance(counts.get(key), int) else None
+                       for key in ('pending', 'retrying', 'delivered', 'failed')},
+            'knownHttp401Failures': summary.get('knownHttp401Failures') if isinstance(summary.get('knownHttp401Failures'), int) else None,
+            'http200Count': summary.get('http200Count') if isinstance(summary.get('http200Count'), int) else None,
+            'lastDeliveryAt': str(last_delivery or ''),
+            'recentDeliveries': deliveries,
+        })
+    return {'connected': True, 'subscriptions': subscriptions}
 
 
 def configure(profile: dict, payload: dict, callback_url: str) -> dict:

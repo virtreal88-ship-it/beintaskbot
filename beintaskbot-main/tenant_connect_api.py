@@ -5,7 +5,7 @@ import asyncio
 import json
 from aiohttp import web
 
-from tenant_connect_transport import ConnectWebhookError, channels, configure, disconnect, ingest, status
+from tenant_connect_transport import ConnectWebhookError, channels, configure, diagnostics, disconnect, ingest, status
 from tenant_platform import TenantPlatformError
 from tenant_linear_policy import TenantLinearError
 from tenant_request_origin import require_json_post
@@ -47,6 +47,23 @@ def settings_handler(member_from_request, origin: str, logger):
         except Exception:
             logger.exception('Connect settings request failed')
             return web.json_response({'success': False, 'error': 'Connect ayarları saxlanmadı.'}, status=503, headers={'Cache-Control': 'no-store'})
+    return handle
+
+
+def diagnostics_handler(member_from_request, logger):
+    async def handle(request: web.Request) -> web.Response:
+        try:
+            profile = member_from_request(request)
+            if not profile:
+                raise TenantPlatformError('İcazə yoxdur.')
+            result = await asyncio.to_thread(diagnostics, profile)
+            return web.json_response({'success': True, **result}, headers={'Cache-Control': 'no-store'})
+        except TenantPlatformError as exc:
+            return web.json_response({'success': False, 'error': str(exc)}, status=403, headers={'Cache-Control': 'no-store'})
+        except Exception:
+            logger.exception('Connect diagnostics request failed')
+            return web.json_response({'success': False, 'error': 'Connect diaqnostikası oxunmadı.'}, status=503,
+                                     headers={'Cache-Control': 'no-store'})
     return handle
 
 
