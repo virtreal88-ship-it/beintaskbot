@@ -1,4 +1,6 @@
 import json
+import hashlib
+import hmac
 import sys
 import types
 import unittest
@@ -49,6 +51,15 @@ class Connection:
 
 
 class TenantConnectHandoffTests(unittest.TestCase):
+    def test_connect_signature_is_hmac_of_exact_raw_webhook_body(self):
+        raw = (b'{"id":"event-1","type":"message.outbound.observed",'
+               b'"occurred_at":"2026-10-19T12:00:00.000Z","data":{"id":"msg-1",'
+               b'"channelId":"' + CHANNEL.encode() + b'","conversationId":"g@g.us",'
+               b'"fromMe":true,"source":"linked_phone"}}')
+        signature = 'sha256=' + hmac.new(b'test-secret', raw, hashlib.sha256).hexdigest()
+        self.assertTrue(transport._verify_signature('test-secret', raw, signature))
+        self.assertFalse(transport._verify_signature('test-secret', raw + b' ', signature))
+
     def test_phone_outbound_event_stops_only_its_tenant_connect_conversation(self):
         cursor = Cursor(
             rows=[[{'tenant_id': TENANT, 'secrets': b'encrypted'}]],
@@ -56,7 +67,8 @@ class TenantConnectHandoffTests(unittest.TestCase):
         )
         connection = Connection(cursor)
         event = {'id': 'event-1', 'type': 'message.outbound.observed', 'occurred_at': '2026-10-16T12:00:00Z',
-                 'data': {'id': 'phone-1', 'channelId': CHANNEL, 'conversationId': 'client@s.whatsapp.net', 'type': 'text', 'text': 'I will help'}}
+                 'data': {'id': 'phone-1', 'channelId': CHANNEL, 'conversationId': 'client@s.whatsapp.net',
+                          'fromMe': True, 'source': 'linked_phone', 'type': 'text', 'text': 'I will help'}}
         cipher = MagicMock()
         cipher.decrypt.return_value = json.dumps({'webhook_secret': 'secret'}).encode()
         with patch.object(transport, '_connect', return_value=connection), \
@@ -66,14 +78,36 @@ class TenantConnectHandoffTests(unittest.TestCase):
              patch('tenant_ai_agents_schema.ensure_schema'), \
              patch('tenant_ai_agent_connect.mark_operator_reply') as stop:
             self.assertTrue(transport.ingest(b'{}', 'sha256=valid', event))
-        stop.assert_called_once_with(TENANT, 42, CHANNEL, 'client@s.whatsapp.net', connection=connection)
+        stop.assert_called_once_with(TENANT, 42, CHANNEL, 'client@s.whatsapp.net', connection=connection, actor=None)
         self.assertTrue(connection.committed)
         insert = next(params for sql, params in cursor.executed if 'saas_crm_messages' in sql)
         self.assertEqual(insert[1], TENANT)
         self.assertEqual(insert[4], 'connect:' + CHANNEL)
+        self.assertEqual(insert[5], 'Operator')
+
+    def test_signed_linked_phone_source_is_recorded_as_operator(self):
+        event = {'type':'message.outbound.observed','data':{'source':'linked_phone','fromMe':True}}
+        self.assertEqual(transport._outbound_author(event['data']), 'Operator')
+        self.assertFalse(transport._outbound_is_ai(event['data']))
+
+    def test_known_ai_origin_does_not_mark_human_mode(self):
+        event = {'type':'message.outbound.observed','data':{'ai_authored':True,'fromMe':True}}
+        self.assertEqual(transport._outbound_author(event['data']), 'AI Agent')
+        self.assertTrue(transport._outbound_is_ai(event['data']))
+
+    def test_connect_source_without_linked_phone_proof_is_not_inferred_as_ai(self):
+        event = {'type':'message.outbound.observed','data':{'source':'connect','fromMe':True}}
+        self.assertEqual(transport._outbound_author(event['data']), 'WhatsApp operator')
+        self.assertFalse(transport._outbound_is_ai(event['data']))
+
+    def test_unclassified_from_me_message_remains_operator_compatible(self):
+        self.assertEqual(transport._outbound_author({'fromMe':True}), 'WhatsApp operator')
+        self.assertFalse(transport._outbound_is_ai({'fromMe':True}))
 
     def test_connect_resume_verifies_the_tenant_owned_channel(self):
-        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None,
+        # Route validation and the state mutation each independently check
+        # legacy-channel ambiguity; both safe checks must pass.
+        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, None,
             {'state': 'human', 'agent_id': CHANNEL, 'agent_enabled': True,
              'company_enabled': True, 'company_emergency_stop': False,
              'scopes': [{'provider':'connect','channel_id':CHANNEL}], 'tenant_status': 'active', 'operating_mode': 'active'},
@@ -111,7 +145,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
         paused = {'state': 'paused', 'agent_id': CHANNEL, 'agent_enabled': True,
                   'company_enabled': True, 'company_emergency_stop': False,
                   'scopes': [{'provider':'connect','channel_id':CHANNEL}], 'tenant_status': 'active', 'operating_mode': 'active'}
-        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, paused, {'connected': True}])
+        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, None, paused, {'connected': True}])
         with patch.object(agents_store, '_connect', return_value=Connection(cursor)), \
              patch.object(agents_store, 'ensure_schema'), \
              patch.object(agents_store, '_authorize', return_value=(TENANT, 7)), \
@@ -124,7 +158,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
         self.assertNotIn("state='queued'", statements)
 
         blocked = {**paused, 'company_emergency_stop': True}
-        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, blocked])
+        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, None, blocked])
         with patch.object(agents_store, '_connect', return_value=Connection(cursor)), \
              patch.object(agents_store, 'ensure_schema'), \
              patch.object(agents_store, '_authorize', return_value=(TENANT, 7)), \
@@ -235,7 +269,9 @@ class TenantConnectHandoffTests(unittest.TestCase):
             )
         self.assertIsNone(result)
         send.assert_not_called()
-        self.assertFalse(connection.committed)
+        # Connect schema setup commits before acquiring the dialogue lock.
+        # The AI delivery must still remain uncalled after the human takeover.
+        self.assertTrue(connection.committed)
 
 
 if __name__ == '__main__':

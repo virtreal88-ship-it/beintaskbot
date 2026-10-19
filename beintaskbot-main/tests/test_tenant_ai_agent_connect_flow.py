@@ -170,12 +170,12 @@ class ConnectAiFlowTests(unittest.TestCase):
              patch.object(agents_store, '_authorize', return_value=(TENANT, 7)):
             self.assertEqual(agents_store.save_agent(profile, agent_data)['id'], DRAFT)
         self.assertFalse(any('INSERT INTO saas_ai_agents' in sql for sql, _params in cursor.executed))
-        self.assertIn('created_by=%s AND setup_key=%s', cursor.executed[0][0])
+        self.assertTrue(any('created_by=%s AND setup_key=%s' in sql for sql, _params in cursor.executed))
 
         existing_trigger = {'id': DRAFT, 'agent_id': CHANNEL, 'name': 'Handoff', 'trigger_type': 'phrase',
                             'condition': {'phrase': 'operator', 'target_stage_id': '', 'task_text': ''},
                             'actions': ['handoff'], 'enabled': True, 'version': 1, 'created_at': None, 'updated_at': None}
-        cursor = Cursor(ones=[{'id': CHANNEL}, existing_trigger])
+        cursor = Cursor(ones=[{'id': CHANNEL, 'role':'primary', 'expert_policy':{}}, existing_trigger])
         connection = Connection(cursor)
         trigger_data = {'name': 'Handoff', 'trigger_type': 'phrase',
                         'condition': {'phrase': 'operator', 'target_stage_id': '', 'task_text': ''},
@@ -227,7 +227,7 @@ class ConnectAiFlowTests(unittest.TestCase):
                         'actions': ['handoff'], 'enabled': True, 'setup_key': f'{retry}-handoff'}
         legacy_trigger = {'id': DRAFT, 'agent_id': CHANNEL, **{key: value for key, value in trigger_data.items()
                           if key != 'setup_key'}, 'version': 1, 'created_at': None, 'updated_at': None}
-        cursor = Cursor(ones=[{'id': CHANNEL}, None, legacy_trigger], alls=[[legacy_trigger]])
+        cursor = Cursor(ones=[{'id': CHANNEL, 'role':'primary', 'expert_policy':{}}, None, legacy_trigger], alls=[[legacy_trigger]])
         connection = Connection(cursor)
         with patch.object(agents_store, '_connect', return_value=connection), \
              patch.object(agents_store, 'ensure_schema'), \
