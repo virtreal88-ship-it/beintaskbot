@@ -250,13 +250,51 @@ def configure(profile: dict, payload: dict, callback_url: str) -> dict:
     selected = [row for row in remote if isinstance(row, dict) and str(row.get('id')) in requested]
     if len(selected) != len(requested):
         raise TenantPlatformError('Seçilmiş kanal bu Connect hesabına aid deyil.')
-    secret = secrets.token_urlsafe(32)
-    hook = _request(key, 'POST', '/v1/webhooks', {'url': callback_url, 'events': list(CONNECT_WEBHOOK_EVENTS)})
-    # Connect creates the secret and returns it once. Use it for HMAC verification.
-    webhook_secret = str(hook.get('secret') or '')
-    if not webhook_secret:
-        raise TenantPlatformError('Connect webhook təhlükəsizlik açarını qaytarmadı.')
-    encrypted = _fernet().encrypt(_json({'api_key': key, 'webhook_secret': webhook_secret, 'webhook_id': hook.get('id'), 'local_nonce': secret}).encode())
+    with _connect() as conn:
+        _schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='connect' AND status='connected'", (tenant,))
+            row = cur.fetchone()
+            previous = None
+            if row and row.get('secrets'):
+                try:
+                    previous = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode())
+                except Exception:
+                    # Replacing an unreadable secret would strand an active
+                    # Connect subscription and create a second permanently
+                    # invalid delivery stream.
+                    raise TenantPlatformError('Connect webhook saxlanmış açarı oxunmadı.') from None
+
+    # Reusing the existing tenant-owned subscription preserves the secret that
+    # Connect already has. Creating a replacement on every settings save leaves
+    # the old subscription active but its secret is no longer available here;
+    # each event from that stale hook is then rejected with HTTP 401.
+    hook = None
+    webhook_secret = ''
+    if previous and previous.get('api_key') == key and previous.get('webhook_id') and previous.get('webhook_secret'):
+        try:
+            hooks = _request(key, 'GET', '/v1/webhooks').get('data', [])
+            current = next((row for row in hooks if isinstance(row, dict)
+                            and str(row.get('id') or '') == str(previous['webhook_id'])
+                            and str(row.get('url') or '').rstrip('/') == callback_url.rstrip('/')), None)
+            if current:
+                _request(key, 'PATCH', '/v1/webhooks/' + str(previous['webhook_id']),
+                         {'active': True, 'events': list(CONNECT_WEBHOOK_EVENTS)})
+                hook = current
+                webhook_secret = str(previous['webhook_secret'])
+        except Exception:
+            # Do not silently create a second subscription when the existing
+            # one cannot be safely inspected; surface the connection failure.
+            raise TenantPlatformError('Connect webhook mövcud abunəliyi yoxlanmadı.') from None
+    if hook is None:
+        hook = _request(key, 'POST', '/v1/webhooks', {'url': callback_url, 'events': list(CONNECT_WEBHOOK_EVENTS)})
+        # Connect creates the secret and returns it once. Use it for HMAC verification.
+        webhook_secret = str(hook.get('secret') or '')
+        if not webhook_secret:
+            raise TenantPlatformError('Connect webhook təhlükəsizlik açarını qaytarmadı.')
+    old_id = str((previous or {}).get('webhook_id') or '')
+    old_key = str((previous or {}).get('api_key') or '')
+    encrypted = _fernet().encrypt(_json({'api_key': key, 'webhook_secret': webhook_secret, 'webhook_id': hook.get('id'), 'local_nonce': secrets.token_urlsafe(32)}).encode())
     with _connect() as conn:
         _schema(conn)
         with conn.cursor() as cur:
@@ -271,6 +309,14 @@ def configure(profile: dict, payload: dict, callback_url: str) -> dict:
                   SET name=EXCLUDED.name,status=EXCLUDED.status,active=TRUE,updated_at=now()''',
                             (tenant, str(channel['id']), str(channel.get('name') or ''), str(channel.get('status') or '')))
         conn.commit()
+    if old_id and old_id != str(hook.get('id') or '') and old_key:
+        try:
+            # The saved integration record proves ownership of this exact
+            # previous subscription. Disable only that id after the replacement
+            # is persisted; never enumerate or alter other subscribers.
+            _request(old_key, 'PATCH', '/v1/webhooks/' + old_id, {'active': False})
+        except Exception:
+            pass
     return status(profile)
 
 

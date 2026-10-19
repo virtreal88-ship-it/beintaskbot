@@ -192,7 +192,8 @@ class TenantConnectHandoffTests(unittest.TestCase):
                           'groupSubject': 'Night support', 'participantAlt': '994501234567@s.whatsapp.net',
                           'participantName': 'Leyla', 'fromMe': False, 'type': 'text', 'text': 'Need help'}}
         cipher = MagicMock(); cipher.decrypt.return_value = json.dumps({'webhook_secret': 'secret'}).encode()
-        with patch.object(transport, '_connect', return_value=connection), \
+        with patch.dict('os.environ', {'SUPPORT_CASES_LIVE_EXTRACTION_ENABLED':'true'}), \
+             patch.object(transport, '_connect', return_value=connection), \
              patch.object(transport, '_fernet', return_value=cipher), \
              patch.object(transport, '_verify_signature', return_value=True), \
              patch.object(transport, '_schema'), \
