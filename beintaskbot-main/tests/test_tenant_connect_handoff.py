@@ -220,6 +220,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
              patch.object(transport, '_verify_signature', return_value=True), \
              patch.object(transport, '_schema'), \
              patch('tenant_ai_agents_schema.ensure_schema'), \
+             patch('tenant_knowledge_live_queue.extraction_enabled', return_value=True), \
              patch('tenant_ai_agent_connect.enqueue') as enqueue:
             self.assertTrue(transport.ingest(b'{}', 'sha256=valid', event))
         queued = next(params for sql, params in cursor.executed if 'INSERT INTO saas_knowledge_live_queue' in sql)
