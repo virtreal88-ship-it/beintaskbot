@@ -136,7 +136,7 @@ def evidence(cur,profile,extraction,names_out=None):
         if 'approved_channel_ids' in extraction['route'] and ref['channel_id'] not in extraction['route']['approved_channel_ids']:
             raise TenantLinearError('Источник не утверждён.',403)
         source=assert_route(cur,tenant,policy,'connect',extraction['route']['conversation_id'],ref['channel_id'])
-        cur.execute('SELECT id,body,direction,author_name,raw,message_type FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s',
+        cur.execute('SELECT id,body,direction,author_name,raw,message_type,happened_at FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s',
             (tenant,ref['id'],source['lead_id'],'connect:'+ref['channel_id']))
         row=cur.fetchone()
         if not row or digest(str(row.get('body') or ''))!=ref['body_hash']: raise TenantLinearError('Исходное сообщение изменилось или больше недоступно.',409)
@@ -146,7 +146,8 @@ def evidence(cur,profile,extraction,names_out=None):
     if names_out is not None: names_out.extend(names)
     transcripts={r['id']:r.get('transcript','') for r in extraction.get('media_results',[]) if (r.get('status')=='processed' and r.get('code')=='transcribed') or r.get('audio_status')=='processed'}
     return [{'id':ref['id'],'channel_id':ref['channel_id'],'lead_id':ref['lead_id'],'provider':'connect','conversation_id':extraction['route']['conversation_id'],
-      'text':redact(row['body'],names)[:ref['text_limit']]+('\n[Transcript] '+redact(transcripts[ref['id']],names)[:4000] if ref['id'] in transcripts else ''),'role':'ai' if ref.get('role')=='ai' else author_role(row)}
+      'text':redact(row['body'],names)[:ref['text_limit']]+('\n[Transcript] '+redact(transcripts[ref['id']],names)[:4000] if ref['id'] in transcripts else ''),'role':'ai' if ref.get('role')=='ai' else author_role(row),
+      'happened_at':row['happened_at'].isoformat() if row.get('happened_at') else None}
       for ref,row in items]
 
 
@@ -165,13 +166,16 @@ def public_request(row):
       'media_results':row.get('media_results') or [],'next_before':row['route'].get('next_before'),'limits':{'max_messages':MAX_MESSAGES,'max_context_chars':MAX_CONTEXT,'max_cards':5}}
 
 
-def public_card(cur,row):
+def public_card(cur,row,content_language='az'):
     value={**_row(row),**row['content']};value.pop('content',None);value.pop('content_hash',None)
     if value.get('reviewed_at'): value['reviewed_at']=value['reviewed_at'].isoformat()
     value['extraction_id']=str(row['extraction_id'])
     cur.execute('SELECT agent_id,source_id FROM saas_knowledge_candidate_sources WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid ORDER BY agent_id',(row['tenant_id'],row['id']))
     value['publications']=[{k:str(v) for k,v in item.items()} for item in cur.fetchall()]
     value.setdefault('resolution_method','unknown');value.setdefault('operator_actions',[]);value.setdefault('operator_action_evidence',[]);value.setdefault('case_kind','technical')
+    # Existing records predate the explicit content-language field. Their extraction
+    # route records the language requested when the card was generated.
+    value.setdefault('content_language',content_language if content_language in {'ru','az','en'} else 'az')
     reason=approval_reason(value)
     value['result_confirmed']=value['outcome']['status']=='confirmed'
     value['clarification_status']='required' if reason else 'not_required'
@@ -186,7 +190,7 @@ def request_detail(profile,request_id):
         with conn.cursor() as cur:
             tenant,_,_=authorize(cur,profile);row=extraction_row(cur,tenant,request_id);evidence(cur,profile,row)
             cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND extraction_id=%s::uuid ORDER BY created_at,id',(tenant,row['id']))
-            cards=[public_card(cur,r) for r in cur.fetchall()]
+            cards=[public_card(cur,r,row.get('route',{}).get('language') or 'az') for r in cur.fetchall()]
     return {'request':public_request(row),'candidates':cards}
 
 
@@ -199,7 +203,7 @@ def detail(profile,candidate_id):
             row=cur.fetchone()
             if not row: raise TenantLinearError('Карточка не найдена.',404)
             run=extraction_row(cur,tenant,row['extraction_id']);items=evidence(cur,profile,run)
-            value=public_card(cur,row)
+            value=public_card(cur,row,run.get('route',{}).get('language') or 'az')
     return {'candidate':value,'evidence':items,'route':run['route']}
 
 
@@ -231,12 +235,12 @@ def listing(profile,data):
                 clauses.append('(c.created_at,c.id)<(SELECT created_at,id FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid)')
                 args.extend([tenant,identifier(data['before'])])
             cur.execute("SELECT c.* FROM saas_knowledge_candidates c JOIN saas_knowledge_extractions e ON e.tenant_id=c.tenant_id AND e.id=c.extraction_id WHERE "+' AND '.join(clauses)+' ORDER BY c.created_at DESC,c.id DESC LIMIT %s',tuple(args+[limit+1]))
-            values=cur.fetchall();cards=[];checked=set()
+            values=cur.fetchall();cards=[];runs={}
             for row in values[:limit]:
                 extraction_id=str(row['extraction_id'])
-                if extraction_id not in checked:
-                    run=extraction_row(cur,tenant,extraction_id);route(cur,profile,run['route']);checked.add(extraction_id)
-                cards.append(public_card(cur,row))
+                if extraction_id not in runs:
+                    runs[extraction_id]=extraction_row(cur,tenant,extraction_id);route(cur,profile,runs[extraction_id]['route'])
+                cards.append(public_card(cur,row,runs[extraction_id].get('route',{}).get('language') or 'az'))
     return {'candidates':cards,'limit':limit,'next_before':str(values[limit-1]['id']) if len(values)>limit else None}
 
 
