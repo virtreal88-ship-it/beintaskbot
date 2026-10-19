@@ -512,6 +512,8 @@ def channels(profile: dict, api_key: str) -> list[dict]:
             cur.execute('SELECT connect_channel_id FROM saas_connect_channels WHERE tenant_id=%s::uuid AND active=TRUE', (tenant,))
             active_ids = {str(row['connect_channel_id']) for row in cur.fetchall()}
     return [{'id': str(row.get('id') or ''), 'name': str(row.get('name') or ''), 'status': str(row.get('status') or ''),
+             'phone': str(row.get('phone') or ''), 'phoneConflict': bool(row.get('phoneConflict')),
+             'duplicateChannelId': str(row.get('duplicateChannelId') or ''),
              'active': str(row.get('id') or '') in active_ids, 'linked': str(row.get('id') or '') in linked_ids}
             for row in rows if isinstance(row, dict) and row.get('id')]
 
