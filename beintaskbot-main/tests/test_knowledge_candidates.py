@@ -328,6 +328,24 @@ def test_knowledge_extraction_defaults_to_az_and_preserves_explicit_languages():
     assert policy.language('ru',{'language':'az'})=='ru'
 
 
+def test_card_content_language_is_persistable_and_validated():
+    value=model_card();ids=[str(uuid.uuid4()) for _ in value['source_message_ids']];value['source_message_ids']=ids;value['outcome']['message_ids']=[ids[-1]]
+    assert policy.card(value,ids)['content_language']=='az'
+    assert policy.card({**value,'content_language':'en'},ids)['content_language']=='en'
+    with pytest.raises(TenantLinearError):policy.card({**value,'content_language':'fr'},ids)
+
+
+def test_legacy_card_language_uses_extraction_then_saved_az_is_returned(ready):
+    db,_,data=ready;value=candidate(ready)
+    db.execute("UPDATE saas_knowledge_candidates SET content=content-'content_language' WHERE id=%s::uuid",(value['id'],))
+    db.execute("UPDATE saas_knowledge_extractions SET route=jsonb_set(route,'{language}','\"en\"'::jsonb) WHERE id=%s::uuid",(value['extraction_id'],));db.commit()
+    assert store.detail(PROFILE,value['id'])['candidate']['content_language']=='en'
+    assert store.listing(PROFILE,{'limit':25})['candidates'][0]['content_language']=='en'
+    saved=store.mutate(PROFILE,value['id'],{'expected_version':1,'content_language':'az'})['candidate']
+    assert saved['content_language']=='az'
+    assert store.listing(PROFILE,{'limit':25})['candidates'][0]['content_language']=='az'
+
+
 def test_remote_case_without_employee_actions_cannot_publish():
     value=model_card(confirmed=True)
     value['resolution_method']='remote';value['operator_actions']=[]
