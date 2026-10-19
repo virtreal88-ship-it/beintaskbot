@@ -6,7 +6,7 @@ MAX_CONTEXT=12000
 MAX_TOKENS=16000
 MAX_CARDS=5
 BASE_FIELDS={'title','symptoms','cause','resolution_steps','outcome','source_message_ids','product','product_version'}
-FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','operator_action_evidence','case_kind','content_language'}
+FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','operator_action_evidence','case_kind','content_language','clarification_note'}
 
 def language(value=None,profile=None):
     # The extraction language belongs to the request, not the employee profile.
@@ -56,7 +56,10 @@ def card(data,allowed_ids):
     if not isinstance(actions,list) or len(actions)>10: raise TenantLinearError('Некорректные действия сотрудника.')
     content_language=data.get('content_language','az')
     if not isinstance(content_language,str) or content_language not in {'ru','az','en'}: raise TenantLinearError('Язык карточки: ru, az или en.')
-    result={'resolution_method':method,'case_kind':kind,'operator_actions':[text(v,800,True) for v in actions],'content_language':content_language}
+    clarification_note=data.get('clarification_note','')
+    if not isinstance(clarification_note,str): raise TenantLinearError('Комментарий уточнения должен быть текстом.')
+    result={'resolution_method':method,'case_kind':kind,'operator_actions':[text(v,800,True) for v in actions],'content_language':content_language,
+      'clarification_note':text(clarification_note,2000)}
     result.update({key:text(data[key],180 if key=='title' else 120, key=='title') for key in ('title','product','product_version')})
     for key in ('symptoms','resolution_steps'):
         values=data[key]

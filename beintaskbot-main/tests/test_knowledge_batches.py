@@ -102,7 +102,7 @@ def test_queue_filters_keyset_and_needs_clarification(batch):
     page=store.listing(PROFILE,{'limit':1,'status':'pending_review','before':rows['next_before']})
     assert len(page['candidates'])==1 and page['candidates'][0]['id']!=rows['candidates'][0]['id']
     item=rows['candidates'][0]
-    updated=store.mutate(PROFILE,item['id'],{'expected_version':1},'clarify')['candidate']
+    updated=store.mutate(PROFILE,item['id'],{'expected_version':1,'clarification_note':'Please confirm the result.'},'clarify')['candidate']
     assert updated['status']=='needs_clarification' and updated['version']==2
     assert len(store.listing(PROFILE,{'status':'needs_clarification','channel_id':CA,'batch_id':result['id']})['candidates'])==1
     changed=store.mutate(PROFILE,item['id'],{'expected_version':2,'title':'Уточнённая проблема'})['candidate']
@@ -171,7 +171,7 @@ def test_clarify_cannot_publish_unconfirmed_result(batch):
     d,generation,data=batch
     generation.side_effect=lambda *a,**k:(json.dumps({'cards':[model_card(confirmed=False)]}),{'total_tokens':10})
     result=run(batch);item=store.listing(PROFILE,{'batch_id':result['id']})['candidates'][0]
-    value=store.mutate(PROFILE,item['id'],{'expected_version':1},'clarify')['candidate']
+    value=store.mutate(PROFILE,item['id'],{'expected_version':1,'clarification_note':'Please confirm the result.'},'clarify')['candidate']
     assert not value['can_approve']
     with pytest.raises(TenantLinearError,match='confirmation_required'):store.mutate(PROFILE,item['id'],{'expected_version':2,'agent_ids':[AGENT]},'approve')
 
@@ -217,4 +217,4 @@ def test_status_constraint_upgrade_preserves_existing_candidates(batch):
     d.execute("ALTER TABLE saas_knowledge_candidates ADD CONSTRAINT saas_knowledge_candidates_status_check CHECK(status IN ('pending_review','approved','rejected'))")
     d.commit();schema.create_schema(d);d.commit()
     assert {r['id'] for r in store.listing(PROFILE,{})['candidates']}==set(ids)
-    assert store.mutate(PROFILE,ids[0],{'expected_version':1},'clarify')['candidate']['status']=='needs_clarification'
+    assert store.mutate(PROFILE,ids[0],{'expected_version':1,'clarification_note':'Please confirm the result.'},'clarify')['candidate']['status']=='needs_clarification'

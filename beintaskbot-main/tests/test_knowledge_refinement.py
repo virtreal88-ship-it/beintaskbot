@@ -261,3 +261,33 @@ def test_ai_message_cannot_supply_performed_operator_actions(ready):
     generation.return_value=(json.dumps({'cards':[raw]}),{'total_tokens':20})
     value=candidate(ready)
     assert value['operator_actions']==[] and not value['can_approve']
+
+
+def test_clarification_note_persists_without_changing_source_evidence(ready):
+    value=candidate(ready);before=store.detail(PROFILE,value['id'])
+    note='Confirm that the customer can reconnect after the restart.'
+    changed=store.mutate(PROFILE,value['id'],{'expected_version':1,'clarification_note':note},'clarify')['candidate']
+    reopened=store.detail(PROFILE,value['id'])
+    assert changed['status']=='needs_clarification' and changed['clarification_note']==note
+    assert reopened['candidate']['clarification_note']==note
+    assert [item['id'] for item in reopened['evidence']]==[item['id'] for item in before['evidence']]
+    assert not d_has_publications(ready)
+
+
+def d_has_publications(ready):
+    db,_,_=ready
+    return bool(db.execute('SELECT id FROM saas_ai_knowledge_sources'))
+
+
+def test_evidence_uses_existing_customer_and_multiple_employee_names(ready):
+    db,_,_=ready
+    db.execute("UPDATE saas_connect_conversations SET contact_name='Nigar' WHERE tenant_id=%s::uuid AND conversation_id='client'",(PROFILE['tenant_id'],))
+    db.execute("UPDATE saas_crm_messages SET author_name='Leyla' WHERE external_id='response-0'")
+    db.execute("UPDATE saas_crm_messages SET direction='outgoing',author_name='Kamran' WHERE external_id='response-1'")
+    db.commit()
+    value=candidate(ready);evidence=store.detail(PROFILE,value['id'])['evidence']
+    roles_names={(item['role'],item['sender_name']) for item in evidence}
+    assert ('customer','Nigar') in roles_names
+    assert ('operator','Leyla') in roles_names
+    assert ('operator','Kamran') in roles_names
+    assert len({item['id'] for item in evidence})==len(evidence)

@@ -1,6 +1,7 @@
 """Tenant/route-authorized candidates; publication uses existing Knowledge Sources."""
 import hashlib
 import json
+import re
 import uuid
 from tenant_platform import _connect, _json
 from tenant_ai_agents_schema import ensure_schema
@@ -142,13 +143,58 @@ def evidence(cur,profile,extraction,names_out=None):
         if not row or digest(str(row.get('body') or ''))!=ref['body_hash']: raise TenantLinearError('Исходное сообщение изменилось или больше недоступно.',409)
         names.extend([source.get('contact_name'),source.get('phone'),row.get('author_name')])
         raw=row.get('raw') or {};names.extend(raw.get(k) for k in ('participantName','pushName','senderName','contactName'))
-        items.append((ref,row))
+        items.append((ref,row,source))
     if names_out is not None: names_out.extend(names)
     transcripts={r['id']:r.get('transcript','') for r in extraction.get('media_results',[]) if (r.get('status')=='processed' and r.get('code')=='transcribed') or r.get('audio_status')=='processed'}
-    return [{'id':ref['id'],'channel_id':ref['channel_id'],'lead_id':ref['lead_id'],'provider':'connect','conversation_id':extraction['route']['conversation_id'],
-      'text':redact(row['body'],names)[:ref['text_limit']]+('\n[Transcript] '+redact(transcripts[ref['id']],names)[:4000] if ref['id'] in transcripts else ''),'role':'ai' if ref.get('role')=='ai' else author_role(row),
-      'happened_at':row['happened_at'].isoformat() if row.get('happened_at') else None}
-      for ref,row in items]
+    conversation=extraction['route']['conversation_id'];is_group=bool(group_jid(conversation))
+    from tenant_operator_dialogs import _message,_participant_fields
+    participant_ids=[]
+    if is_group:
+        for _,row,_ in items:
+            jid,_,_=_participant_fields(row.get('raw'))
+            if jid and jid not in participant_ids: participant_ids.append(jid)
+    participant_names={};verified_staff={}
+    if is_group and participant_ids:
+        channel_ids=list({str(ref['channel_id']) for ref,_,_ in items})
+        cur.execute("SELECT to_regclass('public.saas_connect_participant_display_names') AS relation")
+        if cur.fetchone().get('relation'):
+            cur.execute('''SELECT connect_channel_id::text AS channel_id,participant_jid,display_name
+              FROM saas_connect_participant_display_names WHERE tenant_id=%s::uuid AND conversation_id=%s
+                AND connect_channel_id::text=ANY(%s::text[]) AND participant_jid=ANY(%s::text[])''',
+              (tenant,conversation,channel_ids,participant_ids))
+            participant_names={(str(value['channel_id']),str(value['participant_jid'])):str(value['display_name'])
+              for value in cur.fetchall() if str(value.get('display_name') or '')}
+        cur.execute("SELECT to_regclass('public.saas_ai_group_staff') AS relation")
+        if cur.fetchone().get('relation'):
+            cur.execute('''SELECT s.channel_id::text AS channel_id,s.jid,m.display_name FROM saas_ai_group_staff s
+              JOIN saas_tenant_members m ON m.tenant_id=s.tenant_id AND m.telegram_id=s.member_id
+              WHERE s.tenant_id=%s::uuid AND s.channel_id::text=ANY(%s::text[]) AND s.jid=ANY(%s::text[]) AND m.active=TRUE''',
+              (tenant,channel_ids,participant_ids))
+            verified_staff={(str(value['channel_id']),str(value['jid'])):str(value['display_name'])
+              for value in cur.fetchall() if str(value.get('display_name') or '')}
+    def display_name(value,source,row,role):
+        value=str(value or '').strip()[:180]
+        if role=='ai': return 'AI Agent'
+        if not value or value in {'Operator','WhatsApp operator'} or re.fullmatch(r'[+\d\s().-]+',value) or '@' in value:
+            return ''
+        for technical in (source.get('phone'),row.get('external_id')):
+            if technical and value==str(technical): return ''
+        return value
+    result=[]
+    for ref,row,source in items:
+        role='ai' if ref.get('role')=='ai' else author_role(row)
+        raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
+        participant_jid,_,_=_participant_fields(raw)
+        staff_name=verified_staff.get((str(ref['channel_id']),participant_jid)) if is_group else None
+        if role=='customer' and staff_name: role='operator'
+        author_input={**row,'channel':'connect:'+str(ref['channel_id']),'source_channel_id':str(ref['channel_id'])}
+        contact_name=(source.get('manual_display_name') or source.get('contact_name') or source.get('display_name')) if not is_group else ''
+        author=staff_name or _message(author_input,group=is_group,participant_names=participant_names,contact_name=contact_name).get('author_name')
+        result.append({'id':ref['id'],'channel_id':ref['channel_id'],'lead_id':ref['lead_id'],'provider':'connect','conversation_id':conversation,
+          'text':redact(row['body'],names)[:ref['text_limit']]+('\n[Transcript] '+redact(transcripts[ref['id']],names)[:4000] if ref['id'] in transcripts else ''),
+          'role':role,'sender_name':display_name(author,source,row,role),
+          'happened_at':row['happened_at'].isoformat() if row.get('happened_at') else None})
+    return result
 
 
 def extraction_row(cur,tenant,request_id):
@@ -173,6 +219,7 @@ def public_card(cur,row,content_language='az'):
     cur.execute('SELECT agent_id,source_id FROM saas_knowledge_candidate_sources WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid ORDER BY agent_id',(row['tenant_id'],row['id']))
     value['publications']=[{k:str(v) for k,v in item.items()} for item in cur.fetchall()]
     value.setdefault('resolution_method','unknown');value.setdefault('operator_actions',[]);value.setdefault('operator_action_evidence',[]);value.setdefault('case_kind','technical')
+    value.setdefault('clarification_note','')
     # Existing records predate the explicit content-language field. Their extraction
     # route records the language requested when the card was generated.
     value.setdefault('content_language',content_language if content_language in {'ru','az','en'} else 'az')
@@ -304,8 +351,11 @@ def mutate(profile,candidate_id,data,action='edit'):
                 value=enforce_confirmation(card({**row['content'],**patch},[i['id'] for i in items]),items)
                 cur.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(value),tenant,row['id']))
             elif action=='clarify':
-                if set(data)-{'expected_version'}: raise TenantLinearError('Неизвестное поле.')
-                cur.execute("UPDATE saas_knowledge_candidates SET status='needs_clarification',version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,row['id']))
+                if set(data)-{'expected_version','clarification_note'}: raise TenantLinearError('Неизвестное поле.')
+                if not isinstance(data.get('clarification_note'),str) or not data['clarification_note'].strip():
+                    raise TenantLinearError('Dəqiqləşdirmə üçün çatışmayan məlumatı qeyd edin.')
+                patch=card({**row['content'],'clarification_note':data['clarification_note']},[i['id'] for i in items])
+                cur.execute("UPDATE saas_knowledge_candidates SET content=%s::jsonb,status='needs_clarification',version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(_json(patch),tenant,row['id']))
             elif action=='reject':
                 if set(data)-{'expected_version'}: raise TenantLinearError('Неизвестное поле.')
                 cur.execute("UPDATE saas_knowledge_candidates SET status='rejected',version=version+1,reviewed_by=%s,reviewed_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(actor,tenant,row['id']))
