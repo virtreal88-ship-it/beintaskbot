@@ -93,6 +93,29 @@ class TenantConnectHandoffTests(unittest.TestCase):
         self.assertEqual(transport._outbound_author(event['data']), 'Operator')
         self.assertFalse(transport._outbound_is_ai(event['data']))
 
+    def test_uncertain_connect_echo_is_unknown_and_does_not_trigger_staff_handoff(self):
+        cursor = Cursor(
+            rows=[[{'tenant_id': TENANT, 'secrets': b'encrypted'}]],
+            ones=[{'active': True}, {'event_id': 'event-unknown'}, {'lead_id': 42}],
+        )
+        connection = Connection(cursor)
+        event = {'id': 'event-unknown', 'type': 'message.outbound.observed', 'occurred_at': '2026-10-19T12:00:00Z',
+                 'data': {'id': 'uncertain-1', 'channelId': CHANNEL, 'conversationId': 'client@s.whatsapp.net',
+                          'fromMe': True, 'source': 'unknown', 'authorshipUncertain': True, 'type': 'text', 'text': 'reply'}}
+        cipher = MagicMock()
+        cipher.decrypt.return_value = json.dumps({'webhook_secret': 'secret'}).encode()
+        with patch.object(transport, '_connect', return_value=connection), \
+             patch.object(transport, '_fernet', return_value=cipher), \
+             patch.object(transport, '_verify_signature', return_value=True), \
+             patch.object(transport, '_schema'), \
+             patch('tenant_ai_agents_schema.ensure_schema'), \
+             patch('tenant_ai_agent_connect.mark_operator_reply') as stop:
+            self.assertTrue(transport.ingest(b'{}', 'sha256=valid', event))
+        stop.assert_not_called()
+        insert = next(params for sql, params in cursor.executed if 'saas_crm_messages' in sql)
+        self.assertEqual(insert[5], 'Unknown sender')
+        self.assertEqual(json.loads(insert[-1])['source'], 'unknown')
+
     def test_known_ai_origin_does_not_mark_human_mode(self):
         event = {'type':'message.outbound.observed','data':{'ai_authored':True,'fromMe':True}}
         self.assertEqual(transport._outbound_author(event['data']), 'AI Agent')

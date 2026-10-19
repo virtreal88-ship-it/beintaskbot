@@ -133,6 +133,8 @@ def _outbound_author(data: dict) -> str:
         return 'AI Agent'
     if data.get('source') == 'linked_phone':
         return 'Operator'
+    if data.get('source') == 'unknown':
+        return 'Unknown sender'
     return 'WhatsApp operator'
 
 
@@ -428,7 +430,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                     raise ConnectWebhookError('message_scope_conflict', 'Connect message scope mismatch.', 409)
                 # A malformed outbound event with ``fromMe:false`` is kept as
                 # an observable outbound record, but cannot take over a chat.
-                if data.get('fromMe') is not False and not _outbound_is_ai(data, stored) and not ai_origin and (not coordinated or employee is not None):
+                if data.get('fromMe') is not False and data.get('source') != 'unknown' and not _outbound_is_ai(data, stored) and not ai_origin and (not coordinated or employee is not None):
                     from tenant_ai_agent_connect import mark_operator_reply
                     mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn, actor=employee)
                     if stored and stored.get('id'):
