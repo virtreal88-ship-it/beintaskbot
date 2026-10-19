@@ -33,6 +33,10 @@ class Cursor:
     def fetchone(self):
         return self.settings if self.calls == 1 else {'connected': True}
 
+    def fetchall(self):
+        # Dialogue-lock guards read any legacy row set; this fixture has none.
+        return []
+
 
 class Connection:
     def __init__(self, cursor):

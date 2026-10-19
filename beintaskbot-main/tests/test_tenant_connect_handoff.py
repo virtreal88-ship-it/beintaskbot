@@ -88,7 +88,9 @@ class TenantConnectHandoffTests(unittest.TestCase):
         self.assertFalse(transport._outbound_is_ai({'fromMe':True}))
 
     def test_connect_resume_verifies_the_tenant_owned_channel(self):
-        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None,
+        # Route validation and the state mutation each independently check
+        # legacy-channel ambiguity; both safe checks must pass.
+        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, None,
             {'state': 'human', 'agent_id': CHANNEL, 'agent_enabled': True,
              'company_enabled': True, 'company_emergency_stop': False,
              'scopes': [{'provider':'connect','channel_id':CHANNEL}], 'tenant_status': 'active', 'operating_mode': 'active'},
@@ -126,7 +128,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
         paused = {'state': 'paused', 'agent_id': CHANNEL, 'agent_enabled': True,
                   'company_enabled': True, 'company_emergency_stop': False,
                   'scopes': [{'provider':'connect','channel_id':CHANNEL}], 'tenant_status': 'active', 'operating_mode': 'active'}
-        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, paused, {'connected': True}])
+        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, None, paused, {'connected': True}])
         with patch.object(agents_store, '_connect', return_value=Connection(cursor)), \
              patch.object(agents_store, 'ensure_schema'), \
              patch.object(agents_store, '_authorize', return_value=(TENANT, 7)), \
@@ -139,7 +141,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
         self.assertNotIn("state='queued'", statements)
 
         blocked = {**paused, 'company_emergency_stop': True}
-        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, blocked])
+        cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, None, blocked])
         with patch.object(agents_store, '_connect', return_value=Connection(cursor)), \
              patch.object(agents_store, 'ensure_schema'), \
              patch.object(agents_store, '_authorize', return_value=(TENANT, 7)), \
@@ -250,7 +252,9 @@ class TenantConnectHandoffTests(unittest.TestCase):
             )
         self.assertIsNone(result)
         send.assert_not_called()
-        self.assertFalse(connection.committed)
+        # Connect schema setup commits before acquiring the dialogue lock.
+        # The AI delivery must still remain uncalled after the human takeover.
+        self.assertTrue(connection.committed)
 
 
 if __name__ == '__main__':

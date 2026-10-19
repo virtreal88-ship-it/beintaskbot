@@ -24,6 +24,14 @@ CONNECT_URL = str(os.environ.get("CONNECT_PUBLIC_URL") or "https://connect.crm.p
 CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed')
 
 
+class ConnectWebhookError(TenantPlatformError):
+    """A safe, classified rejection of a signed Connect webhook request."""
+    def __init__(self, code: str, message: str, status: int):
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+
 def _safe_label(value, limit=180):
     """Keep provider labels display-safe without manufacturing an identity."""
     if not isinstance(value, str):
@@ -337,10 +345,10 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
     event_id, data = str(event.get('id') or ''), event.get('data') or {}
     event_type = str(event.get('type') or '')
     if event_type not in CONNECT_WEBHOOK_EVENTS or not event_id or not isinstance(data, dict):
-        raise TenantPlatformError('Connect webhook formatı düzgün deyil.')
+        raise ConnectWebhookError('invalid_event', 'Connect webhook formatı düzgün deyil.', 400)
     channel_id, conversation = str(data.get('channelId') or ''), str(data.get('conversationId') or '')
     if not channel_id or not conversation:
-        raise TenantPlatformError('Connect webhook kanal məlumatı yoxdur.')
+        raise ConnectWebhookError('missing_route', 'Connect webhook kanal məlumatı yoxdur.', 400)
     metadata = _conversation_metadata(data, conversation)
     accepted = False
     queued_payload = None
@@ -362,7 +370,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 if _verify_signature(secret, raw, signature):
                     matches.append(str(row['tenant_id']))
             if len(matches) != 1:
-                raise TenantPlatformError('Connect webhook imzası etibarsızdır.')
+                raise ConnectWebhookError('invalid_signature', 'Connect webhook imzası etibarsızdır.', 401)
             tenant = matches[0]
             cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active=TRUE', (tenant, channel_id))
             if not cur.fetchone():
@@ -415,7 +423,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                             (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,_outbound_author(data),str(data.get('text') or ''),str(data.get('type') or 'text'),occurred,_json(data)))
                 stored = cur.fetchone()
                 if stored and (stored.get('kommo_lead_id') != lead_id or stored.get('channel') != 'connect:' + channel_id):
-                    raise TenantPlatformError('Connect message scope mismatch.')
+                    raise ConnectWebhookError('message_scope_conflict', 'Connect message scope mismatch.', 409)
                 # A malformed outbound event with ``fromMe:false`` is kept as
                 # an observable outbound record, but cannot take over a chat.
                 if data.get('fromMe') is not False and not _outbound_is_ai(data, stored) and not ai_origin and (not coordinated or employee is not None):
@@ -479,7 +487,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 cur.execute("SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND kommo_lead_id=%s AND channel=%s AND direction='incoming'",
                             (tenant, 'connect:' + queued_payload[4], queued_payload[3], 'connect:' + channel_id))
                 if not cur.fetchone():
-                    raise TenantPlatformError('Connect message scope mismatch.')
+                    raise ConnectWebhookError('message_scope_conflict', 'Connect message scope mismatch.', 409)
                 from tenant_ai_agent_connect import enqueue
                 enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
                         lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],

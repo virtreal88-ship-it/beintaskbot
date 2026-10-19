@@ -5,7 +5,7 @@ import asyncio
 import json
 from aiohttp import web
 
-from tenant_connect_transport import channels, configure, disconnect, ingest, status
+from tenant_connect_transport import ConnectWebhookError, channels, configure, disconnect, ingest, status
 from tenant_platform import TenantPlatformError
 from tenant_linear_policy import TenantLinearError
 from tenant_request_origin import require_json_post
@@ -55,13 +55,25 @@ def webhook_handler(logger):
         raw = await request.read()
         signature = str(request.headers.get('x-connect-signature-256') or '')
         try:
-            data = json.loads(raw.decode('utf-8'))
+            if not signature:
+                raise ConnectWebhookError('missing_signature_header', 'Connect webhook imzası yoxdur.', 401)
+            try:
+                data = json.loads(raw.decode('utf-8'))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise ConnectWebhookError('invalid_json', 'Connect webhook formatı düzgün deyil.', 400) from None
             if not isinstance(data, dict):
-                raise TenantPlatformError('Connect webhook formatı düzgün deyil.')
+                raise ConnectWebhookError('invalid_event', 'Connect webhook formatı düzgün deyil.', 400)
             accepted = await asyncio.to_thread(ingest, raw, signature, data)
             return web.json_response({'accepted': accepted})
-        except TenantPlatformError as exc:
-            return web.json_response({'error': str(exc)}, status=401)
+        except ConnectWebhookError as exc:
+            # Never log the body, signature, API key, or tenant identifiers.
+            # A short reason code lets operators distinguish auth failures
+            # from malformed/spoofed requests and internal scope conflicts.
+            logger.warning('Connect webhook rejected code=%s status=%s', exc.code, exc.status)
+            return web.json_response({'error': str(exc)}, status=exc.status)
+        except TenantPlatformError:
+            logger.exception('Connect webhook platform failure')
+            return web.json_response({'error': 'webhook_failed'}, status=500)
         except Exception:
             logger.exception('Connect webhook failed')
             return web.json_response({'error': 'webhook_failed'}, status=500)
