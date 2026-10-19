@@ -56,7 +56,7 @@ def _conversation_metadata(data, conversation):
     explicit_type = str(data.get('conversationType') or data.get('chatType') or '').strip().casefold()
     if jid.endswith('@g.us') or data.get('isGroup') is True or explicit_type in {'group', 'groupchat'}:
         kind = 'group'
-    elif jid.endswith('@s.whatsapp.net') or explicit_type in {'contact', 'personal', 'direct'}:
+    elif jid.endswith(('@s.whatsapp.net', '@c.us')) or explicit_type in {'contact', 'personal', 'direct'}:
         kind = 'contact'
     else:
         kind = ''
@@ -87,7 +87,7 @@ def _conversation_metadata(data, conversation):
 
 def _phone_from_jid(jid):
     value = str(jid or '')
-    if '@' in value and not value.endswith('@s.whatsapp.net'):
+    if '@' in value and not value.endswith(('@s.whatsapp.net', '@c.us')):
         return ''
     candidate = value.split('@', 1)[0]
     return candidate if re.fullmatch(r'[1-9][0-9]{5,18}', candidate) else ''
@@ -756,6 +756,17 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 pass
             else:
                 lead_id = _upsert_conversation(cur, tenant, channel_id, conversation, metadata)
+                # Create/attach the native CRM contact independently of AI.
+                # Only a personal, provider-verified WhatsApp JID is an
+                # identity; group JIDs, names, and unknown IDs never create a
+                # person record.  This shares the webhook transaction so
+                # retries cannot leave a contact without its message.
+                if (metadata.get('kind') == 'contact'
+                        and str(conversation).endswith(('@s.whatsapp.net', '@c.us'))):
+                    from tenant_crm_native_contacts import upsert_whatsapp_contact
+                    upsert_whatsapp_contact(cur, tenant, channel_id, conversation,
+                        _phone_from_jid(conversation), metadata.get('display_name') or '',
+                        str(data.get('id') or event_id))
                 occurred = str(event.get('occurred_at') or datetime.now(timezone.utc).isoformat())
                 is_group = metadata.get('kind') == 'group'
                 phone = '' if is_group else _phone_from_jid(conversation)
