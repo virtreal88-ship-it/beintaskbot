@@ -13,6 +13,24 @@ PROFILE = {'tenant_id': TENANT, 'role': 'owner'}
 
 
 class ChannelManagementTests(TestCase):
+    def test_channel_listing_surfaces_confirmed_phone_and_safe_conflict(self):
+        conn = mock.MagicMock()
+        cursor = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cursor.fetchall.side_effect = [
+            [{'connect_channel_id': CHANNEL}],
+            [{'connect_channel_id': CHANNEL}],
+        ]
+        with mock.patch.object(transport, '_owner'), \
+             mock.patch.object(transport, '_stored_connect_credentials', return_value={'api_key': 'tenant-key'}), \
+             mock.patch.object(transport, '_request', return_value={'data': [
+                 {'id': CHANNEL, 'name': 'Support', 'status': 'connected', 'phone': '994501234567'},
+                 {'id': OTHER_CHANNEL, 'name': 'Duplicate', 'status': 'error', 'phoneConflict': True, 'duplicateChannelId': CHANNEL},
+             ]}), mock.patch.object(transport, '_connect', return_value=conn):
+            rows = transport.channels(PROFILE, '')
+        self.assertEqual(rows[0]['phone'], '994501234567')
+        self.assertTrue(rows[1]['phoneConflict'])
+        self.assertEqual(rows[1]['duplicateChannelId'], CHANNEL)
+
     def test_disconnect_rejects_foreign_channel_without_provider_call(self):
         conn = mock.MagicMock()
         cur = conn.__enter__.return_value.cursor.return_value.__enter__.return_value
