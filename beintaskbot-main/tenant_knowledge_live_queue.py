@@ -119,6 +119,11 @@ def tick():
     profile={'tenant_id':str(item['tenant_id']),'telegram_id':item['reviewer_id']}
     request_id=_request_id(item)
     try:
+        # Re-check after claim: a switch-off between claim and provider dispatch
+        # must not start a new analysis. Preserve the receipt for later review.
+        if not extraction_enabled():
+            finish(item,error_code='disabled_after_claim')
+            return False
         response=analyze(profile,{
           'request_id':request_id,'provider':'connect','channel_id':str(item['channel_id']),
           'conversation_id':item['conversation_id'],'history_mode':'channel','language':'az'})
