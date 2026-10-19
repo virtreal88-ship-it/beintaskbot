@@ -10,7 +10,7 @@ FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','case_kind'}
 
 def language(value=None,profile=None):
     profile=profile or {}
-    value=value or profile.get('language') or profile.get('language_code') or profile.get('company_language') or 'ru'
+    value=value or profile.get('language') or profile.get('language_code') or profile.get('company_language') or 'az'
     if value not in {'ru','az','en'}: raise TenantLinearError('Язык: ru, az или en.')
     return value
 
