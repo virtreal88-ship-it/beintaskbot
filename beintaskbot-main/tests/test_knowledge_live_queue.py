@@ -103,3 +103,20 @@ def test_restart_with_disabled_flag_never_claims_backlog(monkeypatch):
     monkeypatch.setattr(live,'_connect',Mock(side_effect=AssertionError('backlog touched')))
     assert live.tick() is False
     assert live.claim() is None
+
+
+def test_switch_off_between_claim_and_analyze(monkeypatch):
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED', 'true')
+    item={'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'client',
+          'lead_id':42,'reviewer_id':9,'last_message_id':MESSAGE,'generation':1}
+    def claim_then_disable():
+        monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED', 'false')
+        return item
+    monkeypatch.setattr(live,'claim',claim_then_disable)
+    ai=Mock(side_effect=AssertionError('AI request must not run'))
+    finish=Mock()
+    monkeypatch.setattr(live,'analyze',ai)
+    monkeypatch.setattr(live,'finish',finish)
+    assert live.tick() is False
+    ai.assert_not_called()
+    finish.assert_called_once_with(item,error_code='disabled_after_claim')
