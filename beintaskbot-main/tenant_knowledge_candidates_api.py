@@ -2,6 +2,7 @@
 import asyncio
 from aiohttp import web
 import tenant_knowledge_batches as batches
+import tenant_knowledge_campaigns as campaigns
 _batch_tasks=set()
 
 async def _run_batch(profile,batch_id,logger):
@@ -22,7 +23,10 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
             if not profile: raise TenantLinearError('Нет доступа.',403)
             if request.method=='GET':
                 _expected(request.query,profile)
-                if resource=='batch': result=await asyncio.to_thread(batches.get,profile,request.match_info['batch_id'])
+                if resource=='campaign_preview': result=await asyncio.to_thread(campaigns.preview,profile,request.query.getall('channel_id',[]))
+                elif resource=='campaigns': result=await asyncio.to_thread(campaigns.get,profile)
+                elif resource=='campaign': result=await asyncio.to_thread(campaigns.get,profile,request.match_info['campaign_id'])
+                elif resource=='batch': result=await asyncio.to_thread(batches.get,profile,request.match_info['batch_id'])
                 elif resource=='request': result=await asyncio.to_thread(request_detail,profile,request.match_info['request_id'])
                 elif resource=='candidate': result=await asyncio.to_thread(detail,profile,request.match_info['candidate_id'])
                 else: result=await asyncio.to_thread(listing,profile,dict(request.query))
@@ -33,7 +37,15 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                 if not isinstance(data,dict): raise TenantLinearError('Некорректный запрос.')
                 _expected(data,profile)
                 data={k:v for k,v in data.items() if k not in ('expected_tenant_id','expected_user_id')}
-                if resource=='batches':
+                if resource=='campaigns':
+                    key=await asyncio.to_thread(campaigns.prepare,profile,data)
+                    result=await asyncio.to_thread(campaigns.get,profile,key)
+                elif resource=='campaign_start': result=await asyncio.to_thread(campaigns.approve,profile,request.match_info['campaign_id'],data)
+                elif resource=='campaign_control':
+                    if set(data)!={'expected_version','action'}: raise TenantLinearError('Некорректные параметры.')
+                    await asyncio.to_thread(campaigns.control,profile,request.match_info['campaign_id'],data['expected_version'],data['action'])
+                    result=await asyncio.to_thread(campaigns.get,profile,request.match_info['campaign_id'])
+                elif resource=='batches':
                     receipt=await asyncio.to_thread(batches.start,profile,data)
                     if receipt['created']:
                         task=asyncio.create_task(_run_batch(profile,receipt['id'],logger))

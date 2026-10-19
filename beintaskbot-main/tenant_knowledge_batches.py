@@ -12,7 +12,7 @@ MAX_DIALOGS=4
 
 
 def start(profile,data):
-    allowed={'request_id','provider','channel_id','conversation_id','period_start','period_end','history_mode','analysis_agent_id','before','language'}
+    allowed={'request_id','provider','channel_id','conversation_id','period_start','period_end','history_mode','analysis_agent_id','before','language','allow_external_media','allow_paid_asr'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректный пакет.')
     if data.get('provider','connect')!='connect': raise TenantLinearError('Поддерживается только WhatsApp.')
     request_id=identifier(data.get('request_id'));channel=identifier(data.get('channel_id'));start,end=period(data,True)
@@ -22,6 +22,11 @@ def start(profile,data):
     mode=data.get('history_mode','channel')
     if mode not in {'channel','unified_group'}: raise TenantLinearError('Некорректный режим истории.')
     params={'language':language(data.get('language'),profile),'channel_id':channel,'period_start':start,'period_end':end,'history_mode':mode}
+    for flag in ('allow_external_media','allow_paid_asr'):
+        if flag in data:
+            if type(data[flag]) is not bool: raise TenantLinearError('Некорректное разрешение медиа.')
+            params[flag]=data[flag]
+    if params.get('allow_paid_asr') and not params.get('allow_external_media'): raise TenantLinearError('Требуется разрешение передачи медиа.')
     selected_language=params['language']
     if 'language' not in data and selected_language=='ru': params.pop('language')
     if conversation: params['conversation_id']=conversation
@@ -83,7 +88,7 @@ def get(profile,batch_id):
                 if item['extraction_id']: item['extraction_id']=str(item['extraction_id'])
     return {'batch':{'id':str(row['id']),'status':'interrupted' if row['status']=='running' and row['expired'] else row['status'],
         'params':row['params'],'items':items,'continuations':row['continuations'],'routes_truncated':row['routes_truncated'],
-        'message_count':sum(i['message_count'] for i in items),'error_code':'batch_interrupted' if row['status']=='running' and row['expired'] else '','limits':{'max_dialogs':4,'max_fragments':4,'max_messages':320,'max_reserved_tokens':64000},
+        'message_count':sum(i['message_count'] for i in items),'error_code':'batch_interrupted' if row['status']=='running' and row['expired'] else '','limits':{'max_dialogs':4,'max_fragments':2 if row['params'].get('allow_paid_asr') else 4,'max_messages':160 if row['params'].get('allow_paid_asr') else 320,'max_reserved_tokens':48000 if row['params'].get('allow_paid_asr') else 64000},
         'candidates_query':{'batch_id':str(row['id'])}}}
 
 
@@ -97,7 +102,8 @@ def process(profile,batch_id):
             cur.execute('SELECT routes FROM saas_knowledge_batches WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,batch_id))
             queue=list(cur.fetchone()['routes'])
     errors=False;success=False
-    for ordinal in range(MAX_FRAGMENTS):
+    fragment_limit=2 if state['params'].get('allow_paid_asr') else MAX_FRAGMENTS
+    for ordinal in range(fragment_limit):
         if not queue: break
         route=queue.pop(0)
         payload={k:v for k,v in route.items() if k not in {'provider'}}

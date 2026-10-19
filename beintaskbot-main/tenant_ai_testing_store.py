@@ -110,7 +110,7 @@ def control(profile,id,data):
         conn.commit()
     return read(profile,id)
 
-def reserve(profile,id,data):
+def reserve(profile,id,data,*,campaign_id=None):
     if set(data)-{'request_id','text'} or not isinstance(data.get('text'),str) or not 1<=len(data['text'].strip())<=8000:raise TenantLinearError('Введите текст до 8000 символов.')
     request=identifier(data.get('request_id'));text=data['text'].strip();digest=hashlib.sha256((str(id)+'\n'+text).encode()).hexdigest()
     with _connect() as conn:
@@ -183,6 +183,9 @@ def reserve(profile,id,data):
             if cap:
                 cur.execute(TOKEN_USAGE_SQL,(tenant,tenant))
                 if int(cur.fetchone()['tokens'])+tokens>cap:raise TenantLinearError('Лимит токенов платформы не допускает этот тест.',429)
+            if campaign_id:
+                from tenant_knowledge_quality import reserve_budget
+                reserve_budget(cur,tenant,campaign_id,tokens)
             snapshot={'agent_version':row['version'],'settings_version':str(row['settings_version']),'config_version':str(row.get('config_version')),'session_revision':value['revision']}
             cur.execute('SELECT 1 FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(tenant,request))
             if cur.fetchone():raise TenantLinearError('Код запроса уже использован другой AI-операцией.',409)

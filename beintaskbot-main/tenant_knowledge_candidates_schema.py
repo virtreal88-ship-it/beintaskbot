@@ -11,6 +11,7 @@ def create_schema(conn):
           PRIMARY KEY(tenant_id,id),UNIQUE(tenant_id,fingerprint),
           FOREIGN KEY(tenant_id,id) REFERENCES saas_ai_agent_runs(tenant_id,id) ON DELETE CASCADE,
           FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id))""")
+        cur.execute("ALTER TABLE saas_knowledge_extractions ADD COLUMN IF NOT EXISTS media_results JSONB NOT NULL DEFAULT '[]'::jsonb")
         cur.execute("""CREATE TABLE IF NOT EXISTS saas_knowledge_candidates(
           tenant_id UUID NOT NULL,id UUID NOT NULL,extraction_id UUID NOT NULL,
           content JSONB NOT NULL,content_hash TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending_review'
@@ -19,6 +20,7 @@ def create_schema(conn):
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY(tenant_id,id),UNIQUE(tenant_id,extraction_id,content_hash),
           FOREIGN KEY(tenant_id,extraction_id) REFERENCES saas_knowledge_extractions(tenant_id,id) ON DELETE CASCADE)""")
+        cur.execute("ALTER TABLE saas_knowledge_candidates ADD COLUMN IF NOT EXISTS quality_flags JSONB NOT NULL DEFAULT '[]'::jsonb")
         cur.execute("ALTER TABLE saas_knowledge_candidates DROP CONSTRAINT IF EXISTS saas_knowledge_candidates_status_check")
         cur.execute("ALTER TABLE saas_knowledge_candidates ADD CONSTRAINT saas_knowledge_candidates_status_check CHECK(status IN ('pending_review','needs_clarification','approved','rejected'))")
         from tenant_knowledge_batch_schema import create_schema as batches_schema
