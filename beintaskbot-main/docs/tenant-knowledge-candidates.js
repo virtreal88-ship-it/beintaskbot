@@ -81,6 +81,7 @@
     const text=String(item.body??item.text??item.redacted_text??'').trim();
     if(text)return text;
     const type=String(item.message_type||item.type||'').toLowerCase();
+    if(item.source==='connect'&&type!=='text'&&item.external_id)return '';
     return caseMessageType(type);
   }
   function caseMessageType(type){return ({image:'Şəkil',audio:'Səsli mesaj',video:'Video',document:'Fayl',sticker:'Stiker',contact:'Kontakt'})[String(type||'').toLowerCase()]||'Əlavə';}
