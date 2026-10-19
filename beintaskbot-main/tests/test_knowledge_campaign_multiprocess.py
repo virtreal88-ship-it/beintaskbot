@@ -20,7 +20,18 @@ def child(dsn,kind,key,barrier,out):
             def invoke(*args,**kwargs):
                 with factory() as conn:conn.execute('INSERT INTO test_asr_calls DEFAULT VALUES')
                 return 'Synthetic transcript',{'total_tokens':10}
-            try:result=cache.transcribe_once(PROFILE,{'tenant':A,'key':'mock'},'test',(b'fake','wav','audio/wav'),invoke);out.put(('ok',result[2]))
+            try:
+                if kind=='vision':
+                    import tenant_knowledge_candidates_service as service
+                    from test_tenant_support_inbox import CA
+                    service.check_active=lambda *a:None
+                    ref={'id':'synthetic','channel_id':CA}
+                    item={'tenant':A,'key':'mock','model':'fixture','refs':[ref],
+                          'route':{'allow_external_media':True,'allow_vision':True,'approved_channel_ids':[CA]}}
+                    result=cache.observe_once(PROFILE,item,ref,b'fake-image','image/png',{},invoke)
+                else:
+                    result=cache.transcribe_once(PROFILE,{'tenant':A,'key':'mock'},'test',(b'fake','wav','audio/wav'),invoke)
+                out.put(('ok',result[2]))
             except Exception as error:
                 from tenant_linear_policy import TenantLinearError
                 if isinstance(error,TenantLinearError) and error.status==409:out.put(('ok',False))
@@ -44,13 +55,25 @@ def race(d,kind,key):
 def test_two_workers_reserve_one_fragment(campaign):
     d,_,_,key=campaign;add(d,key);add(d,key,1);approve_fixture(d,key)
     assert sum(r[1] for r in race(d,'claim',key))==1
-    assert d.execute('SELECT reserved_calls FROM saas_knowledge_campaigns')[0]['reserved_calls']==2
+    assert d.execute('SELECT reserved_calls FROM saas_knowledge_campaigns')[0]['reserved_calls']==1
 
 
 def test_media_cache_race_never_duplicates_asr(campaign):
     import tenant_knowledge_media_cache as cache
     d,_,_,key=campaign
     with d.cursor() as cur:cache.schema(cur)
-    d.execute('CREATE TABLE test_asr_calls(id BIGSERIAL PRIMARY KEY)');d.commit()
+    d.execute('CREATE TABLE IF NOT EXISTS test_asr_calls(id BIGSERIAL PRIMARY KEY)');d.execute('TRUNCATE test_asr_calls');d.commit()
     assert sum(r[1] for r in race(d,'media',key))==1
+    assert d.execute('SELECT count(*) AS n FROM test_asr_calls')[0]['n']==1
+
+
+def test_media_cache_race_never_duplicates_vision(campaign):
+    import tenant_knowledge_media_cache as cache
+    d,_,_,key=campaign
+    with d.cursor() as cur:cache.schema(cur)
+    d.execute('CREATE TABLE IF NOT EXISTS test_asr_calls(id BIGSERIAL PRIMARY KEY)');d.execute('TRUNCATE test_asr_calls');d.commit()
+    assert sum(r[1] for r in race(d,'vision',key))==1
+    assert d.execute('SELECT count(*) AS n FROM test_asr_calls')[0]['n']==1
+    # Fresh processes (a worker restart) reuse the durable receipt.
+    assert sum(r[1] for r in race(d,'vision',key))==0
     assert d.execute('SELECT count(*) AS n FROM test_asr_calls')[0]['n']==1

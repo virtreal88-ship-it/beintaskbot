@@ -3,7 +3,7 @@
   "deploy": {
     "aptPackages": [
       "...",
-      "ffmpeg"
+      "ffmpeg", "poppler-utils"
     ]
   }
 }

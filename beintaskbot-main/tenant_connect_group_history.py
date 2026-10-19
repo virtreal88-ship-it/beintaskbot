@@ -2,7 +2,7 @@
 from tenant_ai_group_coordination import group_jid
 
 
-def page(cur, tenant, conversation, *, before=None, limit=51, through=None):
+def page(cur, tenant, conversation, *, before=None, limit=51, through=None, channel_ids=None):
     if not group_jid(conversation):
         return []
     # Only signed, route-consistent provider IDs AND exact participant identities
@@ -23,6 +23,7 @@ def page(cur, tenant, conversation, *, before=None, limit=51, through=None):
       JOIN saas_crm_messages m ON m.tenant_id=c.tenant_id AND m.kommo_lead_id=c.lead_id
         AND m.channel='connect:'||c.connect_channel_id::text
       WHERE c.tenant_id=%s::uuid AND c.conversation_id=%s
+        AND (%s::uuid[] IS NULL OR c.connect_channel_id=ANY(%s::uuid[]))
         AND (%s::timestamptz IS NULL OR COALESCE(m.happened_at,m.created_at)<=%s::timestamptz)
     ), pairs AS (
       SELECT DISTINCT provider_event,message_type,
@@ -53,7 +54,7 @@ def page(cur, tenant, conversation, *, before=None, limit=51, through=None):
       SELECT x.sort_at,x.id FROM canonical x JOIN scoped anchor ON anchor.event_identity=x.event_identity
       WHERE anchor.id=%s::uuid))
     ORDER BY sort_at DESC,id DESC LIMIT %s''',
-    (tenant,conversation,through,through,before,before,min(max(int(limit),1),81)))
+    (tenant,conversation,channel_ids,channel_ids,through,through,before,before,min(max(int(limit),1),81)))
     fields={'id','external_id','direction','channel','author_name','body','message_type','media_url',
             'happened_at','created_at','raw','source_channel_id','source_channel_name','source_lead_id','sources'}
     return [{key:value for key,value in dict(row).items() if key in fields} for row in cur.fetchall()]

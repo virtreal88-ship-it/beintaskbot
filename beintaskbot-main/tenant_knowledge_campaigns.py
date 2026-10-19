@@ -10,10 +10,11 @@ from tenant_linear_policy import TenantLinearError, identifier
 from tenant_knowledge_candidates_policy import MAX_TOKENS, period
 import tenant_knowledge_candidates_store as store
 from tenant_knowledge_campaign_schema import create_schema
+from tenant_knowledge_campaign_policy import FIELDS, validate, reservation, fits
 
 
 def prepare(profile, data):
-    allowed={'request_id','channel_ids','analysis_agent_id','max_calls','max_tokens'}
+    allowed={'request_id','channel_ids','analysis_agent_id','max_calls','max_tokens'} | FIELDS
     if not isinstance(data,dict) or set(data)-allowed:
         raise TenantLinearError('Некорректные параметры.')
     key=identifier(data.get('request_id'))
@@ -25,6 +26,7 @@ def prepare(profile, data):
     calls=data.get('max_calls');tokens=data.get('max_tokens')
     if type(calls) is not int or not 1<=calls<=10000 or type(tokens) is not int or not MAX_TOKENS<=tokens<=160000000:
         raise TenantLinearError('Укажите ограниченный бюджет вызовов и токенов.')
+    policy=validate(data,calls)
     with _connect() as conn:
         store.schema(conn);create_schema(conn)
         with conn.cursor() as cur:
@@ -33,7 +35,7 @@ def prepare(profile, data):
             cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,key))
             old=cur.fetchone()
             if old:
-                if old['sources']!=channels or str(old['analysis_agent_id'])!=agent or old['max_calls']!=calls or old['max_tokens']!=tokens:
+                if old['media_policy']!=policy or old['sources']!=channels or str(old['analysis_agent_id'])!=agent or old['max_calls']!=calls or old['max_tokens']!=tokens:
                     raise TenantLinearError('request_id уже используется.',409)
                 return key
             for channel in channels:
@@ -44,9 +46,9 @@ def prepare(profile, data):
             cur.execute("SELECT 1 FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND status<>'stopped'",(tenant,))
             if cur.fetchone(): raise TenantLinearError('Процесс уже подготовлен.',409)
             cur.execute('''INSERT INTO saas_knowledge_campaigns
-              (tenant_id,id,created_by,sources,analysis_agent_id,max_calls,max_tokens)
-              VALUES(%s::uuid,%s::uuid,%s,%s::jsonb,%s::uuid,%s,%s)''',
-              (tenant,key,actor,_json(channels),agent,calls,tokens))
+              (tenant_id,id,created_by,sources,analysis_agent_id,max_calls,max_tokens,media_policy)
+              VALUES(%s::uuid,%s::uuid,%s,%s::jsonb,%s::uuid,%s,%s,%s::jsonb)''',
+              (tenant,key,actor,_json(channels),agent,calls,tokens,_json(policy)))
             store._audit(cur,tenant,actor,'knowledge_campaign_prepared','knowledge_campaign',key)
         conn.commit()
     return key
@@ -91,12 +93,10 @@ def enqueue(cur, profile, campaign, route):
     period(route,True)
     if binding['channel_id'] not in campaign['sources']:
         raise TenantLinearError('Источник не утверждён.',403)
-    # Unified history may include another company channel. Require every source
-    # explicitly, rather than silently widening the approved source selection.
-    if binding['history_mode']=='unified_group':
-        cur.execute('SELECT connect_channel_id FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND conversation_id=%s',(tenant,binding['conversation_id']))
-        if any(str(r['connect_channel_id']) not in campaign['sources'] for r in cur.fetchall()):
-            raise TenantLinearError('Выберите все каналы этой группы.',409)
+    route={**route,'approved_channel_ids':sorted(campaign['sources']),
+      **{k:campaign['media_policy'].get(k,False) for k in ('allow_external_media','allow_paid_asr')}}
+    route['allow_paid_asr']=bool(route['allow_paid_asr'] and campaign['media_policy'].get('max_asr_calls',0)>0)
+    route['allow_vision']=bool(campaign['media_policy'].get('max_vision_calls',0) and route['allow_external_media'])
     key=store.digest(route);fragment=str(uuid.uuid5(uuid.UUID(str(campaign['id'])),key))
     cur.execute('''INSERT INTO saas_knowledge_campaign_fragments(tenant_id,campaign_id,id,source_key,route)
       VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::jsonb) ON CONFLICT DO NOTHING''',
@@ -125,14 +125,15 @@ def claim(tenant, campaign_id):
             fragment=cur.fetchone()
             if not fragment: return None
             store.route(cur,profile,fragment['route'])
-            if campaign['reserved_calls']+2>campaign['max_calls'] or campaign['reserved_tokens']+MAX_TOKENS+8000>campaign['max_tokens']:
+            amount=reservation(campaign['media_policy'])
+            if not fits(campaign['media_policy'],campaign['reserved_kinds'],amount) or campaign['reserved_calls']+amount['calls']>campaign['max_calls'] or campaign['reserved_tokens']+amount['tokens']>campaign['max_tokens']:
                 cur.execute("UPDATE saas_knowledge_campaigns SET status='budget_exhausted',version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,campaign_id))
                 conn.commit();return None
             token=str(uuid.uuid4())
-            cur.execute('UPDATE saas_knowledge_campaigns SET reserved_calls=reserved_calls+2,reserved_tokens=reserved_tokens+%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(MAX_TOKENS+8000,tenant,campaign_id))
-            cur.execute("UPDATE saas_knowledge_campaign_fragments SET status='running',lease_token=%s::uuid,lease_until=now()+interval '360 seconds',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(token,tenant,fragment['id']))
+            cur.execute('UPDATE saas_knowledge_campaigns SET reserved_calls=reserved_calls+%s,reserved_tokens=reserved_tokens+%s,reserved_kinds=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(amount['calls'],amount['tokens'],_json({k:campaign['reserved_kinds'].get(k,0)+amount[k] for k in ('main','asr','vision')}),tenant,campaign_id))
+            cur.execute("UPDATE saas_knowledge_campaign_fragments SET status='running',reservation=%s::jsonb,lease_token=%s::uuid,lease_until=now()+interval '360 seconds',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(_json(amount),token,tenant,fragment['id']))
         conn.commit()
-    return {**fragment,'lease_token':token,'profile':profile}
+    return {**fragment,'reservation':amount,'lease_token':token,'profile':profile}
 
 
 def get(profile, campaign_id=None):
@@ -189,6 +190,7 @@ def get(profile, campaign_id=None):
     return {'campaign':{'id':str(row['id']),'version':row['version'],'status':row['status'],
       'channel_ids':row['sources'],'fragments':counts,'cards':cards,
       'reserved_calls':row['reserved_calls'],'reserved_tokens':row['reserved_tokens'],
+      'media_policy':row['media_policy'],'reserved_kinds':row['reserved_kinds'],
       'used_tokens':int(tokens),'cost':None,'max_calls':row['max_calls'],'max_tokens':row['max_tokens'],
       'progress':progress,'media_processed':media['processed'],'media_unavailable':media['unavailable'],'processed_messages':messages,'reviews':reviews,'quality_checks':quality}}
 
@@ -210,8 +212,6 @@ def complete(claimed, response):
               (state,request['id'],_json({'message_count':request.get('message_count'),'media_results':media}),
                code,tenant,claimed['id'],claimed['lease_token']))
             if not cur.fetchone():return False
-            if str(request['id'])!=str(claimed['id']):
-                cur.execute('UPDATE saas_knowledge_campaigns SET reserved_calls=reserved_calls-2,reserved_tokens=reserved_tokens-24000 WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,claimed['campaign_id']))
             # Completed text can advance while unavailable attachments remain a
             # durable partial fragment for an explicit, budgeted later retry.
             if request.get('next_before') and state in {'completed','partial'}:
@@ -226,7 +226,7 @@ def complete(claimed, response):
 
 def approve(profile,campaign_id,data):
     """Explicit source/budget confirmation, never called by deployment/startup."""
-    if set(data)!={'expected_version','channel_ids','max_calls','max_tokens','confirm_external_processing'} or data['confirm_external_processing'] is not True:
+    if set(data)!={'expected_version','channel_ids','max_calls','max_tokens','confirm_external_processing','media_policy'} or data['confirm_external_processing'] is not True:
         raise TenantLinearError('Подтвердите источники и бюджет внешней обработки.')
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -241,15 +241,24 @@ def approve(profile,campaign_id,data):
             calls,tokens=data['max_calls'],data['max_tokens']
             if type(calls) is not int or not 2<=calls<=10000 or type(tokens) is not int or not 24000<=tokens<=160000000:
                 raise TenantLinearError('Некорректный бюджет.')
+            if not isinstance(data['media_policy'],dict) or set(data['media_policy'])!=FIELDS:raise TenantLinearError('Некорректные разрешения.')
+            new_policy=validate(data['media_policy'],calls)
+            if row['status']=='awaiting_budget' and new_policy!=row['media_policy']:raise TenantLinearError('Разрешения изменились.',409)
+            if row['status']=='budget_exhausted':
+                for flag in ('allow_external_media','allow_paid_asr'):
+                    if new_policy[flag]!=row['media_policy'].get(flag,False):raise TenantLinearError('Подготовьте новую кампанию для изменения разрешений.',409)
+                for kind in ('main','asr','vision'):
+                    if new_policy['max_'+kind+'_calls']<row['media_policy'].get('max_'+kind+'_calls',0):raise TenantLinearError('Лимит нельзя уменьшить.',409)
             if row['status']=='awaiting_budget' and (row['max_calls']!=calls or row['max_tokens']!=tokens):
                 raise TenantLinearError('Бюджет изменился.',409)
-            if row['status']=='budget_exhausted' and (calls<row['max_calls'] or tokens<row['max_tokens'] or (calls==row['max_calls'] and tokens==row['max_tokens'])):
+            if row['status']=='budget_exhausted' and (calls<row['max_calls'] or tokens<row['max_tokens'] or (calls==row['max_calls'] and tokens==row['max_tokens'] and new_policy==row['media_policy'])):
                 raise TenantLinearError('Новый общий бюджет должен быть больше прежнего.',409)
 
-            if row['max_calls']<2 or row['max_tokens']<24000:raise TenantLinearError('Бюджет должен покрывать хотя бы один мультимодальный фрагмент.')
+            amount=reservation(new_policy)
+            if not fits(new_policy,row['reserved_kinds'],amount) or calls<amount['calls'] or tokens<amount['tokens']:raise TenantLinearError('Бюджет не покрывает фрагмент.')
             from tenant_knowledge_campaign_discovery import seed
             if row['status']=='awaiting_budget':seed(cur,profile,row)
-            cur.execute("UPDATE saas_knowledge_campaigns SET status='running',max_calls=%s,max_tokens=%s,approved_by=%s,approved_at=now(),version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid",(calls,tokens,actor,tenant,campaign_id))
+            cur.execute("UPDATE saas_knowledge_campaigns SET status='running',max_calls=%s,max_tokens=%s,media_policy=%s::jsonb,approved_by=%s,approved_at=now(),version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid",(calls,tokens,_json(new_policy),actor,tenant,campaign_id))
             from tenant_knowledge_quality import schema as quality_schema
             quality_schema(cur)
             cur.execute('''UPDATE saas_knowledge_quality_checks q SET state='pending' WHERE tenant_id=%s::uuid

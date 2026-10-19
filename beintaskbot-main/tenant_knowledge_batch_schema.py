@@ -18,3 +18,5 @@ def create_schema(conn):
         cur.execute("CREATE INDEX IF NOT EXISTS saas_knowledge_review_queue_idx ON saas_knowledge_candidates(tenant_id,status,created_at DESC,id DESC)")
 
         cur.execute("CREATE INDEX IF NOT EXISTS saas_knowledge_queue_all_idx ON saas_knowledge_candidates(tenant_id,created_at DESC,id DESC)")
+
+        cur.execute("ALTER TABLE saas_knowledge_batches ADD COLUMN IF NOT EXISTS active_until TIMESTAMPTZ")

@@ -50,8 +50,8 @@ def test_enqueue_replay_reservation_and_single_inflight(campaign):
     add(d,key,1);approve_fixture(d,key)
     claim=campaigns.claim(A,key)
     assert claim and campaigns.claim(A,key) is None
-    assert row(d,key)['reserved_calls']==2
-    assert row(d,key)['reserved_tokens']==MAX_TOKENS+8000
+    assert row(d,key)['reserved_calls']==1
+    assert row(d,key)['reserved_tokens']==MAX_TOKENS
 
 def test_restart_unknown_never_replays_or_refunds(campaign):
     d,provider,_,key=campaign
@@ -59,7 +59,7 @@ def test_restart_unknown_never_replays_or_refunds(campaign):
     d.execute("UPDATE saas_knowledge_campaign_fragments SET lease_until=now()-interval '1 second'");d.commit()
     assert campaigns.claim(A,key) is None
     assert d.execute("SELECT status FROM saas_knowledge_campaign_fragments WHERE lease_token IS NOT NULL")[0]['status']=='unknown'
-    assert row(d,key)['reserved_calls']==2
+    assert row(d,key)['reserved_calls']==1
     provider.assert_not_called()
 
 def test_pause_resume_stop_versions_and_isolation(campaign):
@@ -163,7 +163,7 @@ def test_explicit_approval_and_background_tick_no_delivery(campaign,monkeypatch)
     import tenant_knowledge_campaign_worker as worker
     d,provider,data,key=campaign;monkeypatch.setattr(worker,'_connect',lambda:d)
     with pytest.raises(TenantLinearError):campaigns.approve(PROFILE,key,{'expected_version':1})
-    approved=campaigns.approve(PROFILE,key,{'expected_version':1,'channel_ids':[CA],'max_calls':data['max_calls'],'max_tokens':data['max_tokens'],'confirm_external_processing':True})
+    approved=campaigns.approve(PROFILE,key,{'expected_version':1,'channel_ids':[CA],'max_calls':data['max_calls'],'max_tokens':data['max_tokens'],'confirm_external_processing':True,'media_policy':row(d,key)['media_policy']})
     assert approved['campaign']['status']=='running'
     worker.tick();worker.tick()
     assert provider.call_count==1
@@ -210,7 +210,7 @@ def test_published_knowledge_uses_virtual_test_and_shared_budget(campaign,monkey
     assert generation.call_count==1
     check=d.execute('SELECT state,retrieval_state,response_state FROM saas_knowledge_quality_checks')[0]
     assert check=={'state':'completed','retrieval_state':'found','response_state':'exact_supported'}
-    assert row(d,key)['reserved_calls']==3
+    assert row(d,key)['reserved_calls']==2
     assert not d.execute('SELECT * FROM saas_ai_agent_drafts')
 
 
@@ -225,9 +225,9 @@ def test_quality_never_labels_missing_sources_or_extra_steps_as_supported():
 def test_budget_renewal_keeps_progress_and_requires_explicit_consent(campaign):
     d,_,data,key=campaign
     d.execute("UPDATE saas_knowledge_campaigns SET status='budget_exhausted',progress='{"+'"phase":"history"'+"}'::jsonb");d.commit()
-    approval={'expected_version':1,'channel_ids':[CA],'max_calls':4,'max_tokens':72000,'confirm_external_processing':False}
+    approval={'expected_version':1,'channel_ids':[CA],'max_calls':4,'max_tokens':72000,'confirm_external_processing':False,'media_policy':row(d,key)['media_policy']}
     with pytest.raises(TenantLinearError):campaigns.approve(PROFILE,key,approval)
-    result=campaigns.approve(PROFILE,key,{**approval,'confirm_external_processing':True})['campaign']
+    result=campaigns.approve(PROFILE,key,{**approval,'confirm_external_processing':True,'media_policy':row(d,key)['media_policy']})['campaign']
     assert result['status']=='running' and result['progress']['phase']=='waiting_completion'
 
 @pytest.mark.parametrize('kinds,expected',[(['image']*10,2),(['audio']*5,1),(['document']*4,1),(['video','voice'],1)])
@@ -239,7 +239,7 @@ def test_campaign_media_pages_do_not_strand_older_attachments(kinds,expected):
     assert item['next_before']==item['refs'][0]['id']
     assert item['messages'][0]['text']==item['refs'][0]['id']
 
-def test_group_inventory_merges_only_verified_identity_and_requires_all_sources(campaign):
+def test_group_inventory_keeps_only_selected_channels(campaign):
     import tenant_knowledge_campaign_discovery as discovery
     from test_knowledge_candidates import GROUP
     d,provider,_,key=campaign;second=str(uuid.uuid4())
@@ -247,9 +247,9 @@ def test_group_inventory_merges_only_verified_identity_and_requires_all_sources(
     d.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'Second')",(A,second))
     d.execute('INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,%s,43)',(A,second,GROUP))
     d.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,43,'copy',%s,'incoming','Synthetic group message')",(A,str(uuid.uuid4()),'connect:'+second));d.commit()
-    with pytest.raises(TenantLinearError):
-        with d.cursor() as cur:discovery.seed(cur,PROFILE,row(d,key))
-    d.rollback()
+    with d.cursor() as cur:discovery.seed(cur,PROFILE,row(d,key))
+    d.commit()
+    assert row(d,key)['progress']['stored_message_copies']==3
     import json
     d.execute('UPDATE saas_knowledge_campaigns SET sources=%s::jsonb',(json.dumps([CA,second]),));d.commit()
     with d.cursor() as cur:discovery.seed(cur,PROFILE,row(d,key))

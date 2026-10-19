@@ -47,7 +47,14 @@ def route(cur,profile,data):
         if not ticket: raise TenantLinearError('Обращение недоступно в этом диалоге.',404)
     start,end=period(data)
     binding={'language':language(data.get('language'),profile),'provider':'connect','channel_id':channel,'conversation_id':conversation,'history_mode':mode,'ticket_id':ticket_id}
-    for flag in ('allow_external_media','allow_paid_asr'):
+    if 'approved_channel_ids' in data:
+        selected=data['approved_channel_ids']
+        if not isinstance(selected,list) or not selected or len(selected)>100:
+            raise TenantLinearError('Выберите источники.')
+        selected=sorted(set(identifier(c) for c in selected))
+        if channel not in selected: raise TenantLinearError('Источник не утверждён.',403)
+        binding['approved_channel_ids']=selected
+    for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
         if flag in data: binding[flag]=data[flag]
     if data.get('retry_of'):binding['retry_of']=identifier(data['retry_of'])
     if start: binding.update(period_start=start,period_end=end)
@@ -68,7 +75,8 @@ def snapshot(cur,profile,data):
     if binding['history_mode']=='unified_group':
         from datetime import timedelta
         through=(moment(end)-timedelta(microseconds=1)).isoformat() if end else None
-        rows=group_page(cur,tenant,binding['conversation_id'],before=before,limit=81,through=through)
+        rows=group_page(cur,tenant,binding['conversation_id'],before=before,limit=81,through=through,
+                        channel_ids=binding.get('approved_channel_ids'))
         if start: rows=[r for r in rows if moment(r.get('happened_at') or r['created_at'])>=moment(start)]
     else:
         cur.execute('''SELECT m.*,m.kommo_lead_id AS source_lead_id,%s AS source_channel_id
@@ -125,6 +133,8 @@ def evidence(cur,profile,extraction,names_out=None):
     tenant,_,policy,_,_,_=route(cur,profile,extraction['route'])
     items=[];names=[]
     for ref in extraction['source_refs']:
+        if 'approved_channel_ids' in extraction['route'] and ref['channel_id'] not in extraction['route']['approved_channel_ids']:
+            raise TenantLinearError('Источник не утверждён.',403)
         source=assert_route(cur,tenant,policy,'connect',extraction['route']['conversation_id'],ref['channel_id'])
         cur.execute('SELECT id,body,direction,author_name,raw,message_type FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s',
             (tenant,ref['id'],source['lead_id'],'connect:'+ref['channel_id']))

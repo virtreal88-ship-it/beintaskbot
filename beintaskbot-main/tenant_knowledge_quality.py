@@ -26,9 +26,11 @@ def reserve_budget(cur,tenant,campaign_id,tokens):
     cur.execute("SELECT 1 FROM saas_knowledge_quality_checks q JOIN saas_ai_test_turns t ON t.tenant_id=q.tenant_id AND t.id=q.id WHERE q.tenant_id=%s::uuid AND t.state IN ('generating','unknown') LIMIT 1",(tenant,))
     if cur.fetchone():raise TenantLinearError('Дождитесь проверки предыдущего AI-вызова.',409)
     cur.execute('''UPDATE saas_knowledge_campaigns SET reserved_calls=reserved_calls+1,
+        reserved_kinds=jsonb_set(reserved_kinds,'{main}',to_jsonb(COALESCE((reserved_kinds->>'main')::int,0)+1)),
       reserved_tokens=reserved_tokens+%s WHERE tenant_id=%s::uuid AND id=%s::uuid
       AND status='running' AND approved_at IS NOT NULL
-      AND reserved_calls+1<=max_calls AND reserved_tokens+%s<=max_tokens RETURNING id''',(tokens,tenant,campaign_id,tokens))
+      AND COALESCE((reserved_kinds->>'main')::int,0)+1<=COALESCE((media_policy->>'max_main_calls')::int,0)
+        AND reserved_calls+1<=max_calls AND reserved_tokens+%s<=max_tokens RETURNING id''',(tokens,tenant,campaign_id,tokens))
     if not cur.fetchone():
         error=TenantLinearError('Проверка знаний остановлена или бюджет исчерпан.',429);error.campaign_budget=True;raise error
 
