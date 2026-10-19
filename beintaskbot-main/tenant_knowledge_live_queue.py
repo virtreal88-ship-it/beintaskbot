@@ -5,6 +5,7 @@ as the source message. The worker then reuses the bounded knowledge extractor,
 its budget checks, AI emergency stop, and review-only candidate persistence.
 """
 import asyncio
+import os
 import uuid
 
 from tenant_platform import _connect
@@ -14,6 +15,11 @@ from tenant_knowledge_candidates_service import analyze
 
 DEBOUNCE_SECONDS = 20
 LEASE_SECONDS = 300
+
+
+def extraction_enabled():
+    # Separate opt-in: never inherit the existing AI-agent enabled flag.
+    return os.environ.get('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED', '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 
 def create_schema(conn):
@@ -42,6 +48,8 @@ def create_schema(conn):
 
 def enqueue(cur, tenant, channel_id, conversation_id, lead_id, message_id, actor_id=None):
     """Record a new source message; duplicate Connect events are filtered upstream."""
+    if not extraction_enabled():
+        return
     cur.execute("""INSERT INTO saas_knowledge_live_queue
       (tenant_id,channel_id,conversation_id,lead_id,actor_id,last_message_id,generation,state,next_attempt_at)
       VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s::uuid,1,'pending',now()+(%s * interval '1 second'))
@@ -59,6 +67,8 @@ def enqueue(cur, tenant, channel_id, conversation_id, lead_id, message_id, actor
 
 def claim():
     """Claim one due conversation without holding DB locks during model calls."""
+    if not extraction_enabled():
+        return None
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute("""UPDATE saas_knowledge_live_queue SET state='blocked',error_code='worker_lease_expired',
@@ -102,6 +112,8 @@ def finish(item, extraction_id=None, error_code=''):
 
 
 def tick():
+    if not extraction_enabled():
+        return False
     item=claim()
     if not item:return False
     profile={'tenant_id':str(item['tenant_id']),'telegram_id':item['reviewer_id']}
