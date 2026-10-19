@@ -7,6 +7,7 @@ from test_tenant_support_inbox import database,db,A,B,CA,CB,AGENT,PROFILE,seed_j
 import tenant_knowledge_candidates_store as store
 import tenant_knowledge_candidates_service as service
 import tenant_knowledge_candidates_policy as policy
+import tenant_knowledge_live_queue as live
 import tenant_ai_agents_store as agents
 import tenant_ai_agent_run_store as runs
 from tenant_linear_policy import TenantLinearError
@@ -211,6 +212,40 @@ def test_extraction_daily_cap_and_concurrency(ready):
     db.commit()
     with pytest.raises(TenantLinearError,match='10 в сутки'):service.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4())})
     generation.assert_not_called()
+
+def test_live_queue_is_idempotent_and_channel_scoped(ready):
+    db,generation,data=ready
+    live.create_schema(db)
+    first=str(uuid.UUID(int=9901));second=str(uuid.UUID(int=9902))
+    with db.cursor() as cur:
+        live.enqueue(cur,A,CA,'client',41,first,actor_id=11)
+        live.enqueue(cur,A,CA,'client',41,first,actor_id=11)
+    db.commit()
+    rows=db.execute('SELECT channel_id::text AS channel_id,generation,last_message_id::text AS last_message_id FROM saas_knowledge_live_queue WHERE tenant_id=%s::uuid',(A,))
+    assert len(rows)==1 and rows[0]['generation']==1 and rows[0]['last_message_id']==first
+    with db.cursor() as cur:
+        live.enqueue(cur,A,CA,'client',41,second,actor_id=11)
+        live.enqueue(cur,A,CB,'client',41,first,actor_id=11)
+    db.commit()
+    rows=db.execute('SELECT channel_id::text AS channel_id,generation,last_message_id::text AS last_message_id FROM saas_knowledge_live_queue WHERE tenant_id=%s::uuid ORDER BY channel_id',(A,))
+    assert len(rows)==2
+    assert rows[0]['generation']==2 and rows[0]['last_message_id']==second
+    assert rows[1]['channel_id']==CB and rows[1]['generation']==1
+    assert generation.call_count==0
+
+def test_live_queue_obeys_company_ai_emergency_stop(ready,monkeypatch):
+    db,generation,data=ready
+    live.create_schema(db)
+    with db.cursor() as cur:live.enqueue(cur,A,CA,'client',41,str(uuid.UUID(int=9910)),actor_id=11)
+    db.execute("UPDATE saas_knowledge_live_queue SET next_attempt_at=now()-interval '1 second' WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_agent_settings SET emergency_stop=TRUE WHERE tenant_id=%s::uuid",(A,));db.commit()
+    monkeypatch.setattr(live,'_connect',lambda:db)
+    assert live.claim() is None
+    db.execute("UPDATE saas_ai_agent_settings SET emergency_stop=FALSE WHERE tenant_id=%s::uuid",(A,));db.commit()
+    claimed=live.claim()
+    assert claimed and claimed['state']=='pending' and claimed['reviewer_id']==11
+    assert db.execute("SELECT state FROM saas_knowledge_live_queue WHERE tenant_id=%s::uuid",(A,))[0]['state']=='running'
+    assert generation.call_count==0
 
 def test_deactivate_published_source_stops_agent_retrieval(ready):
     db,generation,data=ready;value=candidate(ready)

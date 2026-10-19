@@ -357,6 +357,8 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
         # Connect DDL locks while waiting for the AI schema's process lock.
         from tenant_ai_agents_schema import ensure_schema
         ensure_schema(conn)
+        from tenant_knowledge_live_queue import create_schema as create_live_queue_schema
+        create_live_queue_schema(conn)
         _schema(conn)
         conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
@@ -419,7 +421,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
                   VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,%s,'',%s::timestamptz,%s::jsonb)
                   ON CONFLICT(tenant_id,external_id) DO UPDATE SET external_id=saas_crm_messages.external_id
-                  RETURNING author_name,raw,kommo_lead_id,channel''',
+                  RETURNING id,author_name,raw,kommo_lead_id,channel''',
                             (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,_outbound_author(data),str(data.get('text') or ''),str(data.get('type') or 'text'),occurred,_json(data)))
                 stored = cur.fetchone()
                 if stored and (stored.get('kommo_lead_id') != lead_id or stored.get('channel') != 'connect:' + channel_id):
@@ -429,6 +431,10 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 if data.get('fromMe') is not False and not _outbound_is_ai(data, stored) and not ai_origin and (not coordinated or employee is not None):
                     from tenant_ai_agent_connect import mark_operator_reply
                     mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn, actor=employee)
+                    if stored and stored.get('id'):
+                        from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
+                        enqueue_case_extraction(cur,tenant,channel_id,conversation,lead_id,
+                            str(stored['id']),actor_id=employee)
                 conn.commit()
                 return True
             # A legacy inbound delivery may have committed the durable CRM
@@ -479,15 +485,21 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
             # The CRM copy, dedup receipt and AI admission commit together.
             # A failed queue write rolls back the webhook, so Connect can retry.
             if accepted and queued_payload:
+                cur.execute("SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND kommo_lead_id=%s AND channel=%s AND direction='incoming'",
+                            (tenant, 'connect:' + queued_payload[4], queued_payload[3], 'connect:' + channel_id))
+                source_message=cur.fetchone()
+                if not source_message:
+                    raise ConnectWebhookError('message_scope_conflict', 'Connect message scope mismatch.', 409)
                 if coordinated and (ai_origin or employee is not None or uncertain_origin or control_replayed):
                     if employee is not None:
                         stop_group(cur,tenant,conversation,reason='verified_employee_reply',actor=employee)
+                        from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
+                        enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],
+                            str(source_message['id']),actor_id=employee)
                     conn.commit()
                     return True
-                cur.execute("SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND kommo_lead_id=%s AND channel=%s AND direction='incoming'",
-                            (tenant, 'connect:' + queued_payload[4], queued_payload[3], 'connect:' + channel_id))
-                if not cur.fetchone():
-                    raise ConnectWebhookError('message_scope_conflict', 'Connect message scope mismatch.', 409)
+                from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
+                enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],str(source_message['id']))
                 from tenant_ai_agent_connect import enqueue
                 enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
                         lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
@@ -625,15 +637,22 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
         if author != 'AI Agent':
             from tenant_ai_agents_schema import ensure_schema
             ensure_schema(conn)
+            from tenant_knowledge_live_queue import create_schema as create_live_queue_schema
+            create_live_queue_schema(conn)
         _schema(conn)
         conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, "connect", route["channel_id"], route["conversation_id"])
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
-              VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
+              VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING RETURNING id''',
                         (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending'})))
-        if author != 'AI Agent':
-            from tenant_ai_agent_connect import mark_operator_reply
-            mark_operator_reply(tenant, lead_id, str(route['channel_id']), str(route['conversation_id']), connection=conn, actor=actor)
+            saved=cur.fetchone()
+            if author != 'AI Agent':
+                from tenant_ai_agent_connect import mark_operator_reply
+                mark_operator_reply(tenant, lead_id, str(route['channel_id']), str(route['conversation_id']), connection=conn, actor=actor)
+                if saved:
+                    from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
+                    enqueue_case_extraction(cur,tenant,str(route['channel_id']),str(route['conversation_id']),
+                        lead_id,str(saved['id']),actor_id=actor)
         conn.commit()
 

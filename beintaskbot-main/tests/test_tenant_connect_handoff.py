@@ -34,7 +34,10 @@ class Cursor:
     def __exit__(self, *_args): return False
     def execute(self, sql, params=None): self.executed.append((sql, params))
     def fetchall(self): return self.rows.pop(0) if self.rows else []
-    def fetchone(self): return self.ones.pop(0) if self.ones else None
+    def fetchone(self):
+        if self.executed and 'SELECT id FROM saas_crm_messages' in self.executed[-1][0]:
+            return {'id':'00000000-0000-0000-0000-000000000103'}
+        return self.ones.pop(0) if self.ones else None
 
 
 class Connection:
@@ -196,6 +199,9 @@ class TenantConnectHandoffTests(unittest.TestCase):
              patch('tenant_ai_agents_schema.ensure_schema'), \
              patch('tenant_ai_agent_connect.enqueue') as enqueue:
             self.assertTrue(transport.ingest(b'{}', 'sha256=valid', event))
+        queued = next(params for sql, params in cursor.executed if 'INSERT INTO saas_knowledge_live_queue' in sql)
+        self.assertEqual(queued[:5], (TENANT, CHANNEL, event['data']['conversationId'], 42, None))
+        self.assertEqual(queued[5], '00000000-0000-0000-0000-000000000103')
         conversation_sql, conversation_params = next((sql, params) for sql, params in cursor.executed
                                                       if 'display_name,conversation_kind' in sql)
         self.assertIn('conversation_kind', conversation_sql)

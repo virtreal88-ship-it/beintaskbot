@@ -679,6 +679,8 @@ async def run_worker(kommo_request, logger, wait_slot):
     heartbeat = asyncio.create_task(heartbeat_loop(logger), name='ai-worker-heartbeat')
     from tenant_knowledge_campaign_worker import run as run_campaigns
     campaigns = asyncio.create_task(run_campaigns(logger), name='knowledge-campaigns')
+    from tenant_knowledge_live_queue import run as run_live_cases
+    live_cases = asyncio.create_task(run_live_cases(logger), name='knowledge-live-cases')
     try:
         while True:
             try:
@@ -696,6 +698,11 @@ async def run_worker(kommo_request, logger, wait_slot):
         campaigns.cancel()
         try:
             await campaigns
+        except asyncio.CancelledError:
+            pass
+        live_cases.cancel()
+        try:
+            await live_cases
         except asyncio.CancelledError:
             pass
         heartbeat.cancel()
