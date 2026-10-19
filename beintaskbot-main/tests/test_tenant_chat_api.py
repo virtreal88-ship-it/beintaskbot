@@ -85,6 +85,17 @@ class ChatApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["warning"], "Kommo müvəqqəti əlçatan deyil.")
         self.messages.assert_called_once()
 
+    async def test_connect_native_history_refresh_does_not_call_kommo(self):
+        self.deal.return_value = {"tenant_id": "company-a", "allowed": True,
+                                  "raw": {"source": "connect", "conversation_id": "15550000000@s.whatsapp.net"}}
+        response = await self.api["chat"](Request(lead_id="7", refresh="true"))
+        body = self.body(response)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(body["messages"], [{"external_id": "m1", "body": "Salam"}])
+        self.assertFalse(body["stale"])
+        self.sync.assert_not_awaited()
+        self.messages.assert_called_once_with(tenant_id="company-a", kommo_lead_id=7)
+
     async def test_unexpected_refresh_error_does_not_leak_details(self):
         self.sync.side_effect = RuntimeError("PRIVATE_TOKEN")
         response = await self.api["chat"](Request(lead_id="7", refresh="1"))

@@ -226,7 +226,8 @@
       const d=await api('/api/platform/crm/deal?lead_id='+encodeURIComponent(id));
       if(revision!==chatRevision||identity!==chatIdentity())return;
       const x=d.deal;$('modalTitle').textContent=x.name||'Sövdələşmə';
-      $('modalContent').innerHTML=`<div class="meta"><div><b>Müştəri</b>${esc(x.contact_name||'Göstərilməyib')}</div><div><b>Telefon</b>${esc(x.phone||'Göstərilməyib')}</div><div><b>Mərhələ</b>${esc(x.stage_name||'Göstərilməyib')}</div><div><b>Kommo ID</b>${esc(x.kommo_lead_id)}</div></div><div class="chat-placeholder"><div id="chatRows"></div><div style="display:flex;gap:8px;margin-top:10px"><textarea id="chatText" rows="2" placeholder="Mesaj yazın" style="flex:1;resize:none;border:0;background:#fff;border-radius:9px;padding:9px"></textarea><button class="primary" id="sendChat">Göndər</button></div></div>`;
+      const idLabel=x.raw?.source==='connect'?'Beintaskbot ID':'Kommo ID';
+      $('modalContent').innerHTML=`<div class="meta"><div><b>Müştəri</b>${esc(x.contact_name||'Göstərilməyib')}</div><div><b>Telefon</b>${esc(x.phone||'Göstərilməyib')}</div><div><b>Mərhələ</b>${esc(x.stage_name||'Göstərilməyib')}</div><div><b>${idLabel}</b>${esc(x.kommo_lead_id)}</div></div><div class="chat-placeholder"><div id="chatRows"></div><div style="display:flex;gap:8px;margin-top:10px"><textarea id="chatText" rows="2" placeholder="Mesaj yazın" style="flex:1;resize:none;border:0;background:#fff;border-radius:9px;padding:9px"></textarea><button class="primary" id="sendChat">Göndər</button></div></div>`;
       $('modalContent').querySelector('.meta')?.insertAdjacentHTML('afterend',`<button type="button" class="outline" data-duplicate-search="${Number(x.kommo_lead_id)}" data-duplicate-tenant="true" data-duplicate-phone="${esc(x.phone||'')}" style="margin-top:12px">Dublikatları tap</button>`);
       $('dealModal').classList.add('show');
       document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:x.kommo_lead_id}}));

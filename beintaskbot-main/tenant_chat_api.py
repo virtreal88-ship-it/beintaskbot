@@ -42,8 +42,11 @@ def handlers(context: ChatApiContext) -> dict[str, Callable]:
         if not context.policy(profile).can_access_deal(deal):
             return web.json_response(
                 {"success": False, "error": "Sövdələşmə seçilmiş siyahıda deyil."}, status=404)
+        raw = deal.get("raw") if isinstance(deal, dict) else None
+        connect_native = isinstance(raw, dict) and raw.get("source") == "connect"
         warning = ""
-        if str(request.rel_url.query.get("refresh") or "").casefold() in {"1", "true", "yes"}:
+        if (not connect_native and
+                str(request.rel_url.query.get("refresh") or "").casefold() in {"1", "true", "yes"}):
             try:
                 await context.sync_chat(profile, lead_id)
             except context.platform_error as exc:
