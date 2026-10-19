@@ -9,4 +9,10 @@ assert.match(ui,/expected_tenant_id/);assert.match(ui,/expected_user_id/);assert
 assert.match(ui,/pending_review/);assert.match(ui,/needs_clarification/);assert.match(ui,/approved/);assert.match(ui,/rejected/);
 assert.match(ui,/analysisUnavailable/);assert.match(ui,/No fabricated results/);
 assert.match(ui,/tenant-support-open/);
+assert.match(ui,/language\|\|\x27az\x27/,'Azerbaijani is the default UI language');
+assert.match(ui,/caseCopy\.az/,'case labels include Azerbaijani copy');
+assert.match(ui,/data-case-translate/,'English cases expose explicit translation');
+assert.match(ui,/confirmTranslation/,'translation requires employee confirmation');
+assert.match(ui,/clarificationReason/,'clarification blockers have concrete explanations');
+assert.match(ui,/Approve and publish|Təsdiqlə və dərc et/,'approval action is clearly labelled as publication');
 console.log('PASS: support cases view, safe route/identity fields, review actions, statuses and batch-analysis integration.');
