@@ -45,7 +45,7 @@ def start(profile,data):
             if old:
                 if str(old['id'])==request_id and old['request_key']!=key: raise TenantLinearError('request_id уже используется для другого пакета.',409)
                 return {'id':str(old['id']),'created':False}
-            cur.execute("UPDATE saas_knowledge_batches SET status='interrupted',completed_at=now() WHERE tenant_id=%s::uuid AND status='running' AND deadline<now()",(tenant,))
+            cur.execute("UPDATE saas_knowledge_batches SET status='interrupted',completed_at=now() WHERE tenant_id=%s::uuid AND status='running' AND deadline<now() AND (active_until IS NULL OR active_until<now())",(tenant,))
             cur.execute("SELECT 1 FROM saas_knowledge_batches WHERE tenant_id=%s::uuid AND status='running' LIMIT 1",(tenant,))
             if cur.fetchone(): raise TenantLinearError('Другой пакет этой компании ещё выполняется.',429)
             if conversation:
@@ -78,7 +78,7 @@ def get(profile,batch_id):
         store.schema(conn)
         with conn.cursor() as cur:
             tenant,_,_=store.authorize(cur,profile)
-            cur.execute('SELECT *,deadline<now() AS expired FROM saas_knowledge_batches WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,identifier(batch_id)))
+            cur.execute('SELECT *,deadline<now() AND (active_until IS NULL OR active_until<now()) AS expired FROM saas_knowledge_batches WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,identifier(batch_id)))
             row=cur.fetchone()
             if not row: raise TenantLinearError('Пакет не найден.',404)
             for route in row['routes']: store.route(cur,profile,route)
@@ -113,6 +113,12 @@ def process(profile,batch_id):
             # Recheck lifecycle, route, batch deadline before every paid fragment.
             live=get(profile,batch_id)['batch']
             if live['status']!='running': break
+            with _connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE saas_knowledge_batches SET active_until=now()+interval '270 seconds' WHERE tenant_id=%s::uuid AND id=%s::uuid AND status='running' AND deadline>now() AND (active_until IS NULL OR active_until<now()) RETURNING id",(tenant,batch_id))
+                    admitted=cur.fetchone()
+                conn.commit()
+            if not admitted:return
             result=analyze(profile,payload);request=result['request']
             extraction=request['id'];count=request['message_count'];status=request['status']
             success=success or status=='completed'
@@ -136,7 +142,7 @@ def process(profile,batch_id):
                 # Save only task metadata; raw history never enters batch tables.
                 cur.execute("INSERT INTO saas_knowledge_batch_items(tenant_id,batch_id,ordinal,route,extraction_id,status,error_code,message_count) VALUES(%s::uuid,%s::uuid,%s,%s::jsonb,%s::uuid,%s,%s,%s) ON CONFLICT DO NOTHING",
                     (tenant,batch_id,ordinal,_json(route),extraction,status,code,count))
-                cur.execute('UPDATE saas_knowledge_batches SET continuations=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(queue),tenant,batch_id))
+                cur.execute('UPDATE saas_knowledge_batches SET continuations=%s::jsonb,active_until=NULL WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(queue),tenant,batch_id))
             conn.commit()
         if code in {'access_denied','limit_exceeded'}: break
     with _connect() as conn:

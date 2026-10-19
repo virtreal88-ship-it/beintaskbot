@@ -16,6 +16,10 @@ def check_fence(cur, tenant, extraction_id):
     row=cur.fetchone()
     if row and (row['status']!='running' or row['campaign_status']!='running' or not row['live'] or any(str(r.get('channel_id')) not in row['sources'] for r in row.get('source_refs') or [])):
         raise TenantLinearError('Накопление знаний остановлено.',409)
+    if row:
+        # Durable progress heartbeat without unbounded lease extension. The 360s
+        # lease remains strictly above the 240s extraction hard deadline.
+        cur.execute("UPDATE saas_knowledge_campaign_fragments SET updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND status='running' AND lease_until>now()",(tenant,extraction_id))
 
 
 def tick():
@@ -59,8 +63,6 @@ def tick():
                 empty=not receipt and error.status==409 and 'нет доступного текста' in str(error)
                 code='no_text' if empty else 'provider_unknown' if receipt else 'limit_exceeded' if error.status==429 else 'source_unavailable'
                 cur.execute("UPDATE saas_knowledge_campaign_fragments SET status=%s,error_code=%s WHERE tenant_id=%s::uuid AND id=%s::uuid AND lease_token=%s::uuid",('unknown' if receipt else 'completed' if empty else 'blocked',code,tenant,claimed['id'],claimed['lease_token']))
-                if not receipt:
-                    cur.execute('UPDATE saas_knowledge_campaigns SET reserved_calls=reserved_calls-2,reserved_tokens=reserved_tokens-24000 WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,key))
                 if empty and getattr(error,'next_before',None):
                     queue.enqueue(cur,profile,campaign,{**claimed['route'],'before':error.next_before})
                 if not empty:

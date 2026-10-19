@@ -43,10 +43,6 @@ def seed(cur, profile, campaign):
         route={'provider':'connect','channel_id':str(row['channel_id']),'conversation_id':row['conversation_id'],
           'history_mode':'unified_group' if group_jid(row['conversation_id']) else 'channel'}
         store.route(cur,profile,route)
-        if route['history_mode']=='unified_group':
-            cur.execute('SELECT connect_channel_id FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND conversation_id=%s',(campaign['tenant_id'],row['conversation_id']))
-            if any(str(r['connect_channel_id']) not in campaign['sources'] for r in cur.fetchall()):
-                raise TenantLinearError('Подтвердите все каналы объединённой группы.',409)
         start=moment(str(row['earliest']));end=moment(str(row['latest']))+timedelta(seconds=1)
         cur.execute('''INSERT INTO saas_knowledge_campaign_sources
           (tenant_id,campaign_id,source_key,channel_id,conversation_id,history_mode,period_start,period_end,next_start)
@@ -84,11 +80,12 @@ def discover_resolved(cur, profile, campaign):
       AND NOT EXISTS(SELECT 1 FROM saas_connect_conversations c JOIN saas_crm_messages m
         ON m.tenant_id=c.tenant_id AND m.kommo_lead_id=c.lead_id AND m.channel='connect:'||c.connect_channel_id::text
         WHERE c.tenant_id=t.tenant_id AND c.conversation_id=t.conversation_id
+        AND c.connect_channel_id=ANY(%s::uuid[])
         AND (c.connect_channel_id=t.channel_id OR t.conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$')
         AND m.created_at>t.resolved_at)
       AND NOT EXISTS(SELECT 1 FROM saas_knowledge_campaign_sources s WHERE s.tenant_id=t.tenant_id
         AND s.campaign_id=%s::uuid AND s.source_key='ticket:'||t.id::text||':'||t.resolved_at::text)
-      ORDER BY t.resolved_at,t.id LIMIT 1''',(campaign['tenant_id'],campaign['sources'],campaign['id']))
+      ORDER BY t.resolved_at,t.id LIMIT 1''',(campaign['tenant_id'],campaign['sources'],campaign['sources'],campaign['id']))
     ticket=cur.fetchone()
     if not ticket:return
     start=moment(str(ticket['created_at']));end=moment(str(ticket['resolved_at']))+timedelta(microseconds=1)

@@ -38,3 +38,7 @@ def create_schema(conn):
           next_start TIMESTAMPTZ NOT NULL,status TEXT NOT NULL DEFAULT 'pending',
           PRIMARY KEY(tenant_id,campaign_id,source_key),
           FOREIGN KEY(tenant_id,campaign_id) REFERENCES saas_knowledge_campaigns(tenant_id,id))""")
+
+        cur.execute("ALTER TABLE saas_knowledge_campaigns ADD COLUMN IF NOT EXISTS media_policy JSONB NOT NULL DEFAULT '{}'")
+        cur.execute("ALTER TABLE saas_knowledge_campaigns ADD COLUMN IF NOT EXISTS reserved_kinds JSONB NOT NULL DEFAULT '{}'")
+        cur.execute("ALTER TABLE saas_knowledge_campaign_fragments ADD COLUMN IF NOT EXISTS reservation JSONB NOT NULL DEFAULT '{}'")

@@ -76,7 +76,7 @@ def collect(profile,item):
     images=[];results=[];seen={};size=0;deadline=time.monotonic()+65
     consent=item['route'].get('allow_external_media') is True
     names=item.get('redaction_names',[])
-    asr_used=False
+    asr_used=False;visual_count=0
     for ref,message in zip(item['refs'],item['messages']):
         kind=ref.get('media_kind')
         if not kind: continue
@@ -167,9 +167,19 @@ def collect(profile,item):
                 if not signature(data,mime): raise ValueError('invalid_image')
                 visuals=[(data,mime,{})]
             if not consent: receipt['code']='external_media_permission_required';continue
+            if item['route'].get('allow_vision') is False: receipt.update(status='unavailable',code='vision_not_approved');continue
             if not supports_images(item['model']): receipt.update(status='unsupported',code='model_has_no_vision');continue
-            if len(images)+len(visuals)>MAX_VISUALS: receipt['code']='visual_budget';continue
+            if visual_count+len(visuals)>MAX_VISUALS: receipt['code']='visual_budget';continue
             if not visuals: raise ValueError('empty_visuals')
+            visual_count+=len(visuals)
+            if item['route'].get('allow_vision') is True:
+                from tenant_knowledge_media_cache import observe_once
+                from tenant_chat_ai_provider import generate
+                for content,content_type,origin in visuals:
+                    text,_,_=observe_once(profile,item,ref,content,content_type,origin,generate)
+                    message['text']+='\n[Untrusted visual observation; not a confirmed solution] '+text
+                receipt.update(status='processed',code='vision_observation',visuals=[origin for _,_,origin in visuals])
+                continue
             for content,content_type,origin in visuals:
                 images.append({'content':content,'content_type':content_type,'detail':'low','source_ref':message['ref']})
             receipt.update(status='pending_processing',code='awaiting_model',visuals=[origin for _,_,origin in visuals])

@@ -100,10 +100,10 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
     return result, {'input_tokens': input_tokens, 'output_tokens': output_tokens, 'total_tokens': total_tokens}
 
 
-def transcribe(key, model, content, extension, content_type, *, with_usage=False):
+def transcribe(key, model, content, extension, content_type, *, with_usage=False, request_timeout=90):
     response = requests.post('https://api.openai.com/v1/audio/transcriptions',
         headers={'Authorization': 'Bearer ' + key}, data={'model': model, 'response_format': 'json'},
-        files={'file': ('recording.' + extension, content, content_type)}, timeout=(5, 90), allow_redirects=False)
+        files={'file': ('recording.' + extension, content, content_type)}, timeout=(5, min(90,max(1,request_timeout))), allow_redirects=False)
     if response.status_code != 200:
         raise ChatAIProviderError(response.status_code, _provider_error_category(response))
     payload = response.json()

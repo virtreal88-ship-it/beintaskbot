@@ -12,6 +12,26 @@ from tenant_linear_policy import TenantLinearError
 
 START='2026-10-18T00:00:00Z';END='2026-10-19T00:00:00Z'
 
+
+def test_expired_batch_does_not_interrupt_admitted_media(batch):
+    d,generation,data=batch
+    receipt=batches.start(PROFILE,data)
+    d.execute("UPDATE saas_knowledge_batches SET deadline=now()-interval '1 second',active_until=now()+interval '90 seconds'");d.commit()
+    assert batches.get(PROFILE,receipt['id'])['batch']['status']=='running'
+    # Admission deadline still forbids another call despite the active child.
+    batches.process(PROFILE,receipt['id'])
+    generation.assert_not_called()
+    assert batches.get(PROFILE,receipt['id'])['batch']['status']=='running'
+
+
+def test_dead_batch_becomes_interrupted_without_retry(batch):
+    d,generation,data=batch
+    receipt=batches.start(PROFILE,data)
+    d.execute("UPDATE saas_knowledge_batches SET deadline=now()-interval '1 second',active_until=now()-interval '1 second'");d.commit()
+    assert batches.get(PROFILE,receipt['id'])['batch']['status']=='interrupted'
+    batches.process(PROFILE,receipt['id'])
+    generation.assert_not_called()
+
 @pytest.fixture
 def batch(ready,monkeypatch):
     d,generation,_=ready;monkeypatch.setattr(batches,'_connect',lambda:d)

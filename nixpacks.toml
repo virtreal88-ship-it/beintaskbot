@@ -1,2 +1,4 @@
 [phases.setup]
 nixPkgs = ["ffmpeg", "python311", "python311Packages.pip"]
+
+aptPkgs = ["poppler-utils"]

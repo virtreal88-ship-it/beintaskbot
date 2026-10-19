@@ -30,9 +30,9 @@ Write concise general instructions in the requested output_language (ru, az or e
 
 
 def prepare(profile,data,review=None):
-    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of'}
+    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректные параметры анализа.')
-    for flag in ('allow_external_media','allow_paid_asr'):
+    for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
         if flag in data and type(data[flag]) is not bool: raise TenantLinearError('Некорректное разрешение медиа.')
     if data.get('allow_paid_asr') and not data.get('allow_external_media'): raise TenantLinearError('Требуется разрешение передачи медиа.')
     explicit_language='language' in data
@@ -56,6 +56,18 @@ def prepare(profile,data,review=None):
             if replay:
                 if replay['request_key']!=request_key: raise TenantLinearError('request_id уже использован для другого запроса.',409)
                 return {'existing':request_id}
+            cur.execute('''SELECT c.sources,f.route FROM saas_knowledge_campaign_fragments f
+              JOIN saas_knowledge_campaigns c ON c.tenant_id=f.tenant_id AND c.id=f.campaign_id
+              WHERE f.tenant_id=%s::uuid AND f.id=%s::uuid''',(tenant,request_id))
+            campaign_source=cur.fetchone()
+            if campaign_source:
+                expected=sorted(campaign_source['sources'])
+                for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
+                    if data.get(flag,False)!=campaign_source['route'].get(flag,False):raise TenantLinearError('Разрешения кампании изменились.',409)
+                if data.get('approved_channel_ids')!=expected:
+                    raise TenantLinearError('Источники кампании изменились.',409)
+                from tenant_knowledge_campaign_worker import check_fence
+                check_fence(cur,tenant,request_id)
             item=review['snapshot'] if review else store.snapshot(cur,profile,data)
             cur.execute('SELECT 1 FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,request_id))
             if cur.fetchone():
@@ -92,13 +104,13 @@ def prepare(profile,data,review=None):
             item['route']['next_before']=item['next_before']
             content_route={'provider':'connect','conversation_id':item['route']['conversation_id'],'history_mode':item['route']['history_mode']}
             if item['route']['history_mode']=='channel': content_route['channel_id']=item['route']['channel_id']
-            content_route.update({flag:data[flag] for flag in ('allow_external_media','allow_paid_asr') if flag in data})
+            content_route.update({flag:data[flag] for flag in ('allow_external_media','allow_paid_asr','allow_vision') if flag in data})
             if data.get('retry_of'):content_route['retry_of']=identifier(data['retry_of'])
             fingerprint=store.digest([content_route,item['refs'],item['source_digest'],str(agent['id']),model,data['language'],review['key'] if review else None])
             cur.execute("""SELECT e.* FROM saas_knowledge_extractions e WHERE tenant_id=%s::uuid AND
-              (id=%s::uuid OR fingerprint=%s OR (source_refs=%s::jsonb AND source_digest=%s AND route->>'history_mode'=%s AND (%s='unified_group' OR route->>'channel_id'=%s) AND COALESCE(route->>'language','ru')=%s AND COALESCE(route->'review','null'::jsonb)=%s::jsonb AND COALESCE(route->>'allow_external_media','false')=%s AND COALESCE(route->>'allow_paid_asr','false')=%s AND COALESCE(route->>'retry_of','')=%s AND EXISTS(
+              (id=%s::uuid OR fingerprint=%s OR (source_refs=%s::jsonb AND source_digest=%s AND route->>'history_mode'=%s AND (%s='unified_group' OR route->>'channel_id'=%s) AND COALESCE(route->>'language','ru')=%s AND COALESCE(route->'review','null'::jsonb)=%s::jsonb AND COALESCE(route->>'allow_external_media','false')=%s AND COALESCE(route->>'allow_paid_asr','false')=%s AND COALESCE(route->>'retry_of','')=%s AND COALESCE(route->>'allow_vision','false')=%s AND COALESCE(route->'approved_channel_ids','null'::jsonb)=%s::jsonb AND EXISTS(
                 SELECT 1 FROM saas_ai_agent_runs r WHERE r.tenant_id=e.tenant_id AND r.id=e.id AND r.agent_id=%s::uuid AND r.model=%s)))
-              ORDER BY id=%s::uuid DESC LIMIT 1""",(tenant,request_id,fingerprint,_json(item['refs']),item['source_digest'],item['route']['history_mode'],item['route']['history_mode'],item['route']['channel_id'],data['language'],_json(review['key']) if review else 'null',str(data.get('allow_external_media',False)).lower(),str(data.get('allow_paid_asr',False)).lower(),str(data.get('retry_of') or ''),agent['id'],model,request_id))
+              ORDER BY id=%s::uuid DESC LIMIT 1""",(tenant,request_id,fingerprint,_json(item['refs']),item['source_digest'],item['route']['history_mode'],item['route']['history_mode'],item['route']['channel_id'],data['language'],_json(review['key']) if review else 'null',str(data.get('allow_external_media',False)).lower(),str(data.get('allow_paid_asr',False)).lower(),str(data.get('retry_of') or ''),str(data.get('allow_vision',False)).lower(),_json(data.get('approved_channel_ids')),agent['id'],model,request_id))
             existing=cur.fetchone()
             if existing:
                 if str(existing['id'])==request_id and existing['fingerprint']!=fingerprint: raise TenantLinearError('request_id уже использован для другого фрагмента.',409)
@@ -111,11 +123,14 @@ def prepare(profile,data,review=None):
             cur.execute("""SELECT COALESCE((SELECT sum(reserved_calls) FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date),0)
               +COALESCE((SELECT sum(reserved_calls) FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'
               AND (state IN ('generating','completed','unknown') OR reserved_calls>1 OR generated_at IS NOT NULL)),0) AS n""",(tenant,tenant))
-            if int(cur.fetchone()['n'])+(1 if data.get('allow_paid_asr') else 0)>=int(meta.get('daily_limit') or 50): raise TenantLinearError('Дневной лимит AI компании исчерпан.',429)
+            if int(cur.fetchone()['n'])+(1 if data.get('allow_paid_asr') else 0)+(2 if data.get('allow_vision') is True else 0)>=int(meta.get('daily_limit') or 50): raise TenantLinearError('Дневной лимит AI компании исчерпан.',429)
             cur.execute(TOKEN_USAGE_SQL,(tenant,tenant));used=int(cur.fetchone()['tokens'])
             cap=platform_token_limit(tenant) if source=='platform' else 0
-            if cap and used+MAX_TOKENS+(8000 if data.get('allow_paid_asr') else 0)>cap: raise TenantLinearError('Недостаточно бюджета токенов компании.',429)
+            if cap and used+MAX_TOKENS+(8000 if data.get('allow_paid_asr') else 0)+(8000 if data.get('allow_vision') is True else 0)>cap: raise TenantLinearError('Недостаточно бюджета токенов компании.',429)
             extra_calls=1 if data.get('allow_paid_asr') else 0
+            vision_calls=2 if data.get('allow_vision') is True else 0
+            if vision_calls and not campaign_source:raise TenantLinearError('Vision-кеш доступен только утверждённой кампании.',403)
+
             if extra_calls and int(meta.get('daily_limit') or 50)<=int(0): raise TenantLinearError('Недостаточно бюджета.',429)
             event='knowledge_extraction:'+request_id
             cur.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,state) VALUES(%s::uuid,%s,'connect','knowledge_extraction','completed')",(tenant,event))
@@ -125,6 +140,9 @@ def prepare(profile,data,review=None):
                 (tenant,request_id,item['actor'],_json(item['route']),_json(item['refs']),item['source_digest'],fingerprint,request_key))
             if extra_calls:
                 cur.execute('UPDATE saas_ai_agent_runs SET reserved_calls=2 WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,request_id))
+                cur.execute('UPDATE saas_ai_agent_token_usage SET reserved_tokens=reserved_tokens+8000 WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(tenant,request_id))
+            if vision_calls:
+                cur.execute('UPDATE saas_ai_agent_runs SET reserved_calls=reserved_calls+%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(vision_calls,tenant,request_id))
                 cur.execute('UPDATE saas_ai_agent_token_usage SET reserved_tokens=reserved_tokens+8000 WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(tenant,request_id))
             if any(r.get('media_kind') for r in item['refs']):
                 pending=[{k:r[k] for k in ('id','channel_id','lead_id','role','happened_at') if k in r}|{'kind':r['media_kind'],'status':'pending_processing','code':'not_started'} for r in item['refs'] if r.get('media_kind')]
@@ -181,10 +199,11 @@ def finish(profile,item,values,usage,error,attempted,proposal=None):
             if usage:
                 incoming=max(0,int(usage.get('input_tokens') or 0));outgoing=max(0,int(usage.get('output_tokens') or 0));total=max(incoming+outgoing,int(usage.get('total_tokens') or 0))
                 cur.execute('UPDATE saas_ai_agent_token_usage SET input_tokens=%s,output_tokens=%s,total_tokens=%s,reserved_tokens=CASE WHEN %s>0 THEN 0 ELSE reserved_tokens END WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(incoming,outgoing,total,total,tenant,request_id))
-            if item.get('generation_attempted') and not item.get('generation_usage_received'):
-                cur.execute('UPDATE saas_ai_agent_token_usage SET reserved_tokens=GREATEST(reserved_tokens,%s) WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(MAX_TOKENS,tenant,request_id))
-            if item.get('asr_attempted') and not item.get('asr_usage'):
-                cur.execute('UPDATE saas_ai_agent_token_usage SET reserved_tokens=GREATEST(reserved_tokens,8000) WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(tenant,request_id))
+            unknown_tokens=(MAX_TOKENS if item.get('generation_attempted') and not item.get('generation_usage_received') else 0)
+            unknown_tokens+=8000 if item.get('asr_attempted') and not item.get('asr_usage') else 0
+            unknown_tokens+=4000*max(0,item.get('vision_attempts',0)-sum(bool(u) for u in item.get('vision_usage',[])))
+            if unknown_tokens:
+                cur.execute('UPDATE saas_ai_agent_token_usage SET reserved_tokens=GREATEST(reserved_tokens,%s) WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(unknown_tokens,tenant,request_id))
             if not attempted: cur.execute('UPDATE saas_ai_agent_token_usage SET reserved_tokens=0 WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(tenant,request_id))
             if values is not None:
                 for value in values:
@@ -261,5 +280,7 @@ def analyze(profile,data):
     finally:
         audio_usage=item.get('asr_usage')
         if audio_usage: usage={k:int((usage or {}).get(k) or 0)+int(audio_usage.get(k) or 0) for k in ('input_tokens','output_tokens','total_tokens')}
-        finish(profile,item,values,usage,error,attempted or item.get('asr_attempted',False))
+        for visual_usage in item.get('vision_usage',[]):
+            usage={k:int((usage or {}).get(k) or 0)+int(visual_usage.get(k) or 0) for k in ('input_tokens','output_tokens','total_tokens')}
+        finish(profile,item,values,usage,error,attempted or item.get('asr_attempted',False) or bool(item.get('vision_attempts')))
     return store.request_detail(profile,item['id'])
