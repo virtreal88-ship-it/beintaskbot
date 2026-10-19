@@ -25,7 +25,7 @@ Refs are m1,m2,... from input, never invented IDs. Do not invent causes, success
 AI suggestions and resolved ticket status alone do not prove success. Use explicit customer/staff confirmation.
 An unconfirmed suggestion MUST have unconfirmed/unknown outcome and suspected/unknown cause.
 Do not include names, contact details, addresses, identifiers, secrets, private reasoning or raw chat quotes.
-Write concise general instructions in the requested output_language (ru, az or en). No knowledge is published automatically.
+Write concise general instructions in the requested output_language (ru, az or en). Translate explanatory fields such as title, symptoms, cause, proposed resolution, operator_actions and outcome into that language, but keep evidence references unchanged. Preserve the meaning and certainty of the source; never add technical facts. No knowledge is published automatically.
 """
 
 
