@@ -5,11 +5,31 @@ from tenant_ai_dialog_scope import job_scope, lock_dialog
 from tenant_ai_agents_schema import ensure_schema
 from tenant_platform import _connect, _json
 
-_HANDOFF = re.compile(r"(?:\b(?:human|manager|supervisor|operator|agent)\b|менеджер|оператор|человек|руководител|menecer|operator|insan|canlı\s+dəstək|canli\s+destek)",re.I)
+_HANDOFF_TARGET = (
+    r"(?:a\s+|the\s+|real\s+)?(?:human|person|someone|somebody|manager|supervisor|"
+    r"operator|representative|real agent|support agent|insan\w*|operator\w*|"
+    r"menecer\w*|əməkdaş\w*|canlı dəstək\w*|canli destek\w*|"
+    r"человек\w*|оператор\w*|менеджер\w*|руководител\w*|специалист\w*)"
+)
+# These patterns encode a request, rather than a mere mention or reported
+# speech (for example, "the operator told me to speak to the sales agent").
+_HANDOFF_REQUESTS = tuple(re.compile(pattern, re.I) for pattern in (
+    rf"\b(?:can|could) i (?:please )?(?:speak|talk|chat) to {_HANDOFF_TARGET}\b",
+    rf"\bi (?:want|need|would like) to (?:speak|talk|chat) to {_HANDOFF_TARGET}\b",
+    rf"\b(?:please )?(?:connect|transfer|put|pass|switch) me (?:to|with) {_HANDOFF_TARGET}\b",
+    rf"\b(?:i need|i want) {_HANDOFF_TARGET}\b",
+    rf"\b{_HANDOFF_TARGET}\s+(?:please|now)\b",
+    r"\b(?:insan|operator|menecer|əməkdaş)\w*\s+(?:ilə\s+)?danışmaq\s+istəyir(?:əm|ik)\b",
+    r"\b(?:məni\s+)?(?:insan|operator|menecer|əməkdaş)\w*\s+(?:ilə\s+)?(?:danışdırın|qoşun|birləşdirin)\b",
+    r"\b(?:хочу|хотим|мне нужно|мне нужен|мне нужна)\s+(?:поговорить\s+с\s+)?(?:человек\w*|оператор\w*|менеджер\w*|специалист\w*)\b",
+    r"\b(?:позовите|пригласите)\s*,?\s*(?:пожалуйста\s*,?\s*)?(?:человек\w*|оператор\w*|менеджер\w*|специалист\w*)\b",
+    r"\b(?:соедините|переключите|переведите|передайте)\s+(?:меня\s+)?(?:к|на|с)\s+(?:человек\w*|оператор\w*|менеджер\w*|специалист\w*)\b",
+))
 
 
 def should_handoff(text):
-    return bool(_HANDOFF.search(str(text or '')[:6000]))
+    body = str(text or '')[:6000]
+    return any(pattern.search(body) for pattern in _HANDOFF_REQUESTS)
 
 
 def enabled_triggers(tenant_id,agent_id):

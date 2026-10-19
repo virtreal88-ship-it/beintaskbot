@@ -15,6 +15,7 @@ if 'psycopg' not in sys.modules:
     sys.modules['psycopg.rows'] = rows
 
 import tenant_ai_agents_store as agents_store
+import tenant_ai_agent_actions as agent_actions
 import tenant_connect_transport as transport
 from tenant_linear_policy import TenantLinearError
 
@@ -54,6 +55,30 @@ class Connection:
 
 
 class TenantConnectHandoffTests(unittest.TestCase):
+    def test_handoff_requires_an_explicit_request_for_a_human_in_az_ru_or_en(self):
+        for text in (
+            'Can I speak to a human, please?',
+            'Please connect me with a manager.',
+            'Operatorla danışmaq istəyirəm.',
+            'Zəhmət olmasa, məni operatora qoşun.',
+            'Хочу поговорить с менеджером.',
+            'Позовите, пожалуйста, оператора.',
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(agent_actions.should_handoff(text))
+
+    def test_mentions_of_agent_or_operator_do_not_trigger_handoff(self):
+        for text in (
+            'Our agent fixed the problem.',
+            'I am a manager at the customer company.',
+            'Operator status is online.',
+            'The operator told me to speak to the sales agent.',
+            'Müştəri menecerə qiyməti soruşdu.',
+            'Менеджер уже ответил, проблема решена.',
+        ):
+            with self.subTest(text=text):
+                self.assertFalse(agent_actions.should_handoff(text))
+
     def test_connect_signature_is_hmac_of_exact_raw_webhook_body(self):
         raw = (b'{"id":"event-1","type":"message.outbound.observed",'
                b'"occurred_at":"2026-10-19T12:00:00.000Z","data":{"id":"msg-1",'
