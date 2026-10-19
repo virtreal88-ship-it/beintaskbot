@@ -129,7 +129,7 @@ def _outbound_author(data: dict) -> str:
     known linked-phone events explicitly. Unknown provenance remains an
     operator-compatible fallback for historical integrations.
     """
-    if data.get('ai_authored') is True or data.get('source') == 'ai_agent':
+    if data.get('ai_authored') is True:
         return 'AI Agent'
     if data.get('source') == 'linked_phone':
         return 'Operator'
@@ -138,7 +138,7 @@ def _outbound_author(data: dict) -> str:
 
 def _outbound_is_ai(data: dict, existing: dict | None = None) -> bool:
     """Classify AI only on explicit signed/provider or stored run provenance."""
-    return (_outbound_author(data) == 'AI Agent' or _is_ai_message(existing))
+    return (data.get('ai_authored') is True or _is_ai_message(existing))
 
 
 def _schema(conn) -> None:

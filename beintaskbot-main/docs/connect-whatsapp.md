@@ -37,12 +37,13 @@ Connect should additionally send these signed fields when Evolution has them:
 - `participantJid` and `participantName` — author of an inbound group message;
 - `fromMe` — the Evolution message-direction fact.
 
-Outbound events should also include `source` when the adapter can establish it:
-`linked_phone` for a message sent from the linked WhatsApp client, `ai_agent`
-for a CRM-originated AI delivery, and `crm_operator` for a human CRM send.
-`fromMe` alone establishes direction, not authorship. Beintaskbot uses known
-provenance to distinguish AI echoes from staff takeover; an unclassified
-outbound event is conservatively treated as a staff reply for AI stop rules.
+The current Connect adapter emits `message.outbound.observed` for an Evolution
+`fromMe=true` message that was not already correlated with a Connect API send.
+It marks that event `source: "linked_phone"`. An API-originated echo is matched
+to its previously saved Connect message and is not emitted a second time;
+Beintaskbot already recorded that send with its original author. `fromMe` alone
+establishes direction, not authorship. An unclassified outbound event remains
+operator-compatible for AI stop rules rather than being inferred as AI.
 
 Beintaskbot keeps the original signed webhook data for diagnostics, stores the
 group title separately from the conversation JID, and exposes the participant

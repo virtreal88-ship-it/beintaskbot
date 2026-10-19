@@ -78,10 +78,15 @@ class TenantConnectHandoffTests(unittest.TestCase):
         self.assertEqual(transport._outbound_author(event['data']), 'Operator')
         self.assertFalse(transport._outbound_is_ai(event['data']))
 
-    def test_crm_ai_echo_source_does_not_mark_human_mode(self):
-        event = {'type':'message.outbound.observed','data':{'source':'ai_agent','fromMe':True}}
+    def test_known_ai_origin_does_not_mark_human_mode(self):
+        event = {'type':'message.outbound.observed','data':{'ai_authored':True,'fromMe':True}}
         self.assertEqual(transport._outbound_author(event['data']), 'AI Agent')
         self.assertTrue(transport._outbound_is_ai(event['data']))
+
+    def test_connect_source_without_linked_phone_proof_is_not_inferred_as_ai(self):
+        event = {'type':'message.outbound.observed','data':{'source':'connect','fromMe':True}}
+        self.assertEqual(transport._outbound_author(event['data']), 'WhatsApp operator')
+        self.assertFalse(transport._outbound_is_ai(event['data']))
 
     def test_unclassified_from_me_message_remains_operator_compatible(self):
         self.assertEqual(transport._outbound_author({'fromMe':True}), 'WhatsApp operator')
