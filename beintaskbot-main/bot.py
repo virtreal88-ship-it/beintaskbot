@@ -18644,6 +18644,12 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_post('/api/platform/crm/native/contacts', native_contacts_api)
     app_web.router.add_get('/api/platform/crm/native/contacts/{id}', native_contacts_api)
     app_web.router.add_post('/api/platform/crm/native/contacts/{id}', native_contacts_api)
+    from tenant_crm_native_deal_api import handler as native_crm_deals_handler
+    native_deals_api = native_crm_deals_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
+    app_web.router.add_get('/api/platform/crm/native/deals', native_deals_api)
+    app_web.router.add_post('/api/platform/crm/native/deals', native_deals_api)
+    app_web.router.add_get('/api/platform/crm/native/deals/{id}', native_deals_api)
+    app_web.router.add_post('/api/platform/crm/native/deals/{id}', native_deals_api)
     app_web.router.add_post('/api/platform/integrations/connect/deactivate-webhooks', tenant_connect_deactivate_webhooks_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, is_connect_platform_admin))
     app_web.router.add_post('/api/platform/connect/webhook', tenant_connect_webhook_handler(logger))
     from tenant_company_admin_api import handler as tenant_company_admin_handler
