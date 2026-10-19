@@ -1,5 +1,6 @@
 import uuid
 from unittest.mock import Mock
+import pytest
 
 import tenant_knowledge_live_queue as live
 
@@ -52,6 +53,7 @@ def test_worker_reuses_stable_receipt_and_only_requests_az(monkeypatch):
     assert args[1]['channel_id']==CHANNEL and args[1]['conversation_id']==item['conversation_id']
     assert args[1]['request_id']==live._request_id(item)
     assert live._request_id(item)==live._request_id(dict(item))
+    assert analyze.call_args.kwargs['before_provider'] is live.require_extraction_enabled
     finish.assert_called_once_with(item,args[1]['request_id'],'')
 
 
@@ -119,4 +121,35 @@ def test_switch_off_between_claim_and_analyze(monkeypatch):
     monkeypatch.setattr(live,'finish',finish)
     assert live.tick() is False
     ai.assert_not_called()
-    finish.assert_called_once_with(item,error_code='disabled_after_claim')
+    finish.assert_called_once_with(item,error_code='live_extraction_disabled_after_claim')
+
+
+def test_disabled_queue_receipt_is_terminally_blocked(monkeypatch):
+    item={'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'client','generation':3}
+    connection=Connection()
+    monkeypatch.setattr(live,'_connect',lambda:connection)
+    live.finish(item,error_code='live_extraction_disabled_after_claim')
+    sql,params=connection.value.calls[0]
+    assert "WHEN %s<>'' THEN 'blocked'" in sql
+    assert params[1]=='live_extraction_disabled_after_claim'
+    assert connection.commits==1
+
+
+def test_switch_off_during_analyze_stops_before_next_provider_call(monkeypatch):
+    from tenant_knowledge_candidates_service import LiveExtractionDisabled
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED', 'true')
+    item={'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'client',
+          'lead_id':42,'reviewer_id':9,'last_message_id':MESSAGE,'generation':1}
+    monkeypatch.setattr(live,'claim',lambda:item)
+    enabled={'value':True}
+    provider=Mock(side_effect=AssertionError('next AI call must not start'))
+    def analyze(_profile,_data,*,before_provider):
+        enabled['value']=False
+        before_provider()
+        provider()
+    monkeypatch.setattr(live,'analyze',analyze)
+    finish=Mock();monkeypatch.setattr(live,'finish',finish)
+    monkeypatch.setattr(live,'extraction_enabled',lambda:enabled['value'])
+    assert live.tick() is False
+    provider.assert_not_called()
+    finish.assert_called_once_with(item,error_code='live_extraction_disabled_before_provider')

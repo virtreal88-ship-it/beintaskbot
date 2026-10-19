@@ -213,7 +213,8 @@ def test_extraction_daily_cap_and_concurrency(ready):
     with pytest.raises(TenantLinearError,match='10 в сутки'):service.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4())})
     generation.assert_not_called()
 
-def test_live_queue_is_idempotent_and_channel_scoped(ready):
+def test_live_queue_is_idempotent_and_channel_scoped(ready,monkeypatch):
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
     db,generation,data=ready
     live.create_schema(db)
     first=str(uuid.UUID(int=9901));second=str(uuid.UUID(int=9902))
@@ -234,6 +235,7 @@ def test_live_queue_is_idempotent_and_channel_scoped(ready):
     assert generation.call_count==0
 
 def test_live_queue_obeys_company_ai_emergency_stop(ready,monkeypatch):
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
     db,generation,data=ready
     live.create_schema(db)
     with db.cursor() as cur:live.enqueue(cur,A,CA,'client',41,str(uuid.UUID(int=9910)),actor_id=11)

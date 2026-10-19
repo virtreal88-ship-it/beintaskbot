@@ -17,8 +17,9 @@ from test_connect_images import PNG
 @pytest.fixture
 def context(monkeypatch):
     import tenant_knowledge_media_cache as cache
-    def unit_asr(profile,item,model,media,invoke):
+    def unit_asr(profile,item,model,media,invoke,check_before_ai=None):
         item['asr_attempted']=True
+        if check_before_ai: check_before_ai()
         text,usage=invoke(item['key'],model,*media,with_usage=True)
         return text,usage,True
     monkeypatch.setattr(cache,'transcribe_once',unit_asr)

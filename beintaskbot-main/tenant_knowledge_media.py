@@ -10,6 +10,7 @@ from pathlib import Path
 
 from tenant_platform import _connect
 from tenant_linear_policy import TenantLinearError
+from tenant_knowledge_candidates_service import LiveExtractionDisabled
 from tenant_chat_attachment_store import load
 from tenant_connect_media import download_media
 from tenant_connect_images import signature, supports_images
@@ -72,7 +73,7 @@ def cached_transcript(item,ref):
     return row['text'] if row else ''
 
 
-def collect(profile,item):
+def collect(profile,item,check_before_ai=None):
     images=[];results=[];seen={};size=0;deadline=time.monotonic()+65
     consent=item['route'].get('allow_external_media') is True
     names=item.get('redaction_names',[])
@@ -110,9 +111,10 @@ def collect(profile,item):
                 if load(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
                 from tenant_knowledge_candidates_service import check_active
                 check_active(profile,item)
+                if check_before_ai: check_before_ai()
                 asr_used=True
                 from tenant_knowledge_media_cache import transcribe_once
-                text,usage,asr_used=transcribe_once(profile,item,model,media,transcribe)
+                text,usage,asr_used=transcribe_once(profile,item,model,media,transcribe,check_before_ai=check_before_ai)
                 item['asr_usage']=usage
                 text=redact(text,names)[:4000]
                 receipt.update(status='processed',code='transcribed',transcript=text,model=model)
@@ -156,9 +158,10 @@ def collect(profile,item):
                         if not model: raise LookupError('asr_model_unavailable')
                         if load(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
                         check_active(profile,item)
+                        if check_before_ai: check_before_ai()
                         asr_used=True
                         from tenant_knowledge_media_cache import transcribe_once
-                        text,usage,asr_used=transcribe_once(profile,item,model,track,transcribe)
+                        text,usage,asr_used=transcribe_once(profile,item,model,track,transcribe,check_before_ai=check_before_ai)
                         item['asr_usage']=usage;text=redact(text,names)[:4000]
                         receipt.update(audio_status='processed',transcript=text,model=model)
                         message['text']+='\n[Video audio transcript] '+text
@@ -176,7 +179,8 @@ def collect(profile,item):
                 from tenant_knowledge_media_cache import observe_once
                 from tenant_chat_ai_provider import generate
                 for content,content_type,origin in visuals:
-                    text,_,_=observe_once(profile,item,ref,content,content_type,origin,generate)
+                    if check_before_ai: check_before_ai()
+                    text,_,_=observe_once(profile,item,ref,content,content_type,origin,generate,check_before_ai=check_before_ai)
                     message['text']+='\n[Untrusted visual observation; not a confirmed solution] '+text
                 receipt.update(status='processed',code='vision_observation',visuals=[origin for _,_,origin in visuals])
                 continue
@@ -184,6 +188,7 @@ def collect(profile,item):
                 images.append({'content':content,'content_type':content_type,'detail':'low','source_ref':message['ref']})
             receipt.update(status='pending_processing',code='awaiting_model',visuals=[origin for _,_,origin in visuals])
             message['text']+='\n[Visual inputs supplied: '+message['ref']+']'
+        except LiveExtractionDisabled: raise
         except LookupError as error: receipt.update(status='unsupported',code=str(error))
         except TenantLinearError as error: receipt.update(status='unavailable' if error.status in {403,404,410} else 'unsupported' if error.status==415 else 'error',code='media_unavailable')
         except Exception: receipt.update(status='error',code='media_processing_failed')

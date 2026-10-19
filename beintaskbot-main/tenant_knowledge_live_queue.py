@@ -11,7 +11,7 @@ import uuid
 from tenant_platform import _connect
 from tenant_linear_policy import TenantLinearError
 import tenant_knowledge_candidates_store as store
-from tenant_knowledge_candidates_service import analyze
+from tenant_knowledge_candidates_service import LiveExtractionDisabled, analyze
 
 DEBOUNCE_SECONDS = 20
 LEASE_SECONDS = 300
@@ -98,15 +98,20 @@ def _request_id(item):
     return str(uuid.uuid5(uuid.NAMESPACE_URL,value))
 
 
+def require_extraction_enabled():
+    if not extraction_enabled():
+        raise LiveExtractionDisabled()
+
+
 def finish(item, extraction_id=None, error_code=''):
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute("""UPDATE saas_knowledge_live_queue SET
-              state=CASE WHEN generation=%s THEN 'completed' ELSE 'pending' END,
+              state=CASE WHEN generation<>%s THEN 'pending' WHEN %s<>'' THEN 'blocked' ELSE 'completed' END,
               next_attempt_at=CASE WHEN generation=%s THEN next_attempt_at ELSE now()+(%s * interval '1 second') END,
               lease_until=NULL,extraction_id=%s::uuid,error_code=%s,updated_at=now()
               WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s AND state='running'""",
-              (item['generation'],item['generation'],DEBOUNCE_SECONDS,extraction_id,error_code,
+              (item['generation'],error_code,item['generation'],DEBOUNCE_SECONDS,extraction_id,error_code,
                item['tenant_id'],item['channel_id'],item['conversation_id']))
         conn.commit()
 
@@ -122,17 +127,23 @@ def tick():
         # Re-check after claim: a switch-off between claim and provider dispatch
         # must not start a new analysis. Preserve the receipt for later review.
         if not extraction_enabled():
-            finish(item,error_code='disabled_after_claim')
+            finish(item,error_code='live_extraction_disabled_after_claim')
             return False
         response=analyze(profile,{
           'request_id':request_id,'provider':'connect','channel_id':str(item['channel_id']),
-          'conversation_id':item['conversation_id'],'history_mode':'channel','language':'az'})
+          'conversation_id':item['conversation_id'],'history_mode':'channel','language':'az'},
+          before_provider=require_extraction_enabled)
         request=response.get('request') or {}
         state=request.get('status')
         if state not in {'completed','failed','unknown'}:
             finish(item,error_code='extraction_state_unknown')
         else:
             finish(item,request_id,'' if state=='completed' else 'provider_'+state)
+    except LiveExtractionDisabled:
+        # The service stopped at a pre-provider guard. Keep an explicit safe
+        # terminal receipt; a later genuine message creates a fresh generation.
+        finish(item,error_code='live_extraction_disabled_before_provider')
+        return False
     except TenantLinearError as exc:
         # Quota, disabled AI, emergency stop, lost route, and source changes
         # fail closed. A later real message may enqueue a fresh generation.
