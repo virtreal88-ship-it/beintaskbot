@@ -324,6 +324,61 @@ def diagnostics(profile: dict) -> dict:
                 any(row['isCurrent'] and row['active'] for row in subscriptions))}
 
 
+
+def deactivate_stale_webhooks(profile: dict, webhook_ids: list[str], *, confirmed: bool = False) -> dict:
+    """Explicit, tenant-owned deactivation only; never delete delivery history.
+
+    No automatic invocation. The owner must separately confirm exact IDs.
+    """
+    _owner(profile)
+    ids = [str(value) for value in webhook_ids]
+    if not confirmed or not ids or len(ids) > 20 or len(ids) != len(set(ids)):
+        raise TenantPlatformError('Webhook deaktivasiya təsdiqi və unikal ID-lər tələb olunur.')
+    if any(not re.fullmatch(r'[0-9a-fA-F-]{36}', value) for value in ids):
+        raise TenantPlatformError('Webhook ID düzgün deyil.')
+    tenant = str(profile['tenant_id'])
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='connect'", (tenant,))
+            integration = cur.fetchone()
+    if not integration or integration.get('status') != 'connected' or not integration.get('secrets'):
+        raise TenantPlatformError('Connect bağlantısı təsdiqlənmədi.')
+    try:
+        credentials = json.loads(_fernet().decrypt(bytes(integration['secrets'])).decode())
+        key = str(credentials.get('api_key') or '')
+        current_id = str(credentials.get('webhook_id') or '')
+    except Exception:
+        raise TenantPlatformError('Connect təhlükəsizlik məlumatı oxunmadı.') from None
+    if not key or not re.fullmatch(r'[0-9a-fA-F-]{36}', current_id) or current_id in ids:
+        raise TenantPlatformError('Cari webhook qorunur; deaktivasiya dayandırıldı.')
+    hooks = _request(key, 'GET', '/v1/webhooks').get('data', [])
+    if not isinstance(hooks, list):
+        raise TenantPlatformError('Webhook siyahısı təsdiqlənmədi.')
+    current = next((row for row in hooks if isinstance(row, dict) and str(row.get('id')) == current_id), None)
+    if not current or not current.get('active'):
+        raise TenantPlatformError('Cari webhook aktiv deyil; deaktivasiya dayandırıldı.')
+    expected_url = str(current.get('url') or '').rstrip('/')
+    if not expected_url:
+        raise TenantPlatformError('Cari webhook ünvanı təsdiqlənmədi.')
+    targets = []
+    for webhook_id in ids:
+        hook = next((row for row in hooks if isinstance(row, dict) and str(row.get('id')) == webhook_id), None)
+        if not hook or not hook.get('active') or str(hook.get('url') or '').rstrip('/') != expected_url:
+            raise TenantPlatformError('Webhook ünvanı və statusu uyğun gəlmir.')
+        stats = _request(key, 'GET', '/v1/webhooks/' + webhook_id + '/diagnostics')
+        counts = stats.get('counts') if isinstance(stats, dict) else None
+        if not isinstance(counts, dict) or counts.get('pending') != 0 or counts.get('retrying') != 0:
+            raise TenantPlatformError('Webhook gözləyən çatdırılmaları var və ya statistika məlum deyil.')
+        targets.append(webhook_id)
+    # All targets are validated before the first change. A partial failure is
+    # reported; never retry silently or touch the authoritative subscription.
+    disabled = []
+    for webhook_id in targets:
+        _request(key, 'PATCH', '/v1/webhooks/' + webhook_id, {'active': False})
+        disabled.append(webhook_id)
+    return {'disabledWebhookIds': disabled, 'preservedWebhookId': current_id}
+
+
 def configure(profile: dict, payload: dict, callback_url: str) -> dict:
     _owner(profile)
     tenant = str(profile['tenant_id'])
