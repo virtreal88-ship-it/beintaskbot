@@ -16,6 +16,13 @@ class DeactivateWebhookSafetyTests(unittest.TestCase):
                 transport.deactivate_stale_webhooks({'tenant_id': 'tenant', 'role': 'admin'}, [self.OLD])
             conn.assert_not_called()
 
+    def test_company_admin_cannot_deactivate_stale_webhooks(self):
+        with mock.patch.object(transport, '_connect') as conn:
+            with self.assertRaises(Exception):
+                transport.deactivate_stale_webhooks({'tenant_id': 'tenant', 'role': 'admin'},
+                                                    [self.OLD], confirmed=True)
+            conn.assert_not_called()
+
     def test_current_id_is_never_disabled(self):
         context = mock.MagicMock()
         cur = context.__enter__.return_value.cursor.return_value.__enter__.return_value
@@ -27,7 +34,7 @@ class DeactivateWebhookSafetyTests(unittest.TestCase):
                 'api_key': 'private-key', 'webhook_id': self.CURRENT}).encode()
             with self.assertRaises(Exception):
                 transport.deactivate_stale_webhooks({'tenant_id': 'tenant', 'role': 'admin'},
-                                                    [self.CURRENT], confirmed=True)
+                                                    [self.CURRENT], confirmed=True, platform_admin=True)
             request.assert_not_called()
 
     def test_only_selected_old_hook_is_deactivated(self):
@@ -52,7 +59,7 @@ class DeactivateWebhookSafetyTests(unittest.TestCase):
             fernet.return_value.decrypt.return_value = json.dumps({
                 'api_key': 'private-key', 'webhook_id': self.CURRENT}).encode()
             result = transport.deactivate_stale_webhooks({'tenant_id': 'tenant', 'role': 'admin'},
-                                                         [self.OLD], confirmed=True)
+                                                         [self.OLD], confirmed=True, platform_admin=True)
         self.assertEqual(result['disabledWebhookIds'], [self.OLD])
         self.assertEqual(result['preservedWebhookId'], self.CURRENT)
 
