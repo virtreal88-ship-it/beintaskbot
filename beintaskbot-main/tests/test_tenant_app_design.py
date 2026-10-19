@@ -22,6 +22,10 @@ class AppDesignTests(unittest.TestCase):
         self.assertNotIn('app-shell', legacy)
         self.assertNotIn('tenant-chakra-ui.js', legacy)
 
+    def test_native_connect_deal_does_not_claim_a_kommo_id(self):
+        app = (ROOT / 'docs/tenant-app.html').read_text(encoding='utf-8')
+        self.assertIn("x.raw?.source==='connect'?'Beintaskbot ID':'Kommo ID'", app)
+
     def test_theme_and_responsive_preferences_are_presentation_only(self):
         shell = (ROOT / 'ui/src/app-shell.js').read_text(encoding='utf-8')
         css = (ROOT / 'ui/src/app-theme.css').read_text(encoding='utf-8')
