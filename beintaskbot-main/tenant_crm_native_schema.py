@@ -15,6 +15,21 @@ def migrate_native_contacts(cur):
         ON saas_crm_native_contacts(tenant_id, updated_at DESC)""")
     cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS saas_crm_native_contacts_tenant_id_idx
         ON saas_crm_native_contacts(tenant_id,id)""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_crm_native_companies (
+        id UUID PRIMARY KEY,
+        tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+        name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 240),
+        phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+        responsible_id BIGINT NULL,
+        archived_at TIMESTAMPTZ NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        FOREIGN KEY (tenant_id,responsible_id) REFERENCES saas_tenant_members(tenant_id,telegram_id)
+    )""")
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS saas_crm_native_companies_tenant_id_idx ON saas_crm_native_companies(tenant_id,id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS saas_crm_native_companies_search_idx ON saas_crm_native_companies(tenant_id,lower(name)) WHERE archived_at IS NULL")
+    cur.execute("ALTER TABLE saas_crm_native_contacts ADD COLUMN IF NOT EXISTS company_id UUID NULL")
+    cur.execute("ALTER TABLE saas_crm_native_contacts DROP CONSTRAINT IF EXISTS saas_crm_native_contacts_company_fk")
+    cur.execute("ALTER TABLE saas_crm_native_contacts ADD CONSTRAINT saas_crm_native_contacts_company_fk FOREIGN KEY(tenant_id,company_id) REFERENCES saas_crm_native_companies(tenant_id,id)")
     # A provider identity is distinct from a display name.  Keep a tenant
     # scoped identity map so the same verified WhatsApp number across channels
     # resolves to one native contact without merging on names.
@@ -60,6 +75,9 @@ def migrate_native_contacts(cur):
         CHECK (length(trim(title)) > 0),
         CHECK ((channel_id IS NULL AND conversation_id='') OR (channel_id IS NOT NULL AND conversation_id<>''))
     )""")
+    cur.execute("ALTER TABLE saas_crm_native_deals ADD COLUMN IF NOT EXISTS company_id UUID NULL")
+    cur.execute("ALTER TABLE saas_crm_native_deals DROP CONSTRAINT IF EXISTS saas_crm_native_deals_company_fk")
+    cur.execute("ALTER TABLE saas_crm_native_deals ADD CONSTRAINT saas_crm_native_deals_company_fk FOREIGN KEY(tenant_id,company_id) REFERENCES saas_crm_native_companies(tenant_id,id)")
     cur.execute("""CREATE INDEX IF NOT EXISTS saas_crm_native_deals_tenant_idx
         ON saas_crm_native_deals(tenant_id,updated_at DESC) WHERE archived_at IS NULL""")
     cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS saas_crm_native_deals_chat_unique

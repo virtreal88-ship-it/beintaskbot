@@ -18644,6 +18644,12 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_post('/api/platform/crm/native/contacts', native_contacts_api)
     app_web.router.add_get('/api/platform/crm/native/contacts/{id}', native_contacts_api)
     app_web.router.add_post('/api/platform/crm/native/contacts/{id}', native_contacts_api)
+    from tenant_crm_native_company_api import handler as native_crm_companies_handler
+    native_companies_api = native_crm_companies_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
+    app_web.router.add_get('/api/platform/crm/native/companies', native_companies_api)
+    app_web.router.add_post('/api/platform/crm/native/companies', native_companies_api)
+    app_web.router.add_get('/api/platform/crm/native/companies/{id}', native_companies_api)
+    app_web.router.add_post('/api/platform/crm/native/companies/{id}', native_companies_api)
     from tenant_crm_native_deal_api import handler as native_crm_deals_handler
     native_deals_api = native_crm_deals_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
     app_web.router.add_get('/api/platform/crm/native/deals', native_deals_api)
