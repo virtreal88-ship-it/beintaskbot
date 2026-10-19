@@ -1,4 +1,6 @@
 import json
+import hashlib
+import hmac
 import sys
 import types
 import unittest
@@ -49,6 +51,15 @@ class Connection:
 
 
 class TenantConnectHandoffTests(unittest.TestCase):
+    def test_connect_signature_is_hmac_of_exact_raw_webhook_body(self):
+        raw = (b'{"id":"event-1","type":"message.outbound.observed",'
+               b'"occurred_at":"2026-10-19T12:00:00.000Z","data":{"id":"msg-1",'
+               b'"channelId":"' + CHANNEL.encode() + b'","conversationId":"g@g.us",'
+               b'"fromMe":true,"source":"linked_phone"}}')
+        signature = 'sha256=' + hmac.new(b'test-secret', raw, hashlib.sha256).hexdigest()
+        self.assertTrue(transport._verify_signature('test-secret', raw, signature))
+        self.assertFalse(transport._verify_signature('test-secret', raw + b' ', signature))
+
     def test_phone_outbound_event_stops_only_its_tenant_connect_conversation(self):
         cursor = Cursor(
             rows=[[{'tenant_id': TENANT, 'secrets': b'encrypted'}]],
