@@ -5,7 +5,8 @@ import asyncio
 import json
 from aiohttp import web
 
-from tenant_connect_transport import ConnectWebhookError, channels, configure, diagnostics, deactivate_stale_webhooks, disconnect, ingest, status
+from tenant_connect_transport import (ConnectWebhookError, channel_status, channels, configure, diagnostics,
+                                      deactivate_stale_webhooks, disconnect, disconnect_channel, ingest, status)
 from tenant_platform import TenantPlatformError
 from tenant_linear_policy import TenantLinearError
 from tenant_request_origin import require_json_post
@@ -33,6 +34,14 @@ def settings_handler(member_from_request, origin: str, logger):
                     raise TenantPlatformError('Sorğu düzgün deyil.')
                 if data.get('action') == 'disconnect':
                     result = await asyncio.to_thread(disconnect, profile)
+                elif data.get('action') == 'disconnect_channel':
+                    result = await asyncio.to_thread(disconnect_channel, profile, str(data.get('channel_id') or ''))
+                elif data.get('action') in {'channel_status', 'reconnect_channel'}:
+                    result = await asyncio.to_thread(
+                        channel_status, profile, str(data.get('channel_id') or ''),
+                        reconnect=data.get('action') == 'reconnect_channel',
+                        callback_url=origin.rstrip('/') + '/api/platform/connect/webhook',
+                    )
                 elif data.get('action') == 'channels':
                     result = {'channels': await asyncio.to_thread(channels, profile, str(data.get('api_key') or ''))}
                 else:
@@ -50,13 +59,14 @@ def settings_handler(member_from_request, origin: str, logger):
     return handle
 
 
-def diagnostics_handler(member_from_request, logger):
+def diagnostics_handler(member_from_request, logger, is_platform_admin=lambda _profile: False):
     async def handle(request: web.Request) -> web.Response:
         try:
             profile = member_from_request(request)
             if not profile:
                 raise TenantPlatformError('İcazə yoxdur.')
             result = await asyncio.to_thread(diagnostics, profile)
+            result['canDeactivateStaleWebhooks'] = bool(is_platform_admin(profile))
             return web.json_response({'success': True, **result}, headers={'Cache-Control': 'no-store'})
         except TenantPlatformError as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=403, headers={'Cache-Control': 'no-store'})
@@ -68,12 +78,14 @@ def diagnostics_handler(member_from_request, logger):
 
 
 
-def deactivate_webhooks_handler(member_from_request, origin: str, logger):
+def deactivate_webhooks_handler(member_from_request, origin: str, logger, is_platform_admin=lambda _profile: False):
     async def handle(request: web.Request) -> web.Response:
         try:
             profile = member_from_request(request)
             if not profile:
                 raise TenantPlatformError('İcazə yoxdur.')
+            if not is_platform_admin(profile):
+                raise TenantPlatformError('Bu əməliyyat yalnız platform administratoru üçündür.')
             require_json_post(request, origin)
             payload = await request.json()
             if not isinstance(payload, dict) or set(payload) != {'webhook_ids', 'confirm'}:
@@ -82,7 +94,7 @@ def deactivate_webhooks_handler(member_from_request, origin: str, logger):
             if not isinstance(ids, list) or any(not isinstance(value, str) for value in ids):
                 raise TenantPlatformError('Webhook ID siyahısı düzgün deyil.')
             result = await asyncio.to_thread(deactivate_stale_webhooks, profile, ids,
-                                             confirmed=payload['confirm'] is True)
+                                             confirmed=payload['confirm'] is True, platform_admin=True)
             return web.json_response({'success': True, **result}, headers={'Cache-Control': 'no-store'})
         except TenantLinearError as exc:
             return _policy_error_response(web, exc)

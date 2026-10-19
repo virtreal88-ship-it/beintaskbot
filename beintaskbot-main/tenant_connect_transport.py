@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import uuid
+from contextlib import contextmanager
 from urllib.parse import urlsplit, urlunsplit
 from tenant_ai_dialog_scope import lock_dialog
 from datetime import datetime, timezone
@@ -185,6 +186,24 @@ def _owner(profile: dict) -> None:
         raise TenantPlatformError('Connect bağlantısını yalnız administrator idarə edə bilər.')
 
 
+@contextmanager
+def _tenant_connect_lock(tenant: str):
+    """Serialize connection changes across workers without holding a DB transaction."""
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute('SELECT pg_try_advisory_lock(hashtextextended(%s, 0)) AS locked', ('beintaskbot-connect:' + tenant,))
+            if not cur.fetchone()['locked']:
+                conn.commit()
+                raise TenantPlatformError('Connect dəyişiklikləri davam edir; bir az sonra yenidən yoxlayın.')
+            conn.commit()
+        try:
+            yield
+        finally:
+            with conn.cursor() as cur:
+                cur.execute('SELECT pg_advisory_unlock(hashtextextended(%s, 0))', ('beintaskbot-connect:' + tenant,))
+            conn.commit()
+
+
 def _public_channel(row: dict) -> dict:
     """Return JSON-safe channel metadata from a PostgreSQL row."""
     return {**row, 'connect_channel_id': str(row['connect_channel_id'])}
@@ -325,11 +344,14 @@ def diagnostics(profile: dict) -> dict:
 
 
 
-def deactivate_stale_webhooks(profile: dict, webhook_ids: list[str], *, confirmed: bool = False) -> dict:
+def deactivate_stale_webhooks(profile: dict, webhook_ids: list[str], *, confirmed: bool = False,
+                              platform_admin: bool = False) -> dict:
     """Explicit, tenant-owned deactivation only; never delete delivery history.
 
     No automatic invocation. The owner must separately confirm exact IDs.
     """
+    if not platform_admin:
+        raise TenantPlatformError('Bu əməliyyat yalnız platform administratoru üçündür.')
     _owner(profile)
     ids = [str(value) for value in webhook_ids]
     if not confirmed or not ids or len(ids) > 20 or len(ids) != len(set(ids)):
@@ -381,6 +403,12 @@ def deactivate_stale_webhooks(profile: dict, webhook_ids: list[str], *, confirme
 
 def configure(profile: dict, payload: dict, callback_url: str) -> dict:
     _owner(profile)
+    with _tenant_connect_lock(str(profile['tenant_id'])):
+        return _configure_locked(profile, payload, callback_url)
+
+
+def _configure_locked(profile: dict, payload: dict, callback_url: str) -> dict:
+    _owner(profile)
     tenant = str(profile['tenant_id'])
     key = str(payload.get('api_key') or '').strip()
     requested = {str(value) for value in (payload.get('channel_ids') or []) if str(value).strip()}
@@ -389,14 +417,16 @@ def configure(profile: dict, payload: dict, callback_url: str) -> dict:
     remote = _request(key, 'GET', '/v1/channels').get('data', [])
     if not isinstance(remote, list):
         raise TenantPlatformError('Connect kanalları oxunmadı.')
-    selected = [row for row in remote if isinstance(row, dict) and str(row.get('id')) in requested]
-    if len(selected) != len(requested):
+    remote_by_id = {str(row.get('id')): row for row in remote if isinstance(row, dict) and row.get('id')}
+    if not requested.issubset(remote_by_id):
         raise TenantPlatformError('Seçilmiş kanal bu Connect hesabına aid deyil.')
     with _connect() as conn:
         _schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='connect' AND status='connected'", (tenant,))
             row = cur.fetchone()
+            cur.execute('SELECT connect_channel_id FROM saas_connect_channels WHERE tenant_id=%s::uuid AND active=TRUE', (tenant,))
+            already_active = {str(item['connect_channel_id']) for item in cur.fetchall()}
             previous = None
             if row and row.get('secrets'):
                 try:
@@ -406,6 +436,11 @@ def configure(profile: dict, payload: dict, callback_url: str) -> dict:
                     # Connect subscription and create a second permanently
                     # invalid delivery stream.
                     raise TenantPlatformError('Connect webhook saxlanmış açarı oxunmadı.') from None
+    if not already_active.issubset(remote_by_id):
+        raise TenantPlatformError('Mövcud aktiv kanal Connect hesabında təsdiqlənmədi; heç bir kanal dəyişdirilmədi.')
+    # Saving an additional number is additive. Existing numbers are removed
+    # only through the explicit per-channel disconnect action.
+    selected = [remote_by_id[channel_id] for channel_id in sorted(requested | already_active)]
 
     # Reusing the existing tenant-owned subscription preserves the secret that
     # Connect already has. Creating a replacement on every settings save leaves
@@ -443,8 +478,7 @@ def configure(profile: dict, payload: dict, callback_url: str) -> dict:
             cur.execute('''INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain,secrets,metadata,connected_at)
               VALUES(%s::uuid,'connect','connected',%s,%s,%s::jsonb,now())
               ON CONFLICT(tenant_id,provider) DO UPDATE SET status='connected',account_domain=EXCLUDED.account_domain,secrets=EXCLUDED.secrets,metadata=EXCLUDED.metadata,connected_at=now(),updated_at=now()''',
-                        (tenant, CONNECT_URL, encrypted, _json({'webhook_id': hook.get('id'), 'channel_ids': sorted(requested)})))
-            cur.execute('UPDATE saas_connect_channels SET active=FALSE,updated_at=now() WHERE tenant_id=%s::uuid', (tenant,))
+                        (tenant, CONNECT_URL, encrypted, _json({'webhook_id': hook.get('id'), 'channel_ids': sorted(requested | already_active)})))
             for channel in selected:
                 cur.execute('''INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name,status,active)
                   VALUES(%s::uuid,%s::uuid,%s,%s,TRUE) ON CONFLICT(tenant_id,connect_channel_id) DO UPDATE
@@ -464,23 +498,95 @@ def configure(profile: dict, payload: dict, callback_url: str) -> dict:
 
 def channels(profile: dict, api_key: str) -> list[dict]:
     _owner(profile)
-    rows = _request(str(api_key or '').strip(), 'GET', '/v1/channels').get('data', [])
+    key = str(api_key or '').strip()
+    if not key:
+        key = str(_stored_connect_credentials(profile)['api_key'])
+    rows = _request(key, 'GET', '/v1/channels').get('data', [])
     if not isinstance(rows, list):
         raise TenantPlatformError('Connect kanalları oxunmadı.')
-    return [{'id': str(row.get('id') or ''), 'name': str(row.get('name') or ''), 'status': str(row.get('status') or '')}
+    tenant = str(profile['tenant_id'])
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute('SELECT connect_channel_id FROM saas_connect_channels WHERE tenant_id=%s::uuid', (tenant,))
+            linked_ids = {str(row['connect_channel_id']) for row in cur.fetchall()}
+            cur.execute('SELECT connect_channel_id FROM saas_connect_channels WHERE tenant_id=%s::uuid AND active=TRUE', (tenant,))
+            active_ids = {str(row['connect_channel_id']) for row in cur.fetchall()}
+    return [{'id': str(row.get('id') or ''), 'name': str(row.get('name') or ''), 'status': str(row.get('status') or ''),
+             'active': str(row.get('id') or '') in active_ids, 'linked': str(row.get('id') or '') in linked_ids}
             for row in rows if isinstance(row, dict) and row.get('id')]
 
 
 def disconnect(profile: dict) -> dict:
     _owner(profile)
+    raise TenantPlatformError('Hər WhatsApp nömrəsini ayrıca ayırın; şirkət bağlantısı və webhook saxlanılır.')
+
+
+def _stored_connect_credentials(profile: dict) -> dict:
     tenant = str(profile['tenant_id'])
     with _connect() as conn:
-        _schema(conn)
         with conn.cursor() as cur:
-            cur.execute("UPDATE saas_tenant_integrations SET status='not_connected',secrets=NULL,metadata='{}'::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'", (tenant,))
-            cur.execute('UPDATE saas_connect_channels SET active=FALSE,updated_at=now() WHERE tenant_id=%s::uuid', (tenant,))
-        conn.commit()
+            cur.execute("SELECT status,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='connect'", (tenant,))
+            row = cur.fetchone()
+    if not row or row.get('status') != 'connected' or not row.get('secrets'):
+        raise TenantPlatformError('Connect bağlantısı aktiv deyil.')
+    try:
+        credentials = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode())
+    except Exception:
+        raise TenantPlatformError('Connect təhlükəsizlik məlumatı oxunmadı.') from None
+    if not credentials.get('api_key'):
+        raise TenantPlatformError('Connect API açarı saxlanmayıb.')
+    return credentials
+
+
+def disconnect_channel(profile: dict, channel_id: str) -> dict:
+    _owner(profile)
+    with _tenant_connect_lock(str(profile['tenant_id'])):
+        return _disconnect_channel_locked(profile, channel_id)
+
+
+def _disconnect_channel_locked(profile: dict, channel_id: str) -> dict:
+    _owner(profile)
+    if not re.fullmatch(r'[0-9a-fA-F-]{36}', str(channel_id or '')):
+        raise TenantPlatformError('WhatsApp kanal ID-si düzgün deyil.')
+    tenant = str(profile['tenant_id'])
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute('SELECT active FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid', (tenant, channel_id))
+            local = cur.fetchone()
+    if not local:
+        raise TenantPlatformError('WhatsApp kanalı bu şirkətə aid deyil.')
+    if local.get('active'):
+        credentials = _stored_connect_credentials(profile)
+        _request(str(credentials['api_key']), 'POST', '/v1/channels/' + channel_id + '/disconnect')
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute('''UPDATE saas_connect_channels SET active=FALSE,status='disconnected',updated_at=now()
+                               WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid''', (tenant, channel_id))
+            conn.commit()
     return status(profile)
+
+
+def channel_status(profile: dict, channel_id: str, *, reconnect: bool = False,
+                   callback_url: str = '') -> dict:
+    _owner(profile)
+    if not re.fullmatch(r'[0-9a-fA-F-]{36}', str(channel_id or '')):
+        raise TenantPlatformError('WhatsApp kanal ID-si düzgün deyil.')
+    tenant = str(profile['tenant_id'])
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid', (tenant, channel_id))
+            if not cur.fetchone():
+                raise TenantPlatformError('WhatsApp kanalı bu şirkətə aid deyil.')
+    credentials = _stored_connect_credentials(profile)
+    if reconnect:
+        configure(profile, {'api_key': str(credentials['api_key']), 'channel_ids': [channel_id]}, callback_url)
+    current = _request(str(credentials['api_key']), 'GET', '/v1/channels/' + channel_id + '/status')
+    result = {'id': channel_id, 'status': str(current.get('status') or 'unknown'),
+              'phone': str(current.get('phone') or '')}
+    if reconnect and result['status'] != 'connected':
+        qr = _request(str(credentials['api_key']), 'GET', '/v1/channels/' + channel_id + '/qr')
+        result['qr'] = str(qr.get('code') or '')
+    return result
 
 
 def sync_webhook_subscriptions() -> int:
