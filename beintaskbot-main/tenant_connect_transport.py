@@ -267,6 +267,11 @@ def diagnostics(profile: dict) -> dict:
         if isinstance(exc, TenantPlatformError):
             raise
         raise TenantPlatformError('Connect diaqnostikası oxunmadı.') from exc
+    # The encrypted integration record is the only authoritative pointer to
+    # the webhook whose HMAC secret Beintaskbot currently verifies.
+    current_webhook_id = str(credentials.get('webhook_id') or '')
+    if not re.fullmatch(r'[0-9a-fA-F-]{36}', current_webhook_id):
+        current_webhook_id = ''
     hooks = hooks_response.get('data', [])
     if not isinstance(hooks, list):
         raise TenantPlatformError('Connect diaqnostikası oxunmadı.')
@@ -298,6 +303,11 @@ def diagnostics(profile: dict) -> dict:
                               if isinstance(item, dict) and (item.get('deliveredAt') or item.get('createdAt'))), '')
         subscriptions.append({
             'id': webhook_id,
+            'isCurrent': bool(current_webhook_id and webhook_id == current_webhook_id),
+            # A different ID is only a *candidate* for manual review:
+            # other integrations may legitimately own their own hooks.
+            'needsReview': bool(current_webhook_id and webhook_id != current_webhook_id
+                                and hook.get('active')),
             'active': bool(hook.get('active')),
             'url': _diagnostic_url(hook.get('url') or ''),
             'channels': channel_names,
@@ -308,7 +318,10 @@ def diagnostics(profile: dict) -> dict:
             'lastDeliveryAt': str(last_delivery or ''),
             'recentDeliveries': deliveries,
         })
-    return {'connected': True, 'subscriptions': subscriptions}
+    return {'connected': True, 'subscriptions': subscriptions,
+            'currentWebhookId': current_webhook_id,
+            'hasVerifiedCurrentWebhook': bool(current_webhook_id and
+                any(row['isCurrent'] and row['active'] for row in subscriptions))}
 
 
 def configure(profile: dict, payload: dict, callback_url: str) -> dict:
