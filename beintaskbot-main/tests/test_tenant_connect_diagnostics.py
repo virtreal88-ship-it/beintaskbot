@@ -23,7 +23,14 @@ class ConnectDiagnostics(unittest.TestCase):
         cursor.fetchall.return_value = [{'name': 'Support'}]
         responses = {
             '/v1/webhooks': {'data': [{'id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'active': True,
-                                       'url': 'https://user:pass@example.test/hook?token=hidden'}]},
+                                       'url': 'https://user:pass@example.test/hook?token=hidden'},
+                                      {'id': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'active': True,
+                                       'url': 'https://example.test/hook'}]},
+            '/v1/webhooks/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/diagnostics': {
+                'counts': {'pending': 0, 'retrying': 0, 'delivered': 0, 'failed': 5},
+                'knownHttp401Failures': 5, 'http200Count': None,
+            },
+            '/v1/webhooks/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/deliveries': {'data': []},
             '/v1/webhooks/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/diagnostics': {
                 'counts': {'pending': 2, 'retrying': 1, 'delivered': 9, 'failed': 3},
                 'knownHttp401Failures': 3, 'http200Count': None,
@@ -44,12 +51,18 @@ class ConnectDiagnostics(unittest.TestCase):
              mock.patch.object(transport, '_connect', return_value=conn_context), \
              mock.patch.object(transport, '_fernet') as fernet, \
              mock.patch.object(transport, '_request', side_effect=request):
-            fernet.return_value.decrypt.return_value = json.dumps({'api_key': 'server-only-key'}).encode()
+            fernet.return_value.decrypt.return_value = json.dumps({'api_key': 'server-only-key',
+                'webhook_id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}).encode()
             result = transport.diagnostics({'tenant_id': 'tenant-a', 'role': 'admin'})
 
         owner.assert_called_once_with({'tenant_id': 'tenant-a', 'role': 'admin'})
         self.assertEqual([call.args[1] for call in cursor.execute.call_args_list],
                          [('tenant-a',), ('tenant-a',)])
+        self.assertTrue(result['hasVerifiedCurrentWebhook'])
+        self.assertTrue(result['subscriptions'][0]['isCurrent'])
+        self.assertFalse(result['subscriptions'][0]['needsReview'])
+        self.assertFalse(result['subscriptions'][1]['isCurrent'])
+        self.assertTrue(result['subscriptions'][1]['needsReview'])
         self.assertEqual(result['subscriptions'][0]['url'], 'https://example.test/hook')
         self.assertEqual(result['subscriptions'][0]['channels'], ['Support'])
         self.assertEqual(result['subscriptions'][0]['knownHttp401Failures'], 3)
