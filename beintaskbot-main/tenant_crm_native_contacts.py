@@ -1,6 +1,7 @@
 """Tenant-scoped native contact CRUD. No Kommo requests or external side effects."""
 from __future__ import annotations
 import uuid
+import re
 
 from tenant_platform_core import _connect, _ensure_schema
 
@@ -94,3 +95,70 @@ def archive_contact(tenant_id: str, contact_id: str):
             row = cur.fetchone()
         conn.commit()
     return row is not None
+
+
+def upsert_whatsapp_contact(cur, tenant_id: str, channel_id: str, conversation_id: str,
+                            phone: str, display_name: str = '', message_id: str = ''):
+    """Resolve a direct WhatsApp conversation to a tenant-owned native contact.
+
+    Caller must pass a provider-verified personal JID number, never a name or
+    group identifier.  The caller's transaction makes contact and conversation
+    linkage atomic with the durable message receipt.
+    """
+    number = re.sub(r'\D', '', str(phone or ''))
+    if not re.fullmatch(r'[1-9][0-9]{5,18}', number):
+        return None
+    try:
+        channel = str(uuid.UUID(str(channel_id)))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    conversation = str(conversation_id or '').strip()
+    # Require the number to be encoded in an explicit personal JID.  A caller
+    # cannot turn an arbitrary chat ID or group participant name into identity.
+    suffix = next((jid for jid in ('@s.whatsapp.net', '@c.us') if conversation.endswith(jid)), '')
+    if (not suffix
+            or conversation.split('@', 1)[0] != number):
+        return None
+    # Serializes first-contact races, including the same person arriving via
+    # two channels.  Hashing is database-local and exposes no identity.
+    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                (str(tenant_id) + ':wa:' + number,))
+    cur.execute("""SELECT c.id,c.display_name,c.phone,c.email
+        FROM saas_crm_native_contact_identities i
+        JOIN saas_crm_native_contacts c ON c.tenant_id=i.tenant_id AND c.id=i.contact_id
+        WHERE i.tenant_id=%s::uuid AND i.identity_type='whatsapp_phone' AND i.identity_value=%s
+          AND c.archived_at IS NULL FOR UPDATE OF c""", (tenant_id, number))
+    row = cur.fetchone()
+    if row is None:
+        # Adopt a pre-existing contact with the same verified number before
+        # creating a new one. Names are deliberately excluded from matching.
+        cur.execute("""SELECT id,display_name,phone,email FROM saas_crm_native_contacts
+            WHERE tenant_id=%s::uuid AND archived_at IS NULL
+              AND regexp_replace(phone,'[^0-9]','','g')=%s
+            ORDER BY created_at,id LIMIT 1 FOR UPDATE""", (tenant_id, number))
+        row = cur.fetchone()
+    if row is None:
+        name = str(display_name or '').strip()[:180] or number
+        ident = str(uuid.uuid4())
+        cur.execute("""INSERT INTO saas_crm_native_contacts(id,tenant_id,display_name,phone)
+            VALUES(%s::uuid,%s::uuid,%s,%s) RETURNING id,display_name,phone,email""",
+            (ident, tenant_id, name, number))
+        row = cur.fetchone()
+    ident = str(row['id'])
+    cur.execute("""INSERT INTO saas_crm_native_contact_identities
+        (tenant_id,identity_type,identity_value,contact_id)
+        VALUES(%s::uuid,'whatsapp_phone',%s,%s::uuid)
+        ON CONFLICT(tenant_id,identity_type,identity_value) DO NOTHING""", (tenant_id, number, ident))
+    # If an older transaction won the identity race, honor its mapping.
+    cur.execute("""SELECT contact_id FROM saas_crm_native_contact_identities
+        WHERE tenant_id=%s::uuid AND identity_type='whatsapp_phone' AND identity_value=%s""",
+        (tenant_id, number))
+    identity = cur.fetchone()
+    ident = str(identity['contact_id'])
+    cur.execute("""INSERT INTO saas_crm_native_contact_conversations
+        (tenant_id,provider,channel_id,conversation_id,contact_id,first_message_id)
+        VALUES(%s::uuid,'connect',%s::uuid,%s,%s::uuid,%s)
+        ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE
+        SET contact_id=EXCLUDED.contact_id""",
+        (tenant_id, channel, conversation, ident, str(message_id or '')[:240]))
+    return ident

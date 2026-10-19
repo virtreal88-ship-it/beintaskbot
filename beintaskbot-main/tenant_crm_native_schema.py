@@ -15,6 +15,29 @@ def migrate_native_contacts(cur):
         ON saas_crm_native_contacts(tenant_id, updated_at DESC)""")
     cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS saas_crm_native_contacts_tenant_id_idx
         ON saas_crm_native_contacts(tenant_id,id)""")
+    # A provider identity is distinct from a display name.  Keep a tenant
+    # scoped identity map so the same verified WhatsApp number across channels
+    # resolves to one native contact without merging on names.
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_crm_native_contact_identities (
+        tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+        identity_type TEXT NOT NULL,
+        identity_value TEXT NOT NULL,
+        contact_id UUID NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (tenant_id,identity_type,identity_value),
+        FOREIGN KEY (tenant_id,contact_id) REFERENCES saas_crm_native_contacts(tenant_id,id) ON DELETE CASCADE
+    )""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_crm_native_contact_conversations (
+        tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        channel_id UUID NOT NULL,
+        conversation_id TEXT NOT NULL,
+        contact_id UUID NOT NULL,
+        first_message_id TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (tenant_id,provider,channel_id,conversation_id),
+        FOREIGN KEY (tenant_id,contact_id) REFERENCES saas_crm_native_contacts(tenant_id,id) ON DELETE CASCADE
+    )""")
     cur.execute("""CREATE TABLE IF NOT EXISTS saas_crm_native_deals (
         id UUID PRIMARY KEY,
         tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
