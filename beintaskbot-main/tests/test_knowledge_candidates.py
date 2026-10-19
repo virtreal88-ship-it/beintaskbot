@@ -323,8 +323,9 @@ def test_empty_model_result_completes_without_persistence(ready):
 
 def test_knowledge_extraction_defaults_to_az_and_preserves_explicit_languages():
     assert policy.language(None,{})=='az'
-    assert policy.language(None,{'language':'ru'})=='ru'
+    assert policy.language(None,{'language':'en','language_code':'ru'})=='az'
     assert policy.language('en',{})=='en'
+    assert policy.language('ru',{'language':'az'})=='ru'
 
 
 def test_remote_case_without_employee_actions_cannot_publish():
@@ -344,3 +345,18 @@ def test_informational_case_does_not_require_technical_resolution_steps():
     value['source_message_ids']=ids;value['outcome']['message_ids']=[ids[-1]]
     normalized=policy.card(value,ids)
     assert policy.approval_reason(normalized) is None
+
+
+def test_azerbaijani_action_summary_keeps_exact_original_quote_as_evidence():
+    message_id=str(uuid.UUID(int=77))
+    item={'messages':[{'ref':'m1','role':'operator','text':'Routeri yenidən başladım'}],
+          'refs':[{'id':message_id}]}
+    value=model_card(refs=('m1',),confirmed=False)
+    value.update(resolution_method='remote',operator_actions=['Əməkdaş routeri yenidən başlatdı'],
+        operator_action_evidence=[{'action_index':0,'message_ref':'m1','quote':'Routeri yenidən başladım'}])
+    parsed=service.parse(json.dumps({'cards':[value]},ensure_ascii=False),item)[0]
+    assert parsed['operator_actions']==['Əməkdaş routeri yenidən başlatdı']
+    assert parsed['operator_action_evidence']==[{'action_index':0,'message_id':message_id,'quote':'Routeri yenidən başladım'}]
+    value['operator_action_evidence'][0]['quote']='Invented quote'
+    parsed=service.parse(json.dumps({'cards':[value]},ensure_ascii=False),item)[0]
+    assert parsed['operator_actions']==[] and parsed['operator_action_evidence']==[]

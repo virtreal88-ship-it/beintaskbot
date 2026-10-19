@@ -54,6 +54,40 @@ def test_extraction_language_passed_to_provider_and_receipt(ready,lang):
     assert result['request']['route']['language']==lang
 
 
+def test_campaign_style_extraction_defaults_to_az_even_for_non_az_profile(ready):
+    d,generation,data=ready
+    profile={**PROFILE,'language':'en','language_code':'ru'}
+    result=service.analyze(profile,{**data,'request_id':str(uuid.uuid4())})
+    assert generation.call_args.kwargs['extra_context']['output_language']=='az'
+    assert result['request']['route']['language']=='az'
+
+
+def test_old_case_translation_covers_all_explanatory_fields_and_preserves_evidence(ready):
+    d,generation,data=ready;value=candidate(ready)
+    value=store.mutate(PROFILE,value['id'],{'expected_version':1,'resolution_method':'phone',
+        'operator_actions':['Employee restarted the router'],'resolution_steps':['Restart the router']})['candidate']
+    original=store.detail(PROFILE,value['id'])['candidate']
+    generation.return_value=(json.dumps({'title':'Bağlantı problemi','symptoms':['Tətbiqdə xəta görünür'],
+        'cause_text':'Router bağlantısı kəsilmişdi','resolution_steps':['Routeri yenidən başladın'],
+        'operator_actions':['Əməkdaş routeri yenidən başlatdı'],'outcome_text':'Nəticə yazışmada təsdiqlənməyib'}),{'total_tokens':100})
+    result=improve.improve(PROFILE,value['id'],payload(value,mode='translate',language='az'))
+    proposal=result['proposal']
+    assert result['mode']=='translate' and result['language']=='az'
+    assert proposal['title']=='Bağlantı problemi'
+    assert proposal['cause']['status']==original['cause']['status']
+    assert proposal['outcome']['status']==original['outcome']['status']
+    assert proposal['outcome']['message_ids']==original['outcome']['message_ids']
+    assert proposal['source_message_ids']==original['source_message_ids']
+    assert proposal['resolution_steps']==['Routeri yenidən başladın']
+    assert proposal['operator_actions']==['Əməkdaş routeri yenidən başlatdı']
+    assert store.detail(PROFILE,value['id'])['candidate']==original
+    saved=store.mutate(PROFILE,value['id'],{'expected_version':2,**proposal})['candidate']
+    assert saved['operator_actions']==['Əməkdaş routeri yenidən başlatdı']
+    assert saved['source_message_ids']==original['source_message_ids']
+    assert saved['outcome']['message_ids']==original['outcome']['message_ids']
+    assert generation.call_args.kwargs['instructions'].find('Translate every explanatory support-case field')>=0
+
+
 @pytest.mark.parametrize('lang',['ru','az','en'])
 def test_improve_proposal_only_explicit_save_and_idempotency(ready,lang):
     d,generation,data=ready;value=candidate(ready)
