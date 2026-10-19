@@ -320,3 +320,27 @@ def test_empty_model_result_completes_without_persistence(ready):
     assert result['request']['status']=='completed' and result['candidates']==[]
     assert service.analyze(PROFILE,data)['candidates']==[]
     generation.assert_called_once()
+
+def test_knowledge_extraction_defaults_to_az_and_preserves_explicit_languages():
+    assert policy.language(None,{})=='az'
+    assert policy.language(None,{'language':'ru'})=='ru'
+    assert policy.language('en',{})=='en'
+
+
+def test_remote_case_without_employee_actions_cannot_publish():
+    value=model_card(confirmed=True)
+    value['resolution_method']='remote';value['operator_actions']=[]
+    ids=[str(uuid.UUID(int=i)) for i in (1,2,3)]
+    value['source_message_ids']=ids;value['outcome']['message_ids']=[ids[-1]]
+    normalized=policy.card(value,ids)
+    assert policy.approval_reason(normalized)=='operator_actions_required'
+    assert normalized['resolution_steps']
+
+
+def test_informational_case_does_not_require_technical_resolution_steps():
+    value=model_card(confirmed=True)
+    value['case_kind']='informational';value['resolution_steps']=[]
+    ids=[str(uuid.UUID(int=i)) for i in (1,2,3)]
+    value['source_message_ids']=ids;value['outcome']['message_ids']=[ids[-1]]
+    normalized=policy.card(value,ids)
+    assert policy.approval_reason(normalized) is None
