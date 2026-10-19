@@ -23,7 +23,7 @@ def public_job(row: dict) -> dict:
 
 
 def enqueue(tenant_id: str, resource: str, *, force_full: bool = False) -> dict:
-    if resource not in {'leads', 'tasks'}:
+    if resource not in {'leads', 'tasks', 'contacts'}:
         raise ValueError('Invalid CRM resource')
     with _connect() as conn:
         ensure_sync_schema(conn)
@@ -58,6 +58,36 @@ def enqueue(tenant_id: str, resource: str, *, force_full: bool = False) -> dict:
             result = public_job(cur.fetchone())
         conn.commit()
     return result
+
+
+def enqueue_enabled_imports() -> int:
+    """Queue opted-in Kommo deltas only; first window starts at opt-in time."""
+    queued=0
+    with _connect() as conn:
+        ensure_sync_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''SELECT s.tenant_id,s.entity_type,s.enabled_since,i.account_domain,i.connected_at
+              FROM saas_crm_provider_settings s JOIN saas_tenant_integrations i USING(tenant_id)
+              WHERE s.provider='kommo' AND s.sync_direction IN ('from_external','bidirectional')
+                AND s.enabled_since IS NOT NULL AND i.provider='kommo' AND i.status='connected'
+                AND s.entity_type IN ('contact','deal') ORDER BY s.tenant_id,s.entity_type''')
+            for p in cur.fetchall():
+                tenant=str(p['tenant_id']);resource='contacts' if p['entity_type']=='contact' else 'leads'
+                connection=str(p['account_domain'])+':'+str(p['connected_at'])
+                cur.execute('SELECT * FROM saas_crm_sync_jobs WHERE tenant_id=%s::uuid AND resource=%s FOR UPDATE',(tenant,resource));old=cur.fetchone()
+                if old and old['status'] in {'queued','running'} and old['connection_id']==connection:continue
+                since=int(p['enabled_since'].timestamp());end=int(time.time())-30
+                previous=int(old.get('watermark') or 0) if old and old['connection_id']==connection else 0
+                start=max(0,(previous or since)-300)
+                cur.execute('''INSERT INTO saas_crm_sync_jobs(tenant_id,resource,run_id,connection_id,status,window_from,window_to,watermark,last_full_sync)
+                  VALUES(%s::uuid,%s,%s::uuid,%s,'queued',%s,%s,%s,%s)
+                  ON CONFLICT(tenant_id,resource) DO UPDATE SET run_id=EXCLUDED.run_id,connection_id=EXCLUDED.connection_id,
+                    status='queued',phase='active',next_page=1,last_record_id=0,window_from=EXCLUDED.window_from,
+                    window_to=EXCLUDED.window_to,watermark=EXCLUDED.watermark,last_full_sync=EXCLUDED.last_full_sync,
+                    records_saved=0,attempts=0,next_attempt_at=now(),started_at=now(),updated_at=now(),finished_at=NULL''',
+                  (tenant,resource,str(uuid.uuid4()),connection,start,end,previous or start,end));queued+=1
+        conn.commit()
+    return queued
 
 
 def sync_status(tenant_id: str, resources: list[str]) -> list[dict]:
@@ -122,7 +152,7 @@ class SyncPageStore:
         tenant, resource = str(self.row['tenant_id']), self.row['resource']
         deleted = resource == 'leads' and self.row.get('phase') == 'deleted'
         rows = ([(tenant, int(item['kommo_lead_id']), item['deleted_at']) for item in snapshots]
-                if deleted else (deal_rows if resource == 'leads' else task_rows)(tenant, snapshots, json.dumps))
+                if deleted else ([item['raw'] for item in snapshots] if resource=='contacts' else (deal_rows if resource == 'leads' else task_rows)(tenant, snapshots, json.dumps)))
         switch_phase = done and resource == 'leads' and not deleted
         done = done and not switch_phase
         with self.conn.cursor() as cur:
@@ -151,7 +181,13 @@ class SyncPageStore:
                         saas_crm_deals.source_updated_at<=EXCLUDED.deleted_at)
                     AND (saas_crm_deals.deleted_at IS NULL OR
                         saas_crm_deals.deleted_at<=EXCLUDED.deleted_at)''', rows)
+            elif rows and resource == 'contacts':
+                from tenant_crm_sync_import import import_contacts
+                import_contacts(cur,tenant,rows)
             elif rows and resource == 'leads':
+                from tenant_crm_sync_import import import_deals
+                raw_rows=[item['raw'] for item in snapshots if item.get('raw')]
+                if raw_rows:import_deals(cur,tenant,raw_rows)
                 # CRM refresh must not erase chat previews or their timestamps.
                 cur.executemany('''INSERT INTO saas_crm_deals
                     (tenant_id,kommo_lead_id,pipeline_id,status_id,stage_name,name,contact_name,phone,
@@ -184,7 +220,7 @@ class SyncPageStore:
                 ,last_full_sync=CASE WHEN %s AND window_from=0 AND window_to>0 THEN window_to ELSE last_full_sync END
                 WHERE tenant_id=%s::uuid AND resource=%s AND run_id=%s::uuid''',
                 ('done' if done else 'queued',
-                 max((int(item[1]) for item in rows),
+                 max((int(item.get('id') or 0) for item in rows) if resource=='contacts' else (int(item[1]) for item in rows),
                      default=int(self.row.get('last_record_id') or 0)),
                  len(rows), done, done, done, tenant, resource, str(self.row['run_id'])))
             if done:

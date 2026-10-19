@@ -66,6 +66,12 @@ def handler(member_from_request, origin, logger):
                     return web.json_response({'success': False, 'error': 'method_not_allowed'}, status=405)
                 if result is None or result is False:
                     return web.json_response({'success': False, 'error': 'not_found'}, status=404)
+                if request.method=='POST' and (not contact_id or body.get('action')=='update'):
+                    try:
+                        from tenant_crm_sync_outbox import enqueue_change
+                        await asyncio.to_thread(enqueue_change,tenant_id,'contact',str(result['id']))
+                    except Exception:
+                        logger.warning('CRM contact sync enqueue unavailable: tenant=%s',tenant_id)
             return web.json_response({'success': True, 'data': _jsonable(result)},
                                      headers={'Cache-Control': 'no-store'})
         except TenantLinearError:

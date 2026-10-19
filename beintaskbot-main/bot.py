@@ -225,8 +225,9 @@ from legacy_employee_notifications import (
     notification_event_catalog, normalize_employee_notifications,
 )
 from legacy_roster_cleanup import remove_retired_employee_access as _remove_retired_employee_access
-from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
+from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status, enqueue_enabled_imports
 from tenant_crm_sync_worker import run_sync_batch
+from tenant_crm_sync_policy_api import handler as tenant_crm_sync_policy_handler
 from tenant_push import (
     MAX_DEVICES as TENANT_PUSH_MAX_DEVICES,
     register_device as register_tenant_push_device, list_devices as list_tenant_push_devices,
@@ -16827,7 +16828,11 @@ async def check_tenant_hot_order_notifications(context: ContextTypes.DEFAULT_TYP
 
 async def check_tenant_crm_sync(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
+        await asyncio.to_thread(enqueue_enabled_imports)
         await run_sync_batch(_tenant_kommo_request, logger)
+        from tenant_crm_sync_outbox import run_batch as run_crm_sync_outbox
+        from tenant_bein_integration import credential as bein_crm_credential
+        await run_crm_sync_outbox(_tenant_kommo_request,bein_crm_credential,logger)
     except Exception:
         logger.error('Tenant CRM background sync unavailable')
 
@@ -18697,6 +18702,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_post("/api/platform/integrations/beinsystems", bein_api)
     app_web.router.add_get("/api/platform/crm/deals", deal_api["deals"])
     app_web.router.add_get('/api/platform/crm/sync', deal_api["sync_status"])
+    app_web.router.add_route('*','/api/platform/crm/external-sync',tenant_crm_sync_policy_handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,logger))
     app_web.router.add_get("/api/platform/crm/deal", deal_api["deal"])
     app_web.router.add_get("/api/platform/crm/chat", chat_api["chat"])
     app_web.router.add_post('/api/platform/crm/chat/import-history', chat_import_api)

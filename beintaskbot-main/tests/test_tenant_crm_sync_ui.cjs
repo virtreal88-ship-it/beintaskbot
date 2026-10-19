@@ -7,13 +7,15 @@ assert(app.includes('/assets/tenant-crm-sync.js'));
 assert(app.includes('tenant-crm-sync-complete'));
 assert(app.includes('loadDeals(false)'));
 assert(app.includes('loadTasks(false)'));
+assert(app.includes('externalCrmSyncPanel'));
+assert(app.includes('Standart olaraq söndürülüb'));
 
 function setup() {
   const listeners = {}, events = [], boxes = [], timers = new Map();
   let next = 0, responses = [];
   const document = {
     hidden: false,
-    getElementById() { return {after(box) { boxes.push(box); }}; },
+    getElementById(id) { if (id==='externalCrmSyncPanel'||id==='externalCrmSyncSave') return null; return {after(box) { boxes.push(box); }}; },
     createElement() { return {textContent:'', classList:{toggle(){}}, setAttribute(){}}; },
     addEventListener(name, handler) { listeners[name] = handler; },
     dispatchEvent(event) { events.push(event); }

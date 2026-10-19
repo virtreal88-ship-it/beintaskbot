@@ -46,7 +46,7 @@ async def sync_one_page(store: SyncPageStore, request: KommoRead) -> None:
         raise ValueError('CRM page did not advance in ID order')
     if resource == 'leads' and not deleted:
         items = await enrich_contacts(tenant, items, request)
-    snapshots = deleted_page(items) if deleted else normalize_page(resource, items, stage_names)
+    snapshots = deleted_page(items) if deleted else ([{'raw':item} for item in items] if resource=='contacts' else normalize_page(resource, items, stage_names))
     # A full page always probes another page, regardless of HAL links. Never
     # follow a provider-supplied URL (host and credentials stay server-owned).
     await store_call(store.save_page, snapshots, done=len(items) < PAGE_SIZE)

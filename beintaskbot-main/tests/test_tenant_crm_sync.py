@@ -237,7 +237,8 @@ class SchemaTests(unittest.TestCase):
         self.assertIn('PRIMARY KEY (tenant_id, resource)', sql)
         self.assertIn('REFERENCES saas_tenants', sql)
         self.assertIn('CREATE INDEX IF NOT EXISTS', sql)
-        self.assertNotIn('DROP ', sql)
+        self.assertIn('DROP CONSTRAINT IF EXISTS saas_crm_sync_jobs_resource_check', sql)
+        self.assertIn("resource IN ('leads','tasks','contacts')", sql)
 
     def test_schema_commit_failure_does_not_mark_migration_ready(self):
         module = load_module('tenant_crm_sync_schema', {'_ensure_schema':Mock()}, {'tenant_platform'})
