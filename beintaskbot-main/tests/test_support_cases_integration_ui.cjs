@@ -1,6 +1,6 @@
 const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const fs=require('fs'),assert=require('node:assert/strict');
-const dom=new JSDOM('<div id="supportCases"></div><b id="supportCasesPending"></b>',{url:'https://example.test/app',runScripts:'outside-only'});
+const dom=new JSDOM('<div id="supportCases"></div><b id="supportCasesPending"></b>',{url:'https://example.test/app?site_lang=az',runScripts:'outside-only'});
 const w=dom.window,calls=[];let page=0;
 w.tenantProfileSnapshot={member:{tenant_id:'tenant-a',telegram_id:7,role:'owner'}};
 w.fetch=async(url,opt={})=>{calls.push({url,opt});let result={};if(url.includes('/ai/channels')){const q=new URL(url,'https://example.test').searchParams;if(q.get('expected_tenant_id')!=='tenant-a'||q.get('expected_user_id')!=='7')return {ok:false,status:409,json:async()=>({success:false,error_code:'identity_changed'})};}

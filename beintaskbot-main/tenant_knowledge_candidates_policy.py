@@ -6,15 +6,14 @@ MAX_CONTEXT=12000
 MAX_TOKENS=16000
 MAX_CARDS=5
 BASE_FIELDS={'title','symptoms','cause','resolution_steps','outcome','source_message_ids','product','product_version'}
-FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','operator_action_evidence','case_kind','content_language','clarification_note'}
+FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','operator_action_evidence','case_kind','content_language','clarification_note','work_status','start_message_id','end_message_id','case_relation'}
 
 def language(value=None,profile=None):
-    # The extraction language belongs to the request, not the employee profile.
-    # Campaign workers have no interactive locale selection, so their default
-    # must stay Azerbaijani even when the campaign creator uses another locale.
-    value=value or 'az'
-    if value not in {'ru','az','en'}: raise TenantLinearError('Язык: ru, az или en.')
-    return value
+    # AI-created case content has a fixed Azerbaijani language contract. Keep
+    # accepting legacy RU/EN request values, but never let UI locale change the
+    # generated case language. Staff edits remain unrestricted in card policy.
+    if value not in (None, '', 'ru', 'az', 'en'): raise TenantLinearError('Язык: ru, az или en.')
+    return 'az'
 
 
 def redact(text,names=()):
@@ -49,6 +48,7 @@ def text(value,limit,required=False):
 
 
 def card(data,allowed_ids):
+    allowed_order=list(allowed_ids);allowed_set=set(allowed_order)
     if not isinstance(data,dict) or not BASE_FIELDS<=set(data) or set(data)-FIELDS: raise TenantLinearError('Некорректная структура карточки.')
     method=data.get('resolution_method','unknown');kind=data.get('case_kind','technical')
     actions=data.get('operator_actions',[])
@@ -57,9 +57,13 @@ def card(data,allowed_ids):
     content_language=data.get('content_language','az')
     if not isinstance(content_language,str) or content_language not in {'ru','az','en'}: raise TenantLinearError('Язык карточки: ru, az или en.')
     clarification_note=data.get('clarification_note','')
+    work_status=data.get('work_status','unknown')
+    case_relation=data.get('case_relation','unknown')
+    if case_relation not in {'new_request','continuation','recurrence','new_issue','unknown'}: raise TenantLinearError('Некорректный тип связи с обращением.')
+    if work_status not in {'resolved','unresolved','no_response','awaiting_information','in_progress','unknown'}: raise TenantLinearError('Некорректный результат обращения.')
     if not isinstance(clarification_note,str): raise TenantLinearError('Комментарий уточнения должен быть текстом.')
     result={'resolution_method':method,'case_kind':kind,'operator_actions':[text(v,800,True) for v in actions],'content_language':content_language,
-      'clarification_note':text(clarification_note,2000)}
+      'clarification_note':text(clarification_note,2000),'work_status':work_status,'case_relation':case_relation}
     result.update({key:text(data[key],180 if key=='title' else 120, key=='title') for key in ('title','product','product_version')})
     for key in ('symptoms','resolution_steps'):
         values=data[key]
@@ -72,10 +76,14 @@ def card(data,allowed_ids):
     def ids(values):
         if not isinstance(values,list) or len(values)>MAX_MESSAGES: raise TenantLinearError('Некорректные ссылки на сообщения.')
         normalized=list(dict.fromkeys(identifier(v) for v in values))
-        if set(normalized)-set(allowed_ids): raise TenantLinearError('Сообщение недоступно в выбранном фрагменте.',403)
+        if set(normalized)-allowed_set: raise TenantLinearError('Сообщение недоступно в выбранном фрагменте.',403)
         return normalized
     result['source_message_ids']=ids(data['source_message_ids'])
     if not result['source_message_ids']: raise TenantLinearError('Укажите исходные сообщения.')
+    start=identifier(data.get('start_message_id',result['source_message_ids'][0]));end=identifier(data.get('end_message_id',result['source_message_ids'][-1]))
+    if start not in result['source_message_ids'] or end not in result['source_message_ids']: raise TenantLinearError('Границы обращения должны входить в исходные сообщения.',403)
+    if allowed_order.index(start)>allowed_order.index(end): raise TenantLinearError('Начальное сообщение должно предшествовать конечному.')
+    result['start_message_id']=start;result['end_message_id']=end
     evidence=data.get('operator_action_evidence',[])
     if not isinstance(evidence,list) or len(evidence)>10: raise TenantLinearError('Некорректные подтверждения действий сотрудника.')
     normalized_evidence=[]
@@ -120,6 +128,7 @@ def period(data,required=False):
 
 def approval_reason(value):
     if value['outcome']['status']!='confirmed': return 'confirmation_required'
+    if value.get('case_kind','technical')=='technical' and value.get('work_status','unknown')!='resolved': return 'work_status_required' if value.get('work_status','unknown')=='unknown' else 'work_not_resolved'
     if value.get('resolution_method') in {'remote','phone'} and not value.get('operator_actions'): return 'operator_actions_required'
     if value.get('case_kind','technical')=='technical' and not value['resolution_steps']: return 'solution_required'
     return None

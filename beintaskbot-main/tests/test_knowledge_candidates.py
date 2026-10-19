@@ -7,6 +7,7 @@ from test_tenant_support_inbox import database,db,A,B,CA,CB,AGENT,PROFILE,seed_j
 import tenant_knowledge_candidates_store as store
 import tenant_knowledge_candidates_service as service
 import tenant_knowledge_candidates_policy as policy
+import tenant_knowledge_live_queue as live
 import tenant_ai_agents_store as agents
 import tenant_ai_agent_run_store as runs
 from tenant_linear_policy import TenantLinearError
@@ -17,7 +18,7 @@ EXPERT=str(uuid.UUID(int=401));GROUP='120363000000000@g.us'
 def model_card(refs=('m1','m2','m3'),confirmed=True,title='Нет связи'):
     return {'title':title,'symptoms':['Синхронизация остановилась'],'cause':{'status':'suspected','text':'Соединение недоступно'},
         'resolution_steps':['Проверить соединение','Повторить синхронизацию'],'outcome':{'status':'confirmed' if confirmed else 'unconfirmed','text':'Клиент подтвердил результат' if confirmed else 'Нужна проверка','message_ids':[refs[-1]]},
-        'source_message_ids':list(refs),'product':'Bein','product_version':'2.1'}
+        'source_message_ids':list(refs),'product':'Bein','product_version':'2.1','clarification_note':'','case_relation':'new_request','work_status':'resolved' if confirmed else 'unresolved'}
 
 @pytest.fixture
 def ready(db,monkeypatch):
@@ -212,6 +213,42 @@ def test_extraction_daily_cap_and_concurrency(ready):
     with pytest.raises(TenantLinearError,match='10 в сутки'):service.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4())})
     generation.assert_not_called()
 
+def test_live_queue_is_idempotent_and_channel_scoped(ready,monkeypatch):
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
+    db,generation,data=ready
+    live.create_schema(db)
+    first=str(uuid.UUID(int=9901));second=str(uuid.UUID(int=9902))
+    with db.cursor() as cur:
+        live.enqueue(cur,A,CA,'client',41,first,actor_id=11)
+        live.enqueue(cur,A,CA,'client',41,first,actor_id=11)
+    db.commit()
+    rows=db.execute('SELECT channel_id::text AS channel_id,generation,last_message_id::text AS last_message_id FROM saas_knowledge_live_queue WHERE tenant_id=%s::uuid',(A,))
+    assert len(rows)==1 and rows[0]['generation']==1 and rows[0]['last_message_id']==first
+    with db.cursor() as cur:
+        live.enqueue(cur,A,CA,'client',41,second,actor_id=11)
+        live.enqueue(cur,A,CB,'client',41,first,actor_id=11)
+    db.commit()
+    rows=db.execute('SELECT channel_id::text AS channel_id,generation,last_message_id::text AS last_message_id FROM saas_knowledge_live_queue WHERE tenant_id=%s::uuid ORDER BY channel_id',(A,))
+    assert len(rows)==2
+    assert rows[0]['generation']==2 and rows[0]['last_message_id']==second
+    assert rows[1]['channel_id']==CB and rows[1]['generation']==1
+    assert generation.call_count==0
+
+def test_live_queue_obeys_company_ai_emergency_stop(ready,monkeypatch):
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
+    db,generation,data=ready
+    live.create_schema(db)
+    with db.cursor() as cur:live.enqueue(cur,A,CA,'client',41,str(uuid.UUID(int=9910)),actor_id=11)
+    db.execute("UPDATE saas_knowledge_live_queue SET next_attempt_at=now()-interval '1 second' WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_agent_settings SET emergency_stop=TRUE WHERE tenant_id=%s::uuid",(A,));db.commit()
+    monkeypatch.setattr(live,'_connect',lambda:db)
+    assert live.claim() is None
+    db.execute("UPDATE saas_ai_agent_settings SET emergency_stop=FALSE WHERE tenant_id=%s::uuid",(A,));db.commit()
+    claimed=live.claim()
+    assert claimed and claimed['state']=='pending' and claimed['reviewer_id']==11
+    assert db.execute("SELECT state FROM saas_knowledge_live_queue WHERE tenant_id=%s::uuid",(A,))[0]['state']=='running'
+    assert generation.call_count==0
+
 def test_deactivate_published_source_stops_agent_retrieval(ready):
     db,generation,data=ready;value=candidate(ready)
     result=store.mutate(PROFILE,value['id'],{'expected_version':1,'agent_ids':[AGENT]},'approve')['candidate']
@@ -324,8 +361,27 @@ def test_empty_model_result_completes_without_persistence(ready):
 def test_knowledge_extraction_defaults_to_az_and_preserves_explicit_languages():
     assert policy.language(None,{})=='az'
     assert policy.language(None,{'language':'en','language_code':'ru'})=='az'
-    assert policy.language('en',{})=='en'
-    assert policy.language('ru',{'language':'az'})=='ru'
+    assert policy.language('en',{})=='az'
+    assert policy.language('ru',{'language':'az'})=='az'
+    assert policy.language('az',{})=='az'
+
+
+def test_ai_generation_language_is_always_azerbaijani_even_for_ru_en_interface():
+    assert [policy.language(value,{}) for value in ('ru','az','en',None)]==['az','az','az','az']
+    assert 'Azerbaijani (AZ)' in service.PROMPT
+
+
+def test_work_status_is_separate_from_confirmation_and_gates_publication():
+    value=model_card(confirmed=True);ids=[str(uuid.UUID(int=i)) for i in (1,2,3)]
+    value['source_message_ids']=ids;value['outcome']['message_ids']=[ids[-1]]
+    value['work_status']='unresolved'
+    normalized=policy.card(value,ids)
+    assert normalized['outcome']['status']=='confirmed'
+    assert policy.approval_reason(normalized)=='work_not_resolved'
+    value['work_status']='unknown'
+    assert policy.approval_reason(policy.card(value,ids))=='work_status_required'
+    value['work_status']='resolved'
+    assert policy.approval_reason(policy.card(value,ids)) is None
 
 
 def test_card_content_language_is_persistable_and_validated():
@@ -344,6 +400,30 @@ def test_legacy_card_language_uses_extraction_then_saved_az_is_returned(ready):
     saved=store.mutate(PROFILE,value['id'],{'expected_version':1,'content_language':'az'})['candidate']
     assert saved['content_language']=='az'
     assert store.listing(PROFILE,{'limit':25})['candidates'][0]['content_language']=='az'
+
+
+def test_model_cannot_override_azerbaijani_content_language_marker():
+    ids=[str(uuid.UUID(int=i)) for i in (31,32,33)]
+    value=model_card(refs=('m1','m2','m3'),confirmed=False)
+    value['content_language']='en'
+    item={'messages':[{'ref':f'm{i+1}','role':'customer','text':'source'} for i in range(3)],'refs':[{'id':message_id} for message_id in ids]}
+    parsed=service.parse(json.dumps({'cards':[value]},ensure_ascii=False),item)[0]
+    assert parsed['content_language']=='az'
+    assert parsed['source_message_ids']==ids
+    assert parsed['start_message_id']==ids[0] and parsed['end_message_id']==ids[-1]
+    assert parsed['case_relation']=='new_request'
+
+
+def test_model_message_boundaries_are_mapped_and_must_be_in_selected_source_range():
+    ids=[str(uuid.UUID(int=i)) for i in (41,42,43)]
+    value=model_card(refs=('m1','m2','m3'),confirmed=False)
+    value.update(start_message_ref='m2',end_message_ref='m3',case_relation='recurrence')
+    item={'messages':[{'ref':f'm{i+1}','role':'customer','text':'source'} for i in range(3)],'refs':[{'id':message_id} for message_id in ids]}
+    parsed=service.parse(json.dumps({'cards':[value]},ensure_ascii=False),item)[0]
+    assert parsed['start_message_id']==ids[1] and parsed['end_message_id']==ids[2]
+    assert parsed['case_relation']=='recurrence'
+    value['start_message_ref']='m3';value['end_message_ref']='m1'
+    with pytest.raises(TenantLinearError):service.parse(json.dumps({'cards':[value]},ensure_ascii=False),item)
 
 
 def test_remote_case_without_employee_actions_cannot_publish():
