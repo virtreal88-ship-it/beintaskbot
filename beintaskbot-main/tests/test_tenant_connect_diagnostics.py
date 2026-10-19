@@ -16,6 +16,16 @@ class ConnectDiagnostics(unittest.TestCase):
         self.assertIn('Dəqiq HTTP 200', html)
         self.assertIn('Əlçatan deyil', html)
 
+    def test_cleanup_button_requires_explicit_confirmation_and_only_candidates(self):
+        html = (Path(__file__).resolve().parents[1] / 'docs' / 'tenant-app.html').read_text()
+        self.assertIn('id="deactivateStaleConnectWebhooks"', html)
+        self.assertIn("typed!=='DEACTIVATE'", html)
+        self.assertIn("h.needsReview&&h.active&&!h.isCurrent", html)
+        self.assertIn("h.counts?.pending===0&&h.counts?.retrying===0", html)
+        self.assertIn("h.url===current.url", html)
+        self.assertIn("webhook_ids:ids,confirm:true", html)
+        self.assertNotIn("'/v1/webhooks/' + hook.id", html)
+
     def test_diagnostics_are_tenant_scoped_read_only_and_redacted(self):
         conn_context = mock.MagicMock()
         cursor = conn_context.__enter__.return_value.cursor.return_value.__enter__.return_value
