@@ -17,7 +17,7 @@ EXPERT=str(uuid.UUID(int=401));GROUP='120363000000000@g.us'
 def model_card(refs=('m1','m2','m3'),confirmed=True,title='Нет связи'):
     return {'title':title,'symptoms':['Синхронизация остановилась'],'cause':{'status':'suspected','text':'Соединение недоступно'},
         'resolution_steps':['Проверить соединение','Повторить синхронизацию'],'outcome':{'status':'confirmed' if confirmed else 'unconfirmed','text':'Клиент подтвердил результат' if confirmed else 'Нужна проверка','message_ids':[refs[-1]]},
-        'source_message_ids':list(refs),'product':'Bein','product_version':'2.1'}
+        'source_message_ids':list(refs),'product':'Bein','product_version':'2.1','work_status':'resolved' if confirmed else 'unresolved'}
 
 @pytest.fixture
 def ready(db,monkeypatch):
@@ -324,8 +324,27 @@ def test_empty_model_result_completes_without_persistence(ready):
 def test_knowledge_extraction_defaults_to_az_and_preserves_explicit_languages():
     assert policy.language(None,{})=='az'
     assert policy.language(None,{'language':'en','language_code':'ru'})=='az'
-    assert policy.language('en',{})=='en'
-    assert policy.language('ru',{'language':'az'})=='ru'
+    assert policy.language('en',{})=='az'
+    assert policy.language('ru',{'language':'az'})=='az'
+    assert policy.language('az',{})=='az'
+
+
+def test_ai_generation_language_is_always_azerbaijani_even_for_ru_en_interface():
+    assert [policy.language(value,{}) for value in ('ru','az','en',None)]==['az','az','az','az']
+    assert 'Azerbaijani (AZ)' in service.PROMPT
+
+
+def test_work_status_is_separate_from_confirmation_and_gates_publication():
+    value=model_card(confirmed=True);ids=[str(uuid.UUID(int=i)) for i in (1,2,3)]
+    value['source_message_ids']=ids;value['outcome']['message_ids']=[ids[-1]]
+    value['work_status']='unresolved'
+    normalized=policy.card(value,ids)
+    assert normalized['outcome']['status']=='confirmed'
+    assert policy.approval_reason(normalized)=='work_not_resolved'
+    value['work_status']='unknown'
+    assert policy.approval_reason(policy.card(value,ids))=='work_status_required'
+    value['work_status']='resolved'
+    assert policy.approval_reason(policy.card(value,ids)) is None
 
 
 def test_card_content_language_is_persistable_and_validated():
@@ -344,6 +363,16 @@ def test_legacy_card_language_uses_extraction_then_saved_az_is_returned(ready):
     saved=store.mutate(PROFILE,value['id'],{'expected_version':1,'content_language':'az'})['candidate']
     assert saved['content_language']=='az'
     assert store.listing(PROFILE,{'limit':25})['candidates'][0]['content_language']=='az'
+
+
+def test_model_cannot_override_azerbaijani_content_language_marker():
+    ids=[str(uuid.UUID(int=i)) for i in (31,32,33)]
+    value=model_card(refs=('m1','m2','m3'),confirmed=False)
+    value['content_language']='en'
+    item={'messages':[{'ref':f'm{i+1}','role':'customer','text':'source'} for i in range(3)],'refs':[{'id':message_id} for message_id in ids]}
+    parsed=service.parse(json.dumps({'cards':[value]},ensure_ascii=False),item)[0]
+    assert parsed['content_language']=='az'
+    assert parsed['source_message_ids']==ids
 
 
 def test_remote_case_without_employee_actions_cannot_publish():

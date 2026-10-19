@@ -115,4 +115,4 @@ def improve(profile,candidate_id,data):
             result=cur.fetchone()['result']
     return {'request':store.public_request(receipt),'candidate_id':candidate_id,'expected_version':data['expected_version'],
         'language':lang,'proposal':result if receipt['status']=='completed' else None,'requires_explicit_save':True,
-        'mode':mode,'protected_fields':['cause.status','outcome.status','outcome.message_ids','source_message_ids','operator_action_evidence','resolution_method','case_kind','product','product_version'] if mode=='translate' else ['cause','resolution_steps','operator_actions','operator_action_evidence','resolution_method','outcome','source_message_ids','case_kind','product','product_version']}
+        'mode':mode,'protected_fields':['cause.status','outcome.status','outcome.message_ids','source_message_ids','operator_action_evidence','resolution_method','case_kind','product','product_version','work_status'] if mode=='translate' else ['cause','resolution_steps','operator_actions','operator_action_evidence','resolution_method','outcome','source_message_ids','case_kind','product','product_version']}

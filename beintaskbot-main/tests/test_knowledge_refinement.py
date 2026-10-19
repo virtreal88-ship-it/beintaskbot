@@ -47,11 +47,11 @@ def test_informational_case_needs_no_technical_cause_or_steps(ready):
 
 
 @pytest.mark.parametrize('lang',['ru','az','en'])
-def test_extraction_language_passed_to_provider_and_receipt(ready,lang):
+def test_interface_language_does_not_change_extraction_language(ready,lang):
     d,generation,data=ready
     result=service.analyze(PROFILE,{**data,'language':lang})
-    assert generation.call_args.kwargs['extra_context']['output_language']==lang
-    assert result['request']['route']['language']==lang
+    assert generation.call_args.kwargs['extra_context']['output_language']=='az'
+    assert result['request']['route']['language']=='az'
 
 
 def test_campaign_style_extraction_defaults_to_az_even_for_non_az_profile(ready):
@@ -96,12 +96,12 @@ def test_improve_proposal_only_explicit_save_and_idempotency(ready,lang):
     args=payload(value,language=lang,clarifications='user@example.com; пароль: synthetic-secret')
     result=improve.improve(PROFILE,value['id'],args)
     assert result['request']['status']=='completed' and result['requires_explicit_save']
-    assert result['language']==lang and result['expected_version']==1
+    assert result['language']=='az' and result['expected_version']==1
     for key in FIELDS-{'title','symptoms'}: assert result['proposal'][key]==value[key]
     assert store.detail(PROFILE,value['id'])==before
     assert not d.execute('SELECT id FROM saas_ai_knowledge_sources');d.commit()
     context=generation.call_args.kwargs['extra_context']
-    assert context['output_language']==lang and 'synthetic-secret' not in json.dumps(context)
+    assert context['output_language']=='az' and 'synthetic-secret' not in json.dumps(context)
     assert 'user@example.com' not in json.dumps(context)
     assert improve.improve(PROFILE,value['id'],args)['proposal']==result['proposal']
     assert improve.improve(PROFILE,value['id'],{**args,'request_id':str(uuid.uuid4())})['proposal']==result['proposal']
@@ -152,15 +152,15 @@ def test_improve_permissions_input_limits_and_request_binding(ready):
     assert generation.call_count==2
 
 
-def test_language_specific_dedup_and_company_quota(ready,monkeypatch):
+def test_interface_language_independent_dedup_and_company_quota(ready,monkeypatch):
     d,generation,data=ready
     first=service.analyze(PROFILE,{**data,'language':'ru'})
     second=service.analyze(PROFILE,{**data,'request_id':str(uuid.uuid4()),'language':'az'})
-    assert first['request']['id']!=second['request']['id']
+    assert first['request']['id']==second['request']['id']
     value=first['candidates'][0]
     monkeypatch.setattr(service,'platform_token_limit',lambda *a:1)
     with pytest.raises(TenantLinearError,match='бюджета'):improve.improve(PROFILE,value['id'],payload(value))
-    assert generation.call_count==2
+    assert generation.call_count==1
 
 
 def test_remote_success_confirmed_but_unknown_actions_blocks_publication(ready):

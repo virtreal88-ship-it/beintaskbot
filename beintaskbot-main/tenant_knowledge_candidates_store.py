@@ -219,7 +219,7 @@ def public_card(cur,row,content_language='az'):
     cur.execute('SELECT agent_id,source_id FROM saas_knowledge_candidate_sources WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid ORDER BY agent_id',(row['tenant_id'],row['id']))
     value['publications']=[{k:str(v) for k,v in item.items()} for item in cur.fetchall()]
     value.setdefault('resolution_method','unknown');value.setdefault('operator_actions',[]);value.setdefault('operator_action_evidence',[]);value.setdefault('case_kind','technical')
-    value.setdefault('clarification_note','')
+    value.setdefault('clarification_note','');value.setdefault('work_status','unknown')
     # Existing records predate the explicit content-language field. Their extraction
     # route records the language requested when the card was generated.
     value.setdefault('content_language',content_language if content_language in {'ru','az','en'} else 'az')
@@ -319,6 +319,7 @@ def publication_text(value):
     return '\n'.join([value['title'],'Тип кейса: '+value.get('case_kind','technical'),'Симптомы: '+ '; '.join(value['symptoms']),
       'Причина ('+value['cause']['status']+'): '+value['cause']['text'],
       'Решение:\n'+'\n'.join(str(i+1)+'. '+s for i,s in enumerate(value['resolution_steps'])),
+      'Состояние работы: '+value.get('work_status','unknown'),
       'Результат подтверждён в исходной переписке: '+value['outcome']['text'],
       'Способ решения: '+value.get('resolution_method','unknown'),
       'Действия сотрудника: '+'; '.join(value.get('operator_actions',[])),
