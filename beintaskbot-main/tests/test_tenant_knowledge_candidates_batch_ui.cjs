@@ -27,7 +27,7 @@ const settle=()=>new Promise(resolve=>setTimeout(resolve,0));
   await settle();await settle();await settle();
   const request=requests.find(item=>item.opt.method==='POST');assert.ok(request,'batch request is sent');
   const payload=JSON.parse(request.opt.body);
-  assert.equal(payload.channel_id,channel);assert.equal(payload.history_mode,'unified_group');
+  assert.equal(payload.channel_id,channel);assert.equal(payload.history_mode,'unified_group');assert.equal(payload.language,'az','new cases use Azerbaijani even when the interface locale is Russian');
   const start=new Date(payload.period_start),end=new Date(payload.period_end);
   assert.deepEqual([start.getFullYear(),start.getMonth()+1,start.getDate(),start.getHours()],[2026,10,16,0]);
   assert.deepEqual([end.getFullYear(),end.getMonth()+1,end.getDate(),end.getHours()],[2026,10,19,0]);

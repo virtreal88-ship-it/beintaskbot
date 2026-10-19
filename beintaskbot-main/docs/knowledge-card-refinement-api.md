@@ -21,9 +21,12 @@ operator_actions remains needs_clarification and cannot be published. Technical 
 also require nonempty resolution_steps. Informational cases require no technical cause or
 technical steps, but still require source confirmation. Unknown/suspected cause is explicitly
 labelled; a confirmed technical cause is not required for an evidence-backed workaround.
-AI extraction cannot establish confirmed cause and only accepts operator_actions that are
-literal redacted spans from selected source messages. Remote/phone without actions clears
-unsupported instruction steps. Employee PATCH may supply actions after investigation.
+AI extraction cannot establish confirmed cause. New operator_actions are concise translations
+in the requested output language, paired with operator_action_evidence containing exact
+redacted quotes and original message IDs. Unsupported actions are dropped. Evidence messages
+and IDs remain unchanged; source evidence is rechecked on save and approve. Remote/phone
+without supported actions clears unsupported instruction steps. Employee PATCH may supply
+actions after investigation.
 
 Existing PATCH /api/platform/ai/knowledge-candidates/{id} accepts these content fields plus
 expected_version. approve/reject/clarify routes and Knowledge Sources publication remain.
@@ -31,11 +34,12 @@ Full legacy cards are accepted; old stored JSON receives defaults on read withou
 
 ## Language
 
-Manual extraction POST and /batches POST accept language: ru | az | en. Pass the UI-selected
-company/user language explicitly. Fallback: profile.language, language_code, company_language,
-then ru; no company/agent settings are changed. Provider output_language is explicit and is
-part of dedup identity. Evidence and literal action excerpts stay in their original language
-with existing PII/secret masking. Languages are tested with provider mocks, not paid calls.
+Manual extraction POST and /batches POST accept language: ru | az | en. Support-case UI requests
+AZ for new cases regardless of source-message or general interface language. A request with no
+language uses AZ, including campaign worker requests. API callers can explicitly request ru/en.
+No company/agent settings are changed. Provider output_language is explicit and is part of dedup
+identity. Evidence, quotes and message IDs remain in their original language with existing
+PII/secret masking. Languages are tested with provider mocks, not paid calls.
 
 ## AI improvement
 
@@ -52,9 +56,12 @@ without another provider call. Same version/language/clarifications with a diffe
 reuses the receipt. Reusing an ID with changed parameters returns 409. Unknown/failed calls
 are not auto-retried; unknown usage retains its existing token reservation.
 
-The model edits title and symptoms ONLY. It sees redacted original evidence, current card
-and employee clarifications. cause, resolution_steps, operator_actions, resolution_method,
-outcome, source_message_ids, case_kind, product/version are protected and copied by server.
+In improve mode, the model edits title and symptoms ONLY. In translate mode, it proposes
+AZ text for title, symptoms, cause, resolution_steps, operator_actions and outcome while
+preserving certainty, method, product/version and evidence references. It sees redacted original
+evidence, current card and employee clarifications. The translation is only a proposal: the
+employee compares every explanatory field, confirms the translation and explicitly saves it.
+Cause/outcome statuses, outcome/source message IDs, case_kind and product/version are protected.
 Unexpected factual output fields fail closed. This intentionally does not translate or
 rewrite factual instructions; edit those explicitly with PATCH before requesting editorial
 improvement. Free-text editorial suggestions still need employee review; semantic truth or

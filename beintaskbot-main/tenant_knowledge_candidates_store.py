@@ -171,7 +171,7 @@ def public_card(cur,row):
     value['extraction_id']=str(row['extraction_id'])
     cur.execute('SELECT agent_id,source_id FROM saas_knowledge_candidate_sources WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid ORDER BY agent_id',(row['tenant_id'],row['id']))
     value['publications']=[{k:str(v) for k,v in item.items()} for item in cur.fetchall()]
-    value.setdefault('resolution_method','unknown');value.setdefault('operator_actions',[]);value.setdefault('case_kind','technical')
+    value.setdefault('resolution_method','unknown');value.setdefault('operator_actions',[]);value.setdefault('operator_action_evidence',[]);value.setdefault('case_kind','technical')
     reason=approval_reason(value)
     value['result_confirmed']=value['outcome']['status']=='confirmed'
     value['clarification_status']='required' if reason else 'not_required'
@@ -242,6 +242,14 @@ def listing(profile,data):
 
 def enforce_confirmation(value,items):
     by_id={item['id']:item for item in items}
+    for item in value.get('operator_action_evidence',[]):
+        source=by_id.get(item.get('message_id'))
+        if (not source or item.get('message_id') not in value['source_message_ids']
+                or type(item.get('action_index')) is not int
+                or not 0<=item['action_index']<len(value.get('operator_actions',[]))
+                or not item.get('quote') or item['quote'] not in source.get('text','')
+                or source.get('role') not in {'customer','operator'}):
+            raise TenantLinearError('Подтверждение действия не совпадает с исходным сообщением.',409)
     source_text='\n'.join(by_id[i]['text'] for i in value['source_message_ids'])
     import re
     if value.get('resolution_method','unknown')=='unknown':

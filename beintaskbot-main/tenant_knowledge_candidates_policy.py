@@ -6,11 +6,13 @@ MAX_CONTEXT=12000
 MAX_TOKENS=16000
 MAX_CARDS=5
 BASE_FIELDS={'title','symptoms','cause','resolution_steps','outcome','source_message_ids','product','product_version'}
-FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','case_kind'}
+FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','operator_action_evidence','case_kind'}
 
 def language(value=None,profile=None):
-    profile=profile or {}
-    value=value or profile.get('language') or profile.get('language_code') or profile.get('company_language') or 'az'
+    # The extraction language belongs to the request, not the employee profile.
+    # Campaign workers have no interactive locale selection, so their default
+    # must stay Azerbaijani even when the campaign creator uses another locale.
+    value=value or 'az'
     if value not in {'ru','az','en'}: raise TenantLinearError('Язык: ru, az или en.')
     return value
 
@@ -69,6 +71,16 @@ def card(data,allowed_ids):
         return normalized
     result['source_message_ids']=ids(data['source_message_ids'])
     if not result['source_message_ids']: raise TenantLinearError('Укажите исходные сообщения.')
+    evidence=data.get('operator_action_evidence',[])
+    if not isinstance(evidence,list) or len(evidence)>10: raise TenantLinearError('Некорректные подтверждения действий сотрудника.')
+    normalized_evidence=[]
+    for item in evidence:
+        if not isinstance(item,dict) or set(item)!={'action_index','message_id','quote'} or type(item['action_index']) is not int or not 0<=item['action_index']<len(result['operator_actions']):
+            raise TenantLinearError('Некорректные подтверждения действий сотрудника.')
+        message_id=identifier(item['message_id'])
+        if message_id not in result['source_message_ids']: raise TenantLinearError('Подтверждение действия вне исходных сообщений.',403)
+        normalized_evidence.append({'action_index':item['action_index'],'message_id':message_id,'quote':text(item['quote'],800,True)})
+    result['operator_action_evidence']=normalized_evidence
     result['outcome']={'status':outcome['status'],'text':text(outcome['text'],1200),'message_ids':ids(outcome['message_ids'])}
     if set(result['outcome']['message_ids'])-set(result['source_message_ids']): raise TenantLinearError('Подтверждение должно входить в исходные сообщения.')
     if result['outcome']['status']=='confirmed' and not result['outcome']['message_ids']: raise TenantLinearError('Нужна ссылка на подтверждающее сообщение.')
