@@ -609,6 +609,19 @@ async def process_connect_one(job, logger):
         if any(row['external_id'] != source_id and row['happened_at'] >= source['happened_at'] for row in current):
             await asyncio.to_thread(finish_superseded, job, reservation, 'connect_conversation_advanced')
             return
+        # Existing trigger engine can optionally execute a fixed allowlist of
+        # tenant-native CRM operations. Both process and tenant switches are
+        # default-off; the service revalidates scope, lease and handoff before
+        # each write. A handoff trigger never runs CRM mutations.
+        if not any({'handoff','handoff_after_reply'} & set(t.get('actions') or []) for t in matched):
+            from tenant_ai_agent_native_crm_actions import execute as execute_native_crm
+            native_result=await execute_native_crm(job,source,matched,
+                tenant_enabled=config.get('native_crm_actions_enabled') is True,
+                automatic=reservation.get('mode')=='automatic')
+            if native_result.get('blocked') or native_result.get('unknown'):
+                await asyncio.to_thread(handoff,job,'native_crm_action_blocked_or_unknown')
+                await asyncio.to_thread(finish_superseded,job,reservation,'native_crm_action_blocked_or_unknown')
+                return
         # The initial schedule check prevents unnecessary model calls.  This
         # second check is the send boundary: an overnight shift can close
         # while generation is in progress, and no response may cross it.

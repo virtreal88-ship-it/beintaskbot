@@ -127,9 +127,10 @@ def read_settings(profile):
             tenant, _ = _authorize(cur, profile)
             cur.execute('''INSERT INTO saas_ai_agent_settings(tenant_id) VALUES(%s::uuid)
               ON CONFLICT(tenant_id) DO NOTHING''', (tenant,))
-            cur.execute('''SELECT company_instructions,enabled,operating_mode,emergency_stop,auto_send_enabled,crm_actions_enabled,max_replies_per_chat,updated_at
+            cur.execute('''SELECT company_instructions,enabled,operating_mode,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,max_replies_per_chat,updated_at
               FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid''', (tenant,))
             result = _row(cur.fetchone())
+            result['server_native_crm_actions_enabled']=runtime_flag('AI_NATIVE_CRM_ACTIONS_ENABLED')
             # This summary is intentionally scoped by the already-authorized
             # tenant.  It lets the browser distinguish a saved company switch
             # from a missing Connect route without exposing other companies.
@@ -163,7 +164,7 @@ def save_settings(profile, data):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
-            if any(patch.get(key) is True for key in ('auto_send_enabled','crm_actions_enabled')) and profile.get('role') != 'owner':
+            if any(patch.get(key) is True for key in ('auto_send_enabled','crm_actions_enabled','native_crm_actions_enabled')) and profile.get('role') != 'owner':
                 raise TenantLinearError('Avtomatik göndərmə və CRM yazılarını yalnız şirkət sahibi aça bilər.',403)
             if patch.get('enabled') is True and not platform_service_ready():
                 cur.execute("SELECT secrets,metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
@@ -173,19 +174,19 @@ def save_settings(profile, data):
                     raise TenantLinearError('Əvvəlcə mövcud Chat AI ayarlarını və razılığı tamamlayın.', 409)
             cur.execute('''INSERT INTO saas_ai_agent_settings(tenant_id) VALUES(%s::uuid)
               ON CONFLICT(tenant_id) DO NOTHING''', (tenant,))
-            cur.execute('''SELECT company_instructions,enabled,operating_mode,emergency_stop,auto_send_enabled,crm_actions_enabled,max_replies_per_chat FROM saas_ai_agent_settings
+            cur.execute('''SELECT company_instructions,enabled,operating_mode,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,max_replies_per_chat FROM saas_ai_agent_settings
               WHERE tenant_id=%s::uuid FOR UPDATE''', (tenant,))
             previous = cur.fetchone() or {}
             values = {'company_instructions': str(previous.get('company_instructions') or ''),
-                      **{key: bool(previous.get(key, False)) for key in ('enabled','auto_send_enabled','crm_actions_enabled')},
+                      **{key: bool(previous.get(key, False)) for key in ('enabled','auto_send_enabled','crm_actions_enabled','native_crm_actions_enabled')},
                       'operating_mode': str(previous.get('operating_mode') or 'test'),
                       'emergency_stop': bool(previous.get('emergency_stop',False)),
                       'max_replies_per_chat': int(previous.get('max_replies_per_chat') or 20)}
             values.update(patch)
             cur.execute('''UPDATE saas_ai_agent_settings SET company_instructions=%s,enabled=%s,operating_mode=%s,emergency_stop=%s,
-              auto_send_enabled=%s,crm_actions_enabled=%s,max_replies_per_chat=%s,updated_by=%s,updated_at=now() WHERE tenant_id=%s::uuid
-              RETURNING company_instructions,enabled,operating_mode,emergency_stop,auto_send_enabled,crm_actions_enabled,max_replies_per_chat,updated_at''',
-              (values['company_instructions'], values['enabled'], values['operating_mode'], values['emergency_stop'], values['auto_send_enabled'], values['crm_actions_enabled'],
+              auto_send_enabled=%s,crm_actions_enabled=%s,native_crm_actions_enabled=%s,max_replies_per_chat=%s,updated_by=%s,updated_at=now() WHERE tenant_id=%s::uuid
+              RETURNING company_instructions,enabled,operating_mode,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,max_replies_per_chat,updated_at''',
+              (values['company_instructions'], values['enabled'], values['operating_mode'], values['emergency_stop'], values['auto_send_enabled'], values['crm_actions_enabled'], values['native_crm_actions_enabled'],
                values['max_replies_per_chat'], actor, tenant))
             result = _row(cur.fetchone())
             # A company-wide stop is deliberately stronger than the per-test
@@ -676,6 +677,7 @@ def list_triggers(profile,agent_id):
 def save_trigger(profile,agent_id,data,*,trigger_id=None):
     agent=identifier(agent_id);creating=trigger_id is None
     patch=validate_trigger({key:value for key,value in data.items() if key!='expected_version'} if isinstance(data,dict) else data,creating=creating)
+    native_actions={'native_find_create_contact','native_find_create_company','native_find_create_deal','native_move_stage','native_assign_responsible','native_create_task','native_get_deal_status','native_get_task_status'}
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -717,6 +719,10 @@ def save_trigger(profile,agent_id,data,*,trigger_id=None):
                 settings=cur.fetchone() or {}
                 if patch.get('enabled') and settings.get('crm_actions_enabled') is not True:
                     raise TenantLinearError('Əvvəlcə şirkət səviyyəsində AI CRM əməliyyatlarını aktiv edin.',409)
+            if patch.get('enabled') and native_actions.intersection(patch.get('actions',[])):
+                cur.execute('SELECT native_crm_actions_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid FOR SHARE',(tenant,))
+                if profile.get('role')!='owner' or (cur.fetchone() or {}).get('native_crm_actions_enabled') is not True:
+                    raise TenantLinearError('Native CRM əməliyyatları yalnız sahib tərəfindən ayrıca aktivləşdirilə bilər.',403)
             if creating:
                 if not existing:
                     trigger_uuid=uuid.uuid4()
@@ -737,6 +743,10 @@ def save_trigger(profile,agent_id,data,*,trigger_id=None):
                 if merged['enabled'] and any(action in merged['actions'] for action in ('create_task','update_phone','move_stage')):
                     cur.execute('SELECT crm_actions_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid',(tenant,))
                     if (cur.fetchone() or {}).get('crm_actions_enabled') is not True:raise TenantLinearError('AI CRM əməliyyatları söndürülüb.',409)
+                if merged['enabled'] and native_actions.intersection(merged['actions']):
+                    cur.execute('SELECT native_crm_actions_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid',(tenant,))
+                    if profile.get('role')!='owner' or (cur.fetchone() or {}).get('native_crm_actions_enabled') is not True:
+                        raise TenantLinearError('Native CRM əməliyyatları söndürülüb.',409)
                 cur.execute('''UPDATE saas_ai_agent_triggers SET name=%s,trigger_type=%s,condition=%s::jsonb,actions=%s::jsonb,
                   enabled=%s,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND id=%s::uuid
                   RETURNING id,agent_id,name,trigger_type,condition,actions,enabled,version,created_at,updated_at''',

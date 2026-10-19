@@ -161,3 +161,40 @@ def archive_deal(tenant_id, deal_id):
             row=cur.fetchone()
         conn.commit()
     return row is not None
+
+
+def find_chat_deal(tenant_id,channel_id,conversation_id):
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT id,title,pipeline_id,stage_id,contact_id,responsible_id,company_id,channel_id,conversation_id,description FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s AND archived_at IS NULL",(tenant_id,_uuid(channel_id,'channel id'),str(conversation_id)))
+            return cur.fetchone()
+
+
+def set_deal_stage(tenant_id,deal_id,stage_id):
+    ident=_uuid(deal_id,'deal id'); stage=str(stage_id or '').strip()
+    if not stage:raise ValueError('invalid stage')
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT pipeline_id FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE",(tenant_id,ident)); row=cur.fetchone()
+            if not row:return None
+            cur.execute("SELECT 1 FROM saas_tenant_pipeline_stages s JOIN saas_tenant_pipelines p USING(tenant_id,pipeline_id) WHERE s.tenant_id=%s::uuid AND s.pipeline_id=%s AND s.stage_id=%s AND p.active=TRUE",(tenant_id,row['pipeline_id'],stage))
+            if not cur.fetchone():raise ValueError('stage outside deal pipeline')
+            cur.execute("UPDATE saas_crm_native_deals SET stage_id=%s,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING id,title,pipeline_id,stage_id,contact_id,responsible_id,company_id,channel_id,conversation_id",(stage,tenant_id,ident)); result=cur.fetchone()
+        conn.commit()
+    return result
+
+
+def assign_deal_responsible(tenant_id,deal_id,responsible_id):
+    ident=_uuid(deal_id,'deal id')
+    try:assignee=int(responsible_id)
+    except (ValueError,TypeError):raise ValueError('invalid responsible') from None
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE",(tenant_id,assignee))
+            if not cur.fetchone():raise ValueError('responsible unavailable')
+            cur.execute("UPDATE saas_crm_native_deals SET responsible_id=%s,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL RETURNING id,title,pipeline_id,stage_id,contact_id,responsible_id,company_id,channel_id,conversation_id",(assignee,tenant_id,ident)); row=cur.fetchone()
+        conn.commit()
+    return row

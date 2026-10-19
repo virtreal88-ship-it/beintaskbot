@@ -46,6 +46,27 @@ def create_company(tenant_id,name,phone='',email='',description='',responsible_i
     return row
 
 
+def find_or_create_company(tenant_id,name,phone='',email='',description='',responsible_id=None):
+    """Exact-name dedupe for verified AI-trigger facts, serialized per tenant."""
+    values=_fields(name,phone,email,description,responsible_id)
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",(str(tenant_id)+':ai-company:'+values[0].casefold(),))
+            cur.execute("SELECT id,name,phone,email,description,responsible_id FROM saas_crm_native_companies WHERE tenant_id=%s::uuid AND archived_at IS NULL AND lower(name)=lower(%s) ORDER BY created_at,id LIMIT 2 FOR UPDATE",(tenant_id,values[0]))
+            rows=cur.fetchall()
+            if len(rows)>1:raise ValueError('company name is ambiguous')
+            if rows:row=rows[0]
+            else:
+                if values[4]:
+                    cur.execute("SELECT 1 FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE",(tenant_id,values[4]))
+                    if not cur.fetchone():raise ValueError('responsible unavailable')
+                cur.execute("INSERT INTO saas_crm_native_companies(id,tenant_id,name,phone,email,description,responsible_id) VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s) RETURNING id,name,phone,email,description,responsible_id",(str(uuid.uuid4()),tenant_id,*values))
+                row=cur.fetchone()
+        conn.commit()
+    return row
+
+
 def list_companies(tenant_id,search='',limit=50):
     q='%'+str(search or '').strip()[:120].replace('\\','\\\\').replace('%','\\%').replace('_','\\_')+'%'
     with _connect() as conn:
