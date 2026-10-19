@@ -8,6 +8,12 @@ encrypted credentials and the provider transport are ready. Kommo-specific
 snapshot identifiers and chat delivery remain isolated until the generic data
 identity migration described below is complete.
 
+The provider-neutral identity foundation now stores tenant-scoped entity links
+and an explicit per-entity system-of-record mode. It is metadata only: no sync
+is scheduled or activated by writing these tables. Existing Kommo/BeinSystems
+connectors and the legacy snapshot schema remain unchanged until each entity is
+migrated deliberately.
+
 ## Confirmed BEIN ERP mapping
 
 Official source: <https://docs.beinsystems.az/docs/api/>
@@ -31,9 +37,9 @@ chosen.
 
 ## Remaining data-plane migration
 
-1. Replace `kommo_lead_id` and `kommo_task_id` as domain identities with
-   `(provider, external_id text)` while retaining compatibility columns during
-   migration.
+1. Move runtime domain identity from `kommo_lead_id` and `kommo_task_id` to
+   internal Beintaskbot IDs plus `saas_crm_entity_links`; retain compatibility
+   columns until each entity type is migrated.
 2. Move Kommo HAL parsing (`_embedded`, numeric IDs, Unix timestamps) behind a
    Kommo adapter; add a BEIN ERP adapter for UUIDs and envelope pagination.
 3. Route deals, tasks, pipelines, stages and customers through the selected
