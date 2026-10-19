@@ -307,9 +307,7 @@ def diagnostics(profile: dict) -> dict:
             # A different ID is only a *candidate* for manual review:
             # other integrations may legitimately own their own hooks.
             'needsReview': bool(current_webhook_id and webhook_id != current_webhook_id
-                                and hook.get('active') and
-                                _diagnostic_url(hook.get('url') or '') ==
-                                _diagnostic_url(CONNECT_URL.rstrip('/') + '/api/platform/connect/webhook')),
+                                and hook.get('active')),
             'active': bool(hook.get('active')),
             'url': _diagnostic_url(hook.get('url') or ''),
             'channels': channel_names,
