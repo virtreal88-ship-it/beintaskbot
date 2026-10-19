@@ -5,6 +5,7 @@ from uuid import UUID
 from aiohttp import web
 from tenant_crm_native_contacts import create_contact, get_contact, list_contacts, update_contact, archive_contact
 from tenant_request_origin import require_json_post
+from tenant_linear_policy import TenantLinearError
 
 
 def _jsonable(value):
@@ -66,6 +67,9 @@ def handler(member_from_request, origin, logger):
                 if result is None or result is False:
                     return web.json_response({'success': False, 'error': 'not_found'}, status=404)
             return web.json_response({'success': True, 'data': _jsonable(result)},
+                                     headers={'Cache-Control': 'no-store'})
+        except TenantLinearError:
+            return web.json_response({'success': False, 'error': 'invalid_origin'}, status=403,
                                      headers={'Cache-Control': 'no-store'})
         except ValueError:
             return web.json_response({'success': False, 'error': 'invalid_contact'}, status=400,
