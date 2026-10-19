@@ -56,7 +56,8 @@ class TenantConnectHandoffTests(unittest.TestCase):
         )
         connection = Connection(cursor)
         event = {'id': 'event-1', 'type': 'message.outbound.observed', 'occurred_at': '2026-10-16T12:00:00Z',
-                 'data': {'id': 'phone-1', 'channelId': CHANNEL, 'conversationId': 'client@s.whatsapp.net', 'type': 'text', 'text': 'I will help'}}
+                 'data': {'id': 'phone-1', 'channelId': CHANNEL, 'conversationId': 'client@s.whatsapp.net',
+                          'fromMe': True, 'source': 'linked_phone', 'type': 'text', 'text': 'I will help'}}
         cipher = MagicMock()
         cipher.decrypt.return_value = json.dumps({'webhook_secret': 'secret'}).encode()
         with patch.object(transport, '_connect', return_value=connection), \
@@ -71,7 +72,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
         insert = next(params for sql, params in cursor.executed if 'saas_crm_messages' in sql)
         self.assertEqual(insert[1], TENANT)
         self.assertEqual(insert[4], 'connect:' + CHANNEL)
-        self.assertEqual(insert[5], 'WhatsApp operator')
+        self.assertEqual(insert[5], 'Operator')
 
     def test_signed_linked_phone_source_is_recorded_as_operator(self):
         event = {'type':'message.outbound.observed','data':{'source':'linked_phone','fromMe':True}}
