@@ -69,7 +69,7 @@ def test_old_case_translation_covers_all_explanatory_fields_and_preserves_eviden
     original=store.detail(PROFILE,value['id'])['candidate']
     generation.return_value=(json.dumps({'title':'Bağlantı problemi','symptoms':['Tətbiqdə xəta görünür'],
         'cause_text':'Router bağlantısı kəsilmişdi','resolution_steps':['Routeri yenidən başladın'],
-        'operator_actions':['Əməkdaş routeri yenidən başlatdı'],'outcome_text':'Nəticə yazışmada təsdiqlənməyib'}),{'total_tokens':100})
+        'operator_actions':['Əməkdaş routeri yenidən başlatdı'],'outcome_text':'Nəticə yazışmada təsdiqlənməyib','clarification_note':'Müştərinin terminal növünü dəqiqləşdirin.'}),{'total_tokens':100})
     result=improve.improve(PROFILE,value['id'],payload(value,mode='translate',language='az'))
     proposal=result['proposal']
     assert result['mode']=='translate' and result['language']=='az'
@@ -80,9 +80,11 @@ def test_old_case_translation_covers_all_explanatory_fields_and_preserves_eviden
     assert proposal['source_message_ids']==original['source_message_ids']
     assert proposal['resolution_steps']==['Routeri yenidən başladın']
     assert proposal['operator_actions']==['Əməkdaş routeri yenidən başlatdı']
+    assert proposal['clarification_note']=='Müştərinin terminal növünü dəqiqləşdirin.'
     assert store.detail(PROFILE,value['id'])['candidate']==original
     saved=store.mutate(PROFILE,value['id'],{'expected_version':2,**proposal})['candidate']
     assert saved['operator_actions']==['Əməkdaş routeri yenidən başlatdı']
+    assert saved['clarification_note']=='Müştərinin terminal növünü dəqiqləşdirin.'
     assert saved['source_message_ids']==original['source_message_ids']
     assert saved['outcome']['message_ids']==original['outcome']['message_ids']
     assert generation.call_args.kwargs['instructions'].find('Translate every explanatory support-case field')>=0

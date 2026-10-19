@@ -17,7 +17,7 @@ EXPERT=str(uuid.UUID(int=401));GROUP='120363000000000@g.us'
 def model_card(refs=('m1','m2','m3'),confirmed=True,title='Нет связи'):
     return {'title':title,'symptoms':['Синхронизация остановилась'],'cause':{'status':'suspected','text':'Соединение недоступно'},
         'resolution_steps':['Проверить соединение','Повторить синхронизацию'],'outcome':{'status':'confirmed' if confirmed else 'unconfirmed','text':'Клиент подтвердил результат' if confirmed else 'Нужна проверка','message_ids':[refs[-1]]},
-        'source_message_ids':list(refs),'product':'Bein','product_version':'2.1','work_status':'resolved' if confirmed else 'unresolved'}
+        'source_message_ids':list(refs),'product':'Bein','product_version':'2.1','clarification_note':'','case_relation':'new_request','work_status':'resolved' if confirmed else 'unresolved'}
 
 @pytest.fixture
 def ready(db,monkeypatch):
@@ -373,6 +373,20 @@ def test_model_cannot_override_azerbaijani_content_language_marker():
     parsed=service.parse(json.dumps({'cards':[value]},ensure_ascii=False),item)[0]
     assert parsed['content_language']=='az'
     assert parsed['source_message_ids']==ids
+    assert parsed['start_message_id']==ids[0] and parsed['end_message_id']==ids[-1]
+    assert parsed['case_relation']=='new_request'
+
+
+def test_model_message_boundaries_are_mapped_and_must_be_in_selected_source_range():
+    ids=[str(uuid.UUID(int=i)) for i in (41,42,43)]
+    value=model_card(refs=('m1','m2','m3'),confirmed=False)
+    value.update(start_message_ref='m2',end_message_ref='m3',case_relation='recurrence')
+    item={'messages':[{'ref':f'm{i+1}','role':'customer','text':'source'} for i in range(3)],'refs':[{'id':message_id} for message_id in ids]}
+    parsed=service.parse(json.dumps({'cards':[value]},ensure_ascii=False),item)[0]
+    assert parsed['start_message_id']==ids[1] and parsed['end_message_id']==ids[2]
+    assert parsed['case_relation']=='recurrence'
+    value['start_message_ref']='m3';value['end_message_ref']='m1'
+    with pytest.raises(TenantLinearError):service.parse(json.dumps({'cards':[value]},ensure_ascii=False),item)
 
 
 def test_remote_case_without_employee_actions_cannot_publish():

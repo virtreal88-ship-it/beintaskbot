@@ -220,6 +220,10 @@ def public_card(cur,row,content_language='az'):
     value['publications']=[{k:str(v) for k,v in item.items()} for item in cur.fetchall()]
     value.setdefault('resolution_method','unknown');value.setdefault('operator_actions',[]);value.setdefault('operator_action_evidence',[]);value.setdefault('case_kind','technical')
     value.setdefault('clarification_note','');value.setdefault('work_status','unknown')
+    sources=value.get('source_message_ids') or []
+    value.setdefault('start_message_id',sources[0] if sources else '')
+    value.setdefault('end_message_id',sources[-1] if sources else '')
+    value.setdefault('case_relation','unknown')
     # Existing records predate the explicit content-language field. Their extraction
     # route records the language requested when the card was generated.
     value.setdefault('content_language',content_language if content_language in {'ru','az','en'} else 'az')
