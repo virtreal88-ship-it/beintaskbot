@@ -5,7 +5,7 @@ import asyncio
 import json
 from aiohttp import web
 
-from tenant_connect_transport import ConnectWebhookError, channels, configure, diagnostics, disconnect, ingest, status
+from tenant_connect_transport import ConnectWebhookError, channels, configure, diagnostics, deactivate_stale_webhooks, disconnect, ingest, status
 from tenant_platform import TenantPlatformError
 from tenant_linear_policy import TenantLinearError
 from tenant_request_origin import require_json_post
@@ -64,6 +64,35 @@ def diagnostics_handler(member_from_request, logger):
             logger.exception('Connect diagnostics request failed')
             return web.json_response({'success': False, 'error': 'Connect diaqnostikası oxunmadı.'}, status=503,
                                      headers={'Cache-Control': 'no-store'})
+    return handle
+
+
+
+def deactivate_webhooks_handler(member_from_request, origin: str, logger):
+    async def handle(request: web.Request) -> web.Response:
+        try:
+            profile = member_from_request(request)
+            if not profile:
+                raise TenantPlatformError('İcazə yoxdur.')
+            require_json_post(request, origin)
+            payload = await request.json()
+            if not isinstance(payload, dict) or set(payload) != {'webhook_ids', 'confirm'}:
+                raise TenantPlatformError('Webhook deaktivasiya sorğusu düzgün deyil.')
+            ids = payload['webhook_ids']
+            if not isinstance(ids, list) or any(not isinstance(value, str) for value in ids):
+                raise TenantPlatformError('Webhook ID siyahısı düzgün deyil.')
+            result = await asyncio.to_thread(deactivate_stale_webhooks, profile, ids,
+                                             confirmed=payload['confirm'] is True)
+            return web.json_response({'success': True, **result}, headers={'Cache-Control': 'no-store'})
+        except TenantLinearError as exc:
+            return _policy_error_response(web, exc)
+        except TenantPlatformError as exc:
+            return web.json_response({'success': False, 'error': str(exc)}, status=403,
+                                     headers={'Cache-Control': 'no-store'})
+        except Exception:
+            logger.exception('Connect webhook deactivation failed')
+            return web.json_response({'success': False, 'error': 'Webhook deaktivasiya baş tutmadı.'},
+                                     status=503, headers={'Cache-Control': 'no-store'})
     return handle
 
 
