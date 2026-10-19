@@ -52,12 +52,12 @@ def handler(member_from_request, origin, logger):
                     result = await asyncio.to_thread(create_contact, tenant_id,
                         body.get('name'), body.get('phone', ''), body.get('email', ''),
                         contact_id=body.get('id'))
-                elif request.method == 'PATCH' and contact_id:
-                    if set(body) - {'name', 'phone', 'email'} or 'name' not in body:
+                elif request.method == 'POST' and contact_id and body.get('action') == 'update':
+                    if set(body) - {'action', 'name', 'phone', 'email'} or 'name' not in body:
                         raise ValueError('invalid fields')
                     result = await asyncio.to_thread(update_contact, tenant_id, contact_id,
                         body['name'], body.get('phone', ''), body.get('email', ''))
-                elif request.method == 'POST' and contact_id:
+                elif request.method == 'POST' and contact_id and body.get('action') == 'archive':
                     if body != {'action': 'archive'}:
                         raise ValueError('invalid archive action')
                     result = await asyncio.to_thread(archive_contact, tenant_id, contact_id)
