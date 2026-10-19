@@ -82,12 +82,17 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
         with conn.cursor() as cur:
             # Validate links against this company's current membership before
             # any insert. IDs from another company must never grant access.
-            cur.execute("SELECT telegram_id,role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE", (str(tenant_id),))
-            member_roles = {int(row['telegram_id']): row['role'] for row in cur.fetchall()}
+            cur.execute("SELECT telegram_id,role,permissions FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE", (str(tenant_id),))
+            active_members=cur.fetchall()
+            member_roles = {int(row['telegram_id']): row['role'] for row in active_members}
+            task_members = {int(row['telegram_id']) for row in active_members if row['role']=='owner' or 'tasks' in (row.get('permissions') or [])}
             member_ids = set(member_roles)
             if any(int(item['telegram_id']) not in member_ids or int(item['telegram_id']) == int(owner_id) for item in members):
                 raise TenantPlatformError('Yalnız bu şirkətin aktiv əməkdaşlarını dəyişə bilərsiniz.')
             member_roles.update({int(item['telegram_id']): item['role'] for item in members})
+            for item in members:
+                if item['role']=='owner' or 'tasks' in item.get('permissions',[]): task_members.add(int(item['telegram_id']))
+                else: task_members.discard(int(item['telegram_id']))
             cur.execute("SELECT pipeline_id FROM saas_tenant_pipelines WHERE tenant_id=%s::uuid", (str(tenant_id),))
             pipeline_ids = {str(row['pipeline_id']) for row in cur.fetchall()} | {str(item['pipeline_id']) for item in pipelines}
             for item in pipelines:
@@ -98,6 +103,9 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
             for item in stages:
                 if str(item['pipeline_id']) not in pipeline_ids:
                     raise TenantPlatformError('Mərhələnin vərəqi bu şirkətdə yoxdur.')
+                trigger=(item.get('settings') or {}).get('native_task') or {}
+                if trigger.get('responsible_id') and int(trigger['responsible_id']) not in task_members:
+                    raise TenantPlatformError('Avtomatik tapşırığın icraçısı bu şirkətdə aktiv tapşırıq icazəsinə malik olmalıdır.')
             for key, value in (policies.get('members') or {}).items():
                 if int(key) not in member_ids or any(str(pid) not in pipeline_ids for pid in value.get('pipeline_ids', [])):
                     raise TenantPlatformError('Əməkdaş və vərəq eyni şirkətə aid olmalıdır.')
