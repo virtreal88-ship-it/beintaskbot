@@ -70,7 +70,7 @@ def webhook_handler(logger):
             # A short reason code lets operators distinguish auth failures
             # from malformed/spoofed requests and internal scope conflicts.
             logger.warning('Connect webhook rejected code=%s status=%s', exc.code, exc.status)
-            return web.json_response({'error': str(exc)}, status=exc.status)
+            return web.json_response({'error': exc.code}, status=exc.status)
         except TenantPlatformError:
             logger.exception('Connect webhook platform failure')
             return web.json_response({'error': 'webhook_failed'}, status=500)

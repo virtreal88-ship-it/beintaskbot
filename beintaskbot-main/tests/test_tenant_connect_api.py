@@ -26,7 +26,7 @@ class Api(unittest.TestCase):
                                         side_effect=ConnectWebhookError('invalid_signature', 'rejected', 401)):
             response = asyncio.run(tenant_connect_api.webhook_handler(logger)(Request()))
         self.assertEqual(response.status, 401)
-        self.assertEqual(json.loads(response.text)['error'], 'rejected')
+        self.assertEqual(json.loads(response.text)['error'], 'invalid_signature')
         logger.warning.assert_called_once_with('Connect webhook rejected code=%s status=%s', 'invalid_signature', 401)
         self.assertNotIn('private', str(logger.mock_calls))
 
