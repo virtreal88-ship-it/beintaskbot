@@ -66,11 +66,26 @@ class TenantConnectHandoffTests(unittest.TestCase):
              patch('tenant_ai_agents_schema.ensure_schema'), \
              patch('tenant_ai_agent_connect.mark_operator_reply') as stop:
             self.assertTrue(transport.ingest(b'{}', 'sha256=valid', event))
-        stop.assert_called_once_with(TENANT, 42, CHANNEL, 'client@s.whatsapp.net', connection=connection)
+        stop.assert_called_once_with(TENANT, 42, CHANNEL, 'client@s.whatsapp.net', connection=connection, actor=None)
         self.assertTrue(connection.committed)
         insert = next(params for sql, params in cursor.executed if 'saas_crm_messages' in sql)
         self.assertEqual(insert[1], TENANT)
         self.assertEqual(insert[4], 'connect:' + CHANNEL)
+        self.assertEqual(insert[5], 'WhatsApp operator')
+
+    def test_signed_linked_phone_source_is_recorded_as_operator(self):
+        event = {'type':'message.outbound.observed','data':{'source':'linked_phone','fromMe':True}}
+        self.assertEqual(transport._outbound_author(event['data']), 'Operator')
+        self.assertFalse(transport._outbound_is_ai(event['data']))
+
+    def test_crm_ai_echo_source_does_not_mark_human_mode(self):
+        event = {'type':'message.outbound.observed','data':{'source':'ai_agent','fromMe':True}}
+        self.assertEqual(transport._outbound_author(event['data']), 'AI Agent')
+        self.assertTrue(transport._outbound_is_ai(event['data']))
+
+    def test_unclassified_from_me_message_remains_operator_compatible(self):
+        self.assertEqual(transport._outbound_author({'fromMe':True}), 'WhatsApp operator')
+        self.assertFalse(transport._outbound_is_ai({'fromMe':True}))
 
     def test_connect_resume_verifies_the_tenant_owned_channel(self):
         cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None,

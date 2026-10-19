@@ -113,6 +113,26 @@ def _is_ai_message(row):
     return bool((row or {}).get('author_name') == 'AI Agent' or (isinstance(raw, dict) and raw.get('run_id')))
 
 
+def _outbound_author(data: dict) -> str:
+    """Use signed provider provenance to separate phone sends from CRM sends.
+
+    Evolution's ``fromMe`` only establishes direction; it does not establish
+    whether a person or an automated client sent the message. Connect can mark
+    known linked-phone events explicitly. Unknown provenance remains an
+    operator-compatible fallback for historical integrations.
+    """
+    if data.get('ai_authored') is True or data.get('source') == 'ai_agent':
+        return 'AI Agent'
+    if data.get('source') == 'linked_phone':
+        return 'Operator'
+    return 'WhatsApp operator'
+
+
+def _outbound_is_ai(data: dict, existing: dict | None = None) -> bool:
+    """Classify AI only on explicit signed/provider or stored run provenance."""
+    return (_outbound_author(data) == 'AI Agent' or _is_ai_message(existing))
+
+
 def _schema(conn) -> None:
     _ensure_schema(conn)
     with conn.cursor() as cur:
@@ -389,16 +409,16 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 occurred = str(event.get('occurred_at') or datetime.now(timezone.utc).isoformat())
                 external = 'connect:' + str(data.get('id') or event_id)
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
-                  VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,'WhatsApp operator',%s,%s,'',%s::timestamptz,%s::jsonb)
+                  VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,%s,'',%s::timestamptz,%s::jsonb)
                   ON CONFLICT(tenant_id,external_id) DO UPDATE SET external_id=saas_crm_messages.external_id
                   RETURNING author_name,raw,kommo_lead_id,channel''',
-                            (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,str(data.get('text') or ''),str(data.get('type') or 'text'),occurred,_json(data)))
+                            (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,_outbound_author(data),str(data.get('text') or ''),str(data.get('type') or 'text'),occurred,_json(data)))
                 stored = cur.fetchone()
                 if stored and (stored.get('kommo_lead_id') != lead_id or stored.get('channel') != 'connect:' + channel_id):
                     raise TenantPlatformError('Connect message scope mismatch.')
                 # A malformed outbound event with ``fromMe:false`` is kept as
                 # an observable outbound record, but cannot take over a chat.
-                if data.get('fromMe') is not False and not _is_ai_message(stored) and not ai_origin and (not coordinated or employee is not None):
+                if data.get('fromMe') is not False and not _outbound_is_ai(data, stored) and not ai_origin and (not coordinated or employee is not None):
                     from tenant_ai_agent_connect import mark_operator_reply
                     mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn, actor=employee)
                 conn.commit()
