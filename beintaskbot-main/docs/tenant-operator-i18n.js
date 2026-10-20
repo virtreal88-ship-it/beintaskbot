@@ -38,6 +38,7 @@
     mediaLarge:['Файл слишком большой: фото до 8 МБ, аудио до 10 МБ.','Fayl çox böyükdür: şəkil 8 MB, audio 10 MB.','File too large: photos up to 8 MB, audio up to 10 MB.'],
     mediaInvalid:['Файл повреждён или формат не поддерживается.','Fayl zədələnib və ya format dəstəklənmir.','File damaged or format unsupported.'],
     mediaBusy:['Слишком много запросов. Повторите через минуту.','Çox sorğu göndərilib. Bir dəqiqə sonra yoxlayın.','Too many requests. Try again in a minute.'],
+    mediaRetryAfter:['Повторите через {seconds} сек.','{seconds} saniyədən sonra yenidən yoxlayın.','Try again in {seconds} sec.'],
     mediaTimeout:['Время загрузки истекло. Попробуйте снова.','Yükləmə vaxtı bitdi. Yenidən yoxlayın.','Download timed out. Please retry.'],
 
     night_report:['Отчёт ночной смены','Gecə növbəsi hesabatı','Night shift report'],nightOperator:['Ночной оператор','Gecə operatoru','Night operator'],aiStatus:['Статус AI','AI vəziyyəti','AI status'],

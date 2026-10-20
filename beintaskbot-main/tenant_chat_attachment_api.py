@@ -18,8 +18,13 @@ def admit(session):
         if REQUESTS[key][1] <= now:
             del REQUESTS[key]
     keys = [(str(session['tenant_id']), str(session['telegram_id'])), (str(session['tenant_id']), '*')]
-    if len(REQUESTS) > 2000 or any(REQUESTS.get(key, (0, 0))[0] >= cap for key, cap in zip(keys, (20, 60))):
-        raise TenantLinearError('Çox sorğu göndərilib. Bir dəqiqə sonra yoxlayın.', 429)
+    blocked = [(key, cap) for key, cap in zip(keys, (20, 60))
+               if REQUESTS.get(key, (0, 0))[0] >= cap]
+    if len(REQUESTS) > 2000 or blocked:
+        wait = max((REQUESTS[key][1] - now for key, _cap in blocked), default=60)
+        error = TenantLinearError('Çox sorğu göndərilib. Göstərilən müddətdən sonra yoxlayın.', 429)
+        error.retry_after = max(1, min(3600, int(wait + 0.999)))
+        raise error
     for key in keys:
         count, until = REQUESTS.get(key, (0, now + 60))
         REQUESTS[key] = (count + 1, until)
@@ -31,9 +36,11 @@ def handler(member_from_request, request_provider, logger):
                    'Content-Security-Policy': "default-src 'none'; sandbox", 'Referrer-Policy': 'no-referrer'}
         try:
             session = require_read_session(request, member_from_request)
-            admit(session)
             if SLOTS.locked():
-                raise TenantLinearError('Fayllar yüklənir. Bir az sonra yoxlayın.', 429)
+                error = TenantLinearError('Fayllar yüklənir. Göstərilən müddətdən sonra yenidən yoxlayın.', 429)
+                error.retry_after = 5
+                raise error
+            admit(session)
             async with SLOTS:
                 lead, message = request.query.get('lead_id'), request.query.get('message_id')
                 scope={'channel_id':request.query.get('channel_id') or None,
@@ -54,7 +61,7 @@ def handler(member_from_request, request_provider, logger):
             return web.Response(body=content, content_type=mime, headers=headers)
         except TenantLinearError as error:
             if error.status == 429:
-                headers['Retry-After'] = '60'
+                headers['Retry-After'] = str(getattr(error, 'retry_after', 60))
             return web.json_response({'success': False, 'error': str(error)}, status=error.status, headers=headers)
         except (ValueError, TypeError, KeyError):
             return web.json_response({'success': False, 'error': 'Fayl yüklənmədi. Fayl icazəsini və faylın mövcudluğunu yoxlayın.'}, status=400, headers=headers)

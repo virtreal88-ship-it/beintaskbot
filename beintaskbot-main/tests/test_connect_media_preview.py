@@ -169,6 +169,14 @@ def test_per_actor_and_tenant_rate_limits():
     api.REQUESTS.clear()
 
 
+def test_local_rate_limit_retry_after_uses_actual_window(monkeypatch):
+    import time
+    api.REQUESTS.clear();api.REQUESTS[(A,'11')]=(20,time.monotonic()+31)
+    with pytest.raises(TenantLinearError) as error:api.admit(PROFILE)
+    assert error.value.status==429 and 1<=error.value.retry_after<=31
+    api.REQUESTS.clear()
+
+
 @pytest.mark.parametrize('url',['http://connect.test','https://127.0.0.1','https://[::1]','https://user:password@connect.test','https://connect.test/path','https://connect.test?secret=1'])
 def test_unsafe_configured_origin_never_opens_network(monkeypatch,url):
     monkeypatch.setattr(media,'CONNECT_URL',url)
@@ -192,6 +200,25 @@ def test_transport_timeout_has_safe_error(monkeypatch):
     session.get.side_effect=TimeoutError('private-provider-key')
     with pytest.raises(TenantLinearError) as error:run(media.download_media(item()))
     assert error.value.status==502 and 'private-provider-key' not in str(error.value)
+
+
+def test_upstream_429_retry_after_is_preserved(monkeypatch):
+    transport(monkeypatch,status=429,headers={'Retry-After':'17'})
+    with pytest.raises(TenantLinearError) as error:run(media.download_media(item()))
+    assert error.value.status==429 and error.value.retry_after==17
+    assert media.retry_after_seconds('99999')==3600
+    assert media.retry_after_seconds('invalid')==60
+
+
+def test_attachment_api_returns_remaining_retry_after(monkeypatch):
+    current=item();monkeypatch.setattr(api,'load',Mock(return_value=current))
+    limited=TenantLinearError('Try later',429);limited.retry_after=23
+    monkeypatch.setattr(media,'download_media',AsyncMock(side_effect=limited))
+    handle=api.handler(lambda _:PROFILE,AsyncMock(),Mock())
+    request=SimpleNamespace(query={'lead_id':'41','message_id':'connect:'+MID,'expected_tenant_id':A,'expected_user_id':'11'})
+    api.REQUESTS.clear();response=run(handle(request))
+    assert response.status==429 and response.headers['Retry-After']=='23'
+    api.REQUESTS.clear()
 
 
 @pytest.mark.parametrize('status',['active','onboarding','ready_for_integration','suspended','archived'])
