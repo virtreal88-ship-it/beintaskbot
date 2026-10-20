@@ -135,6 +135,18 @@ class Provider(unittest.TestCase):
         self.assertNotIn('customer-secret-value',str(caught.exception))
         self.assertNotIn('private',str(caught.exception))
 
+    def test_unavailable_model_error_is_classified_without_fallback(self):
+        from unittest.mock import patch
+        from tenant_chat_ai_provider import ChatAIProviderError
+        response=Mock(status_code=404)
+        response.json.return_value={'error':{'code':'model_not_found','message':'private model/account detail'}}
+        with patch('tenant_chat_ai_provider.requests.post',return_value=response) as post:
+            with self.assertRaises(ChatAIProviderError) as caught:
+                self.generate('company-key','selected-copilot-model','reply',[],'')
+        self.assertEqual(caught.exception.category,'model_access')
+        self.assertEqual(post.call_args.kwargs['json']['model'],'selected-copilot-model')
+        self.assertNotIn('private model/account detail',str(caught.exception))
+
     def test_audio_uploaded_as_bytes_without_remote_media_url(self):
         from unittest.mock import patch
         response=Mock(status_code=200);response.json.return_value={'text':'transcript'}

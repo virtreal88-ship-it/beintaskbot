@@ -1,12 +1,14 @@
 """No paid calls, real media or production database are used by these contracts."""
 import asyncio
 import ast
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, MagicMock, patch
 import test_tenant_hot_orders as loaders
 from tenant_chat_ai_policy import configuration, command, history, media_address, media_identity, fingerprint
+from tenant_chat_ai_settings import public as public_settings
 from tenant_ai_agent_access import tenant_status_allows_management
 from tenant_chat_media import public_addresses, download
 from tenant_linear_policy import TenantLinearError
@@ -23,8 +25,19 @@ ROW={'external_id':'voice-1','message_type':'audio','media_url':'https://cdn.exa
 
 class Policy(unittest.TestCase):
     def test_configuration_requires_consent_and_strict_types(self):
-        self.assertEqual(configuration(CONFIG),CONFIG)
+        config=configuration(CONFIG)
+        self.assertEqual(config['model'],'text-model')
+        self.assertEqual(config['copilot_model'],'text-model')
+        self.assertTrue(config['copilot_enabled'])
+        self.assertEqual(config['copilot_daily_limit'],50)
         for changes in ({'enabled':1},{'consent':False},{'daily_limit':True},{'model':'bad model'},{'media_hosts':['*.example.com']},{'media_hosts':['https://cdn.example.com']}):
+            with self.assertRaises(TenantLinearError):configuration({**CONFIG,**changes})
+
+    def test_copilot_model_and_limits_are_independent_and_validated(self):
+        result=configuration({**CONFIG,'copilot_model':'copilot-model','copilot_enabled':False,'copilot_daily_limit':7})
+        self.assertEqual((result['model'],result['copilot_model'],result['copilot_enabled'],result['copilot_daily_limit']),
+                         ('text-model','copilot-model',False,7))
+        for changes in ({'copilot_model':'bad model'},{'copilot_enabled':1},{'copilot_daily_limit':0}):
             with self.assertRaises(TenantLinearError):configuration({**CONFIG,**changes})
 
     def test_commands_are_bounded_and_no_arbitrary_url_input(self):
@@ -43,6 +56,16 @@ class Policy(unittest.TestCase):
 
 
 class SettingsAuthorization(unittest.TestCase):
+    def test_public_copilot_settings_are_separate_and_secret_free(self):
+        result=public_settings({'secrets':b'cipher','metadata':{**CONFIG,'copilot_model':'copilot-model',
+            'copilot_enabled':False,'copilot_daily_limit':9},'updated_at':'v2'})
+        self.assertEqual(result['copilot_model'],'copilot-model')
+        self.assertEqual(result['model'],'text-model')
+        self.assertFalse(result['copilot_enabled'])
+        self.assertEqual(result['copilot_daily_limit'],9)
+        self.assertEqual(result['provider'],'OpenAI')
+        self.assertNotIn('secrets',result);self.assertNotIn('api_key',result)
+
     @classmethod
     def setUpClass(cls):
         tree=ast.parse((Path(__file__).resolve().parents[1]/'tenant_chat_ai_settings.py').read_text(encoding='utf-8-sig'))
@@ -137,6 +160,20 @@ class Storage(unittest.TestCase):
         self.access=Mock(return_value=(TENANT,20,CONNECTION));self.service.reserve.__globals__['access']=self.access
         self.cur.fetchall.return_value=[{'external_id':'text-1','direction':'incoming','body':'hello','message_type':'text'}]
         self.cur.fetchone.side_effect=[None,{'used':0}]
+
+    def test_legacy_settings_update_preserves_a_separate_copilot_model(self):
+        previous={**CONNECTION,'metadata':{**CONFIG,'copilot_model':'copilot-only','copilot_enabled':True,'copilot_daily_limit':7}}
+        connect=MagicMock();cur=connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cur.fetchone.side_effect=[previous,previous]
+        service=loaders.load('tenant_chat_ai_settings',{'_connect':connect,'_fernet':lambda:Mock(),
+            'authorize':Mock(return_value=(TENANT,20)),'ensure_schema':Mock()},
+            {'tenant_platform','tenant_news_ai_settings','tenant_chat_ai_schema'})
+        service.save.__globals__['authorize']=Mock(return_value=(TENANT,20))
+        service.save(SESSION,{**CONFIG,'api_key':'','expected_updated_at':'version-1'})
+        saved=json.loads(cur.execute.call_args.args[1][2])
+        self.assertEqual(saved['model'],'text-model')
+        self.assertEqual(saved['copilot_model'],'copilot-only')
+        self.assertEqual(saved['copilot_daily_limit'],7)
 
     def test_receipt_and_quota_committed_before_provider(self):
         item=self.service.reserve(SESSION,COMMAND)

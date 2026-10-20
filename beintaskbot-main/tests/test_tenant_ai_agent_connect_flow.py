@@ -77,6 +77,11 @@ class Connection:
 
 
 class ConnectAiFlowTests(unittest.TestCase):
+    def test_manual_agents_never_create_background_drafts_in_active_or_test_mode(self):
+        rows = [{'enabled': True, 'mode': 'manual'}, {'enabled': True, 'mode': 'automatic'},
+                {'enabled': False, 'mode': 'automatic'}]
+        self.assertEqual(connect_ai.eligible_connect_agents(rows), [rows[1]])
+
     def test_overnight_schedule_uses_the_shift_start_day_and_defers_after_close(self):
         schedule = {'timezone': 'Asia/Baku', 'days': [0], 'start': '22:00', 'end': '06:00'}
         baku = ZoneInfo('Asia/Baku')

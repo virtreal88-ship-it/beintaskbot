@@ -34,6 +34,15 @@ def _whatsapp_phone(conversation_id: str) -> str:
     return candidate if re.fullmatch(r'[1-9][0-9]{5,18}', candidate) else ''
 
 
+def eligible_connect_agents(rows):
+    """Only explicitly automatic agents may react to inbound Connect events.
+
+    Test Mode still safely exercises automatic agents, but does not turn a
+    manual assignment into an automated background draft job.
+    """
+    return [row for row in rows if row.get('enabled') is True and row.get('mode') == 'automatic']
+
+
 def scope_matches(scopes, channel_id: str, *, is_group=False) -> bool:
     """A Connect scope is explicit; legacy Kommo scopes never bleed across."""
     for scope in scopes if isinstance(scopes, list) else []:
@@ -184,10 +193,9 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 tenant_agents = [a for a in tenant_agents if str(a['id']) == str(bound['agent_id'])]
             if group_fence:
                 tenant_agents = [a for a in tenant_agents if str(a['id']) == group_fence['primary_agent_id']]
-            # Manual mode is human-only in Active Mode. Test Mode keeps its
-            # explicitly bound draft workflow for validating an agent.
-            enabled_agents = [row for row in tenant_agents if row.get('enabled') is True
-                              and (test_mode or row.get('mode') == 'automatic')]
+            # Manual mode is human-only. Test Mode can still exercise agents
+            # configured for automatic mode without enabling Manual Draft jobs.
+            enabled_agents = eligible_connect_agents(tenant_agents)
             channel_agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id)]
             agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id, is_group=is_group)]
             from tenant_ai_agent_schedule import current_candidates

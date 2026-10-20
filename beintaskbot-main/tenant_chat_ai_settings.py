@@ -31,10 +31,19 @@ def authorize(cur, session):
 
 def public(row):
     row = row or {}
-    return {'configured': bool(row.get('secrets')), 'updated_at': str(row.get('updated_at') or ''),
-            **{k: (row.get('metadata') or {}).get(k, v) for k, v in {
+    metadata = row.get('metadata') or {}
+    result = {'configured': bool(row.get('secrets')), 'updated_at': str(row.get('updated_at') or ''),
+            **{k: metadata.get(k, v) for k, v in {
                 'enabled': False, 'consent': False, 'audio_enabled': False, 'model': '',
                 'transcription_model': '', 'daily_limit': 50, 'media_hosts': []}.items()}}
+    result.update({
+        'copilot_enabled': metadata.get('copilot_enabled', True),
+        'copilot_model': metadata.get('copilot_model') or metadata.get('model') or '',
+        'copilot_daily_limit': metadata.get('copilot_daily_limit', 50),
+        'copilot_employee_permission': 'chat_ai',
+        'provider': 'OpenAI',
+    })
+    return result
 
 
 def read(session):
@@ -60,6 +69,15 @@ def save(session, data):
             previous = cur.fetchone() or {}
             if str(previous.get('updated_at') or '') != str(data.get('expected_updated_at') or ''):
                 raise TenantLinearError('AI ayarları dəyişib. Yeniləyin.', 409)
+            # Older settings clients do not submit the Copilot subsection.
+            # Preserve its values so legacy Chat AI edits cannot couple models.
+            old_metadata = previous.get('metadata') if isinstance(previous.get('metadata'), dict) else {}
+            if 'copilot_model' not in data:
+                config['copilot_model'] = old_metadata.get('copilot_model') or old_metadata.get('model') or config['model']
+            if 'copilot_enabled' not in data:
+                config['copilot_enabled'] = old_metadata.get('copilot_enabled', True)
+            if 'copilot_daily_limit' not in data:
+                config['copilot_daily_limit'] = old_metadata.get('copilot_daily_limit', 50)
             encrypted = previous.get('secrets')
             if data.get('remove_key') is True:
                 encrypted = None

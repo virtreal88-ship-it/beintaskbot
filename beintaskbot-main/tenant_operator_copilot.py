@@ -18,7 +18,7 @@ def _provider_failure_message(error):
             'invalid_credentials': 'Chat AI отклонил ключ доступа. Проверьте ключ в настройках компании.',
             'project_access': 'У ключа Chat AI нет доступа к проекту. Проверьте доступ проекта в настройках провайдера.',
             'billing_or_quota': 'У аккаунта Chat AI исчерпан лимит или не настроена оплата.',
-            'model_access': 'Выбранная модель недоступна этому аккаунту. Проверьте модель в настройках Chat AI.',
+            'model_access': 'Выбранная модель Copilot недоступна этому аккаунту OpenAI. В настройках → AI Copilot выберите модель, доступную для сохранённого ключа. Модель не меняется автоматически.',
             'rate_limit': 'Chat AI временно ограничил частоту запросов. Повторите позже.',
             'request_rejected': 'Chat AI отклонил запрос. Проверьте настройки модели и попробуйте позже.',
         }
@@ -83,7 +83,9 @@ def run(profile, data):
             config = connection.get('metadata') if isinstance(connection.get('metadata'), dict) else {}
             if not connection.get('secrets') or config.get('enabled') is not True or config.get('consent') is not True:
                 raise TenantLinearError('Сначала включите Chat AI и разрешите обработку данных компании.', 409)
-            model = str(config.get('model') or '').strip()
+            if config.get('copilot_enabled', True) is not True:
+                raise TenantLinearError('AI Copilot выключен для компании. Включите его в настройках → AI Copilot.', 409)
+            model = str(config.get('copilot_model') or config.get('model') or '').strip()
             if not _MODEL_ID.fullmatch(model):
                 raise TenantLinearError('В настройках Chat AI указана некорректная модель. Проверьте её перед генерацией.', 409)
             digest = _hash(command)
@@ -100,6 +102,10 @@ def run(profile, data):
             cur.execute("SELECT COALESCE(sum(reserved_calls),0) AS used FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date", (tenant,))
             if int((cur.fetchone() or {}).get('used') or 0) >= int(config.get('daily_limit') or 50):
                 raise TenantLinearError('Дневной лимит AI компании исчерпан.', 429)
+            cur.execute("""SELECT COALESCE(sum(reserved_calls),0) AS used FROM saas_chat_ai_runs
+              WHERE tenant_id=%s::uuid AND provider='connect' AND usage_day=(now() AT TIME ZONE 'UTC')::date""", (tenant,))
+            if int((cur.fetchone() or {}).get('used') or 0) >= int(config.get('copilot_daily_limit') or 50):
+                raise TenantLinearError('Дневной лимит запросов AI Copilot исчерпан.', 429)
             cur.execute('''SELECT count(*) AS used FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND requested_by=%s
               AND provider='connect' AND channel_id=%s AND conversation_id=%s AND usage_day=(now() AT TIME ZONE 'UTC')::date''', thread_key)
             if int((cur.fetchone() or {}).get('used') or 0) >= 20:
