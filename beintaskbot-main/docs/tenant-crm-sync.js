@@ -92,12 +92,27 @@
   });
   const syncPanel=document.getElementById('externalCrmSyncPanel');
   const fieldOptions={contact:{kommo:['name','phone','email']},deal:{kommo:['title','pipeline_id','stage_id','contact_id'],beinsystems:['title','pipeline_id','stage_id','contact_id','description']}};
+  function renderProviderStatus(result){
+    const root=document.getElementById('externalCrmProviderStatus');if(!root)return;
+    const integrations=result.integrations||{},caps=result.capabilities||{},outbox=result.outbox||[],conflicts=result.conflicts||[];
+    root.replaceChildren();
+    for(const [provider,label] of [['kommo','Kommo'],['beinsystems','BeinSystems']]){
+      const card=document.createElement('article');card.className='panel';
+      const title=document.createElement('h3');title.textContent=label;card.append(title);
+      const status=document.createElement('p');status.className='sub';status.textContent=`Bağlantı: ${integrations[provider]||'məlumat əlçatan deyil'}`;card.append(status);
+      const supported=[];for(const [entity,names] of Object.entries(caps[provider]||{})){if(names.length)supported.push(`${entity==='contact'?'Əlaqələr':'Sövdələşmələr'}: ${names.map(x=>({to_external:'Beintaskbot → CRM',from_external:'CRM → Beintaskbot',bidirectional:'iki istiqamətli'}[x]||x)).join(', ')}`);else supported.push(`${entity==='contact'?'Əlaqələr':'Sövdələşmələr'}: dəstəklənmir`)}
+      const capability=document.createElement('p');capability.className='sub';capability.textContent=supported.join(' · ');card.append(capability);
+      const queue=document.createElement('p');queue.className='sub';const rows=outbox.filter(x=>x.provider===provider);queue.textContent=`Növbə: ${rows.length?rows.map(x=>`${x.entity_type} ${x.state}: ${x.count}`).join(' · '):'boş'}; failed: ${rows.filter(x=>x.state==='failed').reduce((n,x)=>n+Number(x.count||0),0)}`;card.append(queue);
+      const pending=conflicts.filter(x=>x.provider===provider).reduce((n,x)=>n+Number(x.count||0),0);const errors=document.createElement('p');errors.className='sub';errors.textContent=`Həll edilməmiş münaqişələr: ${pending}; fərdi xəta detalları API-dən əlçatan deyil.`;card.append(errors);root.append(card);
+    }
+  }
   async function loadExternalSync(){
     if(!syncPanel||profile?.role!=='owner')return;
     try{
       const res=await fetch('/api/platform/crm/external-sync',{credentials:'same-origin'}),data=await res.json();
       if(!res.ok||!data.success)throw new Error();
       const rows=Object.fromEntries((data.result.settings||[]).map(x=>[x.entity_type,x]));
+      renderProviderStatus(data.result);
       const root=document.getElementById('externalCrmSyncSettings');root.replaceChildren();
       for(const entity of ['contact','deal']){
         const saved=rows[entity]||{},card=document.createElement('div');card.className='grid';card.dataset.entity=entity;
@@ -105,7 +120,7 @@
         const provider=card.querySelector('[data-provider]'),direction=card.querySelector('[data-direction]');
         const render=()=>{const p=provider.value,allowed=entity==='contact'?['off',...(p==='kommo'?['to_external','from_external','bidirectional']:[])]:['off','to_external',...(p==='kommo'?['from_external','bidirectional']:[])];direction.replaceChildren(...allowed.map(v=>{const o=document.createElement('option');o.value=v;o.textContent=({off:'Söndürülüb',to_external:'Beintaskbot → CRM',from_external:'CRM → Beintaskbot',bidirectional:'İki istiqamətli'})[v];return o}));const fieldBox=card.querySelector('[data-fields]');fieldBox.replaceChildren();for(const f of fieldOptions[entity][p]||[]){const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.dataset.field=f;input.checked=(saved.allowed_fields||[]).includes(f);label.append(input,document.createTextNode(' '+f));fieldBox.append(label)} };
         provider.value=saved.provider||'kommo';render();direction.value=saved.sync_direction||'off';provider.onchange=()=>{saved.allowed_fields=[];render();direction.value='off'};
-        const counts=(data.result.outbox||[]).filter(x=>x.entity_type===entity).map(x=>`${x.state}: ${x.count}`).join(' · ');const conflicts=(data.result.conflicts||[]).filter(x=>x.entity_type===entity).reduce((n,x)=>n+Number(x.count||0),0);card.querySelector('[data-counts]').textContent=`Növbə: ${counts||'boş'}; münaqişə: ${conflicts}; bağlantı: ${(data.result.integrations||{})[provider.value]||'yoxlanılmayıb'}`;
+        const counts=(data.result.outbox||[]).filter(x=>x.entity_type===entity&&x.provider===provider.value).map(x=>`${x.state}: ${x.count}`).join(' · ');const conflicts=(data.result.conflicts||[]).filter(x=>x.entity_type===entity&&x.provider===provider.value).reduce((n,x)=>n+Number(x.count||0),0);card.querySelector('[data-counts]').textContent=`Növbə: ${counts||'boş'}; həll edilməmiş münaqişə: ${conflicts}; bağlantı: ${(data.result.integrations||{})[provider.value]||'yoxlanılmayıb'}`;
         root.append(card);
       }
       document.getElementById('externalCrmSyncStatus').textContent='Ayarlar yükləndi. Sinxronizasiya yalnız açıq şəkildə seçildikdə başlayır.';
