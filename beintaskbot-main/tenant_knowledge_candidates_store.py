@@ -218,7 +218,7 @@ def public_card(cur,row,content_language='az'):
     value['extraction_id']=str(row['extraction_id'])
     cur.execute('SELECT agent_id,source_id FROM saas_knowledge_candidate_sources WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid ORDER BY agent_id',(row['tenant_id'],row['id']))
     value['publications']=[{k:str(v) for k,v in item.items()} for item in cur.fetchall()]
-    value.setdefault('resolution_method','unknown');value.setdefault('operator_actions',[]);value.setdefault('operator_action_evidence',[]);value.setdefault('case_kind','technical')
+    value.setdefault('resolution_method','unknown');value.setdefault('operator_actions',[]);value.setdefault('operator_action_evidence',[]);value.setdefault('cause_evidence',[]);value.setdefault('case_kind','technical')
     value.setdefault('clarification_note','');value.setdefault('work_status','unknown')
     sources=value.get('source_message_ids') or []
     value.setdefault('start_message_id',sources[0] if sources else '')
@@ -318,7 +318,17 @@ def enforce_confirmation(value,items):
         value['resolution_steps']=[]
     confirmed=any(by_id[i]['role'] in {'customer','operator'} and positive_confirmation(by_id[i]['text'],value.get('case_kind')=='informational') for i in value['outcome']['message_ids'])
     if value['outcome']['status']=='confirmed' and not confirmed: value['outcome']['status']='unconfirmed'
-    if value['cause']['status']=='confirmed' and not any(by_id[i]['role'] in {'customer','operator'} for i in value['source_message_ids']): value['cause']['status']='suspected'
+    cause_evidence=value.get('cause_evidence',[])
+    for item in cause_evidence:
+        source=by_id.get(item.get('message_id'))
+        if (not source or item.get('message_id') not in value['source_message_ids']
+                or not item.get('quote') or item['quote'] not in source.get('text','')
+                or source.get('role') not in {'customer','operator'}):
+            raise TenantLinearError('Подтверждение причины не совпадает с исходным сообщением.',409)
+    # A status is never upgraded from the mere presence of a human message.  A
+    # reviewer must explicitly select and quote the source that establishes it.
+    if value['cause']['status']=='confirmed' and not cause_evidence:
+        value['cause']['status']='suspected'
     return value
 
 
@@ -329,8 +339,8 @@ def publication_text(value):
       'Состояние работы: '+value.get('work_status','unknown'),
       'Результат подтверждён в исходной переписке: '+value['outcome']['text'],
       'Способ решения: '+value.get('resolution_method','unknown'),
-      'Действия сотрудника: '+'; '.join(value.get('operator_actions',[])),
-      'Продукт: '+value['product']+'; версия: '+value['product_version']])
+       'Действия сотрудника: '+'; '.join(value.get('operator_actions',[])),
+       'Продукт и версия из карточки (не являются отдельным доказательством): '+value['product']+'; '+value['product_version']])
 
 
 def mutate(profile,candidate_id,data,action='edit'):

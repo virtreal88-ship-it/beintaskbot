@@ -120,14 +120,14 @@ def _message(item, *, group=False, participant_names=None, contact_name=''):
     if value['source'] == 'connect':
         # No provider URL or raw webhook payload crosses the browser boundary.
         value['media_url'] = ''
-        if value.get('message_type') in {'image','audio','video','document'}:
+        if value.get('message_type') in {'image','audio','voice','video','document'}:
             filename=_media_filename(raw)
             if filename:value['media_filename']=filename
         transcript = raw.get('voice_transcription', {}) if isinstance(raw, dict) else {}
-        if (value.get('message_type') == 'audio' and isinstance(transcript, dict)
+        if (value.get('message_type') in {'audio','voice'} and isinstance(transcript, dict)
                 and transcript.get('status') == 'completed' and value.get('body')):
             value['has_transcription'] = True
-        if value.get('message_type') == 'audio':
+        if value.get('message_type') in {'audio','voice'}:
             duration = _audio_duration(raw)
             if duration is not None:
                 value['duration_seconds'] = duration

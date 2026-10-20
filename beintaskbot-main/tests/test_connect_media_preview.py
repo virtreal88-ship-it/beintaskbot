@@ -81,6 +81,15 @@ def test_group_media_preserves_route_and_saved_transcript(media_db):
     assert 'has_transcription' not in dialogs._message({'channel':'connect:'+CA,'message_type':'audio','body':'','raw':{'voice_transcription':{'status':'failed'}}})
 
 
+def test_voice_uses_the_same_protected_preview_and_transcript_contract(media_db):
+    media_db.execute("UPDATE saas_crm_messages SET message_type='voice' WHERE tenant_id=%s::uuid",(A,));media_db.commit()
+    result=store.load({'tenant_id':A,'telegram_id':33},41,'connect:'+MID,channel_id=CA,conversation_id='client')
+    assert result['row']['message_type']=='voice' and result['route']['channel_id']==CA
+    public=dialogs._message({'channel':'connect:'+CA,'direction':'incoming','message_type':'voice','body':'Hazır transkript',
+        'raw':{'voice_transcription':{'status':'completed'},'durationSeconds':12}})
+    assert public['has_transcription'] is True and public['duration_seconds']==12
+
+
 def run(coroutine):return asyncio.run(coroutine)
 
 
@@ -129,9 +138,10 @@ def test_mime_size_identity_and_truncation(monkeypatch,headers,chunks):
     with pytest.raises(TenantLinearError):run(media.download_media(item()))
 
 
-def test_audio_preview(monkeypatch):
+@pytest.mark.parametrize('kind',['audio','voice'])
+def test_audio_preview(monkeypatch,kind):
     transport(monkeypatch,headers={'Content-Type':'audio/ogg'},chunks=[b'OggSopus'])
-    audio=item();audio['row']['message_type']='audio'
+    audio=item();audio['row']['message_type']=kind
     assert run(media.download_media(audio))==(b'OggSopus','audio/ogg')
 
 
@@ -185,7 +195,7 @@ def test_transport_timeout_has_safe_error(monkeypatch):
 
 
 @pytest.mark.parametrize('status',['active','onboarding','ready_for_integration','suspended','archived'])
-@pytest.mark.parametrize('kind',['image','audio'])
+@pytest.mark.parametrize('kind',['image','audio','voice'])
 def test_connect_preview_lifecycle_matches_read_only_dialogs(media_db,status,kind):
     media_db.execute("UPDATE saas_tenants SET status=%s WHERE id=%s::uuid",(status,A))
     media_db.execute("UPDATE saas_crm_messages SET message_type=%s WHERE tenant_id=%s::uuid",(kind,A));media_db.commit()
