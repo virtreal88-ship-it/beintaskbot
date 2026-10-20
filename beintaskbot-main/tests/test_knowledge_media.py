@@ -79,9 +79,10 @@ def test_plain_document_extracts_redacts_and_preserves_caption(context):
     assert 'Synthetic caption' in item['messages'][0]['text']
     assert 'demo@example.com' not in item['messages'][0]['text'] and 'fake-secret' not in item['messages'][0]['text']
 
+@pytest.mark.parametrize('kind',['audio','voice'])
 @pytest.mark.parametrize('language,text',[('az','Miqdarı yoxlayın'),('ru','Проверьте количество'),('en','Check quantity')])
-def test_cached_asr_reused_without_download(context,monkeypatch,language,text):
-    item,add,download=context;add('audio');monkeypatch.setattr(media,'cached_transcript',lambda *a:text)
+def test_cached_asr_reused_without_download(context,monkeypatch,kind,language,text):
+    item,add,download=context;add(kind);monkeypatch.setattr(media,'cached_transcript',lambda *a:text)
     assert media.collect({},item)[1][0]['code']=='existing_transcript'
     assert text in item['messages'][0]['text'];download.assert_not_called()
 

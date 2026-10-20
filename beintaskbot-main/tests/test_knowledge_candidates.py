@@ -304,7 +304,22 @@ def test_model_cannot_certify_its_own_cause(ready):
     result=candidate(ready)
     assert result['cause']['status']=='suspected'
     edited=store.mutate(PROFILE,result['id'],{'expected_version':1,'cause':{'status':'confirmed','text':'Сотрудник проверил причину по исходным сообщениям'}})['candidate']
-    assert edited['cause']['status']=='confirmed'
+    assert edited['cause']['status']=='suspected'
+
+
+def test_confirmed_cause_requires_exact_human_source_evidence_and_rechecks_source(ready):
+    db,generation,data=ready;value=candidate(ready)
+    evidence={'message_id':value['source_message_ids'][1],'quote':'Проверьте соединение и повторите синхронизацию'}
+    edited=store.mutate(PROFILE,value['id'],{'expected_version':1,
+        'cause':{'status':'confirmed','text':'Сотрудник установил причину по переписке'},'cause_evidence':[evidence]})['candidate']
+    assert edited['cause']['status']=='confirmed' and edited['cause_evidence']==[evidence] and edited['can_approve']
+    with pytest.raises(TenantLinearError):
+        store.mutate(PROFILE,value['id'],{'expected_version':2,'cause_evidence':[{'message_id':str(uuid.uuid4()),'quote':'чужой источник'}]})
+    with pytest.raises(TenantLinearError):
+        store.mutate(PROFILE,value['id'],{'expected_version':2,'cause_evidence':[{'message_id':value['source_message_ids'][1],'quote':'чужая цитата'}]})
+    db.execute("UPDATE saas_crm_messages SET body='Изменённый источник' WHERE external_id='response-0'");db.commit()
+    with pytest.raises(TenantLinearError,match='Исходное сообщение изменилось'):
+        store.mutate(PROFILE,value['id'],{'expected_version':2,'agent_ids':[AGENT]},'approve')
 
 def test_group_ai_authored_flag_never_human_confirmation(ready):
     db,generation,data=ready

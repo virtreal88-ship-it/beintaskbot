@@ -7,7 +7,7 @@ MAX_TOKENS=16000
 MAX_DAILY_EXTRACTIONS=10
 MAX_CARDS=5
 BASE_FIELDS={'title','symptoms','cause','resolution_steps','outcome','source_message_ids','product','product_version'}
-FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','operator_action_evidence','case_kind','content_language','clarification_note','work_status','start_message_id','end_message_id','case_relation'}
+FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','operator_action_evidence','cause_evidence','case_kind','content_language','clarification_note','work_status','start_message_id','end_message_id','case_relation'}
 
 def language(value=None,profile=None):
     # AI-created case content has a fixed Azerbaijani language contract. Keep
@@ -81,6 +81,18 @@ def card(data,allowed_ids):
         return normalized
     result['source_message_ids']=ids(data['source_message_ids'])
     if not result['source_message_ids']: raise TenantLinearError('Укажите исходные сообщения.')
+    cause_evidence=data.get('cause_evidence',[])
+    if not isinstance(cause_evidence,list) or len(cause_evidence)>3:
+        raise TenantLinearError('Некорректные подтверждения причины.')
+    normalized_cause_evidence=[]
+    for item in cause_evidence:
+        if not isinstance(item,dict) or set(item)!={'message_id','quote'}:
+            raise TenantLinearError('Некорректные подтверждения причины.')
+        message_id=identifier(item['message_id'])
+        if message_id not in result['source_message_ids']:
+            raise TenantLinearError('Подтверждение причины вне исходных сообщений.',403)
+        normalized_cause_evidence.append({'message_id':message_id,'quote':text(item['quote'],800,True)})
+    result['cause_evidence']=normalized_cause_evidence
     start=identifier(data.get('start_message_id',result['source_message_ids'][0]));end=identifier(data.get('end_message_id',result['source_message_ids'][-1]))
     if start not in result['source_message_ids'] or end not in result['source_message_ids']: raise TenantLinearError('Границы обращения должны входить в исходные сообщения.',403)
     if allowed_order.index(start)>allowed_order.index(end): raise TenantLinearError('Начальное сообщение должно предшествовать конечному.')
@@ -132,4 +144,5 @@ def approval_reason(value):
     if value.get('case_kind','technical')=='technical' and value.get('work_status','unknown')!='resolved': return 'work_status_required' if value.get('work_status','unknown')=='unknown' else 'work_not_resolved'
     if value.get('resolution_method') in {'remote','phone'} and not value.get('operator_actions'): return 'operator_actions_required'
     if value.get('case_kind','technical')=='technical' and not value['resolution_steps']: return 'solution_required'
+    if value.get('cause',{}).get('status')=='confirmed' and not value.get('cause_evidence'): return 'cause_evidence_required'
     return None

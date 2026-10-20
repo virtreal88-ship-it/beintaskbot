@@ -12,6 +12,7 @@ else {page++;result={candidates:[{id:'card-'+page,title:'Case '+page,status:'pen
 return {ok:true,json:async()=>({success:true,result})};};
 const tick=()=>new Promise(r=>setTimeout(r,20));
 (async()=>{w.eval(fs.readFileSync('docs/tenant-knowledge-candidates.js','utf8'));await tick();
+const search=w.document.getElementById('casesSearch');assert(search,'local search is available without changing server pagination');assert(w.document.querySelector('.case-readiness').textContent.includes('Həll yolu yoxdur'),'list marks a missing solution');search.value='not found';search.dispatchEvent(new w.Event('input',{bubbles:true}));assert.equal(w.document.querySelectorAll('.support-case').length,0);search.value='Case 1';search.dispatchEvent(new w.Event('input',{bubbles:true}));assert.equal(w.document.querySelectorAll('.support-case').length,1);search.value='';search.dispatchEvent(new w.Event('input',{bubbles:true}));
 assert.equal(w.document.querySelectorAll('#casesChannel option').length,3);
 assert(calls.some(c=>c.url.includes('knowledge-candidates?')&&!c.url.includes('channel_id')),'Unified queue loads without route');
 const initialQueueCall=calls.find(c=>c.url.includes('knowledge-candidates?')&&!c.url.includes('channel_id'));assert(!new URL(initialQueueCall.url,'https://example.test').searchParams.has('status'),'default queue leaves rejected filtering to the server');
