@@ -1,7 +1,9 @@
 """Operator workspace regressions against isolated PostgreSQL, never production."""
+import asyncio
 import json
 import uuid
-from unittest.mock import patch
+from unittest.mock import Mock,patch
+from aiohttp.test_utils import make_mocked_request
 import pytest
 from test_tenant_support_inbox import database,db,A,B,CA,CB,AGENT,PROFILE,manual,seed_job
 import tenant_operator_dialogs as dialogs
@@ -45,6 +47,34 @@ def test_connect_media_filename_exposes_only_safe_basename():
     assert dialogs._media_filename({'file_name':'//private.provider/secret.pdf'})==''
     assert dialogs._media_filename({'filename':'unsafe\nname.pdf'})==''
 
+
+def test_dialogs_endpoint_lists_real_postgres_rows_and_detects_manual_handoff(operator_db,monkeypatch):
+    seed_job(operator_db)
+    executed=[]
+    original_execute=operator_db.execute
+    def capture_execute(sql,params=()):
+        executed.append(sql)
+        return original_execute(sql,params)
+    monkeypatch.setattr(operator_db,'execute',capture_execute)
+    from tenant_operator_api import handler
+    handle=handler(lambda _request:PROFILE,'https://crm.test',Mock(),'dialogs')
+    request=make_mocked_request('GET','/api/platform/ai/dialogs')
+    response=asyncio.run(handle(request))
+    assert response.status==200
+    body=json.loads(response.text)
+    assert body['success'] is True and len(body['result']['dialogs'])==1
+    assert body['result']['dialogs'][0]['conversation_id']=='client'
+    projection_sql='\n'.join(executed)
+    for pattern in ("LIKE 'handoff:%%'","LIKE 'manual-handoff:%%'","LIKE 'group-handoff:%%'","NOT LIKE 'connect:%%'"):
+        assert pattern in projection_sql
+
+    agents.set_conversation_state(PROFILE,'client','human','Manual handoff','connect',CA)
+    response=asyncio.run(handle(make_mocked_request('GET','/api/platform/ai/dialogs')))
+    assert response.status==200
+    dialog=json.loads(response.text)['result']['dialogs'][0]
+    assert dialog['handoff_active'] is True
+    assert dialog['handoff_source']=='manual'
+    assert dialog['handoff_event_id'].startswith('manual-handoff:')
 
 def test_operator_rights_do_not_grant_configuration(operator_db):
     person=employee(operator_db,['dialogs','support'])
