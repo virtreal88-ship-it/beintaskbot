@@ -41,6 +41,55 @@ def candidate(ready):
     db,generation,data=ready
     return service.analyze(PROFILE,data)['candidates'][0]
 
+
+def test_case_customer_and_company_are_read_from_tenant_native_crm(ready):
+    db,_,_=ready;value=candidate(ready)
+    company=str(uuid.UUID(int=9901));contact=str(uuid.UUID(int=9902))
+    db.execute("INSERT INTO saas_crm_native_companies(id,tenant_id,name) VALUES(%s::uuid,%s::uuid,'Go party')",(company,A))
+    db.execute("INSERT INTO saas_crm_native_contacts(id,tenant_id,display_name,phone,company_id) VALUES(%s::uuid,%s::uuid,'Nicat Xaliqov','994501234567',%s::uuid)",(contact,A,company))
+    db.execute("INSERT INTO saas_crm_native_contact_conversations(tenant_id,provider,channel_id,conversation_id,contact_id) VALUES(%s::uuid,'connect',%s::uuid,'client',%s::uuid)",(A,CA,contact))
+    db.commit()
+    listed=store.listing(PROFILE,{'limit':25})['candidates'][0]
+    opened=store.detail(PROFILE,value['id'])['candidate']
+    assert (listed['customer_name'],listed['customer_phone'],listed['company_name'])==('Nicat Xaliqov','+994501234567','Go party')
+    assert (opened['customer_name'],opened['customer_phone'],opened['company_name'])==(listed['customer_name'],listed['customer_phone'],listed['company_name'])
+    # A second tenant may store the same external conversation key; it cannot override tenant A's contact.
+    foreign=str(uuid.UUID(int=9903))
+    db.execute("INSERT INTO saas_crm_native_contacts(id,tenant_id,display_name,phone) VALUES(%s::uuid,%s::uuid,'Foreign','994999999999')",(foreign,B))
+    db.execute("INSERT INTO saas_crm_native_contact_conversations(tenant_id,provider,channel_id,conversation_id,contact_id) VALUES(%s::uuid,'connect',%s::uuid,'client',%s::uuid)",(B,CB,foreign));db.commit()
+    assert store.listing(PROFILE,{'limit':25})['candidates'][0]['customer_name']=='Nicat Xaliqov'
+
+
+def test_case_customer_without_crm_link_uses_verified_connect_phone(ready):
+    db,_,_=ready;value=candidate(ready)
+    db.execute("UPDATE saas_connect_conversations SET phone='+994 50 123 4567' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CA));db.commit()
+    listed=store.listing(PROFILE,{'limit':25})['candidates'][0]
+    opened=store.detail(PROFILE,value['id'])['candidate']
+    assert listed['customer_name']=='Client' and listed['customer_phone']=='+994501234567' and listed['company_name']==''
+    assert (opened['customer_name'],opened['customer_phone'])==(listed['customer_name'],listed['customer_phone'])
+
+
+def test_case_customer_without_phone_or_company_reports_missing_values(ready):
+    db,_,_=ready;value=candidate(ready);contact=str(uuid.UUID(int=9904))
+    db.execute("INSERT INTO saas_crm_native_contacts(id,tenant_id,display_name,phone) VALUES(%s::uuid,%s::uuid,'Aysel Məmmədova','')",(contact,A))
+    db.execute("INSERT INTO saas_crm_native_contact_conversations(tenant_id,provider,channel_id,conversation_id,contact_id) VALUES(%s::uuid,'connect',%s::uuid,'client',%s::uuid)",(A,CA,contact))
+    db.execute("UPDATE saas_connect_conversations SET phone='',contact_name='',display_name='' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CA));db.commit()
+    listed=store.listing(PROFILE,{'limit':25})['candidates'][0]
+    opened=store.detail(PROFILE,value['id'])['candidate']
+    assert listed['customer_name']=='Aysel Məmmədova' and listed['customer_phone']=='' and listed['company_name']==''
+    assert (opened['customer_name'],opened['customer_phone'],opened['company_name'])==(listed['customer_name'],listed['customer_phone'],listed['company_name'])
+
+
+def test_group_case_never_displays_group_jid_or_arbitrarily_picks_sender(ready):
+    db,_,_=ready;value=candidate(ready);group='120363000000000@g.us'
+    db.execute("UPDATE saas_knowledge_extractions SET route=jsonb_set(route,'{conversation_id}',to_jsonb(%s::text)) WHERE tenant_id=%s::uuid AND id=%s::uuid",(group,A,value['extraction_id']))
+    db.execute("UPDATE saas_connect_conversations SET conversation_id=%s,conversation_kind='group',phone='' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND lead_id=41",(group,A,CA))
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND external_id='m1'",(json.dumps({'participantJid':'994501111111@s.whatsapp.net','participantName':'Aysel'}),A))
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND external_id='response-1'",(json.dumps({'participantJid':'994502222222@s.whatsapp.net','participantName':'Murad'}),A));db.commit()
+    result=store.listing(PROFILE,{'limit':25})['candidates'][0]
+    assert result['customer_phone']=='' and result['customer_name']=='' and result['company_name']==''
+    assert '@' not in result['customer_name']
+
 def test_private_pending_review_edit_approve_agent_scoped_idempotent(ready):
     db,generation,data=ready
     before=db.execute('SELECT enabled,mode,scopes,version FROM saas_ai_agents ORDER BY id');db.commit()

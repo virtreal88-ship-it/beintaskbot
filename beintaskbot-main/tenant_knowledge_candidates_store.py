@@ -212,7 +212,83 @@ def public_request(row):
       'media_results':row.get('media_results') or [],'next_before':row['route'].get('next_before'),'limits':{'max_messages':MAX_MESSAGES,'max_context_chars':MAX_CONTEXT,'max_cards':5}}
 
 
-def public_card(cur,row,content_language='az',source_route=None):
+def _safe_client_name(value):
+    value=str(value or '').strip()[:180]
+    if not value or '@' in value or re.fullmatch(r'[+\d\s().-]+',value): return ''
+    return value
+
+
+def _safe_client_phone(value):
+    value=str(value or '').strip()
+    if '@' in value or not re.fullmatch(r'\+?[\d\s().-]{6,}',value): return ''
+    digits=re.sub(r'\D','',value)
+    return '+'+digits if 6<=len(digits)<=18 else ''
+
+
+def _crm_contact_by_wa_identity(cur,tenant,number):
+    digits=re.sub(r'\D','',str(number or ''))
+    if not digits: return None
+    cur.execute('''SELECT c.id,c.display_name,c.phone,c.company_id,co.name AS company_name
+      FROM saas_crm_native_contact_identities i
+      JOIN saas_crm_native_contacts c ON c.tenant_id=i.tenant_id AND c.id=i.contact_id AND c.archived_at IS NULL
+      LEFT JOIN saas_crm_native_companies co ON co.tenant_id=c.tenant_id AND co.id=c.company_id AND co.archived_at IS NULL
+      WHERE i.tenant_id=%s::uuid AND i.identity_type='whatsapp_phone' AND i.identity_value=%s''',(tenant,digits))
+    rows=cur.fetchall()
+    return rows[0] if len(rows)==1 else None
+
+
+def _case_customer(cur,tenant,route_value,card,dialog=None):
+    """Resolve only tenant-scoped CRM links and provider-verified WhatsApp identities."""
+    channel=str(route_value.get('channel_id') or '')
+    conversation=str(route_value.get('conversation_id') or '')
+    group=group_jid(conversation)
+    contact=None;fallback_name='';fallback_phone=''
+    if not group and channel and conversation:
+        cur.execute('''SELECT c.id,c.display_name,c.phone,c.company_id,co.name AS company_name
+          FROM saas_crm_native_contact_conversations x
+          JOIN saas_crm_native_contacts c ON c.tenant_id=x.tenant_id AND c.id=x.contact_id AND c.archived_at IS NULL
+          LEFT JOIN saas_crm_native_companies co ON co.tenant_id=c.tenant_id AND co.id=c.company_id AND co.archived_at IS NULL
+          WHERE x.tenant_id=%s::uuid AND x.provider='connect' AND x.channel_id=%s::uuid AND x.conversation_id=%s''',
+          (tenant,channel,conversation))
+        contact=cur.fetchone()
+        if dialog:
+            fallback_name=_safe_client_name(dialog.get('manual_display_name') or dialog.get('contact_name') or dialog.get('display_name'))
+            candidate=conversation.split('@',1)[0] if conversation.endswith(('@s.whatsapp.net','@c.us')) else ''
+            if candidate.isdecimal(): fallback_phone=_safe_client_phone(candidate)
+            fallback_phone=fallback_phone or _safe_client_phone(dialog.get('phone'))
+            if not contact:
+                contact=_crm_contact_by_wa_identity(cur,tenant,fallback_phone)
+    elif group:
+        ids=[str(value) for value in card.get('source_message_ids',[]) if value]
+        if ids:
+            cur.execute('''SELECT raw,author_name FROM saas_crm_messages WHERE tenant_id=%s::uuid
+              AND id=ANY(%s::uuid[]) AND direction='incoming' AND channel LIKE 'connect:%%' ''',(tenant,ids))
+            from tenant_operator_dialogs import _participant_fields
+            senders={}
+            for message in cur.fetchall():
+                raw=message.get('raw') if isinstance(message.get('raw'),dict) else {}
+                jid,_,display=_participant_fields(raw)
+                if jid.endswith(('@s.whatsapp.net','@c.us')):
+                    number=jid.split('@',1)[0]
+                    if number.isdecimal(): senders[number]=_safe_client_name(display or message.get('author_name'))
+            numbers=list(senders)
+            if numbers:
+                linked=[(match,number) for number in numbers if (match:=_crm_contact_by_wa_identity(cur,tenant,number))]
+                linked_contacts={str(match['id']):match for match,_ in linked}
+                if len(linked_contacts)==1:
+                    contact=next(iter(linked_contacts.values()))
+                    linked_numbers={number for _,number in linked}
+                    if len(linked_numbers)==1: fallback_phone=_safe_client_phone(next(iter(linked_numbers)))
+                elif not linked and len(numbers)==1:
+                    fallback_phone=_safe_client_phone(numbers[0]);fallback_name=senders[numbers[0]]
+    name=_safe_client_name(contact.get('display_name')) if contact else fallback_name
+    phone=_safe_client_phone(contact.get('phone')) if contact else ''
+    phone=phone or fallback_phone
+    return {'customer_name':name or phone,'customer_phone':phone,
+            'company_name':str(contact.get('company_name') or '') if contact else ''}
+
+
+def public_card(cur,row,content_language='az',source_route=None,tenant=None,dialog=None):
     value={**_row(row),**row['content']};value.pop('content',None);value.pop('content_hash',None)
     if value.get('reviewed_at'): value['reviewed_at']=value['reviewed_at'].isoformat()
     value['extraction_id']=str(row['extraction_id'])
@@ -226,6 +302,8 @@ def public_card(cur,row,content_language='az',source_route=None):
     value.setdefault('case_relation','unknown')
     route=source_route or {}
     value['source_route']={key:route[key] for key in ('provider','channel_id','conversation_id','phone') if route.get(key)}
+    if tenant:
+        value.update(_case_customer(cur,tenant,route,value,dialog))
     # Existing records predate the explicit content-language field. Their extraction
     # route records the language requested when the card was generated.
     value.setdefault('content_language',content_language if content_language in {'ru','az','en'} else 'az')
@@ -256,7 +334,8 @@ def detail(profile,candidate_id):
             row=cur.fetchone()
             if not row: raise TenantLinearError('Карточка не найдена.',404)
             run=extraction_row(cur,tenant,row['extraction_id']);items=evidence(cur,profile,run)
-            value=public_card(cur,row,run.get('route',{}).get('language') or 'az')
+            chosen=route(cur,profile,run['route'])[3]
+            value=public_card(cur,row,run.get('route',{}).get('language') or 'az',run['route'],tenant,chosen)
     return {'candidate':value,'evidence':items,'route':run['route']}
 
 
@@ -295,9 +374,10 @@ def listing(profile,data):
             for row in values[:limit]:
                 extraction_id=str(row['extraction_id'])
                 if extraction_id not in runs:
-                    runs[extraction_id]=extraction_row(cur,tenant,extraction_id);route(cur,profile,runs[extraction_id]['route'])
+                    runs[extraction_id]=extraction_row(cur,tenant,extraction_id)
+                    runs[extraction_id]['_chosen']=route(cur,profile,runs[extraction_id]['route'])[3]
                 source_route=runs[extraction_id].get('route',{})
-                cards.append(public_card(cur,row,source_route.get('language') or 'az',source_route))
+                cards.append(public_card(cur,row,source_route.get('language') or 'az',source_route,tenant,runs[extraction_id]['_chosen']))
     return {'candidates':cards,'limit':limit,'next_before':str(values[limit-1]['id']) if len(values)>limit else None}
 
 
