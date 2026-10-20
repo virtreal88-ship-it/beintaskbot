@@ -243,6 +243,37 @@ def _case_customer(cur,tenant,route_value,card,dialog=None):
     conversation=str(route_value.get('conversation_id') or '')
     group=group_jid(conversation)
     contact=None;fallback_name='';fallback_phone=''
+    group_name='';participants={};participant_count=0
+    if group:
+        from tenant_operator_dialogs import _safe_group_name, _participant_fields
+        group_name=_safe_group_name({**(dialog or {}),'conversation_id':conversation})
+        ids=[str(value) for value in card.get('source_message_ids',[]) if value]
+        if ids:
+            cur.execute('''SELECT m.raw,m.author_name,m.channel FROM saas_crm_messages m WHERE m.tenant_id=%s::uuid
+              AND m.id=ANY(%s::uuid[]) AND m.direction='incoming' AND m.channel LIKE 'connect:%%'
+              AND EXISTS(SELECT 1 FROM saas_connect_conversations c WHERE c.tenant_id=m.tenant_id
+                AND c.connect_channel_id::text=substring(m.channel from 9) AND c.conversation_id=%s AND c.lead_id=m.kommo_lead_id)''',(tenant,ids,conversation))
+            sender_jids=[]; sender_names={}
+            for message in cur.fetchall():
+                raw=message.get('raw') if isinstance(message.get('raw'),dict) else {}
+                jid,_,display=_participant_fields(raw)
+                if jid and jid not in sender_jids: sender_jids.append(jid)
+                safe_name=_safe_client_name(display or message.get('author_name'))
+                if jid and safe_name: sender_names[(str(message.get('channel') or '').removeprefix('connect:'),jid)]=safe_name
+            participant_count=len(sender_jids)
+            sender_channels=sorted({item[0] for item in sender_names if item[0]})
+            cur.execute("SELECT to_regclass('public.saas_connect_participant_display_names') AS relation")
+            participant_names_available=bool((cur.fetchone() or {}).get('relation'))
+            if participant_names_available and sender_jids and sender_channels:
+                cur.execute('''SELECT participant_jid,display_name FROM saas_connect_participant_display_names
+                  WHERE tenant_id=%s::uuid AND connect_channel_id::text=ANY(%s::text[]) AND conversation_id=%s AND participant_jid=ANY(%s::text[])''',
+                  (tenant,sender_channels,conversation,sender_jids))
+                for row in cur.fetchall():
+                    safe_name=_safe_client_name(row.get('display_name'))
+                    if safe_name:
+                        for source_channel in sender_channels:
+                            sender_names[(source_channel,str(row['participant_jid']))]=safe_name
+            participants={name for name in sender_names.values()}
     if not group and channel and conversation:
         cur.execute('''SELECT c.id,c.display_name,c.phone,c.company_id,co.name AS company_name
           FROM saas_crm_native_contact_conversations x
@@ -258,37 +289,26 @@ def _case_customer(cur,tenant,route_value,card,dialog=None):
             fallback_phone=fallback_phone or _safe_client_phone(dialog.get('phone'))
             if not contact:
                 contact=_crm_contact_by_wa_identity(cur,tenant,fallback_phone)
-    elif group:
-        ids=[str(value) for value in card.get('source_message_ids',[]) if value]
-        if ids:
-            cur.execute('''SELECT raw,author_name FROM saas_crm_messages WHERE tenant_id=%s::uuid
-              AND id=ANY(%s::uuid[]) AND direction='incoming' AND channel LIKE 'connect:%%' ''',(tenant,ids))
-            from tenant_operator_dialogs import _participant_fields
-            senders={}
-            for message in cur.fetchall():
-                raw=message.get('raw') if isinstance(message.get('raw'),dict) else {}
-                jid,_,display=_participant_fields(raw)
-                if jid.endswith(('@s.whatsapp.net','@c.us')):
-                    number=jid.split('@',1)[0]
-                    if number.isdecimal(): senders[number]=_safe_client_name(display or message.get('author_name'))
-            numbers=list(senders)
-            if numbers:
-                linked=[(match,number) for number in numbers if (match:=_crm_contact_by_wa_identity(cur,tenant,number))]
-                linked_contacts={str(match['id']):match for match,_ in linked}
-                if len(linked_contacts)==1:
-                    contact=next(iter(linked_contacts.values()))
-                    linked_numbers={number for _,number in linked}
-                    if len(linked_numbers)==1: fallback_phone=_safe_client_phone(next(iter(linked_numbers)))
-                elif not linked and len(numbers)==1:
-                    fallback_phone=_safe_client_phone(numbers[0]);fallback_name=senders[numbers[0]]
+    if group:
+        return {'customer_name':'','customer_phone':'','company_name':'','conversation_kind':'group',
+                'conversation_name':group_name,'participant_count':participant_count,'participants':sorted(participants)}
     name=_safe_client_name(contact.get('display_name')) if contact else fallback_name
     phone=_safe_client_phone(contact.get('phone')) if contact else ''
     phone=phone or fallback_phone
     return {'customer_name':name or phone,'customer_phone':phone,
-            'company_name':str(contact.get('company_name') or '') if contact else ''}
+            'company_name':str(contact.get('company_name') or '') if contact else '',
+            'conversation_kind':'direct','conversation_name':'','participant_count':0,'participants':[]}
 
 
-def public_card(cur,row,content_language='az',source_route=None,tenant=None,dialog=None):
+def _public_media_processing(media_results,source_ids,extraction_status):
+    source_ids={str(value) for value in source_ids or []}
+    return [{'id':str(item.get('id') or ''),'status':str(item.get('status') or ''),
+      'code':str(item.get('code') or ''),'audio_status':str(item.get('audio_status') or ''),
+      'extraction_status':str(extraction_status or '')}
+      for item in media_results or [] if str(item.get('id') or '') in source_ids]
+
+
+def public_card(cur,row,content_language='az',source_route=None,tenant=None,dialog=None,media_results=None,extraction_status=None):
     value={**_row(row),**row['content']};value.pop('content',None);value.pop('content_hash',None)
     if value.get('reviewed_at'): value['reviewed_at']=value['reviewed_at'].isoformat()
     value['extraction_id']=str(row['extraction_id'])
@@ -302,6 +322,8 @@ def public_card(cur,row,content_language='az',source_route=None,tenant=None,dial
     value.setdefault('case_relation','unknown')
     route=source_route or {}
     value['source_route']={key:route[key] for key in ('provider','channel_id','conversation_id','phone') if route.get(key)}
+    if media_results is not None:
+        value['media_processing']=_public_media_processing(media_results,sources,extraction_status)
     if tenant:
         value.update(_case_customer(cur,tenant,route,value,dialog))
     # Existing records predate the explicit content-language field. Their extraction
@@ -321,7 +343,7 @@ def request_detail(profile,request_id):
         with conn.cursor() as cur:
             tenant,_,_=authorize(cur,profile);row=extraction_row(cur,tenant,request_id);evidence(cur,profile,row)
             cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND extraction_id=%s::uuid ORDER BY created_at,id',(tenant,row['id']))
-            cards=[public_card(cur,r,row.get('route',{}).get('language') or 'az') for r in cur.fetchall()]
+            cards=[public_card(cur,r,row.get('route',{}).get('language') or 'az',media_results=row.get('media_results') or []) for r in cur.fetchall()]
     return {'request':public_request(row),'candidates':cards}
 
 
@@ -335,7 +357,7 @@ def detail(profile,candidate_id):
             if not row: raise TenantLinearError('Карточка не найдена.',404)
             run=extraction_row(cur,tenant,row['extraction_id']);items=evidence(cur,profile,run)
             chosen=route(cur,profile,run['route'])[3]
-            value=public_card(cur,row,run.get('route',{}).get('language') or 'az',run['route'],tenant,chosen)
+            value=public_card(cur,row,run.get('route',{}).get('language') or 'az',run['route'],tenant,chosen,run.get('media_results') or [],run.get('status'))
             value['boundary_summary']=boundary_summary(cur,tenant,run['route'],chosen,value)
     return {'candidate':value,'evidence':items,'route':run['route']}
 
@@ -426,7 +448,7 @@ def listing(profile,data):
                     runs[extraction_id]=extraction_row(cur,tenant,extraction_id)
                     runs[extraction_id]['_chosen']=route(cur,profile,runs[extraction_id]['route'])[3]
                 source_route=runs[extraction_id].get('route',{})
-                cards.append(public_card(cur,row,source_route.get('language') or 'az',source_route,tenant,runs[extraction_id]['_chosen']))
+                cards.append(public_card(cur,row,source_route.get('language') or 'az',source_route,tenant,runs[extraction_id]['_chosen'],runs[extraction_id].get('media_results') or [],runs[extraction_id].get('status')))
     return {'candidates':cards,'limit':limit,'next_before':str(values[limit-1]['id']) if len(values)>limit else None}
 
 
