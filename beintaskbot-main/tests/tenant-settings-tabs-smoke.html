@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Settings tabs browser smoke</title>
+  <style>
+    :root{--paper:#f4f6f8;--line:#d5dce1;--ink:#172b32;--muted:#73818a;--card:#fff;--brand-soft:#e3f1ec;--brand:#146954}
+    :root[data-theme=dark]{--paper:#18242b;--line:#34444c;--ink:#edf4f6;--muted:#a1b0b7;--card:#202e36;--brand-soft:#25473e;--brand:#8dd6bd}
+    body{margin:0;background:var(--paper);color:var(--ink);font:14px system-ui,sans-serif}.nav{display:flex;gap:8px;padding:10px;background:var(--card)}main{padding:20px}.view{background:var(--card);padding:18px;border:1px solid var(--line);border-radius:12px}.top{min-height:60px}.panel{padding:14px;border:1px solid var(--line);border-radius:8px;margin:8px 0}.grid,.toolbar{display:flex;gap:8px}.grid>.panel{flex:1}button{color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:7px;padding:8px 12px}
+  </style>
+</head>
+<body>
+  <nav class="nav"><button data-view="settings">Settings</button><button data-view="integrations">Integrations</button><button type="button" onclick="setSmokeLanguage('ru')">RU</button><button type="button" onclick="setSmokeLanguage('az')">AZ</button><button type="button" onclick="setSmokeLanguage('en')">EN</button><button type="button" onclick="setSmokeTheme(document.documentElement.dataset.theme==='dark'?'light':'dark')">Toggle theme</button></nav>
+  <main>
+    <section class="view" id="view-deals"><div class="toolbar"></div></section>
+    <section class="view" id="view-settings">
+      <div id="hidden-pilot" hidden><div class="top"><h2>Hidden pilot modal</h2></div></div>
+      <div class="top"><h1>Settings</h1></div>
+      <div id="chakra-settings-root"></div>
+      <div class="grid"><article class="panel" id="connectWhatsAppSettings"></article><article class="panel" id="companyManagement"></article><article class="panel" id="workflowPanel"></article><article class="panel" id="extraDiagnostics"></article></div>
+    </section>
+  </main>
+  <script>window.tenantI18n={language:'ru'};window.setSmokeLanguage=language=>{window.tenantI18n.language=language;document.documentElement.lang=language;document.dispatchEvent(new CustomEvent('tenant-language',{detail:{language}}))};window.setSmokeTheme=theme=>document.documentElement.dataset.theme=theme;</script>
+  <script src="/docs/tenant-workspace.js"></script>
+</body>
+</html>

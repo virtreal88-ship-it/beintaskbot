@@ -108,6 +108,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/copilot', operator_handler(member, origin, logger, 'copilot'), ('POST',)),
         ('dialogs/display-name', operator_handler(member, origin, logger, 'display_name'), ('POST',)),
         ('dialogs/agent-assignment', operator_handler(member, origin, logger, 'agent_assignment'), ('GET', 'POST')),
+        ('dialogs/agent-assignment-bulk', operator_handler(member, origin, logger, 'agent_assignment_bulk'), ('GET', 'POST')),
         ('dialogs/legacy-continuation', operator_handler(member, origin, logger, 'legacy_continuation'), ('GET', 'POST')),
         ('dialogs/legacy-recovery', operator_handler(member, origin, logger, 'legacy_recovery'), ('GET', 'POST')),
         ('dialogs/group-coordination', operator_handler(member, origin, logger, 'group_coordination'), ('POST',)),

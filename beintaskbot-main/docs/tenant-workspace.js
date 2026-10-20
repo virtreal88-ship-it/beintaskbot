@@ -31,7 +31,7 @@
     main{padding:30px 28px 64px}.top{margin-bottom:22px}.top h1{font-size:27px;letter-spacing:-.7px;font-weight:650}.eyebrow{display:none}.top p{font-size:13px;margin-top:6px}.toolbar{margin:0 0 20px;gap:10px}.refresh,.primary{border-radius:8px;padding:10px 14px;font-size:14px}.table{border-radius:12px}.row{width:100%;background:white;text-align:left}.panel{border-radius:12px;padding:22px}.panel h2{font-weight:650}.panel p{font-size:13px;line-height:1.6}button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid #7bc7b5;outline-offset:2px}
     .workspace-controls{display:flex;gap:8px;align-items:center}.workspace-controls select{max-width:220px;border:1px solid var(--line);background:white;border-radius:8px;padding:10px;color:var(--ink)}.workspace-modes{display:flex;background:#e9eef0;padding:3px;border-radius:9px}.workspace-modes button{padding:7px 11px;border-radius:7px;background:transparent;color:var(--muted);font-size:13px}.workspace-modes button[aria-pressed=true]{background:white;color:var(--ink);box-shadow:0 1px 3px #20343a15}
     #dealsList.workspace-board{background:none;border:0;overflow:visible}.workspace-pipeline{margin:0 0 28px}.workspace-pipeline h2{font-size:15px;font-weight:650;margin:0 0 12px}.workspace-lanes{display:flex;gap:14px;overflow-x:auto;padding:0 0 12px;overscroll-behavior-x:contain}.workspace-lane{flex:0 0 276px;background:#edf1f3;border:1px solid #e4e9ec;border-radius:12px;padding:10px;min-height:170px}.workspace-lane-header{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 3px 13px;font-size:13px;font-weight:650}.workspace-lane-header span{background:#dce5e7;color:#61747a;border-radius:6px;padding:2px 7px;font-size:12px}.workspace-card{display:block;width:100%;background:white;text-align:left;border:1px solid #e1e7ea;border-radius:10px;padding:15px;margin-bottom:10px;box-shadow:0 2px 4px #20343a04;transition:border-color .15s}.workspace-card:hover{border-color:#8ebbb0}.workspace-card strong{display:block;font-size:14px;overflow-wrap:anywhere;line-height:1.5}.workspace-phone{display:block;font-size:13px;color:#2b7367;margin:4px 0 10px}.workspace-card .sub{white-space:normal;overflow-wrap:anywhere;font-size:12px}.workspace-card-footer{display:flex;justify-content:space-between;gap:8px;margin-top:13px;color:#88969b;font-size:11px}.workspace-empty{padding:28px 8px;text-align:center;color:#88969b;font-size:12px}
-    .settings-sections{display:flex;gap:5px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin:0 0 22px;padding-bottom:12px}.settings-sections button{padding:9px 14px;border-radius:8px;background:transparent;color:var(--muted);font-size:14px}.settings-sections button[aria-selected=true]{background:#e3f1ec;color:#146954;font-weight:650}#view-settings [data-settings-section][hidden]{display:none!important}#view-settings>.panel{margin-bottom:16px}#view-settings>.grid{align-items:start}.settings-help{font-size:13px;color:var(--muted);margin:-7px 0 20px}
+    .settings-sections{display:flex;gap:5px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin:0 0 22px;padding-bottom:12px}.settings-sections button{padding:9px 14px;border-radius:8px;background:transparent;color:var(--muted);font-size:14px}.settings-sections button[aria-selected=true]{background:var(--brand-soft,var(--paper));color:var(--brand,var(--ink));font-weight:650}#view-settings [data-settings-section][hidden]{display:none!important}#view-settings>.panel{margin-bottom:16px}#view-settings>.grid{align-items:start}.settings-help{font-size:13px;color:var(--muted);margin:-7px 0 20px}
     @media(max-width:760px){aside{padding:10px 12px;gap:10px}.brand{font-size:14px}.nav{flex-direction:row;flex:0 1 auto}.nav button{font-size:0;padding:10px}.nav svg{width:20px;height:20px}.nav .settings{margin-top:0}main{padding:22px 16px 84px}.top h1{font-size:23px}.toolbar{gap:10px}.workspace-controls{width:100%;justify-content:space-between}.workspace-controls select{min-width:0;max-width:55%;flex:1}.workspace-lane{flex-basis:calc(100vw - 48px);max-width:340px}.settings-sections{flex-wrap:nowrap;overflow-x:auto}.settings-sections button{white-space:nowrap}.panel{padding:18px}.workspace-card{padding:16px}.top p{display:block}.top a{font-size:12px;padding:8px}.search{min-width:0;flex-basis:100%}}
   `;
   document.head.append(css);
@@ -69,14 +69,20 @@
     }
   };
   const settings = $('view-settings');
-  const groups = [['employees','Əməkdaşlar','Dəvətlər, giriş sorğuları və komandanız.'],['integrations','İnteqrasiyalar','Connect WhatsApp kanallarını və digər şirkət bağlantılarını idarə edin.'],['companies','Şirkətlər','Şirkətlərin adını və girişini idarə edin.'],['workflow','İş qaydaları','Vərəqlər, mərhələlər, əməkdaş hüquqları və təsdiq qaydaları.'],['advanced','Diaqnostika','Sistem vəziyyəti və texniki yoxlamalar.']];
+  const settingsCopy = {
+    az:{employees:['Əməkdaşlar','Dəvətlər, giriş sorğuları və komandanız.'],integrations:['İnteqrasiyalar','Connect WhatsApp kanallarını və digər şirkət bağlantılarını idarə edin.'],companies:['Şirkətlər','Şirkətlərin adını və girişini idarə edin.'],workflow:['İş qaydaları','Vərəqlər, mərhələlər, əməkdaş hüquqları və təsdiq qaydaları.'],advanced:['Diaqnostika','Sistem vəziyyəti və texniki yoxlamalar.'],title:'Geniş ayarlar',description:'Şirkətin iş axınını və texniki parametrlərini ehtiyac olduqda dəyişin.'},
+    ru:{employees:['Сотрудники','Приглашения, запросы доступа и команда.'],integrations:['Интеграции','Управляйте Connect WhatsApp и другими подключениями компании.'],companies:['Компании','Управляйте компаниями и доступом.'],workflow:['Правила работы','Воронки, этапы, права сотрудников и подтверждения.'],advanced:['Диагностика','Состояние системы и технические проверки.'],title:'Дополнительные настройки',description:'При необходимости настройте рабочие процессы и технические параметры компании.'},
+    en:{employees:['Employees','Invitations, access requests and your team.'],integrations:['Integrations','Manage Connect WhatsApp channels and other company connections.'],companies:['Companies','Manage company names and access.'],workflow:['Work rules','Pipelines, stages, employee permissions and approvals.'],advanced:['Diagnostics','System status and technical checks.'],title:'Advanced settings',description:'Adjust company workflows and technical settings when needed.'}
+  };
+  const groups = ['employees','integrations','companies','workflow','advanced'];
+  const settingsLanguage=()=>settingsCopy[window.tenantI18n?.language||document.documentElement.lang]||settingsCopy.az;
   let section = 'employees';
   const sections = document.createElement('div'); sections.className = 'settings-sections'; sections.setAttribute('role','tablist');
-  sections.innerHTML = groups.map(([key,label]) => `<button type="button" role="tab" data-settings-tab="${key}">${label}</button>`).join('');
+  sections.innerHTML = groups.map(key => `<button type="button" role="tab" data-settings-tab="${key}"></button>`).join('');
   const help = document.createElement('p'); help.className='settings-help';
   const advancedTitle = document.createElement('div'); advancedTitle.className = 'advanced-settings-title';
-  advancedTitle.innerHTML = '<h2>Geniş ayarlar</h2><p>Şirkətin iş axınını və texniki parametrlərini ehtiyac olduqda dəyişin.</p>';
-  const settingsAnchor = settings.querySelector('.top');
+  advancedTitle.innerHTML = '<h2></h2><p></p>';
+  const settingsAnchor = settings.querySelector(':scope > .top');
   settingsAnchor.after(advancedTitle,sections,help);
   function classify(panel) {
     if (panel.id === 'chakra-settings-root') return 'employees';
@@ -88,16 +94,19 @@
     return 'advanced';
   }
   function showSettings() {
+    const languageCopy=settingsLanguage();
+    sections.querySelectorAll('[data-settings-tab]').forEach(button=>{button.textContent=languageCopy[button.dataset.settingsTab][0];});
+    advancedTitle.querySelector('h2').textContent=languageCopy.title;advancedTitle.querySelector('p').textContent=languageCopy.description;
     const panels = [...settings.querySelectorAll(':scope > #chakra-settings-root,:scope > .panel,:scope > .grid > .panel')].filter(panel => !panel.hasAttribute('data-basic-settings'));
     const settingsPanels = panels.filter(panel => classify(panel) !== 'external-integration');
-    const available = groups.find(([key]) => settingsPanels.some(panel => panel.dataset.settingsSection === key || classify(panel) === key));
+    const available = groups.find(key => settingsPanels.some(panel => panel.dataset.settingsSection === key || classify(panel) === key));
     if (!settingsPanels.some(panel => (panel.dataset.settingsSection || classify(panel)) === section) && available) section = available[0];
     panels.forEach(panel => {panel.dataset.settingsSection = classify(panel);panel.hidden = panel.dataset.settingsSection === 'external-integration' || panel.dataset.settingsSection !== section;});
     sections.querySelectorAll('button').forEach(button => {
       button.hidden = !settingsPanels.some(panel => panel.dataset.settingsSection === button.dataset.settingsTab);
       button.setAttribute('aria-selected',String(button.dataset.settingsTab === section));
     });
-    help.textContent = groups.find(g => g[0] === section)?.[2] || '';
+    help.textContent = languageCopy[section]?.[1] || '';
     advancedTitle.hidden = !panels.length; sections.hidden = !panels.length; help.hidden = !panels.length;
   }
   sections.querySelectorAll('button').forEach(button => button.onclick = () => {section=button.dataset.settingsTab;showSettings();});
@@ -108,13 +117,35 @@
     }
     const view = document.querySelector('.nav [data-view="settings"]');
     if (view && !view.hidden) view.click();
-    if (groups.some(group => group[0] === target)) section = target;
+    if (groups.includes(target)) section = target;
     showSettings();
     requestAnimationFrame(() => sections.scrollIntoView({behavior:'smooth',block:'start'}));
+  };
+  window.tenantOpenChatAISettings = () => {
+    document.querySelector('.nav [data-view="integrations"]')?.click();
+    let attempts=0;
+    const open=()=>{
+      const root=document.getElementById('chakra-integrations-root');
+      const title=[...(root?.querySelectorAll('*')||[])].find(node=>node.childElementCount===0&&node.textContent.trim()==='OpenAI');
+      let card=title;
+      while(card&&card!==root&&!card.querySelector('button'))card=card.parentElement;
+      const manage=card&&card!==root?[...card.querySelectorAll('button')].find(button=>!button.disabled):null;
+      if(!manage){if(++attempts<40)setTimeout(open,100);return;}
+      manage.click();let modalAttempts=0;
+      const settingsTab=()=>{
+        const dialog=[...document.querySelectorAll('[role="dialog"]')].find(node=>node.textContent.includes('OpenAI'));
+        const tab=[...(dialog?.querySelectorAll('[role="tab"]')||[])].find(node=>/^(ayarlar|настройки|settings)$/i.test(node.textContent.trim()));
+        if(tab){tab.click();return;}
+        if(++modalAttempts<40)setTimeout(settingsTab,100);
+      };
+      setTimeout(settingsTab,0);
+    };
+    setTimeout(open,0);
   };
   const observer = new MutationObserver(showSettings);
   observer.observe(settings,{childList:true}); observer.observe(settings.querySelector('.grid'),{childList:true});
   document.addEventListener('tenant-profile', e => {catalog=e.detail.capabilities?.deal_board || [];if(['owner','admin'].includes(e.detail.member?.role)&&section==='employees')section='integrations';updateIcons();showSettings();refresh();});
+  document.addEventListener('tenant-language',showSettings);
   const integrationRepository = document.createElement('div');
   integrationRepository.id = 'integrationSettingsRepository';
   integrationRepository.hidden = true;
