@@ -76,8 +76,8 @@ assert.match(appSource, /data-ai-section-nav="stopping"/,
   'the editor must expose a separate stop/handoff section');
 assert.match(fs.readFileSync(path.join(root,'docs/tenant-operator-dialogs.js'),'utf8'), /actions\.has\('pause'\).*actionButton\('pause','pause'\)/,
   'an active dialogue must offer Pause rather than only a handoff action');
-assert.match(appSource, /id="aiHandoffCapabilityNote"[\s\S]*sentiment[\s\S]*Ключевая фраза[\s\S]*Передать менеджеру/,
-  'The editor must disclose unsupported general sentiment detection and explain phrase-trigger handoff.');
+assert.match(appSource, /id="aiHandoffCapabilityNote"[\s\S]*явное недовольство[\s\S]*AZ\/RU\/EN[\s\S]*без отдельного AI-запроса/,
+  'The editor must explain the supported multilingual deterministic dissatisfaction handoff.');
 assert.match(appSource, /id="aiAllowGroupMessages"/,
   'the administrator must explicitly opt in before an AI Agent can handle group messages');
 

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from tenant_ai_expert_service import request_expert
 from tenant_ai_agent_queue import _scope_matches
-from tenant_ai_agent_actions import should_handoff, enabled_triggers, matching_triggers, handoff
+from tenant_ai_agent_actions import handoff_reason, enabled_triggers, matching_triggers, handoff
 from tenant_ai_agent_crm_actions import execute_matching_actions
 from tenant_ai_agent_run_store import (claim_next, complete_run, defer_job,
     finish_unknown, finish_superseded, finish_sent, knowledge_context, record_token_usage,
@@ -217,10 +217,12 @@ async def process_one(job, kommo_request, wait_slot, logger):
         matched = matching_triggers(triggers, source['body'])
         _test_diag(logger, job, 'trigger_evaluation',
             f"matched={len(matched)} configured={len(triggers)}")
-        if should_handoff(source['body']) or any('handoff' in (trigger.get('actions') or [])
+        detected_handoff = handoff_reason(source['body'])
+        if detected_handoff or any('handoff' in (trigger.get('actions') or [])
             for trigger in matching_triggers(triggers,source['body'])):
-            await asyncio.to_thread(handoff,job,'customer_requested_manager')
-            _test_diag(logger, job, 'job_handed_off', 'customer_requested_manager')
+            reason = detected_handoff or 'customer_requested_manager'
+            await asyncio.to_thread(handoff,job,reason)
+            _test_diag(logger, job, 'job_handed_off', reason)
             return
         model_config = None
         from tenant_ai_agent_run_store import load_agent_config
@@ -478,6 +480,10 @@ async def process_connect_one(job, logger):
         if open_at:
             await asyncio.to_thread(defer_job, job, open_at)
             return
+        early_handoff = handoff_reason(source.get('body'))
+        if early_handoff:
+            await asyncio.to_thread(handoff, job, early_handoff)
+            return
         voice = is_audio(source)
         if voice and source.get('voice_eligible') is False and not source.get('transcript'):
             await asyncio.to_thread(skip_job, job, 'voice_before_resume')
@@ -531,10 +537,12 @@ async def process_connect_one(job, logger):
         matched = matching_triggers(triggers, source['body'],
                                    first_inquiry=payload.get('first_inquiry') is True,
                                    phone=str(payload.get('phone') or ''))
-        if should_handoff(source['body']) or any('handoff' in (trigger.get('actions') or []) for trigger in matched):
-            await asyncio.to_thread(handoff, job, 'customer_requested_manager')
+        detected_handoff = handoff_reason(source['body'])
+        if detected_handoff or any('handoff' in (trigger.get('actions') or []) for trigger in matched):
+            reason = detected_handoff or 'customer_requested_manager'
+            await asyncio.to_thread(handoff, job, reason)
             if reservation:
-                await asyncio.to_thread(finish_superseded, job, reservation, 'customer_requested_manager')
+                await asyncio.to_thread(finish_superseded, job, reservation, reason)
             return
         model = str(config.get('agent_model') or config['chat_model'])
         phase = 'connect_reserve'
