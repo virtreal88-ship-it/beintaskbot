@@ -90,6 +90,56 @@ def test_group_case_never_displays_group_jid_or_arbitrarily_picks_sender(ready):
     assert result['customer_phone']=='' and result['customer_name']=='' and result['company_name']==''
     assert '@' not in result['customer_name']
 
+
+def test_boundary_adjustment_uses_exact_dialog_and_returns_human_summary(ready):
+    db,_,_=ready;value=candidate(ready);earlier=str(uuid.UUID(int=9910))
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,happened_at) VALUES(%s::uuid,%s::uuid,41,'older-boundary',%s,'incoming','Earlier customer context',now()-interval '1 hour')",(earlier,A,'connect:'+CA));db.commit()
+    result=store.mutate(PROFILE,value['id'],{'expected_version':1,'start_message_id':earlier,'end_message_id':value['end_message_id']},'boundaries')['candidate']
+    assert result['version']==2 and result['start_message_id']==earlier
+    assert result['source_message_ids']==value['source_message_ids']
+    summary=result['boundary_summary']
+    assert summary['available'] and summary['start']['text']=='Earlier customer context' and summary['message_count']>=len(value['source_message_ids'])+1
+    clarified=store.mutate(PROFILE,value['id'],{'expected_version':2,'clarification_note':'Need additional context'},'clarify')['candidate']
+    assert clarified['version']==3 and clarified['start_message_id']==earlier
+
+
+def test_boundary_adjustment_cannot_drop_outcome_evidence_or_reverse_range(ready):
+    value=candidate(ready)
+    with pytest.raises(TenantLinearError,match='подтверждение.*результата'):
+        store.mutate(PROFILE,value['id'],{'expected_version':1,'start_message_id':value['start_message_id'],'end_message_id':value['start_message_id']},'boundaries')
+    with pytest.raises(TenantLinearError,match='предшествовать'):
+        store.mutate(PROFILE,value['id'],{'expected_version':1,'start_message_id':value['end_message_id'],'end_message_id':value['start_message_id']},'boundaries')
+    assert store.detail(PROFILE,value['id'])['candidate']['version']==1
+
+
+def test_boundary_adjustment_rejects_foreign_source_and_employee(ready):
+    db,_,_=ready;value=candidate(ready)
+    foreign=str(uuid.UUID(int=9911))
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,42,'foreign-boundary','connect:'||%s,'incoming','Foreign')",(foreign,B,CB))
+    db.execute("UPDATE saas_tenant_members SET role='manager' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));db.commit()
+    with pytest.raises(TenantLinearError):store.mutate(PROFILE,value['id'],{'expected_version':1,'start_message_id':foreign,'end_message_id':value['end_message_id']},'boundaries')
+    db.execute("UPDATE saas_tenant_members SET role='owner' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));db.commit()
+    with pytest.raises(TenantLinearError,match='недоступно'):
+        store.mutate(PROFILE,value['id'],{'expected_version':1,'start_message_id':foreign,'end_message_id':value['end_message_id']},'boundaries')
+
+
+def test_boundary_adjustment_requires_owner_or_admin(ready):
+    db,_,_=ready;value=candidate(ready);earlier=str(uuid.UUID(int=9912))
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,happened_at) VALUES(%s::uuid,%s::uuid,41,'role-boundary',%s,'incoming','Earlier',now()-interval '1 hour')",(earlier,A,'connect:'+CA))
+    db.execute("UPDATE saas_tenant_members SET role='manager' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));db.commit()
+    with pytest.raises(TenantLinearError):
+        store.mutate(PROFILE,value['id'],{'expected_version':1,'start_message_id':earlier,'end_message_id':value['end_message_id']},'boundaries')
+    db.execute("UPDATE saas_tenant_members SET role='admin' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));db.commit()
+    db.execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value) VALUES(%s::uuid,'members','{\"11\":{\"ai_agents_manage\":true}}'::jsonb) ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=EXCLUDED.value",(A,));db.commit()
+    assert store.mutate(PROFILE,value['id'],{'expected_version':1,'start_message_id':earlier,'end_message_id':value['end_message_id']},'boundaries')['candidate']['version']==2
+
+
+def test_published_case_boundaries_are_immutable(ready):
+    value=candidate(ready)
+    approved=store.mutate(PROFILE,value['id'],{'expected_version':1,'agent_ids':[AGENT]},'approve')['candidate']
+    with pytest.raises(TenantLinearError,match='опубликованного кейса'):
+        store.mutate(PROFILE,value['id'],{'expected_version':approved['version'],'start_message_id':approved['start_message_id'],'end_message_id':approved['end_message_id']},'boundaries')
+
 def test_private_pending_review_edit_approve_agent_scoped_idempotent(ready):
     db,generation,data=ready
     before=db.execute('SELECT enabled,mode,scopes,version FROM saas_ai_agents ORDER BY id');db.commit()

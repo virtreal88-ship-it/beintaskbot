@@ -336,7 +336,56 @@ def detail(profile,candidate_id):
             run=extraction_row(cur,tenant,row['extraction_id']);items=evidence(cur,profile,run)
             chosen=route(cur,profile,run['route'])[3]
             value=public_card(cur,row,run.get('route',{}).get('language') or 'az',run['route'],tenant,chosen)
+            value['boundary_summary']=boundary_summary(cur,tenant,run['route'],chosen,value)
     return {'candidate':value,'evidence':items,'route':run['route']}
+
+
+def _boundary_context(cur,tenant,run,chosen,start_id,end_id,source_ids):
+    channel=str(run.get('channel_id') or '')
+    lead_id=int(chosen['lead_id'])
+    ids=list(dict.fromkeys([start_id,end_id,*source_ids]))
+    cur.execute('''SELECT id::text AS id,COALESCE(happened_at,created_at) AS at FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=ANY(%s::uuid[]) FOR SHARE''',
+      (tenant,lead_id,'connect:'+channel,ids))
+    rows={str(row['id']):row for row in cur.fetchall()}
+    if start_id not in rows or end_id not in rows:
+        raise TenantLinearError('Выбранное сообщение недоступно в этом канале или диалоге.',409)
+    start=(rows[start_id]['at'],start_id);end=(rows[end_id]['at'],end_id)
+    if start>end: raise TenantLinearError('Начальное сообщение должно предшествовать конечному.',409)
+    cur.execute('''SELECT count(*) AS message_count FROM saas_crm_messages WHERE tenant_id=%s::uuid
+      AND kommo_lead_id=%s AND channel=%s
+      AND (COALESCE(happened_at,created_at),id)>=(%s::timestamptz,%s::uuid)
+      AND (COALESCE(happened_at,created_at),id)<=(%s::timestamptz,%s::uuid)''',
+      (tenant,lead_id,'connect:'+channel,start[0],start_id,end[0],end_id))
+    count=int((cur.fetchone() or {}).get('message_count') or 0)
+    inside=[message_id for message_id in source_ids if message_id in rows and start<=(rows[message_id]['at'],message_id)<=end]
+    return rows,count,inside
+
+
+def boundary_summary(cur,tenant,run,chosen,value):
+    start_id=str(value.get('start_message_id') or '')
+    end_id=str(value.get('end_message_id') or '')
+    if not start_id or not end_id:
+        return {'available':False,'start':None,'end':None,'message_count':None}
+    try: _,count,_=_boundary_context(cur,tenant,run,chosen,start_id,end_id,[])
+    except TenantLinearError: return {'available':False,'start':None,'end':None,'message_count':None}
+    cur.execute('''SELECT id::text AS id,body,direction,author_name,raw,message_type,happened_at,created_at
+      FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=ANY(%s::uuid[])''',
+      (tenant,int(chosen['lead_id']),'connect:'+str(run.get('channel_id') or ''),[start_id,end_id]))
+    messages={str(row['id']):row for row in cur.fetchall()}
+    if start_id not in messages or end_id not in messages:
+        return {'available':False,'start':None,'end':None,'message_count':None}
+    from tenant_operator_dialogs import _participant_fields
+    def preview(message):
+        raw=message.get('raw') if isinstance(message.get('raw'),dict) else {}
+        _,_,participant_name=_participant_fields(raw)
+        author=str(participant_name or message.get('author_name') or '').strip()
+        if '@' in author or re.fullmatch(r'[+\d\s().-]+',author): author=''
+        return {'author':author,'role':'customer' if message.get('direction')=='incoming' else 'operator',
+          'at':(message.get('happened_at') or message.get('created_at')).isoformat(),
+          'text':str(message.get('body') or '')[:180],
+          'message_type':str(message.get('message_type') or 'text')}
+    return {'available':True,'start':preview(messages[start_id]),'end':preview(messages[end_id]),'message_count':count}
 
 
 def listing(profile,data):
@@ -430,7 +479,7 @@ def mutate(profile,candidate_id,data,action='edit'):
     with _connect() as conn:
         schema(conn)
         with conn.cursor() as cur:
-            tenant,actor,_=authorize(cur,profile)
+            tenant,actor,policy=authorize(cur,profile)
             cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,identifier(candidate_id)))
             row=cur.fetchone()
             if not row: raise TenantLinearError('Карточка не найдена.',404)
@@ -444,25 +493,62 @@ def mutate(profile,candidate_id,data,action='edit'):
                     if agents==sorted(v['agent_id'] for v in existing['publications']): return {'candidate':existing}
                     raise TenantLinearError('Карточка уже опубликована для другого набора агентов.',409)
             if type(data.get('expected_version')) is not int or data['expected_version']!=row['version']: raise TenantLinearError('Карточка изменилась. Обновите страницу.',409)
+            if action=='boundaries' and row['status']=='approved':
+                raise TenantLinearError('Границы опубликованного кейса нельзя изменить. Опубликованное знание останется без изменений.',409)
+            if action=='boundaries' and policy.profile.get('role') not in {'owner','admin'}:
+                raise TenantLinearError('Изменять границы обращения могут только владелец или администратор.',403)
             if row['status'] not in {'pending_review','needs_clarification'}: raise TenantLinearError('Карточка уже рассмотрена.',409)
-            if action=='edit':
+            if action=='boundaries':
+                if set(data)!={'expected_version','start_message_id','end_message_id'}:
+                    raise TenantLinearError('Некорректный запрос изменения границ.')
+                start_id=identifier(data['start_message_id']);end_id=identifier(data['end_message_id'])
+                chosen=assert_route(cur,tenant,policy,'connect',run['route']['conversation_id'],run['route']['channel_id'])
+                content=dict(row['content']);source_ids=[identifier(value) for value in content.get('source_message_ids',[])]
+                _,message_count,inside=_boundary_context(cur,tenant,run['route'],chosen,start_id,end_id,source_ids)
+                if not inside:
+                    raise TenantLinearError('Диапазон не включает исходные сообщения этого кейса. Выберите более широкий диапазон.',409)
+                inside_set=set(inside);removed=set(source_ids)-inside_set
+                invalid=[]
+                if any(item.get('message_id') in removed for item in content.get('operator_action_evidence',[])): invalid.append('действий сотрудника')
+                if any(item.get('message_id') in removed for item in content.get('cause_evidence',[])) or (content.get('cause',{}).get('status')=='confirmed' and not content.get('cause_evidence')): invalid.append('причины')
+                if any(value in removed for value in content.get('outcome',{}).get('message_ids',[])): invalid.append('результата')
+                if invalid:
+                    raise TenantLinearError('Границы не сохранены: диапазон исключает подтверждение '+', '.join(invalid)+'. Выберите диапазон с нужными сообщениями или отправьте кейс на уточнение.',409)
+                updated={**content,'source_message_ids':[message_id for message_id in source_ids if message_id in inside_set],
+                    'start_message_id':start_id,'end_message_id':end_id}
+                updated=card(updated,[item['id'] for item in items],allow_boundary_outside_sources=True)
+                checked=enforce_confirmation(updated,items)
+                if checked['cause']['status']!=updated['cause']['status'] or checked['outcome']['status']!=updated['outcome']['status']:
+                    raise TenantLinearError('Границы не сохранены: оставшиеся сообщения не подтверждают указанную причину или результат.',409)
+                cur.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(updated),tenant,row['id']))
+            elif action=='edit':
                 patch={k:v for k,v in data.items() if k!='expected_version'}
                 from tenant_knowledge_candidates_policy import FIELDS
                 if set(patch)-FIELDS: raise TenantLinearError('Неизвестное поле карточки.')
-                value=enforce_confirmation(card({**row['content'],**patch},[i['id'] for i in items]),items)
+                for key in ('start_message_id','end_message_id'):
+                    if key in patch and str(patch[key])!=str(row['content'].get(key) or ''):
+                        raise TenantLinearError('Границы меняются только в настройках кейса.',403)
+                value=card({**row['content'],**patch},[i['id'] for i in items],allow_boundary_outside_sources=True)
+                added=set(value.get('source_message_ids',[]))-set(row['content'].get('source_message_ids',[]))
+                if added:
+                    chosen=assert_route(cur,tenant,policy,'connect',run['route']['conversation_id'],run['route']['channel_id'])
+                    rows,_,inside=_boundary_context(cur,tenant,run['route'],chosen,value['start_message_id'],value['end_message_id'],list(added))
+                    if set(inside)!=added or set(rows)!=set(added)|{value['start_message_id'],value['end_message_id']}:
+                        raise TenantLinearError('Нельзя добавить подтверждение вне выбранных границ обращения.',409)
+                value=enforce_confirmation(value,items)
                 cur.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(value),tenant,row['id']))
             elif action=='clarify':
                 if set(data)-{'expected_version','clarification_note'}: raise TenantLinearError('Неизвестное поле.')
                 if not isinstance(data.get('clarification_note'),str) or not data['clarification_note'].strip():
                     raise TenantLinearError('Dəqiqləşdirmə üçün çatışmayan məlumatı qeyd edin.')
-                patch=card({**row['content'],'clarification_note':data['clarification_note']},[i['id'] for i in items])
+                patch=card({**row['content'],'clarification_note':data['clarification_note']},[i['id'] for i in items],allow_boundary_outside_sources=True)
                 cur.execute("UPDATE saas_knowledge_candidates SET content=%s::jsonb,status='needs_clarification',version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(_json(patch),tenant,row['id']))
             elif action=='reject':
                 if set(data)-{'expected_version'}: raise TenantLinearError('Неизвестное поле.')
                 cur.execute("UPDATE saas_knowledge_candidates SET status='rejected',version=version+1,reviewed_by=%s,reviewed_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(actor,tenant,row['id']))
             elif action=='approve':
                 if set(data)-{'expected_version','agent_ids'}: raise TenantLinearError('Неизвестное поле.')
-                value=enforce_confirmation(card(row['content'],[i['id'] for i in items]),items)
+                value=enforce_confirmation(card(row['content'],[i['id'] for i in items],allow_boundary_outside_sources=True),items)
                 reason=approval_reason(value)
                 if reason: raise TenantLinearError(reason,409)
                 for agent_id in agents:
@@ -476,6 +562,6 @@ def mutate(profile,candidate_id,data,action='edit'):
                     cur.execute('INSERT INTO saas_knowledge_candidate_sources(tenant_id,candidate_id,agent_id,source_id) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid)',(tenant,row['id'],agent_id,source['id']))
                 cur.execute("UPDATE saas_knowledge_candidates SET status='approved',version=version+1,reviewed_by=%s,reviewed_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(actor,tenant,row['id']))
             else: raise TenantLinearError('Некорректное действие.')
-            _audit(cur,tenant,actor,'knowledge_candidate_'+action,'knowledge_candidate',row['id'])
+            _audit(cur,tenant,actor,'knowledge_candidate_'+action,'knowledge_candidate',row['id'],{'message_count':message_count} if action=='boundaries' else {})
         conn.commit()
     return detail(profile,candidate_id)
