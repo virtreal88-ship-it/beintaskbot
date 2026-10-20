@@ -245,3 +245,32 @@ def test_confirmation_schema_migration_is_idempotent_additive_ddl():
         assert field in sql
 
 
+
+
+def test_final_gate_rejects_agent_id_mismatch(monkeypatch):
+    row = {'conversation_state': 'active', 'conversation_ai_enabled': True, 'conversation_manual_hold': False,
+           'active': True, 'integration_status': 'connected', 'tenant_status': 'active',
+           'company_enabled': True, 'operating_mode': 'active', 'auto_send_enabled': True,
+           'emergency_stop': False, 'agent_enabled': True, 'agent_mode': 'automatic',
+           'exact_agent_scope': True, 'agent_id': 'agent-ok'}
+    monkeypatch.setattr(pilot, '_snapshot', lambda *_: (row, 'fp'))
+
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def execute(self, *_): pass
+        def fetchone(self): return {'valid': True}
+
+    class Connection:
+        def cursor(self): return Cursor()
+
+    with patch.dict('os.environ', pilot_env(AI_AGENTS_PILOT_SCOPE_ENABLED='true',
+                                             AI_AGENTS_AUTO_SEND_ENABLED='true'), clear=True):
+        assert pilot.automatic_send_allowed({**JOB, 'agent_id': 'agent-ok'}, Connection())
+        assert not pilot.automatic_send_allowed({**JOB, 'agent_id': 'agent-other'}, Connection())
+
+
+def test_claimed_pilot_run_stays_blocked_if_scope_is_removed_before_send():
+    job = {**JOB, '_pilot_scope_fenced': True}
+    with patch.dict('os.environ', {}, clear=True):
+        assert not pilot.automatic_send_allowed(job)

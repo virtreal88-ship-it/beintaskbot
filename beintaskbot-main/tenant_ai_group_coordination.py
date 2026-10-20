@@ -179,10 +179,10 @@ def job_allowed(cur, job):
 
 
 def delivery_source(cur, tenant, run_id):
-    cur.execute('''SELECT r.agent_id,e.payload,'run' AS source_kind FROM saas_ai_agent_runs r
+    cur.execute('''SELECT r.agent_id,r.event_fingerprint,e.payload,'run' AS source_kind FROM saas_ai_agent_runs r
       JOIN saas_tenant_webhook_events e ON e.tenant_id=r.tenant_id AND e.fingerprint=r.event_fingerprint
       WHERE r.tenant_id=%s::uuid AND r.id=%s::uuid
-      UNION ALL SELECT d.agent_id,e.payload,'draft' AS source_kind FROM saas_ai_agent_drafts d
+      UNION ALL SELECT d.agent_id,d.source_fingerprint AS event_fingerprint,e.payload,'draft' AS source_kind FROM saas_ai_agent_drafts d
       JOIN saas_tenant_webhook_events e ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
       WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid''', (tenant, run_id, tenant, run_id))
     rows = cur.fetchall()

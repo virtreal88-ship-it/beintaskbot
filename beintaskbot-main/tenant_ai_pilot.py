@@ -220,6 +220,7 @@ def automatic_send_allowed(job, connection=None):
                     or row.get('operating_mode') != 'active' or row.get('auto_send_enabled') is not True
                     or row.get('emergency_stop') is True or row.get('agent_enabled') is not True
                     or row.get('agent_mode') != 'automatic' or not row.get('exact_agent_scope')
+                    or (job.get('agent_id') and str(row.get('agent_id') or '') != str(job.get('agent_id')))
                     or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')):
                 return False
             cur.execute('''SELECT (c.kwid_expires_at>clock_timestamp() AND c.owner_expires_at>clock_timestamp()
