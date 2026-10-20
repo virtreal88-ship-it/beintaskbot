@@ -172,11 +172,11 @@ def projection(policy):
       LEFT JOIN saas_support_tickets ticket ON ticket.tenant_id=c.tenant_id AND ticket.channel_id=c.connect_channel_id
         AND ticket.conversation_id=c.conversation_id AND ticket.status<>'resolved'
       LEFT JOIN saas_tenant_members tm ON tm.tenant_id=c.tenant_id AND tm.telegram_id=ticket.assigned_to
-      LEFT JOIN LATERAL(SELECT CASE WHEN he.event_key LIKE 'manual-handoff:%' OR he.event_key LIKE 'group-handoff:%' THEN 'manual' ELSE 'ai_handoff' END AS source,ht.reason,ht.created_at,he.event_key,hm.display_name AS assigned_name
+      LEFT JOIN LATERAL(SELECT CASE WHEN he.event_key LIKE 'manual-handoff:%%' OR he.event_key LIKE 'group-handoff:%%' THEN 'manual' ELSE 'ai_handoff' END AS source,ht.reason,ht.created_at,he.event_key,hm.display_name AS assigned_name
         FROM saas_support_tickets ht JOIN saas_support_events he ON he.tenant_id=ht.tenant_id AND he.ticket_id=ht.id
         LEFT JOIN saas_tenant_members hm ON hm.tenant_id=ht.tenant_id AND hm.telegram_id=ht.assigned_to
         WHERE ht.tenant_id=c.tenant_id AND ht.channel_id=c.connect_channel_id AND ht.conversation_id=c.conversation_id
-          AND (he.event_key LIKE 'handoff:%' OR he.event_key LIKE 'manual-handoff:%' OR he.event_key LIKE 'group-handoff:%')
+          AND (he.event_key LIKE 'handoff:%%' OR he.event_key LIKE 'manual-handoff:%%' OR he.event_key LIKE 'group-handoff:%%')
         ORDER BY ht.created_at DESC,he.event_key DESC LIMIT 1) h ON TRUE
       WHERE c.tenant_id=%s::uuid
       UNION ALL
