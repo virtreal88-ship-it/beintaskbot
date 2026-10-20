@@ -91,9 +91,11 @@ def get_deal(tenant_id, deal_id):
         _ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""SELECT d.id,d.title,d.pipeline_id,d.stage_id,d.contact_id,c.display_name AS contact_name,
-                d.responsible_id,m.display_name AS responsible_name,d.channel_id,d.conversation_id,d.description,d.created_at,d.updated_at
+                d.company_id,co.name AS company_name,d.responsible_id,m.display_name AS responsible_name,
+                d.channel_id,d.conversation_id,d.description,d.created_at,d.updated_at
                 FROM saas_crm_native_deals d LEFT JOIN saas_crm_native_contacts c
                   ON c.tenant_id=d.tenant_id AND c.id=d.contact_id
+                LEFT JOIN saas_crm_native_companies co ON co.tenant_id=d.tenant_id AND co.id=d.company_id
                 LEFT JOIN saas_tenant_members m ON m.tenant_id=d.tenant_id AND m.telegram_id=d.responsible_id
                 WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.archived_at IS NULL""", (tenant_id, ident))
             return cur.fetchone()
@@ -105,8 +107,9 @@ def list_deals(tenant_id, search='', limit=50):
         _ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""SELECT d.id,d.title,d.pipeline_id,d.stage_id,d.contact_id,c.display_name AS contact_name,
-                d.responsible_id,d.channel_id,d.conversation_id,d.updated_at FROM saas_crm_native_deals d
+                d.company_id,co.name AS company_name,d.responsible_id,d.channel_id,d.conversation_id,d.updated_at FROM saas_crm_native_deals d
                 LEFT JOIN saas_crm_native_contacts c ON c.tenant_id=d.tenant_id AND c.id=d.contact_id
+                LEFT JOIN saas_crm_native_companies co ON co.tenant_id=d.tenant_id AND co.id=d.company_id
                 WHERE d.tenant_id=%s::uuid AND d.archived_at IS NULL AND (d.title ILIKE %s ESCAPE '\\' OR c.display_name ILIKE %s ESCAPE '\\')
                 ORDER BY d.updated_at DESC,d.id LIMIT %s""",(tenant_id,needle,needle,max(1,min(int(limit),100))))
             return cur.fetchall()

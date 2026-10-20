@@ -7,6 +7,7 @@ import pytest
 from test_tenant_support_inbox import database,db,A,B,CA,CB
 import tenant_crm_native_companies as companies
 import tenant_crm_native_contacts as contacts
+import tenant_crm_native_deals as deals
 import tenant_crm_native_company_api as company_api
 
 
@@ -16,6 +17,8 @@ def company_db(db,monkeypatch):
     monkeypatch.setattr(companies,'_ensure_schema',lambda _conn:None)
     monkeypatch.setattr(contacts,'_connect',lambda:db)
     monkeypatch.setattr(contacts,'_ensure_schema',lambda _conn:None)
+    monkeypatch.setattr(deals,'_connect',lambda:db)
+    monkeypatch.setattr(deals,'_ensure_schema',lambda _conn:None)
     return db
 
 
@@ -35,6 +38,10 @@ def test_company_crud_contact_relationship_and_tenant_isolation(company_db):
     assert companies.link_entity(A,company['id'],'deal',deal_id)
     item=companies.get_company(A,company['id'])
     assert item['name']=='Acme' and len(item['contacts'])==2 and len(item['deals'])==1
+    assert contacts.get_contact(A,contact['id'])['company_name']=='Acme'
+    assert contacts.get_contact(A,contact['id'])['company_id']==company['id']
+    assert deals.get_deal(A,deal_id)['company_name']=='Acme'
+    assert deals.get_deal(A,deal_id)['company_id']==company['id']
     assert companies.list_companies(A,'Acme')[0]['contact_count']==2
     assert companies.get_company(B,company['id']) is None
     assert companies.link_entity(B,company['id'],'contact',contact['id']) is None

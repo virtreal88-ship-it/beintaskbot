@@ -49,9 +49,10 @@ def get_contact(tenant_id: str, contact_id: str):
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("""SELECT id, display_name, phone, email, created_at, updated_at
-                FROM saas_crm_native_contacts WHERE tenant_id=%s::uuid AND id=%s::uuid
-                AND archived_at IS NULL""", (tenant_id, _valid_id(contact_id)))
+            cur.execute("""SELECT c.id, c.display_name, c.phone, c.email, c.company_id, co.name AS company_name, c.created_at, c.updated_at
+                FROM saas_crm_native_contacts c
+                LEFT JOIN saas_crm_native_companies co ON co.tenant_id=c.tenant_id AND co.id=c.company_id
+                WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid AND c.archived_at IS NULL""", (tenant_id, _valid_id(contact_id)))
             return cur.fetchone()
 
 
@@ -60,11 +61,12 @@ def list_contacts(tenant_id: str, search: str = '', limit: int = 50):
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("""SELECT id, display_name, phone, email, created_at, updated_at
-                FROM saas_crm_native_contacts
-                WHERE tenant_id=%s::uuid AND archived_at IS NULL
-                AND (display_name ILIKE %s ESCAPE '\\' OR phone ILIKE %s ESCAPE '\\' OR email ILIKE %s ESCAPE '\\')
-                ORDER BY updated_at DESC, id LIMIT %s""",
+            cur.execute("""SELECT c.id, c.display_name, c.phone, c.email, c.company_id, co.name AS company_name, c.created_at, c.updated_at
+                FROM saas_crm_native_contacts c
+                LEFT JOIN saas_crm_native_companies co ON co.tenant_id=c.tenant_id AND co.id=c.company_id
+                WHERE c.tenant_id=%s::uuid AND c.archived_at IS NULL
+                AND (c.display_name ILIKE %s ESCAPE '\\' OR c.phone ILIKE %s ESCAPE '\\' OR c.email ILIKE %s ESCAPE '\\')
+                ORDER BY c.updated_at DESC, c.id LIMIT %s""",
                 (tenant_id, query, query, query, max(1, min(int(limit), 100))))
             return cur.fetchall()
 
