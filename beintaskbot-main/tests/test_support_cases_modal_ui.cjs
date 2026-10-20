@@ -39,6 +39,9 @@ w.fetch=async(url,opt={})=>{
 const tick=()=>new Promise(resolve=>setTimeout(resolve,75));
 (async()=>{
  w.eval(js);await tick();
+ assert(d.querySelector('#casesSearch'),'case list starts with a compact search field');
+ assert.equal(d.querySelector('#casesStatus').value,'','rejected cases stay hidden by default');
+ assert(d.querySelector('.support-cases-advanced'),'less-frequent analysis controls stay visually secondary');
  d.querySelector('[data-case-open="case-1"]').click();await tick();await tick();
  const modal=d.getElementById('supportCaseModal');assert(modal,'case modal opens from actual list');
  assert.equal(modal.querySelector('#caseTitle').value,card.title);assert.equal(modal.querySelector('.case-review-status select'),null,'review status is informational');
@@ -66,6 +69,8 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,75));
  assert(css.includes('.case-conversation-messages{display:flex;flex-direction:column;gap:12px;min-height:0;overflow-y:auto'));
  assert(css.includes('.case-history-warning{'));assert(css.includes('.case-message-source{'));
  assert(css.includes('grid-template-rows:auto minmax(0,1fr) auto'));
+ assert(html.includes('support-pilot-compact')&&html.includes('supportPilotModal'),'pilot diagnostics use a compact entry point and modal');
+ assert(html.includes('Pilot ayarları'),'pilot settings have an explicit compact action');
  modal.querySelector('[data-case-close]').click();route.conversation_id='customer@s.whatsapp.net';await tick();d.querySelector('[data-case-open="case-1"]').click();await tick();await tick();assert.equal(d.querySelector('[data-case-customer-phone]').textContent,'+994501234567','direct case displays the real route phone');
  w.close();console.log('PASS: AZ modal fields, genuine conversation API, names, editable multilingual content, evidence IDs, five actions, and independent scroll layout');
 })().catch(error=>{console.error(error);process.exitCode=1;w.close();});
