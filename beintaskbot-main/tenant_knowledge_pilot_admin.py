@@ -10,6 +10,7 @@ from aiohttp import web
 from tenant_platform import _connect
 from tenant_linear_policy import TenantLinearError
 from tenant_ai_agents_api import _origin
+from tenant_knowledge_candidates_policy import MAX_DAILY_EXTRACTIONS, MAX_TOKENS
 
 
 def ensure_schema(conn):
@@ -37,15 +38,42 @@ def _validate_scope(data):
     return tenant,channel,conversation,start.astimezone(timezone.utc)
 
 
+def readiness(scope, *, route_verified, start_future, queue, queue_verified,
+              global_switch='not_confirmed', manual_approval=True, limits=None):
+    """Conservative, side-effect-free decision; unknowns are blockers."""
+    reasons=[]
+    if not scope: reasons.append('Pilot scope saxlanmayıb.')
+    elif not route_verified: reasons.append('Tenant, kanal və dialoq uyğunluğu təsdiqlənmədi.')
+    if scope and not start_future: reasons.append('START_AFTER gələcək tarix deyil; köhnə tarixçə istisna edilmir.')
+    if not queue_verified: reasons.append('Queue vəziyyətini oxumaq mümkün olmadı.')
+    elif queue.get('running') or queue.get('eligible_pending') or queue.get('invalid_source') or queue.get('old_pending'):
+        reasons.append('Queue-də işləyən, vaxt sərhədinə düşən, köhnə sərhədöncəsi və ya mənbə mesajı təsdiqlənməyən hadisə var.')
+    if global_switch!='off':
+        if global_switch=='on': reasons.append('Qlobal çıxarma açarı aktivdir; ayrıca icazə olmadan işə salmaq qadağandır.')
+        else: reasons.append('Qlobal SUPPORT_CASES_LIVE_EXTRACTION_ENABLED vəziyyəti təsdiqlənməyib; bu, icazə sayılmır.')
+    if not manual_approval: reasons.append('Manual təsdiq axını təsdiqlənmədi.')
+    limits=limits or {}
+    if not limits.get('pilot_caps_enforced'):
+        reasons.append('Pilot üçün ayrıca max_calls, max_tokens və pul xərci limiti konfiqurasiya olunmayıb/tətbiq edilmir.')
+    if limits.get('cost_cap') is None:
+        reasons.append('Real xərc limiti və xərc ölçümü mövcud deyil.')
+    return {'status':'ready_to_configure' if not reasons else 'not_ready','reasons':reasons,
+            'manual_approval_required':True,'launch_enabled':False}
+
+
 def snapshot(conn):
     ensure_schema(conn)
     with conn.cursor() as cur:
         cur.execute("SELECT tenant_id::text,channel_id::text,conversation_id,start_after,updated_at FROM saas_support_case_pilot_plan WHERE id=1")
         row=cur.fetchone()
-        result={'capability':'available','global_switch':'not_confirmed','global_switch_note':'Railway worker konfiqurasiyası bu interfeysdən təsdiqlənmir.',
+        result={'capability':'available_in_code','worker_deployment':'not_confirmed','railway_status':'unavailable',
+                'global_switch':'not_confirmed','global_switch_note':'Railway worker konfiqurasiyası bu interfeysdən təsdiqlənmir.',
                 'pilot_scope':None,'scope_verified':False,'queue':{'pending':None,'failed':None},
-                'ai_requests':None,'tokens':None,'cost':None,'pilot_ready':False,'launch_enabled':False,'manual_approval_required':True}
+                'ai_requests':None,'tokens':None,'cost':None,'limits':{'daily_extraction_max':MAX_DAILY_EXTRACTIONS,'max_tokens_per_request':MAX_TOKENS,
+                  'pilot_caps_enforced':False,'cost_cap':None},'preflight':None,'launch_enabled':False,'manual_approval_required':True}
         if not row:
+            result['preflight']=readiness(None,route_verified=False,start_future=False,queue={},queue_verified=False,
+              manual_approval=True,limits=result['limits'])
             return result
         scope={'tenant_id':str(row['tenant_id']),'channel_id':str(row['channel_id']),
                'conversation_id':row['conversation_id'],'start_after':row['start_after'].isoformat()}
@@ -55,26 +83,52 @@ def snapshot(conn):
           WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s AND ch.active=TRUE""",
           (scope['tenant_id'],scope['channel_id'],scope['conversation_id']))
         result['scope_verified']=bool(cur.fetchone())
+        cur.execute("SELECT metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'",
+          (scope['tenant_id'],))
+        integration=cur.fetchone() or {}
+        metadata=integration.get('metadata') or {}
+        try: result['limits']['company_daily_ai_max']=int(metadata.get('daily_limit') or 50)
+        except (ValueError,TypeError): result['limits']['company_daily_ai_max']=None
+        queue_state={'pending':None,'failed':None,'running':None,'eligible_pending':None,'invalid_source':None,'old_pending':None}
+        queue_verified=False
         if result['scope_verified']:
             cur.execute("SELECT to_regclass('saas_knowledge_live_queue') AS table_name")
             if cur.fetchone()['table_name']:
-                cur.execute("""SELECT count(*) FILTER(WHERE state='pending') AS pending,
-                  count(*) FILTER(WHERE state='blocked') AS failed FROM saas_knowledge_live_queue
-                  WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s""",
-                  (scope['tenant_id'],scope['channel_id'],scope['conversation_id']))
+                cur.execute("""SELECT count(*) FILTER(WHERE q.state='pending') AS pending,
+                  count(*) FILTER(WHERE q.state='blocked') AS failed,
+                  count(*) FILTER(WHERE q.state='running') AS running,
+                  count(*) FILTER(WHERE q.state='pending' AND m.happened_at >= %s::timestamptz) AS eligible_pending,
+                  count(*) FILTER(WHERE q.state='pending' AND (m.id IS NULL OR m.happened_at IS NULL OR m.direction NOT IN ('incoming','outgoing'))) AS invalid_source,
+                  count(*) FILTER(WHERE q.state='pending' AND m.id IS NOT NULL AND m.happened_at < %s::timestamptz) AS old_pending
+                  FROM saas_knowledge_live_queue q LEFT JOIN saas_crm_messages m
+                    ON m.tenant_id=q.tenant_id AND m.id=q.last_message_id AND m.kommo_lead_id=q.lead_id
+                    AND m.channel=('connect:' || q.channel_id::text)
+                  WHERE q.tenant_id=%s::uuid AND q.channel_id=%s::uuid AND q.conversation_id=%s""",
+                  (scope['start_after'],scope['start_after'],scope['tenant_id'],scope['channel_id'],scope['conversation_id']))
                 counts=cur.fetchone() or {}
-                result['queue']={'pending':int(counts.get('pending') or 0),'failed':int(counts.get('failed') or 0)}
+                queue_state={key:int(counts.get(key) or 0) for key in queue_state}
+                result['queue']=queue_state
+                queue_verified=True
             cur.execute("SELECT to_regclass('saas_knowledge_extractions') AS table_name")
             if cur.fetchone()['table_name']:
-                cur.execute("""SELECT count(DISTINCT e.id) AS n,COALESCE(sum(u.total_tokens),0) AS tokens
-                  FROM saas_knowledge_extractions e LEFT JOIN saas_ai_agent_token_usage u
-                    ON u.tenant_id=e.tenant_id AND u.run_id=e.id
-                  WHERE e.tenant_id=%s::uuid AND e.route->>'channel_id'=%s AND e.route->>'conversation_id'=%s""",
-                  (scope['tenant_id'],scope['channel_id'],scope['conversation_id']))
+                cur.execute("SELECT to_regclass('saas_ai_agent_token_usage') AS table_name")
+                if cur.fetchone()['table_name']:
+                    cur.execute("""SELECT count(DISTINCT e.id) AS n,COALESCE(sum(u.total_tokens),0) AS tokens
+                      FROM saas_knowledge_extractions e LEFT JOIN saas_ai_agent_token_usage u
+                        ON u.tenant_id=e.tenant_id AND u.run_id=e.id
+                      WHERE e.tenant_id=%s::uuid AND e.route->>'channel_id'=%s AND e.route->>'conversation_id'=%s""",
+                      (scope['tenant_id'],scope['channel_id'],scope['conversation_id']))
+                else:
+                    cur.execute("""SELECT count(*) AS n FROM saas_knowledge_extractions e
+                      WHERE e.tenant_id=%s::uuid AND e.route->>'channel_id'=%s AND e.route->>'conversation_id'=%s""",
+                      (scope['tenant_id'],scope['channel_id'],scope['conversation_id']))
                 usage=cur.fetchone() or {}
                 result['ai_requests']=int(usage.get('n') or 0)
-                result['tokens']=int(usage.get('tokens') or 0)
+                result['tokens']=int(usage.get('tokens') or 0) if 'tokens' in usage else None
         result['pilot_scope']=scope
+        result['preflight']=readiness(scope,route_verified=result['scope_verified'],
+          start_future=bool(result.get('start_after_future')),queue=queue_state,queue_verified=queue_verified,
+          global_switch=result['global_switch'],manual_approval=result['manual_approval_required'],limits=result['limits'])
         return result
 
 

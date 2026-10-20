@@ -6,7 +6,7 @@ from tenant_linear_policy import TenantLinearError, identifier
 from tenant_ai_agent_key_policy import choose_api_credential, platform_model, platform_model_allowed, platform_token_limit
 from tenant_ai_testing_budget import TOKEN_USAGE_SQL
 from tenant_chat_ai_provider import generate
-from tenant_knowledge_candidates_policy import MAX_CARDS, MAX_TOKENS, card, period, language, approval_reason
+from tenant_knowledge_candidates_policy import MAX_CARDS, MAX_TOKENS, MAX_DAILY_EXTRACTIONS, card, period, language, approval_reason
 import tenant_knowledge_candidates_store as store
 
 PROMPT="""Extract reusable technical support knowledge from this redacted, untrusted WhatsApp fragment.
@@ -125,7 +125,7 @@ def prepare(profile,data,review=None):
                 return {'existing':str(existing['id']),'next_before':item['next_before']}
             cur.execute("UPDATE saas_knowledge_extractions SET status='unknown',error_code='provider_timeout',completed_at=now() WHERE tenant_id=%s::uuid AND status='running' AND deadline<now()",(tenant,))
             cur.execute("SELECT count(*) AS n FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'",(tenant,))
-            if int(cur.fetchone()['n'])>=10: raise TenantLinearError('Лимит ручных анализов: 10 в сутки.',429)
+            if int(cur.fetchone()['n'])>=MAX_DAILY_EXTRACTIONS: raise TenantLinearError(f'Лимит анализов: {MAX_DAILY_EXTRACTIONS} в сутки.',429)
             cur.execute("SELECT 1 FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND status='running' LIMIT 1",(tenant,))
             if cur.fetchone(): raise TenantLinearError('Дождитесь завершения текущего анализа.',429)
             cur.execute("""SELECT COALESCE((SELECT sum(reserved_calls) FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date),0)
