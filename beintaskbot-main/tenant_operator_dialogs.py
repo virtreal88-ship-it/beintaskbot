@@ -147,14 +147,16 @@ def projection(policy):
       SELECT 'connect'::text AS provider,c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
         COALESCE(NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
         ch.name AS channel_name,ch.active AS channel_active,'connect:'||c.connect_channel_id::text AS history_channel,
-        COALESCE(cs.agent_id,j.agent_id) AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,
+        COALESCE(cs.agent_id,j.agent_id) AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,a.mode AS agent_mode,a.scopes AS agent_scopes,
         COALESCE(gc.state,cs.state,'active') AS state,COALESCE(gc.reason,cs.reason,'') AS reason,COALESCE(gc.updated_at,cs.updated_at) AS updated_at,
         cs.tenant_id IS NOT NULL AS tracked,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,
         t.status AS tenant_status,j.state AS latest_job_state,COALESCE(j.error_code,'') AS latest_job_error,
         COALESCE(lm.last_message_at,c.last_message_at,c.created_at) AS last_message_at,
         ticket.assigned_to,tm.display_name AS assignee_name,
         NOT ai_legacy_blocked(c.tenant_id,c.connect_channel_id::text,c.conversation_id) AS unambiguous,
-        EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected') AS connected
+        EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected') AS connected,
+        h.source AS handoff_source,h.reason AS handoff_reason,h.created_at AS handoff_at,h.event_key AS handoff_event_id,h.assigned_name AS handoff_assignee_name,
+        NULL::text AS pipeline_id,NULL::text AS stage_id
       FROM saas_connect_conversations c
       JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id
       JOIN saas_tenants t ON t.id=c.tenant_id
@@ -170,15 +172,22 @@ def projection(policy):
       LEFT JOIN saas_support_tickets ticket ON ticket.tenant_id=c.tenant_id AND ticket.channel_id=c.connect_channel_id
         AND ticket.conversation_id=c.conversation_id AND ticket.status<>'resolved'
       LEFT JOIN saas_tenant_members tm ON tm.tenant_id=c.tenant_id AND tm.telegram_id=ticket.assigned_to
+      LEFT JOIN LATERAL(SELECT CASE WHEN he.event_key LIKE 'manual-handoff:%' OR he.event_key LIKE 'group-handoff:%' THEN 'manual' ELSE 'ai_handoff' END AS source,ht.reason,ht.created_at,he.event_key,hm.display_name AS assigned_name
+        FROM saas_support_tickets ht JOIN saas_support_events he ON he.tenant_id=ht.tenant_id AND he.ticket_id=ht.id
+        LEFT JOIN saas_tenant_members hm ON hm.tenant_id=ht.tenant_id AND hm.telegram_id=ht.assigned_to
+        WHERE ht.tenant_id=c.tenant_id AND ht.channel_id=c.connect_channel_id AND ht.conversation_id=c.conversation_id
+          AND (he.event_key LIKE 'handoff:%' OR he.event_key LIKE 'manual-handoff:%' OR he.event_key LIKE 'group-handoff:%')
+        ORDER BY ht.created_at DESC,he.event_key DESC LIMIT 1) h ON TRUE
       WHERE c.tenant_id=%s::uuid
       UNION ALL
       SELECT 'kommo',COALESCE(j.channel_id,lm.channel,''),COALESCE(j.conversation_id,''),d.kommo_lead_id,
         COALESCE(NULLIF(d.contact_name,''),NULLIF(d.name,''),d.kommo_lead_id::text),''::text AS manual_display_name,COALESCE(d.phone,''),''::text AS conversation_kind,
-        COALESCE(NULLIF(lm.channel,''),'Kommo'),TRUE,COALESCE(lm.channel,''),j.agent_id,a.name,a.enabled,
+        COALESCE(NULLIF(lm.channel,''),'Kommo'),TRUE,COALESCE(lm.channel,''),j.agent_id,a.name,a.enabled,a.mode,a.scopes,
         COALESCE(cs.state,'active'),COALESCE(cs.reason,''),cs.updated_at,cs.tenant_id IS NOT NULL,
         s.enabled,s.emergency_stop,t.status,j.state,COALESCE(j.error_code,''),lm.last_message_at,
         cs.assigned_to,tm.display_name,TRUE,
-        EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=d.tenant_id AND i.provider='kommo' AND i.status='connected')
+        EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=d.tenant_id AND i.provider='kommo' AND i.status='connected'),
+        NULL::text,NULL::text,NULL::timestamptz,NULL::text,NULL::text,d.pipeline_id::text,d.status_id::text
       FROM saas_crm_deals d JOIN saas_tenants t ON t.id=d.tenant_id
       JOIN LATERAL(SELECT m.channel,COALESCE(m.happened_at,m.created_at) AS last_message_at FROM saas_crm_messages m
         WHERE m.tenant_id=d.tenant_id AND m.kommo_lead_id=d.kommo_lead_id AND m.channel NOT LIKE 'connect:%%'
@@ -200,12 +209,32 @@ def projection(policy):
     return sql,params
 
 
+def _agent_scope_available(item):
+    if not item.get('agent_id') or item.get('agent_enabled') is not True:
+        return False
+    scopes=item.get('agent_scopes') or []
+    if item.get('provider')=='connect':
+        from tenant_ai_agent_connect import scope_matches
+        return scope_matches(scopes,str(item.get('channel_id') or ''),is_group=item.get('conversation_kind')=='group')
+    from tenant_ai_agent_queue import _scope_matches
+    return _scope_matches(scopes,item.get('pipeline_id'),item.get('stage_id'),item.get('channel_id'))
+
+
+_HANDOFF_REASONS={'human_handoff','operator_handoff','trigger_reply_sent_then_handoff','customer_requested_manager','connect_human_takeover','verified_employee_reply'}
+
+
 def decorate(row):
     item=dict(row)
     unmanaged=item['display_state']=='unmanaged'
     execution_error=(item.get('state') == 'active' and item.get('latest_job_state') in {'failed','unknown'}
                      and bool(item.get('latest_job_error')))
     item=_decorate_conversation_state(item)
+    item['agent_available']=_agent_scope_available(item)
+    item['handoff_active']=item.get('state')=='human' and (bool(item.get('handoff_event_id')) or str(item.get('reason') or '') in _HANDOFF_REASONS)
+    if item['handoff_active']:
+        item['handoff_source']=item.get('handoff_source') or ('manual' if str(item.get('handoff_event_id') or '').startswith(('manual-handoff:','group-handoff:')) else 'ai_handoff')
+        item['handoff_at']=item.get('handoff_at') or item.get('updated_at')
+        item['handoff_event_id']=item.get('handoff_event_id') or ''
     if unmanaged and item['state']=='active':
         item['display_state']='unmanaged';item['display_reason']='agent_not_found'
     elif execution_error:
@@ -221,7 +250,7 @@ def decorate(row):
     item['control_block_reason']='channel_inactive' if not item.get('channel_active') else 'legacy_channel_ambiguous' if not item.get('unambiguous') else 'untracked_dialog' if not item.get('conversation_id') else ''
     item['can_send']=bool(item.get('channel_active') and item.get('connected') and item.get('tenant_status')=='active')
     item['send_block_reason']='integration_disconnected' if not item.get('connected') else 'channel_inactive' if not item.get('channel_active') else 'tenant_not_active' if item.get('tenant_status')!='active' else ''
-    if item.get('display_state') == 'active':
+    if item.get('agent_available') and item.get('display_state') == 'active':
         item['ai_availability'] = 'available'
     elif item.get('display_state') == 'error':
         item['ai_availability'] = 'error'
@@ -231,10 +260,12 @@ def decorate(row):
         item['ai_availability'] = 'stopped'
     else:
         item['ai_availability'] = 'blocked'
-    item['available_actions'] = (['pause','handoff'] if item.get('state') == 'active' and item.get('ai_availability') == 'available' and item.get('controls_allowed')
-                                 else ['resume'] if item.get('state') in {'paused','human'} and item.get('resume_allowed') and item.get('controls_allowed')
+    item['available_actions'] = (['pause','handoff'] if item.get('agent_available') and item.get('agent_mode')=='automatic' and item.get('state')=='active' and item.get('ai_availability')=='available' and item.get('controls_allowed')
+                                 else ['resume'] if item.get('agent_available') and item.get('state') in {'paused','human'} and item.get('resume_allowed') and item.get('controls_allowed')
+                                 else ['handoff'] if item.get('agent_available') and item.get('ai_availability') in {'available','stopped'} and not item.get('handoff_active') and item.get('controls_allowed')
                                  else [])
     item['state_changed_at'] = item.get('updated_at')
+    item.pop('agent_scopes',None)
     return public(item)
 
 
@@ -242,8 +273,16 @@ def apply_group_view(cur,tenant,dialog):
     from tenant_ai_group_coordination import view
     from tenant_ai_agent_access import tenant_status_allows_ai
     g=view(cur,tenant,dialog['conversation_id']);dialog['group_coordination']=g
-    cur.execute('SELECT name FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,g['primary_agent_id']))
-    name=(cur.fetchone() or {}).get('name');g['primary_agent_name']=name
+    cur.execute('SELECT name,mode,enabled,scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,g['primary_agent_id']))
+    primary_agent=dict(cur.fetchone() or {});name=primary_agent.get('name');g['primary_agent_name']=name
+    dialog.update(agent_mode=primary_agent.get('mode'),agent_enabled=primary_agent.get('enabled'),agent_scopes=primary_agent.get('scopes'))
+    dialog['agent_available']=_agent_scope_available(dialog)
+    dialog['handoff_active']=g['state']=='human' and (bool(g.get('group_event_key')) or str(g.get('reason') or '') in _HANDOFF_REASONS)
+    if dialog['handoff_active']:
+        dialog['handoff_source']='manual' if str(g.get('group_event_key') or '').startswith(('manual-handoff:','group-handoff:')) else 'ai_handoff'
+        dialog['handoff_at']=g.get('updated_at')
+        dialog['handoff_event_id']=g.get('group_event_key') or ''
+    dialog.pop('agent_scopes',None)
     cur.execute('SELECT display_name FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',(tenant,g['assigned_to']))
     assignee=(cur.fetchone() or {}).get('display_name')
     usable=bool(g['primary_agent_id'] and dialog.get('controls_allowed') and dialog.get('company_enabled') and not dialog.get('company_emergency_stop') and dialog.get('connected') and runtime_flag('AI_AGENTS_ENABLED') and tenant_status_allows_ai(dialog.get('tenant_status'),'connect'))
@@ -252,7 +291,7 @@ def apply_group_view(cur,tenant,dialog):
                   state=state,display_state=display,display_reason=g['reason'],
                   ai_availability='available' if display=='active' else 'stopped' if display in ('human','paused') else 'blocked',
                   resume_allowed=usable and state!='active',
-                  available_actions=['pause','handoff'] if state=='active' and dialog.get('controls_allowed') else ['resume'] if usable else [])
+                  available_actions=['pause','handoff'] if state=='active' and dialog.get('agent_mode')=='automatic' and usable and dialog.get('controls_allowed') else ['resume'] if state in ('human','paused') and usable and dialog.get('controls_allowed') else ['handoff'] if usable and dialog.get('controls_allowed') and state!='human' else [])
     return dialog
 
 
