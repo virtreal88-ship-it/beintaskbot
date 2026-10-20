@@ -21,7 +21,7 @@ def ensure_sync_schema(conn) -> None:
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('crm-sync-schema',))
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_crm_sync_jobs (
                 tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
-                resource TEXT NOT NULL CHECK (resource IN ('leads','tasks')),
+                resource TEXT NOT NULL CHECK (resource IN ('leads','tasks','contacts')),
                 run_id UUID NOT NULL,
                 connection_id TEXT NOT NULL,
                 status TEXT NOT NULL CHECK (status IN ('queued','running','done','failed')),
@@ -41,5 +41,7 @@ def ensure_sync_schema(conn) -> None:
                 WHERE status IN ('queued','running')''')
             migrate_incremental_sync(cur)
             migrate_deletion_scan(cur)
+            cur.execute("ALTER TABLE saas_crm_sync_jobs DROP CONSTRAINT IF EXISTS saas_crm_sync_jobs_resource_check")
+            cur.execute("ALTER TABLE saas_crm_sync_jobs ADD CONSTRAINT saas_crm_sync_jobs_resource_check CHECK (resource IN ('leads','tasks','contacts'))")
         conn.commit()
         _ready = True

@@ -43,6 +43,11 @@ def handler(member_from_request,origin,logger):
             if deal_id: result=await asyncio.to_thread(update_deal,tenant_id,deal_id,**fields)
             else: result=await asyncio.to_thread(create_deal,tenant_id,**fields,deal_id=data.get('id'))
             if deal_id and result is None: return web.json_response({'success':False,'error':'not_found'},status=404)
+            try:
+                from tenant_crm_sync_outbox import enqueue_change
+                await asyncio.to_thread(enqueue_change,tenant_id,'deal',str(result['id']))
+            except Exception:
+                logger.warning('CRM deal sync enqueue unavailable: tenant=%s',tenant_id)
             return web.json_response({'success':True,'deal':_jsonable(result)})
         except TenantLinearError:
             return web.json_response({'success':False,'error':'invalid_origin'},status=403,headers={'Cache-Control':'no-store'})
