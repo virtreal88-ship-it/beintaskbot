@@ -16,6 +16,7 @@ import tenant_chat_ai_schema as chat_schema
 import tenant_ai_agent_actions as actions
 import tenant_ai_agent_connect as connect_ai
 import tenant_ai_agents_store as agents
+import tenant_ai_agent_run_store as run_store
 import tenant_support_inbox_store as store
 import tenant_support_inbox_summary as summary
 from tenant_linear_policy import TenantLinearError
@@ -89,7 +90,7 @@ def database():
 @pytest.fixture
 def db(database,monkeypatch):
     database.execute('TRUNCATE saas_tenants CASCADE');database.commit()
-    for module in (store,summary,actions,connect_ai,agents):monkeypatch.setattr(module,'_connect',lambda:database)
+    for module in (store,summary,actions,connect_ai,agents,run_store):monkeypatch.setattr(module,'_connect',lambda:database)
     for tenant,user,channel,lead in ((A,11,CA,41),(B,22,CB,42)):
         database.execute("INSERT INTO saas_tenants(id,slug,name,status,owner_telegram_id) VALUES(%s::uuid,%s,'Company','active',%s)",(tenant,tenant,user))
         database.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name) VALUES(%s::uuid,%s,'owner','Owner')",(tenant,user))
@@ -171,6 +172,17 @@ def seed_job(db):
     db.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,chat_id,channel_id,lead_id,event_fingerprint,talk_id,due_at) VALUES(%s::uuid,%s::uuid,'connect','client','client',%s,41,'evt','',now())",(A,AGENT,CA))
     db.commit()
     return {'tenant_id':A,'provider':'connect','agent_id':AGENT,'conversation_id':'client','chat_id':'client','channel_id':CA,'lead_id':41,'event_fingerprint':'evt','lease_token':str(uuid.uuid4()),'revision':1}
+
+
+def test_active_manual_job_is_fenced_before_ai_reservation(db):
+    job=seed_job(db)
+    db.execute("UPDATE saas_ai_agent_settings SET operating_mode='active' WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_agents SET mode='manual' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
+    db.execute("UPDATE saas_ai_agent_jobs SET state='processing',lease_token=%s WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",(job['lease_token'],A,AGENT))
+    db.commit()
+    config,reason=run_store.load_agent_config(job,with_block_reason=True)
+    assert config is None
+    assert reason=='manual_mode_requires_operator_request'
 
 
 def test_handoff_creates_one_waiting_ticket_and_event_receipt(db):
@@ -308,6 +320,32 @@ def test_reopening_conflicting_ticket_returns_409(db):
     manual()
     with pytest.raises(TenantLinearError) as caught:store.update(PROFILE,first,{'status':'waiting'})
     assert caught.value.status==409
+
+
+def test_complete_ticket_is_idempotent_and_keeps_unconfirmed_outcome(db):
+    request_id=str(uuid.uuid4())
+    payload={'request_id':request_id,'lead_id':41,'channel_id':CA,'conversation_id':'client',
+             'outcome':'recommendations_unknown','note':'Customer has not confirmed yet.','propose_knowledge':True}
+    first=store.complete(PROFILE,payload)['ticket']
+    second=store.complete(PROFILE,payload)['ticket']
+    assert first['id']==second['id']
+    assert first['status']=='resolved'
+    assert first['completion_outcome']=='recommendations_unknown'
+    assert first['completion_note']=='Customer has not confirmed yet.'
+    assert first['knowledge_candidate_requested'] is True
+    assert db.execute('SELECT count(*) AS n FROM saas_support_tickets WHERE tenant_id=%s::uuid',(A,))[0]['n']==1
+    db.commit()
+
+
+def test_complete_ticket_rejects_cross_tenant_and_idempotency_reuse(db):
+    payload={'request_id':str(uuid.uuid4()),'lead_id':41,'channel_id':CA,'conversation_id':'client',
+             'outcome':'resolved_confirmed','note':'','propose_knowledge':False}
+    ticket=store.complete(PROFILE,payload)['ticket']
+    with pytest.raises(TenantLinearError):store.complete({'tenant_id':B,'telegram_id':22},payload)
+    altered={**payload,'outcome':'unresolved'}
+    with pytest.raises(TenantLinearError):store.complete(PROFILE,altered)
+    assert store.detail(PROFILE,ticket['id'])['ticket']['completion_outcome']=='resolved_confirmed'
+    db.commit()
 
 
 def test_ai_does_not_overwrite_employee_edits(db):

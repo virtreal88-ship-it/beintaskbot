@@ -23,6 +23,14 @@ assert.doesNotMatch(ui,/Изменить имя участника/,'the message
 assert.match(ui,/stopDialogueAI/,'an active AI conversation exposes Pause as Stop AI');
 assert.match(ui,/enableDialogueAI/,'a resumable dialogue exposes Enable AI');
 assert.match(ui,/operator-more-actions/,'secondary controls belong in the compact overflow menu');
+assert.match(ui,/AI köməkçi/,'the dialog exposes an explicit Copilot action');
+assert.match(ui,/dialogs\/copilot/,'Copilot actions use a protected operator API');
+assert.match(ui,/operatorCopilotInsert/,'client-facing AI text requires an explicit insert action');
+assert.match(ui,/operatorComplete/,'the employee can complete a single support request');
+assert.match(ui,/support-tickets\/complete/,'completion is saved through the tenant ticket API');
+assert.match(ui,/knowledge-candidates/,'knowledge extraction is a separate explicit action');
+const copilotHandler=ui.slice(ui.indexOf('async function submitCopilot'),ui.indexOf('copilotAsk.onclick'));
+assert.doesNotMatch(copilotHandler,/sendChat|tenantChatSend/,'Copilot generation must not invoke the message sender');
 assert.match(ui,/data-chat-attachment/,'media stays behind the existing explicit preview control');
 assert.doesNotMatch(ui,/\$\{esc\(m\.message_type\)\}<\/small>/,'technical media types must not be rendered in message cards');
 assert.match(ui,/@media\(max-width:600px\)/,'the compact dialog has a mobile layout breakpoint');

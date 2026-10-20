@@ -85,7 +85,7 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT i.tenant_id,t.status AS tenant_status FROM saas_tenant_integrations i
+            cur.execute('''SELECT i.tenant_id,t.status AS tenant_status,cfg.operating_mode FROM saas_tenant_integrations i
               JOIN saas_tenants t ON t.id=i.tenant_id
               JOIN saas_ai_agent_settings cfg ON cfg.tenant_id=i.tenant_id AND cfg.enabled=TRUE
               WHERE i.provider='kommo' AND i.status='connected' AND i.account_domain=%s
@@ -100,6 +100,10 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
             cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.mode,a.schedule FROM saas_ai_agents a
               WHERE a.role='primary' AND a.tenant_id=%s::uuid AND a.enabled=TRUE'''+clause('a','kommo')+' ORDER BY a.created_at,a.id', (tenant,))
             agents = cur.fetchall()
+            # Keep isolated Test Mode drafts, but stop Active Mode webhook jobs
+            # from being enqueued for agents configured as Manual.
+            if connections[0].get('operating_mode') == 'active':
+                agents = [agent for agent in agents if agent.get('mode') == 'automatic']
             for event in normalized:
                 # Test Mode is deliberately fail-closed: Kommo webhook must
                 # carry every binding identifier, including contact and origin.

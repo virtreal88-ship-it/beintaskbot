@@ -24,6 +24,18 @@ def ensure_schema(conn):
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               PRIMARY KEY(tenant_id,request_id),CHECK(status IN ('sending','completed','unknown','skipped')),
               FOREIGN KEY(tenant_id,requested_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
+            # Scoped fields let operator Copilot reuse the existing immutable
+            # usage receipt and tenant budget without a second billing table.
+            cur.execute("ALTER TABLE saas_chat_ai_runs ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'kommo'")
+            cur.execute("ALTER TABLE saas_chat_ai_runs ADD COLUMN IF NOT EXISTS channel_id TEXT NOT NULL DEFAULT ''")
+            cur.execute("ALTER TABLE saas_chat_ai_runs ADD COLUMN IF NOT EXISTS conversation_id TEXT NOT NULL DEFAULT ''")
+            cur.execute('''CREATE TABLE IF NOT EXISTS saas_operator_copilot_threads(
+              tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+              requested_by BIGINT NOT NULL,channel_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
+              turns JSONB NOT NULL DEFAULT '[]'::jsonb,updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              PRIMARY KEY(tenant_id,requested_by,channel_id,conversation_id),
+              FOREIGN KEY(tenant_id,requested_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
+            cur.execute('CREATE INDEX IF NOT EXISTS saas_chat_ai_copilot_usage_idx ON saas_chat_ai_runs(tenant_id,requested_by,provider,channel_id,conversation_id,usage_day)')
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_chat_transcripts(
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,lead_id BIGINT NOT NULL,
               media_hash TEXT NOT NULL,transcript TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

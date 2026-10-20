@@ -307,4 +307,5 @@
   document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='support_cases')return;const modal=$('supportCaseModal');if(caseReturnPending&&modal){modal.style.display='';caseReturnPending=false;return;}prepare();});
   document.addEventListener('tenant-language',()=>{if(root()?.innerHTML)prepare();});
   if(window.tenantProfileSnapshot?.member){member=window.tenantProfileSnapshot.member;prepare();}
+  window.tenantKnowledgeCases={openCard};
 })();

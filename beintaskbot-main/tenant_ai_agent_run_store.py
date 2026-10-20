@@ -167,6 +167,9 @@ def load_agent_config(job, *, with_block_reason=False):
         reason = 'agent_disabled'
     elif row['settings_enabled'] is not True:
         reason = 'company_ai_disabled'
+    elif row.get('operating_mode') == 'active' and row.get('mode') == 'manual':
+        # Fence queued/recovered Manual Mode jobs before provider I/O.
+        reason = 'manual_mode_requires_operator_request'
     elif row.get('conversation_state') in {'human', 'paused'}:
         reason = 'conversation_paused_or_human'
     elif row.get('emergency_stop') is True:
@@ -333,6 +336,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
             api_key, credential_source = choose_api_credential(tenant, job['agent_id'], job.get('provider'), company_key, selected_model)
             use_platform_key = credential_source == 'platform'
             if (not tenant_status_allows_ai(row['tenant_status'],job.get('provider')) or row['settings_enabled'] is not True or row.get('emergency_stop') is True or row['agent_enabled'] is not True or row.get('role','primary')!='primary'
+                    or (row.get('operating_mode')=='active' and row.get('mode')=='manual')
                     or row['conversation_state'] in {'human','paused'}
                     or (not use_platform_key and (config.get('enabled') is not True or config.get('consent') is not True or not company_key))):
                 raise TenantLinearError('AI Agents və mövcud Chat AI ayarları aktiv deyil.', 409)
@@ -482,6 +486,7 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
                     or current['conversation_revision']!=reservation.get('conversation_revision')
                     or not tenant_status_allows_ai(current['tenant_status'],job.get('provider')) or current.get('emergency_stop') is True
                     or (current.get('operating_mode')!='active' and current.get('test_mode_allowed') is not True)
+                    or (current.get('operating_mode')=='active' and reservation.get('mode')=='manual')
                     or str(current.get('config_version'))!=str(reservation.get('config_version'))
                     or (reservation.get('credential_source') != 'platform' and config.get('consent') is not True)):
                 cur.execute("UPDATE saas_ai_agent_runs SET state='superseded',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",

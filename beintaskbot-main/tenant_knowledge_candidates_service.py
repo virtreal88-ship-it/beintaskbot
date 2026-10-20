@@ -211,6 +211,12 @@ def parse(raw,item):
         # an English/Russian suggestion as Azerbaijani.
         value['content_language']='az'
         validated=card(value,aliases.values())
+        if (not isinstance(item.get('ticket'),dict)
+                or item['ticket'].get('completion_outcome')!='resolved_confirmed'):
+            if validated.get('outcome',{}).get('status')=='confirmed':
+                validated['outcome']['status']='unconfirmed'
+            if validated.get('work_status')=='resolved':
+                validated['work_status']='unknown'
         # Retain only translated actions with exact, selected source-message quotes.
         supported={entry['action_index'] for entry in validated['operator_action_evidence']}
         mapping={old:new for new,old in enumerate(i for i in range(len(validated['operator_actions'])) if i in supported)}

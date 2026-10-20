@@ -43,7 +43,7 @@ def route(cur,profile,data):
     ticket_id=identifier(data['ticket_id']) if data.get('ticket_id') else None
     ticket=None
     if ticket_id:
-        cur.execute('SELECT id,status FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',(tenant,ticket_id,channel,conversation))
+        cur.execute('SELECT id,status,completion_outcome,completion_note FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',(tenant,ticket_id,channel,conversation))
         ticket=cur.fetchone()
         if not ticket: raise TenantLinearError('Обращение недоступно в этом диалоге.',404)
     start,end=period(data)
@@ -127,7 +127,7 @@ def snapshot(cur,profile,data):
     for index,message in enumerate(messages): message['ref']='m'+str(index+1)
     if remaining<=0 and len(refs)<len(rows): next_before=refs[0]['id']
     binding['source_channels']=sorted(channels)
-    return {'tenant':tenant,'actor':actor,'route':binding,'refs':refs,'messages':messages,'source_digest':digest(messages),'next_before':next_before,'ticket':{'status':ticket['status']} if ticket else None}
+    return {'tenant':tenant,'actor':actor,'route':binding,'refs':refs,'messages':messages,'source_digest':digest(messages),'next_before':next_before,'ticket':{'status':ticket['status'],'completion_outcome':ticket.get('completion_outcome') or '','completion_note':ticket.get('completion_note') or ''} if ticket else None}
 
 
 def evidence(cur,profile,extraction,names_out=None):

@@ -1,5 +1,7 @@
 """Tenant-scoped Connect support queue. Viewing never changes AI conversation state."""
 import uuid
+import hashlib
+import json
 from tenant_ai_dialog_scope import job_scope, lock_dialog
 from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agents_store import _audit, _decorate_conversation_state
@@ -252,6 +254,61 @@ def update(profile, ticket_id, data):
                 raise TenantLinearError('В этом диалоге уже есть открытое обращение.',409) from None
             if not cur.fetchone(): raise TenantLinearError('Обращение не найдено.',404)
             _audit(cur,tenant,actor,'support_update','support_ticket',ticket_id,data)
+        conn.commit()
+    return detail(profile,ticket_id)
+
+
+def complete(profile, data):
+    """Close one Connect support request with an explicit staff outcome."""
+    allowed={'request_id','lead_id','channel_id','conversation_id','outcome','note','propose_knowledge'}
+    if not isinstance(data,dict) or set(data)-allowed:
+        raise TenantLinearError('Некорректные параметры завершения обращения.')
+    outcome=data.get('outcome')
+    if outcome not in {'resolved_confirmed','recommendations_unknown','unresolved','informational'}:
+        raise TenantLinearError('Выберите результат обращения.')
+    note=data.get('note','')
+    if not isinstance(note,str) or len(note)>1200: raise TenantLinearError('Комментарий слишком длинный.')
+    propose=data.get('propose_knowledge',False)
+    if type(propose) is not bool: raise TenantLinearError('Некорректный выбор базы знаний.')
+    request_id=identifier(data.get('request_id'))
+    channel=identifier(data.get('channel_id'))
+    conversation=str(data.get('conversation_id') or '').strip()
+    try: lead_id=int(data.get('lead_id'))
+    except (TypeError,ValueError): raise TenantLinearError('Выберите диалог.') from None
+    if not conversation or len(conversation)>160: raise TenantLinearError('Выберите диалог.')
+    shape={'channel_id':channel,'conversation_id':conversation,'lead_id':lead_id,'outcome':outcome,'note':note,'propose_knowledge':propose}
+    digest=hashlib.sha256(json.dumps(shape,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant,actor=_authorize(cur,profile)
+            selected=route(cur,tenant,channel,conversation)
+            if int(selected.get('lead_id') or 0)!=lead_id:
+                raise TenantLinearError('Диалог изменился. Обновите его.',409)
+            channel=str(selected['connect_channel_id']);conversation=str(selected['conversation_id'])
+            cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('support-complete:'+tenant+':'+channel+':'+conversation,))
+            cur.execute('SELECT actor_id,input_hash,ticket_id,channel_id,conversation_id FROM saas_support_completions WHERE tenant_id=%s::uuid AND request_id=%s::uuid FOR UPDATE',(tenant,request_id))
+            previous=cur.fetchone()
+            if previous:
+                if int(previous['actor_id'])!=actor or previous['input_hash']!=digest or str(previous['channel_id'])!=channel or previous['conversation_id']!=conversation:
+                    raise TenantLinearError('Код завершения уже использован для другого обращения.',409)
+                ticket_id=str(previous['ticket_id'])
+            else:
+                cur.execute('''SELECT id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
+                  AND status<>'resolved' ORDER BY created_at DESC,id DESC LIMIT 1 FOR UPDATE''',(tenant,channel,conversation))
+                ticket=cur.fetchone()
+                if ticket:
+                    ticket_id=str(ticket['id'])
+                else:
+                    receipt=create_in_transaction(cur,tenant,channel,conversation,'Завершено сотрудником','completion:'+request_id,
+                        actor=actor,description=note[:1000],source='manual',lead_id=lead_id)
+                    ticket_id=str(receipt['id'])
+                cur.execute('''UPDATE saas_support_tickets SET status='resolved',resolved_at=COALESCE(resolved_at,now()),
+                  completion_outcome=%s,completion_note=%s,knowledge_candidate_requested=%s,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid''',(outcome,note,propose,tenant,ticket_id))
+                cur.execute('''INSERT INTO saas_support_completions(tenant_id,request_id,actor_id,channel_id,conversation_id,input_hash,ticket_id)
+                  VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::uuid)''',(tenant,request_id,actor,channel,conversation,digest,ticket_id))
+                _audit(cur,tenant,actor,'support_complete','support_ticket',ticket_id,{'outcome':outcome,'knowledge_candidate_requested':propose})
         conn.commit()
     return detail(profile,ticket_id)
 
