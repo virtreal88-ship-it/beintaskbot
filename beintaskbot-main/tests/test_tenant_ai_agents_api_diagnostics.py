@@ -3,7 +3,7 @@ import json
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from aiohttp import web
 from tenant_linear_policy import TenantLinearError
@@ -171,6 +171,50 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
         namespace['list_connect_diagnostics'].assert_called_once_with(profile, '10')
         namespace['list_knowledge'].assert_not_called()
         member.assert_called_once_with(request)
+
+    def test_pilot_preflight_is_get_only_and_uses_verified_profile(self):
+        profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
+        handler, _ = load_handler(_origin=lambda *_args: None, _json_body=lambda _request: True,
+            _expected=lambda *_args: None)
+        with patch('tenant_ai_pilot.preflight', return_value={'ready':False,'blockers':['exact_pilot_scope_missing']}) as preflight:
+            response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
+                Mock(), 'pilot_preflight')(SimpleNamespace(method='GET', query={})))
+        self.assertEqual(response.status, 200)
+        preflight.assert_called_once_with(profile)
+
+    def test_kwid_confirmation_uses_verified_profile_and_ignores_browser_scope(self):
+        profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
+        class Request:
+            method='POST'; content_type='application/json'; content_length=128
+            headers={'Origin':'https://crm.pro.az'}; query={}; match_info={}
+            async def json(self):
+                return {'confirmed':True,'tenant_id':'attacker-tenant','channel_id':'attacker-channel',
+                        'conversation_id':'attacker-dialog','expected_tenant_id':profile['tenant_id'],
+                        'expected_user_id':profile['telegram_id']}
+        handler, _ = load_handler(_origin=lambda *_args: None, _json_body=lambda _request: True,
+            _expected=lambda *_args: None)
+        with patch('tenant_ai_pilot.confirm_kwid_disabled', return_value={'ready':False}) as confirm:
+            response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
+                Mock(), 'pilot_kwid_confirmation')(Request()))
+        self.assertEqual(response.status, 200, response.text)
+        self.assertEqual(confirm.call_args.args, (profile, {'confirmed':True,'tenant_id':'attacker-tenant',
+            'channel_id':'attacker-channel','conversation_id':'attacker-dialog'}))
+
+    def test_pilot_owner_approval_has_a_separate_endpoint(self):
+        profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
+        class Request:
+            method='POST'; content_type='application/json'; content_length=128
+            headers={'Origin':'https://crm.pro.az'}; query={}; match_info={}
+            async def json(self):
+                return {'approved':True,'expected_tenant_id':profile['tenant_id'],
+                        'expected_user_id':profile['telegram_id']}
+        handler, _ = load_handler(_origin=lambda *_args: None, _json_body=lambda _request: True,
+            _expected=lambda *_args: None)
+        with patch('tenant_ai_pilot.approve_pilot', return_value={'ready':False}) as approve:
+            response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
+                Mock(), 'pilot_owner_approval')(Request()))
+        self.assertEqual(response.status, 200)
+        approve.assert_called_once_with(profile, {'approved':True})
 
     def test_cached_options_never_contacts_kommo(self):
         catalog = Mock(return_value={'connect_channels': [{'id': 'tenant-channel'}]})

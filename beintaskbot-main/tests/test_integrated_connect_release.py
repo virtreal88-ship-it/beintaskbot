@@ -85,6 +85,38 @@ def test_real_sql_text_voice_text_and_central_key(flow,transcript):
     assert not f['db'].execute("SELECT 1 FROM saas_tenant_integrations WHERE provider='kommo'")
     f['db'].commit()
 
+def test_pilot_send_requires_fresh_exact_kwid_and_separate_owner_confirmation(flow,monkeypatch):
+    from tenant_ai_pilot import _snapshot
+    f=flow;db=f['db']
+    monkeypatch.setenv('AI_AGENTS_PILOT_SCOPE_ENABLED','true')
+    monkeypatch.setenv('AI_AGENTS_PILOT_TENANT_ID',A)
+    monkeypatch.setenv('AI_AGENTS_PILOT_CHANNEL_ID',CA)
+    monkeypatch.setenv('AI_AGENTS_PILOT_CONVERSATION_ID','client')
+    f['inbound']();f['process']()
+    assert f['send'].call_count==0  # absent attestation blocks at final send
+
+    scope={'tenant_id':A,'channel_id':CA,'conversation_id':'client'}
+    with db.cursor() as cur:
+        _row,fingerprint=_snapshot(cur,A,scope)
+        cur.execute('''INSERT INTO saas_ai_pilot_confirmations
+            (tenant_id,channel_id,conversation_id,scope_fingerprint,kwid_confirmed_by,kwid_confirmed_at,kwid_expires_at)
+            VALUES(%s::uuid,%s::uuid,%s,%s,11,clock_timestamp(),clock_timestamp()+interval '15 minutes')''',
+            (A,CA,'client',fingerprint))
+    db.commit()
+    f['inbound']();f['process']()
+    assert f['send'].call_count==0  # KWID confirmation alone cannot run the pilot
+
+    db.execute('''UPDATE saas_ai_pilot_confirmations SET owner_approved_by=11,
+        owner_approved_at=clock_timestamp(),owner_expires_at=kwid_expires_at
+        WHERE tenant_id=%s::uuid''',(A,));db.commit()
+    f['inbound']();f['process']()
+    assert f['send'].call_count==1
+
+    # A setting edit changes the live fingerprint; old approval is unusable.
+    db.execute("UPDATE saas_ai_agent_settings SET updated_at=clock_timestamp()+interval '1 second' WHERE tenant_id=%s::uuid",(A,));db.commit()
+    assert not __import__('tenant_ai_pilot').automatic_send_allowed(
+        {'tenant_id':A,'channel_id':CA,'conversation_id':'client'})
+
 def test_resume_only_new_messages_and_replayed_webhook(flow):
     f=flow;db=f['db']
     old,_=f['inbound']('audio','')

@@ -914,6 +914,15 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
                 raise TenantPlatformError('Connect açarı oxunmadı.') from exc
             route = {'provider':'connect','channel_id':str(row['connect_channel_id']),'conversation_id':str(row['conversation_id']),
                      'api_key':str(secret.get('api_key') or '')}
+            # Revalidate the single-dialog pilot confirmation at the final
+            # provider boundary. Human-reviewed drafts are already explicitly
+            # approved and do not use the automatic-pilot gate.
+            if draft_review is None:
+                from tenant_ai_pilot import automatic_send_allowed
+                if not automatic_send_allowed({'tenant_id':tenant,'channel_id':channel_id,
+                    'conversation_id':conversation_id}, connection=conn):
+                    conn.rollback()
+                    return None
             message_id = send_ai_reply(route, text, run_id)
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,'AI Agent',%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
