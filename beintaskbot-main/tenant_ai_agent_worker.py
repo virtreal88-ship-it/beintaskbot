@@ -668,7 +668,9 @@ async def process_connect_one(job, logger):
         if auto and (job.get('payload') or {}).get('test_mode') is not True:
             phase = 'connect_send'
             handoff_after_reply = any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matched)
-            send_options = {'handoff_fingerprint':job['event_fingerprint']} if handoff_after_reply else {}
+            send_options = {'pilot_scope_fenced':job.get('_pilot_scope_fenced') is True}
+            if handoff_after_reply:
+                send_options['handoff_fingerprint'] = job['event_fingerprint']
             def route_and_send():
                 return send_ai_reply_if_active(tenant, int(job['lead_id']), str(job['channel_id']),
                                                str(job['conversation_id']), draft[:8000], reservation['run_id'],

@@ -851,7 +851,8 @@ def send_ai_reply(route: dict, text: str, run_id: str) -> str:
 
 
 def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversation_id: str,
-                            text: str, run_id: str, expected_revision: int, *, handoff_fingerprint: str = '', draft_review=None) -> str | None:
+                            text: str, run_id: str, expected_revision: int, *, handoff_fingerprint: str = '',
+                            pilot_scope_fenced: bool = False, draft_review=None) -> str | None:
     """Serialize Connect send with an observed human takeover.
 
     The row lock intentionally spans the short Connect request. If the human
@@ -866,6 +867,7 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
     if coordinated and not reserve_delivery(tenant, channel_id, conversation_id, run_id):
         return None
     ticket = None
+    send_source = None
     with _connect() as conn:
         _schema(conn)
         conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
@@ -884,6 +886,7 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
                 cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid ORDER BY id FOR SHARE',(tenant,))
                 cur.fetchall()
                 source = delivery_source(cur, tenant, run_id)
+                send_source = source
                 if not source or not job_allowed(cur, {**source, 'tenant_id':tenant, 'provider':'connect', 'channel_id':channel_id, 'conversation_id':conversation_id}):
                     return None
                 if source['source_kind']=='run':
@@ -919,8 +922,19 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
             # approved and do not use the automatic-pilot gate.
             if draft_review is None:
                 from tenant_ai_pilot import automatic_send_allowed
-                if not automatic_send_allowed({'tenant_id':tenant,'channel_id':channel_id,
-                    'conversation_id':conversation_id}, connection=conn):
+                if send_source is None:
+                    try:
+                        send_source = delivery_source(cur, tenant, run_id)
+                    except Exception:
+                        # No source fingerprint is a pilot denial; unconfigured
+                        # deployments retain their existing send policy.
+                        send_source = None
+                gate_context = {'provider':'connect', 'tenant_id':tenant, 'channel_id':channel_id,
+                    'conversation_id':conversation_id,
+                    'event_fingerprint':str((send_source or {}).get('event_fingerprint') or ''),
+                    'agent_id':(send_source or {}).get('agent_id'),
+                    '_pilot_scope_fenced':pilot_scope_fenced is True}
+                if not automatic_send_allowed(gate_context, connection=conn):
                     conn.rollback()
                     return None
             message_id = send_ai_reply(route, text, run_id)
