@@ -25,11 +25,14 @@ for (const [viewId, createId, formId, modalId] of [
 assert(app.includes('data-view="companies"') && app.includes('Şirkətlər'));
 assert(view('customers').includes('nativeContactsList'), 'Kommo client list and native contacts must coexist');
 assert(view('companies').includes('companySearch') && view('companies').includes('nativeCompaniesList'));
+assert(!view('companies').includes('nativeCompanyLinkContact') && !view('companies').includes('nativeCompanyLinkDeal'), 'company associations belong inside the company card');
+assert(app.includes('nativeEntityCard') && app.includes('data-company-tab=\"contacts\"') && app.includes('data-company-tab=\"deals\"'), 'company card exposes relationship tabs');
+for (const type of ['company', 'contact', 'deal', 'task']) assert(app.includes(`data-native-open=\"${type}:`), `${type}: entity card action missing`);
 assert(view('integrations').includes('externalCrmSyncPanel'), 'sync settings belong in existing integrations view');
 assert(!view('deals').includes('externalCrmSyncPanel'));
-assert(app.includes('Beintaskbot UUID:') && !app.includes('nativeContactKommoId'));
+assert(!app.includes('Beintaskbot UUID:') && !app.includes('nativeContactKommoId'));
 assert(app.includes('button.disabled)return') && app.includes('showCrmModalError'), 'submits must prevent double-save and retain/report errors');
-assert(app.includes('Əlaqəli qeydlər') && app.includes("confirm('Şirkət arxivlənsin?"));
+assert(app.includes("confirm('Ayırmaq istəyirsiniz? Qeyd özü silinməyəcək.')"));
 assert(sync.includes("beinsystems:['title','pipeline_id','stage_id','contact_id','description']"));
 assert(sync.includes("['off','to_external',...(p==='kommo'?['from_external','bidirectional']:[])]"));
 assert(sync.includes("contact:['to_external','from_external','bidirectional']") === false); // capabilities are rendered from the API response
