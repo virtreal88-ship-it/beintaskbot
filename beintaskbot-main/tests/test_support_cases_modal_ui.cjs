@@ -7,7 +7,7 @@ const w=dom.window,d=w.document,calls=[];let historyPage=0;
 w.tenantI18n={language:'az'};
 w.tenantProfileSnapshot={member:{tenant_id:'tenant-a',telegram_id:7,role:'owner'}};
 const card={id:'case-1',version:3,title:'Axtarış nəticəsi haqqında real case title',status:'pending_review',case_kind:'technical',resolution_method:'chat',content_language:'en',symptoms:['Customer sees unrelated records'],operator_actions:['Employee checked search filters'],resolution_steps:['Refresh the search index'],cause:{status:'suspected',text:'The index may be stale'},outcome:{status:'unconfirmed',text:'Waiting for customer confirmation',message_ids:[]},source_message_ids:['message-2'],can_approve:true,approval_block_reason:null,created_at:'2026-10-17T10:12:00Z'};
-const route={provider:'connect',lead_id:17,channel_id:'channel-a',conversation_id:'12345@g.us',phone:'+994501234567'};
+const route={provider:'connect',channel_id:'channel-a',conversation_id:'12345@g.us',phone:'+994501234567'};
 const messages=[
  {id:'message-1',direction:'incoming',author_type:'customer',author_name:'Mamed Saray',body:'Real incoming text',message_type:'text',happened_at:'2026-10-17T10:12:00Z',source:'connect'},
  {id:'message-2',direction:'outgoing',author_type:'operator',author_name:'Leyla Hasanова',body:'Real employee answer',message_type:'text',happened_at:'2026-10-17T10:15:00Z',source:'connect'},
@@ -21,14 +21,14 @@ w.fetch=async(url,opt={})=>{
  calls.push({url,opt});let result={};
  if(url.includes('/ai/dialogs/history')){
    const q=new URL(url,'https://example.test').searchParams;
-   assert.equal(q.get('provider'),'connect');assert.equal(q.get('channel_id'),'channel-a');assert.equal(q.get('conversation_id'),route.conversation_id);
+   assert.equal(q.get('provider'),'connect');assert.equal(q.get('lead_id'),'17','full history route derives its lead from same-channel evidence');assert.equal(q.get('channel_id'),'channel-a');assert.equal(q.get('conversation_id'),route.conversation_id);
    historyPage++;
    result=historyPage===1?{dialog:route,messages,next_before:'older-cursor'}:{dialog:route,messages:[{id:'message-0',direction:'incoming',author_type:'customer',author_name:'Mamed Saray',body:'Older real text',message_type:'text',happened_at:'2026-10-17T10:00:00Z',source:'connect'}],next_before:null};
  }else if(url.includes('/chat/attachment'))return {ok:true,status:200,blob:async()=>new w.Blob(['test image bytes'],{type:'image/jpeg'}),headers:{get:()=> 'image/jpeg'}};
  else if(url.includes('/ai/dialogs'))result={dialogs:[]};
  else if(url.includes('/ai/agents'))result={agents:[{id:'agent-a',name:'Nizam AI'}]};
  else if(url.includes('/ai/channels'))result={channels:[{provider:'connect',channel_id:'channel-a',name:'Texniki Dəstək'},{provider:'connect',channel_id:'channel-b',name:'Satış'}]};
- else if(url.includes('/knowledge-candidates/case-1?'))result={candidate:card,evidence:[{...messages[1],role:'operator',text:messages[1].body}],route};
+ else if(url.includes('/knowledge-candidates/case-1?'))result={candidate:card,evidence:[{...messages[1],role:'operator',text:messages[1].body,provider:'connect',lead_id:17,channel_id:'channel-a',conversation_id:route.conversation_id}],route};
  else if(url.includes('/knowledge-candidates?'))result={candidates:[card],next_before:null};
  else if(url.endsWith('/knowledge-candidates/case-1')&&opt.method==='PATCH'){
    const body=JSON.parse(opt.body);assert.equal(body.title,'Dəyişdirilmiş başlıq EN');assert.deepEqual(body.symptoms,['Symptom in English']);assert.deepEqual(body.source_message_ids,['message-2']);assert.deepEqual(body.outcome.message_ids,['message-2']);result={candidate:{...card,...body,version:4},evidence:[{...messages[1],role:'operator',text:messages[1].body}],route};
