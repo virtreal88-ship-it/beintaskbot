@@ -4,6 +4,7 @@ from tenant_linear_policy import TenantLinearError, identifier
 MAX_MESSAGES=80
 MAX_CONTEXT=12000
 MAX_TOKENS=16000
+MAX_DAILY_EXTRACTIONS=10
 MAX_CARDS=5
 BASE_FIELDS={'title','symptoms','cause','resolution_steps','outcome','source_message_ids','product','product_version'}
 FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','operator_action_evidence','case_kind','content_language','clarification_note','work_status','start_message_id','end_message_id','case_relation'}
