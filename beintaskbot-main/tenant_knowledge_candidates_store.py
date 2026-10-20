@@ -276,9 +276,12 @@ def listing(profile,data):
                 if not data.get('channel_id'): raise TenantLinearError('Для диалога выберите канал.')
                 route(cur,profile,data)
                 clauses.append("e.route->>'conversation_id'=%s");args.append(data['conversation_id'])
-            if data.get('status'):
-                if data['status'] not in {'pending_review','needs_clarification','approved','rejected'}: raise TenantLinearError('Некорректный статус.')
-                clauses.append('c.status=%s');args.append(data['status'])
+            status=data.get('status')
+            if status:
+                if status not in {'pending_review','needs_clarification','approved','rejected','all'}: raise TenantLinearError('Некорректный статус.')
+                if status!='all': clauses.append('c.status=%s');args.append(status)
+            else:
+                clauses.append("c.status<>'rejected'")
             if data.get('batch_id'):
                 clauses.append('EXISTS(SELECT 1 FROM saas_knowledge_batch_items bi WHERE bi.tenant_id=c.tenant_id AND bi.extraction_id=c.extraction_id AND bi.batch_id=%s::uuid)')
                 args.append(identifier(data['batch_id']))

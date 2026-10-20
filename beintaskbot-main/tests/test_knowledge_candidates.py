@@ -474,3 +474,13 @@ def test_azerbaijani_action_summary_keeps_exact_original_quote_as_evidence():
     value['operator_action_evidence'][0]['quote']='Invented quote'
     parsed=service.parse(json.dumps({'cards':[value]},ensure_ascii=False),item)[0]
     assert parsed['operator_actions']==[] and parsed['operator_action_evidence']==[]
+
+
+def test_listing_hides_rejected_by_default_and_supports_explicit_filters(ready):
+    value=candidate(ready)
+    store.mutate(PROFILE,value['id'],{'expected_version':1},'reject')
+    assert store.listing(PROFILE,{'limit':25})['candidates']==[]
+    rejected=store.listing(PROFILE,{'limit':25,'status':'rejected'})['candidates']
+    included=store.listing(PROFILE,{'limit':25,'status':'all'})['candidates']
+    assert [item['id'] for item in rejected]==[value['id']]
+    assert [item['id'] for item in included]==[value['id']]
