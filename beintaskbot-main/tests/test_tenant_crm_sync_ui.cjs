@@ -8,7 +8,7 @@ assert(app.includes('tenant-crm-sync-complete'));
 assert(app.includes('loadDeals(false)'));
 assert(app.includes('loadTasks(false)'));
 assert(app.includes('externalCrmSyncPanel'));
-assert(app.includes('Standart olaraq söndürülüb'));
+assert(app.includes('Sinxronizasiya standart olaraq söndürülüb'));
 
 function setup() {
   const listeners = {}, events = [], boxes = [], timers = new Map();
