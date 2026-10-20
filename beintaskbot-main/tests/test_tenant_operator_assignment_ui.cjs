@@ -8,7 +8,7 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
  const member={tenant_id:A,telegram_id:11,role:'manager',permissions:['dialogs','support'],active:true};
  w.tenantProfileSnapshot={member,capabilities:{modules:{dialogs:true,support:true}}};w.confirm=()=>true;w.crypto.randomUUID=()=> '00000000-0000-0000-0000-000000000777';
  const choices={allowed:true,reason:'',revision:7,agents:[{id:AGENT,name:'<b>Support</b>',mode:'manual'}]};
- const route={provider:'connect',channel_id:CA,conversation_id:'same-client',lead_id:41,customer_name:'Test contact',channel_name:'Second WhatsApp',state:'human',display_state:'human',display_reason:'manager_replied',controls_allowed:true,agent_id:null,can_send:true,available_actions:[],agent_assignment:choices};
+ const route={provider:'connect',channel_id:CA,conversation_id:'same-client',lead_id:41,customer_name:'Test contact',phone:'+994501234567',channel_name:'Second WhatsApp',state:'human',display_state:'human',display_reason:'manager_replied',controls_allowed:true,agent_id:null,can_send:true,available_actions:[],agent_assignment:choices};
  let failOnce=true;
  w.fetch=async(url,opts={})=>{
   const u=new URL(url,w.location),body=opts.body?JSON.parse(opts.body):null;calls.push({path:u.pathname,query:u.search,method:opts.method||'GET',body});let result={};
@@ -21,6 +21,24 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
   return{ok:true,status:200,json:async()=>({success:true,result:structuredClone(result)})};
  };
  w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await settle();
+ assert.ok(d.querySelector('#operatorWorkspace'),'dialog page mounts a split workspace');
+ assert.ok(d.querySelector('#operatorRows [role=option]'),'existing dialogues render in the left list');
+ assert.ok(d.querySelector('#operatorConversationPane'),'conversation stays in the right pane');
+ d.querySelector('#operatorSearch').value='filter stays';
+ const list=d.querySelector('#operatorRows');list.scrollTop=28;list.dispatchEvent(new w.Event('scroll'));
+ await w.tenantOperator.openDialog(route);await settle();
+ assert.equal(d.querySelector('#dealModal').classList.contains('show'),false,'opening a conversation does not use the modal');
+ assert.equal(d.querySelector('#operatorWorkspace').dataset.selected,'true');
+ assert.match(d.querySelector('#operatorConversationHeader').textContent,/\+994501234567/,'the selected chat header shows the verified phone');
+ assert.equal(d.querySelector('#operatorSearch').value,'filter stays','selection keeps the active search');
+ assert.equal(d.querySelector('#operatorRows').scrollTop,28,'rerender preserves list position');
+ assert.equal(d.querySelector('#operatorRows [role=option]').getAttribute('aria-selected'),'true');
+ d.querySelector('#operatorCopilotToggle').click();
+ assert.equal(d.querySelector('#operatorCopilot').hidden,false,'Copilot opens alongside the chat without replacing the list');
+ assert.equal(calls.filter(call=>call.path.endsWith('/copilot')).length,0,'opening Copilot does not launch an AI call');
+ d.querySelector('[data-operator-back]').click();
+ assert.equal(d.querySelector('#operatorWorkspace').dataset.selected,'false','mobile back returns to the list');
+ assert.equal(d.querySelector('#operatorRows [role=option]').getAttribute('aria-selected'),'true','returning to the list preserves the selected conversation');
  await w.tenantOperator.openDialog(route);await settle();
  assert.equal(d.querySelector('[data-operator-assign-agent]').textContent,'Назначить AI-агента');
  assert.ok(d.querySelector('[data-operator-create-ticket]'));

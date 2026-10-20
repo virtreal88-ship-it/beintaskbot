@@ -3,6 +3,7 @@ const root=path.join(__dirname,'..');
 const ui=fs.readFileSync(path.join(root,'docs','tenant-operator-dialogs.js'),'utf8');
 const l10n=fs.readFileSync(path.join(root,'docs','tenant-operator-i18n.js'),'utf8');
 const backend=fs.readFileSync(path.join(root,'tenant_operator_dialogs.py'),'utf8');
+const sidebar=fs.readFileSync(path.join(root,'docs','index.html'),'utf8');
 
 assert.match(ui,/author_type==='ai'/,'AI messages need their own durable author label');
 assert.match(ui,/author_type==='operator'/,'operator messages need their own durable author label');
@@ -49,7 +50,15 @@ assert.match(ui,/operator-composer-actions/,'AI and send actions are grouped ins
 assert.match(ui,/operator-dialog-head-row/,'dialog metadata uses a compact first header row');
 assert.match(ui,/operator-dialog-head-secondary/,'agent and conversation controls use a compact second header row');
 assert.match(ui,/operatorHeadStatus/,'AI status exposes its detailed reason on demand');
-assert.match(ui,/width:min\(1480px,calc\(100vw - 48px\)\)/,'desktop conversation modal uses the available viewport width');
+assert.match(ui,/grid-template-columns:minmax\(270px,34fr\) minmax\(0,66fr\)/,'the conversations view uses the requested master/detail split');
+assert.match(ui,/operatorWorkspace.*operatorConversationContent/s,'conversation history renders in the inline right pane');
+assert.match(ui,/data-operator-back/,'narrow screens provide a return to the list');
+const dialogRenderer=ui.slice(ui.indexOf('function renderDialog'),ui.indexOf('async function changeState'));
+assert.doesNotMatch(dialogRenderer,/dealModal|modalContent/,'ordinary conversations no longer render in the modal');
+assert.match(ui,/safeName=row=>/,'display labels reject transport JIDs instead of rendering technical identifiers');
+assert.match(ui,/value>99\?'99\+'/,'dialog attention counts display 99+ without changing the count');
+assert.match(sidebar,/body:not\(\.sidebar-open\) \.sidebar-item \{ position:relative/,'collapsed menu counters anchor to the icon item');
+assert.match(sidebar,/sidebar-nav \{ overflow-x:hidden/,'collapsed menu prevents horizontal overflow');
 assert.match(ui,/\.operator-chat-history\{flex:1;min-height:0;max-height:none;overflow:auto/,'conversation history fills and scrolls independently');
 assert.match(ui,/operator-composer-actions #sendChat[^`]*border-radius:50%/,'send is displayed as a circular composer action');
 assert.match(ui,/autosize=\(\)=>/,'composer grows with the draft text');
