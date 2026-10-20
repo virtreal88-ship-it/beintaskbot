@@ -26,10 +26,55 @@ _HANDOFF_REQUESTS = tuple(re.compile(pattern, re.I) for pattern in (
     r"\b(?:соедините|переключите|переведите|передайте)\s+(?:меня\s+)?(?:к|на|с)\s+(?:человек\w*|оператор\w*|менеджер\w*|специалист\w*)\b",
 ))
 
+# Deterministic, high-confidence dissatisfaction signals. These avoid extra
+# provider calls and intentionally require an explicit complaint, failed
+# resolution, demand, or complaint threat rather than generic negative words.
+_DISSATISFACTION = tuple(re.compile(pattern, re.I) for pattern in (
+    r"\b(?:i(?:'|’)m|i am)\s+(?:really\s+|very\s+)?(?:dissatisfied|unhappy|disappointed)\b",
+    r"\b(?:i(?:'|’)m|i am)\s+(?:really\s+|very\s+)?(?:frustrated|fed up)\s+(?:with|about|by)\s+(?:your\s+|the\s+|this\s+|that\s+)?(?:service|support|response|answer|bot|ai|chatbot|help|handling|problem|issue|you)\b",
+    r"\b(?:i am not happy|i am not satisfied|i(?:'|’)m not happy|i(?:'|’)m not satisfied)\s+(?:with|about)\s+(?:your\s+|the\s+|this\s+|that\s+)?(?:service|support|response|answer|bot|ai|chatbot|help|handling|problem|issue)\b",
+    r"\b(?:this|that|your (?:service|support|response|answer|bot|ai))\s+(?:is|are|was|were)\s+(?:unacceptable|awful|terrible|useless)\b",
+    r"\b(?:your|the)\s+(?:service|support|answers?|bot|ai|chatbot)\s+(?:is|are|keeps?|keep|just)\s+(?:terrible|awful|useless|repeating|giving me the same answer)\b",
+    r"\b(?:i have|i've|we have|we've|i|we)\s+(?:already\s+)?(?:told|contacted|written to|called)\s+you\b.{0,100}\b(?:still not fixed|still unresolved|not resolved|not fixed|problem remains)\b",
+    r"\b(?:again|yet again|for the \w+ time|several times|multiple times|repeatedly)\b.{0,100}\b(?:still not working|not fixed|not resolved|problem remains|same problem)\b",
+    r"\b(?:i|we)\s+(?:demand|insist)\s+(?:that\s+)?(?:you\s+)?(?:fix|resolve|solve|address)\b",
+    r"\b(?:i will|i'm going to|we will)\s+(?:file|make|submit|lodge)\s+(?:a\s+)?complaint\b|\b(?:i will|i'm going to)\s+report you\b",
+    r"\b(?:xidmətdən|xidmətinizdən|dəstək xidmətindən)\s+(?:çox\s+)?narazı(?:yam|yıq)?\b",
+    r"\b(?:bu|belə)\s+(?:xidmət|cavab|yanaşma)\s+(?:qəbuledilməzdir|qəbulolunmazdır)\b",
+    r"\b(?:cavablarınız|cavabınız|bot(?:unuz)?|ai)\b.{0,60}\b(?:məni qane etmir|eyni cavabı təkrarlayır|kömək etmir)\b",
+    r"\b(?:dəfələrlə|neçə dəfə|yenə|təkrarən)\b.{0,100}\b(?:həll olunmayıb|düzəlməyib|işləmir|problem qalır|cavab almadım)\b",
+    r"\b(?:tələb edirəm|xahiş edirəm)\b.{0,80}\b(?:problemi|məsələni)\b.{0,40}\b(?:dərhal|indi)\b.{0,30}\bhəll edin\b",
+    r"\bşikayət\s+(?:edəcəyəm|edəcəm|etmək məcburiyyətində qalacağam)\b|\b(?:rəsmi\s+)?şikayət\s+(?:edəcəyəm|edəcəm)\b",
+    r"\bя\s+(?:очень\s+)?(?:недоволен|недовольна|разочарован|разочарована|раздражён|раздражена)\s+(?:(?:вашим|вашей|этим|этой|работой)\s+)?(?:обслуживанием|сервисом|поддержкой|ответами|ответом|ботом|ии|решением|работой|помощью)\b",
+    r"\b(?:это|такое|ваш сервис|ваша поддержка|ваш ответ)\s+(?:совершенно\s+)?(?:неприемлемо|ужасно|отвратительно|бесполезно)\b",
+    r"\b(?:ваши ответы|ответы бота|ответы ии|бот|ии)\b.{0,60}\b(?:меня не устраивают|повторяет одно и то же|не помогают)\b",
+    r"\b(?:я|мы)\s+(?:уже\s+)?(?:несколько раз|много раз|снова|опять|в который раз)\b.{0,100}\b(?:не решен[аоы]?|не исправлен[аоы]?|не работает|проблема осталась|не помогло)\b",
+    r"\b(?:я|мы)\s+(?:требую|настаиваю)\b.{0,80}\b(?:решить|исправить|устранить)\b",
+    r"\b(?:я|мы)\s+(?:подам|подаём|подадим|напишу|напишем)\s+(?:официальную\s+)?жалобу\b|\bпожалуюсь\b",
+))
+_QUOTED_SPAN = re.compile(r'“[^”]*”|«[^»]*»|„[^“]*“|‘[^’]*’|"[^"\n]*"|`[^`]*`|(?<!\w)\x27[^\x27\n]+\x27(?!\w)', re.S)
+_REPORTED_COMPLAINT = re.compile(
+    r"\b(?:(?:customer|client|user|colleague|coworker|friend|boss|someone|they|he|she)|(?:my|our)\s+(?:customer|client|colleague|coworker|friend|boss))\s+(?:said|wrote|mentioned|reported|complained|asked)\b|"
+    r"\b(?:müştəri|musteri|alıcı)\s+(?:dedi|yazdı|bildirdi|xahiş etdi|şikayət etdi)\b|"
+    r"\b(?:(?:клиент|покупатель|коллега|друг|подруга|начальник|он|она|они)|(?:мой|моя|наш|наша)\s+(?:клиент|покупатель|коллега|друг|подруга|начальник))\s+(?:сказал\w*|написал\w*|сообщил\w*|попросил\w*|пожаловал\w*)\b",
+    re.I,
+)
+
+
+def handoff_reason(text):
+    body = str(text or '')[:6000]
+    complaint = _QUOTED_SPAN.sub(' ', body).casefold()
+    if _REPORTED_COMPLAINT.search(complaint):
+        return None
+    if any(pattern.search(complaint) for pattern in _HANDOFF_REQUESTS):
+        return 'customer_requested_manager'
+    if any(pattern.search(complaint) for pattern in _DISSATISFACTION):
+        return 'customer_dissatisfied'
+    return None
+
 
 def should_handoff(text):
-    body = str(text or '')[:6000]
-    return any(pattern.search(body) for pattern in _HANDOFF_REQUESTS)
+    return handoff_reason(text) is not None
 
 
 def enabled_triggers(tenant_id,agent_id):
