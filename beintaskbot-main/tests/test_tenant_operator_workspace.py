@@ -250,13 +250,19 @@ def test_group_participant_name_priority_is_manual_then_saved_then_whatsapp_then
 def test_dialogue_actions_are_derived_from_availability_not_only_storage_state(operator_db):
     base={'provider':'connect','conversation_id':'client','channel_active':True,'unambiguous':True,'connected':True,
           'tenant_status':'active','company_enabled':True,'company_emergency_stop':False,'agent_id':AGENT,
-          'agent_enabled':True,'state':'active','reason':'','latest_job_state':'queued','latest_job_error':'',
+          'agent_enabled':True,'agent_mode':'automatic','agent_scopes':[{'provider':'connect','channel_id':'channel'}],'channel_id':'channel','state':'active','reason':'','latest_job_state':'queued','latest_job_error':'',
           'customer_name':'Client','phone':'994501234567','conversation_kind':'','updated_at':None,'display_state':'active'}
     active=dialogs.decorate(base)
     assert active['ai_availability']=='available' and active['available_actions']==['pause','handoff']
+    replied=dialogs.decorate({**base,'state':'human','reason':'manager_replied'})
+    assert replied['handoff_active'] is False and replied['available_actions']==['resume']
     paused=dialogs.decorate({**base,'state':'paused','reason':'manager_pause'})
     assert paused['available_actions']==['resume']
     blocked=dialogs.decorate({**base,'company_emergency_stop':True})
     assert blocked['ai_availability']=='blocked' and blocked['available_actions']==[]
+    manual=dialogs.decorate({**base,'agent_mode':'manual'})
+    assert manual['available_actions']==['handoff']
+    manual_paused=dialogs.decorate({**base,'agent_mode':'manual','state':'paused','reason':'manager_pause'})
+    assert manual_paused['available_actions']==['resume']
     failed=dialogs.decorate({**base,'latest_job_state':'failed','latest_job_error':'connect_policy_blocked'})
     assert failed['display_state']=='error' and failed['available_actions']==[]
