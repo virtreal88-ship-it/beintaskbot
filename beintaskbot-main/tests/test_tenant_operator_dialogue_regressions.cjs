@@ -36,7 +36,12 @@ assert.match(ui,/support-tickets\/complete/,'completion is saved through the ten
 assert.match(ui,/knowledge-candidates/,'knowledge extraction is a separate explicit action');
 const copilotHandler=ui.slice(ui.indexOf('async function submitCopilot'),ui.indexOf('copilotAsk.onclick'));
 assert.doesNotMatch(copilotHandler,/sendChat|tenantChatSend/,'Copilot generation must not invoke the message sender');
-assert.match(ui,/data-chat-attachment/,'media stays behind the existing explicit preview control');
+assert.match(ui,/data-chat-attachment/,'dialog attachments use the protected media preview component');
+assert.match(ui,/data-channel-id=\"\$\{esc\(route\.channel_id\)\}/,'media preview carries the channel scope');
+assert.match(ui,/data-conversation-id=\"\$\{esc\(route\.conversation_id\)\}/,'media preview carries the conversation scope');
+assert.match(ui,/operator-composer-actions/,'AI and send actions are grouped inside the message composer');
+assert.match(ui,/autosize=\(\)=>/,'composer grows with the draft text');
+assert.match(ui,/data-media-meta>\$\{esc\(m\.media_filename\|\|m\.file_name\|\|''\)\}/,'attachments show their stored filename');
 assert.doesNotMatch(ui,/\$\{esc\(m\.message_type\)\}<\/small>/,'technical media types must not be rendered in message cards');
 assert.match(ui,/@media\(max-width:600px\)/,'the compact dialog has a mobile layout breakpoint');
 assert.match(backend,/display_state']='error'/,'job failure must be distinct from a policy block');

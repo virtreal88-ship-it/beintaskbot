@@ -24,16 +24,16 @@
     urls.forEach(url=>URL.revokeObjectURL(url));urls.clear();previews.forEach(preview=>stop(preview.media));previews.clear();
     document.querySelectorAll('[data-chat-attachment]').forEach(host=>{
       host.querySelectorAll('[data-media-preview],img,audio,video,a').forEach(node=>node.remove());
-      const button=host.querySelector('button');if(button){button.hidden=false;button.disabled=false;}
+      const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button');if(button){button.hidden=false;button.disabled=false;}delete host.dataset.mediaPreviewState;
     });
   }
   function bind(){
     document.querySelectorAll('#chatRows [data-chat-attachment]').forEach(host=>{
-      const button=host.querySelector('button'),status=host.querySelector('[role="status"]');
+      const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button'),status=host.querySelector('[role="status"]');
       if(!button)return;
-      button.onclick=async()=>{
+      const load=async(auto=false)=>{
         if(button.disabled||!member||!lead)return;
-        if(active.size>=3){status.textContent=text('mediaBusy','Bir az sonra yoxlayın.');return;}
+        if(active.size>=3){status.textContent=text('mediaBusy','Bir az sonra yoxlayın.');if(auto)button.hidden=false;return;}
         const current=epoch,who=identity(member),selected=lead,controller=new AbortController();
         active.add(controller);button.disabled=true;button.setAttribute('aria-busy','true');status.textContent=' '+text('loading','Yüklənir…');
         const valid=()=>current===epoch&&who===identity(member)&&selected===lead&&host.isConnected;
@@ -41,16 +41,17 @@
         let blobUrl;
         try{
           const query=new URLSearchParams({lead_id:host.dataset.attachmentLeadId||selected,message_id:host.dataset.chatAttachment,
-            expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
+            expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id,...(host.dataset.channelId&&host.dataset.conversationId?{channel_id:host.dataset.channelId,conversation_id:host.dataset.conversationId}:{})});
           const response=await fetch('/api/platform/crm/chat/attachment?'+query,
             {credentials:'same-origin',cache:'no-store',signal:controller.signal});
           if(!response.ok){const data=await response.json();const key={404:'mediaUnavailable',410:'mediaUnavailable',413:'mediaLarge',415:'mediaInvalid',429:'mediaBusy'}[response.status]||'mediaFailed';throw Error(host.dataset.connectMedia?text(key,data.error||'Fayl yüklənmədi.'):data.error||'Fayl yüklənmədi.');}
-          const chunks=[],reader=response.body.getReader(),total=Number(response.headers.get('Content-Length'));
+          const declaredSize=Number(response.headers.get('Content-Length'));if(auto&&declaredSize>5*1024*1024)throw Error(text('mediaLarge','Fayl çox böyükdür.'));
+          const chunks=[],reader=response.body.getReader(),total=declaredSize;
           let size=0;
           while(true){
             const {done,value}=await reader.read();if(done)break;
             if(!valid()){await reader.cancel();return;}
-            size+=value.length;
+            size+=value.length;if(auto&&size>5*1024*1024){await reader.cancel();throw Error(text('mediaLarge','Fayl çox böyükdür.'));}
             if(size>20*1024*1024){await reader.cancel();throw Error('Fayl çox böyükdür.');}
             chunks.push(value);status.textContent=total>0?' Yüklənir: '+Math.min(100,Math.round(size/total*100))+'%':' Yüklənir…';
           }
@@ -58,7 +59,7 @@
           const blob=new Blob(chunks,{type:contentType});if(!valid())return;
           if(!blob.size||blob.size>20*1024*1024)throw Error('Fayl ölçüsü düzgün deyil.');
           blobUrl=URL.createObjectURL(blob);urls.add(blobUrl);
-          const type=blob.type.split(';')[0];let node,media;
+          const type=blob.type.split(';')[0],expected=host.dataset.mediaKind;if(expected==='image'&&!type.startsWith('image/'))throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));if(expected==='audio'&&!type.startsWith('audio/')&&type!=='application/ogg')throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));if(expected==='video'&&!type.startsWith('video/'))throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));let node,media;
           if(['image/jpeg','image/png','image/webp','image/gif'].includes(type)){
             node=document.createElement('img');if(node.dataset)node.dataset.mediaPreview='image';node.className='operator-media-preview';node.alt=text('photo','Chat photo');node.title=text('openOriginal','Open original');node.onclick=()=>node.classList?.toggle('is-expanded');media=node;
           }else if(type.startsWith('audio/')||type==='application/ogg'){
@@ -66,7 +67,7 @@
           }else if(['video/mp4','video/webm'].includes(type)){
             node=document.createElement('video');if(node.dataset)node.dataset.mediaPreview='video';node.className='operator-media-video';node.controls=true;node.preload='metadata';media=node;
           }else{
-            node=document.createElement('a');if(node.dataset)node.dataset.mediaPreview='file';node.href=blobUrl;node.download='attachment'+(type==='application/pdf'?'.pdf':'');node.textContent=text('downloadAttachment','Download attachment');
+            node=document.createElement('a');if(node.dataset)node.dataset.mediaPreview='file';node.href=blobUrl;node.target='_blank';node.rel='noopener';node.textContent=text('downloadAttachment','Download attachment');
             const meta=host.querySelector('[data-media-meta]');if(meta?.dataset)meta.textContent=[type==='application/pdf'?'PDF':type,formatSize(contentLength||blob.size)].filter(Boolean).join(' · ');
           }
           if(node.tagName!=='A'){
@@ -76,10 +77,11 @@
           // Keep at most three decoded previews in this tab, not the whole history.
           if(previews.size>=3){const [oldUrl,old]=previews.entries().next().value;stop(old.media);old.node.remove();old.button.hidden=false;URL.revokeObjectURL(oldUrl);urls.delete(oldUrl);previews.delete(oldUrl);}
           previews.set(blobUrl,{node,button,media});
-          host.append(node);button.hidden=true;status.textContent='';
-        }catch(error){if(valid())status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;}
+          if(host.insertBefore)host.insertBefore(node,button);else host.append(node);button.hidden=true;status.textContent='';
+        }catch(error){if(blobUrl){URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);}if(valid()){host.dataset.mediaPreviewState='unavailable';status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;}}
         finally{clearTimeout(timer);active.delete(controller);button.disabled=false;button.setAttribute('aria-busy','false');}
       };
+      button.onclick=()=>load(false);const knownImage=host.dataset.mediaKind==='image';if(knownImage&&!host.dataset.mediaPreviewState){host.dataset.mediaPreviewState='loading';button.hidden=true;load(true).then(()=>{if(!host.isConnected)return;if(!host.querySelector('[data-media-preview="image"]'))button.hidden=false;});}
     });
   }
   document.addEventListener('tenant-profile',event=>{if(identity(member)!==identity(event.detail.member)||JSON.stringify(member?.permissions)!==JSON.stringify(event.detail.member?.permissions)||member?.role!==event.detail.member?.role||member?.active!==event.detail.member?.active)clear();member=event.detail.member;});

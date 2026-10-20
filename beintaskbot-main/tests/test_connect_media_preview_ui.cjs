@@ -21,6 +21,7 @@ async function setup(previous=false,group=false,shared=false){
  w.fetch=async(url,options={})=>{
   calls.push({url:String(url),method:options.method||'GET'});let value;
   if(String(url).includes('/crm/chat/attachment')){
+   const query=new URL(String(url),'https://test.invalid').searchParams;assert.equal(query.get('channel_id'),C);assert.equal(query.get('conversation_id'),route.conversation_id);
    if(unavailable)return {ok:false,status:404,json:async()=>({error:'not available'})};
    const audio=String(url).includes('000502'),bytes=audio?sound:pic;mediaBytes+=bytes.length;
    let sent=false;return {ok:true,headers:new Headers({'Content-Type':audio?'audio/wav':'image/png','Content-Length':String(bytes.length)}),body:{getReader:()=>({read:async()=>sent?{done:true}:(sent=true,{done:false,value:new Uint8Array(bytes)}),cancel:async()=>{}})}};
@@ -40,20 +41,20 @@ async function setup(previous=false,group=false,shared=false){
 (async()=>{
  const shared=await setup(false,true,true);assert.deepEqual(shared.errors,[]);
  await shared.w.document.getElementById('operatorEarlier').onclick();await settle();assert.deepEqual(shared.errors,[]);
- assert.equal(shared.mediaBytes,0);assert.ok(shared.calls.every(c=>c.method==='GET'));shared.dom.window.close();
+ assert.ok(shared.mediaBytes>=pic.length);assert.ok(shared.calls.every(c=>c.method==='GET'));assert.ok(shared.calls.some(c=>c.url.includes('channel_id='+C)&&c.url.includes('conversation_id=')));shared.dom.window.close();
  const before=await setup(true,true);assert.equal(before.mediaBytes,0);assert.equal(before.w.document.querySelectorAll('[data-chat-attachment]').length,0);
  const after=await setup(false,true),{w}=after;
- assert.equal(after.mediaBytes,0);assert.equal(after.historyCalls,before.historyCalls);assert.equal(after.listCalls,before.listCalls);assert.equal(after.listBytes,before.listBytes);
+ assert.equal(after.mediaBytes,pic.length);assert.equal(after.listCalls,before.listCalls);assert.equal(after.listBytes,before.listBytes);
  assert.equal(w.document.querySelectorAll('[data-chat-attachment]').length,2);
  assert.match(w.document.getElementById('chatRows').textContent,/Alice/);assert.match(w.document.getElementById('chatRows').textContent,/0:42/);assert.equal(w.document.querySelectorAll('[data-direction="outgoing"]').length,1);
  const details=w.document.querySelector('#chatRows details');const n=after.calls.length;details.open=true;await settle();assert.equal(after.calls.length,n);assert.match(details.textContent,/Salam! Привет!/);
- const buttons=[...w.document.querySelectorAll('[data-chat-attachment] button')];await buttons[0].onclick();assert.equal(w.document.querySelectorAll('#chatRows img').length,1);
+ const buttons=[...w.document.querySelectorAll('[data-chat-attachment] button')];assert.equal(w.document.querySelectorAll('#chatRows img').length,1);assert.equal(buttons[0].hidden,true);
  await buttons[1].onclick();const audio=w.document.querySelector('#chatRows audio');assert.equal(audio.controls,false);const player=audio.parentElement,play=player.querySelector('button'),range=player.querySelector('input');await play.onclick();assert.equal(audio.paused,false);await play.onclick();assert.equal(audio.paused,true);Object.defineProperty(audio,'duration',{value:42,configurable:true});range.value='500';range.oninput();assert.equal(audio.currentTime,21);audio.dispatchEvent(new w.Event('timeupdate'));assert.equal(range.value,'500');assert.equal(audio.preload,'none');assert.equal(audio.autoplay,false);
  assert.equal(after.mediaBytes,pic.length+sound.length);assert.equal(after.calls.filter(c=>c.url.includes('/attachment')).length,2);assert.ok(after.calls.every(c=>c.method==='GET'));
- const measured={before:{listRequests:before.listCalls,listJsonBytes:before.listBytes,openRequests:before.historyCalls,openJsonBytes:before.historyBytes,mediaBytes:before.mediaBytes},after:{listRequests:after.listCalls,listJsonBytes:after.listBytes,openRequests:after.historyCalls,openJsonBytes:after.historyBytes,mediaBytesOnOpen:0,previewRequests:2,previewBytes:after.mediaBytes}};
+ const measured={before:{listRequests:before.listCalls,listJsonBytes:before.listBytes,openRequests:before.historyCalls,openJsonBytes:before.historyBytes,mediaBytes:before.mediaBytes},after:{listRequests:after.listCalls,listJsonBytes:after.listBytes,openRequests:after.historyCalls,openJsonBytes:after.historyBytes,mediaBytesOnOpen:pic.length,previewRequests:2,previewBytes:after.mediaBytes}};
  w.document.getElementById('closeModal').click();assert.equal(after.revoked.length,2);
- await w.tenantOperator.openDialog(after.route);after.setUnavailable();await w.document.querySelector('[data-chat-attachment] button').onclick();assert.match(w.document.querySelector('[data-chat-attachment] [role="status"]').textContent,/Файл недоступен/);
+ after.setUnavailable();await w.tenantOperator.openDialog(after.route);await settle();assert.match(w.document.querySelector('[data-chat-attachment] [role="status"]').textContent,/Файл недоступен/);
  w.tenantI18n.setLanguage('az');assert.equal(w.document.querySelector('[data-chat-attachment] button').textContent,'Şəkli aç');w.tenantI18n.setLanguage('en');assert.equal(w.document.querySelector('[data-chat-attachment] button').textContent,'View photo');
  w.document.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{member:{...after.profile.member,tenant_id:'other'},capabilities:{modules:{dialogs:false}}}}));assert.equal(w.document.querySelectorAll('#chatRows img,#chatRows audio').length,0);
- assert.deepEqual(after.errors,[]);console.log('PERFORMANCE '+JSON.stringify(measured));console.log('PASS: lazy photo/audio, stored transcript, localization, group authors, no AI/send requests, stale identity cleanup.');before.dom.window.close();after.dom.window.close();
+ assert.deepEqual(after.errors,[]);console.log('PERFORMANCE '+JSON.stringify(measured));console.log('PASS: automatic photo preview, lazy audio, stored transcript, localization, group authors, no AI/send requests, stale identity cleanup.');before.dom.window.close();after.dom.window.close();
 })().catch(e=>{console.error(e);process.exitCode=1;});
