@@ -6,7 +6,7 @@ from tenant_ai_agents_api import _expected, _origin
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_dialogs import listing,history,save_display_name
 from tenant_ai_group_coordination import configure as configure_group, register_employee
-from tenant_operator_assignment import options as assignment_options, assign as assign_agent
+from tenant_operator_assignment import options as assignment_options, assign as assign_agent, bulk_preview as assignment_bulk_preview, bulk_apply as assignment_bulk_apply
 from tenant_operator_continuation import options as continuation_options, grant as grant_continuation
 from tenant_operator_legacy import options as legacy_options, recover as recover_legacy
 from tenant_operator_copilot import run as run_copilot
@@ -26,6 +26,8 @@ def handler(member_from_request,origin,logger,resource):
                     result=await asyncio.to_thread(history,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),query.get('before'),query.get('anchor'))
                 elif resource=='agent_assignment':
                     result=await asyncio.to_thread(assignment_options,profile,dict(query))
+                elif resource=='agent_assignment_bulk':
+                    result=await asyncio.to_thread(assignment_bulk_preview,profile)
                 elif resource in {'legacy_recovery','legacy_continuation'}:
                     _expected(query,profile)
                     result=await asyncio.to_thread(continuation_options if resource=='legacy_continuation' else legacy_options,profile,dict(query))
@@ -33,7 +35,7 @@ def handler(member_from_request,origin,logger,resource):
                     raise TenantLinearError('Метод не поддерживается.',405)
             else:
                 _origin(request,origin)
-                if request.method!='POST' or resource not in {'display_name','agent_assignment','group_coordination','group_staff','legacy_recovery','legacy_continuation','copilot'} or request.content_type!='application/json':
+                if request.method!='POST' or resource not in {'display_name','agent_assignment','agent_assignment_bulk','group_coordination','group_staff','legacy_recovery','legacy_continuation','copilot'} or request.content_type!='application/json':
                     raise TenantLinearError('Метод не поддерживается.',405)
                 if request.content_length is not None and request.content_length>20_000:
                     raise TenantLinearError('Слишком большой запрос.',413)
@@ -43,7 +45,7 @@ def handler(member_from_request,origin,logger,resource):
                 if not isinstance(data,dict): raise TenantLinearError('Некорректный запрос.')
                 _expected(data,profile)
                 payload={key:value for key,value in data.items() if key not in {'expected_tenant_id','expected_user_id'}}
-                result=await asyncio.to_thread(run_copilot if resource=='copilot' else grant_continuation if resource=='legacy_continuation' else recover_legacy if resource=='legacy_recovery' else register_employee if resource=='group_staff' else configure_group if resource=='group_coordination' else assign_agent if resource=='agent_assignment' else save_display_name,profile,payload)
+                result=await asyncio.to_thread(run_copilot if resource=='copilot' else assignment_bulk_apply if resource=='agent_assignment_bulk' else grant_continuation if resource=='legacy_continuation' else recover_legacy if resource=='legacy_recovery' else register_employee if resource=='group_staff' else configure_group if resource=='group_coordination' else assign_agent if resource=='agent_assignment' else save_display_name,profile,payload)
             return web.json_response({'success':True,'result':result},headers=headers)
         except TenantLinearError as error:
             return web.json_response({'success':False,'error':str(error)},status=error.status,headers=headers)

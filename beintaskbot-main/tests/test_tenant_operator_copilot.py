@@ -69,3 +69,24 @@ def test_copilot_uses_its_own_model_and_never_sends_a_message(monkeypatch):
     sql=' '.join(call.args[0] for call in cur.execute.call_args_list)
     assert "provider='connect' AND usage_day" in sql
     assert 'tenant-chat-ai:'+tenant in str(cur.execute.call_args_list)
+
+
+def test_provider_failure_logs_only_allowlisted_metadata(monkeypatch):
+    tenant='aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';actor=22
+    connection={'secrets':b'cipher','metadata':{'enabled':True,'consent':True,'model':'agent-model',
+        'copilot_enabled':True,'copilot_model':'gpt-4o-mini','daily_limit':100,'copilot_daily_limit':8},'updated_at':'v1'}
+    conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
+    cur=conn.cursor.return_value.__enter__.return_value
+    cur.fetchone.side_effect=[connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
+    cur.fetchall.side_effect=[[{'external_id':'m1','direction':'incoming','body':'private customer text','message_type':'text','happened_at':'now'}],[]]
+    monkeypatch.setattr(copilot,'_connect',lambda:conn);monkeypatch.setattr(copilot,'ensure_schema',Mock())
+    monkeypatch.setattr(copilot,'access',Mock(return_value=(tenant,actor,SimpleNamespace(can_use_chat_ai=lambda:True))))
+    monkeypatch.setattr(copilot,'assert_route',Mock(return_value={'lead_id':17}))
+    monkeypatch.setattr(copilot,'_fernet',lambda:SimpleNamespace(decrypt=lambda _:json.dumps({'tenant_id':tenant,'provider':'chat_ai','api_key':'private-secret'}).encode()))
+    monkeypatch.setattr(copilot,'_finish',Mock())
+    monkeypatch.setattr(copilot,'generate',Mock(side_effect=ChatAIProviderError(404,'model_access')))
+    warning=Mock();monkeypatch.setattr(copilot._LOGGER,'warning',warning)
+    with pytest.raises(TenantLinearError):copilot.run({'tenant_id':tenant,'telegram_id':actor},request())
+    rendered=' '.join(str(part) for part in warning.call_args.args)
+    assert 'model_access' in rendered and '404' in rendered and 'gpt-4o-mini' in rendered and 'responses' in rendered
+    assert 'private customer text' not in rendered and 'private-secret' not in rendered and tenant not in rendered

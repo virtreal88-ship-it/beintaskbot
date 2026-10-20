@@ -325,6 +325,14 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
             for r in rows:
                 if r['provider']=='connect' and group_jid(r['conversation_id']):
                     apply_group_view(cur,tenant,r)
+                elif r['provider']=='connect' and not r.get('agent_id') and r.get('unambiguous') and r.get('controls_allowed'):
+                    # Surface the same read-only candidate choices used by the
+                    # card for every page of existing dialogues. Never bind or
+                    # resume an agent while listing conversations.
+                    from tenant_operator_assignment import options_in_transaction
+                    r['agent_assignment']=options_in_transaction(cur,profile,{
+                        'provider':'connect','lead_id':r['lead_id'],'channel_id':r['channel_id'],
+                        'conversation_id':r['conversation_id']})
     return {'dialogs':rows[:50],'channels':channels,'agents':agents,
             'attention_count':count,'next_offset':offset+50 if len(rows)>50 else None}
 

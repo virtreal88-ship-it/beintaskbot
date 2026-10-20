@@ -1,8 +1,10 @@
 """On-demand, tenant/dialog/employee-scoped AI Copilot for Connect operators."""
 import hashlib
 import json
+import logging
 import re
 import requests
+import uuid
 from tenant_chat_ai_schema import ensure_schema
 from tenant_chat_ai_provider import ChatAIProviderError, generate
 from tenant_linear_policy import TenantLinearError, identifier
@@ -11,6 +13,7 @@ from tenant_platform import _connect, _fernet
 
 MODES = {'reply', 'solution', 'instruction', 'chat', 'clear'}
 _MODEL_ID = re.compile(r'^[A-Za-z0-9_.:-]{1,100}$')
+_LOGGER = logging.getLogger(__name__)
 
 def _provider_failure_message(error):
     if isinstance(error, ChatAIProviderError):
@@ -180,6 +183,12 @@ def run(profile, data):
         if not text or not text.strip():
             raise ValueError('empty copilot response')
     except Exception as error:
+        if isinstance(error, ChatAIProviderError):
+            # Safe operational metadata only: never log tenant/user identifiers,
+            # prompts, provider bodies, credentials, or conversation content.
+            correlation_id = str(uuid.uuid4())
+            _LOGGER.warning('copilot_provider_error correlation_id=%s category=%s status=%s model=%s endpoint=responses',
+                            correlation_id, error.category, error.status_code, model)
         _finish(tenant, command, actor, None, turns, request, '')
         failure = TenantLinearError(_provider_failure_message(error), 503)
         failure.keep_request = True

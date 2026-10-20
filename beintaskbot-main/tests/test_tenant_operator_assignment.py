@@ -204,3 +204,36 @@ def test_assignment_http_requires_identity_origin_and_dialog_permission(monkeypa
     assign_mock.assert_not_called()
     assert asyncio.run(handle(request(body))).status==200
     assert assign_mock.call_args.args==(PROFILE,{'provider':'connect'})
+
+
+def test_bulk_preview_is_owner_only_and_read_only(old_dialog,monkeypatch):
+    from unittest.mock import Mock
+    f=old_dialog;db=f['db'];monkeypatch.setattr(assignment,'_connect',lambda:db)
+    row={'provider':'connect','lead_id':41,'channel_id':CA,'conversation_id':'client','agent_id':None,
+         'agent_assignment':{'allowed':True,'revision':0,'agents':[{'id':AGENT,'name':'Night support'}]},
+         'display_state':'unmanaged','state':'unmanaged','customer_kind':'contact','customer_name':'Test customer'}
+    listing=Mock(return_value={'dialogs':[row],'next_offset':None})
+    monkeypatch.setattr(dialogs,'listing',listing)
+    before=db.execute('SELECT * FROM saas_ai_conversation_state');db.commit()
+    preview=assignment.bulk_preview(PROFILE)
+    after=db.execute('SELECT * FROM saas_ai_conversation_state');db.commit()
+    assert preview['summary']['one_candidate']==1 and preview['summary']['assigned']==0
+    assert preview['requires_owner_confirmation'] is True and len(preview['eligible'])==1
+    assert before==after and f['generate'].call_count==0 and f['send'].call_count==0
+    person=employee(db,['dialogs'],role='manager')
+    with pytest.raises(TenantLinearError):assignment.bulk_preview(person)
+
+
+def test_bulk_apply_requires_explicit_confirmation_and_is_idempotent(monkeypatch):
+    from unittest.mock import Mock
+    preview={'preview_token':'a'*64,'eligible':[{'provider':'connect','lead_id':41,'channel_id':CA,
+        'conversation_id':'client','agent_id':AGENT,'agent_name':'Night support','customer_name':'Customer','revision':3}]}
+    monkeypatch.setattr(assignment,'bulk_preview',lambda _profile:preview)
+    applied=Mock(return_value={'replayed':False,'state':'human'})
+    monkeypatch.setattr(assignment,'assign',applied)
+    with pytest.raises(TenantLinearError):assignment.bulk_apply(PROFILE,{'confirmed':False,'preview_token':'a'*64,'batch_id':str(uuid.uuid4())})
+    batch=str(uuid.uuid4());payload={'confirmed':True,'preview_token':'a'*64,'batch_id':batch}
+    assignment.bulk_apply(PROFILE,payload);first=applied.call_args.args[1]
+    assignment.bulk_apply(PROFILE,payload);second=applied.call_args.args[1]
+    assert first['request_id']==second['request_id'] and first['expected_revision']==3
+    assert first['agent_id']==AGENT and applied.call_count==2

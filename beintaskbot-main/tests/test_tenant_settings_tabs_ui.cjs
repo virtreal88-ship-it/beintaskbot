@@ -1,0 +1,30 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const root=path.join(__dirname,'..');
+const html=fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8');
+const script=fs.readFileSync(path.join(root,'docs/tenant-workspace.js'),'utf8');
+const settle=async()=>{for(let i=0;i<10;i++)await new Promise(resolve=>setImmediate(resolve));};
+
+(async()=>{
+ const dom=new JSDOM(html,{url:'https://crm.test/app?view=settings',runScripts:'outside-only'}),w=dom.window,d=w.document;
+ w.tenantI18n={language:'ru'};
+ w.HTMLElement.prototype.scrollIntoView=function(){};
+ w.eval(script);await settle();
+ const settings=d.getElementById('view-settings'),tabs=settings.querySelector('.settings-sections');
+ assert.ok(tabs,'settings tabs are initialized');
+ assert.equal(tabs.parentElement,settings,'tabs are direct children of the Settings page');
+ assert.equal(tabs.previousElementSibling.classList.contains('advanced-settings-title'),true);
+ assert.notEqual(tabs.closest('#supportPilotModal'),d.getElementById('supportPilotModal'),'tabs do not render in the hidden pilot modal');
+ const workflow=d.createElement('article');workflow.id='workflowPanel';workflow.className='panel';settings.append(workflow);
+ const advanced=d.createElement('article');advanced.className='panel';settings.append(advanced);
+ await settle();
+ assert.deepEqual([...tabs.querySelectorAll('[role=tab]')].map(button=>button.textContent),['Сотрудники','Интеграции','Компании','Правила работы','Диагностика']);
+ assert.equal([...tabs.querySelectorAll('[role=tab]')].filter(button=>!button.hidden).length,5);
+ w.tenantI18n.language='az';d.dispatchEvent(new w.CustomEvent('tenant-language',{detail:{language:'az'}}));
+ assert.deepEqual([...tabs.querySelectorAll('[role=tab]')].map(button=>button.textContent),['Əməkdaşlar','İnteqrasiyalar','Şirkətlər','İş qaydaları','Diaqnostika']);
+ w.tenantI18n.language='en';d.dispatchEvent(new w.CustomEvent('tenant-language',{detail:{language:'en'}}));
+ assert.deepEqual([...tabs.querySelectorAll('[role=tab]')].map(button=>button.textContent),['Employees','Integrations','Companies','Work rules','Diagnostics']);
+ dom.window.close();console.log('PASS: Settings tabs mount in the visible page and relocalize RU/AZ/EN.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

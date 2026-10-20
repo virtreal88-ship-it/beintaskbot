@@ -41,6 +41,20 @@ def test_all_connect_conversations_are_visible_without_ai_or_kommo(operator_db):
     assert page['dialog']['can_send'] is False
 
 
+def test_existing_unassigned_dialog_lists_candidate_without_mutating_state(operator_db):
+    operator_db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,operating_mode) VALUES(%s::uuid,TRUE,'active') ON CONFLICT(tenant_id) DO UPDATE SET enabled=TRUE,operating_mode='active'",(A,))
+    operator_db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT(tenant_id,provider) DO UPDATE SET status='connected'",(A,))
+    operator_db.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled,mode,scopes) VALUES(%s::uuid,%s::uuid,'Night support',11,TRUE,'manual',%s::jsonb)",
+        (A,AGENT,json.dumps([{'provider':'connect','channel_id':CA}])));operator_db.commit()
+    before=operator_db.execute('SELECT * FROM saas_ai_conversation_state ORDER BY tenant_id,provider,channel_id,conversation_id');operator_db.commit()
+    row=dialogs.listing(PROFILE)['dialogs'][0]
+    after=operator_db.execute('SELECT * FROM saas_ai_conversation_state ORDER BY tenant_id,provider,channel_id,conversation_id');operator_db.commit()
+    assert row['agent_assignment']['allowed'] is True, row['agent_assignment']
+    assert [candidate['id'] for candidate in row['agent_assignment']['agents']]==[AGENT]
+    assert before==after
+    assert not operator_db.execute('SELECT * FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid',(A,));operator_db.commit()
+
+
 def test_connect_media_filename_exposes_only_safe_basename():
     assert dialogs._media_filename({'document':{'fileName':'/private/path/manual.pdf'}})=='manual.pdf'
     assert dialogs._media_filename({'fileName':'https://private.provider/token/secret.pdf'})==''

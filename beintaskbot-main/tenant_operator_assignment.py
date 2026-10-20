@@ -1,9 +1,13 @@
-"""Explicit, channel-local binding of an unassigned Connect dialogue.
+"""Explicit, channel-local binding of unassigned Connect dialogues.
 
 Assignment never queues work or sends a message. Resume remains a separate
 operation. The existing dialogue lock serializes this with incoming webhooks,
 operator takeover and Resume; the assignment token makes retries harmless.
 """
+import hashlib
+import json
+import re
+import uuid
 from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agents_store import _audit, _resume_block_reason
 from tenant_ai_agent_connect import scope_matches, test_allowed
@@ -72,6 +76,9 @@ def candidates(cur, tenant, channel, conversation, route, state, has_job, config
       WHERE tenant_id=%s::uuid AND enabled=TRUE ORDER BY name,id FOR SHARE''', (tenant,))
     is_group = route.get('conversation_kind') == 'group' or conversation.endswith('@g.us')
     agents = [dict(a) for a in cur.fetchall() if scope_matches(a.get('scopes'), channel, is_group=is_group)]
+    # Candidate discovery is not runtime admission: an out-of-shift agent can
+    # be explicitly assigned, but the worker still enforces its schedule before
+    # processing. Discovery never resumes AI or authorizes automatic sending.
     if config.get('operating_mode') != 'active':
         agents = [a for a in agents if test_allowed(cur, tenant, channel, conversation, agent_id=a['id'])]
     return [{'id': str(a['id']), 'name': a['name'], 'mode': a['mode']} for a in agents], ('' if agents else 'no_eligible_agent')
@@ -131,3 +138,83 @@ def assign(profile, data):
                     'request_id': request_id, 'previous_state': state.get('state', 'unmanaged'), 'state': stopped})
         conn.commit()
     return {**result, 'agent_id': agent, 'replayed': False}
+
+
+def _require_owner(profile):
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            _tenant, _actor, policy = access(cur, profile, 'dialogs')
+            if policy.profile.get('role') != 'owner':
+                raise TenantLinearError('Массовое назначение доступно только владельцу компании.', 403)
+
+
+def bulk_preview(profile):
+    """Read-only inventory and exact-one-candidate preview for owner review."""
+    _require_owner(profile)
+    from tenant_operator_dialogs import listing
+    rows=[]; offset=0
+    while True:
+        page=listing(profile,offset=offset)
+        rows.extend(page['dialogs'])
+        if page.get('next_offset') is None: break
+        offset=page['next_offset']
+        if offset>=100_000:
+            raise TenantLinearError('Предпросмотр слишком велик. Уточните список диалогов.',413)
+    summary={'total':len(rows),'assigned':0,'one_candidate':0,'multiple_candidates':0,'no_candidate':0,
+             'handoff':0,'excluded_from_automatic':0,'ambiguous_state':0,'group':0}
+    eligible=[]
+    for row in rows:
+        if row.get('agent_id'): summary['assigned']+=1
+        if row.get('handoff_active'): summary['handoff']+=1
+        if row.get('display_state')!='active' or row.get('state') in {'human','paused'}:
+            summary['excluded_from_automatic']+=1
+        reason=row.get('display_reason') or row.get('reason')
+        if row.get('state') in {'human','paused','unmanaged'} or reason in {'legacy_channel_ambiguous','untracked_dialog','ambiguous_channel','group_assignment_required_or_ambiguous','group_authorship_unresolved'}:
+            summary['ambiguous_state']+=1
+        if row.get('customer_kind')=='group' or str(row.get('conversation_id') or '').endswith('@g.us'):
+            summary['group']+=1
+            continue
+        if row.get('provider')!='connect' or row.get('agent_id'):
+            continue
+        if not row.get('agent_assignment'):
+            summary['no_candidate']+=1
+            continue
+        choices=row['agent_assignment'].get('agents') or []
+        if len(choices)==1 and row['agent_assignment'].get('allowed'):
+            summary['one_candidate']+=1
+            eligible.append({'provider':'connect','lead_id':int(row['lead_id']),'channel_id':row['channel_id'],
+                'conversation_id':row['conversation_id'],'agent_id':str(choices[0]['id']),
+                'agent_name':str(choices[0]['name']),'customer_name':str(row.get('customer_name') or ''),
+                'revision':int(row['agent_assignment'].get('revision') or 0)})
+        elif len(choices)>1:
+            summary['multiple_candidates']+=1
+        else:
+            summary['no_candidate']+=1
+    canonical=json.dumps(eligible,sort_keys=True,ensure_ascii=False,separators=(',',':'))
+    token=hashlib.sha256(canonical.encode()).hexdigest()
+    return {'summary':summary,'eligible':eligible,'preview_token':token,'requires_owner_confirmation':True}
+
+
+def bulk_apply(profile,data):
+    if not isinstance(data,dict) or data.get('confirmed') is not True:
+        raise TenantLinearError('Сначала просмотрите кандидатов и подтвердите массовое назначение.',400)
+    token=str(data.get('preview_token') or '')
+    batch_id=identifier(data.get('batch_id'))
+    if not re.fullmatch(r'[0-9a-f]{64}',token):
+        raise TenantLinearError('Предпросмотр устарел. Обновите его перед подтверждением.',409)
+    preview=bulk_preview(profile)
+    if token!=preview['preview_token']:
+        raise TenantLinearError('Список диалогов или кандидаты изменились. Проверьте новый предпросмотр.',409)
+    outcomes=[];namespace=uuid.UUID(batch_id)
+    for item in preview['eligible']:
+        request_id=str(uuid.uuid5(namespace,f"{item['channel_id']}:{item['conversation_id']}"))
+        try:
+            result=assign(profile,{**item,'expected_revision':item['revision'],'request_id':request_id})
+            outcomes.append({'channel_id':item['channel_id'],'conversation_id':item['conversation_id'],
+                'agent_id':item['agent_id'],'status':'assigned','replayed':bool(result.get('replayed'))})
+        except TenantLinearError as error:
+            outcomes.append({'channel_id':item['channel_id'],'conversation_id':item['conversation_id'],
+                'agent_id':item['agent_id'],'status':'skipped','reason':str(error)})
+    return {'total':len(outcomes),'assigned':sum(o['status']=='assigned' for o in outcomes),
+            'skipped':sum(o['status']=='skipped' for o in outcomes),'outcomes':outcomes}

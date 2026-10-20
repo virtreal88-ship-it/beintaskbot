@@ -6,7 +6,7 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
 (async()=>{
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?site_lang=ru',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
  const member={tenant_id:A,telegram_id:11,role:'manager',permissions:['dialogs','support'],active:true};
- w.tenantProfileSnapshot={member,capabilities:{modules:{dialogs:true,support:true}}};w.confirm=()=>true;
+ w.tenantProfileSnapshot={member,capabilities:{modules:{dialogs:true,support:true}}};w.confirm=()=>true;w.crypto.randomUUID=()=> '00000000-0000-0000-0000-000000000777';
  const choices={allowed:true,reason:'',revision:7,agents:[{id:AGENT,name:'<b>Support</b>',mode:'manual'}]};
  const route={provider:'connect',channel_id:CA,conversation_id:'same-client',lead_id:41,customer_name:'Test contact',channel_name:'Second WhatsApp',state:'human',display_state:'human',display_reason:'manager_replied',controls_allowed:true,agent_id:null,can_send:true,available_actions:[],agent_assignment:choices};
  let failOnce=true;
@@ -16,7 +16,8 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
   else if(u.pathname.endsWith('/dialogs/agent-assignment')){
    if(body){if(failOnce){failOnce=false;throw new Error('network failed');}route.agent_id=AGENT;route.agent_name='<b>Support</b>';route.agent_assignment=null;route.resume_allowed=true;route.available_actions=['resume'];result={agent_id:AGENT,state:'human'};}
    else result=choices;
-  }else if(u.pathname.endsWith('/dialogs'))result={dialogs:[route],channels:[],agents:[],attention_count:1};
+  }else if(u.pathname.endsWith('/dialogs/agent-assignment-bulk'))result=body?{total:1,assigned:1,skipped:0,outcomes:[]}:{summary:{total:4,assigned:1,one_candidate:1,multiple_candidates:1,no_candidate:1,group:0,handoff:1},eligible:[{customer_name:'Preview contact',agent_name:'Support agent'}],preview_token:'a'.repeat(64)};
+  else if(u.pathname.endsWith('/dialogs'))result={dialogs:[route],channels:[],agents:[],attention_count:1};
   return{ok:true,status:200,json:async()=>({success:true,result:structuredClone(result)})};
  };
  w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await settle();
@@ -54,5 +55,10 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
  assert.equal(calls.filter(c=>c.path.includes('/resume')||c.path.includes('/chat/send')).length,0);
  route.agent_id=null;route.available_actions=[];route.agent_assignment={allowed:false,reason:'no_eligible_agent'};
  await w.tenantOperator.openDialog(route);assert.equal(d.querySelector('[data-operator-assign-agent]'),null);assert.match(d.querySelector('#operatorActionReason').textContent,/eligible/);
+ member.role='owner';d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{member,capabilities:{modules:{dialogs:true,support:true}}}}));await settle();
+ const bulk=d.querySelector('#operatorBulkAssignment');assert.equal(bulk.hidden,false,'only the owner can access bulk assignment preview');bulk.click();await settle();
+ assert.match(d.querySelector('#operatorBulkPreview').textContent,/one candidate/i);assert.match(d.querySelector('#operatorBulkPreview').textContent,/Preview contact/);
+ d.querySelector('#operatorBulkPreview button').click();await settle();assert.ok(calls.some(call=>call.path.endsWith('/agent-assignment-bulk')&&call.method==='POST'&&call.body.confirmed===true));
+ assert.equal(calls.filter(call=>call.path.includes('/resume')||call.path.includes('/chat/send')).length,0,'bulk assignment preview/apply never resumes AI or sends messages');
  dom.window.close();console.log('PASS: channel-scoped assignment, XSS escaping, identity, retry token, separate Resume, RU/AZ/EN and safe unavailable state');
 })().catch(e=>{console.error(e);process.exitCode=1;});

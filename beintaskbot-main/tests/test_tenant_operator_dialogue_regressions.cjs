@@ -27,6 +27,12 @@ assert.match(ui,/operator-more-actions/,'secondary controls belong in the compac
 assert.match(ui,/AI köməkçi/,'the dialog exposes an explicit Copilot action');
 assert.match(ui,/dialogs\/copilot/,'Copilot actions use a protected operator API');
 assert.match(ui,/agentModeLabel/,'dialogue status identifies agent mode, not a false handoff');
+assert.match(ui,/oneAgentCandidate/,'unassigned older dialogues distinguish a single eligible candidate');
+assert.match(ui,/multipleAgentCandidates/,'unassigned older dialogues distinguish multiple eligible candidates');
+assert.match(ui,/agent_assignment\.reason/,'unavailable assignment displays its concrete eligibility reason');
+assert.match(ui,/resumeUiAllowed=actions\.has\('resume'\)&&route\.agent_mode!=='manual'/,'Manual agents are not offered a misleading Resume action');
+assert.match(ui,/\['attention','active','blocked','error','unmanaged'\]/,'internal paused and handoff states are not exposed as AI modes in the filter');
+assert.match(l10n,/verified_employee_reply:'reasonHumanHandoff'/,'confirmed employee handoff remains distinct from an ordinary employee reply');
 assert.match(ui,/operatorAIReply/,'AI reply has a dedicated composer action');
 assert.doesNotMatch(ui,/operatorCopilotInsert|data-copilot-mode=\"reply/,'Copilot panel does not duplicate AI reply or insertion actions');
 assert.match(ui,/replaceDraftConfirm/,'existing employee draft requires confirmation before replacement');
