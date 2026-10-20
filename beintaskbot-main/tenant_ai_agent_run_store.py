@@ -92,6 +92,14 @@ def claim_next():
                 conn.commit()
                 return None
             claimed['payload'] = event['payload'] if isinstance(event['payload'], dict) else {}
+            from tenant_ai_pilot import processing_allowed
+            if not processing_allowed(claimed, connection=conn):
+                cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',lease_token=NULL,lease_until=NULL,error_code='pilot_scope_blocked',updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s AND lease_token=%s",
+                    (claimed['tenant_id'],claimed['agent_id'],claimed['provider'],claimed['conversation_id'],job_scope(claimed),claimed['lease_token']))
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='pilot_scope_blocked' WHERE tenant_id=%s::uuid AND fingerprint=%s",
+                    (claimed['tenant_id'],claimed['event_fingerprint']))
+                conn.commit()
+                return None
             cur.execute("UPDATE saas_tenant_webhook_events SET state='processing' WHERE tenant_id=%s::uuid AND fingerprint=%s AND state='queued'", (claimed['tenant_id'],claimed['event_fingerprint']))
         conn.commit()
         return claimed

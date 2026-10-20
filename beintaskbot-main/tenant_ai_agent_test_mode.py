@@ -195,6 +195,9 @@ def allowed_job(job):
 
 
 def assert_job_allowed(job):
+    from tenant_ai_pilot import processing_allowed
+    if not processing_allowed(job):
+        raise TenantLinearError('AI pilot scope is unavailable, unconfirmed, or does not match this conversation.', 409)
     if not allowed_job(job):
         raise TenantLinearError('AI Agents Test Mode is disabled or the exact test conversation binding changed.', 409)
 

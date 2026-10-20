@@ -78,6 +78,8 @@ def _reserve_action(job,key,action_type,payload):
 
 
 def _action_still_allowed(job):
+    from tenant_ai_pilot import processing_allowed
+    if not processing_allowed(job):return False
     if not runtime_flag('AI_AGENTS_CRM_ENABLED'):return False
     with _connect() as conn:
         ensure_schema(conn)

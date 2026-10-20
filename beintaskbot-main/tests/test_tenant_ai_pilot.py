@@ -6,7 +6,7 @@ from tenant_linear_policy import TenantLinearError
 TENANT = 'd60efb41-e736-4d1e-a7fd-bd234a668c70'
 CHANNEL = '6d758c54-a4bc-4966-87a6-bbb4aa3961b3'
 OTHER = '349795dc-bdf1-49e6-a3bf-75c20c9bc131'
-JOB = {'tenant_id': TENANT, 'channel_id': CHANNEL, 'conversation_id': 'test-chat'}
+JOB = {'provider':'connect', 'tenant_id': TENANT, 'channel_id': CHANNEL, 'conversation_id': 'test-chat', 'event_fingerprint':'evt'}
 
 
 def pilot_env(**extra):
@@ -47,7 +47,9 @@ def test_armed_pilot_fails_closed_for_scope_mismatch_or_missing_confirmation(mon
         def cursor(self): return self.cursor_obj
 
     with patch.dict('os.environ', pilot_env(AI_AGENTS_PILOT_SCOPE_ENABLED='true', AI_AGENTS_AUTO_SEND_ENABLED='true'), clear=True):
-        assert pilot.automatic_send_allowed(JOB, Connection(True))
+        connection = Connection(True)
+        assert pilot.automatic_send_allowed(JOB, connection)
+        assert 'received_at>=GREATEST' in connection.cursor_obj.sql
         assert not pilot.automatic_send_allowed({**JOB, 'channel_id': OTHER}, Connection(True))
         assert not pilot.automatic_send_allowed({**JOB, 'tenant_id': OTHER}, Connection(True))
         assert not pilot.automatic_send_allowed({**JOB, 'conversation_id': 'other-chat'}, Connection(True))
@@ -187,3 +189,59 @@ def test_owner_approval_rejects_admin_and_is_separate_from_kwid_attestation(monk
     monkeypatch.setattr('tenant_platform._connect', lambda: owner_conn)
     assert pilot.approve_pilot({'tenant_id':TENANT,'telegram_id':7}, {'approved':True}) == {'ready':False}
     assert owner_conn.committed and 'LEAST(kwid_expires_at' in owner_conn.cur.sql[-1]
+
+
+def test_active_exact_scope_fails_closed_when_confirmation_table_is_missing(monkeypatch):
+    row = {'conversation_state':'active','conversation_ai_enabled':True,'conversation_manual_hold':False,
+        'active':True,'integration_status':'connected','tenant_status':'active','company_enabled':True,
+        'operating_mode':'active','auto_send_enabled':True,'emergency_stop':False,'agent_enabled':True,
+        'agent_mode':'automatic','exact_agent_scope':True}
+    monkeypatch.setattr(pilot, '_snapshot', lambda *_: (row, 'fingerprint'))
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def execute(self, sql, *_):
+            if 'FROM saas_ai_pilot_confirmations' in sql:
+                raise RuntimeError('relation does not exist')
+        def fetchone(self): return {'exists':True}
+    class Connection:
+        def cursor(self): return Cursor()
+    with patch.dict('os.environ', pilot_env(AI_AGENTS_PILOT_SCOPE_ENABLED='true',
+            AI_AGENTS_AUTO_SEND_ENABLED='true'), clear=True):
+        assert not pilot.processing_allowed(JOB, Connection())
+
+
+def test_processing_gate_blocks_selected_dialog_while_unarmed_but_preserves_other_agents():
+    with patch.dict('os.environ', pilot_env(), clear=True):
+        assert not pilot.processing_allowed(JOB)
+        assert pilot.processing_allowed({**JOB, 'conversation_id':'another-chat'})
+        assert pilot.processing_allowed({**JOB, 'tenant_id':OTHER})
+
+
+def test_processing_gate_is_global_fail_closed_when_armed(monkeypatch):
+    with patch.dict('os.environ', pilot_env(AI_AGENTS_PILOT_SCOPE_ENABLED='true'), clear=True):
+        assert not pilot.processing_allowed({**JOB, 'conversation_id':'another-chat'})
+        assert not pilot.processing_allowed({**JOB, 'provider':'kommo'})
+        assert not pilot.processing_allowed({**JOB, 'channel_id':OTHER})
+        monkeypatch.setattr(pilot, 'automatic_send_allowed', lambda job, connection=None: True)
+        assert pilot.processing_allowed(JOB)
+        monkeypatch.setattr(pilot, 'automatic_send_allowed', lambda job, connection=None: False)
+        assert not pilot.processing_allowed(JOB)
+
+
+def test_confirmation_schema_migration_is_idempotent_additive_ddl():
+    class Cursor:
+        def __init__(self): self.statements=[]
+        def execute(self, sql, *_): self.statements.append(sql)
+    cur=Cursor()
+    pilot.schema(cur)
+    pilot.schema(cur)
+    ddl=[sql for sql in cur.statements if 'CREATE TABLE IF NOT EXISTS saas_ai_pilot_confirmations' in sql]
+    assert len(ddl)==2
+    sql=ddl[0]
+    for field in ('tenant_id UUID PRIMARY KEY','channel_id UUID NOT NULL','conversation_id TEXT NOT NULL',
+                  'scope_fingerprint TEXT NOT NULL','kwid_confirmed_at TIMESTAMPTZ','kwid_expires_at TIMESTAMPTZ',
+                  'owner_approved_at TIMESTAMPTZ','owner_expires_at TIMESTAMPTZ','kwid_confirmed_by IS NOT NULL AND owner_expires_at'):
+        assert field in sql
+
+

@@ -16,6 +16,8 @@ def ensure_schema(conn):
             return
         with conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ('tenant-ai-agents-schema',))
+            from tenant_ai_pilot import schema as pilot_schema
+            pilot_schema(cur)
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_agent_settings(
               tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id) ON DELETE CASCADE,
               company_instructions TEXT NOT NULL DEFAULT '',

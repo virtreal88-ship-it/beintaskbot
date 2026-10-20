@@ -234,6 +234,14 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 payload['phone'] = _whatsapp_phone(conversation_id)
             cur.execute('UPDATE saas_tenant_webhook_events SET payload=%s::jsonb WHERE tenant_id=%s::uuid AND fingerprint=%s',
                         (_json(payload), tenant, fingerprint))
+            from tenant_ai_pilot import processing_allowed
+            if not processing_allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel_id,
+                    'conversation_id':conversation_id,'agent_id':agents[0]['id'],'event_fingerprint':fingerprint}, connection=conn):
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='pilot_scope_blocked' WHERE tenant_id=%s::uuid AND fingerprint=%s",
+                    (tenant, fingerprint))
+                if connection is None:
+                    conn.commit()
+                return 0
             for agent in agents:
                 delay = max(0, min(int(agent.get('delay_seconds') or 0), 300))
                 cur.execute('''INSERT INTO saas_ai_agent_jobs
