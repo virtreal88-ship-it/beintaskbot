@@ -39,6 +39,19 @@ def test_operator_connect_media_needs_no_kommo_crm_or_ai(media_db):
     assert media_db.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
 
 
+def test_case_media_request_is_bound_to_exact_channel_and_conversation(media_db):
+    person={'tenant_id':A,'telegram_id':33}
+    with pytest.raises(TenantLinearError) as wrong_channel:
+        store.load(person,41,'connect:'+MID,channel_id=CB,conversation_id='client')
+    assert wrong_channel.value.status==404
+    with pytest.raises(TenantLinearError) as wrong_conversation:
+        store.load(person,41,'connect:'+MID,channel_id=CA,conversation_id='other')
+    assert wrong_conversation.value.status==404
+    with pytest.raises(TenantLinearError) as incomplete_scope:
+        store.load(person,41,'connect:'+MID,channel_id=CA)
+    assert incomplete_scope.value.status==404
+
+
 @pytest.mark.parametrize('tenant_status',['active','onboarding','ready_for_integration'])
 @pytest.mark.parametrize('case',['tenant','channel','conversation','lead','message','permission','inactive','disconnected','disabled'])
 def test_fresh_scope_and_rights(media_db,case,tenant_status):
