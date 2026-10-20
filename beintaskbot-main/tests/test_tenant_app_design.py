@@ -38,6 +38,27 @@ class AppDesignTests(unittest.TestCase):
         self.assertIn('--app-sidebar:288px', css)
         self.assertIn('--app-sidebar:88px', css)
 
+    def test_topbar_instructions_and_single_localized_crm_nav(self):
+        shell = (ROOT / 'ui/src/app-shell.js').read_text(encoding='utf-8')
+        app = (ROOT / 'docs/tenant-app.html').read_text(encoding='utf-8')
+        i18n = (ROOT / 'docs/tenant-operator-i18n.js').read_text(encoding='utf-8')
+        self.assertIn('data-app-instructions', shell)
+        self.assertIn("pages:['tasks','customers','companies','deals','hot_orders']", shell)
+        self.assertIn("button.querySelector('[data-crm-nav-label]')", shell)
+        self.assertIn('extra!==label)extra.remove()', shell)
+        self.assertIn("customers:'Контакты'", shell)
+        self.assertIn("companies:'Şirkətlər'", shell)
+        self.assertNotIn('instruction-library-nav', app)
+
+    def test_support_case_field_labels_use_accent_and_preserve_click_editing(self):
+        app = (ROOT / 'docs/tenant-app.html').read_text(encoding='utf-8')
+        self.assertIn('.case-content-field>span{color:var(--brand);font-size:14.5px;font-weight:600}', app)
+        self.assertIn('.case-field-preview{display:block', app)
+        self.assertIn('font-size:14.5px;font-weight:500;line-height:1.55', app)
+        candidates = (ROOT / 'docs/tenant-knowledge-candidates.js').read_text(encoding='utf-8')
+        self.assertIn('data-case-preview', candidates)
+        self.assertIn('openInlineCaseEditor', candidates)
+
     def test_existing_dialog_actions_and_settings_panels_are_preserved(self):
         source = (ROOT / 'ui/src/main.jsx').read_text(encoding='utf-8')
         workspace = (ROOT / 'docs/tenant-workspace.js').read_text(encoding='utf-8')

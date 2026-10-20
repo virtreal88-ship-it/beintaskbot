@@ -21,12 +21,17 @@ for (const [viewId, createId, formId, modalId] of [
   const modalEnd = app.indexOf('</section></div>', modalStart);
   assert(modalStart >= 0 && formAt > modalStart && formAt < modalEnd, `${formId} must be inside modal`);
   assert(app.includes(`data-crm-close="${modalId}"`), `${modalId}: cancel/close missing`);
+  const modal=app.slice(modalStart,modalEnd);
+  assert.equal((modal.match(/type="submit"/g)||[]).length,1,`${modalId}: exactly one save action`);
+  assert(modal.includes('crm-modal-actions') && modal.includes('Ləğv et') && modal.includes('Yadda saxla'),`${modalId}: cancel and save share the action row`);
 }
 assert(app.includes('data-view="companies"') && app.includes('data-crm-nav-label="companies"'), 'companies live inside the CRM navigation group');
 assert(app.includes("ru:{group:'CRM'") && app.includes("en:{group:'CRM'") && app.includes('tenant-language'), 'CRM navigation supports RU/AZ/EN');
 assert(app.includes("nativeContactCreate').onclick=async") && app.includes("nativeDealCreate').onclick=async") && app.includes("nativeTaskCreate').onclick=async") && app.includes("nativeCompanyCreate').onclick=async"), 'all four create buttons open working forms');
 assert(app.includes("nativeContactForm').onsubmit=async") && app.includes("nativeDealForm').onsubmit=async") && app.includes("nativeTaskForm').onsubmit=async") && app.includes("nativeCompanyForm').onsubmit=async"), 'all entity forms persist through existing APIs');
 assert(!app.includes('id="nativeTaskReset"'), 'task modal has only one save/create action');
+assert(!app.includes('id="nativeDealReset"')&&!app.includes('id="nativeCompanyReset"'),'deal/company cards have no duplicate create/reset action');
+assert(!app.includes('instruction-library-nav')&&!app.includes('data-instruction-label'),'Instructions are no longer a sidebar item');
 assert(app.includes("Saxlanılmamış dəyişikliklər var"), 'closing an edited form asks before discarding changes');
 assert(view('customers').includes('nativeContactsList'), 'Kommo client list and native contacts must coexist');
 assert(view('companies').includes('companySearch') && view('companies').includes('nativeCompaniesList'));

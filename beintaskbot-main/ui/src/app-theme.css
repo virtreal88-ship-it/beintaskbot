@@ -199,6 +199,11 @@ html[data-app-theme="dark"] body[data-app-ui="kwid"] {
 
 /* Operator navigation uses the same sidebar and responsive shell. */
 .app-language-select{max-width:70px;padding:6px;border:1px solid var(--app-line);border-radius:8px;background:var(--app-surface);color:var(--app-ink);font:inherit}
+.app-instructions-link{display:flex;align-items:center;gap:6px;min-height:36px;padding:7px 10px;border:1px solid var(--app-line);border-radius:8px;color:var(--app-muted);text-decoration:none;font-size:13px;white-space:nowrap}
+.app-instructions-link:hover{background:var(--app-hover);color:var(--app-ink)}
+.app-instructions-link:focus-visible{outline:2px solid var(--app-accent);outline-offset:2px}
+.app-instructions-link svg{width:18px;height:18px;flex:none}
+@media(max-width:639px){.app-instructions-link{width:36px;height:36px;min-height:36px;justify-content:center;padding:8px}.app-instructions-link span{display:none}}
 body[data-app-ui="kwid"] .nav [data-view="dialogs"],body[data-app-ui="kwid"] .nav [data-view="support"]{position:relative}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] #dialogsAttentionCount,body[data-app-ui="kwid"][data-sidebar="collapsed"] #supportUnresolvedCount{position:absolute;right:2px;top:2px;padding:1px 4px;font-size:9px;max-width:34px}
 
