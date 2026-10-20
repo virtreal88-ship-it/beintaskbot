@@ -46,7 +46,9 @@ def test_private_pending_review_edit_approve_agent_scoped_idempotent(ready):
     before=db.execute('SELECT enabled,mode,scopes,version FROM saas_ai_agents ORDER BY id');db.commit()
     first=service.analyze(PROFILE,data);value=first['candidates'][0]
     assert value['status']=='pending_review' and value['outcome']['status']=='confirmed'
-    assert store.listing(PROFILE,data)['candidates'][0]['id']==value['id']
+    listed=store.listing(PROFILE,data)['candidates'][0]
+    assert listed['id']==value['id']
+    assert listed['source_route']=={'provider':'connect','channel_id':CA,'conversation_id':'client'}
     assert not db.execute('SELECT id FROM saas_ai_knowledge_sources');db.commit()
     assert service.analyze(PROFILE,data)['request']['id']==first['request']['id']
     assert service.analyze(PROFILE,dict(reversed(list(data.items()))))['request']['id']==first['request']['id']

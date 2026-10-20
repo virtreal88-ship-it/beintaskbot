@@ -212,7 +212,7 @@ def public_request(row):
       'media_results':row.get('media_results') or [],'next_before':row['route'].get('next_before'),'limits':{'max_messages':MAX_MESSAGES,'max_context_chars':MAX_CONTEXT,'max_cards':5}}
 
 
-def public_card(cur,row,content_language='az'):
+def public_card(cur,row,content_language='az',source_route=None):
     value={**_row(row),**row['content']};value.pop('content',None);value.pop('content_hash',None)
     if value.get('reviewed_at'): value['reviewed_at']=value['reviewed_at'].isoformat()
     value['extraction_id']=str(row['extraction_id'])
@@ -224,6 +224,8 @@ def public_card(cur,row,content_language='az'):
     value.setdefault('start_message_id',sources[0] if sources else '')
     value.setdefault('end_message_id',sources[-1] if sources else '')
     value.setdefault('case_relation','unknown')
+    route=source_route or {}
+    value['source_route']={key:route[key] for key in ('provider','channel_id','conversation_id','phone') if route.get(key)}
     # Existing records predate the explicit content-language field. Their extraction
     # route records the language requested when the card was generated.
     value.setdefault('content_language',content_language if content_language in {'ru','az','en'} else 'az')
@@ -294,7 +296,8 @@ def listing(profile,data):
                 extraction_id=str(row['extraction_id'])
                 if extraction_id not in runs:
                     runs[extraction_id]=extraction_row(cur,tenant,extraction_id);route(cur,profile,runs[extraction_id]['route'])
-                cards.append(public_card(cur,row,runs[extraction_id].get('route',{}).get('language') or 'az'))
+                source_route=runs[extraction_id].get('route',{})
+                cards.append(public_card(cur,row,source_route.get('language') or 'az',source_route))
     return {'candidates':cards,'limit':limit,'next_before':str(values[limit-1]['id']) if len(values)>limit else None}
 
 

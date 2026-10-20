@@ -2,22 +2,22 @@ const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const fs=require('fs'),assert=require('node:assert/strict');
 const dom=new JSDOM('<div id="supportCases"></div><b id="supportCasesPending"></b>',{url:'https://example.test/app?site_lang=az',runScripts:'outside-only'});
 const w=dom.window,calls=[];let page=0;
-w.tenantProfileSnapshot={member:{tenant_id:'tenant-a',telegram_id:7,role:'owner'}};
+w.tenantProfileSnapshot={member:{tenant_id:'tenant-a',tenant_name:'BeinSystems',telegram_id:7,role:'owner'}};
 w.fetch=async(url,opt={})=>{calls.push({url,opt});let result={};if(url.includes('/ai/channels')){const q=new URL(url,'https://example.test').searchParams;if(q.get('expected_tenant_id')!=='tenant-a'||q.get('expected_user_id')!=='7')return {ok:false,status:409,json:async()=>({success:false,error_code:'identity_changed'})};}
 if(url.includes('/ai/dialogs'))result={dialogs:[{provider:'connect',channel_id:'channel-a',conversation_id:'group@g.us',customer_name:'Group'}]};
 else if(url.includes('/ai/agents'))result={agents:[]};
 else if(url.includes('/ai/channels'))result={channels:[{provider:'connect',channel_id:'channel-a',name:'First'},{provider:'connect',channel_id:'channel-b',name:'Second'}]};
 else if(url.includes('/batches'))result={batch:{id:'batch-a',status:'completed',message_count:29,items:[],continuations:[]}};
-else {page++;result={candidates:[{id:'card-'+page,title:'Case '+page,status:'pending_review'}],next_before:page===1?'cursor-a':null};}
+else {page++;result={candidates:[{id:'card-'+page,title:'Case '+page,status:'pending_review',source_route:{channel_id:'channel-a',phone:'+994501234567',conversation_id:'123@g.us'},outcome:{status:'confirmed'},result_confirmed:true}],next_before:page===1?'cursor-a':null};}
 return {ok:true,json:async()=>({success:true,result})};};
 const tick=()=>new Promise(r=>setTimeout(r,20));
 (async()=>{w.eval(fs.readFileSync('docs/tenant-knowledge-candidates.js','utf8'));await tick();
-const search=w.document.getElementById('casesSearch');assert(search,'local search is available without changing server pagination');assert(w.document.querySelector('.case-readiness').textContent.includes('Həll yolu yoxdur'),'list marks a missing solution');search.value='not found';search.dispatchEvent(new w.Event('input',{bubbles:true}));assert.equal(w.document.querySelectorAll('.support-case').length,0);search.value='Case 1';search.dispatchEvent(new w.Event('input',{bubbles:true}));assert.equal(w.document.querySelectorAll('.support-case').length,1);search.value='';search.dispatchEvent(new w.Event('input',{bubbles:true}));
+const search=w.document.getElementById('casesSearch');assert(search,'local search is available without changing server pagination');assert.equal(w.document.querySelectorAll('.support-cases-table tbody tr').length,1);const cells=[...w.document.querySelectorAll('.support-cases-table tbody tr:first-child td')].map(cell=>cell.textContent);assert(cells.includes('+994501234567'),'table renders the real source route phone');assert(cells.includes('First'),'table renders the real Connect channel');assert(cells.includes('BeinSystems'),'table renders the active tenant company name');assert.equal(w.document.querySelector('.case-result').textContent,'✓','table reflects server-confirmed outcome');search.value='not found';search.dispatchEvent(new w.Event('input',{bubbles:true}));assert.equal(w.document.querySelectorAll('.support-cases-table tbody tr').length,0);search.value='Case 1';search.dispatchEvent(new w.Event('input',{bubbles:true}));assert.equal(w.document.querySelectorAll('.support-cases-table tbody tr').length,1);search.value='';search.dispatchEvent(new w.Event('input',{bubbles:true}));
 assert.equal(w.document.querySelectorAll('#casesChannel option').length,3);
 assert(calls.some(c=>c.url.includes('knowledge-candidates?')&&!c.url.includes('channel_id')),'Unified queue loads without route');
 const initialQueueCall=calls.find(c=>c.url.includes('knowledge-candidates?')&&!c.url.includes('channel_id'));assert(!new URL(initialQueueCall.url,'https://example.test').searchParams.has('status'),'default queue leaves rejected filtering to the server');
 assert.equal(w.document.getElementById('casesMore').hidden,false);
-w.document.getElementById('casesMore').click();await tick();assert(calls.some(c=>c.url.includes('before=cursor-a')));assert.equal(w.document.querySelectorAll('.support-case').length,2);
+w.document.getElementById('casesMore').click();await tick();assert(calls.some(c=>c.url.includes('before=cursor-a')));assert.equal(w.document.querySelectorAll('.support-cases-table tbody tr').length,2);
 w.document.getElementById('casesChannel').value='channel-a';w.document.getElementById('casesFrom').value='2026-10-17';w.document.getElementById('casesTo').value='2026-10-18';w.document.getElementById('casesAnalyse').click();await tick();
 const post=calls.find(c=>c.opt.method==='POST');assert(post);const body=JSON.parse(post.opt.body);assert.equal(body.channel_id,'channel-a');assert.equal(body.history_mode,'unified_group');assert.equal(body.expected_tenant_id,'tenant-a');assert(body.request_id);assert.equal(body.conversation_id,undefined);
 assert(w.document.getElementById('casesBatch').textContent.includes('29'));assert(calls.some(c=>c.url.includes('batch_id=batch-a')));assert(!calls.some(c=>c.url.includes('/approve')));
