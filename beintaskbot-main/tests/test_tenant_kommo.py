@@ -87,6 +87,16 @@ class KommoTests(unittest.IsolatedAsyncioTestCase):
                 await self.service.request("company", "GET", "account")
         self.assertNotIn("must-not-log", str(self.logger.mock_calls))
 
+    async def test_chat_message_send_requires_explicit_202_acceptance(self):
+        credentials = {"account_domain": "demo.kommo.com", "access_token": "old",
+                       "refresh_token": "refresh", "token_expires_at": "2999-01-01T00:00:00+00:00"}
+        self.credentials.return_value = credentials
+        with patch("tenant_kommo.wait_slot"), patch("tenant_kommo.requests.request", return_value=Response(200, {"id": "msg-1"})):
+            with self.assertRaises(StoreError):
+                await self.service.request("company", "POST", "talks/12/send_message", json_body={"text": "answer"})
+        with patch("tenant_kommo.wait_slot"), patch("tenant_kommo.requests.request", return_value=Response(202, {"id": "msg-1"})):
+            self.assertEqual(await self.service.request("company", "POST", "talks/12/send_message", json_body={"text": "answer"}), {"id": "msg-1"})
+
     async def test_handlers_require_owner_before_provider_or_store(self):
         self.member.return_value = None
         api = kommo_handlers(self.service.context, self.service)
