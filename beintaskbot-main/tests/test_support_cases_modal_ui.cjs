@@ -42,7 +42,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,75));
  d.querySelector('[data-case-open="case-1"]').click();await tick();await tick();
  const modal=d.getElementById('supportCaseModal');assert(modal,'case modal opens from actual list');
  assert.equal(modal.querySelector('#caseTitle').value,card.title);assert.equal(modal.querySelector('.case-review-status select'),null,'review status is informational');
- assert.equal(modal.querySelectorAll('.case-meta-strip select').length,1,'only result confirmation stays in the main flow');assert(modal.querySelector('.case-tech-details #caseKind'));assert(modal.querySelector('.case-tech-details #caseMethod'));assert(modal.querySelector('#caseCauseEvidence'),'cause evidence is selected in the compact additional section');
+ assert.equal(modal.querySelectorAll('.case-meta-strip select').length,1,'only result confirmation stays in the main flow');assert.equal(modal.querySelectorAll('[data-case-tab]').length,6,'the compact case navigation mirrors the employee review layout');assert(modal.querySelector('.case-tech-details #caseKind'));assert(modal.querySelector('.case-tech-details #caseMethod'));assert(modal.querySelector('#caseCauseEvidence'),'cause evidence is selected in the compact additional section');
  assert.equal(modal.querySelector('[data-case-status]').textContent,'Yoxlamada');
  assert.equal(modal.querySelector('[data-case-customer-names]').textContent,'Mamed Saray');assert.equal(modal.querySelector('[data-case-employee-names]').textContent,'Leyla Hasanова');assert.equal(modal.querySelector('[data-case-customer-phone]').textContent,'Qrup dialoqu');
  assert(modal.textContent.includes('Real incoming text'));assert(modal.textContent.includes('Real employee answer'));
