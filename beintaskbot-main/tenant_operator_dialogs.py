@@ -56,6 +56,27 @@ def _audio_duration(raw):
     return None
 
 
+def _media_filename(raw):
+    """Expose a short safe basename from provider metadata, never a URL/path."""
+    if not isinstance(raw, dict):
+        return ''
+    stack=[raw];seen=0
+    while stack and seen<120:
+        item=stack.pop();seen+=1
+        if isinstance(item,dict):
+            for key in ('fileName','filename','file_name','documentName','originalName'):
+                value=item.get(key)
+                if isinstance(value,str):
+                    value=value.strip()
+                    if '://' in value or value.startswith('//') or any(ord(char)<32 for char in value):
+                        continue
+                    name=value.replace('\\','/').rsplit('/',1)[-1]
+                    if name:return name[:160]
+            stack.extend(value for value in item.values() if isinstance(value,(dict,list)))
+        elif isinstance(item,list):stack.extend(value for value in item if isinstance(value,(dict,list)))
+    return ''
+
+
 def _message(item, *, group=False, participant_names=None, contact_name=''):
     value = dict(item)
     raw = value.pop('raw', None) or {}
@@ -99,6 +120,9 @@ def _message(item, *, group=False, participant_names=None, contact_name=''):
     if value['source'] == 'connect':
         # No provider URL or raw webhook payload crosses the browser boundary.
         value['media_url'] = ''
+        if value.get('message_type') in {'image','audio','video','document'}:
+            filename=_media_filename(raw)
+            if filename:value['media_filename']=filename
         transcript = raw.get('voice_transcription', {}) if isinstance(raw, dict) else {}
         if (value.get('message_type') == 'audio' and isinstance(transcript, dict)
                 and transcript.get('status') == 'completed' and value.get('body')):

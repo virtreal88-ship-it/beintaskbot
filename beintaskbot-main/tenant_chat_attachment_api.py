@@ -36,7 +36,9 @@ def handler(member_from_request, request_provider, logger):
                 raise TenantLinearError('Fayllar yüklənir. Bir az sonra yoxlayın.', 429)
             async with SLOTS:
                 lead, message = request.query.get('lead_id'), request.query.get('message_id')
-                item = await asyncio.to_thread(load, session, lead, message)
+                scope={'channel_id':request.query.get('channel_id') or None,
+                       'conversation_id':request.query.get('conversation_id') or None}
+                item = await asyncio.to_thread(load, session, lead, message, **scope)
                 if item.get('provider') == 'connect':
                     from tenant_connect_media import download_media
                     content, mime = await download_media(item)
@@ -45,7 +47,7 @@ def handler(member_from_request, request_provider, logger):
                         account = await request_provider(session['tenant_id'], 'GET', 'account', params={'with': 'drive_url'})
                     bearer = await asyncio.to_thread(token, item)
                     content, mime = await asyncio.to_thread(download, item['row'], account.get('drive_url'), bearer)
-                current = await asyncio.to_thread(load, session, lead, message)
+                current = await asyncio.to_thread(load, session, lead, message, **scope)
                 if current != item:
                     raise TenantLinearError('Çat və ya bağlantı dəyişib. Yeniləyin.', 409)
             headers['Content-Disposition'] = 'attachment; filename="attachment"'

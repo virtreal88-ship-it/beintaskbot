@@ -2,16 +2,19 @@ const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const fs=require('node:fs'),assert=require('node:assert/strict');
 const html=fs.readFileSync('docs/tenant-app.html','utf8');
 const js=fs.readFileSync('docs/tenant-knowledge-candidates.js','utf8');
-const dom=new JSDOM('<div id="supportCases"></div><span id="supportCasesPending"></span><nav id="supportCasesNav"></nav>',{url:'https://example.test/app?site_lang=az',runScripts:'outside-only'});
+const dom=new JSDOM('<div id="supportCases"></div><span id="supportCasesPending"></span><nav id="supportCasesNav"></nav><nav class="nav"><button data-view="dialogs"></button></nav>',{url:'https://example.test/app',runScripts:'outside-only'});
 const w=dom.window,d=w.document,calls=[];let historyPage=0;
 w.tenantI18n={language:'az'};
 w.tenantProfileSnapshot={member:{tenant_id:'tenant-a',telegram_id:7,role:'owner'}};
 const card={id:'case-1',version:3,title:'Axtarış nəticəsi haqqında real case title',status:'pending_review',case_kind:'technical',resolution_method:'chat',content_language:'en',symptoms:['Customer sees unrelated records'],operator_actions:['Employee checked search filters'],resolution_steps:['Refresh the search index'],cause:{status:'suspected',text:'The index may be stale'},outcome:{status:'unconfirmed',text:'Waiting for customer confirmation',message_ids:[]},source_message_ids:['message-2'],can_approve:true,approval_block_reason:null,created_at:'2026-10-17T10:12:00Z'};
-const route={provider:'connect',lead_id:17,channel_id:'channel-a',conversation_id:'customer@s.whatsapp.net'};
+const route={provider:'connect',lead_id:17,channel_id:'channel-a',conversation_id:'12345@g.us',phone:'+994501234567'};
 const messages=[
  {id:'message-1',direction:'incoming',author_type:'customer',author_name:'Mamed Saray',body:'Real incoming text',message_type:'text',happened_at:'2026-10-17T10:12:00Z',source:'connect'},
  {id:'message-2',direction:'outgoing',author_type:'operator',author_name:'Leyla Hasanова',body:'Real employee answer',message_type:'text',happened_at:'2026-10-17T10:15:00Z',source:'connect'},
- {id:'message-3',external_id:'provider-image-3',source_lead_id:17,direction:'incoming',author_type:'customer',author_name:'Mamed Saray',body:'',message_type:'image',happened_at:'2026-10-17T10:16:00Z',source:'connect'}
+ {id:'message-3',external_id:'provider-image-3',source_lead_id:18,source_channel_id:'channel-b',channel:'connect:channel-b',conversation_id:'12345@g.us',direction:'incoming',author_type:'participant',author_name:'Mamed Saray',body:'',message_type:'image',media_filename:'photo.png',happened_at:'2026-10-17T10:16:00Z',source:'connect'},
+ {id:'message-4',external_id:'provider-audio-4',source_lead_id:17,source_channel_id:'channel-a',channel:'connect:channel-a',conversation_id:'12345@g.us',direction:'incoming',author_type:'participant',author_name:'Mamed Saray',body:'Routeri yenidən başladım',message_type:'audio',media_filename:'voice.ogg',has_transcription:true,happened_at:'2026-10-17T10:17:00Z',source:'connect'},
+ {id:'message-5',external_id:'provider-video-5',source_lead_id:17,source_channel_id:'channel-a',channel:'connect:channel-a',conversation_id:'12345@g.us',direction:'incoming',author_type:'participant',author_name:'Mamed Saray',body:'',message_type:'video',media_filename:'clip.mp4',happened_at:'2026-10-17T10:18:00Z',source:'connect'},
+ {id:'message-6',external_id:'provider-doc-6',source_lead_id:17,source_channel_id:'channel-a',channel:'connect:channel-a',conversation_id:'12345@g.us',direction:'incoming',author_type:'participant',author_name:'Mamed Saray',body:'',message_type:'document',media_filename:'manual.pdf',happened_at:'2026-10-17T10:19:00Z',source:'connect'}
 ];
 w.URL.createObjectURL=()=> 'blob:test-image';w.URL.revokeObjectURL=()=>{};
 w.fetch=async(url,opt={})=>{
@@ -24,7 +27,7 @@ w.fetch=async(url,opt={})=>{
  }else if(url.includes('/chat/attachment'))return {ok:true,status:200,blob:async()=>new w.Blob(['test image bytes'],{type:'image/jpeg'}),headers:{get:()=> 'image/jpeg'}};
  else if(url.includes('/ai/dialogs'))result={dialogs:[]};
  else if(url.includes('/ai/agents'))result={agents:[{id:'agent-a',name:'Nizam AI'}]};
- else if(url.includes('/ai/channels'))result={channels:[{provider:'connect',channel_id:'channel-a',name:'Texniki Dəstək'}]};
+ else if(url.includes('/ai/channels'))result={channels:[{provider:'connect',channel_id:'channel-a',name:'Texniki Dəstək'},{provider:'connect',channel_id:'channel-b',name:'Satış'}]};
  else if(url.includes('/knowledge-candidates/case-1?'))result={candidate:card,evidence:[{...messages[1],role:'operator',text:messages[1].body}],route};
  else if(url.includes('/knowledge-candidates?'))result={candidates:[card],next_before:null};
  else if(url.endsWith('/knowledge-candidates/case-1')&&opt.method==='PATCH'){
@@ -40,12 +43,15 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,25));
  assert.equal(modal.querySelector('#caseTitle').value,card.title);assert.equal(modal.querySelector('.case-review-status select'),null,'review status is informational');
  assert.equal(modal.querySelectorAll('.case-meta-strip select').length,3,'only case type, resolution method and outcome confirmation are dropdowns');
  assert.equal(modal.querySelector('[data-case-status]').textContent,'Yoxlamada');
- assert.equal(modal.querySelector('[data-case-customer-names]').textContent,'Mamed Saray');assert.equal(modal.querySelector('[data-case-employee-names]').textContent,'Leyla Hasanова');
+ assert.equal(modal.querySelector('[data-case-customer-names]').textContent,'Mamed Saray');assert.equal(modal.querySelector('[data-case-employee-names]').textContent,'Leyla Hasanова');assert.equal(modal.querySelector('[data-case-customer-phone]').textContent,'Qrup dialoqu');
  assert(modal.textContent.includes('Real incoming text'));assert(modal.textContent.includes('Real employee answer'));
+ assert(modal.querySelector('.case-history-warning'));assert(modal.textContent.includes('manual.pdf'));assert(modal.textContent.includes('clip.mp4'));assert(modal.textContent.includes('Səsli mesajın transkripsiyası'));assert.equal(modal.querySelectorAll('.case-message-source').length,6);
  assert.equal(modal.querySelectorAll('[data-case-improve],[data-case-reject],[data-case-clarify],[data-case-save],[data-case-approve]').length,5);
  assert.equal(modal.querySelector('[data-case-translate]'),null);assert(!modal.textContent.includes('Tərcümə'));
  assert.equal(modal.querySelector('[data-case-history-earlier]').hidden,false);
- const mediaButton=modal.querySelector('[data-case-media-open]');assert(mediaButton);mediaButton.click();await tick();assert(modal.querySelector('.case-media-preview'));assert(calls.some(c=>c.url.includes('message_id=provider-image-3')),'attachment is fetched through the existing protected endpoint only after click');
+ const mediaButton=modal.querySelector('[data-case-media-open]');assert(mediaButton);mediaButton.click();await tick();assert(modal.querySelector('.case-media-preview'));const mediaCall=calls.find(c=>c.url.includes('message_id=provider-image-3'));assert(mediaCall,'attachment is fetched through the existing protected endpoint only after click');const mediaQuery=new URL(mediaCall.url,'https://example.test').searchParams;assert.equal(mediaQuery.get('channel_id'),'channel-b');assert.equal(mediaQuery.get('conversation_id'),route.conversation_id);assert.equal(mediaQuery.get('lead_id'),'18');
+ let opened=null;d.addEventListener('tenant-support-open',event=>opened=event.detail);modal.querySelector('#caseTitle').value='Unsaved title';modal.querySelector('#caseTitle').dispatchEvent(new w.Event('input',{bubbles:true}));modal.querySelector('[data-case-route]').click();assert.deepEqual(JSON.parse(JSON.stringify(opened)),{provider:'connect',lead_id:17,channel_id:'channel-a',conversation_id:route.conversation_id});assert.equal(modal.style.display,'none');assert.equal(modal.querySelector('#caseTitle').value,'Unsaved title');
+ d.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view:'support_cases'}}));assert.equal(modal.style.display,'');assert.equal(modal.querySelector('#caseTitle').value,'Unsaved title','return preserves unsaved edits');
  modal.querySelector('#caseTitle').value='Dəyişdirilmiş başlıq EN';modal.querySelector('#caseTitle').dispatchEvent(new w.Event('input',{bubbles:true}));
  modal.querySelector('#caseSymptoms').value='Symptom in English';modal.querySelector('#caseSymptoms').dispatchEvent(new w.Event('input',{bubbles:true}));
  const confirmation=modal.querySelector('[data-confirmation]');confirmation.checked=true;confirmation.dispatchEvent(new w.Event('change',{bubbles:true}));
@@ -54,6 +60,8 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,25));
  const css=html.slice(html.indexOf('<style>',html.indexOf('</style>')));
  assert(css.includes('.case-content-column{min-width:0;min-height:0;overflow-y:auto'));
  assert(css.includes('.case-conversation-messages{display:flex;flex-direction:column;gap:12px;min-height:0;overflow-y:auto'));
+ assert(css.includes('.case-history-warning{'));assert(css.includes('.case-message-source{'));
  assert(css.includes('grid-template-rows:auto minmax(0,1fr) auto'));
+ modal.querySelector('[data-case-close]').click();route.conversation_id='customer@s.whatsapp.net';await tick();d.querySelector('[data-case-open="case-1"]').click();await tick();await tick();assert.equal(d.querySelector('[data-case-customer-phone]').textContent,'+994501234567','direct case displays the real route phone');
  w.close();console.log('PASS: AZ modal fields, genuine conversation API, names, editable multilingual content, evidence IDs, five actions, and independent scroll layout');
 })().catch(error=>{console.error(error);process.exitCode=1;w.close();});

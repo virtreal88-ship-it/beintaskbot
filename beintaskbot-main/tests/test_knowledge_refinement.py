@@ -94,12 +94,20 @@ def test_old_case_translation_covers_all_explanatory_fields_and_preserves_eviden
 def test_improve_proposal_only_explicit_save_and_idempotency(ready,lang):
     d,generation,data=ready;value=candidate(ready)
     before=store.detail(PROFILE,value['id'])
-    generation.return_value=(json.dumps({'title':'Уточнённая проблема','symptoms':['Описание симптомов']}),{'total_tokens':90})
+    generation.return_value=(json.dumps({'title':'Уточнённая проблема','symptoms':['Описание симптомов'],
+        'cause_text':'Причина пока не установлена','resolution_steps':['Проверить настройки','Повторить синхронизацию'],
+        'operator_actions':[],'outcome_text':'Результат не подтверждён'}),{'total_tokens':90})
     args=payload(value,language=lang,clarifications='user@example.com; пароль: synthetic-secret')
     result=improve.improve(PROFILE,value['id'],args)
     assert result['request']['status']=='completed' and result['requires_explicit_save']
     assert result['language']=='az' and result['expected_version']==1
-    for key in FIELDS-{'title','symptoms'}: assert result['proposal'][key]==value[key]
+    proposal=result['proposal']
+    assert proposal['cause']['status']==value['cause']['status'] and proposal['cause']['text']=='Причина пока не установлена'
+    assert proposal['resolution_steps']==['Проверить настройки','Повторить синхронизацию']
+    assert proposal['operator_actions']==[]
+    assert proposal['outcome']['status']==value['outcome']['status'] and proposal['outcome']['message_ids']==value['outcome']['message_ids']
+    assert proposal['outcome']['text']=='Результат не подтверждён'
+    assert proposal['source_message_ids']==value['source_message_ids'] and proposal['operator_action_evidence']==value['operator_action_evidence']
     assert store.detail(PROFILE,value['id'])==before
     assert not d.execute('SELECT id FROM saas_ai_knowledge_sources');d.commit()
     context=generation.call_args.kwargs['extra_context']

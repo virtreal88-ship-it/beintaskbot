@@ -39,6 +39,13 @@ def test_all_connect_conversations_are_visible_without_ai_or_kommo(operator_db):
     assert page['dialog']['can_send'] is False
 
 
+def test_connect_media_filename_exposes_only_safe_basename():
+    assert dialogs._media_filename({'document':{'fileName':'/private/path/manual.pdf'}})=='manual.pdf'
+    assert dialogs._media_filename({'fileName':'https://private.provider/token/secret.pdf'})==''
+    assert dialogs._media_filename({'file_name':'//private.provider/secret.pdf'})==''
+    assert dialogs._media_filename({'filename':'unsafe\nname.pdf'})==''
+
+
 def test_operator_rights_do_not_grant_configuration(operator_db):
     person=employee(operator_db,['dialogs','support'])
     assert dialogs.listing(person)['dialogs']
