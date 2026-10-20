@@ -50,6 +50,8 @@ def _allowed(cur,job,*,for_write=True):
 
 
 def _reserve(job,trigger_id,index,action,payload):
+    from tenant_ai_pilot import processing_allowed
+    if not processing_allowed(job):return None,'blocked',None
     if not runtime_flag('AI_NATIVE_CRM_ACTIONS_ENABLED'):return None,'disabled',None
     key=f'native:{trigger_id}:{index}'
     with _connect() as conn:
@@ -75,6 +77,8 @@ def _reserve(job,trigger_id,index,action,payload):
 
 
 def _still_allowed(job):
+    from tenant_ai_pilot import processing_allowed
+    if not processing_allowed(job):return False
     if not runtime_flag('AI_NATIVE_CRM_ACTIONS_ENABLED'):return False
     with _connect() as conn:
         ensure_schema(conn)

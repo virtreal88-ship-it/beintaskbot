@@ -123,6 +123,13 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
                 if not cur.fetchone():
                     reasons.add('duplicate_event')
                     continue
+                from tenant_ai_pilot import processing_allowed
+                if not processing_allowed({'provider':'kommo','tenant_id':tenant,'channel_id':event['channel'],
+                        'conversation_id':event['chat_id'],'event_fingerprint':fingerprint}, connection=conn):
+                    cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='pilot_scope_blocked' WHERE tenant_id=%s::uuid AND fingerprint=%s",
+                        (tenant, fingerprint))
+                    reasons.add('pilot_scope_blocked')
+                    continue
                 cur.execute('''UPDATE saas_tenant_webhook_events SET state='superseded',completed_at=now()
                   WHERE tenant_id=%s::uuid AND provider='kommo' AND state IN ('queued','processing')
                     AND payload->>'chat_id'=%s AND fingerprint<>%s''', (tenant,event['chat_id'],fingerprint))

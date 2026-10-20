@@ -12,6 +12,28 @@ _TRUE = {'1', 'true', 'yes', 'on'}
 CONFIRMATION_MINUTES = 15
 
 
+def schema(cur):
+    """Idempotent additive migration for exact-dialog attestations."""
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_ai_pilot_confirmations(
+      tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      channel_id UUID NOT NULL,
+      conversation_id TEXT NOT NULL CHECK(length(conversation_id) BETWEEN 1 AND 200),
+      scope_fingerprint TEXT NOT NULL CHECK(length(scope_fingerprint)=64),
+      kwid_confirmed_by BIGINT NULL,
+      kwid_confirmed_at TIMESTAMPTZ NULL,
+      kwid_expires_at TIMESTAMPTZ NULL,
+      owner_approved_by BIGINT NULL,
+      owner_approved_at TIMESTAMPTZ NULL,
+      owner_expires_at TIMESTAMPTZ NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK ((kwid_confirmed_by IS NULL AND kwid_confirmed_at IS NULL AND kwid_expires_at IS NULL)
+          OR (kwid_confirmed_by IS NOT NULL AND kwid_confirmed_at IS NOT NULL AND kwid_expires_at>kwid_confirmed_at)),
+      CHECK ((owner_approved_by IS NULL AND owner_approved_at IS NULL AND owner_expires_at IS NULL)
+          OR (owner_approved_by IS NOT NULL AND owner_approved_at IS NOT NULL
+              AND kwid_confirmed_by IS NOT NULL AND owner_expires_at>owner_approved_at
+                  AND owner_expires_at<=kwid_expires_at)))""")
+
+
 def _enabled(name):
     return str(os.environ.get(name) or '').strip().casefold() in _TRUE
 
@@ -111,6 +133,31 @@ def _lock_scope(cur, tenant, scope):
     return bool(cur.fetchone())
 
 
+def processing_allowed(job, connection=None):
+    """Fence all AI/CRM stages to one explicitly armed and confirmed dialog."""
+    scope = configured_scope()
+    armed = _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED')
+    exact = bool(scope and str(job.get('provider') or '') == 'connect'
+        and str(job.get('tenant_id') or '') == scope['tenant_id']
+        and str(job.get('channel_id') or '') == scope['channel_id']
+        and str(job.get('conversation_id') or '') == scope['conversation_id'])
+    # A claimed pilot run stays bound to its original exact scope through send.
+    if job.get('_pilot_scope_fenced') is True:
+        if not exact or not armed:
+            return False
+        return automatic_send_allowed(job, connection)
+    if not scope:
+        return not armed
+    if not exact:
+        return not armed
+    if not armed:
+        return False
+    allowed = automatic_send_allowed(job, connection)
+    if allowed:
+        job['_pilot_scope_fenced'] = True
+    return allowed
+
+
 def automatic_send_allowed(job, connection=None):
     """Guard automatic sends to the configured pilot dialog at the send boundary.
 
@@ -120,12 +167,14 @@ def automatic_send_allowed(job, connection=None):
     """
     scope = configured_scope()
     armed = _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED')
+    if job.get('_pilot_scope_fenced') is True and (not scope or not armed):
+        return False
     if not scope:
         return not armed
     tenant = str(job.get('tenant_id') or '')
     conversation = str(job.get('conversation_id') or job.get('chat_id') or '')
     channel = str(job.get('channel_id') or '')
-    if tenant != scope['tenant_id'] or channel != scope['channel_id'] or conversation != scope['conversation_id']:
+    if str(job.get('provider') or '') != 'connect' or tenant != scope['tenant_id'] or channel != scope['channel_id'] or conversation != scope['conversation_id']:
         return not armed
     # A configured pilot scope must never be sent to before the owner arms it.
     if not armed:
@@ -146,13 +195,18 @@ def automatic_send_allowed(job, connection=None):
                             or row.get('operating_mode') != 'active' or row.get('auto_send_enabled') is not True
                             or row.get('emergency_stop') is True or row.get('agent_enabled') is not True
                             or row.get('agent_mode') != 'automatic' or not row.get('exact_agent_scope')
+                    or (job.get('agent_id') and str(row.get('agent_id') or '') != str(job.get('agent_id')))
+                            or (job.get('agent_id') and str(row.get('agent_id') or '') != str(job.get('agent_id')))
                             or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')):
                         return False
-                    cur.execute('''SELECT (kwid_expires_at>clock_timestamp() AND owner_expires_at>clock_timestamp()) AS valid
-                        FROM saas_ai_pilot_confirmations WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
-                        AND conversation_id=%s AND scope_fingerprint=%s AND kwid_confirmed_by IS NOT NULL
-                        AND owner_approved_by IS NOT NULL FOR SHARE''',
-                        (tenant, scope['channel_id'], scope['conversation_id'], fingerprint))
+                    cur.execute('''SELECT (c.kwid_expires_at>clock_timestamp() AND c.owner_expires_at>clock_timestamp()
+                      AND e.received_at>=GREATEST(c.kwid_confirmed_at,c.owner_approved_at)) AS valid
+                    FROM saas_ai_pilot_confirmations c JOIN saas_tenant_webhook_events e
+                      ON e.tenant_id=c.tenant_id AND e.fingerprint=%s
+                    WHERE c.tenant_id=%s::uuid AND c.channel_id=%s::uuid
+                      AND c.conversation_id=%s AND c.scope_fingerprint=%s
+                      AND c.kwid_confirmed_by IS NOT NULL AND c.owner_approved_by IS NOT NULL FOR SHARE OF c,e''',
+                    (str(job.get('event_fingerprint') or ''), tenant, scope['channel_id'], scope['conversation_id'], fingerprint))
                     return bool((cur.fetchone() or {}).get('valid'))
         with connection.cursor() as cur:
             if not _lock_scope(cur, tenant, scope):
@@ -168,11 +222,14 @@ def automatic_send_allowed(job, connection=None):
                     or row.get('agent_mode') != 'automatic' or not row.get('exact_agent_scope')
                     or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')):
                 return False
-            cur.execute('''SELECT (kwid_expires_at>clock_timestamp() AND owner_expires_at>clock_timestamp()) AS valid
-                FROM saas_ai_pilot_confirmations WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
-                AND conversation_id=%s AND scope_fingerprint=%s AND kwid_confirmed_by IS NOT NULL
-                AND owner_approved_by IS NOT NULL FOR SHARE''',
-                (tenant, scope['channel_id'], scope['conversation_id'], fingerprint))
+            cur.execute('''SELECT (c.kwid_expires_at>clock_timestamp() AND c.owner_expires_at>clock_timestamp()
+                      AND e.received_at>=GREATEST(c.kwid_confirmed_at,c.owner_approved_at)) AS valid
+                    FROM saas_ai_pilot_confirmations c JOIN saas_tenant_webhook_events e
+                      ON e.tenant_id=c.tenant_id AND e.fingerprint=%s
+                    WHERE c.tenant_id=%s::uuid AND c.channel_id=%s::uuid
+                      AND c.conversation_id=%s AND c.scope_fingerprint=%s
+                      AND c.kwid_confirmed_by IS NOT NULL AND c.owner_approved_by IS NOT NULL FOR SHARE OF c,e''',
+                    (str(job.get('event_fingerprint') or ''), tenant, scope['channel_id'], scope['conversation_id'], fingerprint))
             return bool((cur.fetchone() or {}).get('valid'))
     except Exception:
         return False
