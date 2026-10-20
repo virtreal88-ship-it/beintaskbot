@@ -53,6 +53,7 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                     result=await asyncio.to_thread(batches.get,profile,receipt['id'])
                     return web.json_response({'success':True,'result':result},status=202,headers=headers)
                 elif resource=='improve': result=await asyncio.to_thread(improve,profile,request.match_info['candidate_id'],data)
+                elif resource=='boundaries': result=await asyncio.to_thread(mutate,profile,request.match_info['candidate_id'],data,'boundaries')
                 elif resource=='collection': result=await asyncio.to_thread(analyze,profile,data)
                 else: result=await asyncio.to_thread(mutate,profile,request.match_info['candidate_id'],data,'edit' if resource=='candidate' else resource)
             return web.json_response({'success':True,'result':result},headers=headers)

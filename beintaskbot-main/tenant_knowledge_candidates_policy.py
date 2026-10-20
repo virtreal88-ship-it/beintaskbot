@@ -48,7 +48,7 @@ def text(value,limit,required=False):
     return value
 
 
-def card(data,allowed_ids):
+def card(data,allowed_ids,allow_boundary_outside_sources=False):
     allowed_order=list(allowed_ids);allowed_set=set(allowed_order)
     if not isinstance(data,dict) or not BASE_FIELDS<=set(data) or set(data)-FIELDS: raise TenantLinearError('Некорректная структура карточки.')
     method=data.get('resolution_method','unknown');kind=data.get('case_kind','technical')
@@ -94,8 +94,9 @@ def card(data,allowed_ids):
         normalized_cause_evidence.append({'message_id':message_id,'quote':text(item['quote'],800,True)})
     result['cause_evidence']=normalized_cause_evidence
     start=identifier(data.get('start_message_id',result['source_message_ids'][0]));end=identifier(data.get('end_message_id',result['source_message_ids'][-1]))
-    if start not in result['source_message_ids'] or end not in result['source_message_ids']: raise TenantLinearError('Границы обращения должны входить в исходные сообщения.',403)
-    if allowed_order.index(start)>allowed_order.index(end): raise TenantLinearError('Начальное сообщение должно предшествовать конечному.')
+    if not allow_boundary_outside_sources:
+        if start not in result['source_message_ids'] or end not in result['source_message_ids']: raise TenantLinearError('Границы обращения должны входить в исходные сообщения.',403)
+        if allowed_order.index(start)>allowed_order.index(end): raise TenantLinearError('Начальное сообщение должно предшествовать конечному.')
     result['start_message_id']=start;result['end_message_id']=end
     evidence=data.get('operator_action_evidence',[])
     if not isinstance(evidence,list) or len(evidence)>10: raise TenantLinearError('Некорректные подтверждения действий сотрудника.')
