@@ -40,6 +40,12 @@ assert.match(ui,/data-chat-attachment/,'dialog attachments use the protected med
 assert.match(ui,/data-channel-id=\"\$\{esc\(route\.channel_id\)\}/,'media preview carries the channel scope');
 assert.match(ui,/data-conversation-id=\"\$\{esc\(route\.conversation_id\)\}/,'media preview carries the conversation scope');
 assert.match(ui,/operator-composer-actions/,'AI and send actions are grouped inside the message composer');
+assert.match(ui,/operator-dialog-head-row/,'dialog metadata uses a compact first header row');
+assert.match(ui,/operator-dialog-head-secondary/,'agent and conversation controls use a compact second header row');
+assert.match(ui,/operatorHeadStatus/,'AI status exposes its detailed reason on demand');
+assert.match(ui,/width:min\(1480px,calc\(100vw - 48px\)\)/,'desktop conversation modal uses the available viewport width');
+assert.match(ui,/\.operator-chat-history\{flex:1;min-height:0;max-height:none;overflow:auto/,'conversation history fills and scrolls independently');
+assert.match(ui,/operator-composer-actions #sendChat[^`]*border-radius:50%/,'send is displayed as a circular composer action');
 assert.match(ui,/autosize=\(\)=>/,'composer grows with the draft text');
 assert.match(ui,/data-media-meta>\$\{esc\(m\.media_filename\|\|m\.file_name\|\|''\)\}/,'attachments show their stored filename');
 assert.doesNotMatch(ui,/\$\{esc\(m\.message_type\)\}<\/small>/,'technical media types must not be rendered in message cards');

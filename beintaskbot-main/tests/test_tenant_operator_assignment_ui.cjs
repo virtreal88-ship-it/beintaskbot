@@ -43,7 +43,7 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
  assert.equal(posts[0].body.expected_tenant_id,A);assert.equal(posts[0].body.expected_user_id,11);
  assert.equal(posts[0].body.channel_id,CA);assert.equal(posts[0].body.conversation_id,'same-client');assert.equal(posts[0].body.expected_revision,7);
  assert.equal(calls.filter(c=>c.path.includes('/resume')||c.path.includes('/chat/send')).length,0);
- assert.equal(d.querySelector('[data-operator-action=resume]').textContent,'Включить AI');assert.equal(route.state,'human');
+ assert.equal(d.querySelector('[data-operator-action=resume]').textContent,'Возобновить автоматические ответы');assert.equal(route.state,'human');
  assert.equal(d.querySelector('[data-operator-assign-agent]'),null);
  for(const lang of ['ru','az','en']){w.tenantI18n.setLanguage(lang);assert.notEqual(w.tenantI18n.t('assignAgent'),'assignAgent');assert.notEqual(w.tenantI18n.t('assignmentHint'),'assignmentHint');}
  d.querySelector('[data-operator-diagnostics]').click();await settle();
