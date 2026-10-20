@@ -214,10 +214,15 @@ def test_extraction_daily_cap_and_concurrency(ready):
     generation.assert_not_called()
 
 def test_live_queue_is_idempotent_and_channel_scoped(ready,monkeypatch):
-    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
+    _enable_live_pilot(monkeypatch)
     db,generation,data=ready
+    monkeypatch.setattr(live,'_connect',lambda:db)
     live.create_schema(db)
-    first=str(uuid.UUID(int=9901));second=str(uuid.UUID(int=9902))
+    first=db.execute("SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))[0]['id']
+    db.execute("UPDATE saas_crm_messages SET happened_at='2026-10-20T13:00:00Z' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,first))
+    second=str(uuid.UUID(int=9902))
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,happened_at) VALUES(%s::uuid,%s::uuid,41,'new-live',%s,'incoming','new', '2026-10-20T13:01:00Z')",(second,A,'connect:'+CA))
+    db.commit()
     with db.cursor() as cur:
         live.enqueue(cur,A,CA,'client',41,first,actor_id=11)
         live.enqueue(cur,A,CA,'client',41,first,actor_id=11)
@@ -229,16 +234,27 @@ def test_live_queue_is_idempotent_and_channel_scoped(ready,monkeypatch):
         live.enqueue(cur,A,CB,'client',41,first,actor_id=11)
     db.commit()
     rows=db.execute('SELECT channel_id::text AS channel_id,generation,last_message_id::text AS last_message_id FROM saas_knowledge_live_queue WHERE tenant_id=%s::uuid ORDER BY channel_id',(A,))
-    assert len(rows)==2
+    assert len(rows)==1 and rows[0]['channel_id']==CA
     assert rows[0]['generation']==2 and rows[0]['last_message_id']==second
-    assert rows[1]['channel_id']==CB and rows[1]['generation']==1
     assert generation.call_count==0
 
-def test_live_queue_obeys_company_ai_emergency_stop(ready,monkeypatch):
+
+def _enable_live_pilot(monkeypatch):
     monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_TENANT_ID',A)
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_CHANNEL_ID',CA)
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_CONVERSATION_ID','client')
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_START_AFTER','2026-10-20T12:00:00Z')
+
+
+def test_live_queue_obeys_company_ai_emergency_stop(ready,monkeypatch):
+    _enable_live_pilot(monkeypatch)
     db,generation,data=ready
+    monkeypatch.setattr(live,'_connect',lambda:db)
     live.create_schema(db)
-    with db.cursor() as cur:live.enqueue(cur,A,CA,'client',41,str(uuid.UUID(int=9910)),actor_id=11)
+    message=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,happened_at) VALUES(%s::uuid,%s::uuid,41,'pilot-message',%s,'incoming','new','2026-10-20T13:00:00Z')",(message,A,'connect:'+CA));db.commit()
+    with db.cursor() as cur:live.enqueue(cur,A,CA,'client',41,message,actor_id=11)
     db.execute("UPDATE saas_knowledge_live_queue SET next_attempt_at=now()-interval '1 second' WHERE tenant_id=%s::uuid",(A,))
     db.execute("UPDATE saas_ai_agent_settings SET emergency_stop=TRUE WHERE tenant_id=%s::uuid",(A,));db.commit()
     monkeypatch.setattr(live,'_connect',lambda:db)

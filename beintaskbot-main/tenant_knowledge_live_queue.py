@@ -5,6 +5,7 @@ as the source message. The worker then reuses the bounded knowledge extractor,
 its budget checks, AI emergency stop, and review-only candidate persistence.
 """
 import asyncio
+from datetime import datetime, timedelta
 import os
 import uuid
 
@@ -15,11 +16,49 @@ from tenant_knowledge_candidates_service import LiveExtractionDisabled, analyze
 
 DEBOUNCE_SECONDS = 20
 LEASE_SECONDS = 300
+SCOPE_ENV = {
+    'tenant_id': 'SUPPORT_CASES_LIVE_EXTRACTION_TENANT_ID',
+    'channel_id': 'SUPPORT_CASES_LIVE_EXTRACTION_CHANNEL_ID',
+    'conversation_id': 'SUPPORT_CASES_LIVE_EXTRACTION_CONVERSATION_ID',
+    'start_after': 'SUPPORT_CASES_LIVE_EXTRACTION_START_AFTER',
+}
+
+
+def pilot_scope():
+    """Return the single, explicit pilot scope; missing/invalid scope is off."""
+    if os.environ.get('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED', '').strip().lower() not in ('1', 'true', 'yes', 'on'):
+        return None
+    values = {key: str(os.environ.get(name) or '').strip() for key, name in SCOPE_ENV.items()}
+    if not values['conversation_id'] or len(values['conversation_id']) > 200 or any(ord(c) < 32 for c in values['conversation_id']):
+        return None
+    try:
+        values['tenant_id'] = str(uuid.UUID(values['tenant_id']))
+        values['channel_id'] = str(uuid.UUID(values['channel_id']))
+        start = datetime.fromisoformat(values['start_after'].replace('Z', '+00:00'))
+        if start.tzinfo is None:
+            return None
+        values['start_after'] = start.isoformat()
+    except (ValueError, TypeError):
+        return None
+    return values
 
 
 def extraction_enabled():
-    # Separate opt-in: never inherit the existing AI-agent enabled flag.
-    return os.environ.get('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED', '').strip().lower() in ('1', 'true', 'yes', 'on')
+    # Global opt-in is inert unless one exact, dated pilot conversation is set.
+    return pilot_scope() is not None
+
+
+def _scope_matches(scope, tenant, channel, conversation, happened_at=None):
+    if not (scope and str(tenant) == scope['tenant_id'] and str(channel) == scope['channel_id']
+            and str(conversation) == scope['conversation_id']):
+        return False
+    if happened_at is not None:
+        try:
+            happened = happened_at if isinstance(happened_at, datetime) else datetime.fromisoformat(str(happened_at).replace('Z','+00:00'))
+            return happened.tzinfo is not None and happened >= datetime.fromisoformat(scope['start_after'])
+        except (ValueError, TypeError):
+            return False
+    return True
 
 
 def create_schema(conn):
@@ -48,7 +87,17 @@ def create_schema(conn):
 
 def enqueue(cur, tenant, channel_id, conversation_id, lead_id, message_id, actor_id=None):
     """Record a new source message; duplicate Connect events are filtered upstream."""
-    if not extraction_enabled():
+    scope = pilot_scope()
+    if not _scope_matches(scope, tenant, channel_id, conversation_id):
+        return
+    # Reject delayed/replayed pre-pilot webhooks using the persisted message
+    # timestamp, not enqueue time. This also prevents old queue rows from being
+    # refreshed into apparently new work.
+    cur.execute("""SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid
+      AND kommo_lead_id=%s AND channel=%s AND happened_at >= %s::timestamptz
+      AND direction IN ('incoming','outgoing')""",
+      (scope['tenant_id'], str(uuid.UUID(str(message_id))), int(lead_id), 'connect:' + scope['channel_id'], scope['start_after']))
+    if not cur.fetchone():
         return
     cur.execute("""INSERT INTO saas_knowledge_live_queue
       (tenant_id,channel_id,conversation_id,lead_id,actor_id,last_message_id,generation,state,next_attempt_at)
@@ -67,20 +116,29 @@ def enqueue(cur, tenant, channel_id, conversation_id, lead_id, message_id, actor
 
 def claim():
     """Claim one due conversation without holding DB locks during model calls."""
-    if not extraction_enabled():
+    scope = pilot_scope()
+    if not scope:
         return None
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute("""UPDATE saas_knowledge_live_queue SET state='blocked',error_code='worker_lease_expired',
-              lease_until=NULL,updated_at=now() WHERE state='running' AND lease_until<now()""")
-            cur.execute("""SELECT q.*,m.telegram_id AS reviewer_id FROM saas_knowledge_live_queue q
+              lease_until=NULL,updated_at=now() WHERE state='running' AND lease_until<now()
+              AND tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s""",
+              (scope['tenant_id'],scope['channel_id'],scope['conversation_id']))
+            cur.execute("""SELECT q.*,m.telegram_id AS reviewer_id,source.happened_at AS last_message_at
+              FROM saas_knowledge_live_queue q
+              JOIN saas_crm_messages source ON source.tenant_id=q.tenant_id AND source.id=q.last_message_id
+                AND source.kommo_lead_id=q.lead_id AND source.channel=('connect:' || q.channel_id::text)
+                AND source.happened_at >= %s::timestamptz AND source.direction IN ('incoming','outgoing')
               JOIN saas_tenant_members m ON m.tenant_id=q.tenant_id AND m.active=TRUE
                 AND m.role IN ('owner','admin')
               JOIN saas_ai_agent_settings s ON s.tenant_id=q.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE
               JOIN saas_tenants t ON t.id=q.tenant_id AND t.status='active'
-              WHERE q.state='pending' AND q.next_attempt_at<=now()
+              WHERE q.tenant_id=%s::uuid AND q.channel_id=%s::uuid AND q.conversation_id=%s
+                AND q.state='pending' AND q.next_attempt_at<=now()
               ORDER BY q.next_attempt_at,q.updated_at,CASE WHEN m.role='owner' THEN 0 ELSE 1 END,q.tenant_id,q.channel_id
-              LIMIT 1 FOR UPDATE OF q SKIP LOCKED""")
+              LIMIT 1 FOR UPDATE OF q SKIP LOCKED""",
+              (scope['start_after'],scope['tenant_id'],scope['channel_id'],scope['conversation_id']))
             row=cur.fetchone()
             if not row:
                 conn.commit();return None
@@ -98,8 +156,9 @@ def _request_id(item):
     return str(uuid.uuid5(uuid.NAMESPACE_URL,value))
 
 
-def require_extraction_enabled():
-    if not extraction_enabled():
+def require_extraction_enabled(item=None):
+    scope = pilot_scope()
+    if not scope or (item and not _scope_matches(scope,item['tenant_id'],item['channel_id'],item['conversation_id'],item.get('last_message_at'))):
         raise LiveExtractionDisabled()
 
 
@@ -117,7 +176,8 @@ def finish(item, extraction_id=None, error_code=''):
 
 
 def tick():
-    if not extraction_enabled():
+    scope=pilot_scope()
+    if not scope:
         return False
     item=claim()
     if not item:return False
@@ -126,13 +186,19 @@ def tick():
     try:
         # Re-check after claim: a switch-off between claim and provider dispatch
         # must not start a new analysis. Preserve the receipt for later review.
-        if not extraction_enabled():
-            finish(item,error_code='live_extraction_disabled_after_claim')
+        scope=pilot_scope()
+        if not _scope_matches(scope,item['tenant_id'],item['channel_id'],item['conversation_id'],item.get('last_message_at')):
+            finish(item,error_code='live_extraction_scope_changed_after_claim')
             return False
+        message_at=item['last_message_at']
+        if not isinstance(message_at,datetime):
+            message_at=datetime.fromisoformat(str(message_at).replace('Z','+00:00'))
+        end_at=(message_at+timedelta(microseconds=1)).isoformat()
         response=analyze(profile,{
           'request_id':request_id,'provider':'connect','channel_id':str(item['channel_id']),
-          'conversation_id':item['conversation_id'],'history_mode':'channel','language':'az'},
-          before_provider=require_extraction_enabled)
+          'conversation_id':item['conversation_id'],'history_mode':'channel','language':'az',
+          'period_start':scope['start_after'],'period_end':end_at},
+          before_provider=lambda: require_extraction_enabled(item))
         request=response.get('request') or {}
         state=request.get('status')
         if state not in {'completed','failed','unknown'}:

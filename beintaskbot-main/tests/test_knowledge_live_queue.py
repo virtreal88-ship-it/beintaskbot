@@ -8,13 +8,23 @@ import tenant_knowledge_live_queue as live
 TENANT='10000000-0000-0000-0000-000000000001'
 CHANNEL='10000000-0000-0000-0000-000000000002'
 MESSAGE='10000000-0000-0000-0000-000000000003'
+AFTER='2026-10-20T12:00:00+00:00'
+
+
+def enable_pilot(monkeypatch,*,tenant=TENANT,channel=CHANNEL,conversation='client',after=AFTER):
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_TENANT_ID',tenant)
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_CHANNEL_ID',channel)
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_CONVERSATION_ID',conversation)
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_START_AFTER',after)
 
 
 class Cursor:
-    def __init__(self):self.calls=[]
+    def __init__(self):self.calls=[];self.one={'ok':1}
     def __enter__(self):return self
     def __exit__(self,*_):return False
     def execute(self,sql,params=None):self.calls.append((sql,params))
+    def fetchone(self):return self.one
 
 
 class Connection:
@@ -26,10 +36,14 @@ class Connection:
 
 
 def test_webhook_enqueue_is_scoped_and_debounced(monkeypatch):
-    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
+    enable_pilot(monkeypatch,conversation='120363@g.us')
     connection=Connection()
     live.enqueue(connection.cursor(),TENANT,CHANNEL,'120363@g.us',42,MESSAGE,actor_id=77)
-    sql,params=connection.value.calls[0]
+    assert len(connection.value.calls)==2
+    scope_sql,scope_params=connection.value.calls[0]
+    assert 'happened_at >= %s::timestamptz' in scope_sql
+    assert scope_params==(TENANT,MESSAGE,42,'connect:'+CHANNEL,AFTER)
+    sql,params=connection.value.calls[1]
     assert 'PRIMARY KEY' not in sql
     assert 'generation=saas_knowledge_live_queue.generation+1' in sql
     assert 'WHERE saas_knowledge_live_queue.last_message_id IS DISTINCT FROM EXCLUDED.last_message_id' in sql
@@ -39,9 +53,9 @@ def test_webhook_enqueue_is_scoped_and_debounced(monkeypatch):
 
 
 def test_worker_reuses_stable_receipt_and_only_requests_az(monkeypatch):
-    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
+    enable_pilot(monkeypatch,conversation='client@s.whatsapp.net')
     item={'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'client@s.whatsapp.net',
-          'lead_id':42,'actor_id':None,'reviewer_id':9,'last_message_id':MESSAGE,'generation':2}
+          'lead_id':42,'actor_id':None,'reviewer_id':9,'last_message_id':MESSAGE,'generation':2,'last_message_at':AFTER}
     monkeypatch.setattr(live,'claim',lambda:item)
     finish=Mock();monkeypatch.setattr(live,'finish',finish)
     analyze=Mock(return_value={'request':{'status':'completed'},'candidates':[{'status':'pending_review'}]})
@@ -51,16 +65,18 @@ def test_worker_reuses_stable_receipt_and_only_requests_az(monkeypatch):
     assert args[0]=={'tenant_id':TENANT,'telegram_id':9}
     assert args[1]['language']=='az'
     assert args[1]['channel_id']==CHANNEL and args[1]['conversation_id']==item['conversation_id']
+    assert args[1]['period_start']==AFTER
+    assert args[1]['period_end']=='2026-10-20T12:00:00.000001+00:00'
     assert args[1]['request_id']==live._request_id(item)
     assert live._request_id(item)==live._request_id(dict(item))
-    assert analyze.call_args.kwargs['before_provider'] is live.require_extraction_enabled
+    assert analyze.call_args.kwargs['before_provider']() is None
     finish.assert_called_once_with(item,args[1]['request_id'],'')
 
 
 def test_uncertain_ai_result_is_terminal_until_a_new_message(monkeypatch):
-    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
+    enable_pilot(monkeypatch)
     item={'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'client',
-          'lead_id':42,'reviewer_id':9,'last_message_id':MESSAGE,'generation':1}
+          'lead_id':42,'reviewer_id':9,'last_message_id':MESSAGE,'generation':1,'last_message_at':AFTER}
     monkeypatch.setattr(live,'claim',lambda:item)
     finish=Mock();monkeypatch.setattr(live,'finish',finish)
     monkeypatch.setattr(live,'analyze',Mock(side_effect=RuntimeError('provider outcome unknown')))
@@ -93,9 +109,9 @@ def test_flag_is_independent_of_ai_agent_settings(monkeypatch):
     monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','false')
     live.enqueue(db.cursor(), TENANT, CHANNEL, 'client', 42, MESSAGE)
     assert not db.value.calls
-    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
+    enable_pilot(monkeypatch)
     live.enqueue(db.cursor(), TENANT, CHANNEL, 'client', 42, MESSAGE)
-    assert len(db.value.calls)==1
+    assert len(db.value.calls)==2
     monkeypatch.setenv('AI_AGENTS_ENABLED','false')
     assert live.extraction_enabled() is True
 
@@ -108,9 +124,9 @@ def test_restart_with_disabled_flag_never_claims_backlog(monkeypatch):
 
 
 def test_switch_off_between_claim_and_analyze(monkeypatch):
-    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED', 'true')
+    enable_pilot(monkeypatch)
     item={'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'client',
-          'lead_id':42,'reviewer_id':9,'last_message_id':MESSAGE,'generation':1}
+          'lead_id':42,'reviewer_id':9,'last_message_id':MESSAGE,'generation':1,'last_message_at':AFTER}
     def claim_then_disable():
         monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED', 'false')
         return item
@@ -121,7 +137,7 @@ def test_switch_off_between_claim_and_analyze(monkeypatch):
     monkeypatch.setattr(live,'finish',finish)
     assert live.tick() is False
     ai.assert_not_called()
-    finish.assert_called_once_with(item,error_code='live_extraction_disabled_after_claim')
+    finish.assert_called_once_with(item,error_code='live_extraction_scope_changed_after_claim')
 
 
 def test_disabled_queue_receipt_is_terminally_blocked(monkeypatch):
@@ -137,9 +153,10 @@ def test_disabled_queue_receipt_is_terminally_blocked(monkeypatch):
 
 def test_switch_off_during_analyze_stops_before_next_provider_call(monkeypatch):
     from tenant_knowledge_candidates_service import LiveExtractionDisabled
-    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED', 'true')
+    enable_pilot(monkeypatch)
     item={'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'client',
-          'lead_id':42,'reviewer_id':9,'last_message_id':MESSAGE,'generation':1}
+          'lead_id':42,'reviewer_id':9,'last_message_id':MESSAGE,'generation':1,'last_message_at':AFTER}
+    scope=live.pilot_scope()
     monkeypatch.setattr(live,'claim',lambda:item)
     enabled={'value':True}
     provider=Mock(side_effect=AssertionError('next AI call must not start'))
@@ -149,7 +166,41 @@ def test_switch_off_during_analyze_stops_before_next_provider_call(monkeypatch):
         provider()
     monkeypatch.setattr(live,'analyze',analyze)
     finish=Mock();monkeypatch.setattr(live,'finish',finish)
-    monkeypatch.setattr(live,'extraction_enabled',lambda:enabled['value'])
+    monkeypatch.setattr(live,'pilot_scope',lambda:scope if enabled['value'] else None)
     assert live.tick() is False
     provider.assert_not_called()
     finish.assert_called_once_with(item,error_code='live_extraction_disabled_before_provider')
+
+
+@pytest.mark.parametrize('tenant,channel,conversation',[
+    ('10000000-0000-0000-0000-000000000099',CHANNEL,'client'),
+    (TENANT,'10000000-0000-0000-0000-000000000099','client'),
+    (TENANT,CHANNEL,'another-chat'),
+])
+def test_enqueue_rejects_other_tenant_channel_and_conversation(monkeypatch,tenant,channel,conversation):
+    enable_pilot(monkeypatch)
+    connection=Connection()
+    live.enqueue(connection.cursor(),tenant,channel,conversation,42,MESSAGE)
+    assert connection.value.calls==[]
+
+
+def test_flag_without_complete_scope_stays_fail_closed(monkeypatch):
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
+    monkeypatch.delenv('SUPPORT_CASES_LIVE_EXTRACTION_TENANT_ID',raising=False)
+    assert not live.extraction_enabled()
+    connection=Connection();live.enqueue(connection.cursor(),TENANT,CHANNEL,'client',42,MESSAGE)
+    assert connection.value.calls==[] and live.claim() is None
+
+
+def test_claim_filters_exact_pilot_and_source_timestamp(monkeypatch):
+    enable_pilot(monkeypatch)
+    connection=Connection()
+    connection.value.one={'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'client',
+        'reviewer_id':9,'last_message_id':MESSAGE,'generation':2,'last_message_at':AFTER}
+    monkeypatch.setattr(live,'_connect',lambda:connection)
+    item=live.claim()
+    assert item['tenant_id']==TENANT and item['conversation_id']=='client'
+    select=connection.value.calls[1][0].lower();params=connection.value.calls[1][1]
+    assert 'source.happened_at >= %s::timestamptz' in select
+    assert 'q.tenant_id=%s::uuid and q.channel_id=%s::uuid and q.conversation_id=%s' in select
+    assert params==(AFTER,TENANT,CHANNEL,'client')
