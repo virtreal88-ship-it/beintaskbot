@@ -21,6 +21,16 @@ def create_schema(conn):
           FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS saas_support_open_route_idx ON saas_support_tickets(tenant_id,channel_id,conversation_id) WHERE status<>'resolved'")
         cur.execute('CREATE INDEX IF NOT EXISTS saas_support_queue_idx ON saas_support_tickets(tenant_id,status,assigned_to,created_at)')
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS completion_outcome TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS completion_note TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS knowledge_candidate_requested BOOLEAN NOT NULL DEFAULT FALSE")
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_support_completions(
+          tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+          request_id UUID NOT NULL,actor_id BIGINT NOT NULL,channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,
+          input_hash TEXT NOT NULL,ticket_id UUID NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,request_id),
+          FOREIGN KEY(tenant_id,actor_id) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
+          FOREIGN KEY(tenant_id,ticket_id) REFERENCES saas_support_tickets(tenant_id,id) ON DELETE RESTRICT)''')
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_support_events(
           tenant_id UUID NOT NULL,event_key TEXT NOT NULL,ticket_id UUID NOT NULL,
           PRIMARY KEY(tenant_id,event_key),

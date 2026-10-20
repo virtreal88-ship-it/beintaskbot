@@ -4,7 +4,7 @@ import json
 from aiohttp import web
 from tenant_ai_agents_api import _origin, _expected
 from tenant_linear_policy import TenantLinearError
-from tenant_support_inbox_store import listing, detail, create, update
+from tenant_support_inbox_store import listing, detail, create, update, complete
 from tenant_support_inbox_summary import regenerate
 
 
@@ -29,7 +29,9 @@ def handler(member_from_request, origin, logger, resource):
                 if not isinstance(data,dict): raise TenantLinearError('Некорректный запрос.')
                 _expected(data,profile)
                 payload = {k:v for k,v in data.items() if k not in {'expected_tenant_id','expected_user_id'}}
-                if resource=='tickets' and request.method=='POST':
+                if resource=='complete' and request.method=='POST':
+                    result = await asyncio.to_thread(complete,profile,payload)
+                elif resource=='tickets' and request.method=='POST':
                     result = await asyncio.to_thread(create,profile,payload)
                 elif resource=='ticket' and request.method=='PATCH':
                     result = await asyncio.to_thread(update,profile,request.match_info['ticket_id'],payload)
