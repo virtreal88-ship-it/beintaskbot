@@ -13,6 +13,9 @@ assert(ai.includes('tc-ai-spinner')&&ai.includes('missing_audio')&&ai.includes('
 assert(!ai.includes('result.text</')&&!ai.includes('/chat/send'));
 assert(settings.includes('type="password"')&&settings.includes('expected_updated_at:version'));
 assert(settings.includes("!['owner','admin'].includes(next.role)")&&settings.includes('media_hosts'));
+assert(settings.includes('tcCopilotModel'));
+assert(settings.includes('copilot_model:$(\'tcCopilotModel\').value')&&settings.includes('tenant-language'));
+assert(settings.includes('no separate Copilot token')&&settings.includes('Provider: OpenAI'));
 assert(app.includes('revision!==chatRevision||identity!==chatIdentity()'));
 assert(app.includes('tenant-chat-open')&&app.includes('tenant-chat-loaded')&&app.includes('data-chat-audio'));
 console.log('PASS: company chat AI consent, scoped late replies, employee rights, editable drafts, audio warnings and exact-request recovery.');

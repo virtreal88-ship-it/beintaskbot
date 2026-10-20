@@ -23,6 +23,20 @@ def configuration(data):
     if type(limit) is not int or not 1 <= limit <= 1000:
         raise TenantLinearError('Gündəlik limit 1–1000 olmalıdır.')
     result['daily_limit'] = limit
+    # Copilot shares the protected Chat AI credential and consent but owns its
+    # model and request budget. Older settings clients remain compatible.
+    copilot_enabled = data.get('copilot_enabled', True)
+    if type(copilot_enabled) is not bool:
+        raise TenantLinearError('AI Copilot ayarı düzgün deyil.')
+    result['copilot_enabled'] = copilot_enabled
+    copilot_model = data.get('copilot_model', result['model'])
+    if not isinstance(copilot_model, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', copilot_model):
+        raise TenantLinearError('AI Copilot modelinin adını yazın.')
+    result['copilot_model'] = copilot_model
+    copilot_limit = data.get('copilot_daily_limit', 50)
+    if type(copilot_limit) is not int or not 1 <= copilot_limit <= 1000:
+        raise TenantLinearError('AI Copilot üçün gündəlik sorğu limiti 1–1000 olmalıdır.')
+    result['copilot_daily_limit'] = copilot_limit
     hosts = data.get('media_hosts', [])
     if not isinstance(hosts, list) or len(hosts) > 20:
         raise TenantLinearError('Media domenləri düzgün deyil.')

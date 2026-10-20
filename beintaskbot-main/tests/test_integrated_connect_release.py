@@ -234,30 +234,27 @@ def test_manual_and_test_modes_never_send(flow,mode,test_mode):
         db.execute("INSERT INTO saas_ai_agent_connect_test_mode(tenant_id,enabled,verified,channel_id,conversation_id) VALUES(%s::uuid,TRUE,TRUE,%s,'client')",(A,CA))
     db.commit()
     f['inbound']('audio','');f['process']()
+    if mode=='manual':
+        f['speech'].assert_not_called()
+        f['send'].assert_not_called()
+        assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_drafts')[0]['n']==0
+        db.commit()
+        return
     f['speech'].assert_called_once()
     f['send'].assert_not_called()
     assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_drafts')[0]['n']==1
     db.commit()
 
 
-def test_reviewed_manual_draft_handoff_commits_before_finalizer(flow,monkeypatch):
+def test_manual_mode_no_longer_generates_inbound_drafts(flow,monkeypatch):
     f=flow;db=f['db']
     db.execute("UPDATE saas_ai_agents SET mode='manual'");db.commit()
     monkeypatch.setattr(worker,'enabled_triggers',lambda *a:[{'trigger_type':'phrase','condition':{'phrase':'Salam'},'actions':['handoff_after_reply']}])
     f['inbound']();f['process']()
-    draft=db.execute('SELECT id FROM saas_ai_agent_drafts')[0]['id'];db.commit()
-    reserved=agents.reserve_draft_send(PROFILE,draft)
-    assert reserved['handoff_after_send']
-    result=transport.send_ai_reply_if_active(A,41,CA,'client',reserved['draft'],reserved['id'],reserved['expected_revision'],
-        handoff_fingerprint=reserved['source_fingerprint'])
-    assert result and state(db)=='human'
-    assert len(store.listing(PROFILE)['tickets'])==1
-    agents.set_conversation_state(PROFILE,'client','active','resume','connect',CA)
-    assert agents.finish_draft_send(A,draft,'accepted')=='approved'
-    assert state(db)=='active'
-    agents.finish_draft_send(A,draft,'accepted')
-    f['send'].assert_called_once()
-    assert len(store.listing(PROFILE)['tickets'])==1
+    f['speech'].assert_not_called()
+    f['send'].assert_not_called()
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_drafts')[0]['n']==0
+    db.commit()
 
 def test_migrations_are_idempotent_and_existing_voice_receipts_survive(flow):
     import tenant_ai_agents_schema as schema
