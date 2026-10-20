@@ -1,0 +1,28 @@
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const {JSDOM}=require(process.env.SUPPORT_CASES_JSDOM||'jsdom');
+const script=fs.readFileSync('docs/tenant-knowledge-candidates.js','utf8');
+const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
+(async()=>{
+  const id='11111111-1111-4111-8111-111111111111',phone='+994501234567';
+  const candidate={id,version:1,status:'pending_review',title:'Printer issue',symptoms:['Label does not print'],resolution_steps:['Restart printer'],operator_actions:[],cause:{status:'unknown',text:''},outcome:{status:'confirmed',text:'Customer confirmed',message_ids:['m1']},work_status:'resolved',case_kind:'technical',source_message_ids:['m1'],start_message_id:'m1',end_message_id:'m1',customer_name:'Nicat Xaliqov',customer_phone:phone,company_name:'Go party',can_approve:true,clarification_status:'not_required'};
+  const evidence=[{id:'m1',role:'customer',sender_name:'Nicat Xaliqov',text:'Printer does not print',happened_at:'2026-10-19T10:00:00Z',channel_id:'channel-a',lead_id:41,conversation_id:'994501234567@s.whatsapp.net'}];
+  const dom=new JSDOM('<div id="supportCases"></div><span id="supportCasesPending"></span>',{url:'https://example.test/app',runScripts:'outside-only'}),{window:w}=dom,{document:d}=dom.window;
+  w.tenantI18n={language:'ru'};w.confirm=()=>true;w.TenantKnowledgeCampaigns={mount:async()=>{}};
+  w.fetch=async(url)=>{url=String(url);let result={};
+    if(url==='/api/platform/ai/dialogs')result={dialogs:[]};
+    else if(url==='/api/platform/ai/agents')result={agents:[]};
+    else if(url.startsWith('/api/platform/ai/channels'))result={channels:[{provider:'connect',channel_id:'channel-a',name:'WhatsApp'}]};
+    else if(url.includes('/dialogs/history'))result={messages:evidence.map(x=>({id:x.id,direction:'incoming',author_type:'customer',author_name:x.sender_name,body:x.text,happened_at:x.happened_at,source:'connect'})),next_before:null};
+    else if(url.includes('/'+id+'?'))result={candidate,evidence,route:{provider:'connect',channel_id:'channel-a',lead_id:41,conversation_id:'994501234567@s.whatsapp.net'}};
+    else result={candidates:[candidate,{...candidate,id:'22222222-2222-4222-8222-222222222222',customer_name:'Aysel Məmmədova',customer_phone:'',company_name:''}],next_before:null};
+    return {ok:true,status:200,json:async()=>({success:true,result})};
+  };
+  w.eval(script);d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{member:{tenant_id:'tenant-a',telegram_id:'42',role:'owner',tenant_name:'BeinSystems'}}}));await tick();await tick();
+  const cells=[...d.querySelector('.support-case').querySelectorAll('td')];
+  assert.match(cells[3].textContent,/Nicat Xaliqov/);assert.ok(cells[3].textContent.includes(phone));assert.equal(cells[4].textContent,'Go party');assert.doesNotMatch(cells[4].textContent,/BeinSystems/);
+  const missingPhone=[...d.querySelectorAll('.support-case')][1].querySelectorAll('td')[3].textContent;assert.match(missingPhone,/номер не указан/);
+  d.querySelector('[data-case-open]').click();await tick();await tick();
+  assert.equal(d.querySelector('[data-case-customer-summary]').textContent,'Nicat Xaliqov');assert.equal(d.querySelector('[data-case-customer-phone]').textContent,phone);
+  assert.doesNotMatch(d.querySelector('.case-dialog-heading').textContent,/@s\.whatsapp\.net|@g\.us/);
+  w.close();console.log('PASS: client and company match between case list and detail; no WhatsApp JID shown.');
+})().catch(error=>{console.error(error);process.exitCode=1;});
