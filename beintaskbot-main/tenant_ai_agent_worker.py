@@ -12,6 +12,7 @@ from tenant_ai_agent_crm_actions import execute_matching_actions
 from tenant_ai_agent_run_store import (claim_next, complete_run, defer_job,
     finish_unknown, finish_superseded, finish_sent, knowledge_context, record_token_usage,
     reserve_run, retry_or_fail, skip_job)
+from tenant_ai_agent_send import send_agent
 from tenant_chat_ai_policy import history
 from tenant_chat_ai_provider import ChatAIProviderError, INSTRUCTIONS, generate, transcribe
 from tenant_chat_ai_policy import audio as is_audio
@@ -353,6 +354,13 @@ async def process_one(job, kommo_request, wait_slot, logger):
             await asyncio.to_thread(finish_superseded,job,reservation,'conversation_advanced_during_generation')
             _test_diag(logger, job, 'job_superseded', 'conversation_advanced_during_generation')
             return
+        # The configured working window can close while generation is running.
+        # Requeue before any automated CRM action or response crosses the window.
+        final_open_at = _next_open(model_config.get('schedule') or {})
+        if final_open_at:
+            await asyncio.to_thread(defer_job,job,final_open_at,reservation)
+            _test_diag(logger,job,'job_deferred','outside_schedule_after_generation')
+            return
         phase = 'crm_execution'
         action_result=await execute_matching_actions(job,source,kommo_request,
             automatic=reservation['mode']=='automatic',crm_enabled=reservation['crm_actions_enabled'] is True,
@@ -388,12 +396,16 @@ async def process_one(job, kommo_request, wait_slot, logger):
             route={'talk_id':str(job['talk_id']),'chat_id':str(job['chat_id']),'origin':channel,
                    'message_id':source_id,'conversation_revision':reservation['conversation_revision'],
                    'event_fingerprint':job['event_fingerprint'],'revision':job['revision'],
+                   'source_happened_at':source['happened_at'],
+                   'schedule':model_config.get('schedule') or {},
+                   'handoff_after_reply':any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matched),
                    'text_hash':hashlib.sha256(str(draft).strip().encode('utf-8')).hexdigest()}
             try:
                 result=await send_agent(job,{**reservation,'route':route},str(draft)[:8000],kommo_request,
                     wait_slot,logger)
-                if any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matched):
-                    await asyncio.to_thread(handoff,job,'trigger_reply_sent_then_handoff')
+                if result.get('state')=='deferred':
+                    _test_diag(logger,job,'job_deferred','outside_schedule_before_send')
+                    return
                 logger.info('AI agent message accepted: tenant=%s agent=%s receipt=%s',tenant,job['agent_id'],result['state'])
                 _test_diag(logger, job, 'automatic_send', 'accepted')
                 return

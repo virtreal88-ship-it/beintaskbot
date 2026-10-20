@@ -214,15 +214,18 @@ def observe_kommo_outgoing(data, rows, *, fallback_domain=''):
                 if not allowed_event(cur,tenant,domain,event):
                     continue
                 chat=event['chat_id']
+                from tenant_ai_dialog_scope import lock_dialog
+                lock_dialog(cur,tenant,'kommo','',chat)
                 # A webhook can race the POST response. Exact body + chat + a
                 # sending receipt is used only to avoid mistaking our own reply
                 # for a human takeover; arbitrary outgoing messages still pause.
                 digest=hashlib.sha256(text.strip().encode('utf-8')).hexdigest()
                 cur.execute('''SELECT request_id,state,route FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid
-                  AND actor_id=0 AND (message_id=%s OR (state='sending' AND route->>'chat_id'=%s AND route->>'text_hash'=%s))
+                  AND actor_id=0 AND (message_id=%s OR (state IN ('sending','unknown') AND route->>'chat_id'=%s AND route->>'text_hash'=%s))
                   ORDER BY created_at DESC LIMIT 1 FOR UPDATE''',(tenant,message_id,chat,digest))
                 receipt=cur.fetchone()
                 if receipt:
+                    unresolved=receipt['state'] in {'sending','unknown'}
                     cur.execute("UPDATE saas_chat_send_receipts SET state='accepted',message_id=%s,updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=0 AND request_id=%s::uuid AND state IN ('sending','unknown')",(message_id,tenant,receipt['request_id']))
                     route=receipt.get('route') or {}
                     if route.get('event_fingerprint'):
@@ -230,6 +233,14 @@ def observe_kommo_outgoing(data, rows, *, fallback_domain=''):
                         cur.execute("UPDATE saas_ai_agent_jobs SET state='sent',lease_token=NULL,lease_until=NULL,error_code='',updated_at=now() WHERE tenant_id=%s::uuid AND event_fingerprint=%s AND revision=%s AND state IN ('processing','unknown')",(tenant,route['event_fingerprint'],route.get('revision')))
                         cur.execute("UPDATE saas_tenant_webhook_events SET state='completed',completed_at=now(),error_code='' WHERE tenant_id=%s::uuid AND fingerprint=%s",(tenant,route['event_fingerprint']))
                     cur.execute("UPDATE saas_ai_conversation_state SET last_agent_message_id=%s,updated_at=now() WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s",(message_id,tenant,chat))
+                    # Recover the atomic reply-and-stop transition if Kommo
+                    # accepted the POST but the worker died before committing it.
+                    if unresolved and route.get('handoff_after_reply'):
+                        cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s AND channel_id='' AND state='active' AND revision=%s RETURNING revision",(tenant,chat,route.get('conversation_revision')))
+                        if cur.fetchone():
+                            cur.execute("UPDATE saas_ai_agent_runs SET state='superseded',updated_at=now() WHERE tenant_id=%s::uuid AND state='generating' AND event_fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s)",(tenant,tenant,chat))
+                            cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='human_handoff' WHERE tenant_id=%s::uuid AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s AND state IN ('queued','processing'))",(tenant,tenant,chat))
+                            cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='human_handoff',updated_at=now() WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s AND state IN ('queued','processing')",(tenant,chat))
                     changed+=1
                     continue
                 cur.execute('''UPDATE saas_ai_conversation_state SET state='human',reason='manager_replied',revision=revision+1,updated_at=now()
