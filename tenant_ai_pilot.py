@@ -33,7 +33,8 @@ def automatic_send_allowed(job):
     if not _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED'):
         return True  # Existing deployments retain their existing policy.
     scope = configured_scope()
-    if not scope or competing_handler_state() != 'disabled':
+    if (not scope or competing_handler_state() != 'disabled'
+            or not _enabled('AI_AGENTS_PILOT_SEND_APPROVED')):
         return False
     tenant = str(job.get('tenant_id') or '')
     conversation = str(job.get('conversation_id') or job.get('chat_id') or '')
@@ -52,6 +53,7 @@ def preflight(profile):
             result = {'ready': False, 'provider': 'connect', 'pilot_guard_enabled': _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED'),
                       'scope_configured': bool(scope), 'competing_handler': competing_handler_state(),
                       'competing_handler_source': 'server_environment_attestation' if competing_handler_state() != 'unknown' else 'unavailable',
+                      'separate_owner_approval': _enabled('AI_AGENTS_PILOT_SEND_APPROVED'),
                       'auto_send': {'server': runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'), 'company': False},
                       'channel': 'unknown', 'conversation': 'unknown', 'agent': 'unknown',
                       'handoff': 'unknown', 'rollback': {'available': False, 'action': 'pause conversation'}, 'blockers': []}
@@ -102,5 +104,6 @@ def preflight(profile):
     if row.get('conversation_state') != 'active': result['blockers'].append('conversation_not_active_or_handed_off')
     if not result['pilot_guard_enabled']: result['blockers'].append('pilot_guard_not_armed')
     if result['competing_handler'] != 'disabled': result['blockers'].append('competing_handler_not_confirmed_disabled')
+    if not result['separate_owner_approval']: result['blockers'].append('separate_owner_approval_missing')
     result['ready'] = not result['blockers']
     return result

@@ -19,7 +19,7 @@ def test_existing_automatic_send_policy_is_unchanged_when_pilot_guard_is_off():
 
 
 def test_armed_guard_allows_only_the_exact_dialog_after_competing_handler_confirmation():
-    env=scope_env(AI_AGENTS_PILOT_COMPETING_HANDLER_STATE='disabled')
+    env=scope_env(AI_AGENTS_PILOT_COMPETING_HANDLER_STATE='disabled',AI_AGENTS_PILOT_SEND_APPROVED='true')
     job={'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'test-chat'}
     with patch.dict('os.environ',env,clear=True):
         assert pilot.automatic_send_allowed(job)
@@ -66,4 +66,5 @@ def test_preflight_is_read_only_and_unknown_kwid_blocks_readiness(monkeypatch):
     assert result['competing_handler']=='unknown'
     assert result['competing_handler_source']=='unavailable'
     assert 'competing_handler_not_confirmed_disabled' in result['blockers']
+    assert 'separate_owner_approval_missing' in result['blockers']
     assert conn.cur.sql and all(sql.lstrip().upper().startswith('SELECT') for sql in conn.cur.sql)
