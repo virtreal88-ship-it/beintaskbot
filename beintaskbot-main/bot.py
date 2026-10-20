@@ -18669,6 +18669,10 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_post('/api/platform/crm/native/tasks/{id}', native_tasks_api)
     app_web.router.add_post('/api/platform/integrations/connect/deactivate-webhooks', tenant_connect_deactivate_webhooks_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, is_connect_platform_admin))
     app_web.router.add_post('/api/platform/connect/webhook', tenant_connect_webhook_handler(logger))
+    from tenant_knowledge_pilot_admin import handler as support_case_pilot_admin_handler
+    app_web.router.add_route('*', '/api/platform/support-case-pilot', support_case_pilot_admin_handler(
+        _tenant_member_from_request, lambda profile: is_admin(profile.get('telegram_id')),
+        CANONICAL_WEB_ORIGIN, logger))
     from tenant_company_admin_api import handler as tenant_company_admin_handler
     company_admin_api = tenant_company_admin_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
     app_web.router.add_get('/api/platform/companies/manage', company_admin_api)
