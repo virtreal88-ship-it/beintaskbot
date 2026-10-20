@@ -46,6 +46,7 @@ ASSETS = (
     ('/assets/tenant-operator-dialogs.js', 'tenant-operator-dialogs.js', 'no-store'),
     ('/assets/tenant-knowledge-campaigns.js', 'tenant-knowledge-campaigns.js', 'no-store'),
     ('/assets/tenant-knowledge-candidates.js', 'tenant-knowledge-candidates.js', 'no-store'),
+    ('/assets/tenant-knowledge-pilot-admin.js', 'tenant-knowledge-pilot-admin.js', 'no-store'),
     ('/assets/tenant-support-inbox.js', 'tenant-support-inbox.js', 'no-store'),
     ('/assets/tenant-ai-reliability.js', 'tenant-ai-reliability.js', 'no-store'),
     ('/assets/tenant-night-integration.js', 'tenant-night-integration.js', 'no-store'),
