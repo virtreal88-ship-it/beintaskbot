@@ -15,11 +15,17 @@ def public(row):
 
 def _safe_group_name(item):
     """A group title may be absent, but a JID is never a display title."""
-    name = str(item.get('customer_name') or '').strip()
+    # Route rows from Connect and the support-case store carry provider
+    # metadata as display_name; customer_name is only a UI projection and is
+    # not present on every path. Prefer the explicit local override.
     conversation = str(item.get('conversation_id') or '').strip()
     phone = str(item.get('phone') or '').strip()
     technical = {conversation, conversation.split('@', 1)[0], phone}
-    return '' if name in technical else name
+    for candidate in (item.get('manual_display_name'),item.get('customer_name'),item.get('display_name')):
+        name=str(candidate or '').strip()
+        if name and name not in technical and '@' not in name:
+            return name
+    return ''
 
 
 def _manual_label(value):

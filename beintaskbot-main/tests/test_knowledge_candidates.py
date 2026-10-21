@@ -83,12 +83,23 @@ def test_case_customer_without_phone_or_company_reports_missing_values(ready):
 def test_group_case_never_displays_group_jid_or_arbitrarily_picks_sender(ready):
     db,_,_=ready;value=candidate(ready);group='120363000000000@g.us'
     db.execute("UPDATE saas_knowledge_extractions SET route=jsonb_set(route,'{conversation_id}',to_jsonb(%s::text)) WHERE tenant_id=%s::uuid AND id=%s::uuid",(group,A,value['extraction_id']))
-    db.execute("UPDATE saas_connect_conversations SET conversation_id=%s,conversation_kind='group',phone='' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND lead_id=41",(group,A,CA))
+    db.execute("UPDATE saas_connect_conversations SET conversation_id=%s,conversation_kind='group',phone='',display_name='Printer Support' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND lead_id=41",(group,A,CA))
     db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND external_id='m1'",(json.dumps({'participantJid':'994501111111@s.whatsapp.net','participantName':'Aysel'}),A))
     db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND external_id='response-1'",(json.dumps({'participantJid':'994502222222@s.whatsapp.net','participantName':'Murad'}),A));db.commit()
     result=store.listing(PROFILE,{'limit':25})['candidates'][0]
     assert result['customer_phone']=='' and result['customer_name']=='' and result['company_name']==''
+    assert result['conversation_name']=='Printer Support'
     assert '@' not in result['customer_name']
+    assert store.detail(PROFILE,value['id'])['candidate']['conversation_name']=='Printer Support'
+    # A shared group JID can exist on multiple tenant channels. Each case uses
+    # its own persisted channel title; opening a case never calls Evolution.
+    db.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'Second')",(A,CB))
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,display_name,conversation_kind) VALUES(%s::uuid,%s::uuid,%s,420,'Other group title','group')",(A,CB,group));db.commit()
+    assert store.listing(PROFILE,{'limit':25})['candidates'][0]['conversation_name']=='Printer Support'
+    db.execute("UPDATE saas_connect_conversations SET display_name='Renamed support group' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s",(A,CA,group));db.commit()
+    assert store.listing(PROFILE,{'limit':25})['candidates'][0]['conversation_name']=='Renamed support group'
+    db.execute("UPDATE saas_connect_conversations SET manual_display_name=%s WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s",(group,A,CA,group));db.commit()
+    assert store.detail(PROFILE,value['id'])['candidate']['conversation_name']=='Renamed support group'
 
 
 def test_boundary_adjustment_uses_exact_dialog_and_returns_human_summary(ready):
