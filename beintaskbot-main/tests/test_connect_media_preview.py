@@ -15,6 +15,14 @@ from tenant_linear_policy import TenantLinearError
 
 MID = str(uuid.UUID(int=901))
 
+
+@pytest.fixture(autouse=True)
+def clear_attachment_api_memory():
+    api.MEDIA_CACHE.clear()
+    api.MEDIA_CACHE_BYTES = 0
+    api.MEDIA_INFLIGHT.clear()
+    api.REQUESTS.clear()
+
 @pytest.fixture
 def media_db(db, monkeypatch):
     monkeypatch.setattr(store, '_connect', lambda: db)
@@ -143,6 +151,42 @@ def test_audio_preview(monkeypatch,kind):
     transport(monkeypatch,headers={'Content-Type':'audio/ogg'},chunks=[b'OggSopus'])
     audio=item();audio['row']['message_type']=kind
     assert run(media.download_media(audio))==(b'OggSopus','audio/ogg')
+
+
+@pytest.mark.parametrize('mime',[
+    'application/pdf', 'application/msword', 'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'text/plain', 'text/csv',
+])
+def test_attachment_preview_delivers_original_document_formats_without_expanding_ai_allowlist(monkeypatch,mime):
+    _factory,session=transport(monkeypatch,headers={'Content-Type':mime},chunks=[b'original'])
+    document=item();document['row']['message_type']='document'
+    assert run(media.download_media(document,preview_documents=True))==(b'original',mime)
+    assert mime in session.get.call_args.kwargs['headers']['Accept']
+
+
+def test_ai_document_allowlist_does_not_expand_with_preview_formats(monkeypatch):
+    transport(monkeypatch,headers={'Content-Type':'application/vnd.ms-excel'},chunks=[b'original'])
+    document=item();document['row']['message_type']='document'
+    with pytest.raises(TenantLinearError) as error:
+        run(media.download_media(document))
+    assert error.value.status==415
+
+
+def test_attachment_api_serves_office_file_as_download_with_original_filename(monkeypatch):
+    current=item();current['row']['message_type']='document'
+    current['row']['raw']={'message':{'documentMessage':{'fileName':'maintenance.xlsx'}}}
+    monkeypatch.setattr(api,'load',Mock(return_value=current))
+    fetched=AsyncMock(return_value=(b'original-xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'))
+    monkeypatch.setattr(media,'download_media',fetched)
+    handle=api.handler(lambda _:PROFILE,AsyncMock(),Mock())
+    request=SimpleNamespace(query={'lead_id':'41','message_id':'connect:'+MID,'expected_tenant_id':A,'expected_user_id':'11'},headers={})
+    response=run(handle(request))
+    assert response.status==200 and response.body==b'original-xlsx'
+    assert response.content_type=='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    assert response.headers['Content-Disposition']=='attachment; filename="maintenance.xlsx"; filename*=UTF-8\'\'maintenance.xlsx'
+    fetched.assert_awaited_once_with(current,preview_documents=True)
 
 
 def test_preview_api_rechecks_authority_without_kommo_or_ai(monkeypatch):
