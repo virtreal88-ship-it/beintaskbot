@@ -193,16 +193,24 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 tenant_agents = [a for a in tenant_agents if str(a['id']) == str(bound['agent_id'])]
             if group_fence:
                 tenant_agents = [a for a in tenant_agents if str(a['id']) == group_fence['primary_agent_id']]
-            # Manual mode is human-only. Test Mode can still exercise agents
-            # configured for automatic mode without enabling Manual Draft jobs.
-            enabled_agents = eligible_connect_agents(tenant_agents)
-            channel_agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id)]
-            agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id, is_group=is_group)]
+            # Manual mode is human-only. Keep it out of the background queue,
+            # but distinguish it from a disabled agent in the durable reason.
+            scoped_agents = [row for row in tenant_agents if scope_matches(row.get('scopes'), channel_id)]
+            enabled_scoped_agents = [row for row in scoped_agents if row.get('enabled') is True]
+            automatic_agents = eligible_connect_agents(enabled_scoped_agents)
+            group_agents = [row for row in automatic_agents
+                            if scope_matches(row.get('scopes'), channel_id, is_group=True)]
+            agents = group_agents if is_group else automatic_agents
             from tenant_ai_agent_schedule import current_candidates
-            agents = current_candidates(agents)
+            scheduled_agents = current_candidates(agents)
+            agents = scheduled_agents
             if not agents:
-                reason = ('agent_not_found' if not tenant_agents else 'agent_disabled' if not enabled_agents else
-                          'group_messages_not_allowed' if is_group and channel_agents else 'no_connect_scope')
+                reason = ('agent_not_found' if not tenant_agents else
+                          'no_connect_scope' if not scoped_agents else
+                          'agent_disabled' if not enabled_scoped_agents else
+                          'group_messages_not_allowed' if is_group and not group_agents else
+                          'manual_mode' if not automatic_agents else
+                          'outside_schedule' if not scheduled_agents else 'no_eligible_agent')
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code=%s WHERE tenant_id=%s::uuid AND fingerprint=%s", (reason, tenant, fingerprint))
             if not agents:
                 if connection is None:
