@@ -86,10 +86,43 @@ def get(profile,batch_id):
             items=cur.fetchall()
             for item in items:
                 if item['extraction_id']: item['extraction_id']=str(item['extraction_id'])
+            cur.execute("""SELECT
+              (SELECT count(DISTINCT e.id) FROM saas_knowledge_batch_items bi
+               JOIN saas_knowledge_extractions e ON e.tenant_id=bi.tenant_id AND e.id=bi.extraction_id
+               WHERE bi.tenant_id=%s::uuid AND bi.batch_id=%s::uuid AND e.created_at<%s) AS reused_results,
+              (SELECT count(*) FROM saas_knowledge_candidates c
+               WHERE c.tenant_id=%s::uuid AND c.extraction_id IN
+                 (SELECT DISTINCT extraction_id FROM saas_knowledge_batch_items WHERE tenant_id=%s::uuid AND batch_id=%s::uuid AND extraction_id IS NOT NULL)
+                 AND c.created_at>=%s) AS new_candidates,
+              (SELECT count(*) FROM (SELECT DISTINCT extraction_id FROM saas_knowledge_batch_items
+                WHERE tenant_id=%s::uuid AND batch_id=%s::uuid AND extraction_id IS NOT NULL) runs
+               JOIN saas_ai_agent_token_usage u ON u.tenant_id=%s::uuid AND u.run_id=runs.extraction_id) AS usage_runs,
+              (SELECT sum(u.input_tokens) FROM (SELECT DISTINCT extraction_id FROM saas_knowledge_batch_items
+                WHERE tenant_id=%s::uuid AND batch_id=%s::uuid AND extraction_id IS NOT NULL) runs
+               JOIN saas_ai_agent_token_usage u ON u.tenant_id=%s::uuid AND u.run_id=runs.extraction_id) AS input_tokens,
+              (SELECT sum(u.output_tokens) FROM (SELECT DISTINCT extraction_id FROM saas_knowledge_batch_items
+                WHERE tenant_id=%s::uuid AND batch_id=%s::uuid AND extraction_id IS NOT NULL) runs
+               JOIN saas_ai_agent_token_usage u ON u.tenant_id=%s::uuid AND u.run_id=runs.extraction_id) AS output_tokens,
+              (SELECT sum(u.total_tokens) FROM (SELECT DISTINCT extraction_id FROM saas_knowledge_batch_items
+                WHERE tenant_id=%s::uuid AND batch_id=%s::uuid AND extraction_id IS NOT NULL) runs
+               JOIN saas_ai_agent_token_usage u ON u.tenant_id=%s::uuid AND u.run_id=runs.extraction_id) AS total_tokens""",
+              (tenant,row['id'],row['created_at'],tenant,tenant,row['id'],row['created_at'],
+               tenant,row['id'],tenant,tenant,row['id'],tenant,tenant,row['id'],tenant,tenant,row['id'],tenant))
+            usage=cur.fetchone()
+    processed_routes={(str((item.get('route') or {}).get('channel_id') or ''),str((item.get('route') or {}).get('conversation_id') or '')) for item in items if isinstance(item.get('route'),dict)}
+    failed_items=sum(1 for item in items if item.get('error_code'))
+    usage_available=bool(usage and usage.get('usage_runs'))
+    summary={'dialog_count':len(processed_routes),'failed_items':failed_items,
+        'new_candidates':int((usage or {}).get('new_candidates') or 0),
+        'reused_results':int((usage or {}).get('reused_results') or 0),
+        'input_tokens':int(usage['input_tokens'] or 0) if usage_available else None,
+        'output_tokens':int(usage['output_tokens'] or 0) if usage_available else None,
+        'total_tokens':int(usage['total_tokens'] or 0) if usage_available else None,
+        'duplicates_skipped':None,'unprocessed_messages':None}
     return {'batch':{'id':str(row['id']),'status':'interrupted' if row['status']=='running' and row['expired'] else row['status'],
         'params':row['params'],'items':items,'continuations':row['continuations'],'routes_truncated':row['routes_truncated'],
         'message_count':sum(i['message_count'] for i in items),'error_code':'batch_interrupted' if row['status']=='running' and row['expired'] else '','limits':{'max_dialogs':4,'max_fragments':2 if row['params'].get('allow_paid_asr') else 4,'max_messages':160 if row['params'].get('allow_paid_asr') else 320,'max_reserved_tokens':48000 if row['params'].get('allow_paid_asr') else 64000},
-        'candidates_query':{'batch_id':str(row['id'])}}}
+        'candidates_query':{'batch_id':str(row['id'])},'summary':summary}}
 
 
 def process(profile,batch_id):
