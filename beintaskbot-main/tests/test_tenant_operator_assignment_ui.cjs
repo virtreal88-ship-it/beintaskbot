@@ -16,8 +16,10 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
   else if(u.pathname.endsWith('/dialogs/agent-assignment')){
    if(body){if(failOnce){failOnce=false;throw new Error('network failed');}route.agent_id=AGENT;route.agent_name='<b>Support</b>';route.agent_assignment=null;route.resume_allowed=true;route.available_actions=['resume'];result={agent_id:AGENT,state:'human'};}
    else result=choices;
-  }else if(u.pathname.endsWith('/dialogs/agent-assignment-bulk'))result=body?{total:1,assigned:1,skipped:0,outcomes:[]}:{summary:{total:4,assigned:1,one_candidate:1,multiple_candidates:1,no_candidate:1,group:0,handoff:1},eligible:[{customer_name:'Preview contact',agent_name:'Support agent'}],preview_token:'a'.repeat(64)};
+  }else if(u.pathname.endsWith('/dialogs/agent-assignment-bulk'))result=body?{total:1,assigned:1,skipped:0,outcomes:[]}:{channel_id:CA,agent_id:AGENT,summary:{total:4,assigned:1,one_candidate:1,multiple_candidates:1,no_candidate:1,group:0,handoff:1},skipped_reasons:{already_assigned:1,handoff:1},eligible:[{customer_name:'Preview contact',agent_name:'Support agent'}],preview_token:'a'.repeat(64)};
+  else if(u.pathname.endsWith('/agents'))result=[{id:AGENT,name:'Support agent',enabled:true,scopes:[{provider:'connect'}]}];
   else if(u.pathname.endsWith('/dialogs'))result={dialogs:[route],channels:[],agents:[],attention_count:1};
+  if(u.pathname.endsWith('/integrations/connect'))return{ok:true,status:200,json:async()=>({success:true,channels:[{id:CA,name:'Needed source',phone:'+994102135101',active:true,linked:true,phoneConflict:false},{id:'00000000-0000-0000-0000-000000000202',name:'Other source',phone:'+994102135103',active:true,linked:true,phoneConflict:false}]})};
   return{ok:true,status:200,json:async()=>({success:true,result:structuredClone(result)})};
  };
  w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await settle();
@@ -75,8 +77,11 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
  await w.tenantOperator.openDialog(route);assert.equal(d.querySelector('[data-operator-assign-agent]'),null);assert.match(d.querySelector('#operatorActionReason').textContent,/eligible/);
  member.role='owner';d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{member,capabilities:{modules:{dialogs:true,support:true}}}}));await settle();
  const bulk=d.querySelector('#operatorBulkAssignment');assert.equal(bulk.hidden,false,'only the owner can access bulk assignment preview');bulk.click();await settle();
- assert.match(d.querySelector('#operatorBulkPreview').textContent,/one candidate/i);assert.match(d.querySelector('#operatorBulkPreview').textContent,/Preview contact/);
- d.querySelector('#operatorBulkPreview button').click();await settle();assert.ok(calls.some(call=>call.path.endsWith('/agent-assignment-bulk')&&call.method==='POST'&&call.body.confirmed===true));
+ const bulkBox=d.querySelector('#operatorBulkPreview'),bulkSelects=bulkBox.querySelectorAll('select');assert.equal(bulkSelects[0].options.length,3,'bulk preview lists tenant-linked channel identities');
+ bulkSelects[0].value=CA;bulkSelects[1].value=AGENT;
+ [...bulkBox.querySelectorAll('button')].find(button=>button.className==='outline').click();await settle();
+ assert.match(bulkBox.textContent,/\+994102135101/);assert.match(bulkBox.textContent,/handoff: 1/);assert.match(bulkBox.textContent,/does not enable automatic replies|avtomatik cavabları aktivləşdirmir|не включает автоматические ответы/i);
+ [...bulkBox.querySelectorAll('button')].find(button=>button.className==='primary').click();await settle();assert.ok(calls.some(call=>call.path.endsWith('/agent-assignment-bulk')&&call.method==='POST'&&call.body.confirmed===true&&call.body.channel_id===CA&&call.body.agent_id===AGENT));
  assert.equal(calls.filter(call=>call.path.includes('/resume')||call.path.includes('/chat/send')).length,0,'bulk assignment preview/apply never resumes AI or sends messages');
  dom.window.close();console.log('PASS: channel-scoped assignment, XSS escaping, identity, retry token, separate Resume, RU/AZ/EN and safe unavailable state');
 })().catch(e=>{console.error(e);process.exitCode=1;});

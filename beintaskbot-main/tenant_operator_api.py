@@ -27,7 +27,7 @@ def handler(member_from_request,origin,logger,resource):
                 elif resource=='agent_assignment':
                     result=await asyncio.to_thread(assignment_options,profile,dict(query))
                 elif resource=='agent_assignment_bulk':
-                    result=await asyncio.to_thread(assignment_bulk_preview,profile)
+                    result=await asyncio.to_thread(assignment_bulk_preview,profile,query.get('channel_id'),query.get('agent_id'))
                 elif resource in {'legacy_recovery','legacy_continuation'}:
                     _expected(query,profile)
                     result=await asyncio.to_thread(continuation_options if resource=='legacy_continuation' else legacy_options,profile,dict(query))
