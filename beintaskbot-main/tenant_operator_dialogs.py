@@ -147,9 +147,9 @@ def projection(policy):
       SELECT 'connect'::text AS provider,c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
         COALESCE(NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
         ch.name AS channel_name,ch.active AS channel_active,'connect:'||c.connect_channel_id::text AS history_channel,
-        COALESCE(cs.agent_id,j.agent_id) AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,a.mode AS agent_mode,a.scopes AS agent_scopes,a.schedule AS agent_schedule,
+        CASE WHEN cs.agent_assignment_id IS NOT NULL THEN cs.agent_id ELSE COALESCE(cs.agent_id,j.agent_id) END AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,a.mode AS agent_mode,a.scopes AS agent_scopes,a.schedule AS agent_schedule,
         COALESCE(gc.state,cs.state,'active') AS state,COALESCE(gc.reason,cs.reason,'') AS reason,COALESCE(gc.updated_at,cs.updated_at) AS updated_at,
-        cs.tenant_id IS NOT NULL AS tracked,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,
+        cs.tenant_id IS NOT NULL AS tracked,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,s.operating_mode AS company_operating_mode,
         t.status AS tenant_status,j.state AS latest_job_state,COALESCE(j.error_code,'') AS latest_job_error,
         COALESCE(lm.last_message_at,c.last_message_at,c.created_at) AS last_message_at,
         ticket.assigned_to,tm.display_name AS assignee_name,
@@ -164,7 +164,7 @@ def projection(policy):
       LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id AND cs.channel_id=c.connect_channel_id::text
       LEFT JOIN LATERAL(SELECT j0.* FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=c.tenant_id AND j0.provider='connect'
         AND j0.channel_id=c.connect_channel_id::text AND j0.conversation_id=c.conversation_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
-      LEFT JOIN saas_ai_agents a ON a.tenant_id=c.tenant_id AND a.id=COALESCE(cs.agent_id,j.agent_id)
+      LEFT JOIN saas_ai_agents a ON a.tenant_id=c.tenant_id AND a.id=CASE WHEN cs.agent_assignment_id IS NOT NULL THEN cs.agent_id ELSE COALESCE(cs.agent_id,j.agent_id) END
       LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=c.tenant_id
       LEFT JOIN LATERAL(SELECT COALESCE(m.happened_at,m.created_at) AS last_message_at FROM saas_crm_messages m
         WHERE m.tenant_id=c.tenant_id AND m.kommo_lead_id=c.lead_id AND m.channel='connect:'||c.connect_channel_id::text
@@ -184,7 +184,7 @@ def projection(policy):
         COALESCE(NULLIF(d.contact_name,''),NULLIF(d.name,''),d.kommo_lead_id::text),''::text AS manual_display_name,COALESCE(d.phone,''),''::text AS conversation_kind,
         COALESCE(NULLIF(lm.channel,''),'Kommo'),TRUE,COALESCE(lm.channel,''),j.agent_id,a.name,a.enabled,a.mode,a.scopes,a.schedule,
         COALESCE(cs.state,'active'),COALESCE(cs.reason,''),cs.updated_at,cs.tenant_id IS NOT NULL,
-        s.enabled,s.emergency_stop,t.status,j.state,COALESCE(j.error_code,''),lm.last_message_at,
+        s.enabled,s.emergency_stop,s.operating_mode,t.status,j.state,COALESCE(j.error_code,''),lm.last_message_at,
         cs.assigned_to,tm.display_name,TRUE,
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=d.tenant_id AND i.provider='kommo' AND i.status='connected'),
         NULL::text,NULL::text,NULL::timestamptz,NULL::text,NULL::text,d.pipeline_id::text,d.status_id::text
@@ -254,9 +254,9 @@ def decorate(row):
             schedule_open=is_open(item.get('agent_schedule') or {})
         except (ValueError,TypeError,KeyError):
             schedule_open=False
-    operational=bool(item.get('agent_available') and item.get('channel_active') and item.get('connected')
+    operational=bool(item.get('agent_available') and item.get('channel_active') and item.get('unambiguous') and item.get('conversation_id') and item.get('connected')
         and item.get('company_enabled') and not item.get('company_emergency_stop')
-        and item.get('tenant_status')=='active' and runtime_flag('AI_AGENTS_ENABLED'))
+        and item.get('company_operating_mode')=='active' and item.get('tenant_status')=='active' and runtime_flag('AI_AGENTS_ENABLED'))
     if item.get('display_state')=='error':
         item['agent_status']='error'
     # Manual is an assigned operating mode, not an error state. Keep its blue
@@ -279,6 +279,7 @@ def decorate(row):
         elif item.get('tenant_status')!='active': item['agent_status_reason']='tenant_not_active'
         elif item.get('company_emergency_stop'): item['agent_status_reason']='emergency_stop'
         elif not item.get('company_enabled'): item['agent_status_reason']='company_ai_disabled'
+        elif item.get('company_operating_mode')!='active': item['agent_status_reason']='test_binding_required'
         elif item.get('agent_enabled') is not True: item['agent_status_reason']='agent_disabled'
         elif item.get('state') in {'human','paused'}: item['agent_status_reason']=item.get('reason') or ('human_handoff' if item['handoff_active'] else 'manager_pause')
         elif item.get('agent_mode')=='automatic' and not schedule_open: item['agent_status_reason']='outside_schedule'
@@ -312,7 +313,7 @@ def apply_group_view(cur,tenant,dialog):
     from tenant_ai_group_coordination import view
     from tenant_ai_agent_access import tenant_status_allows_ai
     g=view(cur,tenant,dialog['conversation_id']);dialog['group_coordination']=g
-    cur.execute('SELECT name,mode,enabled,scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,g['primary_agent_id']))
+    cur.execute('SELECT name,mode,enabled,scopes,schedule FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,g['primary_agent_id']))
     primary_agent=dict(cur.fetchone() or {});name=primary_agent.get('name');g['primary_agent_name']=name
     dialog.update(agent_mode=primary_agent.get('mode'),agent_enabled=primary_agent.get('enabled'),agent_scopes=primary_agent.get('scopes'))
     dialog['agent_available']=_agent_scope_available(dialog)
@@ -338,13 +339,23 @@ def apply_group_view(cur,tenant,dialog):
         dialog['agent_status']='needs_assignment'
         dialog['agent_status_reason']='assignment_required'
     else:
-        dialog['agent_status']='manual' if primary_agent.get('mode')=='manual' and primary_agent.get('enabled') else 'automatic' if primary_agent.get('mode')=='automatic' and usable and state=='active' else 'attention'
+        schedule_open=True
+        if primary_agent.get('mode')=='automatic':
+            try:
+                from tenant_ai_agent_schedule import is_open
+                schedule_open=is_open(primary_agent.get('schedule') or {})
+            except (ValueError,TypeError,KeyError):schedule_open=False
+        dialog['agent_status']='manual' if primary_agent.get('mode')=='manual' and primary_agent.get('enabled') else 'automatic' if primary_agent.get('mode')=='automatic' and usable and dialog.get('company_operating_mode')=='active' and schedule_open and state=='active' else 'attention'
         dialog['agent_status_reason']='' if dialog['agent_status'] in {'manual','automatic'} else (g.get('reason') or 'connect_admission_blocked')
+        if dialog['agent_status']=='attention' and primary_agent.get('mode')=='automatic' and not schedule_open:
+            dialog['agent_status_reason']='outside_schedule'
+        elif dialog['agent_status']=='attention' and primary_agent.get('mode')=='automatic' and dialog.get('company_operating_mode')!='active':
+            dialog['agent_status_reason']='test_binding_required'
     return dialog
 
 
 def listing(profile,search='',channel='',agent='',state='',offset=0):
-    if state not in {'','active','paused','human','blocked','error','unmanaged','attention'}: raise TenantLinearError('Некорректный статус.')
+    if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
     with _connect() as conn:
         ensure_schema(conn)
@@ -362,11 +373,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
             where,args=[],[]
             if search:where.append("concat_ws(' ',customer_name,phone,conversation_id) ILIKE %s");args.append('%'+str(search)[:200]+'%')
             if channel:where.append("provider||':'||channel_id=%s");args.append(str(channel)[:250])
-            if agent=='unassigned':where.append('agent_id IS NULL')
-            elif agent:where.append('agent_id=%s::uuid');args.append(identifier(agent))
-            if state=='attention':where.append("display_state IN ('human','paused','blocked','error')")
-            elif state:where.append('display_state=%s');args.append(state)
-            cur.execute(sql+"SELECT * FROM (SELECT visible.*,row_number() OVER(PARTITION BY CASE WHEN provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$' THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END ORDER BY last_message_at DESC NULLS LAST,lead_id) AS logical_rank FROM visible"+(' WHERE '+' AND '.join(where) if where else '')+') folded WHERE logical_rank=1 ORDER BY last_message_at DESC NULLS LAST,provider,lead_id LIMIT 51 OFFSET %s',(*params,*args,offset))
+            cur.execute(sql+"SELECT * FROM (SELECT visible.*,row_number() OVER(PARTITION BY CASE WHEN provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$' THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END ORDER BY last_message_at DESC NULLS LAST,lead_id) AS logical_rank FROM visible"+(' WHERE '+' AND '.join(where) if where else '')+') folded WHERE logical_rank=1 ORDER BY last_message_at DESC NULLS LAST,provider,lead_id',(*params,*args))
             rows=cur.fetchall()
             from tenant_ai_group_coordination import group_jid,view as group_view
             rows=[decorate(r) for r in rows]
@@ -375,6 +382,10 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
                     apply_group_view(cur,tenant,r)
                     from tenant_operator_assignment import group_options_in_transaction
                     r['group_assignment_preview']=group_options_in_transaction(cur,tenant,r['channel_id'],r['conversation_id'])
+                    if not r.get('agent_id') and not r.get('group_coordination',{}).get('assignments'):
+                        candidates=r['group_assignment_preview'].get('agents') or []
+                        r['agent_status']='needs_assignment' if candidates else 'no_agent'
+                        r['agent_status_reason']='assignment_required' if candidates else r['group_assignment_preview'].get('reason') or ''
                 elif r['provider']=='connect' and not r.get('agent_id') and r.get('unambiguous') and r.get('controls_allowed'):
                     # Surface the same read-only candidate choices used by the
                     # card for every page of existing dialogues. Never bind or
@@ -386,8 +397,20 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
                     r['agent_status']='needs_assignment' if r['agent_assignment'].get('agents') else 'no_agent'
                     r['agent_status_reason']=('assignment_required' if len(r['agent_assignment'].get('agents') or [])==1 else
                       'agent_selection_required' if len(r['agent_assignment'].get('agents') or [])>1 else r['agent_assignment'].get('reason') or '')
+            for r in rows:
+                if r.get('agent_id') and r.get('agent_name') and not any(str(a.get('id'))==str(r['agent_id']) for a in agents):
+                    agents.append({'id':str(r['agent_id']),'name':r['agent_name']})
+            if agent=='unassigned':rows=[r for r in rows if not r.get('agent_id')]
+            elif agent:
+                selected_agent=identifier(agent)
+                rows=[r for r in rows if str(r.get('agent_id') or '')==selected_agent]
+            rows=[r for r in rows if not state or r.get('agent_status')==state]
+            agents.sort(key=lambda item:str(item.get('name') or '').casefold())
+            total_count=len(rows)
+            rows=rows[offset:offset+51]
     return {'dialogs':rows[:50],'channels':channels,'agents':agents,
-            'attention_count':count,'next_offset':offset+50 if len(rows)>50 else None}
+            'attention_count':count,'total_count':total_count,
+            'next_offset':offset+50 if len(rows)>50 else None}
 
 
 def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None):
@@ -412,6 +435,10 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 apply_group_view(cur,tenant,dialog)
                 from tenant_operator_assignment import group_options_in_transaction
                 dialog['group_assignment_preview']=group_options_in_transaction(cur,tenant,channel,conversation)
+                if not dialog.get('agent_id') and not dialog.get('group_coordination',{}).get('assignments'):
+                    candidates=dialog['group_assignment_preview'].get('agents') or []
+                    dialog['agent_status']='needs_assignment' if candidates else 'no_agent'
+                    dialog['agent_status_reason']='assignment_required' if candidates else dialog['group_assignment_preview'].get('reason') or ''
                 try:
                     from tenant_ai_agents_store import _authorize
                     _authorize(cur,profile)

@@ -116,16 +116,46 @@ def test_assignment_is_separate_from_handoff_and_sends_nothing(operator_db):
 
 def test_dialog_filters_counters_and_ticket_search(operator_db):
     seed_job(operator_db)
-    assert dialogs.listing(PROFILE,agent=AGENT,state='active')['dialogs'][0]['agent_id']==AGENT
+    result=dialogs.listing(PROFILE,agent=AGENT,state='manual')
+    assert result['dialogs'][0]['agent_id']==AGENT and result['total_count']==1
     assert dialogs.listing(PROFILE,channel='connect:'+CB)['dialogs']==[]
     assert dialogs.listing(PROFILE,search='CLIENT')['dialogs']
     agents.set_conversation_state(PROFILE,'client','paused',provider='connect',channel_id=CA)
+    assert dialogs.listing(PROFILE,state='manual')['total_count']==1
+    assert dialogs.listing(PROFILE,state='attention')['total_count']==0
     assert dialogs.listing(PROFILE,state='attention')['attention_count']==1
     agents.set_conversation_state(PROFILE,'client','human',provider='connect',channel_id=CA)
     result=tickets.listing(PROFILE,search='Internet',channel_id=CA)
     assert result['unresolved_count']==1 and len(result['tickets'])==1
     assert tickets.listing(PROFILE,search='not-here')['tickets']==[]
     assert tickets.listing(PROFILE,channel_id=CB)['tickets']==[]
+
+
+def test_normalized_status_filter_runs_before_pagination_and_returns_total(operator_db):
+    import uuid
+    db=operator_db
+    db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,operating_mode) VALUES(%s::uuid,TRUE,'active') ON CONFLICT(tenant_id) DO UPDATE SET enabled=TRUE,operating_mode='active'",(A,))
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT(tenant_id,provider) DO UPDATE SET status='connected'",(A,))
+    db.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled,mode,scopes) VALUES(%s::uuid,%s::uuid,'Manual agent',11,TRUE,'manual',%s::jsonb)",(A,AGENT,json.dumps([{'provider':'connect','channel_id':CA}])))
+    for index in range(55):
+        db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,%s,%s)",(A,CA,'filter-'+str(index),1000+index))
+    db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,agent_id,state) VALUES(%s::uuid,'connect',%s,'filter-54',%s::uuid,'paused')",(A,CA,AGENT));db.commit()
+    first=dialogs.listing(PROFILE,state='manual',offset=0)
+    assert first['total_count']==1 and [row['conversation_id'] for row in first['dialogs']]==['filter-54']
+    assert first['next_offset'] is None
+    needing=dialogs.listing(PROFILE,channel='connect:'+CA,state='needs_assignment',offset=0)
+    assert needing['total_count']==55 and len(needing['dialogs'])==50 and needing['next_offset']==50
+    second=dialogs.listing(PROFILE,channel='connect:'+CA,state='needs_assignment',offset=50)
+    assert second['total_count']==55 and len(second['dialogs'])==5 and second['next_offset'] is None
+
+
+def test_automatic_agent_in_test_mode_is_not_classified_as_live_automatic(operator_db):
+    seed_job(operator_db)
+    operator_db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT(tenant_id,provider) DO UPDATE SET status='connected'",(A,))
+    operator_db.execute("UPDATE saas_ai_agents SET mode='automatic' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));operator_db.commit()
+    row=dialogs.listing(PROFILE,state='attention')['dialogs'][0]
+    assert row['agent_status']=='attention' and row['agent_status_reason']=='test_binding_required'
+    assert dialogs.listing(PROFILE,state='automatic')['total_count']==0
 
 
 @pytest.mark.parametrize('case',['archived','inactive','missing_permission','foreign_tenant'])

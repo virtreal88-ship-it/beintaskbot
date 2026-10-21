@@ -54,27 +54,16 @@ def read(cur, tenant, conversation):
 
 
 def choose(assignments, agents, *, now=None):
-    """Use actual agent schedules. Equal winning priorities are ambiguous."""
-    from tenant_ai_agent_schedule import is_open
+    """Return the sole valid primary binding; legacy multi-slot state is ambiguous."""
     from tenant_ai_agent_connect import scope_matches
-    eligible = []
-    for assignment in assignments:
-        agent = agents.get(str(assignment.get('agent_id')))
-        if not agent or not agent.get('enabled') or agent.get('role', 'primary') != 'primary':
-            continue
-        if not scope_matches(agent.get('scopes'), assignment.get('channel_id'), is_group=True):
-            continue
-        try:
-            if not is_open(agent.get('schedule') or {}, now=now):
-                continue
-        except (ValueError, TypeError, KeyError):
-            return None
-        eligible.append(assignment)
-    if not eligible:
+    if not isinstance(assignments, list) or len(assignments) != 1:
         return None
-    priority = max(a['priority'] for a in eligible)
-    winners = [a for a in eligible if a['priority'] == priority]
-    return winners[0] if len(winners) == 1 else None
+    assignment = assignments[0]
+    agent = agents.get(str(assignment.get('agent_id')))
+    if (not agent or not agent.get('enabled') or agent.get('role', 'primary') != 'primary'
+            or not scope_matches(agent.get('scopes'), assignment.get('channel_id'), is_group=True)):
+        return None
+    return assignment
 
 
 def authority(cur, tenant, channel, conversation, agent_id=None, expected_revision=None, *, allow_stopped=False):
@@ -218,18 +207,15 @@ def configure(profile, data):
     from tenant_linear_policy import identifier
     conversation = group_jid(data.get('conversation_id'))
     slots = data.get('assignments')
-    if not conversation or not isinstance(slots, list) or not 1 <= len(slots) <= 8:
-        raise TenantLinearError('Укажите проверенную группу и от одного до восьми назначений.', 400)
+    if not conversation or not isinstance(slots, list) or len(slots) > 1:
+        raise TenantLinearError('Укажите проверенную группу и не более одного основного агента.', 400)
     if type(data.get('expected_revision')) is not int or data['expected_revision']<0:
         raise TenantLinearError('Требуется актуальная версия состояния.',400)
     normalized = []
     for slot in slots:
         if not isinstance(slot,dict):
             raise TenantLinearError('Некорректное назначение.',400)
-        priority = slot.get('priority')
-        if type(priority) is not int or not 0 <= priority <= 100:
-            raise TenantLinearError('Укажите явный приоритет 0–100.', 400)
-        normalized.append({'agent_id':identifier(slot.get('agent_id')), 'channel_id':channel_scope('connect',slot.get('channel_id')), 'priority':priority})
+        normalized.append({'agent_id':identifier(slot.get('agent_id')), 'channel_id':channel_scope('connect',slot.get('channel_id')), 'priority':0})
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -246,10 +232,17 @@ def configure(profile, data):
                     raise TenantLinearError('Канал группы не подтверждён.', 409)
                 cur.execute('SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE', (tenant, slot['agent_id']))
                 agent = cur.fetchone()
-                if not agent or agent.get('role','primary') != 'primary' or not scope_matches(agent['scopes'], slot['channel_id'], is_group=True):
+                if not agent or agent.get('enabled') is not True or agent.get('role','primary') != 'primary' or not scope_matches(agent['scopes'], slot['channel_id'], is_group=True):
                     raise TenantLinearError('Агент не имеет права работать с группами этого канала.', 409)
-            # Any change fences all prepared responses and leaves AI stopped.
-            stop(cur, tenant, conversation, state='human' if existing.get('state') == 'human' else 'paused', reason='group_assignment_changed', actor=actor)
+            old=existing.get('assignments') or []
+            if len(old)==len(normalized)==1 and str(old[0].get('agent_id'))==str(normalized[0]['agent_id']) and str(old[0].get('channel_id'))==str(normalized[0]['channel_id']):
+                return {'revision':int(existing.get('revision',0)), 'state':existing.get('state','paused'), 'unchanged':True}
+            # Any change fences prepared responses without resuming AI or erasing an existing handoff.
+            current_state=existing.get('state') or 'paused'
+            next_state='human' if current_state=='human' else 'paused'
+            next_reason=existing.get('reason') if current_state in {'human','paused'} else 'group_assignment_changed'
+            stop(cur, tenant, conversation, state=next_state, reason=next_reason or 'group_assignment_changed',
+                 actor=existing.get('assigned_to') if current_state=='human' else actor)
             cur.execute("UPDATE saas_ai_group_coordination SET assignments=%s::jsonb WHERE tenant_id=%s::uuid AND provider='connect' AND group_jid=%s", (_json(normalized), tenant, conversation))
             _audit(cur,tenant,actor,'ai_group_configured','conversation',conversation,{'assignments':normalized})
             return {'revision':read(cur,tenant,conversation)['revision'], 'state':read(cur,tenant,conversation)['state']}

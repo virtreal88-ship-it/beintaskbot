@@ -35,7 +35,13 @@ assert.match(ui,/operator-handoff-badge/,'handoff is shown as a separate badge, 
 assert.match(ui,/operator-state\[data-state=manual\]/,'manual mode receives a distinct blue status');
 assert.match(ui,/agent_assignment\.reason/,'unavailable assignment displays its concrete eligibility reason');
 assert.match(ui,/resumeUiAllowed=actions\.has\('resume'\)&&route\.agent_mode!=='manual'/,'Manual agents are not offered a misleading Resume action');
-assert.match(ui,/\['attention','active','blocked','error','unmanaged'\]/,'internal paused and handoff states are not exposed as AI modes in the filter');
+assert.match(ui,/\['automatic','manual','needs_assignment','attention','no_agent'\]/,'status filter uses normalized agent states');
+assert.match(ui,/operatorResultsCount/,'dialogue list displays the server result count');
+assert.match(ui,/filterNeedsAssignment/,'status options have a localized assignment state');
+assert.match(ui,/expected_revision:revision,assignments:next/,'group settings save a single selected primary agent');
+assert.doesNotMatch(ui,/groupShift|groupPriority|groupAdvanced/,'group settings no longer expose shift or priority controls');
+assert.match(ui,/agent_id:nextValue\|\|null/,'personal dialogue assignment can be changed or removed');
+assert.match(ui,/groupConfirmRemove/,'removing a primary agent requires confirmation');
 assert.match(l10n,/verified_employee_reply:'reasonHumanHandoff'/,'confirmed employee handoff remains distinct from an ordinary employee reply');
 assert.match(ui,/operatorAIReply/,'AI reply has a dedicated composer action');
 assert.doesNotMatch(ui,/operatorCopilotInsert|data-copilot-mode=\"reply/,'Copilot panel does not duplicate AI reply or insertion actions');

@@ -38,6 +38,9 @@ def test_configuration_pauses_resume_and_cross_channel_dedup(group):
         assert groups.admit(c,A,CB,G,'SAME_EVENT') is None
         assert groups.admit(c,A,CA,G,'SAME_EVENT')
         assert groups.admit(c,A,CA,G,'SAME_EVENT') is None
+    current=groups.read(d.cursor(),A,G)
+    unchanged=groups.configure(PROFILE,config(expected_revision=int(current['revision'])))
+    assert unchanged['unchanged'] and unchanged['state']=='active' and unchanged['revision']==current['revision']
     d.commit()
 
 def test_human_on_either_channel_fences_group_only(group):
@@ -54,15 +57,20 @@ def test_human_on_either_channel_fences_group_only(group):
     assert d.execute("SELECT * FROM saas_ai_conversation_state WHERE conversation_id='client'")==before
     d.commit();group['send'].assert_not_called()
 
-def test_schedule_priority_and_midnight():
+def test_legacy_shift_slots_are_ambiguous_and_schedule_never_selects_primary():
     slots=[{'agent_id':'day','channel_id':CA,'priority':10},{'agent_id':'night','channel_id':CA,'priority':10}]
     def agent(schedule):return {'enabled':True,'scopes':[{'provider':'connect','channel_id':CA,'allow_group_messages':True}],'schedule':schedule}
     aa={'day':agent({'timezone':'UTC','days':[0],'start':'08:00','end':'22:00'}),'night':agent({'timezone':'UTC','days':[0],'start':'22:00','end':'08:00'})}
-    assert groups.choose(slots,aa,now=datetime(2026,10,20,2,tzinfo=timezone.utc))['agent_id']=='night'
-    aa['day']['schedule']={};aa['night']['schedule']={}
     assert groups.choose(slots,aa) is None
-    slots[1]['priority']=20
-    assert groups.choose(slots,aa)['agent_id']=='night'
+    assert groups.choose([slots[0]],aa,now=datetime(2026,10,20,2,tzinfo=timezone.utc))['agent_id']=='day'
+    slots[1]['priority']=100
+    assert groups.choose(slots,aa) is None
+
+
+def test_group_configuration_rejects_multiple_primary_agents(group):
+    with pytest.raises(TenantLinearError):
+        groups.configure(PROFILE,config(assignments=[{'agent_id':AGENT,'channel_id':CA},
+            {'agent_id':AGENT2,'channel_id':CB}]))
 
 @pytest.mark.parametrize('jid',['same name','123@lid','123@s.whatsapp.net','abc@g.us','120363431037910651@g.us.attacker'])
 def test_unverified_identity(jid):assert groups.group_jid(jid) is None
@@ -83,6 +91,17 @@ def test_stale_config_and_old_jobs(group):
     with group['db'].cursor() as c:
         assert not groups.job_allowed(c,{'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':G,'agent_id':AGENT})
         assert groups.job_allowed(c,{'provider':'kommo','conversation_id':G})
+
+
+def test_single_agent_edit_preserves_handoff_and_assignee(group):
+    d=group['db'];groups.configure(PROFILE,config())
+    with d.cursor() as cur:
+        groups.stop(cur,A,G,state='human',reason='customer_requested_manager',actor=11)
+        d.commit()
+    current=groups.read(d.cursor(),A,G)
+    groups.configure(PROFILE,config(expected_revision=int(current['revision'])))
+    state=groups.read(d.cursor(),A,G)
+    assert state['state']=='human' and state['reason']=='customer_requested_manager' and state['assigned_to']==11
 
 
 def incoming(f,channel,external):
@@ -144,16 +163,23 @@ def test_worker_one_group_two_channels(group,mode):
     assert len(drafts)==0
 
 
-def test_delivery_reservation_is_durable_and_scope_checked(group):
+def test_manual_group_agent_is_assigned_without_background_processing(group):
     f=group;d=f['db'];d.execute("UPDATE saas_ai_agents SET mode='manual' WHERE tenant_id=%s::uuid",(A,));d.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid",(A,));d.commit()
     groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
-    assert incoming(f,CA,'SEND_ONCE_ONLY')==1
-    f['process']()
-    draft=d.execute('SELECT id FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid',(A,))[0]['id'];d.commit()
-    assert not groups.reserve_delivery(A,CB,G,draft)
-    assert groups.reserve_delivery(A,CA,G,draft)
-    assert not groups.reserve_delivery(A,CA,G,draft)
-    assert not groups.reserve_delivery(B,CA,G,draft)
+    assert incoming(f,CA,'MANUAL_NO_BACKGROUND')==0
+    assert groups.view(d.cursor(),A,G)['primary_agent_id']==AGENT
+    f['process']();f['send'].assert_not_called();f['generate'].assert_not_called()
+    assert not d.execute('SELECT * FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid',(A,));d.commit()
+
+
+def test_delivery_reservation_remains_tenant_and_channel_scoped(group):
+    f=group;d=f['db'];d.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid",(A,));d.commit()
+    groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    assert incoming(f,CA,'SEND_ONCE_ONLY')==1;f['process']()
+    run=d.execute('SELECT id FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid',(A,))[0]['id'];d.commit()
+    assert not groups.reserve_delivery(A,CB,G,run)
+    assert not groups.reserve_delivery(B,CA,G,run)
+    assert not groups.reserve_delivery(A,CA,G,run)
 
 
 def test_pre_resume_event_seen_on_secondary_never_replayed(group):
@@ -235,11 +261,14 @@ def test_manual_group_handoff_is_idempotent_across_channels(group):
 
 def test_schedule_switch_never_resumes_human_group(group,monkeypatch):
     d=group['db'];slots=[{'agent_id':AGENT,'channel_id':CA,'priority':10},{'agent_id':AGENT2,'channel_id':CB,'priority':20}]
-    groups.configure(PROFILE,config(assignments=slots));agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
-    assert incoming(group,CA,'NON_PRIMARY')==0
-    assert incoming(group,CB,'NIGHT_PRIMARY')==1
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,config(assignments=slots))
+    groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
+    with d.cursor() as c:
+        assert groups.authority(c,A,CA,G,AGENT)
+        assert groups.authority(c,A,CB,G,AGENT2) is None
+    d.commit()
     agents.set_conversation_state(PROFILE,G,'human',provider='connect',channel_id=CA)
-    d.execute('UPDATE saas_ai_agents SET enabled=FALSE WHERE id=%s::uuid',(AGENT2,));d.commit()
+    d.execute('UPDATE saas_ai_agents SET enabled=FALSE WHERE id=%s::uuid',(AGENT,));d.commit()
     assert incoming(group,CA,'DAY_AFTER_HANDOFF')==0
     with d.cursor() as c:assert groups.read(c,A,G)['state']=='human'
     d.commit()
