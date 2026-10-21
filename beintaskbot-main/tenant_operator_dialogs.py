@@ -147,7 +147,7 @@ def projection(policy):
       SELECT 'connect'::text AS provider,c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
         COALESCE(NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
         ch.name AS channel_name,ch.active AS channel_active,'connect:'||c.connect_channel_id::text AS history_channel,
-        COALESCE(cs.agent_id,j.agent_id) AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,a.mode AS agent_mode,a.scopes AS agent_scopes,
+        COALESCE(cs.agent_id,j.agent_id) AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,a.mode AS agent_mode,a.scopes AS agent_scopes,a.schedule AS agent_schedule,
         COALESCE(gc.state,cs.state,'active') AS state,COALESCE(gc.reason,cs.reason,'') AS reason,COALESCE(gc.updated_at,cs.updated_at) AS updated_at,
         cs.tenant_id IS NOT NULL AS tracked,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,
         t.status AS tenant_status,j.state AS latest_job_state,COALESCE(j.error_code,'') AS latest_job_error,
@@ -182,7 +182,7 @@ def projection(policy):
       UNION ALL
       SELECT 'kommo',COALESCE(j.channel_id,lm.channel,''),COALESCE(j.conversation_id,''),d.kommo_lead_id,
         COALESCE(NULLIF(d.contact_name,''),NULLIF(d.name,''),d.kommo_lead_id::text),''::text AS manual_display_name,COALESCE(d.phone,''),''::text AS conversation_kind,
-        COALESCE(NULLIF(lm.channel,''),'Kommo'),TRUE,COALESCE(lm.channel,''),j.agent_id,a.name,a.enabled,a.mode,a.scopes,
+        COALESCE(NULLIF(lm.channel,''),'Kommo'),TRUE,COALESCE(lm.channel,''),j.agent_id,a.name,a.enabled,a.mode,a.scopes,a.schedule,
         COALESCE(cs.state,'active'),COALESCE(cs.reason,''),cs.updated_at,cs.tenant_id IS NOT NULL,
         s.enabled,s.emergency_stop,t.status,j.state,COALESCE(j.error_code,''),lm.last_message_at,
         cs.assigned_to,tm.display_name,TRUE,
@@ -204,7 +204,8 @@ def projection(policy):
       WHEN agent_id IS NULL THEN 'unmanaged'
       WHEN latest_job_state IN ('failed','unknown') AND latest_job_error<>'' THEN 'error'
       WHEN NOT COALESCE(company_enabled,FALSE) OR COALESCE(company_emergency_stop,FALSE) OR NOT COALESCE(agent_enabled,FALSE)
-        OR NOT %s OR (latest_job_state='skipped' AND latest_job_error<>'') THEN 'blocked'
+        OR NOT %s OR COALESCE(tenant_status,'')<>'active' OR NOT COALESCE(channel_active,FALSE)
+        OR NOT COALESCE(connected,FALSE) THEN 'blocked'
       ELSE 'active' END AS display_state FROM routes) '''
     return sql,params
 
@@ -246,6 +247,43 @@ def decorate(row):
                              'contact' if item.get('provider') == 'connect' else 'contact')
     if item.get('provider') == 'connect' and item.get('unambiguous') is False:
         item.update(display_state='blocked', display_reason='legacy_channel_ambiguous', resume_allowed=False, resume_block_reason='legacy_channel_ambiguous')
+    schedule_open=True
+    if item.get('agent_mode')=='automatic':
+        try:
+            from tenant_ai_agent_schedule import is_open
+            schedule_open=is_open(item.get('agent_schedule') or {})
+        except (ValueError,TypeError,KeyError):
+            schedule_open=False
+    operational=bool(item.get('agent_available') and item.get('channel_active') and item.get('connected')
+        and item.get('company_enabled') and not item.get('company_emergency_stop')
+        and item.get('tenant_status')=='active' and runtime_flag('AI_AGENTS_ENABLED'))
+    if item.get('display_state')=='error':
+        item['agent_status']='error'
+    # Manual is an assigned operating mode, not an error state. Keep its blue
+    # identity even when a stop rule, handoff, schedule, or admission gate
+    # currently prevents automatic processing; those details stay in reason.
+    elif item.get('agent_id') and item.get('agent_enabled') is True and item.get('agent_mode')=='manual':
+        item['agent_status']='manual'
+    elif item.get('agent_id') and item.get('agent_mode')=='automatic' and operational and schedule_open and item.get('state')=='active' and item.get('display_state')=='active':
+        item['agent_status']='automatic'
+    elif item.get('agent_id'):
+        item['agent_status']='attention'
+    elif item.get('display_reason')=='legacy_channel_ambiguous':
+        item['agent_status']='attention'
+    else:
+        item['agent_status']='no_agent'
+    item['agent_status_reason']=''
+    if item['agent_status']=='attention':
+        if not item.get('channel_active'): item['agent_status_reason']='channel_inactive'
+        elif not item.get('connected'): item['agent_status_reason']='integration_disconnected'
+        elif item.get('tenant_status')!='active': item['agent_status_reason']='tenant_not_active'
+        elif item.get('company_emergency_stop'): item['agent_status_reason']='emergency_stop'
+        elif not item.get('company_enabled'): item['agent_status_reason']='company_ai_disabled'
+        elif item.get('agent_enabled') is not True: item['agent_status_reason']='agent_disabled'
+        elif item.get('state') in {'human','paused'}: item['agent_status_reason']=item.get('reason') or ('human_handoff' if item['handoff_active'] else 'manager_pause')
+        elif item.get('agent_mode')=='automatic' and not schedule_open: item['agent_status_reason']='outside_schedule'
+        elif not item.get('controls_allowed'): item['agent_status_reason']=item.get('control_block_reason') or 'connect_admission_blocked'
+        else: item['agent_status_reason']=item.get('display_reason') or 'connect_admission_blocked'
     item['controls_allowed']=bool(item.get('channel_active') and item.get('unambiguous') and item.get('conversation_id'))
     item['control_block_reason']='channel_inactive' if not item.get('channel_active') else 'legacy_channel_ambiguous' if not item.get('unambiguous') else 'untracked_dialog' if not item.get('conversation_id') else ''
     item['can_send']=bool(item.get('channel_active') and item.get('connected') and item.get('tenant_status')=='active')
@@ -266,6 +304,7 @@ def decorate(row):
                                  else [])
     item['state_changed_at'] = item.get('updated_at')
     item.pop('agent_scopes',None)
+    item.pop('agent_schedule',None)
     return public(item)
 
 
@@ -292,6 +331,15 @@ def apply_group_view(cur,tenant,dialog):
                   ai_availability='available' if display=='active' else 'stopped' if display in ('human','paused') else 'blocked',
                   resume_allowed=usable and state!='active',
                   available_actions=['pause','handoff'] if state=='active' and dialog.get('agent_mode')=='automatic' and usable and dialog.get('controls_allowed') else ['resume'] if state in ('human','paused') and usable and dialog.get('controls_allowed') else ['handoff'] if usable and dialog.get('controls_allowed') and state!='human' else [])
+    if not g.get('primary_agent_id') and g.get('assignments'):
+        dialog['agent_status']='attention'
+        dialog['agent_status_reason']='agent_selection_required'
+    elif not g.get('primary_agent_id'):
+        dialog['agent_status']='needs_assignment'
+        dialog['agent_status_reason']='assignment_required'
+    else:
+        dialog['agent_status']='manual' if primary_agent.get('mode')=='manual' and primary_agent.get('enabled') else 'automatic' if primary_agent.get('mode')=='automatic' and usable and state=='active' else 'attention'
+        dialog['agent_status_reason']='' if dialog['agent_status'] in {'manual','automatic'} else (g.get('reason') or 'connect_admission_blocked')
     return dialog
 
 
@@ -325,6 +373,8 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
             for r in rows:
                 if r['provider']=='connect' and group_jid(r['conversation_id']):
                     apply_group_view(cur,tenant,r)
+                    from tenant_operator_assignment import group_options_in_transaction
+                    r['group_assignment_preview']=group_options_in_transaction(cur,tenant,r['channel_id'],r['conversation_id'])
                 elif r['provider']=='connect' and not r.get('agent_id') and r.get('unambiguous') and r.get('controls_allowed'):
                     # Surface the same read-only candidate choices used by the
                     # card for every page of existing dialogues. Never bind or
@@ -333,6 +383,9 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
                     r['agent_assignment']=options_in_transaction(cur,profile,{
                         'provider':'connect','lead_id':r['lead_id'],'channel_id':r['channel_id'],
                         'conversation_id':r['conversation_id']})
+                    r['agent_status']='needs_assignment' if r['agent_assignment'].get('agents') else 'no_agent'
+                    r['agent_status_reason']=('assignment_required' if len(r['agent_assignment'].get('agents') or [])==1 else
+                      'agent_selection_required' if len(r['agent_assignment'].get('agents') or [])>1 else r['agent_assignment'].get('reason') or '')
     return {'dialogs':rows[:50],'channels':channels,'agents':agents,
             'attention_count':count,'next_offset':offset+50 if len(rows)>50 else None}
 
@@ -357,6 +410,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             from tenant_ai_group_coordination import group_jid, view as group_view
             if provider=='connect' and group_jid(conversation):
                 apply_group_view(cur,tenant,dialog)
+                from tenant_operator_assignment import group_options_in_transaction
+                dialog['group_assignment_preview']=group_options_in_transaction(cur,tenant,channel,conversation)
                 try:
                     from tenant_ai_agents_store import _authorize
                     _authorize(cur,profile)
@@ -385,6 +440,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                         'provider':'connect','lead_id':lead_id,'channel_id':channel,'conversation_id':conversation})
                 else:
                     dialog['agent_assignment']={'allowed':False,'reason':dialog.get('control_block_reason'),'agents':[]}
+                dialog['agent_status']='needs_assignment' if dialog['agent_assignment'].get('agents') else 'no_agent'
+                dialog['agent_status_reason']=('assignment_required' if len(dialog['agent_assignment'].get('agents') or [])==1 else
+                  'agent_selection_required' if len(dialog['agent_assignment'].get('agents') or [])>1 else dialog['agent_assignment'].get('reason') or '')
             if provider=='kommo' and dialog['controls_allowed']:
                 from tenant_ai_agent_test_mode import conversation_allowed
                 if not conversation_allowed(cur,tenant,conversation):

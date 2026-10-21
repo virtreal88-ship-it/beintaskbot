@@ -28,8 +28,11 @@ assert.match(ui,/operator-more-actions/,'secondary controls belong in the compac
 assert.match(ui,/AI köməkçi/,'the dialog exposes an explicit Copilot action');
 assert.match(ui,/dialogs\/copilot/,'Copilot actions use a protected operator API');
 assert.match(ui,/agentModeLabel/,'dialogue status identifies agent mode, not a false handoff');
-assert.match(ui,/oneAgentCandidate/,'unassigned older dialogues distinguish a single eligible candidate');
-assert.match(ui,/multipleAgentCandidates/,'unassigned older dialogues distinguish multiple eligible candidates');
+assert.match(ui,/assignmentRequired/,'a suitable but unassigned agent is shown as an assignment state');
+assert.match(ui,/agent_status==='automatic'/,'automatic status requires server-classified availability');
+assert.match(ui,/data-state="\$\{esc\(route\.agent_status\|\|route\.display_state\)\}"/,'the header status color comes from the same server classification as the list');
+assert.match(ui,/operator-handoff-badge/,'handoff is shown as a separate badge, not conflated with agent mode');
+assert.match(ui,/operator-state\[data-state=manual\]/,'manual mode receives a distinct blue status');
 assert.match(ui,/agent_assignment\.reason/,'unavailable assignment displays its concrete eligibility reason');
 assert.match(ui,/resumeUiAllowed=actions\.has\('resume'\)&&route\.agent_mode!=='manual'/,'Manual agents are not offered a misleading Resume action');
 assert.match(ui,/\['attention','active','blocked','error','unmanaged'\]/,'internal paused and handoff states are not exposed as AI modes in the filter');

@@ -73,7 +73,7 @@ def candidates(cur, tenant, channel, conversation, route, state, has_job, config
     if reason:
         return [], reason
     cur.execute('''SELECT id,name,mode,scopes,enabled FROM saas_ai_agents
-      WHERE tenant_id=%s::uuid ORDER BY name,id FOR SHARE''', (tenant,))
+      WHERE tenant_id=%s::uuid AND role='primary' ORDER BY name,id FOR SHARE''', (tenant,))
     is_group = route.get('conversation_kind') == 'group' or conversation.endswith('@g.us')
     scoped = [dict(a) for a in cur.fetchall() if scope_matches(a.get('scopes'), channel)]
     if not scoped:
@@ -108,6 +108,83 @@ def options(profile, data):
         ensure_schema(conn)
         with conn.cursor() as cur:
             return options_in_transaction(cur, profile, data)
+
+
+def group_options_in_transaction(cur, tenant, channel, conversation):
+    """Read-only, channel-bound group candidates for preview only."""
+    from tenant_ai_group_coordination import group_jid, read as read_group
+    if not group_jid(conversation):
+        return {'allowed':False,'reason':'invalid_group','agents':[],'revision':0}
+    state=read_group(cur,tenant,conversation)
+    revision=int(state.get('revision') or 0)
+    if state.get('assignments'):
+        return {'allowed':False,'reason':'group_already_assigned','agents':[],'revision':revision}
+    if state.get('state') in {'human','active'}:
+        return {'allowed':False,'reason':'group_stopped_or_active','agents':[],'revision':revision}
+    cur.execute('''SELECT t.status,s.enabled,s.emergency_stop,s.operating_mode,ch.active,
+        EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=t.id
+          AND i.provider='connect' AND i.status='connected') AS connected,
+        NOT ai_legacy_blocked(t.id,ch.connect_channel_id::text,%s) AS unambiguous
+      FROM saas_tenants t JOIN saas_connect_channels ch ON ch.tenant_id=t.id
+        AND ch.connect_channel_id=%s::uuid LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=t.id
+      WHERE t.id=%s::uuid''',(conversation,channel,tenant))
+    gate=cur.fetchone() or {}
+    from tenant_ai_agent_access import tenant_status_allows_ai
+    from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+    if (not runtime_flag('AI_AGENTS_ENABLED') or not gate.get('active') or not gate.get('connected') or not gate.get('unambiguous')
+            or gate.get('enabled') is not True or gate.get('emergency_stop') is True
+            or not tenant_status_allows_ai(gate.get('status'),'connect')):
+        return {'allowed':False,'reason':'connect_admission_blocked','agents':[],'revision':revision}
+    cur.execute("SELECT id,name,enabled,mode,scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND role='primary' ORDER BY name,id",(tenant,))
+    rows=[dict(row) for row in cur.fetchall()]
+    from tenant_ai_agent_connect import scope_matches,test_allowed
+    scoped=[row for row in rows if scope_matches(row.get('scopes'),channel,is_group=True)]
+    candidates=[row for row in scoped if row.get('enabled') is True]
+    if gate.get('operating_mode')!='active':
+        candidates=[row for row in candidates if test_allowed(cur,tenant,channel,conversation,agent_id=row['id'])]
+    reason='' if candidates else 'group_messages_not_allowed' if scoped else 'no_connect_scope' if rows else 'agent_not_found'
+    return {'allowed':bool(candidates),'reason':reason,'agents':[{'id':str(row['id']),'name':row['name'],'mode':row['mode']} for row in candidates],'revision':revision}
+
+
+def assign_group(profile,data):
+    """Persist an owner-confirmed unique group binding without resuming it."""
+    from tenant_ai_group_coordination import group_jid,lock_group,read as read_group
+    from tenant_platform import _json
+    channel,conversation,lead=identity(data)
+    if not group_jid(conversation):
+        raise TenantLinearError('Укажите групповую переписку.',400)
+    agent_id=identifier(data.get('agent_id'))
+    revision=data.get('expected_revision')
+    if type(revision) is not int or revision<0:
+        raise TenantLinearError('Обновите предпросмотр назначения группы.',409)
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant,actor,policy=access(cur,profile,'dialogs')
+            if policy.profile.get('role')!='owner':
+                raise TenantLinearError('Массовое назначение доступно только владельцу компании.',403)
+            route=assert_route(cur,tenant,policy,'connect',conversation,channel,lead)
+            assert_resolved(cur,tenant,channel,conversation)
+            lock_group(cur,tenant,conversation)
+            state=read_group(cur,tenant,conversation)
+            if int(state.get('revision') or 0)!=revision:
+                raise TenantLinearError('Состояние группы изменилось. Обновите предпросмотр.',409)
+            candidates=group_options_in_transaction(cur,tenant,channel,conversation)
+            if not candidates.get('allowed') or len(candidates['agents'])!=1 or candidates['agents'][0]['id']!=agent_id:
+                raise TenantLinearError('Единственный подходящий агент изменился. Обновите предпросмотр.',409)
+            cur.execute('''INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,revision) VALUES(%s::uuid,%s,0) ON CONFLICT DO NOTHING''',(tenant,conversation))
+            assignments=[{'agent_id':agent_id,'channel_id':channel,'priority':0}]
+            cur.execute('''UPDATE saas_ai_group_coordination SET assignments=%s::jsonb,reason='operator_agent_assigned',
+              revision=revision+1,updated_at=now()
+              WHERE tenant_id=%s::uuid AND provider='connect' AND group_jid=%s
+                AND revision=%s AND state='paused' AND assignments='[]'::jsonb RETURNING revision''',
+              (_json(assignments),tenant,conversation,revision))
+            if not cur.fetchone():
+                raise TenantLinearError('Состояние группы изменилось. Обновите предпросмотр.',409)
+            _audit(cur,tenant,actor,'ai_group_agent_assigned','conversation',conversation,
+              {'channel_id':channel,'agent_id':agent_id,'source':'confirmed_bulk_preview'})
+        conn.commit()
+    return {'agent_id':agent_id,'state':state.get('state','paused'),'automatic_replies_enabled':False}
 
 
 def assign(profile, data):
@@ -184,20 +261,65 @@ def bulk_preview(profile, channel_id, agent_id):
         offset=page['next_offset']
         if offset>=100_000:
             raise TenantLinearError('Предпросмотр слишком велик. Уточните список диалогов.',413)
-    summary={'total':len(rows),'assigned':0,'one_candidate':0,'multiple_candidates':0,'no_candidate':0,
-             'handoff':0,'excluded_from_automatic':0,'ambiguous_state':0,'group':0}
+    summary={'total':len(rows),'assigned':0,'agent_assigned':0,'one_candidate':0,'single_candidate_unassigned':0,
+             'multiple_candidates':0,'no_candidate':0,'handoff':0,'handoff_and_exceptions':0,
+             'excluded_from_automatic':0,'ambiguous_state':0,'legacy_ambiguity':0,
+             'group':0,'group_without_primary_agent':0,'group_eligible':0}
     eligible=[]; skipped_reasons={}
     for row in rows:
-        if row.get('agent_id'): summary['assigned']+=1
+        group_row=row.get('customer_kind')=='group' or str(row.get('conversation_id') or '').endswith('@g.us')
+        group_state=row.get('group_coordination') or {}
+        has_group_agent=group_row and any(str(a.get('channel_id'))==str(row.get('channel_id')) for a in group_state.get('assignments') or [])
+        if row.get('agent_id') or has_group_agent:
+            summary['assigned']+=1;summary['agent_assigned']+=1
         if row.get('handoff_active'): summary['handoff']+=1
+        if row.get('handoff_active') or row.get('state') in {'human','paused'}:
+            summary['handoff_and_exceptions']+=1
         if row.get('display_state')!='active' or row.get('state') in {'human','paused'}:
             summary['excluded_from_automatic']+=1
         reason=row.get('display_reason') or row.get('reason')
         if row.get('state') in {'human','paused','unmanaged'} or reason in {'legacy_channel_ambiguous','untracked_dialog','ambiguous_channel','group_assignment_required_or_ambiguous','group_authorship_unresolved'}:
             summary['ambiguous_state']+=1
-        if row.get('customer_kind')=='group' or str(row.get('conversation_id') or '').endswith('@g.us'):
+        if row.get('unambiguous') is False or row.get('display_reason')=='legacy_channel_ambiguous':
+            summary['legacy_ambiguity']+=1
+        if group_row:
             summary['group']+=1
-            skipped_reasons['group_requires_review']=skipped_reasons.get('group_requires_review',0)+1
+            if not row.get('agent_id') and not has_group_agent:
+                summary['group_without_primary_agent']+=1
+            if row.get('provider')!='connect':
+                continue
+            if row.get('agent_id') or any(str(a.get('channel_id'))==str(row.get('channel_id')) for a in group_state.get('assignments') or []):
+                skipped_reasons['already_assigned']=skipped_reasons.get('already_assigned',0)+1
+                continue
+            if row.get('handoff_active') or group_state.get('state')=='human':
+                skipped_reasons['handoff']=skipped_reasons.get('handoff',0)+1
+                continue
+            if group_state.get('state')=='active':
+                skipped_reasons['group_active_state_preserved']=skipped_reasons.get('group_active_state_preserved',0)+1
+                continue
+            if row.get('unambiguous') is False:
+                skipped_reasons['legacy_channel_ambiguous']=skipped_reasons.get('legacy_channel_ambiguous',0)+1
+                continue
+            assignment=row.get('group_assignment_preview') or {}
+            choices=assignment.get('agents') or []
+            matches=[choice for choice in choices if str(choice.get('id'))==agent_id]
+            if len(choices)==1:
+                summary['one_candidate']+=1;summary['single_candidate_unassigned']+=1
+            elif len(choices)>1:
+                summary['multiple_candidates']+=1
+            else:
+                summary['no_candidate']+=1
+            if assignment.get('allowed') and len(choices)==1 and len(matches)==1:
+                summary['group_eligible']+=1
+                eligible.append({'provider':'connect','kind':'group','lead_id':int(row['lead_id']),
+                  'channel_id':row['channel_id'],'conversation_id':row['conversation_id'],'agent_id':agent_id,
+                  'agent_name':str(matches[0]['name']),'customer_name':str(row.get('customer_name') or ''),
+                  'revision':int(assignment.get('revision') or 0)})
+            elif len(choices)>1:
+                skipped_reasons['multiple_candidates']=skipped_reasons.get('multiple_candidates',0)+1
+            else:
+                reason=assignment.get('reason') or ('selected_agent_not_unique_candidate' if matches else 'selected_agent_not_candidate')
+                skipped_reasons[str(reason)]=skipped_reasons.get(str(reason),0)+1
             continue
         if row.get('provider')!='connect':
             continue
@@ -216,17 +338,20 @@ def bulk_preview(profile, channel_id, agent_id):
             continue
         choices=row['agent_assignment'].get('agents') or []
         matches=[choice for choice in choices if str(choice.get('id'))==agent_id]
+        if len(choices)==1:
+            summary['one_candidate']+=1;summary['single_candidate_unassigned']+=1
+        elif len(choices)>1:
+            summary['multiple_candidates']+=1
+        else:
+            summary['no_candidate']+=1
         if len(choices)==1 and len(matches)==1 and row['agent_assignment'].get('allowed'):
-            summary['one_candidate']+=1
             eligible.append({'provider':'connect','lead_id':int(row['lead_id']),'channel_id':row['channel_id'],
                 'conversation_id':row['conversation_id'],'agent_id':str(choices[0]['id']),
                 'agent_name':str(choices[0]['name']),'customer_name':str(row.get('customer_name') or ''),
                 'revision':int(row['agent_assignment'].get('revision') or 0)})
         elif len(choices)>1:
-            summary['multiple_candidates']+=1
             skipped_reasons['multiple_candidates']=skipped_reasons.get('multiple_candidates',0)+1
         else:
-            summary['no_candidate']+=1
             reason=row['agent_assignment'].get('reason') or ('selected_agent_not_unique_candidate' if matches else 'selected_agent_not_candidate')
             skipped_reasons[str(reason)]=skipped_reasons.get(str(reason),0)+1
     canonical=json.dumps({'channel_id':channel_id,'agent_id':agent_id,'eligible':eligible},sort_keys=True,ensure_ascii=False,separators=(',',':'))
@@ -250,7 +375,8 @@ def bulk_apply(profile,data):
     for item in preview['eligible']:
         request_id=str(uuid.uuid5(namespace,f"{item['channel_id']}:{item['conversation_id']}"))
         try:
-            result=assign(profile,{**item,'expected_revision':item['revision'],'request_id':request_id})
+            result=(assign_group(profile,{**item,'expected_revision':item['revision']}) if item.get('kind')=='group'
+                    else assign(profile,{**item,'expected_revision':item['revision'],'request_id':request_id}))
             outcomes.append({'channel_id':item['channel_id'],'conversation_id':item['conversation_id'],
                 'agent_id':item['agent_id'],'status':'assigned','replayed':bool(result.get('replayed'))})
         except TenantLinearError as error:

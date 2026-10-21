@@ -166,16 +166,31 @@ def test_duplicate_message_cannot_change_its_channel(channels):
     assert states(f)=={CA:'active'}
     assert len(rows(f,'saas_ai_agent_jobs'))==1
 
-def test_manual_only_scoped_agent_is_not_misreported_as_disabled_or_queued(channels):
+def test_manual_only_scoped_agent_is_assigned_without_queueing_or_reply(channels):
     f=channels;db=f['db']
     db.execute("UPDATE saas_ai_agents SET mode='manual' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));db.commit()
-    jobs_before=rows(f,'saas_ai_agent_jobs');states_before=states(f)
+    jobs_before=rows(f,'saas_ai_agent_jobs')
     mid,queued=f['incoming'](CA);assert queued==0
     event=db.execute("SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND provider='connect' AND external_id=%s",(A,mid))[0]
     assert event=={'state':'skipped','error_code':'manual_mode'}
     assert len(rows(f,'saas_ai_agent_jobs'))==len(jobs_before)
-    assert states(f)==states_before
+    assigned=db.execute("SELECT agent_id,state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert assigned=={'agent_id':AGENT,'state':'active'}
+    agents.set_conversation_state(PROFILE,'client','paused',provider='connect',channel_id=CA)
+    route=dialogs.listing(PROFILE,channel='connect:'+CA)['dialogs'][0]
+    assert route['agent_status']=='manual' and not route['handoff_active']
     f['send'].assert_not_called();f['generate'].assert_not_called()
+
+
+def test_ambiguous_agents_are_not_bound_or_queued(channels):
+    f=channels;db=f['db']
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id IN (%s::uuid,%s::uuid)",
+      (json.dumps([{'provider':'connect','channel_id':CB}]),A,AGENT,AGENT2));db.commit()
+    _mid,queued=f['incoming'](CB);assert queued==0
+    assert db.execute("SELECT 1 FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CB))==[]
+    assert db.execute("SELECT error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND provider='connect' ORDER BY received_at DESC LIMIT 1",(A,))[0]['error_code']=='agent_selection_required'
+    assert db.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND channel_id=%s",(A,CB))==[]
+    f['send'].assert_not_called()
 
 
 def test_read_only_deployment_audit_counts_ambiguity_and_invalid_provenance(channels):

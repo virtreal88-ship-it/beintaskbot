@@ -126,6 +126,7 @@ def test_candidate_reason_identifies_scope_disabled_and_test_binding(old_dialog)
 def test_explicit_choice_survives_resume_even_with_multiple_matching_agents(old_dialog):
     f = old_dialog; db = f['db']
     db.execute('UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE id=%s::uuid', (json.dumps([{'provider':'connect','channel_id':CA}]), AGENT2)); db.commit()
+    db.execute("UPDATE saas_ai_agents SET mode='automatic' WHERE id=%s::uuid", (AGENT2,)); db.commit()
     data = payload(f, agent_id=AGENT2)
     assert {a['id'] for a in assignment.options(PROFILE, data)['agents']} == {AGENT, AGENT2}
     assignment.assign(PROFILE, data)
@@ -134,7 +135,7 @@ def test_explicit_choice_survives_resume_even_with_multiple_matching_agents(old_
     jobs = db.execute("SELECT * FROM saas_ai_agent_jobs WHERE channel_id=%s", (CA,)); db.commit()
     assert len(jobs) == 1 and jobs[0]['agent_id'] == AGENT2
     assert not connect.allowed(dict(jobs[0], agent_id=AGENT))
-    f['process'](); f['send'].assert_not_called()
+    f['process'](); f['send'].assert_called_once()
     db.execute('UPDATE saas_ai_agents SET enabled=FALSE WHERE id=%s::uuid', (AGENT2,)); db.commit()
     assert f['incoming'](CA)[1] == 0  # Never falls back to another matching agent.
 
@@ -180,8 +181,8 @@ def test_activation_changes_only_company_gate_and_does_not_replay_drafts(old_dia
     assignment.assign(PROFILE,payload(f))
     agents.set_conversation_state(PROFILE,'client','active',provider='connect',channel_id=CA)
     f['incoming'](CA);f['process']()
-    assert len(db.execute("SELECT * FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND state='pending'",(A,)))==1;db.commit()
-    f['generate'].reset_mock()
+    assert db.execute("SELECT * FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND state='pending'",(A,))==[];db.commit()
+    f['generate'].assert_not_called()
     assert dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['send_block_reason']=='tenant_not_active'
     tables = ['saas_ai_agents','saas_ai_agent_settings','saas_ai_conversation_state','saas_ai_agent_jobs','saas_ai_agent_drafts','saas_tenant_integrations','saas_connect_channels','saas_tenant_members']
     before = {t:db.execute('SELECT * FROM '+t+' ORDER BY to_jsonb('+t+')::text') for t in tables}; db.commit()
