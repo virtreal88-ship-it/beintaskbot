@@ -1,8 +1,9 @@
 """Claim current recipients, checkpoint before provider I/O, no resend."""
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 from tenant_platform import _connect
 from tenant_crm_notice_schema import ensure_schema
-from tenant_crm_notice_store import profiles, resource, connection_id
+from tenant_crm_notice_store import profiles, resource, connection_id, connect_dialog_route
 from tenant_crm_notice_policy import eligible, task_route, timestamp
 from tenant_policy import TenantPolicy
 
@@ -41,8 +42,26 @@ def claim(channel: str) -> dict | None:
             tenant = str(item['tenant_id'])
             member = next((m for m in profiles(cur, tenant) if m['telegram_id'] == item['recipient_id']), None)
             row = resource(cur, tenant, item['kind'], item['source_key'])
+            target_url=''
+            connect_route=None
+            connect_route_ok=True
+            if item['event']=='incoming_message' and item['kind']=='message' and str((row or {}).get('channel') or '').startswith('connect:'):
+                connect_route=connect_dialog_route(row or {})
+                stored_route=(item.get('payload') or {}).get('connect_dialog')
+                connect_route_ok=bool(connect_route and (not stored_route or stored_route==connect_route))
+                if connect_route_ok:
+                    cur.execute('''SELECT 1 FROM saas_connect_conversations c
+                      JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
+                      JOIN saas_tenant_integrations i ON i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected'
+                      WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid
+                        AND c.conversation_id=%s AND c.lead_id=%s''',
+                      (tenant,connect_route['channel_id'],connect_route['conversation_id'],connect_route['lead_id']))
+                    connect_route_ok=bool(cur.fetchone())
+                if connect_route_ok:
+                    target_url='/app?'+urlencode({'view':'dialogs','open_dialog':'1',**connect_route})
             allowed = bool(member and item['payload'].get('connection') == connection_id(cur, tenant)
-                           and fresh(item['event'], row, item['payload']) and eligible(member, item['event'], row, channel))
+                           and fresh(item['event'], row, item['payload']) and connect_route_ok
+                           and eligible(member, item['event'], row, channel))
             if channel == 'push':
                 allowed = bool(allowed and item['device_active'] is True and item['subscription'] and item['owner_telegram_id'] == item['recipient_id'])
             cur.execute('''UPDATE saas_crm_notice_deliveries SET status=%s,updated_at=now()
@@ -50,7 +69,7 @@ def claim(channel: str) -> dict | None:
               ('sending' if allowed else 'skipped', *key(item)))
             if row and member and item['event'].startswith('task_') and not TenantPolicy(member).can_access_deal(row.get('deal')):
                 row = {**row, 'deal': None}  # Task-only users do not gain client contact access.
-            item.update(send=allowed, resource=row, tenant_name=(member or {}).get('tenant_name', ''))
+            item.update(send=allowed, resource=row, tenant_name=(member or {}).get('tenant_name', ''),target_url=target_url)
         conn.commit()
     return item
 
