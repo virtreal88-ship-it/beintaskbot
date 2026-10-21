@@ -34,6 +34,10 @@ def test_all_connect_conversations_are_visible_without_ai_or_kommo(operator_db):
     assert len(result['dialogs'])==1
     assert result['dialogs'][0]['display_state']=='unmanaged'
     assert result['dialogs'][0]['channel_id']==CA
+    assert result['dialogs'][0]['last_message_id']
+    assert result['dialogs'][0]['last_message_direction']=='incoming'
+    assert result['dialogs'][0]['last_message_type']=='text'
+    assert result['dialogs'][0]['last_message_text']=='Internet is down'
     assert result['attention_count']==0
     assert result['channels']==[{'id':'connect:'+CA,'name':'WhatsApp'}]
     page=dialogs.history(PROFILE,'connect',41,CA,'client')
