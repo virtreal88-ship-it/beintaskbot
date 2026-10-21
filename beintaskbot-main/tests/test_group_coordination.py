@@ -7,13 +7,14 @@ from test_connect_channel_isolation import channels, AGENT2
 import tenant_ai_group_coordination as groups
 import tenant_ai_agents_store as agents
 import tenant_ai_agent_connect as connect
+import tenant_operator_assignment as assignment
 from tenant_linear_policy import TenantLinearError
 
 G='120363431037910651@g.us'
 
 @pytest.fixture
 def group(channels,monkeypatch):
-    f=channels; d=f['db'];monkeypatch.setattr(groups,'_connect',lambda:d)
+    f=channels; d=f['db'];monkeypatch.setattr(groups,'_connect',lambda:d);monkeypatch.setattr(assignment,'_connect',lambda:d)
     for channel,agent in [(CA,AGENT),(CB,AGENT2)]:
         d.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,conversation_kind,lead_id) VALUES(%s::uuid,%s::uuid,%s,'group',%s)",(A,channel,G,1001 if channel==CA else 1002))
         d.execute('UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE id=%s::uuid',(json.dumps([{'provider':'connect','channel_id':channel,'allow_group_messages':True}]),agent))
@@ -92,18 +93,55 @@ def incoming(f,channel,external):
     return connect.enqueue(A,channel_id=channel,conversation_id=G,lead_id=lead,message_id=mid,event_id=mid,text='Question',is_group=True,provider_message_id=external)
 
 
+def test_unique_group_agent_is_recorded_but_group_stays_paused(group):
+    f=group;d=f['db']
+    assert incoming(f,CA,'AUTO_ASSIGN_UNIQUE')==0
+    state=groups.view(d.cursor(),A,G)
+    assert state['primary_agent_id']==AGENT
+    assert state['state']=='paused'
+    assert state['assignments']==[{'agent_id':AGENT,'channel_id':CA,'priority':0}]
+    assert d.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND conversation_id=%s",(A,G))==[]
+    f['send'].assert_not_called();f['generate'].assert_not_called()
+
+
+def test_group_requires_choice_when_multiple_agents_match(group):
+    f=group;d=f['db']
+    d.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      (json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}]),A,AGENT2));d.commit()
+    assert incoming(f,CA,'AMBIGUOUS_GROUP')==0
+    state=groups.view(d.cursor(),A,G)
+    assert state['assignments']==[] and state['primary_agent_id'] is None and state['state']=='paused'
+    assert d.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND conversation_id=%s",(A,G))==[]
+    f['send'].assert_not_called();f['generate'].assert_not_called()
+
+
+def test_owner_bulk_preview_assigns_unique_group_without_resuming(group):
+    f=group;d=f['db']
+    preview=assignment.bulk_preview(PROFILE,CA,AGENT)
+    group_item=next(item for item in preview['eligible'] if item.get('kind')=='group')
+    assert group_item['conversation_id']==G
+    assert preview['summary']['group_eligible']==1
+    result=assignment.bulk_apply(PROFILE,{'confirmed':True,'channel_id':CA,'agent_id':AGENT,
+      'preview_token':preview['preview_token'],'batch_id':'00000000-0000-0000-0000-000000000901'})
+    assert result['assigned']==1
+    state=groups.view(d.cursor(),A,G)
+    assert state['primary_agent_id']==AGENT and state['state']=='paused'
+    assert not state.get('resumed_at')
+    f['send'].assert_not_called();f['generate'].assert_not_called()
+
+
 @pytest.mark.parametrize('mode',['manual','automatic'])
 def test_worker_one_group_two_channels(group,mode):
     f=group;d=f['db'];d.execute("UPDATE saas_ai_agents SET mode=%s WHERE tenant_id=%s::uuid",(mode,A));d.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid",(A,));d.commit()
     groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
     assert incoming(f,CB,'PROVIDER_SHARED')==0
-    assert incoming(f,CA,'PROVIDER_SHARED')==1
+    assert incoming(f,CA,'PROVIDER_SHARED')==(1 if mode=='automatic' else 0)
     assert incoming(f,CA,'PROVIDER_SHARED')==0
     f['process']()
-    assert f['generate'].call_count==1
+    assert f['generate'].call_count==(1 if mode=='automatic' else 0)
     assert f['send'].call_count==(1 if mode=='automatic' else 0)
     drafts=d.execute('SELECT * FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid',(A,));d.commit()
-    assert len(drafts)==(1 if mode=='manual' else 0)
+    assert len(drafts)==0
 
 
 def test_delivery_reservation_is_durable_and_scope_checked(group):
@@ -210,20 +248,18 @@ def test_schedule_switch_never_resumes_human_group(group,monkeypatch):
 @pytest.mark.parametrize('mode',['manual','automatic'])
 def test_group_reply_handoff_and_late_callback_preserve_resume(group,monkeypatch,mode):
     import tenant_ai_agent_worker as worker
-    import tenant_connect_transport as transport
     d=group['db'];d.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid",(A,));d.execute('UPDATE saas_ai_agents SET mode=%s WHERE tenant_id=%s::uuid',(mode,A));d.commit()
     groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
     monkeypatch.setattr(worker,'enabled_triggers',lambda *a:[{'trigger_type':'phrase','condition':{'phrase':'Question'},'actions':['handoff_after_reply']}])
     incoming(group,CA,'HANDOFF_REPLY');group['process']()
     if mode=='manual':
-        draft=d.execute('SELECT id FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid',(A,))[0]['id'];d.commit()
-        reserved=agents.reserve_draft_send(PROFILE,draft)
-        assert transport.send_ai_reply_if_active(A,1001,CA,G,reserved['draft'],reserved['id'],reserved['expected_revision'],handoff_fingerprint=reserved['source_fingerprint'])
+        assert d.execute('SELECT id FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid',(A,))==[]
+        assert d.execute('SELECT id FROM saas_support_tickets WHERE tenant_id=%s::uuid',(A,))==[]
+        assert group['generate'].call_count==0 and group['send'].call_count==0
+        return
     with d.cursor() as c:assert groups.read(c,A,G)['state']=='human'
     d.commit()
     agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CB)
-    if mode=='manual':
-        agents.finish_draft_send(A,draft,'accepted');agents.finish_draft_send(A,draft,'accepted')
     with d.cursor() as c:assert groups.read(c,A,G)['state']=='active'
     assert len(d.execute('SELECT id FROM saas_support_tickets WHERE tenant_id=%s::uuid',(A,)))==1;d.commit()
     group['send'].assert_called_once()

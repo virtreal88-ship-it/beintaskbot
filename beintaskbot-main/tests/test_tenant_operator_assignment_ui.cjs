@@ -80,7 +80,7 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
  const bulkBox=d.querySelector('#operatorBulkPreview'),bulkSelects=bulkBox.querySelectorAll('select');assert.equal(bulkSelects[0].options.length,3,'bulk preview lists tenant-linked channel identities');
  bulkSelects[0].value=CA;bulkSelects[1].value=AGENT;
  [...bulkBox.querySelectorAll('button')].find(button=>button.className==='outline').click();await settle();
- assert.match(bulkBox.textContent,/\+994102135101/);assert.match(bulkBox.textContent,/handoff: 1/);assert.match(bulkBox.textContent,/does not enable automatic replies|avtomatik cavabları aktivləşdirmir|не включает автоматические ответы/i);
+ assert.match(bulkBox.textContent,/\+994102135101/);assert.match(bulkBox.textContent,/handoff preserved: 1|handoff saxlanılıb: 1|сохранён handoff: 1/i);assert.match(bulkBox.textContent,/does not enable automatic replies|avtomatik cavabları aktivləşdirmir|не включает автоматические ответы/i);
  [...bulkBox.querySelectorAll('button')].find(button=>button.className==='primary').click();await settle();assert.ok(calls.some(call=>call.path.endsWith('/agent-assignment-bulk')&&call.method==='POST'&&call.body.confirmed===true&&call.body.channel_id===CA&&call.body.agent_id===AGENT));
  assert.equal(calls.filter(call=>call.path.includes('/resume')||call.path.includes('/chat/send')).length,0,'bulk assignment preview/apply never resumes AI or sends messages');
  dom.window.close();console.log('PASS: channel-scoped assignment, XSS escaping, identity, retry token, separate Resume, RU/AZ/EN and safe unavailable state');

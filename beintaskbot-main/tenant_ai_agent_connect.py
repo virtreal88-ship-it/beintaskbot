@@ -43,6 +43,114 @@ def eligible_connect_agents(rows):
     return [row for row in rows if row.get('enabled') is True and row.get('mode') == 'automatic']
 
 
+def unique_connect_candidate(rows, channel_id: str, *, is_group=False):
+    """Return the sole enabled, tenant-scoped agent for this route.
+
+    Assignment discovery deliberately ignores the agent's operating mode and
+    schedule: those control execution, not whether a known agent belongs to a
+    conversation. Ambiguity is fail-closed; schedule or mode is never used as
+    an implicit priority.
+    """
+    matches = [row for row in rows if row.get('enabled') is True
+               and row.get('role', 'primary') == 'primary'
+               and scope_matches(row.get('scopes'), channel_id, is_group=is_group)]
+    if len(matches) == 1:
+        return matches[0], ''
+    return None, 'agent_selection_required' if len(matches) > 1 else 'no_eligible_agent'
+
+
+def _bind_unique_connect_candidate(cur, tenant, channel_id, conversation_id, rows, *, is_group=False):
+    """Persist one unambiguous inbound binding without resuming or queueing it."""
+    from tenant_ai_group_coordination import group_jid, lock_group, read as read_group
+    if is_group or group_jid(conversation_id):
+        # Group execution remains owned by the explicit group coordinator.
+        # A unique group-enabled agent may be recorded in that coordinator,
+        # but its default/previous paused or human state is never resumed.
+        lock_group(cur, tenant, conversation_id)
+        existing = read_group(cur, tenant, conversation_id)
+        if existing.get('assignments') or existing.get('state') == 'human':
+            return None, 'group_assignment_preserved'
+        agent, reason = unique_connect_candidate(rows, channel_id, is_group=True)
+        if not agent:
+            return None, reason
+        cur.execute('''SELECT 1 FROM saas_connect_conversations c JOIN saas_connect_channels ch
+          ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
+          WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s''',
+          (tenant, channel_id, conversation_id))
+        if not cur.fetchone():
+            return None, 'channel_route_unverified'
+        from tenant_platform import _json
+        assignment = [{'agent_id': str(agent['id']), 'channel_id': str(channel_id), 'priority': 0}]
+        cur.execute('''INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,assignments,reason)
+          VALUES(%s::uuid,%s,%s::jsonb,'operator_agent_assigned') ON CONFLICT(tenant_id,provider,group_jid) DO NOTHING''',
+          (tenant, conversation_id, _json(assignment)))
+        cur.execute('''UPDATE saas_ai_group_coordination SET assignments=%s::jsonb,reason='operator_agent_assigned',
+          revision=revision+1,updated_at=now()
+          WHERE tenant_id=%s::uuid AND provider='connect' AND group_jid=%s
+            AND state='paused' AND assignments='[]'::jsonb RETURNING revision''',
+          (_json(assignment), tenant, conversation_id))
+        return (agent, '') if cur.fetchone() else (None, 'group_assignment_preserved')
+
+    agent, reason = unique_connect_candidate(rows, channel_id)
+    if not agent:
+        return None, reason
+    # Preserve any existing stop/handoff/legacy state and any prior binding.
+    cur.execute('''SELECT agent_id,state FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s FOR UPDATE''',
+      (tenant, channel_id, conversation_id))
+    state = cur.fetchone()
+    if state:
+        if state.get('agent_id'):
+            return (state, '') if str(state['agent_id']) == str(agent['id']) else (None, 'existing_agent_preserved')
+        if state.get('state') in {'human', 'paused'}:
+            return None, 'conversation_stopped'
+        cur.execute('''UPDATE saas_ai_conversation_state SET agent_id=%s::uuid,
+          reason='',revision=revision+1,updated_at=now()
+          WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s
+            AND agent_id IS NULL AND state='active' RETURNING agent_id''',
+          (agent['id'], tenant, channel_id, conversation_id))
+        return (agent, '') if cur.fetchone() else (None, 'existing_agent_preserved')
+    cur.execute('''INSERT INTO saas_ai_conversation_state
+      (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason)
+      VALUES(%s::uuid,'connect',%s,%s,%s::uuid,'active','')
+      ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO NOTHING RETURNING agent_id''',
+      (tenant, channel_id, conversation_id, agent['id']))
+    return (agent, '') if cur.fetchone() else (None, 'existing_agent_preserved')
+
+
+def _auto_assign_group_from_inbound(cur, tenant, channel_id, conversation_id):
+    """Record a unique group primary without activating the group or queueing AI."""
+    from tenant_ai_group_coordination import group_jid
+    if not group_jid(conversation_id):
+        return None, 'invalid_group'
+    if not runtime_flag('AI_AGENTS_ENABLED'):
+        return None, 'ai_agents_server_disabled'
+    cur.execute('''SELECT t.status,s.enabled,s.emergency_stop,s.operating_mode,ch.active,
+        EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=t.id
+          AND i.provider='connect' AND i.status='connected') AS connected,
+        NOT ai_legacy_blocked(t.id,ch.connect_channel_id::text,%s) AS unambiguous
+      FROM saas_tenants t JOIN saas_connect_channels ch ON ch.tenant_id=t.id
+        AND ch.connect_channel_id=%s::uuid
+      LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=t.id WHERE t.id=%s::uuid''',
+      (conversation_id, channel_id, tenant))
+    gate = cur.fetchone() or {}
+    from tenant_ai_agent_access import tenant_status_allows_ai
+    if (not gate.get('active') or not gate.get('connected') or not gate.get('unambiguous')
+            or gate.get('enabled') is not True or gate.get('emergency_stop') is True
+            or not tenant_status_allows_ai(gate.get('status'), 'connect')):
+        return None, 'connect_admission_blocked'
+    from tenant_ai_testing_scope import clause
+    cur.execute('''SELECT a.id,a.name,a.role,a.scopes,a.enabled,a.mode,a.schedule
+      FROM saas_ai_agents a WHERE a.tenant_id=%s::uuid'''+clause('a','connect')+' ORDER BY a.created_at,a.id',
+      (tenant,))
+    rows = [dict(row) for row in cur.fetchall()]
+    agent, reason = unique_connect_candidate(rows, channel_id, is_group=True)
+    if agent and gate.get('operating_mode') != 'active' and not test_allowed(
+            cur, tenant, channel_id, conversation_id, agent_id=agent['id']):
+        return None, 'test_binding_required'
+    return _bind_unique_connect_candidate(cur, tenant, channel_id, conversation_id, rows, is_group=True) if agent else (None, reason)
+
+
 def scope_matches(scopes, channel_id: str, *, is_group=False) -> bool:
     """A Connect scope is explicit; legacy Kommo scopes never bleed across."""
     for scope in scopes if isinstance(scopes, list) else []:
@@ -96,7 +204,7 @@ def allowed(job: dict, connection=None) -> bool:
                 AND NOT EXISTS (SELECT 1 FROM saas_ai_conversation_state bound
                   WHERE bound.tenant_id=i.tenant_id AND bound.provider='connect'
                     AND bound.channel_id=c.connect_channel_id::text AND bound.conversation_id=%s
-                    AND bound.agent_assignment_id IS NOT NULL AND %s::uuid IS NOT NULL
+                    AND bound.agent_id IS NOT NULL AND %s::uuid IS NOT NULL
                     AND bound.agent_id IS DISTINCT FROM %s::uuid)
               FOR SHARE OF i,c''',
                         (channel, tenant, conversation, job.get('event_fingerprint'), conversation, job.get('lead_id'), job.get('lead_id'),
@@ -151,6 +259,10 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             if group_jid(conversation_id):
                 group_fence = admit(cur, tenant, channel_id, conversation_id, provider_message_id, message_id)
                 if not group_fence:
+                    # A single explicitly group-enabled agent may be recorded
+                    # in the existing coordinator. Its state remains paused;
+                    # this path never admits the message to the AI queue.
+                    _auto_assign_group_from_inbound(cur, tenant, channel_id, conversation_id)
                     return 0
                 payload.update(group_fence)
             cur.execute('''INSERT INTO saas_tenant_webhook_events
@@ -182,14 +294,31 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.enabled,a.schedule,a.mode FROM saas_ai_agents a
               WHERE a.role='primary' AND a.tenant_id=%s::uuid'''+clause('a','connect')+' ORDER BY a.created_at,a.id', (tenant,))
             tenant_agents = cur.fetchall()
-            # Explicit assignment is durable across Resume. Never silently
-            # replace it with another matching agent on the next inbound.
-            cur.execute('''SELECT agent_id FROM saas_ai_conversation_state
+            # Existing bindings always win. If this is an unassigned personal
+            # dialogue, persist a unique scoped agent before considering the
+            # execution mode; binding itself never creates an AI job.
+            cur.execute('''SELECT agent_id,state,agent_assignment_id FROM saas_ai_conversation_state
               WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
-                AND conversation_id=%s AND agent_assignment_id IS NOT NULL''',
+                AND conversation_id=%s FOR UPDATE''',
                 (tenant, channel_id, conversation_id))
             bound = cur.fetchone()
-            if bound and not group_fence:
+            scoped_for_assignment = [row for row in tenant_agents
+                if row.get('enabled') is True and scope_matches(row.get('scopes'), channel_id)]
+            selection_ambiguous = False
+            if not group_fence and not (bound or {}).get('agent_id') and not (
+                    bound and bound.get('state') in {'human','paused'}):
+                selected, _selection_reason = unique_connect_candidate(tenant_agents, channel_id)
+                if selected:
+                    _bind_unique_connect_candidate(cur, tenant, channel_id, conversation_id, tenant_agents)
+                    cur.execute('''SELECT agent_id,state,agent_assignment_id FROM saas_ai_conversation_state
+                      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+                        AND conversation_id=%s''', (tenant,channel_id,conversation_id))
+                    bound=cur.fetchone()
+                else:
+                    selection_ambiguous = len(scoped_for_assignment) > 1
+            # Preserve a pre-existing agent even if its current scope or mode
+            # changed; do not replace it with another matching candidate.
+            if bound and bound.get('agent_id') and not group_fence:
                 tenant_agents = [a for a in tenant_agents if str(a['id']) == str(bound['agent_id'])]
             if group_fence:
                 tenant_agents = [a for a in tenant_agents if str(a['id']) == group_fence['primary_agent_id']]
@@ -204,10 +333,15 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             from tenant_ai_agent_schedule import current_candidates
             scheduled_agents = current_candidates(agents)
             agents = scheduled_agents
+            # Multiple matching agents are a selection state, never a reason
+            # to prepare competing drafts or select one by query order.
+            if selection_ambiguous:
+                agents = []
             if not agents:
                 reason = ('agent_not_found' if not tenant_agents else
                           'no_connect_scope' if not scoped_agents else
                           'agent_disabled' if not enabled_scoped_agents else
+                          'agent_selection_required' if selection_ambiguous else
                           'group_messages_not_allowed' if is_group and not group_agents else
                           'manual_mode' if not automatic_agents else
                           'outside_schedule' if not scheduled_agents else 'no_eligible_agent')
