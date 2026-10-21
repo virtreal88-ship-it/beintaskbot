@@ -48,12 +48,12 @@ def inspect(cur, profile, data, writing=False):
     message_counts={str(row['channel_id']):dict(row) for row in cur.fetchall()}
     cur.execute("SELECT channel_id,lead_id,agent_id,state FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s ORDER BY channel_id,agent_id", (tenant, conversation))
     jobs = [dict(r) for r in cur.fetchall()]
-    cur.execute("""SELECT d.id,d.state FROM saas_ai_agent_drafts d
+    cur.execute("""SELECT d.id,d.state,COALESCE(e.payload->>'channel_id','') AS channel_id FROM saas_ai_agent_drafts d
       JOIN saas_tenant_webhook_events e ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
       WHERE d.tenant_id=%s::uuid AND e.provider='connect' AND d.chat_id=%s
         AND d.state IN ('pending','sending','unknown') ORDER BY d.id""", (tenant, conversation))
     drafts = [dict(r) for r in cur.fetchall()]
-    cur.execute("SELECT DISTINCT COALESCE(payload->>'channel_id','') AS channel_id FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND provider='connect' AND payload->>'conversation_id'=%s ORDER BY 1", (tenant, conversation))
+    cur.execute("SELECT COALESCE(payload->>'channel_id','') AS channel_id,count(*)::integer AS event_count FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND provider='connect' AND payload->>'conversation_id'=%s GROUP BY 1 ORDER BY 1", (tenant, conversation))
     events = [dict(r) for r in cur.fetchall()]
     cur.execute('SELECT id,role,scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid', (tenant, legacy.get('agent_id')))
     agent = dict(cur.fetchone() or {})
@@ -86,7 +86,10 @@ def inspect(cur, profile, data, writing=False):
                     'name':str(row.get('channel_name') or ''),'active':row.get('channel_active') is True,
                     'message_count':int(message_counts.get(str(row['connect_channel_id']),{}).get('message_count') or 0),
                     'incoming_count':int(message_counts.get(str(row['connect_channel_id']),{}).get('incoming_count') or 0),
-                    'outgoing_count':int(message_counts.get(str(row['connect_channel_id']),{}).get('outgoing_count') or 0)} for row in routes],
+                    'outgoing_count':int(message_counts.get(str(row['connect_channel_id']),{}).get('outgoing_count') or 0),
+                    'job_count':sum(str(job.get('channel_id') or '')==str(row['connect_channel_id']) for job in jobs),
+                    'event_count':sum(str(event.get('channel_id') or '')==str(row['connect_channel_id']) for event in events),
+                    'draft_count':sum(str(draft.get('channel_id') or '')==str(row['connect_channel_id']) for draft in drafts)} for row in routes],
                   evidence={'job_count':len(jobs),'draft_count':len(drafts),'event_channel_count':len(events),
                     'route_count':len(routes),'message_count':sum(int(x.get('message_count') or 0) for x in message_counts.values())})
     return result, legacy, tenant, actor

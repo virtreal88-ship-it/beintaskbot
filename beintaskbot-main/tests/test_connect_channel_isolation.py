@@ -169,6 +169,7 @@ def test_legacy_channel_review_shows_tenant_routes_but_operator_choice_cannot_re
     assert result['reason']=='multiple_channels' and result['allowed'] is False
     assert {(item['channel_id'],item['name']) for item in result['channels']}=={(CA,'WhatsApp'),(CB,'Second')}
     assert all(item['message_count']>0 for item in result['channels'])
+    assert all(item['job_count']>0 and item['event_count']>0 for item in result['channels'])
     assert result['evidence']['draft_count']==0 and result['evidence']['event_channel_count']==2
     assert result['evidence']['route_count']==2 and result['evidence']['message_count']==sum(item['message_count'] for item in result['channels'])
     # A foreign tenant cannot inspect or select either tenant A route.
