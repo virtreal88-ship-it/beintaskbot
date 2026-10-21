@@ -1,0 +1,24 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const root=path.join(__dirname,'..'),read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const settle=async()=>{for(let i=0;i<25;i++)await new Promise(r=>setImmediate(r));};
+(async()=>{
+ const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?site_lang=ru',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
+ w.tenantI18n={language:'ru'};w.confirm=()=>true;w.fetch=async(url,opts={})=>{
+   const u=new URL(url,w.location),body=opts.body?JSON.parse(opts.body):null;calls.push({path:u.pathname,method:opts.method||'GET',body});
+   let payload;
+   if(u.pathname==='/api/platform/me')payload={member:{tenant_id:'tenant-1',telegram_id:7,role:'owner'}};
+   else if(u.pathname==='/api/platform/chat/ai/settings'&&body)payload={success:true,configured:true,updated_at:'v2',copilot_model:body.copilot_model,model:'agent-model'};
+   else if(u.pathname==='/api/platform/chat/ai/settings')payload={success:true,configured:true,enabled:true,consent:true,copilot_enabled:true,copilot_model:'gpt-4o-mini',copilot_daily_limit:50,model:'agent-model',daily_limit:50,media_hosts:[],updated_at:'v1'};
+   else if(u.pathname==='/api/platform/chat/ai/models')payload={success:true,models:['gpt-4.1-mini','gpt-4o-mini']};
+   else payload={success:false,error:'unexpected request'};
+   return{ok:true,status:200,json:async()=>payload};
+ };
+ w.eval(read('docs/tenant-chat-ai-settings.js'));await settle();
+ const picker=d.querySelector('#tcCopilotModel');assert.equal(picker.tagName,'SELECT');assert.equal(d.querySelector('#tcCopilotModels'),null);
+ d.querySelector('#tcCopilotListModels').click();await settle();assert.deepEqual([...picker.options].map(x=>x.value),['','gpt-4.1-mini','gpt-4o-mini']);
+ picker.value='gpt-4.1-mini';d.querySelector('#tcAiSave').click();await settle();
+ const save=calls.find(call=>call.path==='/api/platform/chat/ai/settings'&&call.method==='POST');assert.equal(save.body.copilot_model,'gpt-4.1-mini');assert.equal(save.body.model,'agent-model','Copilot choice does not overwrite agent model');
+ assert.match(d.querySelector('#tcAiNotice').textContent,/gpt-4.1-mini/);assert.equal(calls.some(call=>call.path.includes('/chat/send')),false);
+ dom.window.close();console.log('PASS: Copilot model picker lists models, persists the independent model, verifies the returned selection, and never sends a customer message.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

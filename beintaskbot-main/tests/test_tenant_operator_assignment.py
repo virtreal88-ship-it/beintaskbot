@@ -219,7 +219,7 @@ def test_assignment_http_requires_identity_origin_and_dialog_permission(monkeypa
     assert assign_mock.call_args.args==(PROFILE,{'provider':'connect'})
 
 
-def test_bulk_preview_is_owner_only_and_read_only(old_dialog,monkeypatch):
+def test_bulk_preview_is_owner_only_channel_and_agent_scoped_read_only(old_dialog,monkeypatch):
     from unittest.mock import Mock
     f=old_dialog;db=f['db'];monkeypatch.setattr(assignment,'_connect',lambda:db)
     row={'provider':'connect','lead_id':41,'channel_id':CA,'conversation_id':'client','agent_id':None,
@@ -228,25 +228,42 @@ def test_bulk_preview_is_owner_only_and_read_only(old_dialog,monkeypatch):
     listing=Mock(return_value={'dialogs':[row],'next_offset':None})
     monkeypatch.setattr(dialogs,'listing',listing)
     before=db.execute('SELECT * FROM saas_ai_conversation_state');db.commit()
-    preview=assignment.bulk_preview(PROFILE)
+    preview=assignment.bulk_preview(PROFILE,CA,AGENT)
     after=db.execute('SELECT * FROM saas_ai_conversation_state');db.commit()
     assert preview['summary']['one_candidate']==1 and preview['summary']['assigned']==0
     assert preview['requires_owner_confirmation'] is True and len(preview['eligible'])==1
+    assert preview['channel_id']==CA and preview['agent_id']==AGENT
+    assert preview['automatic_replies_enabled'] is False
+    assert listing.call_args.kwargs=={'channel':'connect:'+CA,'offset':0}
     assert before==after and f['generate'].call_count==0 and f['send'].call_count==0
     person=employee(db,['dialogs'],role='manager')
-    with pytest.raises(TenantLinearError):assignment.bulk_preview(person)
+    with pytest.raises(TenantLinearError):assignment.bulk_preview(person,CA,AGENT)
+    with pytest.raises(TenantLinearError):assignment.bulk_preview(PROFILE,'not-a-channel',AGENT)
 
 
 def test_bulk_apply_requires_explicit_confirmation_and_is_idempotent(monkeypatch):
     from unittest.mock import Mock
     preview={'preview_token':'a'*64,'eligible':[{'provider':'connect','lead_id':41,'channel_id':CA,
         'conversation_id':'client','agent_id':AGENT,'agent_name':'Night support','customer_name':'Customer','revision':3}]}
-    monkeypatch.setattr(assignment,'bulk_preview',lambda _profile:preview)
+    monkeypatch.setattr(assignment,'bulk_preview',lambda _profile,_channel,_agent:preview)
     applied=Mock(return_value={'replayed':False,'state':'human'})
     monkeypatch.setattr(assignment,'assign',applied)
     with pytest.raises(TenantLinearError):assignment.bulk_apply(PROFILE,{'confirmed':False,'preview_token':'a'*64,'batch_id':str(uuid.uuid4())})
     batch=str(uuid.uuid4());payload={'confirmed':True,'preview_token':'a'*64,'batch_id':batch}
+    payload.update(channel_id=CA,agent_id=AGENT)
     assignment.bulk_apply(PROFILE,payload);first=applied.call_args.args[1]
     assignment.bulk_apply(PROFILE,payload);second=applied.call_args.args[1]
     assert first['request_id']==second['request_id'] and first['expected_revision']==3
     assert first['agent_id']==AGENT and applied.call_count==2
+
+
+def test_bulk_preview_never_selects_one_of_multiple_agents(old_dialog,monkeypatch):
+    from unittest.mock import Mock
+    f=old_dialog;monkeypatch.setattr(assignment,'_connect',lambda:f['db'])
+    row={'provider':'connect','lead_id':41,'channel_id':CA,'conversation_id':'client','agent_id':None,
+         'unambiguous':True,'customer_kind':'contact','agent_assignment':{'allowed':True,'revision':0,'agents':[
+             {'id':AGENT,'name':'First'},{'id':AGENT2,'name':'Second'}]}}
+    monkeypatch.setattr(dialogs,'listing',Mock(return_value={'dialogs':[row],'next_offset':None}))
+    preview=assignment.bulk_preview(PROFILE,CA,AGENT)
+    assert preview['eligible']==[] and preview['summary']['multiple_candidates']==1
+    assert preview['skipped_reasons']=={'multiple_candidates':1}

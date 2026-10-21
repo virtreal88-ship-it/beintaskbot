@@ -155,18 +155,30 @@ def _require_owner(profile):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            _tenant, _actor, policy = access(cur, profile, 'dialogs')
+            tenant, _actor, policy = access(cur, profile, 'dialogs')
             if policy.profile.get('role') != 'owner':
                 raise TenantLinearError('Массовое назначение доступно только владельцу компании.', 403)
+            return tenant
 
 
-def bulk_preview(profile):
-    """Read-only inventory and exact-one-candidate preview for owner review."""
-    _require_owner(profile)
+def bulk_preview(profile, channel_id, agent_id):
+    """Read-only, channel and agent scoped exact-candidate preview for owner review."""
+    tenant=_require_owner(profile)
+    try:
+        channel_id = str(uuid.UUID(str(channel_id)))
+    except (TypeError, ValueError, AttributeError):
+        raise TenantLinearError('Выберите сохранённый WhatsApp-канал.', 400) from None
+    agent_id = identifier(agent_id)
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,agent_id))
+            if not cur.fetchone():
+                raise TenantLinearError('Агент не найден в текущей компании.',404)
     from tenant_operator_dialogs import listing
     rows=[]; offset=0
     while True:
-        page=listing(profile,offset=offset)
+        page=listing(profile,channel='connect:'+channel_id,offset=offset)
         rows.extend(page['dialogs'])
         if page.get('next_offset') is None: break
         offset=page['next_offset']
@@ -174,7 +186,7 @@ def bulk_preview(profile):
             raise TenantLinearError('Предпросмотр слишком велик. Уточните список диалогов.',413)
     summary={'total':len(rows),'assigned':0,'one_candidate':0,'multiple_candidates':0,'no_candidate':0,
              'handoff':0,'excluded_from_automatic':0,'ambiguous_state':0,'group':0}
-    eligible=[]
+    eligible=[]; skipped_reasons={}
     for row in rows:
         if row.get('agent_id'): summary['assigned']+=1
         if row.get('handoff_active'): summary['handoff']+=1
@@ -185,14 +197,26 @@ def bulk_preview(profile):
             summary['ambiguous_state']+=1
         if row.get('customer_kind')=='group' or str(row.get('conversation_id') or '').endswith('@g.us'):
             summary['group']+=1
+            skipped_reasons['group_requires_review']=skipped_reasons.get('group_requires_review',0)+1
             continue
-        if row.get('provider')!='connect' or row.get('agent_id'):
+        if row.get('provider')!='connect':
+            continue
+        if row.get('agent_id'):
+            skipped_reasons['already_assigned']=skipped_reasons.get('already_assigned',0)+1
+            continue
+        if row.get('handoff_active'):
+            skipped_reasons['handoff']=skipped_reasons.get('handoff',0)+1
+            continue
+        if row.get('unambiguous') is False or row.get('display_reason')=='legacy_channel_ambiguous':
+            skipped_reasons['legacy_channel_ambiguous']=skipped_reasons.get('legacy_channel_ambiguous',0)+1
             continue
         if not row.get('agent_assignment'):
             summary['no_candidate']+=1
+            skipped_reasons['no_candidate']=skipped_reasons.get('no_candidate',0)+1
             continue
         choices=row['agent_assignment'].get('agents') or []
-        if len(choices)==1 and row['agent_assignment'].get('allowed'):
+        matches=[choice for choice in choices if str(choice.get('id'))==agent_id]
+        if len(choices)==1 and len(matches)==1 and row['agent_assignment'].get('allowed'):
             summary['one_candidate']+=1
             eligible.append({'provider':'connect','lead_id':int(row['lead_id']),'channel_id':row['channel_id'],
                 'conversation_id':row['conversation_id'],'agent_id':str(choices[0]['id']),
@@ -200,11 +224,16 @@ def bulk_preview(profile):
                 'revision':int(row['agent_assignment'].get('revision') or 0)})
         elif len(choices)>1:
             summary['multiple_candidates']+=1
+            skipped_reasons['multiple_candidates']=skipped_reasons.get('multiple_candidates',0)+1
         else:
             summary['no_candidate']+=1
-    canonical=json.dumps(eligible,sort_keys=True,ensure_ascii=False,separators=(',',':'))
+            reason=row['agent_assignment'].get('reason') or ('selected_agent_not_unique_candidate' if matches else 'selected_agent_not_candidate')
+            skipped_reasons[str(reason)]=skipped_reasons.get(str(reason),0)+1
+    canonical=json.dumps({'channel_id':channel_id,'agent_id':agent_id,'eligible':eligible},sort_keys=True,ensure_ascii=False,separators=(',',':'))
     token=hashlib.sha256(canonical.encode()).hexdigest()
-    return {'summary':summary,'eligible':eligible,'preview_token':token,'requires_owner_confirmation':True}
+    return {'channel_id':channel_id,'agent_id':agent_id,'summary':summary,'skipped_reasons':skipped_reasons,
+            'eligible':eligible,'preview_token':token,'requires_owner_confirmation':True,
+            'automatic_replies_enabled':False}
 
 
 def bulk_apply(profile,data):
@@ -214,7 +243,7 @@ def bulk_apply(profile,data):
     batch_id=identifier(data.get('batch_id'))
     if not re.fullmatch(r'[0-9a-f]{64}',token):
         raise TenantLinearError('Предпросмотр устарел. Обновите его перед подтверждением.',409)
-    preview=bulk_preview(profile)
+    preview=bulk_preview(profile,data.get('channel_id'),data.get('agent_id'))
     if token!=preview['preview_token']:
         raise TenantLinearError('Список диалогов или кандидаты изменились. Проверьте новый предпросмотр.',409)
     outcomes=[];namespace=uuid.UUID(batch_id)
