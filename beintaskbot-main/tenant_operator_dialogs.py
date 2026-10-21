@@ -152,6 +152,7 @@ def projection(policy):
         cs.tenant_id IS NOT NULL AS tracked,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,s.operating_mode AS company_operating_mode,
         t.status AS tenant_status,j.state AS latest_job_state,COALESCE(j.error_code,'') AS latest_job_error,
         COALESCE(lm.last_message_at,c.last_message_at,c.created_at) AS last_message_at,
+        lm.last_message_id,lm.last_message_direction,lm.last_message_type,lm.last_message_text,
         ticket.assigned_to,tm.display_name AS assignee_name,
         NOT ai_legacy_blocked(c.tenant_id,c.connect_channel_id::text,c.conversation_id) AS unambiguous,
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected') AS connected,
@@ -166,7 +167,9 @@ def projection(policy):
         AND j0.channel_id=c.connect_channel_id::text AND j0.conversation_id=c.conversation_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
       LEFT JOIN saas_ai_agents a ON a.tenant_id=c.tenant_id AND a.id=CASE WHEN cs.agent_assignment_id IS NOT NULL THEN cs.agent_id ELSE COALESCE(cs.agent_id,j.agent_id) END
       LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=c.tenant_id
-      LEFT JOIN LATERAL(SELECT COALESCE(m.happened_at,m.created_at) AS last_message_at FROM saas_crm_messages m
+      LEFT JOIN LATERAL(SELECT COALESCE(m.happened_at,m.created_at) AS last_message_at,m.id::text AS last_message_id,
+          m.direction AS last_message_direction,m.message_type AS last_message_type,left(COALESCE(m.body,''),240) AS last_message_text
+        FROM saas_crm_messages m
         WHERE m.tenant_id=c.tenant_id AND m.kommo_lead_id=c.lead_id AND m.channel='connect:'||c.connect_channel_id::text
         ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1) lm ON TRUE
       LEFT JOIN saas_support_tickets ticket ON ticket.tenant_id=c.tenant_id AND ticket.channel_id=c.connect_channel_id
@@ -185,11 +188,14 @@ def projection(policy):
         COALESCE(NULLIF(lm.channel,''),'Kommo'),TRUE,COALESCE(lm.channel,''),j.agent_id,a.name,a.enabled,a.mode,a.scopes,a.schedule,
         COALESCE(cs.state,'active'),COALESCE(cs.reason,''),cs.updated_at,cs.tenant_id IS NOT NULL,
         s.enabled,s.emergency_stop,s.operating_mode,t.status,j.state,COALESCE(j.error_code,''),lm.last_message_at,
+        lm.last_message_id,lm.last_message_direction,lm.last_message_type,lm.last_message_text,
         cs.assigned_to,tm.display_name,TRUE,
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=d.tenant_id AND i.provider='kommo' AND i.status='connected'),
         NULL::text,NULL::text,NULL::timestamptz,NULL::text,NULL::text,d.pipeline_id::text,d.status_id::text
       FROM saas_crm_deals d JOIN saas_tenants t ON t.id=d.tenant_id
-      JOIN LATERAL(SELECT m.channel,COALESCE(m.happened_at,m.created_at) AS last_message_at FROM saas_crm_messages m
+      JOIN LATERAL(SELECT m.channel,COALESCE(m.happened_at,m.created_at) AS last_message_at,m.id::text AS last_message_id,
+          m.direction AS last_message_direction,m.message_type AS last_message_type,left(COALESCE(m.body,''),240) AS last_message_text
+        FROM saas_crm_messages m
         WHERE m.tenant_id=d.tenant_id AND m.kommo_lead_id=d.kommo_lead_id AND m.channel NOT LIKE 'connect:%%'
         ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1) lm ON TRUE
       LEFT JOIN LATERAL(SELECT j0.* FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=d.tenant_id AND j0.provider='kommo'
