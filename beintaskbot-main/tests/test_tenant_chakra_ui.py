@@ -21,17 +21,25 @@ class TenantChakraUiTests(unittest.TestCase):
     def test_market_is_separate_navigation_surface_with_expected_catalog(self):
         page = (ROOT / "docs" / "tenant-app.html").read_text(encoding="utf-8")
         source = (ROOT / "ui" / "src" / "main.jsx").read_text(encoding="utf-8")
+        workspace = (ROOT / "docs" / "tenant-workspace.js").read_text(encoding="utf-8")
         self.assertIn('data-view="integrations"', page)
         self.assertIn('id="view-integrations"', page)
-        for provider in ("Kommo", "Linear", "OpenAI", "Telegram", "Wappi", "BeinSystems ERP"):
+        self.assertNotIn('id="supportPilotAdmin"', page)
+        for provider in ("Kommo", "Linear", "OpenAI", "Telegram", "WhatsApp Connect", "BeinSystems ERP"):
             self.assertIn(provider, source)
+        self.assertNotIn('name:"Wappi"', source)
+        self.assertIn("connect: ['connectWhatsAppSettings']", workspace)
+        shell = (ROOT / "ui" / "src" / "app-shell.js").read_text(encoding="utf-8")
+        self.assertIn("app-nav-route-hidden", shell)
+        self.assertIn('data-app-open="settings"', shell)
+        self.assertIn('data-app-open="profile"', shell)
 
     def test_integration_configuration_lives_in_market_dialog(self):
         source = (ROOT / "ui" / "src" / "main.jsx").read_text(encoding="utf-8")
         workspace = (ROOT / "docs" / "tenant-workspace.js").read_text(encoding="utf-8")
         self.assertIn('setTab("connection")', source)
-        self.assertIn('>Qoşulma</Button>', source)
-        self.assertIn('>Ayarlar</Button>', source)
+        self.assertIn('tx("connection")', source)
+        self.assertIn('tx("settings")', source)
         self.assertIn('id="integrationSettingsHost"', source)
         self.assertIn("tenant-integration-panel", workspace)
         self.assertIn("external-integration", workspace)
