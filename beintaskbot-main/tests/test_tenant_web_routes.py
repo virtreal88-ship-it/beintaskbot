@@ -9,7 +9,7 @@ from test_tenant_hot_orders import load, ROOT
 from tenant_notice_transport import TelegramBot
 from tenant_web_assets import ASSETS, register_assets
 
-EXPECTED_API = (("POST","/api/platform/crm/deals/complete"),("GET","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/chat/send"),("POST","/api/platform/crm/chat/send-file"),("GET","/api/platform/diagnostics"),("GET","/api/platform/crm/chat/history"),("GET","/api/platform/crm/chat/attachment"),("GET","/api/platform/crm/chat/receipts"),("POST","/api/platform/crm/chat/receipts"),("GET","/api/platform/finance"),("POST","/api/platform/finance"),("GET","/api/platform/linear/settings"),("POST","/api/platform/linear/settings"),("GET","/api/platform/linear/tasks"),("POST","/api/platform/linear/tasks"),("GET","/api/platform/news"),("POST","/api/platform/news"),("GET","/api/platform/news/ai"),("POST","/api/platform/news/ai"),("GET","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai"),("GET","/api/platform/news/telegram/settings"),("POST","/api/platform/news/telegram/settings"),("GET","/api/platform/news/telegram"),("POST","/api/platform/news/telegram"),("GET","/api/platform/news/public/{company}"))
+EXPECTED_API = (("POST","/api/platform/crm/deals/complete"),("GET","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/chat/send"),("POST","/api/platform/crm/chat/send-file"),("GET","/api/platform/diagnostics"),("GET","/api/platform/crm/chat/history"),("GET","/api/platform/crm/chat/attachment"),("GET","/api/platform/crm/chat/receipts"),("POST","/api/platform/crm/chat/receipts"),("GET","/api/platform/finance"),("POST","/api/platform/finance"),("GET","/api/platform/linear/settings"),("POST","/api/platform/linear/settings"),("GET","/api/platform/linear/tasks"),("POST","/api/platform/linear/tasks"),("GET","/api/platform/news"),("POST","/api/platform/news"),("GET","/api/platform/news/ai"),("POST","/api/platform/news/ai"),("GET","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai/settings"),("GET","/api/platform/chat/ai/models"),("POST","/api/platform/chat/ai/model-probe"),("POST","/api/platform/chat/ai"),("GET","/api/platform/news/telegram/settings"),("POST","/api/platform/news/telegram/settings"),("GET","/api/platform/news/telegram"),("POST","/api/platform/news/telegram"),("GET","/api/platform/news/public/{company}"))
 EXPECTED_API += tuple((method,path) for path,methods in [
  ('/api/platform/instructions',('GET','POST')),
  ('/api/platform/instructions/{lesson_id}',('GET','POST')),
@@ -62,7 +62,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('knowledge/{source_id}', ('PATCH','DELETE')),
 ] for method in methods)
 FACTORIES = ('instruction_handler', 'finance_handler', 'linear_handler', 'tasks_handler', 'news_handler',
-    'news_telegram_handler', 'chat_ai_handler', 'chat_send_handler', 'chat_upload_handler',
+    'news_telegram_handler', 'chat_ai_handler', 'chat_ai_model_handler', 'chat_send_handler', 'chat_upload_handler',
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler',
     'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'night_report_handler', 'testing_handler', 'ai_state_handler')
 

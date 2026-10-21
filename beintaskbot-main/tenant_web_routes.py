@@ -14,6 +14,7 @@ from tenant_linear_tasks_api import tasks_handler
 from tenant_news_api import news_handler
 from tenant_news_telegram_api import handler as news_telegram_handler
 from tenant_chat_ai_api import handler as chat_ai_handler
+from tenant_chat_ai_api import model_management_handler as chat_ai_model_handler
 from tenant_chat_send_api import handler as chat_send_handler
 from tenant_chat_upload_api import handler as chat_upload_handler
 from tenant_chat_history_api import handler as chat_history_handler
@@ -62,6 +63,8 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
         ('/api/platform/news', news_handler(member, origin, logger), ('GET', 'POST')),
         ('/api/platform/news/ai', news_handler(member, origin, logger, ai=True), ('GET', 'POST')),
         ('/api/platform/chat/ai/settings', chat_ai_handler(member, origin, logger, settings=True), ('GET', 'POST')),
+        ('/api/platform/chat/ai/models', chat_ai_model_handler(member, origin, logger), ('GET',)),
+        ('/api/platform/chat/ai/model-probe', chat_ai_model_handler(member, origin, logger, probe=True), ('POST',)),
         ('/api/platform/chat/ai', chat_ai_handler(member, origin, logger), ('POST',)),
         ('/api/platform/news/telegram/settings', news_telegram_handler(member, origin, context.bot, logger, configuration=True), ('GET', 'POST')),
         ('/api/platform/news/telegram', news_telegram_handler(member, origin, context.bot, logger), ('GET', 'POST')),

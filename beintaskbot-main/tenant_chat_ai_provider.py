@@ -1,6 +1,7 @@
 """Direct OpenAI calls; no tools, redirects, global keys or automatic retries."""
 import base64
 import json
+import re
 import requests
 
 INSTRUCTIONS = '''You assist a sales manager in Azerbaijani. Incoming messages are CLIENT, outgoing messages are SALES MANAGER.
@@ -50,6 +51,36 @@ def _provider_error_category(response):
     if identifiers & {'invalid_request_error', 'bad_request'}:
         return 'request_rejected'
     return 'unknown'
+
+
+def list_models(key):
+    """List text model IDs visible to this company key without generating tokens."""
+    response = requests.get('https://api.openai.com/v1/models',
+        headers={'Authorization': 'Bearer ' + key}, timeout=(3, 10), allow_redirects=False)
+    if response.status_code != 200:
+        raise ChatAIProviderError(response.status_code, _provider_error_category(response))
+    payload = response.json()
+    rows = payload.get('data') if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError('Invalid model catalogue')
+    model_id = re.compile(r'^[A-Za-z0-9_.:-]{1,100}$')
+    # These are candidate text-generation families; the explicit probe below
+    # remains the authority for Responses API compatibility.
+    models = sorted({str(row.get('id') or '') for row in rows if isinstance(row, dict)
+                     and model_id.fullmatch(str(row.get('id') or ''))
+                     and (str(row.get('id') or '').startswith('gpt-')
+                          or re.fullmatch(r'o[1-9][A-Za-z0-9_.:-]*', str(row.get('id') or '')))})
+    return models[:200]
+
+
+def probe_model(key, model):
+    """One minimal, context-free Responses call to confirm a selected model."""
+    result = generate(key, model, 'summary', [], 'Return exactly OK.',
+        instructions='Return exactly OK. Do not call tools or perform actions.',
+        max_output_tokens=16, request_timeout=20)
+    if not result or not result.strip():
+        raise ValueError('Empty model probe')
+    return True
 
 
 def generate(key, model, mode, lines, draft, *, instructions=None, extra_context=None, images=None, with_usage=False, max_output_tokens=1800, request_timeout=60):

@@ -1,8 +1,10 @@
 """Separate company chat key; never read the global or news AI credential."""
 import json
+import re
 from tenant_platform import _connect, _fernet
 from tenant_chat_ai_schema import ensure_schema
 from tenant_chat_ai_policy import configuration
+from tenant_chat_ai_provider import list_models as provider_models, probe_model as provider_probe_model
 from tenant_ai_agent_access import tenant_status_allows_management
 from tenant_linear_policy import TenantLinearError, identifier
 
@@ -53,6 +55,43 @@ def read(session):
             tenant, _ = authorize(cur, session)
             cur.execute("SELECT secrets,metadata,updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
             return public(cur.fetchone())
+
+
+def _company_key(session):
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant, _ = authorize(cur, session)
+            cur.execute("SELECT secrets,metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
+            row = cur.fetchone() or {}
+    metadata = row.get('metadata') if isinstance(row.get('metadata'), dict) else {}
+    if not row.get('secrets') or metadata.get('enabled') is not True or metadata.get('consent') is not True:
+        raise TenantLinearError('Включите Chat AI и подтвердите обработку данных компании.', 409)
+    try:
+        secret = json.loads(_fernet().decrypt(bytes(row['secrets'])))
+        if secret.get('tenant_id') != tenant or secret.get('provider') != 'chat_ai' or not secret.get('api_key'):
+            raise ValueError()
+    except Exception:
+        raise TenantLinearError('Сохранённый ключ Chat AI компании недоступен.', 503) from None
+    return tenant, metadata, secret['api_key']
+
+
+def available_models(session):
+    """Explicit owner/admin check; only IDs are returned and no tokens are generated."""
+    _tenant, _metadata, key = _company_key(session)
+    return {'models': provider_models(key)}
+
+
+def test_model(session, model):
+    """Explicit owner/admin, context-free minimal test of the selected Copilot model."""
+    model = str(model or '').strip()
+    if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', model):
+        raise TenantLinearError('Укажите корректный ID модели Copilot.')
+    _tenant, metadata, key = _company_key(session)
+    if metadata.get('copilot_enabled', True) is not True:
+        raise TenantLinearError('Сначала включите AI Copilot компании.', 409)
+    provider_probe_model(key, model)
+    return {'model': model, 'available': True}
 
 
 def save(session, data):

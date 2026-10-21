@@ -79,15 +79,15 @@ def test_pause_resume_only_new_messages_on_selected_channel(channels):
     f['incoming'](CA);f['process']()
     assert f['send'].call_count==2 and states(f)=={CA:'active',CB:'active'}
 
-def test_manual_drafts_and_reviews_are_channel_scoped(channels):
+def test_manual_mode_does_not_queue_inbound_drafts_for_any_channel(channels):
     f=channels;db=f['db'];db.execute("UPDATE saas_ai_agents SET mode='manual'");db.commit()
-    f['incoming'](CA);f['incoming'](CB);f['process']();f['process']()
-    drafts=rows(f,'saas_ai_agent_drafts');assert len(drafts)==2
-    connect.mark_operator_reply(A,41,CA,'client')
-    first=next(d for d in drafts if d['lead_id']==41);second=next(d for d in drafts if d['lead_id']==43)
-    with pytest.raises(TenantLinearError): agents.reserve_draft_send(PROFILE,first['id'])
-    assert agents.reserve_draft_send(PROFILE,second['id'])['channel_id']==CB
-    assert agents.finish_draft_send(A,second['id'],'blocked')=='pending'
+    jobs_before=rows(f,'saas_ai_agent_jobs')
+    mids=[f['incoming'](CA)[0],f['incoming'](CB)[0]];f['process']();f['process']()
+    assert rows(f,'saas_ai_agent_drafts')==[]
+    events=rows(f,'saas_tenant_webhook_events')
+    current=[event for event in events if event.get('external_id') in mids]
+    assert len(current)==2 and {event['error_code'] for event in current}=={'manual_mode'}
+    assert len(rows(f,'saas_ai_agent_jobs'))==len(jobs_before)
     f['send'].assert_not_called()
 
 def test_handoff_tickets_are_independent_and_idempotent(channels):
@@ -165,6 +165,17 @@ def test_duplicate_message_cannot_change_its_channel(channels):
     with pytest.raises(ValueError,match='scope mismatch'):f['incoming'](CB,mid=mid)
     assert states(f)=={CA:'active'}
     assert len(rows(f,'saas_ai_agent_jobs'))==1
+
+def test_manual_only_scoped_agent_is_not_misreported_as_disabled_or_queued(channels):
+    f=channels;db=f['db']
+    db.execute("UPDATE saas_ai_agents SET mode='manual' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));db.commit()
+    jobs_before=rows(f,'saas_ai_agent_jobs');states_before=states(f)
+    mid,queued=f['incoming'](CA);assert queued==0
+    event=db.execute("SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND provider='connect' AND external_id=%s",(A,mid))[0]
+    assert event=={'state':'skipped','error_code':'manual_mode'}
+    assert len(rows(f,'saas_ai_agent_jobs'))==len(jobs_before)
+    assert states(f)==states_before
+    f['send'].assert_not_called();f['generate'].assert_not_called()
 
 
 def test_read_only_deployment_audit_counts_ambiguity_and_invalid_provenance(channels):

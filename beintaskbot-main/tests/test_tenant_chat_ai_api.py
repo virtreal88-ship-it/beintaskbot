@@ -10,6 +10,8 @@ class Api(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.read=Mock(return_value={});self.save=Mock(return_value={});self.run=AsyncMock(return_value={'text':'draft'})
         self.service=loaders.load('tenant_chat_ai_api',{'read':self.read,'save':self.save,'run':self.run,
+            'available_models':Mock(return_value={'models':['gpt-4.1-mini']}),
+            'test_model':Mock(return_value={'model':'gpt-4.1-mini','available':True}),
             'web':SimpleNamespace(json_response=lambda body,**kwargs:{'body':body,**kwargs})},
             {'aiohttp','tenant_chat_ai_settings','tenant_chat_ai_service'})
         self.logger=Mock();self.handle=self.service.handler(lambda request:SESSION,'https://crm.pro.az',self.logger)
@@ -27,6 +29,21 @@ class Api(unittest.IsolatedAsyncioTestCase):
     async def test_success_is_draft_only_no_store_header(self):
         result=await self.request();self.assertEqual(result['body']['text'],'draft')
         self.assertEqual(result['headers']['Cache-Control'],'no-store');self.run.assert_awaited_once()
+
+    async def test_model_discovery_and_probe_require_current_company_identity(self):
+        handle=self.service.model_management_handler(lambda request:SESSION,'https://crm.pro.az',self.logger)
+        query={'expected_tenant_id':TENANT,'expected_user_id':'20'}
+        result=await handle(SimpleNamespace(method='GET',query=query))
+        self.assertEqual(result['body']['models'],['gpt-4.1-mini'])
+        self.assertEqual(result['headers']['Cache-Control'],'no-store')
+        mismatch=await handle(SimpleNamespace(method='GET',query={**query,'expected_tenant_id':'foreign'}))
+        self.assertEqual(mismatch['status'],409)
+        self.service.available_models.assert_called_once_with(SESSION)
+        probe=self.service.model_management_handler(lambda request:SESSION,'https://crm.pro.az',self.logger,probe=True)
+        request=SimpleNamespace(method='POST',content_type='application/json',headers={'Origin':'https://crm.pro.az'},
+            json=AsyncMock(return_value={**query,'model':'gpt-4.1-mini'}))
+        result=await probe(request)
+        self.assertTrue(result['body']['available']);self.service.test_model.assert_called_once_with(SESSION,'gpt-4.1-mini')
 
     async def test_owner_settings_path_not_chat_command(self):
         self.handle=self.service.handler(lambda request:SESSION,'https://crm.pro.az',self.logger,settings=True)
@@ -73,6 +90,36 @@ class Settings(unittest.TestCase):
         with self.assertRaises(TenantLinearError):self.service.save(SESSION,{**self.data,'remove_key':True})
         self.conn.commit.assert_not_called()
 
+    def test_copilot_model_save_does_not_change_agent_model(self):
+        import json
+        previous={**CONNECTION,'metadata':{**CONFIG,'copilot_model':'gpt-4o-mini'}}
+        updated={**previous,'metadata':{**CONFIG,'copilot_model':'gpt-4.1-mini','copilot_enabled':True,'copilot_daily_limit':50}}
+        self.cur.fetchone.side_effect=[previous,updated]
+        result=self.service.save(SESSION,{**CONFIG,'copilot_model':'gpt-4.1-mini','copilot_enabled':True,
+            'copilot_daily_limit':50,'api_key':'','expected_updated_at':'version-1'})
+        saved=json.loads(self.cur.execute.call_args.args[1][2])
+        self.assertEqual(saved['model'],'text-model')
+        self.assertEqual(saved['copilot_model'],'gpt-4.1-mini')
+        self.assertEqual(result['copilot_model'],'gpt-4.1-mini')
+        self.assertEqual(result['model'],'text-model')
+
+    def test_model_catalog_uses_only_company_saved_key_and_probe_is_explicit(self):
+        import json
+        from unittest.mock import Mock
+        self.crypto.decrypt.return_value=json.dumps({'tenant_id':TENANT,'provider':'chat_ai','api_key':'company-key'}).encode()
+        self.cur.fetchone.return_value={'secrets':b'encrypted','metadata':{'enabled':True,'consent':True,'copilot_enabled':True}}
+        models=Mock(return_value=['gpt-4.1-mini']);probe=Mock(return_value=True)
+        self.service.available_models.__globals__['provider_models']=models
+        self.service.test_model.__globals__['provider_probe_model']=probe
+        result=self.service.available_models(SESSION)
+        self.assertEqual(result,{'models':['gpt-4.1-mini']})
+        models.assert_called_once_with('company-key')
+        self.assertNotIn('company-key',str(result))
+        self.assertEqual(self.service.test_model(SESSION,'gpt-4.1-mini'),{'model':'gpt-4.1-mini','available':True})
+        probe.assert_called_once_with('company-key','gpt-4.1-mini')
+        with self.assertRaises(TenantLinearError):self.service.test_model(SESSION,'bad model id')
+        probe.assert_called_once()
+
 
 class Provider(unittest.TestCase):
     def setUp(self):
@@ -87,6 +134,19 @@ class Provider(unittest.TestCase):
         self.assertEqual(post.call_args.args[0],'https://api.openai.com/v1/responses')
         body=post.call_args.kwargs['json'];self.assertIs(body['store'],False);self.assertNotIn('tools',body)
         self.assertIs(post.call_args.kwargs['allow_redirects'],False)
+
+    def test_model_listing_is_free_and_probe_is_minimal(self):
+        from unittest.mock import patch
+        from tenant_chat_ai_provider import list_models,probe_model
+        response=Mock(status_code=200);response.json.return_value={'data':[{'id':'gpt-4.1-mini'},{'id':'whisper-1'},{'id':'o4-mini'},{'id':'bad model'}]}
+        with patch('tenant_chat_ai_provider.requests.get',return_value=response) as get:
+            self.assertEqual(list_models('company-key'),['gpt-4.1-mini','o4-mini'])
+        self.assertEqual(get.call_args.args[0],'https://api.openai.com/v1/models')
+        self.assertFalse(get.call_args.kwargs['allow_redirects'])
+        with patch('tenant_chat_ai_provider.generate',return_value='OK') as generate:
+            self.assertTrue(probe_model('company-key','gpt-4.1-mini'))
+        self.assertEqual(generate.call_args.args[:4],('company-key','gpt-4.1-mini','summary',[]))
+        self.assertEqual(generate.call_args.kwargs['max_output_tokens'],16)
 
     def test_agent_generation_accepts_tenant_instructions_and_verified_images(self):
         from unittest.mock import patch
