@@ -1,6 +1,6 @@
 /* AI results remain editable drafts. Exact request survives uncertain network replies. */
 (() => {
-  const $=id=>document.getElementById(id);let session,epoch=0,lead=0,pending=null,busy=false;
+  const $=id=>document.getElementById(id);let session,epoch=0,lead=0,pending=null,busy=false,operatorSurface=false;
   const storageKey='tenant-chat-ai-pending';
   document.head.insertAdjacentHTML('beforeend','<style>#dealModal .modal-card{max-height:calc(100dvh - 40px);overflow:auto}#dealModal .modal-head{position:sticky;top:0;background:#fff;z-index:1;padding-bottom:12px}.tc-ai-spinner{display:inline-block;width:13px;height:13px;border:2px solid #c5d8d1;border-top-color:#087d5e;border-radius:50%;animation:tc-ai-spin .8s linear infinite;margin-right:7px}@keyframes tc-ai-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.tc-ai-spinner{animation:none}}</style>');
   function identity(member){return member?.tenant_id+':'+member?.telegram_id;}
@@ -9,7 +9,7 @@
   function remember(data){pending=data;sessionStorage.setItem(storageKey,JSON.stringify(data));}
   function install(data){if(identity(session?.member)!==identity(data.member)){epoch++;busy=false;pending=null;lead=0;$('tcAiResult')?.remove();$('tcAiActions')?.remove();}else if(session?.capabilities?.chat_ai&&!data.capabilities?.chat_ai){epoch++;busy=false;$('tcAiResult')?.remove();$('tcAiActions')?.remove();}session=data;
     try{const stored=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(stored&&stored.expected_tenant_id===data.member.tenant_id&&String(stored.expected_user_id)===String(data.member.telegram_id))pending=stored;else clear();}catch{clear();}if(lead)render();}
-  function render(){ $('tcAiActions')?.remove();if(!session?.capabilities?.chat_ai||!$('chatText'))return;
+  function render(){ $('tcAiActions')?.remove();if(operatorSurface){$('tcAiResult')?.remove();return;}if(!session?.capabilities?.chat_ai||!$('chatText'))return;
     const actions=document.createElement('div');actions.id='tcAiActions';actions.style='display:flex;gap:8px;flex-wrap:wrap;margin-top:10px';
     for(const [mode,label] of [['reply','✦ AI cavab'],['summary','✦ Xülasə']]){const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=label;button.onclick=()=>request(mode);actions.append(button);}
     if(pending){const retry=document.createElement('button');retry.className='outline';retry.textContent='Əvvəlki sorğunu yoxla';retry.onclick=()=>execute(pending);const discard=document.createElement('button');discard.className='outline';discard.textContent='Əvvəlki sorğunu bağla';discard.onclick=()=>{if(busy)return;if(confirm('Əvvəlki sorğu hələ emal oluna və pullu ola bilər. Onu yenidən icra etmədən bağlamaq istəyirsiniz? Yeni sorğu ayrıca ödəniş yarada bilər.')){clear();render();}};actions.append(retry,discard);}
@@ -27,7 +27,7 @@
     catch(error){if(current===epoch)alert(error.message+' Sorğu kodu: '+data.request_id);}finally{if(current===epoch){busy=false;buttons.forEach(b=>b.disabled=false);notice.remove();render();}}
   }
   document.addEventListener('tenant-profile',event=>install(event.detail));
-  document.addEventListener('tenant-chat-open',event=>{epoch++;busy=false;lead=event.detail.lead_id;$('tcAiResult')?.remove();render();});
+  document.addEventListener('tenant-chat-open',event=>{epoch++;busy=false;lead=event.detail.lead_id;operatorSurface=event.detail.surface==='operator';$('tcAiResult')?.remove();render();});
   document.addEventListener('tenant-chat-loaded',event=>{if(Number(event.detail.lead_id)===Number(lead))render();});
   document.addEventListener('tenant-chat-history-added',event=>{if(Number(event.detail.lead_id)===Number(lead))render();});
   const initial=epoch;fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(initial===epoch&&data?.member)install(data);}).catch(()=>{});

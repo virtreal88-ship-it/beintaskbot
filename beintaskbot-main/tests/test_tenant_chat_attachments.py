@@ -3,6 +3,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 import unittest
+import threading
 from unittest.mock import Mock, MagicMock, AsyncMock, patch
 import test_tenant_hot_orders as loaders
 from tenant_chat_attachment_provider import drive_host, download, fetch, file_id, MAX_BYTES
@@ -120,6 +121,42 @@ class Api(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['body'],b'picture');self.assertEqual(self.load.call_count,2)
         self.assertEqual(result['headers']['Cache-Control'],'no-store')
         self.assertEqual(result['headers']['X-Content-Type-Options'],'nosniff')
+        self.assertEqual(result['headers']['Content-Disposition'],'inline; filename="attachment.png"; filename*=UTF-8\'\'attachment.png')
+
+    async def test_filename_is_sanitized_and_keeps_extension(self):
+        self.load.return_value={**ITEM,
+            'row':{**ROW,'raw':{'message':{'attachment':{'fileName':'../../my report.pdf'}}}}}
+        result=await self.handle(SimpleNamespace(query=self.query))
+        self.assertIn('filename="my report.pdf"',result['headers']['Content-Disposition'])
+        self.assertIn("filename*=UTF-8''my%20report.pdf",result['headers']['Content-Disposition'])
+
+    async def test_cached_repeat_still_rechecks_authority(self):
+        first=await self.handle(SimpleNamespace(query=self.query))
+        second=await self.handle(SimpleNamespace(query=self.query))
+        self.assertEqual(first['body'],second['body'])
+        self.assertEqual(self.download.call_count,1)
+        self.assertEqual(self.load.call_count,4)
+
+    async def test_audio_range_is_served_from_authorized_attachment(self):
+        request=SimpleNamespace(query=self.query,headers={'Range':'bytes=1-3'})
+        result=await self.handle(request)
+        self.assertEqual(result['status'],206)
+        self.assertEqual(result['body'],b'ict')
+        self.assertEqual(result['headers']['Content-Range'],'bytes 1-3/7')
+        self.assertEqual(result['headers']['Accept-Ranges'],'bytes')
+
+    async def test_concurrent_same_attachment_download_is_deduplicated(self):
+        started,release=threading.Event(),threading.Event()
+        def slow_download(*_args):
+            started.set();release.wait(2);return b'picture','image/png'
+        self.download.side_effect=slow_download
+        first=asyncio.create_task(self.handle(SimpleNamespace(query=self.query)))
+        self.assertTrue(await asyncio.to_thread(started.wait,1))
+        second=asyncio.create_task(self.handle(SimpleNamespace(query=self.query)))
+        await asyncio.sleep(.01);release.set()
+        a,b=await asyncio.gather(first,second)
+        self.assertEqual(a['body'],b['body'])
+        self.assertEqual(self.download.call_count,1)
 
     async def test_other_company_rejected_before_database_or_network(self):
         result=await self.handle(SimpleNamespace(query={**self.query,'expected_tenant_id':'other'}))

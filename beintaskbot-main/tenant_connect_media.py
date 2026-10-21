@@ -23,6 +23,15 @@ class PublicResolver(aiohttp.resolver.DefaultResolver):
 
 VIDEO_TYPES={'video/mp4','video/webm'}
 DOCUMENT_TYPES={'application/pdf','text/plain','application/vnd.openxmlformats-officedocument.wordprocessingml.document'}
+# The interactive attachment viewer may safely deliver these original formats;
+# AI document extraction intentionally remains limited to DOCUMENT_TYPES above.
+DOCUMENT_PREVIEW_TYPES=DOCUMENT_TYPES | {
+    'application/msword', 'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'text/csv', 'text/rtf', 'application/rtf',
+}
 
 
 def retry_after_seconds(value, default=60):
@@ -39,7 +48,7 @@ def retry_after_seconds(value, default=60):
             seconds = int(default)
     return max(1, min(3600, seconds))
 
-async def download_media(item, *, max_bytes=None):
+async def download_media(item, *, max_bytes=None, preview_documents=False):
     route = item['route']
     channel, message = str(uuid.UUID(route['channel_id'])), str(uuid.UUID(item['message_id']))
     origin = urlsplit(CONNECT_URL)
@@ -53,7 +62,8 @@ async def download_media(item, *, max_bytes=None):
     if literal is not None and not literal.is_global:
         raise TenantLinearError('Connect bağlantısını yoxlayın.', 503)
     kind = item['row']['message_type']
-    cap,types={'image':(8*1024*1024,IMAGE_TYPES),'audio':(10*1024*1024,AUDIO_TYPES),'voice':(10*1024*1024,AUDIO_TYPES),'video':(16*1024*1024,VIDEO_TYPES),'document':(5*1024*1024,DOCUMENT_TYPES)}.get(kind,(0,set()))
+    document_types=DOCUMENT_PREVIEW_TYPES if preview_documents else DOCUMENT_TYPES
+    cap,types={'image':(8*1024*1024,IMAGE_TYPES),'audio':(10*1024*1024,AUDIO_TYPES),'voice':(10*1024*1024,AUDIO_TYPES),'video':(16*1024*1024,VIDEO_TYPES),'document':(5*1024*1024,document_types)}.get(kind,(0,set()))
     if max_bytes is not None: cap=min(cap,max(0,int(max_bytes)))
     if not cap: raise TenantLinearError('Fayl formatı dəstəklənmir.',415)
     url = (CONNECT_URL.rstrip('/') + '/v1/channels/' + channel + '/messages/' + message +

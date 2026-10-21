@@ -10,6 +10,7 @@ assert(workflow.includes("check('ai_enabled'")&&workflow.includes("'deal_complet
 assert(ai.includes('expected_tenant_id')&&ai.includes('expected_user_id')&&ai.includes('current!==epoch'));
 assert(ai.includes('crypto.randomUUID()')&&ai.includes('execute(pending)')&&ai.includes('sessionStorage'));
 assert(ai.includes('tc-ai-spinner')&&ai.includes('missing_audio')&&ai.includes('text.value=result.text'));
+assert(ai.includes("event.detail.surface==='operator'")&&ai.includes('if(operatorSurface)'), 'legacy AI cavab/Xülasə controls stay suppressed when the current /app operator composer opens or reloads a chat');
 assert(!ai.includes('result.text</')&&!ai.includes('/chat/send'));
 assert(settings.includes('type="password"')&&settings.includes('expected_updated_at:version'));
 assert(settings.includes("!['owner','admin'].includes(next.role)")&&settings.includes('media_hosts'));
