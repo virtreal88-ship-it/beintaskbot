@@ -110,6 +110,19 @@ def test_group_opt_in_test_binding_disabled_agents_and_company_stop(old_dialog):
     assert assignment.options(PROFILE, data)['reason'] == 'emergency_stop'
 
 
+def test_candidate_reason_identifies_scope_disabled_and_test_binding(old_dialog):
+    f=old_dialog;db=f['db'];data=payload(f)
+    db.execute('UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE id=%s::uuid',
+               (json.dumps([{'provider':'kommo','channel_id':'other'}]),AGENT));db.commit()
+    assert assignment.options(PROFILE,data)['reason']=='no_connect_scope'
+    db.execute('UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE id=%s::uuid',
+               (json.dumps([{'provider':'connect','channel_id':CA}]),AGENT))
+    db.execute('UPDATE saas_ai_agent_settings SET operating_mode=\'test\' WHERE tenant_id=%s::uuid',(A,));db.commit()
+    assert assignment.options(PROFILE,data)['reason']=='test_binding_required'
+    db.execute('UPDATE saas_ai_agents SET enabled=FALSE WHERE id=%s::uuid',(AGENT,));db.commit()
+    assert assignment.options(PROFILE,data)['reason']=='agent_disabled'
+
+
 def test_explicit_choice_survives_resume_even_with_multiple_matching_agents(old_dialog):
     f = old_dialog; db = f['db']
     db.execute('UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE id=%s::uuid', (json.dumps([{'provider':'connect','channel_id':CA}]), AGENT2)); db.commit()

@@ -1,5 +1,7 @@
 """Read-only, bounded Connect preview. Never calls the AI, webhook or send paths."""
 import ipaddress
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import uuid
 from urllib.parse import urlencode, urlsplit
 import aiohttp
@@ -21,6 +23,21 @@ class PublicResolver(aiohttp.resolver.DefaultResolver):
 
 VIDEO_TYPES={'video/mp4','video/webm'}
 DOCUMENT_TYPES={'application/pdf','text/plain','application/vnd.openxmlformats-officedocument.wordprocessingml.document'}
+
+
+def retry_after_seconds(value, default=60):
+    """Bound and normalize the upstream Retry-After seconds/date formats."""
+    try:
+        seconds = int(str(value or '').strip())
+    except (TypeError, ValueError):
+        try:
+            when = parsedate_to_datetime(str(value or ''))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            seconds = int((when - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            seconds = int(default)
+    return max(1, min(3600, seconds))
 
 async def download_media(item, *, max_bytes=None):
     route = item['route']
@@ -55,7 +72,9 @@ async def download_media(item, *, max_bytes=None):
                 if response.status == 415:
                     raise TenantLinearError('Fayl formatı dəstəklənmir və ya fayl zədələnib.', 415)
                 if response.status == 429:
-                    raise TenantLinearError('Çox sorğu göndərilib. Bir dəqiqə sonra yoxlayın.', 429)
+                    error = TenantLinearError('Çox sorğu göndərilib. Göstərilən müddətdən sonra yoxlayın.', 429)
+                    error.retry_after = retry_after_seconds(response.headers.get('Retry-After'))
+                    raise error
                 if response.status != 200:
                     raise TenantLinearError('WhatsApp faylı hazırda əlçatan deyil. Sonra yenidən yoxlayın.', 502)
                 if (response.headers.get('X-Connect-Channel-Id') != channel or

@@ -72,15 +72,26 @@ def candidates(cur, tenant, channel, conversation, route, state, has_job, config
     reason = _resume_block_reason({**config, 'agent_id': 'candidate', 'agent_enabled': True}, 'connect')
     if reason:
         return [], reason
-    cur.execute('''SELECT id,name,mode,scopes FROM saas_ai_agents
-      WHERE tenant_id=%s::uuid AND enabled=TRUE ORDER BY name,id FOR SHARE''', (tenant,))
+    cur.execute('''SELECT id,name,mode,scopes,enabled FROM saas_ai_agents
+      WHERE tenant_id=%s::uuid ORDER BY name,id FOR SHARE''', (tenant,))
     is_group = route.get('conversation_kind') == 'group' or conversation.endswith('@g.us')
-    agents = [dict(a) for a in cur.fetchall() if scope_matches(a.get('scopes'), channel, is_group=is_group)]
+    scoped = [dict(a) for a in cur.fetchall() if scope_matches(a.get('scopes'), channel)]
+    if not scoped:
+        return [], 'no_connect_scope'
+    agents = [a for a in scoped if a.get('enabled') is True]
+    if not agents:
+        return [], 'agent_disabled'
+    if is_group:
+        agents = [a for a in agents if scope_matches(a.get('scopes'), channel, is_group=True)]
+        if not agents:
+            return [], 'group_messages_not_allowed'
     # Candidate discovery is not runtime admission: an out-of-shift agent can
     # be explicitly assigned, but the worker still enforces its schedule before
     # processing. Discovery never resumes AI or authorizes automatic sending.
     if config.get('operating_mode') != 'active':
         agents = [a for a in agents if test_allowed(cur, tenant, channel, conversation, agent_id=a['id'])]
+        if not agents:
+            return [], 'test_binding_required'
     return [{'id': str(a['id']), 'name': a['name'], 'mode': a['mode']} for a in agents], ('' if agents else 'no_eligible_agent')
 
 
