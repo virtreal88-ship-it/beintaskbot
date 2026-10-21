@@ -142,6 +142,14 @@ class TenantAuthTests(unittest.IsolatedAsyncioTestCase):
         response = await self.api["me"](Request())
         self.assertEqual(payload(response)["members"], [])
 
+    async def test_me_uses_employee_manage_capability_not_hardcoded_roles(self):
+        self.profile["role"] = "manager"
+        context = replace(self.context, capabilities=lambda _profile: {"can_manage_employees": True})
+        api = handlers(context)
+        response = await api["me"](Request())
+        self.assertEqual(payload(response)["members"], [{"telegram_id": 7}])
+        self.members.assert_called_with(tenant_id="company-a", owner_id=7)
+
     async def test_logout_requires_origin_and_cleans_only_tenant_cookies(self):
         response = await self.api["logout"](Request(origin=None, cookies={"tenant_push_device": "device"}))
         self.assertEqual(response.status, 403)

@@ -76,6 +76,8 @@ class TenantPolicy:
         if module not in {'settings', 'employees', 'integrations'} and not modules.get(module, False):
             return False
         permissions = set(self.profile.get('permissions') or [])
+        if module == 'employees' and 'employees:manage' in permissions:
+            return True
         return module in permissions
 
     def allows_action(self, module: str, action: str) -> bool:

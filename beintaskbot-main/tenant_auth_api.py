@@ -316,16 +316,17 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             integrations = await asyncio.to_thread(
                 context.list_integrations, tenant_id=profile["tenant_id"], telegram_id=telegram_id)
             companies = await asyncio.to_thread(context.tenants_for_user, telegram_id)
+            capabilities = context.capabilities(profile)
             members = await asyncio.to_thread(
                 context.list_members, tenant_id=profile["tenant_id"], owner_id=telegram_id,
-            ) if profile.get("role") in {"owner", "admin"} else []
+            ) if capabilities.get('can_manage_employees', profile.get('role') in {'owner', 'admin'}) else []
             account = await asyncio.to_thread(context.account_profile, actor_id=telegram_id) if context.account_profile else {}
         except Exception:
             context.logger.exception("Platform session lookup failed")
             return web.json_response({"success": False, "error": "Platforma məlumatı yüklənmədi."}, status=500)
         safe_profile = {key: value for key, value in profile.items() if key != "workflow"}
         return web.json_response({
-            "success": True, "member": safe_profile, "capabilities": context.capabilities(profile),
+            "success": True, "member": safe_profile, "capabilities": capabilities,
             "role_permissions": context.role_permissions, "integrations": integrations,
             "companies": companies, "members": members, "account": account,
         })
