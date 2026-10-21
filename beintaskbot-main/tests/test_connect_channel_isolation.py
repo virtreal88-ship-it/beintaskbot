@@ -14,6 +14,7 @@ import tenant_ai_agent_worker as worker
 import tenant_connect_transport as transport
 import tenant_support_inbox_store as inbox
 import tenant_operator_dialogs as dialogs
+import tenant_operator_legacy as legacy
 from tenant_linear_policy import TenantLinearError
 
 AGENT2=str(uuid.UUID(int=302))
@@ -158,6 +159,39 @@ def test_unresolved_legacy_state_blocks_both_channels_without_losing_history(cha
     messages=reliability.snapshot(PROFILE)['messages']
     assert messages and all(m['reason_code']=='legacy_channel_ambiguous' and not m['automatic_retry'] for m in messages)
     f['send'].assert_not_called();assert len(rows(f,'saas_crm_messages'))>=2
+
+
+def test_legacy_channel_review_shows_tenant_routes_but_operator_choice_cannot_resolve_ambiguity(channels,monkeypatch):
+    f=channels;db=f['db'];f['incoming'](CA,'channel one proof');f['incoming'](CB,'channel two proof')
+    db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,channel_id,agent_id,state,reason) VALUES(%s::uuid,'connect','client','',%s::uuid,'paused','legacy')",(A,AGENT));db.commit()
+    monkeypatch.setattr(legacy,'_connect',lambda:db)
+    result=legacy.options(PROFILE,{'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41})
+    assert result['reason']=='multiple_channels' and result['allowed'] is False
+    assert {(item['channel_id'],item['name']) for item in result['channels']}=={(CA,'WhatsApp'),(CB,'Second')}
+    assert all(item['message_count']>0 for item in result['channels'])
+    assert all(item['job_count']>0 and item['event_count']>0 for item in result['channels'])
+    assert result['evidence']['draft_count']==0 and result['evidence']['event_channel_count']==2
+    assert result['evidence']['route_count']==2 and result['evidence']['message_count']==sum(item['message_count'] for item in result['channels'])
+    # A foreign tenant cannot inspect or select either tenant A route.
+    with pytest.raises(TenantLinearError):
+        legacy.options({'tenant_id':B,'telegram_id':22},{'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41})
+
+
+def test_legacy_channel_recovery_requires_verified_single_route_and_is_idempotent(channels,monkeypatch):
+    f=channels;db=f['db'];f['incoming'](CA,'persisted source message')
+    db.execute("DELETE FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CB))
+    db.execute("UPDATE saas_ai_agent_jobs SET state='skipped' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s",(A,CA))
+    db.execute("UPDATE saas_ai_conversation_state SET channel_id='',state='paused',reason='legacy' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA));db.commit()
+    monkeypatch.setattr(legacy,'_connect',lambda:db)
+    data={'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41}
+    preview=legacy.options(PROFILE,data)
+    assert preview['allowed'] and preview['reason']=='unique_verified_route'
+    saved=legacy.recover(PROFILE,{**data,'confirmed':True,'expected_token':preview['expected_token']})
+    assert saved['recovered'] and saved['resume_required'] and saved['state']=='paused'
+    replay=legacy.recover(PROFILE,{**data,'confirmed':True,'expected_token':preview['expected_token']})
+    assert replay['replayed'] and replay['state']=='paused'
+    assert db.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='ai_legacy_channel_recovered'",(A,))[0]['n']==1
+    assert db.execute("SELECT channel_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id='client'",(A,))[0]=={'channel_id':CA,'state':'paused','reason':'legacy'}
 
 
 def test_duplicate_message_cannot_change_its_channel(channels):
