@@ -45,7 +45,7 @@ def test_assign_preserves_human_history_modes_and_other_channel(old_dialog):
     assert first['revision'] == retry['revision']
     assert db.execute("SELECT * FROM saas_ai_agent_jobs WHERE channel_id=%s", (CB,)) == other
     assert db.execute('SELECT * FROM saas_crm_messages ORDER BY id') == before
-    assert len(db.execute("SELECT * FROM saas_tenant_audit_events WHERE action='ai_conversation_agent_assigned'")) == 1
+    assert len(db.execute("SELECT * FROM saas_tenant_audit_events WHERE action='ai_conversation_agent_configured'")) == 1
     assert all(a['mode'] == 'manual' for a in db.execute('SELECT mode FROM saas_ai_agents WHERE tenant_id=%s::uuid', (A,)))
     state = db.execute("SELECT * FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s", (A, CA))[0]
     assert state['reason'] == 'manager_replied' and state['agent_id'] == AGENT
@@ -54,7 +54,15 @@ def test_assign_preserves_human_history_modes_and_other_channel(old_dialog):
     assert page['dialog']['agent_id'] == AGENT and page['dialog']['available_actions'] == ['resume']
 
 
-def test_resume_is_separate_and_only_future_inbound_creates_manual_draft(old_dialog):
+def test_saving_the_same_primary_agent_does_not_stop_active_dialog(old_dialog):
+    f=old_dialog;data=payload(f);assignment.assign(PROFILE,data)
+    agents.set_conversation_state(PROFILE,'client','active',provider='connect',channel_id=CA)
+    current=assignment.options(PROFILE,{**data,'manage':'1'})
+    result=assignment.assign(PROFILE,{**data,'request_id':str(uuid.uuid4()),'expected_revision':current['revision']})
+    assert result['unchanged'] and result['state']=='active' and result['revision']==current['revision']
+
+
+def test_manual_agent_stays_assigned_and_never_queues_background_reply(old_dialog):
     f = old_dialog; data = payload(f); old, queued = f['incoming'](CA)
     assert queued == 0
     assignment.assign(PROFILE, data)
@@ -63,10 +71,11 @@ def test_resume_is_separate_and_only_future_inbound_creates_manual_draft(old_dia
     assert f['incoming'](CA, mid=old)[1] == 0 and f['process']() is None
     # Retrying assignment after Resume must not stop or resume the dialogue again.
     assert assignment.assign(PROFILE, data)['state'] == 'active'
-    assert f['incoming'](CA)[1] == 1
-    f['process'](); f['send'].assert_not_called()
+    outcome=f['incoming'](CA)
+    assert outcome[1] == 0
+    f['process'](); f['send'].assert_not_called();f['generate'].assert_not_called()
     drafts = f['db'].execute('SELECT * FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid', (A,)); f['db'].commit()
-    assert len(drafts) == 1 and drafts[0]['agent_id'] == AGENT
+    assert not drafts
 
 
 @pytest.mark.parametrize('case', ['other_channel_agent','other_tenant_agent','wrong_channel','wrong_tenant','lead_mismatch','missing_channel','kommo','stale_revision','no_permission','inactive_member','suspended','quarantine'])
@@ -149,18 +158,30 @@ def test_pause_or_untracked_dialogue_stays_stopped_and_kommo_untouched(old_dialo
     db.commit()
     person = employee(db, ['dialogs'])
     result = assignment.assign(person, payload(f))
-    assert result['state'] == ('paused' if initial == 'paused' else 'human')
+    assert result['state'] == 'paused'
     assert db.execute("SELECT state FROM saas_ai_conversation_state WHERE provider='kommo'")[0]['state'] == 'paused'; db.commit()
     with pytest.raises(TenantLinearError): agents.list_agents(person)
 
 
-def test_competing_assignment_cannot_overwrite_binding(old_dialog):
-    f = old_dialog; data = payload(f)
-    assignment.assign(PROFILE, data)
-    with pytest.raises(TenantLinearError): assignment.assign(PROFILE, {**data,'request_id':str(uuid.uuid4())})
-    with pytest.raises(TenantLinearError): assignment.assign(PROFILE, {**data,'agent_id':AGENT2})
-    with pytest.raises(TenantLinearError): agents.delete_agent(PROFILE, AGENT)
-    assert assignment.assign(PROFILE, data)['state']=='human'
+def test_primary_assignment_can_be_changed_or_removed_without_resuming(old_dialog,monkeypatch):
+    f=old_dialog;db=f['db'];data=payload(f)
+    import tenant_operator_dialogs as dialogs
+    monkeypatch.setattr(dialogs,'_connect',lambda:db)
+    assignment.assign(PROFILE,data)
+    db.execute('UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE id=%s::uuid',(json.dumps([{'provider':'connect','channel_id':CA}]),AGENT2));db.commit()
+    current=assignment.options(PROFILE,{**data,'manage':'1'})
+    assert current['current_agent_id']==AGENT and current['can_manage']
+    changed=assignment.assign(PROFILE,{**data,'agent_id':AGENT2,'request_id':str(uuid.uuid4()),'expected_revision':current['revision']})
+    assert changed['state']=='human' and changed['automatic_replies_enabled'] is False
+    state=db.execute('SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s',(A,CA))[0]
+    assert state['agent_id']==AGENT2 and state['state']=='human' and state['reason']=='manager_replied'
+    removed=assignment.assign(PROFILE,{**data,'agent_id':None,'request_id':str(uuid.uuid4()),'expected_revision':changed['revision']})
+    assert removed['state']=='human' and removed['agent_id'] is None
+    assert db.execute('SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s',(A,CA))[0]=={'state':'human','reason':'manager_replied'}
+    detail=dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']
+    assert detail.get('agent_id') is None and detail['agent_status']=='needs_assignment'
+    agents.delete_agent(PROFILE,AGENT)
+    f['send'].assert_not_called();f['generate'].assert_not_called()
 
 
 def test_additive_migration_preserves_legacy_and_other_provider_states(old_dialog):

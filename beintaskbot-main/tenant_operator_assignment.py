@@ -47,7 +47,8 @@ def context(cur, profile, data, *, writing=False):
         (tenant, channel, conversation))
     state = dict(cur.fetchone() or {})
     cur.execute('''SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid
-      AND provider='connect' AND channel_id=%s AND conversation_id=%s LIMIT 1''',
+      AND provider='connect' AND channel_id=%s AND conversation_id=%s
+      AND state IN ('queued','processing','unknown') LIMIT 1''',
         (tenant, channel, conversation))
     has_job = bool(cur.fetchone())
     cur.execute('''SELECT t.status AS tenant_status,s.enabled AS company_enabled,
@@ -62,8 +63,10 @@ def context(cur, profile, data, *, writing=False):
     return tenant, actor, channel, conversation, route, state, has_job, config
 
 
-def candidates(cur, tenant, channel, conversation, route, state, has_job, config):
-    if state.get('agent_id') or has_job:
+def candidates(cur, tenant, channel, conversation, route, state, has_job, config, *, allow_current=False):
+    if has_job:
+        return [], 'agent_already_assigned'
+    if state.get('agent_id') and not allow_current:
         return [], 'agent_already_assigned'
     if not config.get('channel_active'):
         return [], 'channel_inactive'
@@ -98,8 +101,11 @@ def candidates(cur, tenant, channel, conversation, route, state, has_job, config
 def options_in_transaction(cur, profile, data):
     values = context(cur, profile, data)
     tenant, _, channel, conversation, route, state, has_job, config = values
-    agents, reason = candidates(cur, tenant, channel, conversation, route, state, has_job, config)
+    manage = data.get('manage') in (True,'true','1',1)
+    agents, reason = candidates(cur, tenant, channel, conversation, route, state, has_job, config, allow_current=manage)
     return {'allowed': bool(agents), 'reason': reason, 'agents': agents,
+            'current_agent_id': str(state['agent_id']) if state.get('agent_id') else None,
+            'can_manage': not has_job,
             'revision': int(state.get('revision', 0)), 'state': state.get('state', 'unmanaged')}
 
 
@@ -188,7 +194,7 @@ def assign_group(profile,data):
 
 
 def assign(profile, data):
-    agent = identifier(data.get('agent_id'))
+    agent = identifier(data.get('agent_id')) if data.get('agent_id') else None
     request_id = identifier(data.get('request_id'))
     revision = data.get('expected_revision')
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
@@ -203,29 +209,35 @@ def assign(profile, data):
                 return {'agent_id': agent, 'state': state['state'], 'revision': state['revision'], 'replayed': True}
             if int(state.get('revision', 0)) != revision:
                 raise TenantLinearError('Диалог изменился. Обновите его перед назначением.', 409)
-            agents, reason = candidates(cur, tenant, channel, conversation, route, state, has_job, config)
-            if not any(a['id'] == agent for a in agents):
+            if state.get('agent_id') is not None and str(state.get('agent_id')) == str(agent):
+                return {'agent_id': agent, 'state': state.get('state','active'),
+                        'revision': int(state.get('revision',0)), 'replayed': False,
+                        'automatic_replies_enabled': False, 'unchanged': True}
+            agents, reason = candidates(cur, tenant, channel, conversation, route, state, has_job, config, allow_current=True)
+            if agent and not any(a['id'] == agent for a in agents):
                 error = TenantLinearError('Агент недоступен для назначения в этот диалог.', 409)
                 error.reason_code = reason or 'agent_scope_mismatch'
                 raise error
-            # An untracked/active but unassigned dialogue is stopped. Existing
-            # Human/Pause reasons and the inbound/history fields are preserved.
-            stopped = state.get('state') if state.get('state') in {'human', 'paused'} else 'human'
-            stop_reason = state.get('reason', '') if state.get('state') in {'human', 'paused'} else 'operator_agent_assigned'
+            # Reconfiguration never resumes AI. Preserve human handoff and pause;
+            # changing an active or untracked binding leaves it paused.
+            stopped = 'human' if state.get('state') == 'human' else 'paused'
+            stop_reason = state.get('reason') if state.get('state') in {'human','paused'} else ('operator_agent_assigned' if agent else 'operator_agent_unassigned')
             cur.execute('''INSERT INTO saas_ai_conversation_state
-              (tenant_id,provider,channel_id,conversation_id,agent_id,agent_assignment_id,state,reason)
-              VALUES(%s::uuid,'connect',%s,%s,%s::uuid,%s::uuid,%s,%s)
+              (tenant_id,provider,channel_id,conversation_id,agent_id,agent_assignment_id,state,reason,assigned_to)
+              VALUES(%s::uuid,'connect',%s,%s,%s::uuid,%s::uuid,%s,%s,%s)
               ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE SET
                 agent_id=EXCLUDED.agent_id,agent_assignment_id=EXCLUDED.agent_assignment_id,
                 state=EXCLUDED.state,reason=EXCLUDED.reason,
+                assigned_to=CASE WHEN EXCLUDED.state='human' THEN saas_ai_conversation_state.assigned_to ELSE NULL END,
                 revision=saas_ai_conversation_state.revision+1,updated_at=now()
-              RETURNING revision,state''', (tenant, channel, conversation, agent, request_id, stopped, stop_reason))
+              RETURNING revision,state''', (tenant, channel, conversation, agent, request_id, stopped, stop_reason,
+                state.get('assigned_to') if stopped=='human' else None))
             result = dict(cur.fetchone())
-            _audit(cur, tenant, actor, 'ai_conversation_agent_assigned', 'conversation', conversation,
+            _audit(cur, tenant, actor, 'ai_conversation_agent_configured', 'conversation', conversation,
                    {'provider': 'connect', 'channel_id': channel, 'agent_id': agent,
                     'request_id': request_id, 'previous_state': state.get('state', 'unmanaged'), 'state': stopped})
         conn.commit()
-    return {**result, 'agent_id': agent, 'replayed': False}
+    return {**result, 'agent_id': agent, 'replayed': False, 'automatic_replies_enabled': False}
 
 
 def _require_owner(profile):
