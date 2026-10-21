@@ -37,7 +37,7 @@ from tenant_member_store import (
     list_members, member, tenants_for_user, update_onboarding, upsert_member,
 )
 from tenant_invite_store import (
-    create_invite, decide_invite_request, list_invite_requests,
+    create_invite, accept_email_invite, decide_invite_request, list_invite_requests,
     request_invite_acceptance,
 )
 from tenant_integration_store import (

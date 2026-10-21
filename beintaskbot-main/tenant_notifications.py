@@ -1,20 +1,20 @@
 """Tenant notification preferences; no transport or legacy side effects here."""
 
-CHANNELS = ('telegram', 'push')
+CHANNELS = ('telegram', 'push', 'internal')
 EVENTS = {
     'deal_completion_requested': {'label': 'Sövdələşmə tamamlanması üçün təsdiq', 'module': 'deals', 'roles': ('owner', 'admin')},
     'new_lead': {'label': 'Yeni sövdələşmə', 'module': 'deals', 'roles': ('owner', 'admin', 'manager')},
     'incoming_message': {'label': 'Yeni mesaj', 'module': 'customers', 'roles': ('owner', 'admin', 'manager')},
-    'task_assigned': {'label': 'Yeni tapşırıq', 'module': 'tasks', 'roles': ('owner', 'admin', 'manager', 'worker')},
-    'task_overdue': {'label': 'Gecikmiş tapşırıq', 'module': 'tasks', 'roles': ('owner', 'admin', 'manager', 'worker')},
+    'task_assigned': {'label': 'Yeni tapşırıq', 'module': 'tasks', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker')},
+    'task_overdue': {'label': 'Gecikmiş tapşırıq', 'module': 'tasks', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker')},
     'task_approval_requested': {'label': 'Tapşırıq yaradılması üçün təsdiq', 'module': 'tasks', 'roles': ('owner', 'admin')},
     'task_completion_requested': {'label': 'Tapşırıq tamamlanması üçün təsdiq', 'module': 'tasks', 'roles': ('owner', 'admin')},
-    'task_approval_decided': {'label': 'Tapşırıq təsdiqinin nəticəsi', 'module': 'tasks', 'roles': ('owner', 'admin', 'manager', 'worker')},
-    'hot_order_available': {'label': 'Yeni isti sifariş', 'module': 'hot_orders', 'roles': ('owner', 'admin', 'manager', 'worker', 'master')},
+    'task_approval_decided': {'label': 'Tapşırıq təsdiqinin nəticəsi', 'module': 'tasks', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker')},
+    'hot_order_available': {'label': 'Yeni isti sifariş', 'module': 'hot_orders', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker', 'master')},
     'hot_order_completion_requested': {'label': 'İsti sifarişin tamamlanması üçün təsdiq', 'module': 'hot_orders', 'roles': ('owner', 'admin')},
-    'hot_order_completion_decided': {'label': 'İsti sifariş təsdiqinin nəticəsi', 'module': 'hot_orders', 'roles': ('owner', 'admin', 'manager', 'worker', 'master')},
-    'linear_done': {'label': 'Linear tapşırığı tamamlandı', 'module': 'linear', 'roles': ('owner', 'admin', 'manager', 'worker')},
-    'linear_status_changed': {'label': 'Linear seçilmiş statusa keçdi', 'module': 'linear', 'roles': ('owner', 'admin', 'manager', 'worker')},
+    'hot_order_completion_decided': {'label': 'İsti sifariş təsdiqinin nəticəsi', 'module': 'hot_orders', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker', 'master')},
+    'linear_done': {'label': 'Linear tapşırığı tamamlandı', 'module': 'linear', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker')},
+    'linear_status_changed': {'label': 'Linear seçilmiş statusa keçdi', 'module': 'linear', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker')},
 }
 
 

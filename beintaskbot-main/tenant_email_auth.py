@@ -15,7 +15,7 @@ from email.message import EmailMessage
 
 import requests
 
-from tenant_platform_common import _DEFAULT_MODULES, _DEFAULT_NOTIFICATIONS, _ROLE_PERMISSIONS, _slug, _tenant_payload
+from tenant_platform_common import _DEFAULT_MODULES, _DEFAULT_NOTIFICATIONS, _ROLE_PERMISSIONS, _slug, _tenant_payload, _invite_token
 from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, _json
 
 _EMAIL = re.compile(r"^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,63}$")
@@ -27,6 +27,15 @@ def _email(value: object) -> str:
     if not _EMAIL.fullmatch(result) or len(result) > 254:
         raise TenantPlatformError('Email ünvanını düzgün yazın.')
     return result
+
+
+def _login_identity(value: object) -> str:
+    raw = str(value or '').strip().casefold()
+    if '@' in raw:
+        return _email(raw)
+    if not re.fullmatch(r'[a-z0-9_.-]{3,64}', raw):
+        raise TenantPlatformError('Email və ya login məlumatını düzgün daxil edin.')
+    return raw
 
 
 def _phone(value: object) -> str:
@@ -167,25 +176,49 @@ def _email_link(token: str, purpose: str = 'confirm', destination_product: str =
     return f'{origin}{path}?token={token}&product={_product(destination_product)}'
 
 
-def request_registration(*, name: object, company_name: object, phone: object, email: object, request_ip: str, destination_product: object = 'beintaskbot') -> dict:
-    display_name, company, mobile, address = _name(name, 'Adınızı'), _name(company_name, 'Şirkət adını'), _phone(phone), _email(email)
+def request_registration(*, name: object, company_name: object, phone: object, email: object, request_ip: str,
+                         destination_product: object = 'beintaskbot', invite_token: object = None) -> dict:
+    address = _email(email)
+    invite_hash = hashlib.sha256(_invite_token(invite_token).encode('utf-8')).hexdigest() if invite_token else ''
     _assert_mail_ready()
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            invitation = None
+            if invite_hash:
+                cur.execute('''SELECT i.*,t.name AS tenant_name FROM saas_tenant_invites i JOIN saas_tenants t ON t.id=i.tenant_id
+                               WHERE i.token_hash=%s FOR UPDATE OF i''',(invite_hash,))
+                invitation=cur.fetchone()
+                if not invitation or invitation.get('accepted_at') or invitation.get('expires_at') <= datetime.now(timezone.utc):
+                    raise TenantPlatformError('Dəvət linkinin müddəti bitib və ya artıq istifadə olunub.')
+                invited_email=str(invitation.get('invited_email') or '').strip().casefold()
+                if invited_email and invited_email != address:
+                    raise TenantPlatformError('Bu dəvət başqa email ünvanı üçün yaradılıb.')
+                if not invited_email:
+                    cur.execute('UPDATE saas_tenant_invites SET invited_email=%s WHERE id=%s',(address,invitation['id']))
+            display_name = _name(name or (invitation or {}).get('display_name'), 'Adınızı')
+            company = _name(company_name or (invitation or {}).get('tenant_name') or 'Şirkət', 'Şirkət adını')
+            mobile = _phone(phone) if str(phone or '').strip() else ''
             cur.execute('SELECT * FROM saas_auth_users WHERE email=%s FOR UPDATE', (address,))
             user = cur.fetchone()
             if user and user.get('verified_at'):
-                return {'accepted': True, 'existing': True}
+                return {'accepted': True, 'existing': True, 'needs_login': bool(invitation)}
             if not user:
                 user_id = uuid.uuid4()
                 cur.execute("SELECT nextval('saas_auth_actor_seq') AS actor_id")
                 actor_id = int(cur.fetchone()['actor_id'])
-                cur.execute('''INSERT INTO saas_auth_users(id,actor_id,email,phone,display_name,company_name)
-                    VALUES(%s,%s,%s,%s,%s,%s) RETURNING id''', (user_id, actor_id, address, mobile, display_name, company))
+                cur.execute('''INSERT INTO saas_auth_users(id,actor_id,email,phone,display_name,company_name,pending_invite_id,tenant_id)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id''',
+                    (user_id, actor_id, address, mobile, display_name, company, invitation['id'] if invitation else None,
+                     invitation['tenant_id'] if invitation else None))
             else:
                 user_id = user['id']
-                cur.execute('''UPDATE saas_auth_users SET phone=%s,display_name=%s,company_name=%s,updated_at=now() WHERE id=%s''', (mobile, display_name, company, user_id))
+                if invitation and user.get('pending_invite_id') and str(user['pending_invite_id']) != str(invitation['id']):
+                    raise TenantPlatformError('Bu email üçün başqa dəvət təsdiqlənməyi gözləyir.')
+                cur.execute('''UPDATE saas_auth_users SET phone=CASE WHEN %s<>'' THEN %s ELSE phone END,display_name=%s,company_name=%s,
+                    pending_invite_id=COALESCE(%s,pending_invite_id),tenant_id=COALESCE(%s,tenant_id),updated_at=now() WHERE id=%s''',
+                    (mobile,mobile,display_name,company,invitation['id'] if invitation else None,
+                     invitation['tenant_id'] if invitation else None,user_id))
             product = _product(destination_product)
             token = _issue_token(cur, user_id, 'confirm', request_ip, product)
         conn.commit()
@@ -205,7 +238,25 @@ def complete_confirmation(*, token: object, password: object) -> dict:
                 raise TenantPlatformError('Təsdiq keçidi etibarsızdır və ya müddəti bitib.')
             destination_product = _product(user.get('destination_product'))
             tenant_id = user.get('tenant_id')
-            if not tenant_id:
+            pending_invite_id = user.get('pending_invite_id')
+            if pending_invite_id:
+                cur.execute('SELECT * FROM saas_tenant_invites WHERE id=%s FOR UPDATE', (pending_invite_id,))
+                invitation = cur.fetchone()
+                if (not invitation or invitation.get('accepted_at')
+                        or invitation.get('expires_at') <= datetime.now(timezone.utc)
+                        or (invitation.get('invited_email') or '').casefold() != str(user['email']).casefold()):
+                    raise TenantPlatformError('Dəvət keçidi etibarsızdır və ya müddəti bitib.')
+                tenant_id = invitation['tenant_id']
+                cur.execute('''INSERT INTO saas_tenant_members(tenant_id,telegram_id,display_name,role,permissions,active,invited_by)
+                               VALUES(%s::uuid,%s,%s,%s,%s::jsonb,TRUE,%s)
+                               ON CONFLICT(tenant_id,telegram_id) DO NOTHING''',
+                            (tenant_id,user['actor_id'],user['display_name'],invitation['role'],_json(invitation['permissions']),invitation['created_by']))
+                if cur.rowcount != 1:
+                    raise TenantPlatformError('Bu hesab artıq şirkətin üzvüdür.')
+                cur.execute('UPDATE saas_tenant_invites SET accepted_by=%s,accepted_at=now() WHERE id=%s',
+                            (user['actor_id'], invitation['id']))
+                cur.execute('UPDATE saas_auth_users SET pending_invite_id=NULL WHERE id=%s', (user['id'],))
+            elif not tenant_id:
                 tenant_id = uuid.uuid4()
                 onboarding = {'company_name': user['company_name'], 'completed_steps': ['company','owner','email']}
                 cur.execute('''INSERT INTO saas_tenants(id,slug,name,industry,status,owner_telegram_id,modules,notification_rules,onboarding)
@@ -220,16 +271,20 @@ def complete_confirmation(*, token: object, password: object) -> dict:
 
 
 def login(*, email: object, password: object, request_ip: str) -> dict | None:
-    address, plain = _email(email), str(password or '')
+    address, plain = _login_identity(email), str(password or '')
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT count(*) AS total FROM saas_auth_login_attempts WHERE (email=%s OR request_ip=%s) AND succeeded=FALSE AND created_at>now()-interval '15 minutes'", (address, request_ip[:80]))
             limited = int((cur.fetchone() or {}).get('total') or 0) >= 10
-            cur.execute('SELECT * FROM saas_auth_users WHERE email=%s AND verified_at IS NOT NULL AND disabled_at IS NULL', (address,))
+            cur.execute('''SELECT u.* FROM saas_auth_users u WHERE (lower(u.email)=lower(%s) OR lower(u.login)=lower(%s)
+                OR EXISTS(SELECT 1 FROM saas_user_profiles p WHERE p.actor_id=u.actor_id AND lower(p.login)=lower(%s)))
+                AND u.verified_at IS NOT NULL AND u.disabled_at IS NULL AND u.status='active' ''', (address, address, address))
             user = cur.fetchone()
             accepted = not limited and bool(user and _password_matches(plain, user.get('password_hash') or ''))
             cur.execute('INSERT INTO saas_auth_login_attempts(id,email,request_ip,succeeded) VALUES(%s,%s,%s,%s)', (uuid.uuid4(), address, request_ip[:80], accepted))
+            if accepted:
+                cur.execute('UPDATE saas_auth_users SET last_login_at=now(),updated_at=now() WHERE id=%s', (user['id'],))
         conn.commit()
     if not accepted or not user or not user.get('tenant_id'):
         return None
@@ -262,6 +317,11 @@ def complete_password_reset(*, token: object, password: object) -> dict:
             row = cur.fetchone()
             if not row: raise TenantPlatformError('Parol keçidi etibarsızdır və ya müddəti bitib.')
             cur.execute('UPDATE saas_auth_users SET password_hash=%s,updated_at=now() WHERE id=%s', (_hash_password(plain), row['user_id']))
+            cur.execute('UPDATE saas_tenant_browser_sessions SET revoked_at=now() WHERE actor_id=(SELECT actor_id FROM saas_auth_users WHERE id=%s) AND revoked_at IS NULL', (row['user_id'],))
+            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,payload)
+                           SELECT %s,m.tenant_id,m.telegram_id,'account.password.reset','account','{}'::jsonb
+                           FROM saas_auth_users u JOIN saas_tenant_members m ON m.telegram_id=u.actor_id AND m.active=TRUE
+                           WHERE u.id=%s''',(uuid.uuid4(),row['user_id']))
             cur.execute('UPDATE saas_auth_tokens SET used_at=now() WHERE id=%s', (row['token_id'],))
         conn.commit()
     return {'destination_product': _product(row.get('destination_product'))}
@@ -305,6 +365,10 @@ def request_email_link(*, tenant_id: str, actor_id: int, display_name: object,
                 user_id = user['id']
                 cur.execute('UPDATE saas_auth_users SET tenant_id=%s::uuid,updated_at=now() WHERE id=%s',
                             (tenant_id, user_id))
+            cur.execute('''UPDATE saas_auth_users u SET first_name=p.first_name,last_name=p.last_name,
+                           phone=CASE WHEN p.phone<>'' THEN p.phone ELSE u.phone END,
+                           avatar_url=p.avatar_url,login=CASE WHEN p.login<>'' THEN p.login ELSE u.login END,
+                           updated_at=now() FROM saas_user_profiles p WHERE u.id=%s AND p.actor_id=u.actor_id''',(user_id,))
             token = _issue_token(cur, user_id, 'link_email', request_ip)
         conn.commit()
     _send_mail(address, 'Beintaskbot: email girişini təsdiqləyin',
