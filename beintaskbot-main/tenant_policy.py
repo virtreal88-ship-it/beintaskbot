@@ -8,6 +8,8 @@ ROLE_PERMISSIONS = {
     'owner': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear', 'ai_agents', 'dialogs', 'support', 'night_report'],
     'admin': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear', 'ai_agents', 'dialogs', 'support'],
     'manager': ['deals', 'tasks', 'customers', 'dialogs', 'support'],
+    'operator': ['tasks'],
+    # Historical role keys remain readable for existing memberships.
     'worker': ['tasks'],
     'master': ['hot_orders'],
 }
@@ -68,13 +70,31 @@ class TenantPolicy:
             return self.profile.get('role') == 'admin' and self.member_settings.get('ai_agents_manage') is True
         if self.profile.get('role') == 'master' and module != 'hot_orders':
             return False
-        if self.profile.get('role') == 'worker' and module in {'deals', 'customers'}:
+        if self.profile.get('role') in {'worker', 'operator'} and module in {'deals', 'customers'}:
             return False
         modules = self.policies.get('modules', self.profile.get('modules') or {})
         if module not in {'settings', 'employees', 'integrations'} and not modules.get(module, False):
             return False
         permissions = set(self.profile.get('permissions') or [])
         return module in permissions
+
+    def allows_action(self, module: str, action: str) -> bool:
+        """Check a granular grant, while preserving legacy module grants.
+
+        Existing module permissions continue to authorize their historical
+        endpoints. New endpoints can require an explicit action grant; owners
+        keep tenant-wide authority and inactive memberships fail closed.
+        """
+        allowed_actions = {'view', 'create', 'update', 'delete', 'assign', 'manage'}
+        if action not in allowed_actions or self.profile.get('active') is False:
+            return False
+        if self.profile.get('role') == 'owner':
+            return True
+        permissions = set(self.profile.get('permissions') or [])
+        action_grants = {f'{module}:{item}' for item in allowed_actions}
+        if module in permissions and not (permissions & action_grants):
+            return self.allows(module)  # legacy module grant
+        return f'{module}:{action}' in permissions or f'{module}:manage' in permissions
 
     def pipeline_scope(self) -> list[dict]:
         """An empty scope means no access, never all pipelines."""

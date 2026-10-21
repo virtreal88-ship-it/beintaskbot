@@ -14,7 +14,7 @@ if 'psycopg' not in sys.modules:
     rows.dict_row = object()
     sys.modules['psycopg.rows'] = rows
 
-from tenant_email_auth import _email, _hash_password, _password_matches, _phone, _send_mail
+from tenant_email_auth import _email, _login_identity, _hash_password, _password_matches, _phone, _send_mail
 from tenant_platform_core import TenantPlatformError
 
 
@@ -35,6 +35,11 @@ class EmailAuthValidationTests(unittest.TestCase):
             _email('not-an-email')
         with self.assertRaises(TenantPlatformError):
             _phone('123')
+
+    def test_login_accepts_email_or_safe_username(self):
+        self.assertEqual(_login_identity(' User.Name '),'user.name')
+        self.assertEqual(_login_identity(' Staff@Example.com '),'staff@example.com')
+        with self.assertRaises(TenantPlatformError): _login_identity('bad username')
 
     def test_resend_https_fallback_after_smtp_failure(self):
         class Response:

@@ -26,9 +26,11 @@ class MembersApiTests(unittest.IsolatedAsyncioTestCase):
                                          "employee_name": "E", "card_name": "Card"})
         self.requests = Mock(return_value=[])
         self.decide = Mock(return_value={"telegram_id": 22, "approved": True})
+        self.accept_email = Mock(return_value={'tenant_id':'company-b','tenant_name':'Other company'})
         self.api = handlers(MemberApiContext(self.member, self.identity, self.name, self.send,
             "https://crm.pro.az", self.listing, self.upsert, self.deactivate, self.create,
-            self.accept, self.requests, self.decide, StoreError))
+            self.accept, self.requests, self.decide, StoreError,
+            accept_email_invite=self.accept_email,issue_session=lambda tenant_id,actor_id:f'{tenant_id}:{actor_id}'))
 
     def request(self, method="POST", data=None):
         request = Mock(method=method)
@@ -78,6 +80,14 @@ class MembersApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["pending"])
         self.accept.assert_called_once_with(token="once", telegram_id=22, display_name="Employee")
         self.assertIn("https://crm.pro.az/app", self.send.call_args.args[1])
+
+    async def test_email_invitation_is_bound_and_switches_to_invited_tenant(self):
+        self.profile['email']='worker@example.com'
+        request=self.request(data={'token':'one-use-token'});request.headers={'Origin':'https://crm.pro.az'}
+        response=await self.api['accept_email_invite'](request)
+        self.assertEqual(response.status,200)
+        self.accept_email.assert_called_once_with(token='one-use-token',actor_id=1,email='worker@example.com',display_name='')
+        self.assertIn('csa_tenant_session',response.cookies)
 
     async def test_access_decision_notifies_exact_request_identity(self):
         result = self.payload(await self.api["invite_requests"](

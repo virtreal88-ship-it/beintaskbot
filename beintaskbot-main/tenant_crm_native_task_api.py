@@ -27,7 +27,7 @@ def _allowed(policy,row,actor_id):
 def handler(member_from_request,origin,logger):
     async def handle(request):
         profile=member_from_request(request); policy=TenantPolicy(profile or {})
-        if not profile or not policy.allows('tasks'):
+        if not profile or not (policy.allows('tasks') or any(str(item).startswith('tasks:') for item in (profile.get('permissions') or []))):
             return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
         tenant=str(profile['tenant_id']); actor=int(profile['telegram_id']); task_id=request.match_info.get('id')
         if task_id:
@@ -35,6 +35,8 @@ def handler(member_from_request,origin,logger):
             except (TypeError,ValueError):return web.json_response({'success':False,'error':'invalid_id'},status=400)
         try:
             if request.method=='GET':
+                if not policy.allows_action('tasks','view'):
+                    return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
                 if not task_id and request.query.get('options')=='1':
                     options=await asyncio.to_thread(task_options,tenant,actor,policy.privileged)
                     return web.json_response({'success':True,**_jsonable(options)},headers={'Cache-Control':'no-store'})
@@ -47,6 +49,9 @@ def handler(member_from_request,origin,logger):
             require_json_post(request,origin)
             data=await request.json()
             if not isinstance(data,dict):return web.json_response({'success':False,'error':'invalid_body'},status=400)
+            permission_action='create' if not task_id else ('delete' if data.get('action')=='archive' else 'update')
+            if not policy.allows_action('tasks',permission_action):
+                return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
             if not task_id:
                 if set(data)-{'deal_id','text','responsible_id','due_at','request_id'}:return web.json_response({'success':False,'error':'invalid_fields'},status=400)
                 responsible=int(data.get('responsible_id') or actor)

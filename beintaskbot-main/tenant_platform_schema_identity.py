@@ -38,6 +38,29 @@ def migrate_identity_schema(cur) -> None:
     # entitlement. Existing tokens remain valid and default to Beintaskbot.
     cur.execute("ALTER TABLE saas_auth_tokens ADD COLUMN IF NOT EXISTS destination_product TEXT NOT NULL DEFAULT 'beintaskbot'")
     cur.execute("CREATE INDEX IF NOT EXISTS saas_auth_tokens_user_idx ON saas_auth_tokens(user_id,purpose,created_at DESC)")
+    # Account fields are additive so existing Telegram identities remain valid.
+    for column, definition in (
+        ("first_name", "TEXT NOT NULL DEFAULT ''"),
+        ("last_name", "TEXT NOT NULL DEFAULT ''"),
+        ("login", "TEXT NOT NULL DEFAULT ''"),
+        ("avatar_url", "TEXT NOT NULL DEFAULT ''"),
+        ("status", "TEXT NOT NULL DEFAULT 'active'"),
+        ("last_login_at", "TIMESTAMPTZ NULL"),
+    ):
+        cur.execute(f"ALTER TABLE saas_auth_users ADD COLUMN IF NOT EXISTS {column} {definition}")
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS saas_auth_users_login_idx ON saas_auth_users(lower(login)) WHERE login <> ''")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS saas_user_profiles (
+            actor_id BIGINT PRIMARY KEY,
+            first_name TEXT NOT NULL DEFAULT '',
+            last_name TEXT NOT NULL DEFAULT '',
+            phone TEXT NOT NULL DEFAULT '',
+            avatar_url TEXT NOT NULL DEFAULT '',
+            login TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    """)
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS saas_user_profiles_login_idx ON saas_user_profiles(lower(login)) WHERE login <> ''")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS saas_auth_login_attempts (
             id UUID PRIMARY KEY,
@@ -63,6 +86,17 @@ def migrate_identity_schema(cur) -> None:
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS saas_tenant_browser_sessions (
+            id UUID PRIMARY KEY,
+            tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+            actor_id BIGINT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            expires_at TIMESTAMPTZ NOT NULL,
+            revoked_at TIMESTAMPTZ NULL
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS saas_browser_sessions_actor_idx ON saas_tenant_browser_sessions(tenant_id,actor_id,expires_at DESC) WHERE revoked_at IS NULL")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS saas_tenant_members (
             tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -96,9 +130,12 @@ def migrate_identity_schema(cur) -> None:
     # introduced. Replace only the generated role constraints; data is
     # preserved and the migration is safe to run on every startup.
     cur.execute("ALTER TABLE saas_tenant_members DROP CONSTRAINT IF EXISTS saas_tenant_members_role_check")
-    cur.execute("ALTER TABLE saas_tenant_members ADD CONSTRAINT saas_tenant_members_role_check CHECK (role IN ('owner', 'admin', 'manager', 'worker', 'master'))")
+    cur.execute("ALTER TABLE saas_tenant_members ADD CONSTRAINT saas_tenant_members_role_check CHECK (role IN ('owner', 'admin', 'manager', 'operator', 'worker', 'master'))")
+    cur.execute("ALTER TABLE saas_tenant_members ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ NULL")
     cur.execute("ALTER TABLE saas_tenant_invites DROP CONSTRAINT IF EXISTS saas_tenant_invites_role_check")
-    cur.execute("ALTER TABLE saas_tenant_invites ADD CONSTRAINT saas_tenant_invites_role_check CHECK (role IN ('admin', 'manager', 'worker', 'master'))")
+    cur.execute("ALTER TABLE saas_tenant_invites ADD CONSTRAINT saas_tenant_invites_role_check CHECK (role IN ('admin', 'manager', 'operator', 'worker', 'master'))")
+    cur.execute("ALTER TABLE saas_tenant_invites ADD COLUMN IF NOT EXISTS invited_email TEXT NOT NULL DEFAULT ''")
+    cur.execute("ALTER TABLE saas_auth_users ADD COLUMN IF NOT EXISTS pending_invite_id UUID NULL")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS saas_tenant_integrations (
             tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,

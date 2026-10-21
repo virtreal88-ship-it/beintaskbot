@@ -6,6 +6,7 @@ from aiohttp import web
 from tenant_crm_native_deals import create_deal,get_deal,list_deals,update_deal,archive_deal,deal_options
 from tenant_request_origin import require_json_post
 from tenant_linear_policy import TenantLinearError
+from tenant_policy import TenantPolicy
 
 
 def _jsonable(value):
@@ -19,14 +20,17 @@ def _jsonable(value):
 def handler(member_from_request,origin,logger):
     async def handle(request):
         profile=member_from_request(request)
-        if not profile or profile.get('role') not in ('owner','admin','manager'):
+        if not profile:
             return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
+        policy=TenantPolicy(profile)
         tenant_id=str(profile['tenant_id']); deal_id=request.match_info.get('id')
         if deal_id:
             try: UUID(deal_id)
             except (TypeError,ValueError): return web.json_response({'success':False,'error':'invalid_id'},status=400)
         try:
             if request.method=='GET':
+                if not policy.allows_action('deals','view'):
+                    return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
                 if request.query.get('options')=='1':
                     result=await asyncio.to_thread(deal_options,tenant_id)
                     return web.json_response({'success':True,**_jsonable(result)},headers={'Cache-Control':'no-store'})
@@ -36,6 +40,9 @@ def handler(member_from_request,origin,logger):
             require_json_post(request,origin)
             data=await request.json()
             if not isinstance(data,dict): return web.json_response({'success':False,'error':'invalid_body'},status=400)
+            permission_action='delete' if data.get('action')=='archive' else ('create' if not deal_id else 'update')
+            if not policy.allows_action('deals',permission_action):
+                return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
             if data.get('action')=='archive' and deal_id:
                 result=await asyncio.to_thread(archive_deal,tenant_id,deal_id)
                 return web.json_response({'success':True,'archived':result})

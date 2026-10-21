@@ -7,6 +7,11 @@ from tenant_platform_common import (
 )
 from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, _json
 from tenant_workflow_store import _read_tenant_workflow
+from tenant_policy import TenantPolicy
+
+def _can_manage_members(current: dict | None) -> bool:
+    return bool(current and current.get('active') is not False
+                and TenantPolicy(current).allows_action('employees', 'manage'))
 
 def create_tenant(*, name: str, industry: str, owner_telegram_id: int, owner_name: str) -> dict:
     company = str(name or "").strip()[:120]
@@ -37,10 +42,17 @@ def member(tenant_id: str, telegram_id: int) -> dict | None:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT m.*, au.email, t.name AS tenant_name, t.slug AS tenant_slug, t.status AS tenant_status,
-                       t.modules, t.notification_rules, t.onboarding, t.industry
+                       t.modules, t.notification_rules, t.onboarding, t.industry,
+                       COALESCE(NULLIF(au.first_name,''),up.first_name,'') AS first_name,
+                       COALESCE(NULLIF(au.last_name,''),up.last_name,'') AS last_name,
+                       COALESCE(NULLIF(au.avatar_url,''),up.avatar_url,'') AS avatar_url,
+                       COALESCE(NULLIF(au.login,''),up.login,'') AS login,
+                       COALESCE(NULLIF(au.phone,''),up.phone,'') AS account_phone, au.status AS account_status,
+                       COALESCE(au.last_login_at,m.last_login_at) AS account_last_login_at
                 FROM saas_tenant_members m
                 JOIN saas_tenants t ON t.id = m.tenant_id
                 LEFT JOIN saas_auth_users au ON au.actor_id = m.telegram_id
+                LEFT JOIN saas_user_profiles up ON up.actor_id = m.telegram_id
                 WHERE m.tenant_id = %s::uuid AND m.telegram_id = %s AND m.active = TRUE
             """, (tenant_id, int(telegram_id)))
             row = cur.fetchone()
@@ -52,7 +64,7 @@ def member(tenant_id: str, telegram_id: int) -> dict | None:
     result["tenant_id"] = str(result["tenant_id"])
     # ``member`` is returned directly by JSON API handlers. PostgreSQL gives
     # timestamps as datetime instances, which must be made JSON-safe here.
-    for key in ("created_at", "updated_at"):
+    for key in ("created_at", "updated_at", "last_login_at", "account_last_login_at"):
         if result.get(key):
             result[key] = result[key].isoformat()
     for key in ("permissions", "modules", "notification_rules", "onboarding"):
@@ -78,7 +90,7 @@ def _member_payload(row: dict) -> dict:
     """Make a member row safe to return from the platform API."""
     result = dict(row)
     result["tenant_id"] = str(result["tenant_id"])
-    for key in ("created_at", "updated_at"):
+    for key in ("created_at", "updated_at", "last_login_at"):
         if result.get(key):
             result[key] = result[key].isoformat()
     if not isinstance(result.get("permissions"), list):
@@ -89,16 +101,21 @@ def _member_payload(row: dict) -> dict:
 def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
     """Return the tenant's employee cards to its owner only."""
     current = member(tenant_id, owner_id)
-    if not current or current.get("role") != "owner":
+    if not _can_manage_members(current):
         raise TenantPlatformError("İcazə yoxdur.")
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT m.tenant_id, m.telegram_id, m.display_name, m.role, m.permissions, m.active,
-                       m.created_at, m.updated_at, au.email
+                       m.created_at, m.updated_at, m.last_login_at, au.email, COALESCE(NULLIF(au.phone,''),up.phone,'') AS phone,
+                       COALESCE(NULLIF(au.first_name,''),up.first_name,'') AS first_name,
+                       COALESCE(NULLIF(au.last_name,''),up.last_name,'') AS last_name,
+                       COALESCE(NULLIF(au.avatar_url,''),up.avatar_url,'') AS avatar_url,
+                       COALESCE(NULLIF(au.login,''),up.login,'') AS login, au.status AS account_status
                 FROM saas_tenant_members m
                 LEFT JOIN saas_auth_users au ON au.actor_id = m.telegram_id
+                LEFT JOIN saas_user_profiles up ON up.actor_id = m.telegram_id
                 WHERE m.tenant_id = %s::uuid
                 ORDER BY CASE WHEN m.role = 'owner' THEN 0 ELSE 1 END, m.display_name, m.telegram_id
             """, (tenant_id,))
@@ -114,7 +131,7 @@ def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_na
     after Telegram proves that they own this exact numeric account ID.
     """
     current = member(tenant_id, owner_id)
-    if not current or current.get("role") != "owner":
+    if not _can_manage_members(current):
         raise TenantPlatformError("İcazə yoxdur.")
     try:
         target_id = int(telegram_id)
@@ -128,6 +145,13 @@ def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_na
     is_owner = target_id == int(current["telegram_id"])
     selected_role = _role(str(role or ""), owner=is_owner)
     selected_permissions = _permissions(permissions, selected_role)
+    existing_member = member(tenant_id, target_id)
+    existed = existing_member is not None
+    if current.get('role') != 'owner':
+        if selected_role in {'owner', 'admin'} or set(selected_permissions) - set(current.get('permissions') or []):
+            raise TenantPlatformError('Administrator yalnız öz hüquqları daxilində əməkdaş idarə edə bilər.')
+        if existing_member and existing_member.get('role') in {'owner', 'admin'}:
+            raise TenantPlatformError('Administrator sahibin və ya başqa administratorun rolunu dəyişə bilməz.')
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
@@ -143,6 +167,10 @@ def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_na
                 RETURNING tenant_id, telegram_id, display_name, role, permissions, active, created_at, updated_at
             """, (tenant_id, target_id, name, selected_role, _json(selected_permissions), int(owner_id)))
             row = cur.fetchone()
+            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+                           VALUES(%s,%s::uuid,%s,%s,'employee',%s,%s::jsonb)''',
+                        (uuid.uuid4(),tenant_id,int(owner_id),'employee.updated' if existed else 'employee.created',
+                         str(target_id),_json({'role':selected_role,'permission_count':len(selected_permissions)})))
         conn.commit()
     return _member_payload(row)
 
@@ -150,7 +178,7 @@ def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_na
 def deactivate_member(*, tenant_id: str, owner_id: int, telegram_id: int) -> dict:
     """Disable a former employee without deleting their audit record."""
     current = member(tenant_id, owner_id)
-    if not current or current.get("role") != "owner":
+    if not _can_manage_members(current):
         raise TenantPlatformError("İcazə yoxdur.")
     if int(telegram_id) == int(current["telegram_id"]):
         raise TenantPlatformError("Öz girişinizi bağlaya bilməzsiniz.")
@@ -160,9 +188,14 @@ def deactivate_member(*, tenant_id: str, owner_id: int, telegram_id: int) -> dic
             cur.execute("""
                 UPDATE saas_tenant_members SET active = FALSE, updated_at = now()
                 WHERE tenant_id = %s::uuid AND telegram_id = %s AND role <> 'owner'
+                  AND (%s='owner' OR role NOT IN ('admin'))
                 RETURNING tenant_id, telegram_id, display_name, role, permissions, active, created_at, updated_at
-            """, (tenant_id, int(telegram_id)))
+            """, (tenant_id, int(telegram_id), current.get('role')))
             row = cur.fetchone()
+            if row:
+                cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+                               VALUES(%s,%s::uuid,%s,'employee.deactivated','employee',%s,'{}'::jsonb)''',
+                            (uuid.uuid4(),tenant_id,int(owner_id),str(telegram_id)))
         conn.commit()
     if not row:
         raise TenantPlatformError("Əməkdaş tapılmadı.")

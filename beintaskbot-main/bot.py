@@ -241,7 +241,7 @@ from hot_orders import (
 from tenant_platform import (
     TenantPlatformError, decide_invite_request as decide_tenant_invite_request,
     begin_kommo_oauth, consume_kommo_oauth_state,
-    create_invite as create_tenant_invite, create_tenant,
+    create_invite as create_tenant_invite, accept_email_invite as accept_tenant_email_invite, create_tenant,
     deactivate_member as deactivate_tenant_member, disconnect_integration as disconnect_tenant_integration,
     finalize_onboarding, list_integrations as list_tenant_integrations, list_invite_requests as list_tenant_invite_requests,
     list_members as list_tenant_members, kommo_credentials, member as tenant_member, request_kommo_connection,
@@ -260,6 +260,15 @@ from tenant_platform import (
     claim_linear_news_publish_slot,
     update_linear_news_review,
     list_tenant_workflow_config, save_tenant_workflow_config,
+)
+from tenant_account_store import (
+    profile as tenant_account_profile, update_profile as update_tenant_account_profile,
+    create_session as create_tenant_browser_session,
+    session_is_active as tenant_browser_session_is_active,
+    list_sessions as list_tenant_browser_sessions,
+    revoke_session as revoke_tenant_browser_session,
+    notification_preferences as tenant_notification_preferences,
+    record_login as record_tenant_login,
 )
 # import sqlite3  # replaced by gh_storage
 
@@ -17819,11 +17828,17 @@ _tenant_browser_session = TenantBrowserSession(
     identity_allowed=_tenant_demo_identity_allowed,
     membership_error=TenantPlatformError,
     clock=lambda: _time_module.time(),
+    create_session=create_tenant_browser_session,
+    session_active=tenant_browser_session_is_active,
 )
 
 
 def _make_tenant_session(tenant_id: str, chat_id: int) -> str:
     return _tenant_browser_session.issue(tenant_id, chat_id)
+
+
+def _tenant_session_id(request: web.Request) -> str | None:
+    return _tenant_browser_session.session_id(request)
 
 
 def _tenant_session_identity(request: web.Request) -> tuple[str, int] | None:
@@ -18531,6 +18546,13 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         cookie_ttl=_TENANT_SESSION_TTL_SEC,
         base_dir=os.path.dirname(os.path.abspath(__file__)), logger=logger,
         email_auth=tenant_email_auth, sso=tenant_sso,
+        account_profile=tenant_account_profile,
+        update_account_profile=update_tenant_account_profile,
+        list_sessions=list_tenant_browser_sessions,
+        revoke_session=revoke_tenant_browser_session,
+        session_id=_tenant_session_id,
+        record_login=record_tenant_login,
+        accept_email_invite=accept_tenant_email_invite,
         # The retired legacy WebApp identity resolver is no longer present in
         # this service.  Keep the optional compatibility endpoint disabled
         # instead of failing the entire public HTTP server at startup.
@@ -18546,6 +18568,14 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_post('/api/platform/auth/email/link/request', auth_api['email_link_request'])
     app_web.router.add_post('/api/legacy-auth/email/link/request', auth_api['legacy_email_link_request'])
     app_web.router.add_post('/api/platform/auth/email/link/confirm', auth_api['email_link_confirm'])
+    app_web.router.add_route('*', '/api/platform/account', auth_api['account'])
+    app_web.router.add_route('*', '/api/platform/sessions', auth_api['sessions'])
+    app_web.router.add_post('/api/platform/workspace/switch', auth_api['switch_workspace'])
+    from tenant_account_api import NotificationSettingsContext, handler as tenant_notification_settings_handler
+    app_web.router.add_route('*','/api/platform/notification-preferences',
+        tenant_notification_settings_handler(NotificationSettingsContext(
+            member=_tenant_member_from_request,preferences=tenant_notification_preferences,
+            origin=CANONICAL_WEB_ORIGIN,platform_error=TenantPlatformError)))
     app_web.router.add_get('/api/platform/sso/authorize', auth_api['sso_authorize'])
     app_web.router.add_post('/api/platform/sso/token', auth_api['sso_token'])
     app_web.router.add_post("/api/platform/logout", auth_api["logout"])
@@ -18626,6 +18656,11 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         list_invite_requests=list_tenant_invite_requests,
         decide_invite_request=decide_tenant_invite_request,
         platform_error=TenantPlatformError,
+        can_manage=lambda profile: TenantPolicy(profile).allows_action('employees','manage'),
+        accept_email_invite=accept_tenant_email_invite,
+        issue_session=_make_tenant_session,
+        cookie_name=_TENANT_SESSION_COOKIE,
+        cookie_ttl=_TENANT_SESSION_TTL_SEC,
     ))
     app_web.router.add_get("/api/platform/members", member_api["members"])
     app_web.router.add_post("/api/platform/members", member_api["members"])
@@ -18691,6 +18726,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_post("/api/platform/onboarding/finish", onboarding_complete)
     app_web.router.add_post("/api/platform/invites", member_api["create_invite"])
     app_web.router.add_post("/api/platform/invites/accept", member_api["accept_invite"])
+    app_web.router.add_post("/api/platform/invites/accept/email", member_api["accept_email_invite"])
     app_web.router.add_get("/api/platform/access-requests", member_api["invite_requests"])
     app_web.router.add_post("/api/platform/access-requests", member_api["invite_requests"])
     kommo_api = tenant_kommo_handlers(_tenant_kommo_service.context, _tenant_kommo_service)

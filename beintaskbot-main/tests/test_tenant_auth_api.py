@@ -19,6 +19,7 @@ class Request:
         self.headers = {"Origin": origin} if origin is not None else {}
         self.cookies = cookies or {}
         self.query_string = query_string
+        self.remote = "127.0.0.1"
 
     async def json(self):
         if isinstance(self.body, Exception):
@@ -103,6 +104,25 @@ class TenantAuthTests(unittest.IsolatedAsyncioTestCase):
         self.tenants.return_value[0]["status"] = "onboarding"
         response = await self.api["login"](Request({"telegram": {}}))
         self.assertEqual(payload(response)["redirect"], "/setup")
+
+    async def test_existing_email_user_accepts_invite_during_login(self):
+        email_auth = SimpleNamespace(login=Mock(return_value={"actor_id": 123, "tenant_id": "company-a"}))
+        accept_invite = Mock(return_value={"tenant_id": "company-b", "tenant_name": "Other"})
+        account = Mock(return_value={"email": "person@example.com", "display_name": "Person"})
+        companies = Mock(side_effect=[
+            [{"id": "company-a", "name": "A"}],
+            [{"id": "company-b", "name": "B"}],
+        ])
+        record_login = Mock()
+        context = replace(self.context, email_auth=email_auth, accept_email_invite=accept_invite,
+                          account_profile=account, tenants_for_user=companies, record_login=record_login)
+        api = handlers(context)
+        response = await api["email_login"](Request({"email": "person@example.com", "password": "valid", "invite_token": "once"}))
+        self.assertEqual(response.status, 200)
+        self.assertTrue(payload(response)["invite_accepted"])
+        self.assertIn("company-b:123", response.cookies["tenant_session"].value)
+        accept_invite.assert_called_once_with(token="once", actor_id=123, email="person@example.com", display_name="Person")
+        record_login.assert_called_once_with(tenant_id="company-b", actor_id=123)
 
     async def test_login_denies_unknown_user_and_reports_platform_outage(self):
         self.tenants.return_value = []
