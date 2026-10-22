@@ -13,6 +13,7 @@ from tenant_ai_agent_test_mode import (read_test_mode, save_test_mode, verify_te
     discover_test_talks, assert_expected_route)
 from tenant_ai_agent_runtime_flags import (configured as runtime_configured,
     enabled as runtime_flag, staging_mode as runtime_staging_mode)
+from tenant_ai_expert_tools import registry_snapshot
 
 
 def _expected(data, profile):
@@ -108,7 +109,23 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 elif resource == 'test_mode':
                     result = await asyncio.to_thread(read_test_mode, profile)
                 elif resource == 'agents':
-                    result = await asyncio.to_thread(list_agents, profile)
+                    if request.query.get('view') == 'teams':
+                        rows = await asyncio.to_thread(list_agents, profile)
+                        teams=[]
+                        for agent in rows:
+                            triggers=await asyncio.to_thread(list_triggers,profile,agent['id'])
+                            teams.append({
+                                'id':agent['id'],'name':agent['name'],'role':agent.get('role') or 'primary',
+                                'enabled':bool(agent.get('enabled')),'mode':agent.get('mode') or 'manual',
+                                'expert_policy':agent.get('expert_policy') or {},'version':agent.get('version'),
+                                'triggers':[{'id':item['id'],'name':item['name'],'trigger_type':item['trigger_type'],
+                                    'enabled':bool(item.get('enabled')),'actions':item.get('actions') or [],
+                                    'expert_agent_ids':(item.get('condition') or {}).get('expert_agent_ids') or [],
+                                    'version':item.get('version')} for item in triggers],
+                            })
+                        result={'agents':teams,'tool_registry':registry_snapshot()}
+                    else:
+                        result = await asyncio.to_thread(list_agents, profile)
                 elif resource == 'options':
                     # Use the tenant's existing Kommo adapter, not a browser
                     # supplied account.  This keeps the pick-list current and

@@ -172,6 +172,48 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
         namespace['list_knowledge'].assert_not_called()
         member.assert_called_once_with(request)
 
+    def test_get_ai_teams_returns_tenant_scoped_sanitized_team_snapshot(self):
+        profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
+        rows = [{
+            'id': 'agent-primary', 'tenant_id': 'must-not-leak', 'name': 'Sales',
+            'instructions': 'private prompt', 'enabled': True, 'mode': 'manual',
+            'role': 'primary', 'expert_policy': {'expert_agent_ids': ['expert-a'], 'max_tokens': 7000},
+            'version': 4,
+        }]
+        triggers = [{
+            'id': 'trigger-1', 'name': 'Escalate', 'trigger_type': 'keyword',
+            'condition': {'expert_agent_ids': ['expert-a'], 'private_condition': 'must-not-leak'},
+            'actions': ['call_expert'], 'enabled': True, 'version': 2,
+        }]
+        handler, namespace = load_handler(
+            list_agents=Mock(return_value=rows),
+            list_triggers=Mock(return_value=triggers),
+            registry_snapshot=Mock(return_value=[{'id': 'system_status', 'status': 'integration_unavailable',
+                'registered': True, 'read_only': True, 'customer_send_allowed': False}]),
+        )
+        request = SimpleNamespace(method='GET', query={'view': 'teams', 'tenant_id': 'attacker-tenant'})
+
+        response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
+            Mock(), 'agents')(request))
+
+        self.assertEqual(response.status, 200)
+        payload = json.loads(response.text)
+        self.assertTrue(payload['success'])
+        self.assertEqual(payload['result']['agents'], [{
+            'id': 'agent-primary', 'name': 'Sales', 'role': 'primary', 'enabled': True,
+            'mode': 'manual', 'expert_policy': {'expert_agent_ids': ['expert-a'], 'max_tokens': 7000},
+            'version': 4, 'triggers': [{'id': 'trigger-1', 'name': 'Escalate',
+                'trigger_type': 'keyword', 'enabled': True, 'actions': ['call_expert'],
+                'expert_agent_ids': ['expert-a'], 'version': 2}],
+        }])
+        self.assertNotIn('private prompt', response.text)
+        self.assertNotIn('private_condition', response.text)
+        self.assertEqual(payload['result']['tool_registry'][0]['status'], 'integration_unavailable')
+        namespace['list_agents'].assert_called_once_with(profile)
+        namespace['list_triggers'].assert_called_once_with(profile, 'agent-primary')
+        namespace['registry_snapshot'].assert_called_once_with()
+        namespace['list_knowledge'].assert_not_called()
+
     def test_pilot_preflight_is_get_only_and_uses_verified_profile(self):
         profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
         handler, _ = load_handler(_origin=lambda *_args: None, _json_body=lambda _request: True,
