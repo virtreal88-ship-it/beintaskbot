@@ -81,7 +81,8 @@ def enqueue_inbound(cur, *, tenant_id, channel_id, conversation_id, lead_id,
     cur.execute('''INSERT INTO saas_ai_simulation_queue
       (id,tenant_id,channel_id,conversation_id,lead_id,source_message_id,source_event_id,event_fingerprint)
       VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s::uuid,%s,%s)
-      ON CONFLICT(tenant_id,channel_id,conversation_id,source_message_id) DO NOTHING RETURNING id''',
+      ON CONFLICT(tenant_id,channel_id,conversation_id,source_message_id)
+        WHERE recheck_of_run_id IS NULL DO NOTHING RETURNING id''',
       (str(uuid.uuid4()),tenant_id,channel_id,conversation_id,int(lead_id),str(source_message_id),
        str(source_event_id)[:500],_event_fingerprint(source_event_id)))
     return bool(cur.fetchone())
@@ -90,6 +91,7 @@ def enqueue_inbound(cur, *, tenant_id, channel_id, conversation_id, lead_id,
 def _public_config(row):
     if not row:
         return {'enabled': False, 'emergency_stop': False, 'agent_id': None,
+                'state':'stopped',
                 'channel_ids': [], 'conversation_ids': [], 'token_budget': 0,
                 'message_limit': 0, 'max_parallel': 1, 'max_calls_per_event': 3,
                 'max_output_tokens': 800, 'starts_at': None, 'ends_at': None,
@@ -111,7 +113,7 @@ def read_config(profile):
 
 
 def save_config(profile, data):
-    allowed = {'enabled','emergency_stop','agent_id','channel_ids','conversation_ids','confirm_start',
+    allowed = {'enabled','emergency_stop','state','agent_id','channel_ids','conversation_ids','confirm_start',
                'ends_at','token_budget','message_limit','max_parallel','max_calls_per_event','max_output_tokens'}
     if not isinstance(data, dict) or set(data) - allowed:
         raise TenantLinearError('Simulation ayarları düzgün deyil.')
@@ -143,6 +145,15 @@ def save_config(profile, data):
             enabling = values.get('enabled') is True and current.get('enabled') is not True
             if enabling and data.get('confirm_start') is not True:
                 raise TenantLinearError('Simulation başlatmaq üçün təsdiq tələb olunur.', 409)
+            requested_state=data.get('state')
+            if requested_state not in (None,'running','paused','stopped'):
+                raise TenantLinearError('Simulation statusu düzgün deyil.')
+            if enabling:
+                state='running'
+            elif values.get('enabled'):
+                state='running'
+            else:
+                state=requested_state if requested_state in {'paused','stopped'} else 'stopped'
             for key, low, high in (('token_budget',0,2_000_000_000),('message_limit',0,1_000_000),
                                    ('max_parallel',1,10),('max_calls_per_event',1,8),('max_output_tokens',32,1800)):
                 value = values.get(key)
@@ -209,11 +220,11 @@ def save_config(profile, data):
             if values.get('emergency_stop') is True:
                 cur.execute("UPDATE saas_ai_simulation_queue SET state='skipped',error_code='emergency_stop',completed_at=now(),lease_token=NULL,lease_until=NULL WHERE tenant_id=%s::uuid AND state='queued'", (tenant,))
                 cur.execute("UPDATE saas_ai_simulation_queue SET state='skipped',error_code='emergency_stop',completed_at=now(),lease_token=NULL,lease_until=NULL WHERE tenant_id=%s::uuid AND state='processing' AND provider_started_at IS NULL", (tenant,))
-            cur.execute('''UPDATE saas_ai_simulation_configs SET enabled=%s,emergency_stop=%s,agent_id=%s::uuid,
+            cur.execute('''UPDATE saas_ai_simulation_configs SET enabled=%s,state=%s,emergency_stop=%s,agent_id=%s::uuid,
               channel_ids=%s::jsonb,conversation_ids=%s::jsonb,starts_at=%s,ends_at=%s,token_budget=%s,
               message_limit=%s,max_parallel=%s,max_calls_per_event=%s,max_output_tokens=%s,
               version=version+1,updated_by=%s,updated_at=now() WHERE tenant_id=%s::uuid RETURNING *''',
-              (bool(values.get('enabled')),bool(values.get('emergency_stop')),agent_id,
+              (bool(values.get('enabled')),state,bool(values.get('emergency_stop')),agent_id,
                _json(channels),_json(conversations),starts_at,ends_at,values['token_budget'],
                values['message_limit'],values['max_parallel'],values['max_calls_per_event'],
                values['max_output_tokens'],actor,tenant))
@@ -381,7 +392,7 @@ def _adjust_reservation(cur,job,call_no,required_tokens):
     own=cur.fetchone() or {}
     if own.get('state')!='reserved': return False
     old=max(0,int(own.get('reserved_tokens') or 0))
-    cur.execute('''SELECT COALESCE(sum(CASE WHEN state IN ('reserved','unknown') THEN reserved_tokens ELSE actual_tokens END),0) AS used
+    cur.execute('''SELECT COALESCE(sum(CASE WHEN u.state IN ('reserved','unknown') THEN u.reserved_tokens ELSE u.actual_tokens END),0) AS used
       FROM saas_ai_simulation_usage u JOIN saas_ai_simulation_configs c ON c.tenant_id=u.tenant_id
       WHERE u.tenant_id=%s::uuid AND u.created_at>=c.starts_at
         AND NOT (u.queue_id=%s::uuid AND u.call_no=%s)''',(job['tenant_id'],job['id'],call_no))
@@ -399,7 +410,7 @@ def _mark_provider_started(cur,job,call_no):
         return False
     cur.execute('''SELECT c.agent_id AS configured_agent,c.enabled,c.emergency_stop,c.starts_at,c.ends_at,c.channel_ids,c.conversation_ids,
         s.enabled AS company_enabled,s.emergency_stop AS company_stop,t.status AS tenant_status,
-        q.channel_id,q.conversation_id,q.lead_id,q.source_event_id,u.agent_id AS call_agent,u.call_kind
+        q.channel_id,q.conversation_id,q.lead_id,q.source_event_id,q.recheck_of_run_id,u.agent_id AS call_agent,u.call_kind
       FROM saas_ai_simulation_configs c JOIN saas_ai_agent_settings s ON s.tenant_id=c.tenant_id
       JOIN saas_tenants t ON t.id=c.tenant_id
       JOIN saas_ai_simulation_queue q ON q.tenant_id=c.tenant_id AND q.id=%s::uuid
@@ -452,7 +463,7 @@ def _mark_provider_started(cur,job,call_no):
         if valid and is_group:
             valid=_group_active_binding(cur,str(job['tenant_id']),str(job['channel_id']),
                                         str(job['conversation_id']),str(primary['id']))
-        if valid:
+        if valid and not row.get('recheck_of_run_id'):
             cur.execute("SELECT agent_id,state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s",
                         (job['tenant_id'],str(job['channel_id']),str(job['conversation_id'])))
             live=cur.fetchone() or {}
@@ -470,12 +481,12 @@ def _mark_provider_started(cur,job,call_no):
             cur.execute('SELECT ai_legacy_blocked(%s::uuid,%s,%s,%s) AS blocked',
                         (job['tenant_id'],str(job['channel_id']),str(job['conversation_id']),fingerprint))
             valid=not bool((cur.fetchone() or {}).get('blocked'))
-        if valid:
+        if valid and not row.get('recheck_of_run_id'):
             fingerprint=_event_fingerprint(row.get('source_event_id'))
             cur.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND scope_channel_id=%s AND conversation_id=%s AND event_fingerprint=%s AND state IN ('queued','processing','sent','unknown') LIMIT 1",
                         (job['tenant_id'],str(job['channel_id']),str(job['conversation_id']),fingerprint))
             valid=not bool(cur.fetchone())
-        if valid:
+        if valid and not row.get('recheck_of_run_id'):
             cur.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND scope_channel_id=%s AND conversation_id=%s AND state IN ('queued','processing') LIMIT 1",
                         (job['tenant_id'],str(job['channel_id']),str(job['conversation_id'])))
             valid=not bool(cur.fetchone())
@@ -597,17 +608,18 @@ def _complete(job, outcome, *, reply='', stop_reason='', agent_id=None, triggers
               (str(uuid.uuid4()),job['tenant_id'],job['id'],job['channel_id'],job['conversation_id'],job['source_message_id'],
                agent_id,outcome,str(reply or '')[:8000],str(stop_reason or '')[:200],_json(list(triggers)),_json(list(knowledge)),
                _json(list(experts)),_json(list(events)),max(0,int(total_tokens))))
-            cur.execute('''INSERT INTO saas_ai_simulation_dialog_state
-              (tenant_id,channel_id,conversation_id,session_started_at,last_queue_id,virtual_state)
-              VALUES(%s::uuid,%s::uuid,%s,%s,%s::uuid,%s::jsonb)
-              ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET
-                session_started_at=EXCLUDED.session_started_at,
-                revision=CASE WHEN saas_ai_simulation_dialog_state.session_started_at=EXCLUDED.session_started_at
-                  THEN saas_ai_simulation_dialog_state.revision+1 ELSE 1 END,
-                last_queue_id=EXCLUDED.last_queue_id,virtual_state=EXCLUDED.virtual_state,updated_at=now()''',
-              (job['tenant_id'],job['channel_id'],job['conversation_id'],job.get('simulation_started_at') or datetime.now(timezone.utc),
-               job['id'],_json({'outcome':str(outcome or '')[:40],'last_reply':str(reply or '')[:4000],
-                 'stop_reason':str(stop_reason or '')[:200],'sent':False,'source_message_id':str(job['source_message_id'])})))
+            if not job.get('recheck_of_run_id'):
+                cur.execute('''INSERT INTO saas_ai_simulation_dialog_state
+                  (tenant_id,channel_id,conversation_id,session_started_at,last_queue_id,virtual_state)
+                  VALUES(%s::uuid,%s::uuid,%s,%s,%s::uuid,%s::jsonb)
+                  ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET
+                    session_started_at=EXCLUDED.session_started_at,
+                    revision=CASE WHEN saas_ai_simulation_dialog_state.session_started_at=EXCLUDED.session_started_at
+                      THEN saas_ai_simulation_dialog_state.revision+1 ELSE 1 END,
+                    last_queue_id=EXCLUDED.last_queue_id,virtual_state=EXCLUDED.virtual_state,updated_at=now()''',
+                  (job['tenant_id'],job['channel_id'],job['conversation_id'],job.get('simulation_started_at') or datetime.now(timezone.utc),
+                   job['id'],_json({'outcome':str(outcome or '')[:40],'last_reply':str(reply or '')[:4000],
+                     'stop_reason':str(stop_reason or '')[:200],'sent':False,'source_message_id':str(job['source_message_id'])})))
             cur.execute("UPDATE saas_ai_simulation_queue SET state=%s,error_code=%s,lease_token=NULL,lease_until=NULL,completed_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND lease_token=%s::uuid",
               ('unknown' if outcome=='unknown' else ('failed' if outcome=='error' else ('skipped' if outcome in {'skipped','unsupported','blocked'} else 'completed')),str(error or '')[:80],job['tenant_id'],job['id'],job['lease_token']))
         conn.commit()
@@ -628,7 +640,7 @@ def process(job):
         with _connect() as conn:
             ensure_schema(conn)
             with conn.cursor() as cur:
-                cur.execute('''SELECT q.id,c.enabled,c.emergency_stop,c.agent_id,c.channel_ids,c.conversation_ids,
+                cur.execute('''SELECT q.id,q.recheck_of_run_id,c.enabled,c.emergency_stop,c.agent_id,c.channel_ids,c.conversation_ids,
                     c.starts_at,c.ends_at,c.token_budget,c.message_limit,c.max_parallel,c.max_calls_per_event,c.max_output_tokens,
                     a.id AS primary_id,a.name,a.instructions,a.enabled AS agent_enabled,a.role,a.mode,a.scopes,a.schedule,a.model,a.language,a.style,a.safety,a.expert_policy,
                     s.enabled AS company_enabled,s.emergency_stop AS company_stop,t.status AS tenant_status,
@@ -638,7 +650,7 @@ def process(job):
                       AND d.connect_channel_id=q.channel_id AND d.conversation_id=q.conversation_id AND d.lead_id=q.lead_id) AS route_valid,
                     cs.agent_id AS assigned_agent,cs.state AS live_state,ci.metadata AS ai_metadata,ci.secrets AS ai_secrets,
                     (SELECT company_instructions FROM saas_ai_agent_settings WHERE tenant_id=q.tenant_id) AS company_instructions
-                    ,(SELECT d.virtual_state FROM saas_ai_simulation_dialog_state d WHERE d.tenant_id=q.tenant_id
+                    ,(SELECT d.virtual_state FROM saas_ai_simulation_dialog_state d WHERE q.recheck_of_run_id IS NULL AND d.tenant_id=q.tenant_id
                        AND d.channel_id=q.channel_id AND d.conversation_id=q.conversation_id
                        AND d.session_started_at=c.starts_at) AS prior_virtual_state
                   FROM saas_ai_simulation_queue q JOIN saas_ai_simulation_configs c ON c.tenant_id=q.tenant_id
@@ -672,14 +684,14 @@ def process(job):
                     chosen,_reason=unique_connect_candidate(agents,channel,is_group=is_group)
                     if str(row.get('primary_id') or '')!=(str(chosen['id']) if chosen else ''):
                         result=('blocked','primary_not_unique_or_scope_mismatch',None,[],[],[],[],0)
-                    elif row.get('assigned_agent') and str(row['assigned_agent'])!=str(chosen['id']):
+                    elif not row.get('recheck_of_run_id') and row.get('assigned_agent') and str(row['assigned_agent'])!=str(chosen['id']):
                         result=('blocked','explicit_assignment_preserved',None,[],[],[],[],0)
                     elif row.get('role')!='primary' or row.get('agent_enabled') is not True or row.get('mode')!='automatic':
                         result=('blocked','primary_not_active_eligible',None,[],[],[],[],0)
                     elif is_group and not _group_active_binding(cur,tenant,channel,conversation,str(chosen['id'])):
                         result=('virtual_stop','group_not_active_or_primary_not_bound',str(chosen['id']),[],[],[],
                                 events+[{'type':'virtual_stop','reason':'group_not_active_or_primary_not_bound'}],0)
-                    elif row.get('live_state') in {'human','paused'}:
+                    elif not row.get('recheck_of_run_id') and row.get('live_state') in {'human','paused'}:
                         result=('virtual_stop','conversation_human_or_paused',str(chosen['id']),[],[],[],
                                 events+[{'type':'virtual_stop','reason':'conversation_human_or_paused'}],0)
                     elif not is_open(row.get('schedule') or {}):
@@ -693,10 +705,13 @@ def process(job):
                             result=('unsupported','simulation_media_context_unavailable',str(chosen['id']),[],[],[],
                                     events+[{'type':'simulation_unsupported','reason':'media_context_unavailable','message_type':media_type}],0)
                         else:
-                            fingerprint=_event_fingerprint(job['source_event_id'])
-                            cur.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND scope_channel_id=%s AND conversation_id=%s AND event_fingerprint=%s AND state IN ('queued','processing','sent','unknown') LIMIT 1",
-                                        (tenant,channel,conversation,fingerprint))
-                            active_conflict=bool(cur.fetchone())
+                            if not row.get('recheck_of_run_id'):
+                                fingerprint=_event_fingerprint(job['source_event_id'])
+                                cur.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND scope_channel_id=%s AND conversation_id=%s AND event_fingerprint=%s AND state IN ('queued','processing','sent','unknown') LIMIT 1",
+                                            (tenant,channel,conversation,fingerprint))
+                                active_conflict=bool(cur.fetchone())
+                            else:
+                                active_conflict=False
                         if media_type not in {'text','chat','conversation'} and not text.strip():
                             pass
                         elif active_conflict:
@@ -876,10 +891,12 @@ def list_runs(profile, *, limit=50):
             tenant,_actor=_authorize(cur,profile)
             cur.execute('''SELECT r.id,r.queue_id,r.channel_id,r.conversation_id,r.primary_agent_id,r.outcome,
               r.virtual_reply,r.virtual_stop_reason,r.virtual_triggers,r.knowledge_refs,r.expert_results,
-              r.events,r.total_tokens,r.created_at FROM saas_ai_simulation_runs r
+              r.events,r.total_tokens,r.created_at,q.recheck_of_run_id FROM saas_ai_simulation_runs r
+              JOIN saas_ai_simulation_queue q ON q.tenant_id=r.tenant_id AND q.id=r.queue_id
               WHERE r.tenant_id=%s::uuid ORDER BY r.created_at DESC LIMIT %s''',(tenant,safe_limit))
             rows=[]
             for row in cur.fetchall():
                 item=dict(row);item['created_at']=_iso(item.get('created_at'));item['sent']=False
+                item['recheck_of_run_id']=str(item['recheck_of_run_id']) if item.get('recheck_of_run_id') else None
                 rows.append(item)
             return rows

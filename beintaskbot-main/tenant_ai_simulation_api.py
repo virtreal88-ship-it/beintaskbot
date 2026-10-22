@@ -3,6 +3,7 @@ import asyncio
 from aiohttp import web
 
 from tenant_ai_simulation_engine import list_runs,read_config,save_config
+from tenant_ai_dashboard import dashboard,enqueue_recheck,events,issues,review_issue,simulation_run
 from tenant_linear_policy import TenantLinearError
 
 
@@ -16,6 +17,15 @@ def handler(member_from_request, canonical_origin, logger, resource):
             if request.method=='GET':
                 if resource=='runs':
                     result=await asyncio.to_thread(list_runs,profile,limit=request.query.get('limit',50))
+                elif resource=='dashboard':
+                    result=await asyncio.to_thread(dashboard,profile)
+                elif resource=='events':
+                    result=await asyncio.to_thread(events,profile,limit=request.query.get('limit',100),
+                        mode=request.query.get('mode','all'),event_type=request.query.get('type',''))
+                elif resource=='issues':
+                    result=await asyncio.to_thread(issues,profile,limit=request.query.get('limit',100))
+                elif resource=='run':
+                    result=await asyncio.to_thread(simulation_run,profile,request.match_info.get('run_id',''))
                 else:
                     result=await asyncio.to_thread(read_config,profile)
                 return web.json_response({'success':True,'result':result},headers=headers)
@@ -31,8 +41,16 @@ def handler(member_from_request, canonical_origin, logger, resource):
             if (str(data.get('expected_tenant_id') or '')!=str(profile.get('tenant_id'))
                     or str(data.get('expected_user_id') or '')!=str(profile.get('telegram_id'))):
                 raise TenantLinearError('Kabinet dəyişib. Yeniləyin.',409)
-            result=await asyncio.to_thread(save_config,profile,
-                {key:value for key,value in data.items() if key not in {'expected_tenant_id','expected_user_id'}})
+            clean={key:value for key,value in data.items() if key not in {'expected_tenant_id','expected_user_id'}}
+            if resource=='issue_review':
+                result=await asyncio.to_thread(review_issue,profile,request.match_info.get('run_id',''),
+                    clean.get('issue_key'),clean.get('status'))
+            elif resource=='recheck':
+                result=await asyncio.to_thread(enqueue_recheck,profile,request.match_info.get('run_id',''),clean.get('request_key'))
+            elif resource=='settings':
+                result=await asyncio.to_thread(save_config,profile,clean)
+            else:
+                raise TenantLinearError('This AI Dashboard action is not available.',404)
             return web.json_response({'success':True,'result':result},headers=headers)
         except TenantLinearError as exc:
             return web.json_response({'success':False,'error':str(exc),'code':'simulation_request_rejected'},
