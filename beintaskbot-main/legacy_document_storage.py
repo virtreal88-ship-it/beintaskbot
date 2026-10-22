@@ -259,5 +259,18 @@ def write_json(filename: str, data) -> bool:
     """Persist an arbitrary JSON-serializable document to the data branch."""
     detached = json.loads(json.dumps(data, ensure_ascii=False))
     with _lock:
+        had_previous = filename in _cache
+        previous = _cache.get(filename)
         _cache[filename] = detached
-    return _save_file(filename)
+    saved = _save_file(filename)
+    if saved:
+        return True
+    # Keep the in-memory view consistent with persistence failures. Restore
+    # only if no concurrent writer replaced the value while saving.
+    with _lock:
+        if _cache.get(filename) is detached:
+            if had_previous:
+                _cache[filename] = previous
+            else:
+                _cache.pop(filename, None)
+    return False
