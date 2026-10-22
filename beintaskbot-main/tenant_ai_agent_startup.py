@@ -28,18 +28,25 @@ def prepare_database() -> None:
     from tenant_platform_core import _connect, _fernet
     from tenant_ai_agents_schema import ensure_schema as ensure_agents_schema
     from tenant_chat_ai_schema import ensure_schema as ensure_chat_ai_schema
+    from tenant_ai_simulation_schema import ensure_schema as ensure_simulation_schema
 
     _fernet()
     with _connect() as conn:
         ensure_agents_schema(conn)
         ensure_chat_ai_schema(conn)
+        ensure_simulation_schema(conn)
 
 
 async def start_worker(app, worker, kommo_request, logger, wait_slot,
                        *, prepare_database_first=False,
-                       prepare=prepare_database) -> None:
+                       simulation_worker=None, prepare=prepare_database) -> None:
     """Optionally migrate an isolated staging DB before the worker can run."""
     if prepare_database_first:
         await asyncio.to_thread(_prepare_database_with_retry, prepare)
     app["tenant_ai_agent_worker"] = asyncio.create_task(
         worker(kommo_request, logger, wait_slot), name="tenant-ai-agent-worker")
+    if simulation_worker is not None:
+        from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+        if runtime_flag('AI_SIMULATION_ENABLED'):
+            app['tenant_ai_simulation_worker'] = asyncio.create_task(
+                simulation_worker(logger), name='tenant-ai-simulation-worker')
