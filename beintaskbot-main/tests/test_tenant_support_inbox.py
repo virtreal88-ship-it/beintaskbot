@@ -21,6 +21,7 @@ import tenant_support_inbox_store as store
 import tenant_support_inbox_summary as summary
 import tenant_ai_simulation_schema as simulation_schema
 import tenant_ai_simulation_engine as simulation
+import tenant_ai_dashboard as ai_dashboard
 from tenant_linear_policy import TenantLinearError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -92,7 +93,7 @@ def database():
 @pytest.fixture
 def db(database,monkeypatch):
     database.execute('TRUNCATE saas_tenants CASCADE');database.commit()
-    for module in (store,summary,actions,connect_ai,agents,run_store,simulation):monkeypatch.setattr(module,'_connect',lambda:database)
+    for module in (store,summary,actions,connect_ai,agents,run_store,simulation,ai_dashboard):monkeypatch.setattr(module,'_connect',lambda:database)
     for tenant,user,channel,lead in ((A,11,CA,41),(B,22,CB,42)):
         database.execute("INSERT INTO saas_tenants(id,slug,name,status,owner_telegram_id) VALUES(%s::uuid,%s,'Company','active',%s)",(tenant,tenant,user))
         database.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name) VALUES(%s::uuid,%s,'owner','Owner')",(tenant,user))
@@ -447,6 +448,22 @@ def queue_simulation(db, *, tenant=A, channel=CA, source, event='new-message',co
     return result
 
 
+def seed_simulation_run(db, *, outcome='virtual_reply', events=None, refs=None):
+    source=seed_simulation(db)
+    queue_id=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_ai_simulation_queue(id,tenant_id,channel_id,conversation_id,lead_id,source_message_id,
+        source_event_id,event_fingerprint,state,completed_at)
+        VALUES(%s::uuid,%s::uuid,%s::uuid,'client',41,%s::uuid,'demo-event','demo-fingerprint','completed',now())''',
+        (queue_id,A,CA,source))
+    run_id=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_ai_simulation_runs( id,tenant_id,queue_id,channel_id,conversation_id,source_message_id,
+        primary_agent_id,outcome,virtual_reply,events,knowledge_refs,total_tokens)
+        VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s::uuid,%s,'Virtual draft',%s::jsonb,%s::jsonb,17)''',
+        (run_id,A,queue_id,CA,source,AGENT,outcome,json.dumps(events or []),json.dumps(refs or [])))
+    db.commit()
+    return run_id,source,queue_id
+
+
 def test_simulation_schema_defaults_off_and_is_tenant_scoped(db,monkeypatch):
     source=seed_simulation(db,enabled=False)
     monkeypatch.setattr(simulation,'runtime_flag',lambda name: name!='AI_SIMULATION_ENABLED')
@@ -454,6 +471,25 @@ def test_simulation_schema_defaults_off_and_is_tenant_scoped(db,monkeypatch):
         source_message_id=source,source_event_id='new-message',occurred_at=None) is False
     assert db.execute('SELECT count(*) AS n FROM saas_ai_simulation_queue')[0]['n']==0
     assert simulation.list_runs(PROFILE)==[]
+
+
+def test_simulation_public_config_is_json_serializable_with_psycopg_uuids():
+    from tenant_ai_simulation_engine import _public_config
+    config=_public_config({'tenant_id':uuid.UUID(A),'agent_id':uuid.UUID(AGENT),'channel_ids':[CA],
+        'conversation_ids':[],'enabled':False,'emergency_stop':False,'state':'stopped','token_budget':0,
+        'message_limit':0,'max_parallel':1,'max_calls_per_event':3,'max_output_tokens':800,
+        'starts_at':None,'ends_at':None,'updated_at':None})
+    encoded=json.dumps(config)
+    assert str(uuid.UUID(AGENT)) in encoded and 'tenant_id' not in config
+
+
+def test_simulation_public_runs_are_json_serializable_with_psycopg_uuids():
+    from tenant_ai_simulation_engine import _public_run
+    item=_public_run({'id':uuid.uuid4(),'queue_id':uuid.uuid4(),'channel_id':uuid.uuid4(),
+        'conversation_id':'client@g.us','primary_agent_id':uuid.UUID(AGENT),
+        'recheck_of_run_id':uuid.uuid4(),'created_at':Timestamp('2026-10-22T12:00:00Z'),
+        'outcome':'virtual_reply','events':[]})
+    assert json.loads(json.dumps(item))['conversation_id']=='client@g.us'
 
 
 def test_simulation_inbound_queue_dedupes_and_tenant_fences(db,monkeypatch):
@@ -751,3 +787,54 @@ def test_simulation_executor_has_no_live_side_effect_imports():
     assert not any(name in imports for name in {'tenant_ai_agent_worker','tenant_connect_transport','tenant_chat_send_api','tenant_linear_tasks_api','tenant_ai_agent_actions.handoff'})
     calls={node.func.attr for node in ast.walk(tree) if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)}
     assert not calls.intersection({'send','send_ai_reply','send_ai_reply_if_active','handoff','execute_matching_actions','create_task','move_stage','update_phone'})
+
+
+def test_ai_dashboard_is_tenant_scoped_and_uses_recorded_values(db,monkeypatch):
+    run_id,_source,_queue=seed_simulation_run(db,events=[{'type':'trigger_matched','trigger_id':'t1'}])
+    fingerprint='case-extraction-not-active-job'
+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,payload,state) VALUES(%s::uuid,%s,'connect','knowledge_extraction','{}'::jsonb,'completed')",(A,fingerprint))
+    db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,result) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,'local-preview','completed','{}'::jsonb)",(A,str(uuid.uuid4()),AGENT,fingerprint));db.commit()
+    board=ai_dashboard.dashboard(PROFILE)
+    assert [agent['id'] for agent in board['agents']]==[AGENT]
+    assert board['simulation']['runs']==1 and board['simulation']['tokens']==17
+    assert board['simulation']['trigger_matches']==1
+    assert board['agents'][0]['active_runs']==0  # unrelated AI runs are not Active worker jobs
+    assert all(item['tenant_id']==A for item in ai_dashboard.events(PROFILE,mode='simulation'))
+    detail=ai_dashboard.simulation_run(PROFILE,run_id)
+    assert detail['sent'] is False and 'tenant_id' not in detail
+    json.dumps(detail)
+    foreign={**PROFILE,'tenant_id':B,'telegram_id':22}
+    assert ai_dashboard.events(foreign,mode='simulation')==[]
+    with pytest.raises(TenantLinearError): ai_dashboard.simulation_run(foreign,run_id)
+
+
+def test_ai_dashboard_issues_are_evidence_based_and_reviewable(db):
+    run_id,_source,_queue=seed_simulation_run(db,events=[{'type':'expert_unavailable','reason':'expert_scope_denied'}],refs=[{'source_id':'synthetic-source'}])
+    issues=ai_dashboard.issues(PROFILE)
+    assert len(issues)==1 and issues[0]['category']=='expert_unavailable'
+    assert issues[0]['status']=='new'
+    result=ai_dashboard.review_issue(PROFILE,run_id,'expert_unavailable','in_review')
+    assert result['status']=='in_review'
+    assert ai_dashboard.issues(PROFILE)[0]['status']=='in_review'
+    with pytest.raises(TenantLinearError): ai_dashboard.review_issue(PROFILE,run_id,'provider_result_unknown','confirmed')
+
+
+def test_ai_dashboard_marks_possible_trigger_miss_as_review_prompt(db):
+    run_id,_source,_queue=seed_simulation_run(db,events=[{'type':'trigger_checked','enabled_count':2,
+        'matched':False,'possible_topic':'price'}],refs=[{'source_id':'demo-source'}])
+    issues=ai_dashboard.issues(PROFILE)
+    assert len(issues)==1 and issues[0]['category']=='possible_trigger_miss'
+    assert 'not proof' in issues[0]['suggested_action'].lower()
+    assert ai_dashboard.review_issue(PROFILE,run_id,'possible_trigger_miss','confirmed')['status']=='confirmed'
+
+
+def test_ai_dashboard_recheck_is_tenant_scoped_and_idempotent(db,monkeypatch):
+    run_id,_source,_queue=seed_simulation_run(db)
+    monkeypatch.setattr('tenant_ai_agent_runtime_flags.enabled',lambda _name:True)
+    first=ai_dashboard.enqueue_recheck(PROFILE,run_id,'request-123')
+    second=ai_dashboard.enqueue_recheck(PROFILE,run_id,'request-123')
+    assert first['queued'] and not first['idempotent']
+    assert second['idempotent'] and first['queue_id']==second['queue_id']
+    assert db.execute("SELECT count(*) AS n FROM saas_ai_simulation_queue WHERE tenant_id=%s::uuid AND recheck_of_run_id=%s::uuid",(A,run_id))[0]['n']==1
+    foreign={**PROFILE,'tenant_id':B,'telegram_id':22}
+    with pytest.raises(TenantLinearError): ai_dashboard.enqueue_recheck(foreign,run_id,'other-tenant')

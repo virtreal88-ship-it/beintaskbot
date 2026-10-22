@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react"
 import { createRoot } from "react-dom/client"
 import "./app-shell.js"
+import { AIDashboard } from "./ai-dashboard.jsx"
 import {
   Badge, Box, Button, Card, ChakraProvider, Checkbox, Dialog, Flex, Grid,
   Heading, Input, Portal, Spinner, Stack, Table, Text, createSystem,
@@ -333,6 +334,7 @@ window.tenantChakraCRM = {
   renderTasks: rows => mount("tasksList", <TasksTable rows={rows}/>),
   renderDeals: (target, rows, customer, onOpen) => mount(target, <DealsView rows={rows} customer={customer} onOpen={onOpen}/>),
 }
+mount("aiDashboard", <AIDashboard/>)
 mount("chakra-settings-root", <SettingsHub/>)
 mount("chakra-integrations-root", <IntegrationMarketplace/>)
 document.documentElement.dataset.chakraUi = "ready"

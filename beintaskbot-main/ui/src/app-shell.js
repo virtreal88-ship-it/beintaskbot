@@ -24,7 +24,7 @@ if (document.body.dataset.appUi === 'kwid') {
   const t=key=>window.tenantI18n?.t(key)||key
   const language=()=>window.tenantI18n?.language||document.documentElement.lang||'az'
   const crmLabels={ru:{tasks:'Задачи',customers:'Контакты',companies:'Компании',deals:'Сделки',instructions:'Инструкции'},az:{tasks:'Tapşırıqlar',customers:'Əlaqələr',companies:'Şirkətlər',deals:'Sövdələşmələr',instructions:'Təlimatlar'},en:{tasks:'Tasks',customers:'Contacts',companies:'Companies',deals:'Deals',instructions:'Instructions'}}
-  const aiLabels={ru:{ai_agents:'AI-агенты',knowledge_center:'Центр знаний',support_cases:'Кейсы поддержки',ai_testing:'Тестирование AI'},az:{ai_agents:'AI agentlər',knowledge_center:'Bilik mərkəzi',support_cases:'Dəstək halları',ai_testing:'AI sınağı'},en:{ai_agents:'AI agents',knowledge_center:'Knowledge Center',support_cases:'Support Cases',ai_testing:'AI testing'}}
+  const aiLabels={ru:{ai_agents:'AI-агенты',ai_dashboard:'AI-панель',knowledge_center:'Центр знаний',support_cases:'Кейсы поддержки',ai_testing:'Тестирование AI'},az:{ai_agents:'AI agentlər',ai_dashboard:'AI paneli',knowledge_center:'Bilik mərkəzi',support_cases:'Dəstək halları',ai_testing:'AI sınağı'},en:{ai_agents:'AI agents',ai_dashboard:'AI Dashboard',knowledge_center:'Knowledge Center',support_cases:'Support Cases',ai_testing:'AI testing'}}
   const pageLabel=page=>crmLabels[language()]?.[page]||aiLabels[language()]?.[page]||t(page)
   const originalHeader=sidebar.firstElementChild, brand=originalHeader.querySelector('.brand')
   const header=document.createElement('div');header.className='app-sidebar-header'
@@ -63,7 +63,7 @@ if (document.body.dataset.appUi === 'kwid') {
   document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeUserMenu();mobileMenu(false)}})
   applyTheme()
 
-  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support','night_report']},{id:'crm',label:'CRM',pages:['tasks','customers','companies','deals','hot_orders']},{id:'ai',label:'AI',pages:['ai_agents','knowledge_center','support_cases','ai_testing']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['integrations','settings','profile']}]
+  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support','night_report']},{id:'crm',label:'CRM',pages:['tasks','customers','companies','deals','hot_orders']},{id:'ai',label:'AI',pages:['ai_agents','ai_dashboard','knowledge_center','support_cases','ai_testing']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['integrations','settings','profile']}]
   const containers=new Map()
   for(const group of groups){
     const section=document.createElement('div');section.className='app-nav-group';section.dataset.group=group.id
@@ -74,10 +74,10 @@ if (document.body.dataset.appUi === 'kwid') {
   function organizeNav() {
     for(const button of [...nav.querySelectorAll('[data-view],[data-report-link]')]){
       const page=button.dataset.view||button.dataset.reportLink
-      let label=button.querySelector('.app-nav-label,[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-knowledge-center-label]')
+      let label=button.querySelector('.app-nav-label,[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-knowledge-center-label]')
       if(!label){label=document.createElement('span');label.textContent=[...button.childNodes].filter(node=>node.nodeType===Node.TEXT_NODE).map(node=>node.textContent).join('').trim()||page}
       for(const node of [...button.childNodes])if(node.nodeType===Node.TEXT_NODE)node.remove()
-      for(const extra of button.querySelectorAll('[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-knowledge-center-label],.app-nav-label'))if(extra!==label)extra.remove()
+      for(const extra of button.querySelectorAll('[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-knowledge-center-label],.app-nav-label'))if(extra!==label)extra.remove()
       label.removeAttribute('data-crm-nav-label')
       label.className='app-nav-label';label.dataset.appNavLabel=page
       label.removeAttribute('data-i18n')
