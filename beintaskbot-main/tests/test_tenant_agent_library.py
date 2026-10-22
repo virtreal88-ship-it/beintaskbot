@@ -50,6 +50,19 @@ def test_retry_keys_keep_agent_trigger_and_knowledge_agent_bound(creation):
     assert creation.execute('SELECT count(*) AS n FROM saas_ai_agent_triggers')[0]['n']==1
 
 
+def test_knowledge_center_metadata_is_tenant_scoped_and_human_readable(creation):
+    agent=agents.save_agent(PROFILE,draft())
+    source=agents.save_knowledge(PROFILE,{'title':'Published instruction','kind':'text','content':'verified','active':True,'agent_id':agent['id'],'setup_key':'center-instruction'})
+    creation.execute("UPDATE saas_ai_knowledge_sources SET provenance=%s::jsonb WHERE id=%s::uuid",(json.dumps({'instruction_id':str(uuid.uuid4())}),source['id']))
+    creation.execute("INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,active,content_hash,created_by,provenance) VALUES(%s::uuid,%s::uuid,'General','text','shared',true,'hash',11,'{}'::jsonb)",(str(uuid.uuid4()),A));creation.commit()
+    rows=agents.list_knowledge(PROFILE)
+    bound=next(row for row in rows if row['title']=='Published instruction')
+    general=next(row for row in rows if row['title']=='General')
+    assert bound['origin_type']=='instruction' and bound['origin_id'] and bound['agent_name']==agent['name']
+    assert general['origin_type']=='knowledge_source' and general['agent_id'] is None and general['agent_name'] is None
+    assert all(row['tenant_id']==A for row in rows)
+
+
 @pytest.mark.parametrize('case',['foreign_channel','foreign_actor','inactive','archived','worker','admin_without_permission'])
 def test_current_tenant_and_manage_permissions_are_required(creation,case):
     profile=PROFILE;payload=draft()
