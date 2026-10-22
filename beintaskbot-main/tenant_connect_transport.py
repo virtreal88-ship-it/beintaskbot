@@ -812,6 +812,18 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                         lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
                         text=queued_payload[6], message_type=queued_payload[7],
                         is_group=metadata.get('kind') == 'group', provider_message_id=data.get('externalMessageId'), connection=conn)
+                # Simulation admits only the first durable inbound delivery.
+                # Webhook retries may repair the Active queue above but must
+                # never backfill Simulation or replay a paid virtual run.
+                from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+                if inserted_event and runtime_flag('AI_SIMULATION_ENABLED'):
+                    from tenant_ai_simulation_schema import ensure_schema as ensure_simulation_schema
+                    from tenant_ai_simulation_engine import enqueue_inbound
+                    ensure_simulation_schema(conn)
+                    enqueue_inbound(cur,tenant_id=tenant,channel_id=channel_id,
+                        conversation_id=conversation,lead_id=queued_payload[3],
+                        source_message_id=str(source_message['id']),
+                        source_event_id=queued_payload[4],occurred_at=event.get('occurred_at'))
             conn.commit()
     return accepted
 

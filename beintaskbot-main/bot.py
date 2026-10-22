@@ -18793,6 +18793,7 @@ async def start_webhook_server():
         try:
             from tenant_ai_agent_startup import start_worker
             from tenant_ai_agent_worker import run_worker as tenant_ai_agent_worker
+            from tenant_ai_simulation_worker import run_worker as tenant_ai_simulation_worker
             from tenant_connect_transport import sync_webhook_subscriptions
             try:
                 synced_webhooks = await asyncio.to_thread(sync_webhook_subscriptions)
@@ -18800,7 +18801,8 @@ async def start_webhook_server():
             except Exception:
                 logger.warning("Connect outbound webhook subscription sync could not complete")
             await start_worker(app_web, tenant_ai_agent_worker, _tenant_kommo_request, logger,
-                               _wait_for_tenant_kommo_slot, prepare_database_first=True)
+                               _wait_for_tenant_kommo_slot, prepare_database_first=True,
+                               simulation_worker=tenant_ai_simulation_worker)
             logger.info("Tenant AI queue worker started")
         except Exception:
             logger.exception("Tenant AI queue worker could not start; HTTP service remains available")

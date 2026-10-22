@@ -27,6 +27,7 @@ from tenant_ai_agents_api import handler as ai_agents_handler
 from tenant_knowledge_candidates_api import handler as knowledge_candidates_handler
 from tenant_support_inbox_api import handler as support_handler
 from tenant_ai_testing_api import handler as testing_handler
+from tenant_ai_simulation_api import handler as simulation_handler
 from tenant_ai_state_api import handler as ai_state_handler
 from tenant_operator_api import handler as operator_handler
 from tenant_instruction_library_api import handler as instruction_handler
@@ -91,6 +92,8 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('testing/sessions/{session_id}', testing_handler(member, origin, logger, 'session'), ('GET',)),
         ('testing/sessions/{session_id}/turn', testing_handler(member, origin, logger, 'turn'), ('POST',)),
         ('testing/sessions/{session_id}/control', testing_handler(member, origin, logger, 'control'), ('POST',)),
+        ('simulation/settings', simulation_handler(member, origin, logger, 'settings'), ('GET','PATCH')),
+        ('simulation/runs', simulation_handler(member, origin, logger, 'runs'), ('GET',)),
         ('agents/settings', ai_agents_handler(member, origin, logger, 'settings'), ('GET', 'PATCH')),
         ('agents/pilot-preflight', ai_agents_handler(member, origin, logger, 'pilot_preflight'), ('GET',)),
         ('agents/pilot/kwid-confirmation', ai_agents_handler(member, origin, logger, 'pilot_kwid_confirmation'), ('POST',)),
