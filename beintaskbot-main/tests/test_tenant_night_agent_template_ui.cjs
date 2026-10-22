@@ -59,8 +59,8 @@ assert.match(source, /data-night-entry="1"/, 'The existing wizard must then sele
 assert.match(source, /agentRole==='expert'\?\[\]/, 'Internal agents must skip external channel scopes.');
 assert.match(source, /confirm\(window\.tenantNightL10n\.text\('Закрыть мастер/, 'Closing a dirty wizard must require confirmation.');
 assert.match(source, /setup_key/, 'Agent, handoff and knowledge retries must use idempotency keys.');
-assert.match(source, /never.*Active Mode|не меняет этот режим/i,
-  'The UI must explain that it does not silently enable company Active Mode.');
+assert.match(source, /Настройки автоматической отправки компании мастер не меняет|Мастер не меняет разрешение автоматической отправки компании/i,
+  'The UI must explain that agent setup does not change the company auto-send permission.');
 assert.doesNotMatch(source, /api\('agents\/settings','PATCH'/,
   'The template must not patch company settings while being created.');
 for (const phrase of ['вежливый', 'только на основе доступной базы знаний', 'уточняющий вопрос', 'Не выдумывайте', 'нерешённое обращение', 'выбранные дни и часы']) {

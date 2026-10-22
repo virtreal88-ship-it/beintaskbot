@@ -26,7 +26,7 @@ def flow(db, monkeypatch):
     monkeypatch.delenv('AI_AGENTS_PLATFORM_KEY_ACTIVATED_AT',raising=False)
     seed_job(db)
     db.execute("UPDATE saas_ai_agent_jobs SET state='skipped'")
-    db.execute("UPDATE saas_ai_agent_settings SET operating_mode='active',auto_send_enabled=TRUE")
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE")
     db.execute("UPDATE saas_ai_agents SET mode='automatic',delay_seconds=0,model='test-model',scopes=%s::jsonb",
                (json.dumps([{'provider':'connect','channel_id':CA}]),))
     secret=cipher.encrypt(json.dumps({'api_key':'mock-connect-key'}).encode())
@@ -225,13 +225,11 @@ def test_restart_after_paid_voice_claim_does_not_repeat_call(flow):
     f['speech'].assert_not_called()
     f['send'].assert_called_once()
 
-@pytest.mark.parametrize('mode,test_mode',[('manual',False),('automatic',True)])
-def test_manual_and_test_modes_never_send(flow,mode,test_mode):
+@pytest.mark.parametrize('mode,company_send',[('manual',True),('automatic',False)])
+def test_manual_mode_and_company_send_gate_never_send(flow,mode,company_send):
     f=flow;db=f['db']
     db.execute('UPDATE saas_ai_agents SET mode=%s',(mode,))
-    if test_mode:
-        db.execute("UPDATE saas_ai_agent_settings SET operating_mode='test'")
-        db.execute("INSERT INTO saas_ai_agent_connect_test_mode(tenant_id,enabled,verified,channel_id,conversation_id) VALUES(%s::uuid,TRUE,TRUE,%s,'client')",(A,CA))
+    db.execute('UPDATE saas_ai_agent_settings SET auto_send_enabled=%s',(company_send,))
     db.commit()
     f['inbound']('audio','');f['process']()
     if mode=='manual':
@@ -240,9 +238,9 @@ def test_manual_and_test_modes_never_send(flow,mode,test_mode):
         assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_drafts')[0]['n']==0
         db.commit()
         return
-    f['speech'].assert_called_once()
+    f['speech'].assert_not_called()
     f['send'].assert_not_called()
-    assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_drafts')[0]['n']==1
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_drafts')[0]['n']==0
     db.commit()
 
 

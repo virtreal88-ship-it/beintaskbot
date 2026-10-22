@@ -34,7 +34,7 @@ def expert(db,monkeypatch):
     db.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled,role,model) VALUES(%s::uuid,%s::uuid,'Diagnostic expert',11,TRUE,'expert','test-model')",(A,EXPERT))
     db.execute("UPDATE saas_ai_agents SET expert_policy=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps(cfg),A,AGENT))
     db.execute("UPDATE saas_ai_agent_jobs SET state='processing',lease_token=%s::uuid,lease_until=now()+interval '3 minutes',revision=1 WHERE tenant_id=%s::uuid",(job['lease_token'],A))
-    db.execute("UPDATE saas_ai_agent_settings SET operating_mode='active' WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
     db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,metadata) VALUES(%s::uuid,'chat_ai','connected',%s::jsonb)",(A,json.dumps({'enabled':True,'consent':True,'model':'test-model','daily_limit':50})))
     run=str(uuid.uuid4())
     db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state) VALUES(%s::uuid,%s::uuid,%s::uuid,'evt',1,'test-model','generating')",(A,run,AGENT))

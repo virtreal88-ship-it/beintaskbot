@@ -38,7 +38,7 @@ Envelope: `{success:true,result:{schema_version:1,...}}`. Ошибка: `{succes
 
 - `id` — составной ключ **отображения**, уникальный внутри каталога текущего tenant. Его нельзя записывать в runtime `channel_id`.
 - `channel_id` и `scope` сохраняют действующие ID. Идентичность диалога остаётся `tenant + provider + channel + conversation`.
-- Полный канальный ключ состояния уже используется для Connect. Существующее хранилище Kommo сохраняет прежнюю семантику состояния по chat/conversation с пустым `scope_channel_id`; этот пакет его не мигрирует. Реальный Kommo channel остаётся в маршруте, scope и строгом Test Mode binding. Каталог не обещает новый механизм разделения одного Kommo chat между несколькими каналами.
+- Полный канальный ключ состояния уже используется для Connect. Существующее хранилище Kommo сохраняет прежнюю семантику состояния по chat/conversation с пустым `scope_channel_id`; этот пакет его не мигрирует. Реальный Kommo channel остаётся в маршруте, scope и проверенном маршруте канала и общих server/company ограничениях. Каталог не обещает новый механизм разделения одного Kommo chat между несколькими каналами.
 - `type=whatsapp` доказан текущим WhatsApp-only адаптером Connect. Для каналов Kommo возвращается `unknown`: нет достоверного справочника типа/названия. Не угадывать тип по UUID, имени или факту подключения CRM.
 - `name` — сохранённое название подключения; резервное имя `WhatsApp` или `Канал CRM`, без UUID в основном заголовке. Провайдера показывать вторичной подписью, не как тип общения.
 - `connection.state`: `connected`, `disconnected`, `connecting`, `pending_qr`, `reconnecting`, `reconnect_required`, `error`, `disabled`, `unknown`. Это **сохранённое наблюдение**, не текущий live health. `checked_at` — время локального обновления/наблюдения, не новая проверка сессии.
@@ -56,7 +56,7 @@ Envelope: `{success:true,result:{schema_version:1,...}}`. Ошибка: `{succes
 
 Для каждого Connect-канала брать `scope.provider/channel_id`, добавлять `pipeline_id:''`, `stage_id:''`, `allow_group_messages:false` по умолчанию. Для Kommo обязательно добавить выбранные из existing `agents/options` `pipeline_id` и `stage_id`. Не использовать `id` вместо `channel_id`, не заменять scope одним названием типа WhatsApp.
 
-Runtime уже поддерживает несколько WhatsApp-каналов у одного агента, разных агентов на непересекающихся каналах, несколько Kommo scopes и смешанные Connect+Kommo scopes. Модель/расписание общие для агента; история/состояние/задачи Connect разделяются по каналу. Проверки overlap включённых агентов сохраняются. Existing Kommo wildcard scopes продолжают работать; новый мастер не обязан создавать wildcard. Test Mode ограничен существующей точной привязкой для каждого провайдера, а не всеми отмеченными каналами сразу.
+Runtime уже поддерживает несколько WhatsApp-каналов у одного агента, разных агентов на непересекающихся каналах, несколько Kommo scopes и смешанные Connect+Kommo scopes. Модель/расписание общие для агента; история/состояние/задачи Connect разделяются по каналу. Проверки overlap включённых агентов сохраняются. Existing Kommo wildcard scopes продолжают работать; новый мастер не обязан создавать wildcard. Ручная проверка виртуального чата изолирована от реальных provider routes.
 
 Исправлен старый `agents/options.channels`: он теперь читает только `provider='kommo'`. Ранее там могли появляться Connect UUID. У Kommo queue кандидаты и `_scope_matches` теперь явно исключают Connect scopes.
 
@@ -66,7 +66,7 @@ Runtime уже поддерживает несколько WhatsApp-канало
 
 `summary`: `service` (`available|unavailable` — heartbeat), `state` (`attention|conditional|not_ready`), `enabled_agents`, `eligible_agents`, `connected_channels` (только наблюдавшиеся connected), `ai_errors_24h`, `unconfirmed_sends_24h`, `quarantined_legacy_dialogues`.
 
-Heartbeat не считается доказательством успешной работы. Проверяются настройки компании/агента, модель, подключения, расписание, Test Mode binding и фактические ошибки/очередь. Квоты, актуальность провайдера и состояние конкретного нового диалога окончательно проверяются runtime. Нет выдуманного «всё исправно». Ошибки отражают сохранённые receipts за 24 часа; историческая полнота не гарантируется и показывается пользователю.
+Heartbeat не считается доказательством успешной работы. Проверяются настройки компании/агента, модель, подключения, расписание, разрешение автоотправки и фактические ошибки/очередь. Квоты, актуальность провайдера и состояние конкретного нового диалога окончательно проверяются runtime. Нет выдуманного «всё исправно». Ошибки отражают сохранённые receipts за 24 часа; историческая полнота не гарантируется и показывается пользователю.
 
 `agents`: `id`, `name`, `enabled`, `mode`, `state`, `schedule`, `schedule_open`, `next_shift_at`, `channels`, `recent_events`. Состояния: `disabled`, `blocked`, `outside_schedule`, `manual`, `test`, `ready` (условная готовность к новым сообщениям). Настроенный Automatic отдельно от фактического разрешения автоотправки. Manual и запрет автоотправки означают черновики, а не сбой. Расписание рассчитывается существующим helper, включая переход через полночь и timezone.
 
@@ -105,7 +105,7 @@ Legacy quarantine и канальные ключи не меняются; нет
 
 - Полный Python-набор: **1571 passed, 4 skipped, 240 subtests passed**, 316.58 s. Использован настоящий psycopg (предварительно импортирован, чтобы старые unit-тесты не заменили его заглушкой), `--runxfail` и отдельная localhost PostgreSQL на порту 55441 для многопроцессных гонок.
 - В полном наборе — 9 реальных PostgreSQL concurrency cases: leases, повторные webhook, гонки отправки/takeover и cold startup. Провайдеры замоканы.
-- Новый контракт/права/состояние: **22 теста**, включая отсутствие изменений данных при чтении, provider namespace, два канала, tenant/deal isolation, чужой agent run/draft, Human/Pause/Resume, Test Mode и карантин.
+- Новый контракт/права/состояние: **22 теста**, включая отсутствие изменений данных при чтении, provider namespace, два канала, tenant/deal isolation, чужой agent run/draft, Human/Pause/Resume, карантин и виртуальный тестовый чат.
 - Все **57 JavaScript-наборов** прошли. После уточнения пользовательских формулировок новый UI-набор повторно прошёл.
 - 4 пропуска — прежние Windows asyncio loopback проверки; это не пропуски новых SQL/channel/permission тестов.
 - `git diff --check` чист; ассеты/entrypoints `/webapp` не изменены. Новые миграции отсутствуют.

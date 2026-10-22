@@ -15,7 +15,7 @@ from tenant_ai_agent_key_policy import choose_api_credential, platform_model, pl
 from tenant_ai_testing_budget import TOKEN_USAGE_SQL
 from tenant_chat_ai_provider import generate
 from tenant_ai_agent_run_store import knowledge_context
-from tenant_ai_agent_test_mode import assert_job_allowed
+from tenant_ai_agent_admission import assert_job_allowed
 from tenant_ai_agent_schedule import next_open
 from tenant_linear_policy import TenantLinearError
 

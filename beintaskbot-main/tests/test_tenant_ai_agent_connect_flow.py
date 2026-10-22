@@ -77,7 +77,7 @@ class Connection:
 
 
 class ConnectAiFlowTests(unittest.TestCase):
-    def test_manual_agents_never_create_background_drafts_in_active_or_test_mode(self):
+    def test_only_automatic_agents_enter_background_queue(self):
         rows = [{'enabled': True, 'mode': 'manual'}, {'enabled': True, 'mode': 'automatic'},
                 {'enabled': False, 'mode': 'automatic'}]
         self.assertEqual(connect_ai.eligible_connect_agents(rows), [rows[1]])
@@ -145,17 +145,6 @@ class ConnectAiFlowTests(unittest.TestCase):
         state_sql = next(sql for sql, _params in cursor.executed if "state='human'" in sql)
         self.assertIn('trigger_reply_sent_then_handoff', state_sql)
         self.assertTrue(any("state='sent'" in sql for sql, _params in cursor.executed))
-
-    def test_connect_test_draft_cannot_be_promoted_to_a_real_whatsapp_send(self):
-        cursor = Cursor(ones=[{'provider': 'connect', 'test_mode': 'true'}])
-        connection = Connection(cursor)
-        profile = {'tenant_id': TENANT, 'telegram_id': 7}
-        with patch.object(agents_store, '_connect', return_value=connection), \
-             patch.object(agents_store, 'ensure_schema'), \
-             patch.object(agents_store, '_authorize', return_value=(TENANT, 7)):
-            with self.assertRaises(TenantLinearError):
-                agents_store.reserve_draft_send(profile, DRAFT)
-        self.assertFalse(any("state='sending'" in sql for sql, _params in cursor.executed))
 
     def test_wizard_retry_keys_return_existing_tenant_records_without_another_insert(self):
         profile = {'tenant_id': TENANT, 'telegram_id': 7}

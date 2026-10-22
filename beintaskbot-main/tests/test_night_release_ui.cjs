@@ -10,7 +10,7 @@ const tick=async()=>{for(let i=0;i<8;i++)await new Promise(r=>setImmediate(r));}
   if(u.pathname==='/api/platform/me')return{ok:true,json:async()=>({member,capabilities:{modules:{night_report:true}}})};
   if(u.pathname.endsWith('/channels'))return result({schema_version:1,channels:[{id:'connect:channel-a',provider:'connect',channel_id:'channel-a',name:'Техническая поддержка',type:'whatsapp',scope:{provider:'connect',channel_id:'channel-a'},connection:{state:'connected'},ai:{supported:true,available:true},capabilities:{text_replies:true}}]});
   if(u.pathname.endsWith('/agents/options'))return result({connect_channels:[{id:'channel-a',name:'WhatsApp'}],models:[{id:'test-model',label:'Test model'}]});
-  if(u.pathname.endsWith('/agents/settings'))return result({operating_mode:'active',auto_send_enabled:true});
+  if(u.pathname.endsWith('/agents/settings'))return result({auto_send_enabled:true});
   if(u.pathname.endsWith('/knowledge'))return result([]);
   if(u.pathname.endsWith('/knowledge/upload'))return result({id:'source-a',agent_id:data.agent_id});
   if(u.pathname.endsWith('/agents'))return result({...data,id:'created-agent',name:data.name,version:1,enabled:false});

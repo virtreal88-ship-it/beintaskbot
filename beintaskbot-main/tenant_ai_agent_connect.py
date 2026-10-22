@@ -37,8 +37,8 @@ def _whatsapp_phone(conversation_id: str) -> str:
 def eligible_connect_agents(rows):
     """Only explicitly automatic agents may react to inbound Connect events.
 
-    Test Mode still safely exercises automatic agents, but does not turn a
-    manual assignment into an automated background draft job.
+    Manual agents are invoked only by an explicit employee action and never
+    become automated background jobs.
     """
     return [row for row in rows if row.get('enabled') is True and row.get('mode') == 'automatic']
 
@@ -125,7 +125,7 @@ def _auto_assign_group_from_inbound(cur, tenant, channel_id, conversation_id):
         return None, 'invalid_group'
     if not runtime_flag('AI_AGENTS_ENABLED'):
         return None, 'ai_agents_server_disabled'
-    cur.execute('''SELECT t.status,s.enabled,s.emergency_stop,s.operating_mode,ch.active,
+    cur.execute('''SELECT t.status,s.enabled,s.auto_send_enabled,s.emergency_stop,ch.active,
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=t.id
           AND i.provider='connect' AND i.status='connected') AS connected,
         NOT ai_legacy_blocked(t.id,ch.connect_channel_id::text,%s) AS unambiguous
@@ -139,15 +139,11 @@ def _auto_assign_group_from_inbound(cur, tenant, channel_id, conversation_id):
             or gate.get('enabled') is not True or gate.get('emergency_stop') is True
             or not tenant_status_allows_ai(gate.get('status'), 'connect')):
         return None, 'connect_admission_blocked'
-    from tenant_ai_testing_scope import clause
     cur.execute('''SELECT a.id,a.name,a.role,a.scopes,a.enabled,a.mode,a.schedule
-      FROM saas_ai_agents a WHERE a.tenant_id=%s::uuid'''+clause('a','connect')+' ORDER BY a.created_at,a.id',
+      FROM saas_ai_agents a WHERE a.tenant_id=%s::uuid ORDER BY a.created_at,a.id''',
       (tenant,))
     rows = [dict(row) for row in cur.fetchall()]
     agent, reason = unique_connect_candidate(rows, channel_id, is_group=True)
-    if agent and gate.get('operating_mode') != 'active' and not test_allowed(
-            cur, tenant, channel_id, conversation_id, agent_id=agent['id']):
-        return None, 'test_binding_required'
     return _bind_unique_connect_candidate(cur, tenant, channel_id, conversation_id, rows, is_group=True) if agent else (None, reason)
 
 
@@ -165,17 +161,6 @@ def scope_matches(scopes, channel_id: str, *, is_group=False) -> bool:
     return False
 
 
-def test_allowed(cur, tenant: str, channel_id: str, conversation_id: str, *, agent_id=None) -> bool:
-    cur.execute('''SELECT enabled,emergency_stop,verified,channel_id,conversation_id,agent_id
-      FROM saas_ai_agent_connect_test_mode WHERE tenant_id=%s::uuid FOR SHARE''', (tenant,))
-    row = cur.fetchone() or {}
-    return bool(row.get('enabled') is True and row.get('verified') is True
-                and row.get('emergency_stop') is not True
-                and str(row.get('channel_id') or '') == str(channel_id)
-                and str(row.get('conversation_id') or '') == str(conversation_id)
-                and (not agent_id or not row.get('agent_id') or str(row['agent_id'])==str(agent_id)))
-
-
 def allowed(job: dict, connection=None) -> bool:
     if str(job.get('provider') or '') != 'connect':
         return False
@@ -190,7 +175,7 @@ def allowed(job: dict, connection=None) -> bool:
         if connection is None:
             ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT s.enabled,s.emergency_stop,s.operating_mode,t.status
+            cur.execute('''SELECT s.enabled,s.emergency_stop,s.auto_send_enabled,t.status
               FROM saas_ai_agent_settings s JOIN saas_tenants t ON t.id=s.tenant_id
               WHERE s.tenant_id=%s::uuid FOR SHARE OF s,t''', (tenant,))
             settings = cur.fetchone() or {}
@@ -211,12 +196,9 @@ def allowed(job: dict, connection=None) -> bool:
                          conversation, bound_agent, bound_agent))
             connected = bool(cur.fetchone())
             tenant_active = tenant_status_allows_ai(settings.get('status'), 'connect')
-            if settings.get('operating_mode') == 'active':
-                result = bool(tenant_active and connected and settings.get('enabled') is True
-                              and settings.get('emergency_stop') is not True)
-            else:
-                result = bool(tenant_active and connected and settings.get('enabled') is True and settings.get('emergency_stop') is not True
-                              and test_allowed(cur, tenant, channel, conversation, agent_id=job.get('agent_id')))
+            result = bool(tenant_active and connected and settings.get('enabled') is True
+                          and settings.get('auto_send_enabled') is True and settings.get('emergency_stop') is not True
+                          and runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'))
             from tenant_ai_group_coordination import group_jid, authority, job_allowed
             if group_jid(conversation):
                 result = result and bool(authority(cur, tenant, channel, conversation, job.get('agent_id')))
@@ -242,12 +224,11 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             ensure_schema(conn)
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, 'connect', channel_id, conversation_id)
-            cur.execute('SELECT operating_mode,enabled,emergency_stop FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid', (tenant,))
+            cur.execute('SELECT enabled,auto_send_enabled,emergency_stop FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid', (tenant,))
             settings = cur.fetchone() or {}
-            test_mode = str(settings.get('operating_mode') or 'test') != 'active'
             payload = {'message_id': str(message_id or event_id), 'channel_id': str(channel_id),
                        'conversation_id': str(conversation_id), 'text': str(text or '')[:8000],
-                       'message_type': str(message_type or 'text')[:40], 'test_mode': test_mode,
+                       'message_type': str(message_type or 'text')[:40],
                        # Filled after the durable conversation-state update.
                        # A phone is available only for the first inbound event
                        # in a person-to-person WhatsApp conversation.
@@ -290,9 +271,8 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             cur.execute('''UPDATE saas_tenant_webhook_events SET state='superseded',completed_at=now(),error_code='newer_inbound'
               WHERE tenant_id=%s::uuid AND provider='connect' AND state IN ('queued','processing')
                 AND payload->>'conversation_id'=%s AND payload->>'channel_id'=%s AND fingerprint<>%s''', (tenant, conversation_id, channel_id, fingerprint))
-            from tenant_ai_testing_scope import clause
             cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.enabled,a.schedule,a.mode FROM saas_ai_agents a
-              WHERE a.role='primary' AND a.tenant_id=%s::uuid'''+clause('a','connect')+' ORDER BY a.created_at,a.id', (tenant,))
+              WHERE a.role='primary' AND a.tenant_id=%s::uuid ORDER BY a.created_at,a.id''', (tenant,))
             tenant_agents = cur.fetchall()
             # Existing bindings always win. If this is an unassigned personal
             # dialogue, persist a unique scoped agent before considering the
@@ -326,10 +306,11 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             # but distinguish it from a disabled agent in the durable reason.
             scoped_agents = [row for row in tenant_agents if scope_matches(row.get('scopes'), channel_id)]
             enabled_scoped_agents = [row for row in scoped_agents if row.get('enabled') is True]
-            # Manual mode is human-only. Test Mode is exercised in the
-            # isolated virtual chat, never by processing customer messages.
+            # Inbound work is Active only when both the agent and owner/server
+            # send permissions allow it. Manual agents are staff-initiated.
             automatic_agents = (eligible_connect_agents(enabled_scoped_agents)
-                                if settings.get('operating_mode') == 'active' else [])
+                                if settings.get('enabled') is True and settings.get('auto_send_enabled') is True
+                                and runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED') else [])
             group_agents = [row for row in automatic_agents
                             if scope_matches(row.get('scopes'), channel_id, is_group=True)]
             agents = group_agents if is_group else automatic_agents
@@ -341,8 +322,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             if selection_ambiguous:
                 agents = []
             if not agents:
-                reason = ('virtual_test_only' if settings.get('operating_mode') != 'active' else
-                          'agent_not_found' if not tenant_agents else
+                reason = ('agent_not_found' if not tenant_agents else
                           'no_connect_scope' if not scoped_agents else
                           'agent_disabled' if not enabled_scoped_agents else
                           'agent_selection_required' if selection_ambiguous else

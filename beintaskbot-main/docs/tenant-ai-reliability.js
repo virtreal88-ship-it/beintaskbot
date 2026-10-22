@@ -17,7 +17,7 @@
    for(const text of health.blockers||[])box.append(node('p',text));
    box.append(node('p',`В очереди: ${metrics.queued} · Обрабатывается: ${metrics.processing} · Просрочено: ${metrics.overdue} · Зависшие задачи: ${metrics.expired_leases}`));
    box.append(node('p',`За 24 часа: ошибки AI — ${metrics.ai_errors_24h}; отправки без подтверждения — ${metrics.unsuccessful_sends_24h}. Неизвестный результат автоматически не повторяется.`));
-   box.append(node('p',`Режим компании: ${health.operating_mode}. Автоотправка: ${health.automatic_send_enabled?'разрешена, зависит также от режима агента':'выключена'}.`));
+   box.append(node('p',`Автоотправка: ${health.automatic_send_enabled?'разрешена при режиме Automatic и выполнении ограничений':'выключена'}.`));
    const reload=node('button','Обновить диагностику');reload.type='button';reload.onclick=refresh;box.append(reload);
    const list=node('ol','');
    for(const item of messages){const li=node('li','');li.append(node('strong',`${t(labels[item.status]||item.status)} · ${item.provider} · ${item.message_id}`));li.append(node('p',item.reason||'Ошибок на этом этапе не зафиксировано'));const stages=Object.entries(item.checkpoints).filter(([,done])=>done).map(([key])=>t(labels[key]||key));li.append(node('small',`${item.received_at} · ${stages.join(' → ')} · ${t('Попыток')}: ${item.attempts}${item.automatic_retry?' · '+t('безопасный повтор разрешён'):''}`));list.append(li)}

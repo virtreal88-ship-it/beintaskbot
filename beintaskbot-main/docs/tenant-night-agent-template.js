@@ -164,9 +164,9 @@
  }
  function modeHint(){
   const automatic=$('nightAgentMode').value==='automatic',launch=$('nightAgentLaunch').checked;
-  const current=settings?.operating_mode==='active'?'Active Mode уже задан в настройках компании':'Компания остаётся в Test Mode';
+  const current='Настройки автоматической отправки компании мастер не меняет';
   $('nightAgentModeHint').textContent=automatic
-   ?`Automatic выбран явно. ${current}; мастер не меняет этот режим и не включает автоотправку.`
+   ?`Automatic выбран явно. ${current}; запуск по-прежнему ограничен правами и серверными проверками.`
    :`${current}. Manual создаёт только черновики, пока его не отправит сотрудник.`;
   $('nightAgentLaunchHint').textContent=launch
    ?'Вы явно подтвердили включение агента. Системные ограничения, права и выбранное расписание всё равно применяются.'
@@ -203,9 +203,7 @@
   const schedule=current.scheduleEnabled?`${current.days.map(day=>t(['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][day])).join(', ')} · ${current.start}–${current.end}${current.end<current.start?' следующего дня':''} · ${current.timezone}`:'Без ограничения по расписанию';
   const rows=[['Тип',agentRole==='expert'?'Внутренний':'Основной'],['Оператор',current.name||'—'],['Подключения',agentRole==='expert'?'Внутренний агент не использует внешние каналы':selectedChannels().map(id=>window.tenantAgentCatalog.connectionName(channelRows.find(row=>row.id===id))).join('; ')||'—'],['График',schedule],['Модель',model],['Режим',current.mode==='automatic'?'Automatic (выбран явно)':'Manual'],['База знаний',file?file.name:uploadedFileSignature?'Файл уже загружен':knowledgeSources.length?`используется существующая: ${knowledgeSources.length} источник(ов)`:'Без базы знаний — можно добавить позже'],['Передача человеку',agentRole==='expert'?'Не применяется к внутреннему агенту':current.handoff||'Дополнительный триггер не задан'],['Запуск',current.confirmedLaunch?'агент будет включён по явному подтверждению':'агент будет сохранён выключенным']];
   const list=$('nightAgentReview');list.replaceChildren(...rows.map(([label,value])=>{const row=document.createElement('div'),strong=document.createElement('b'),span=document.createElement('span');strong.textContent=label;span.textContent=t(value);span.setAttribute('data-user-content','');row.append(strong,span);return row}));
-  $('nightAgentCompanyMode').textContent=settings?.operating_mode==='active'
-   ?'Active Mode уже включён в настройках компании. Мастер его не меняет; проверьте права и server kill switch.'
-   :'Компания остаётся в Test Mode. Мастер не включает Active Mode и не меняет автоотправку.';
+  $('nightAgentCompanyMode').textContent='Мастер не меняет разрешение автоматической отправки компании. Для Automatic продолжают действовать все права и серверные ограничения.';
  }
  function render(step,direction=1){
   const bounded=Math.max(0,Math.min(step,STEPS.length-1));

@@ -176,7 +176,7 @@ def seed_job(db):
 
 def test_active_manual_job_is_fenced_before_ai_reservation(db):
     job=seed_job(db)
-    db.execute("UPDATE saas_ai_agent_settings SET operating_mode='active' WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
     db.execute("UPDATE saas_ai_agents SET mode='manual' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
     db.execute("UPDATE saas_ai_agent_jobs SET state='processing',lease_token=%s WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",(job['lease_token'],A,AGENT))
     db.commit()

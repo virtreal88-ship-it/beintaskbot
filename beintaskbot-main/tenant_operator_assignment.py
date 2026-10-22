@@ -10,7 +10,7 @@ import re
 import uuid
 from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agents_store import _audit, _resume_block_reason
-from tenant_ai_agent_connect import scope_matches, test_allowed
+from tenant_ai_agent_connect import scope_matches
 from tenant_ai_dialog_scope import assert_resolved, channel_scope, lock_dialog
 from tenant_linear_policy import TenantLinearError, identifier
 from tenant_operator_access import access, assert_route
@@ -52,7 +52,7 @@ def context(cur, profile, data, *, writing=False):
         (tenant, channel, conversation))
     has_job = bool(cur.fetchone())
     cur.execute('''SELECT t.status AS tenant_status,s.enabled AS company_enabled,
-      s.emergency_stop AS company_emergency_stop,s.operating_mode,ch.active AS channel_active,
+      s.emergency_stop AS company_emergency_stop,ch.active AS channel_active,
       EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=t.id
         AND i.provider='connect' AND i.status='connected') AS connected
       FROM saas_tenants t JOIN saas_connect_channels ch ON ch.tenant_id=t.id
@@ -88,13 +88,8 @@ def candidates(cur, tenant, channel, conversation, route, state, has_job, config
         agents = [a for a in agents if scope_matches(a.get('scopes'), channel, is_group=True)]
         if not agents:
             return [], 'group_messages_not_allowed'
-    # Candidate discovery is not runtime admission: an out-of-shift agent can
-    # be explicitly assigned, but the worker still enforces its schedule before
-    # processing. Discovery never resumes AI or authorizes automatic sending.
-    if config.get('operating_mode') != 'active':
-        agents = [a for a in agents if test_allowed(cur, tenant, channel, conversation, agent_id=a['id'])]
-        if not agents:
-            return [], 'test_binding_required'
+    # Assignment is independent of the agent's Manual/Automatic mode and never
+    # queues work. The worker separately enforces all runtime send checks.
     return [{'id': str(a['id']), 'name': a['name'], 'mode': a['mode']} for a in agents], ('' if agents else 'no_eligible_agent')
 
 
@@ -127,7 +122,7 @@ def group_options_in_transaction(cur, tenant, channel, conversation):
         return {'allowed':False,'reason':'group_already_assigned','agents':[],'revision':revision}
     if state.get('state') in {'human','active'}:
         return {'allowed':False,'reason':'group_stopped_or_active','agents':[],'revision':revision}
-    cur.execute('''SELECT t.status,s.enabled,s.emergency_stop,s.operating_mode,ch.active,
+    cur.execute('''SELECT t.status,s.enabled,s.emergency_stop,ch.active,
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=t.id
           AND i.provider='connect' AND i.status='connected') AS connected,
         NOT ai_legacy_blocked(t.id,ch.connect_channel_id::text,%s) AS unambiguous
@@ -143,11 +138,9 @@ def group_options_in_transaction(cur, tenant, channel, conversation):
         return {'allowed':False,'reason':'connect_admission_blocked','agents':[],'revision':revision}
     cur.execute("SELECT id,name,enabled,mode,scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND role='primary' ORDER BY name,id",(tenant,))
     rows=[dict(row) for row in cur.fetchall()]
-    from tenant_ai_agent_connect import scope_matches,test_allowed
+    from tenant_ai_agent_connect import scope_matches
     scoped=[row for row in rows if scope_matches(row.get('scopes'),channel,is_group=True)]
     candidates=[row for row in scoped if row.get('enabled') is True]
-    if gate.get('operating_mode')!='active':
-        candidates=[row for row in candidates if test_allowed(cur,tenant,channel,conversation,agent_id=row['id'])]
     reason='' if candidates else 'group_messages_not_allowed' if scoped else 'no_connect_scope' if rows else 'agent_not_found'
     return {'allowed':bool(candidates),'reason':reason,'agents':[{'id':str(row['id']),'name':row['name'],'mode':row['mode']} for row in candidates],'revision':revision}
 

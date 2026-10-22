@@ -56,14 +56,12 @@ class Connection:
 
 
 class ConnectAdmissionTests(unittest.TestCase):
-    def test_archived_tenant_is_blocked_in_active_and_test_modes(self):
-        for mode in ('active', 'test'):
-            cursor = Cursor({'enabled': True, 'emergency_stop': False,
-                             'operating_mode': mode, 'status': 'archived'})
-            with self.subTest(mode=mode), \
+    def test_archived_tenant_is_blocked_even_when_send_permissions_are_enabled(self):
+            cursor = Cursor({'enabled': True, 'auto_send_enabled': True, 'emergency_stop': False,
+                             'status': 'archived'})
+            with \
                  patch.object(connect_ai, '_connect', return_value=Connection(cursor)), \
                  patch.object(connect_ai, 'ensure_schema'), \
-                 patch.object(connect_ai, 'test_allowed', return_value=True), \
                  patch.object(connect_ai, 'runtime_flag', return_value=True):
                 self.assertFalse(connect_ai.allowed({
                     'provider': 'connect', 'tenant_id': '00000000-0000-0000-0000-000000000001',
@@ -73,8 +71,8 @@ class ConnectAdmissionTests(unittest.TestCase):
 
     def test_setup_stage_tenants_can_use_connect_but_not_archived_tenants(self):
         for status in ('onboarding', 'ready_for_integration', 'active'):
-            cursor = Cursor({'enabled': True, 'emergency_stop': False,
-                             'operating_mode': 'active', 'status': status})
+            cursor = Cursor({'enabled': True, 'auto_send_enabled': True, 'emergency_stop': False,
+                             'status': status})
             with self.subTest(status=status), \
                  patch.object(connect_ai, '_connect', return_value=Connection(cursor)), \
                  patch.object(connect_ai, 'ensure_schema'), \
@@ -92,7 +90,7 @@ class ConnectAdmissionTests(unittest.TestCase):
         database.assert_not_called()
 
     def test_server_flag_block_is_recorded_for_diagnostics_instead_of_lost(self):
-        cursor = Cursor({'operating_mode': 'active'})
+        cursor = Cursor({'auto_send_enabled': False})
         with patch.object(connect_ai, '_connect', return_value=Connection(cursor)), \
              patch.object(connect_ai, 'ensure_schema'), \
              patch.object(connect_ai, 'allowed', return_value=False), \

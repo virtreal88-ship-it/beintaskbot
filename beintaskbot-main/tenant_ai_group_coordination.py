@@ -262,7 +262,7 @@ def transition(cur, tenant, conversation, state, reason, actor):
       VALUES(%s::uuid,'connect',%s,%s,%s::uuid,'paused') ON CONFLICT(tenant_id,provider,channel_id,conversation_id)
       DO UPDATE SET agent_id=EXCLUDED.agent_id,revision=saas_ai_conversation_state.revision+1''',
       (tenant, channel, conversation, selected['primary_agent_id']))
-    # Existing company, runtime, membership, Test Mode and integration gates.
+    # Existing company, runtime, membership and integration gates.
     cur.execute("UPDATE saas_ai_conversation_state SET state='paused' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s AND state='active'", (tenant,channel,conversation))
     _assert_resume_allowed(cur,tenant,'connect',conversation,channel)
     cur.execute("UPDATE saas_ai_group_coordination SET state='active',reason='',assigned_to=NULL,revision=revision+1,resumed_at=clock_timestamp(),updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND group_jid=%s", (tenant, conversation))

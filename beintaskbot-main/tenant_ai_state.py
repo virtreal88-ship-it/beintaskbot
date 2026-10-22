@@ -31,7 +31,7 @@ def _safe_schedule(value):
     return {key: value[key] for key in ('timezone', 'days', 'start', 'end') if key in value}
 
 
-def _agent_state(agent, channels, system, chat, worker_alive, tenant, now, bindings):
+def _agent_state(agent, channels, system, chat, worker_alive, tenant, now):
     """Eligibility is conditional on a new, fully scoped inbound message."""
     schedule = _safe_schedule(agent.get('schedule'))
     try:
@@ -74,21 +74,12 @@ def _agent_state(agent, channels, system, chat, worker_alive, tenant, now, bindi
             codes.append('ai_configuration_not_ready')
         elif not model or model not in (chat.get('models') or []) + [chat.get('model')]:
             codes.append('model_unavailable')
-        if system.get('operating_mode') != 'active':
-            codes.append('test_mode_draft_only')
-            binding = bindings.get(provider) or {}
-            if not (binding.get('enabled') is True and binding.get('verified') is True
-                    and binding.get('emergency_stop') is not True
-                    and (not binding.get('agent_id') or str(binding['agent_id']) == str(agent['id']))
-                    and (not cid or str(binding.get('channel_id')) == cid)):
-                codes.append('test_binding_mismatch')
-        elif agent.get('mode') != 'automatic': codes.append('manual_mode')
+        if agent.get('mode') != 'automatic': codes.append('manual_mode')
         elif not (system.get('auto_send_enabled') and enabled('AI_AGENTS_AUTO_SEND_ENABLED')):
             codes.append('auto_send_disabled')
-        hard = [code for code in codes if code not in {'manual_mode', 'test_mode_draft_only', 'auto_send_disabled'}]
+        hard = [code for code in codes if code != 'manual_mode']
         state = ('disabled' if 'agent_disabled' in codes else 'outside_schedule' if hard == ['outside_schedule']
-                 else 'blocked' if hard else 'test' if 'test_mode_draft_only' in codes else
-                 'manual' if 'manual_mode' in codes or 'auto_send_disabled' in codes else 'ready')
+                 else 'blocked' if hard else 'manual' if 'manual_mode' in codes else 'ready')
         selected.append({'id': key, 'provider': provider, 'channel_id': cid,
                          'name': channel['name'] if channel else 'Каналы CRM' if provider == 'kommo' and not cid else 'Недоступный канал',
                          'type': channel['type'] if channel else 'unknown', 'state': state,
@@ -98,7 +89,7 @@ def _agent_state(agent, channels, system, chat, worker_alive, tenant, now, bindi
     states = {s['state'] for s in selected}
     status = ('disabled' if not agent.get('enabled') else 'blocked' if not selected else
               'ready' if 'ready' in states else 'manual' if 'manual' in states else
-              'test' if 'test' in states else 'outside_schedule' if states == {'outside_schedule'} else 'blocked')
+              'outside_schedule' if states == {'outside_schedule'} else 'blocked')
     return {'id': str(agent['id']), 'name': str(agent.get('name') or 'AI Agent'),
             'enabled': bool(agent.get('enabled')), 'mode': 'automatic' if agent.get('mode') == 'automatic' else 'manual',
             'state': status, 'schedule': schedule, 'schedule_open': scheduled,
@@ -172,14 +163,9 @@ def snapshot(profile, limit=30, *, technical=False, now=None):
               FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai' ''', (tenant,))
             chat = cur.fetchone() or {}
             if not isinstance(chat.get('models'), list): chat['models'] = []
-            cur.execute('''SELECT 'connect' AS provider,agent_id,channel_id,enabled,verified,emergency_stop
-              FROM saas_ai_agent_connect_test_mode WHERE tenant_id=%s::uuid
-              UNION ALL SELECT 'kommo',agent_id,channel_id,enabled,verified,emergency_stop
-              FROM saas_ai_agent_test_mode WHERE tenant_id=%s::uuid''', (tenant, tenant))
-            bindings = {b['provider']: b for b in cur.fetchall()}
             channels = {item['id']: item for item in catalog['channels']}
             agents = {str(a['id']): _agent_state(a, channels, diagnostics['system'], chat,
-                      reliability['health']['worker_alive'], tenant, now, bindings) for a in agent_rows}
+                      reliability['health']['worker_alive'], tenant, now) for a in agent_rows}
             messages = reliability['messages']
             routes = _event_routes(cur, tenant, messages, policy)
             events = []
@@ -206,7 +192,7 @@ def snapshot(profile, limit=30, *, technical=False, now=None):
     sends = int(metrics['unsuccessful_sends_24h']) if metrics.get('unsuccessful_sends_24h') is not None else None
     stuck = sum(int(metrics[key]) for key in ('overdue','expired_leases')) if all(metrics.get(key) is not None for key in ('overdue','expired_leases')) else None
     attention = bool(errors or sends or metrics.get('overdue') or metrics.get('expired_leases'))
-    ready_count = sum(a['state'] in {'ready', 'manual', 'test'} for a in agents.values())
+    ready_count = sum(a['state'] in {'ready', 'manual'} for a in agents.values())
     result = {'schema_version': 1, 'generated_at': now.isoformat(),
               'summary': {'service': 'available' if reliability['health']['worker_alive'] else 'unavailable',
                           'state': 'attention' if attention else 'conditional' if ready_count else 'not_ready',
