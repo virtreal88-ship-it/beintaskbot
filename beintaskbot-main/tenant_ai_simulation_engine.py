@@ -97,6 +97,12 @@ def _public_config(row):
                 'max_output_tokens': 800, 'starts_at': None, 'ends_at': None,
                 'runtime_enabled': runtime_flag('AI_SIMULATION_ENABLED')}
     result = dict(row)
+    # Tenant identity is already bound by the signed session and must not
+    # leak into this UI settings payload. In particular, psycopg UUID values
+    # are not JSON-serializable by aiohttp's default encoder.
+    result.pop('tenant_id', None)
+    if result.get('agent_id') is not None:
+        result['agent_id'] = str(result['agent_id'])
     for key in ('starts_at', 'ends_at', 'updated_at'):
         result[key] = _iso(result.get(key)) if result.get(key) else None
     result['runtime_enabled'] = runtime_flag('AI_SIMULATION_ENABLED')

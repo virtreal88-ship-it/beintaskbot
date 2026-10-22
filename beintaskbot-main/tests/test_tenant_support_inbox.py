@@ -473,6 +473,16 @@ def test_simulation_schema_defaults_off_and_is_tenant_scoped(db,monkeypatch):
     assert simulation.list_runs(PROFILE)==[]
 
 
+def test_simulation_public_config_is_json_serializable_with_psycopg_uuids():
+    from tenant_ai_simulation_engine import _public_config
+    config=_public_config({'tenant_id':uuid.UUID(A),'agent_id':uuid.UUID(AGENT),'channel_ids':[CA],
+        'conversation_ids':[],'enabled':False,'emergency_stop':False,'state':'stopped','token_budget':0,
+        'message_limit':0,'max_parallel':1,'max_calls_per_event':3,'max_output_tokens':800,
+        'starts_at':None,'ends_at':None,'updated_at':None})
+    encoded=json.dumps(config)
+    assert str(uuid.UUID(AGENT)) in encoded and 'tenant_id' not in config
+
+
 def test_simulation_inbound_queue_dedupes_and_tenant_fences(db,monkeypatch):
     source=seed_simulation(db)
     monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
