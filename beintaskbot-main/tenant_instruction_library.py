@@ -122,12 +122,16 @@ def operation(profile,action,data=None,lesson_id=None):
                 if data.get('expected_version')!=row['version']: raise TenantLinearError('Version conflict',409)
                 if action=='revoke':
                     c.execute('UPDATE saas_instruction_lessons SET public_hash=NULL,version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,key))
+                elif action=='unpublish':
+                    if row['state']!='published': raise TenantLinearError('Only a published instruction can be unpublished',409)
+                    c.execute("UPDATE saas_ai_knowledge_sources SET active=FALSE WHERE tenant_id=%s::uuid AND provenance->>'instruction_id'=%s",(tenant,key))
+                    c.execute("UPDATE saas_instruction_lessons SET state='approved',published_doc=NULL,public_hash=NULL,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,key))
                 elif action=='share':
                     if row['state']!='published': raise TenantLinearError('Publish first',409)
                     token=secrets.token_urlsafe(32);digest=hashlib.sha256(token.encode()).hexdigest()
                     c.execute('UPDATE saas_instruction_lessons SET public_hash=%s,version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid',(digest,tenant,key))
                     _audit(c,tenant,actor,'instruction_public_share','instruction',key);conn.commit();return {'token':token}
-                else:
+                elif action!='unpublish':
                     state=transition(row['state'],action)
                     if action=='approve' and data.get('review_confirmed') is not True: raise TenantLinearError('Explicit employee review required',400)
                     v=document(row['doc']);_assets(c,tenant,v)

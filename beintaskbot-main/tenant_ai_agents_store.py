@@ -546,6 +546,12 @@ def save_knowledge(profile, data, *, source_id=None, connection=None):
                 previous = cur.fetchone()
                 if not previous:
                     raise TenantLinearError('Bilik mənbəyi tapılmadı.', 404)
+                provenance = previous.get('provenance') or {}
+                if isinstance(provenance, str):
+                    try: provenance = json.loads(provenance)
+                    except (TypeError, ValueError): provenance = {}
+                if isinstance(provenance, dict) and provenance.get('instruction_id'):
+                    raise TenantLinearError('Dərc edilmiş təlimat kitabxanasından idarə olunur. Dəyişiklik və deaktivasiya üçün Təlimatlar bölməsindən istifadə edin.', 409)
                 merged = {key: previous[key] for key in ('title','kind','content','active')}
                 merged.update(patch)
                 digest = hashlib.sha256(merged['content'].encode('utf-8')).hexdigest()
@@ -571,9 +577,18 @@ def delete_knowledge(profile, source_id):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
-            cur.execute('DELETE FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING id', (tenant, source))
-            if not cur.fetchone():
+            cur.execute('SELECT provenance FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE', (tenant, source))
+            row = cur.fetchone()
+            if not row:
                 raise TenantLinearError('Bilik mənbəyi tapılmadı.', 404)
+            provenance = row.get('provenance') or {}
+            if isinstance(provenance, str):
+                try: provenance = json.loads(provenance)
+                except (TypeError, ValueError): provenance = {}
+            if isinstance(provenance, dict) and provenance.get('instruction_id'):
+                raise TenantLinearError('Dərc edilmiş təlimat kitabxanasından idarə olunur. Təlimatlar bölməsindən nəşri ləğv edin.', 409)
+            cur.execute('DELETE FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING id', (tenant, source))
+            cur.fetchone()
             _audit(cur, tenant, actor, 'ai_knowledge_deleted', 'knowledge_source', source)
         conn.commit()
     return {'deleted': True}
