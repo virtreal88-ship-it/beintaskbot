@@ -150,28 +150,26 @@ def test_reliability_api_get_uses_tenant_profile_and_no_store():
 
 
 @pytest.mark.parametrize('receipt', ['accepted', 'missing', 'wrong_channel'])
-def test_stuck_manual_send_is_reconciled_without_external_call(system, receipt):
-    from tenant_ai_agents_store import reserve_draft_send
+def test_historical_inflight_draft_is_reconciled_without_external_call(system, receipt):
     f=system;db=f['db']
-    db.execute("UPDATE saas_ai_agents SET mode='manual'");db.commit()
-    mid,_=f['inbound']();f['process']()
-    draft=db.execute('SELECT id FROM saas_ai_agent_drafts')[0]['id'];db.commit()
-    assert reserve_draft_send(PROFILE,draft)
-    assert db.execute('SELECT send_started_at FROM saas_ai_agent_drafts')[0]['send_started_at']
+    db.execute("UPDATE saas_ai_agents SET mode='manual'")
+    mid,_=f['inbound']()
+    fingerprint=db.execute("SELECT fingerprint FROM saas_tenant_webhook_events WHERE provider='connect' ORDER BY received_at DESC LIMIT 1")[0]['fingerprint']
+    run,draft=str(uuid.uuid4()),str(uuid.uuid4())
+    db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,'legacy','completed')",(A,run,AGENT,fingerprint))
+    db.execute("INSERT INTO saas_ai_agent_drafts(tenant_id,id,agent_id,run_id,lead_id,talk_id,chat_id,source_message_id,source_fingerprint,draft,state,send_started_at) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,41,'','client',%s,%s,'Old historical reply','sending',now()-interval '11 minutes')",(A,draft,AGENT,run,mid,fingerprint))
     if receipt!='missing':
-        db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,author_name,raw) VALUES(%s::uuid,%s::uuid,41,'connect:manual-result',%s,'outgoing','AI Agent',%s::jsonb)",
-                   (str(uuid.uuid4()),A,'connect:'+(CA if receipt=='accepted' else CB),json.dumps({'run_id':draft,'status':'accepted'})))
-    db.execute("UPDATE saas_ai_agent_drafts SET send_started_at=now()-interval '11 minutes'");db.commit()
-    assert runs.claim_next() is None
-    assert runs.claim_next() is None
-    expected='approved' if receipt=='accepted' else 'unknown'
-    assert db.execute('SELECT state FROM saas_ai_agent_drafts')[0]['state']==expected
+        db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,author_name,raw) VALUES(%s::uuid,%s::uuid,41,'connect:legacy-result',%s,'outgoing','AI Agent',%s::jsonb)",
+                   (str(uuid.uuid4()),A,'connect:'+(CA if receipt=='accepted' else 'foreign-channel'),json.dumps({'run_id':draft,'status':'accepted'})))
     db.commit()
+    assert runs.claim_next() is None
     item=next(m for m in reliability.snapshot(PROFILE)['messages'] if m['message_id']==mid)
     assert item['status']==('sent' if receipt=='accepted' else 'error')
     assert not item['automatic_retry']
+    assert db.execute('SELECT state FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,draft))[0]['state']==('approved' if receipt=='accepted' else 'unknown')
+    db.commit()
     f['send'].assert_not_called()
-    assert f['generate'].call_count==1
+    assert f['generate'].call_count==0
 
 
 @pytest.mark.parametrize('failure', ['model', 'media', 'connect'])

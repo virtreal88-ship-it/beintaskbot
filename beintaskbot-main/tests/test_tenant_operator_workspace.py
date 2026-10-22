@@ -42,7 +42,7 @@ def test_all_connect_conversations_are_visible_without_ai_or_kommo(operator_db):
 
 
 def test_existing_unassigned_dialog_lists_candidate_without_mutating_state(operator_db):
-    operator_db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,operating_mode) VALUES(%s::uuid,TRUE,'active') ON CONFLICT(tenant_id) DO UPDATE SET enabled=TRUE,operating_mode='active'",(A,))
+    operator_db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,auto_send_enabled) VALUES(%s::uuid,TRUE,TRUE) ON CONFLICT(tenant_id) DO UPDATE SET enabled=TRUE,auto_send_enabled=TRUE",(A,))
     operator_db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT(tenant_id,provider) DO UPDATE SET status='connected'",(A,))
     operator_db.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled,mode,scopes) VALUES(%s::uuid,%s::uuid,'Night support',11,TRUE,'manual',%s::jsonb)",
         (A,AGENT,json.dumps([{'provider':'connect','channel_id':CA}])));operator_db.commit()
@@ -134,7 +134,7 @@ def test_dialog_filters_counters_and_ticket_search(operator_db):
 def test_normalized_status_filter_runs_before_pagination_and_returns_total(operator_db):
     import uuid
     db=operator_db
-    db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,operating_mode) VALUES(%s::uuid,TRUE,'active') ON CONFLICT(tenant_id) DO UPDATE SET enabled=TRUE,operating_mode='active'",(A,))
+    db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,auto_send_enabled) VALUES(%s::uuid,TRUE,TRUE) ON CONFLICT(tenant_id) DO UPDATE SET enabled=TRUE,auto_send_enabled=TRUE",(A,))
     db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT(tenant_id,provider) DO UPDATE SET status='connected'",(A,))
     db.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled,mode,scopes) VALUES(%s::uuid,%s::uuid,'Manual agent',11,TRUE,'manual',%s::jsonb)",(A,AGENT,json.dumps([{'provider':'connect','channel_id':CA}])))
     for index in range(55):
@@ -149,12 +149,12 @@ def test_normalized_status_filter_runs_before_pagination_and_returns_total(opera
     assert second['total_count']==55 and len(second['dialogs'])==5 and second['next_offset'] is None
 
 
-def test_automatic_agent_in_test_mode_is_not_classified_as_live_automatic(operator_db):
+def test_automatic_agent_with_company_send_disabled_is_not_classified_as_live_automatic(operator_db):
     seed_job(operator_db)
     operator_db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT(tenant_id,provider) DO UPDATE SET status='connected'",(A,))
     operator_db.execute("UPDATE saas_ai_agents SET mode='automatic' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));operator_db.commit()
     row=dialogs.listing(PROFILE,state='attention')['dialogs'][0]
-    assert row['agent_status']=='attention' and row['agent_status_reason']=='test_binding_required'
+    assert row['agent_status']=='attention' and row['agent_status_reason']=='auto_send_disabled'
     assert dialogs.listing(PROFILE,state='automatic')['total_count']==0
 
 

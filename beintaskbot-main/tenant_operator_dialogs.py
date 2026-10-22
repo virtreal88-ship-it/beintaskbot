@@ -149,7 +149,7 @@ def projection(policy):
         ch.name AS channel_name,ch.active AS channel_active,'connect:'||c.connect_channel_id::text AS history_channel,
         CASE WHEN cs.agent_assignment_id IS NOT NULL THEN cs.agent_id ELSE COALESCE(cs.agent_id,j.agent_id) END AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,a.mode AS agent_mode,a.scopes AS agent_scopes,a.schedule AS agent_schedule,
         COALESCE(gc.state,cs.state,'active') AS state,COALESCE(gc.reason,cs.reason,'') AS reason,COALESCE(gc.updated_at,cs.updated_at) AS updated_at,
-        cs.tenant_id IS NOT NULL AS tracked,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,s.operating_mode AS company_operating_mode,
+        cs.tenant_id IS NOT NULL AS tracked,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,s.auto_send_enabled AS company_auto_send_enabled,
         t.status AS tenant_status,j.state AS latest_job_state,COALESCE(j.error_code,'') AS latest_job_error,
         COALESCE(lm.last_message_at,c.last_message_at,c.created_at) AS last_message_at,
         ticket.assigned_to,tm.display_name AS assignee_name,
@@ -184,7 +184,7 @@ def projection(policy):
         COALESCE(NULLIF(d.contact_name,''),NULLIF(d.name,''),d.kommo_lead_id::text),''::text AS manual_display_name,COALESCE(d.phone,''),''::text AS conversation_kind,
         COALESCE(NULLIF(lm.channel,''),'Kommo'),TRUE,COALESCE(lm.channel,''),j.agent_id,a.name,a.enabled,a.mode,a.scopes,a.schedule,
         COALESCE(cs.state,'active'),COALESCE(cs.reason,''),cs.updated_at,cs.tenant_id IS NOT NULL,
-        s.enabled,s.emergency_stop,s.operating_mode,t.status,j.state,COALESCE(j.error_code,''),lm.last_message_at,
+        s.enabled,s.emergency_stop,s.auto_send_enabled,t.status,j.state,COALESCE(j.error_code,''),lm.last_message_at,
         cs.assigned_to,tm.display_name,TRUE,
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=d.tenant_id AND i.provider='kommo' AND i.status='connected'),
         NULL::text,NULL::text,NULL::timestamptz,NULL::text,NULL::text,d.pipeline_id::text,d.status_id::text
@@ -204,6 +204,7 @@ def projection(policy):
       WHEN agent_id IS NULL THEN 'unmanaged'
       WHEN latest_job_state IN ('failed','unknown') AND latest_job_error<>'' THEN 'error'
       WHEN NOT COALESCE(company_enabled,FALSE) OR COALESCE(company_emergency_stop,FALSE) OR NOT COALESCE(agent_enabled,FALSE)
+        OR (agent_mode='automatic' AND NOT COALESCE(company_auto_send_enabled,FALSE))
         OR NOT %s OR COALESCE(tenant_status,'')<>'active' OR NOT COALESCE(channel_active,FALSE)
         OR NOT COALESCE(connected,FALSE) THEN 'blocked'
       ELSE 'active' END AS display_state FROM routes) '''
@@ -256,7 +257,8 @@ def decorate(row):
             schedule_open=False
     operational=bool(item.get('agent_available') and item.get('channel_active') and item.get('unambiguous') and item.get('conversation_id') and item.get('connected')
         and item.get('company_enabled') and not item.get('company_emergency_stop')
-        and item.get('company_operating_mode')=='active' and item.get('tenant_status')=='active' and runtime_flag('AI_AGENTS_ENABLED'))
+        and item.get('tenant_status')=='active' and runtime_flag('AI_AGENTS_ENABLED')
+        and (item.get('agent_mode')!='automatic' or (item.get('company_auto_send_enabled') is True and runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'))))
     if item.get('display_state')=='error':
         item['agent_status']='error'
     # Manual is an assigned operating mode, not an error state. Keep its blue
@@ -279,7 +281,7 @@ def decorate(row):
         elif item.get('tenant_status')!='active': item['agent_status_reason']='tenant_not_active'
         elif item.get('company_emergency_stop'): item['agent_status_reason']='emergency_stop'
         elif not item.get('company_enabled'): item['agent_status_reason']='company_ai_disabled'
-        elif item.get('company_operating_mode')!='active': item['agent_status_reason']='test_binding_required'
+        elif item.get('agent_mode')=='automatic' and (item.get('company_auto_send_enabled') is not True or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')): item['agent_status_reason']='auto_send_disabled'
         elif item.get('agent_enabled') is not True: item['agent_status_reason']='agent_disabled'
         elif item.get('state') in {'human','paused'}: item['agent_status_reason']=item.get('reason') or ('human_handoff' if item['handoff_active'] else 'manager_pause')
         elif item.get('agent_mode')=='automatic' and not schedule_open: item['agent_status_reason']='outside_schedule'
@@ -325,7 +327,7 @@ def apply_group_view(cur,tenant,dialog):
     dialog.pop('agent_scopes',None)
     cur.execute('SELECT display_name FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',(tenant,g['assigned_to']))
     assignee=(cur.fetchone() or {}).get('display_name')
-    usable=bool(g['primary_agent_id'] and dialog.get('controls_allowed') and dialog.get('company_enabled') and not dialog.get('company_emergency_stop') and dialog.get('connected') and runtime_flag('AI_AGENTS_ENABLED') and tenant_status_allows_ai(dialog.get('tenant_status'),'connect'))
+    usable=bool(g['primary_agent_id'] and dialog.get('controls_allowed') and dialog.get('company_enabled') and not dialog.get('company_emergency_stop') and dialog.get('connected') and runtime_flag('AI_AGENTS_ENABLED') and tenant_status_allows_ai(dialog.get('tenant_status'),'connect') and (primary_agent.get('mode')!='automatic' or (dialog.get('company_auto_send_enabled') is True and runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'))))
     state=g['state'];display=state if state!='active' or usable else 'blocked'
     dialog.update(agent_id=g['primary_agent_id'],agent_name=name,assignee_name=assignee,
                   state=state,display_state=display,display_reason=g['reason'],
@@ -345,12 +347,12 @@ def apply_group_view(cur,tenant,dialog):
                 from tenant_ai_agent_schedule import is_open
                 schedule_open=is_open(primary_agent.get('schedule') or {})
             except (ValueError,TypeError,KeyError):schedule_open=False
-        dialog['agent_status']='manual' if primary_agent.get('mode')=='manual' and primary_agent.get('enabled') else 'automatic' if primary_agent.get('mode')=='automatic' and usable and dialog.get('company_operating_mode')=='active' and schedule_open and state=='active' else 'attention'
+        dialog['agent_status']='manual' if primary_agent.get('mode')=='manual' and primary_agent.get('enabled') else 'automatic' if primary_agent.get('mode')=='automatic' and usable and schedule_open and state=='active' else 'attention'
         dialog['agent_status_reason']='' if dialog['agent_status'] in {'manual','automatic'} else (g.get('reason') or 'connect_admission_blocked')
         if dialog['agent_status']=='attention' and primary_agent.get('mode')=='automatic' and not schedule_open:
             dialog['agent_status_reason']='outside_schedule'
-        elif dialog['agent_status']=='attention' and primary_agent.get('mode')=='automatic' and dialog.get('company_operating_mode')!='active':
-            dialog['agent_status_reason']='test_binding_required'
+        elif dialog['agent_status']=='attention' and primary_agent.get('mode')=='automatic' and (dialog.get('company_auto_send_enabled') is not True or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')):
+            dialog['agent_status_reason']='auto_send_disabled'
     return dialog
 
 
@@ -471,9 +473,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 dialog['agent_status_reason']=('assignment_required' if len(dialog['agent_assignment'].get('agents') or [])==1 else
                   'agent_selection_required' if len(dialog['agent_assignment'].get('agents') or [])>1 else dialog['agent_assignment'].get('reason') or '')
             if provider=='kommo' and dialog['controls_allowed']:
-                from tenant_ai_agent_test_mode import conversation_allowed
+                from tenant_ai_agent_admission import conversation_allowed
                 if not conversation_allowed(cur,tenant,conversation):
-                    dialog['controls_allowed']=False;dialog['control_block_reason']='test_binding_required'
+                    dialog['controls_allowed']=False;dialog['control_block_reason']='untracked_dialog'
             anchor_at=None;anchor_row={}
             if anchor and not before:
                 # Resolve anchor only within the authorized route / exact tenant group.

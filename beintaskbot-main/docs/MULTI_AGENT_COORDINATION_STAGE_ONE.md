@@ -1,5 +1,7 @@
 # Multi-Agent Coordination — stage 1
 
+Historical implementation report. References below to the company Test Mode describe the then-current architecture; it was later retired while the final send-boundary checks were retained as agent, tenant, channel, and company/server policy checks.
+
 Prepared in isolated worktrees on 2026-10-18. No merge, push, production migration or deployment. Bases verified against origin: Beintaskbot `ffc5a677`, Connect `de67f99`. Connect result: `8c830d2f32369ee6edc05c7c218e6eb12a8c6a17` on `codex/group-coordination`.
 
 ## Coordination and identity

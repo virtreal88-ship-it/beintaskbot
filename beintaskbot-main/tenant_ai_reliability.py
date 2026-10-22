@@ -26,10 +26,9 @@ REASONS = {
     'conversation_human': 'Human Mode: отвечает сотрудник', 'conversation_paused': 'AI приостановлен',
     'connect_human_takeover': 'Ответ отменён после ручного ответа сотрудника',
     'manual_mode': 'Ответ создан как черновик: агент в Manual',
-    'test_mode_draft_only': 'Test Mode: отправка клиенту запрещена',
     'auto_send_disabled': 'Автоматическая отправка выключена',
     'ai_limit_reached': 'Достигнут лимит AI', 'voice_token_limit': 'Достигнут лимит AI',
-    'connect_admission_blocked': 'Канал, компания или Test Mode не разрешает обработку',
+    'connect_admission_blocked': 'Канал или настройки компании не разрешают обработку',
     'connect_policy_blocked': 'Проверка безопасности не разрешила обработку',
     'no_connect_scope': 'Канал не входит в область работы агента',
     'connect_channel_outside_agent_scope': 'Канал не входит в область работы агента',
@@ -75,7 +74,6 @@ REASONS = {
     'tenant_inactive': 'Компания не допущена к работе AI',
     'conversation_paused_or_human': 'Human Mode или Pause: требуется явный Resume',
     'emergency_stopped': 'Включена аварийная остановка',
-    'test_binding_mismatch': 'Сообщение не соответствует разрешённому тестовому диалогу',
     'chat_ai_disabled': 'AI-провайдер не включён для компании',
     'chat_ai_consent_missing': 'Не подтверждены условия использования AI',
     'chat_ai_key_missing': 'Недоступны учётные данные AI-провайдера',
@@ -187,7 +185,7 @@ def _message(row):
         status = 'skipped'
     elif item.get('drafted'):
         status = 'generated'
-        code = 'test_mode_draft_only' if item.get('operating_mode') != 'active' else 'manual_mode' if item.get('agent_mode') != 'automatic' else 'auto_send_disabled'
+        code = 'manual_mode' if item.get('agent_mode') != 'automatic' else 'auto_send_disabled'
     elif state == 'queued':
         status = 'queued'
         if not item.get('agent_enabled'): code = 'agent_disabled'
@@ -243,7 +241,7 @@ def read_snapshot(cur, tenant, limit=50):
     metrics['ai_errors_24h'] += cur.fetchone()['count']
     cur.execute("SELECT count(*) AS count FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND state='unknown' AND created_at>now()-interval '24 hours'",(tenant,))
     metrics['unsuccessful_sends_24h'] += cur.fetchone()['count']
-    cur.execute("SELECT enabled,emergency_stop,operating_mode,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(tenant,))
+    cur.execute("SELECT enabled,emergency_stop,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(tenant,))
     settings = cur.fetchone() or {}
     cur.execute("SELECT count(*) AS count FROM saas_ai_agents WHERE tenant_id=%s::uuid AND enabled=TRUE",(tenant,))
     active_agents = cur.fetchone()['count']
@@ -253,7 +251,7 @@ def read_snapshot(cur, tenant, limit=50):
         e.received_at,e.state AS event_state,e.error_code AS event_error,
         j.state AS job_state,j.error_code AS job_error,j.attempts,j.due_at,
         COALESCE(j.agent_id,r.agent_id) AS agent_id,a.enabled AS agent_enabled,a.mode AS agent_mode,
-        s.enabled AS company_enabled,s.emergency_stop,s.operating_mode,cs.state AS conversation_state,
+        s.enabled AS company_enabled,s.emergency_stop,s.auto_send_enabled,cs.state AS conversation_state,
         (e.provider='connect' AND ai_legacy_blocked(e.tenant_id,e.payload->>'channel_id',e.payload->>'conversation_id',e.fingerprint)) AS legacy_scope_unresolved,
         r.state AS run_state,r.error_code AS run_error,r.generated_at,
         (SELECT d.state FROM saas_ai_agent_drafts d WHERE d.tenant_id=e.tenant_id AND d.source_fingerprint=e.fingerprint AND d.agent_id=COALESCE(j.agent_id,r.agent_id) ORDER BY d.created_at DESC LIMIT 1) AS draft_state,
@@ -286,6 +284,5 @@ def read_snapshot(cur, tenant, limit=50):
     return {'health':{'state':state,'label':labels[state],'worker_alive':bool(worker.get('alive')),
                       'worker_last_seen_at':str(worker.get('last_seen_at') or ''),
                       'blockers':[reason(code)[1] for code in blockers],
-                      'operating_mode':settings.get('operating_mode') or 'test',
                       'automatic_send_enabled':bool(settings.get('auto_send_enabled') and enabled('AI_AGENTS_AUTO_SEND_ENABLED'))},
             'metrics':metrics,'messages':messages,'window_hours':24}

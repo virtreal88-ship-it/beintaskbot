@@ -103,15 +103,14 @@ def test_assignment_rejects_wrong_scope_and_stale_authority(old_dialog, case):
     f['send'].assert_not_called()
 
 
-def test_group_opt_in_test_binding_disabled_agents_and_company_stop(old_dialog):
+def test_group_assignment_does_not_require_company_auto_send(old_dialog):
     f = old_dialog; db = f['db']; data = payload(f)
     db.execute("UPDATE saas_connect_conversations SET conversation_kind='group' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid", (A, CA)); db.commit()
     assert not assignment.options(PROFILE, data)['allowed']
     db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE id=%s::uuid", (json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}]), AGENT)); db.commit()
     assert assignment.options(PROFILE, data)['allowed']
-    db.execute("UPDATE saas_ai_agent_settings SET operating_mode='test' WHERE tenant_id=%s::uuid", (A,)); db.commit()
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=FALSE WHERE tenant_id=%s::uuid", (A,)); db.commit()
     assert not assignment.options(PROFILE, data)['allowed']
-    db.execute("INSERT INTO saas_ai_agent_connect_test_mode(tenant_id,enabled,verified,channel_id,conversation_id,agent_id) VALUES(%s::uuid,TRUE,TRUE,%s,'client',%s::uuid)", (A, CA, AGENT)); db.commit()
     assert assignment.options(PROFILE, data)['allowed']
     db.execute('UPDATE saas_ai_agents SET enabled=FALSE WHERE id=%s::uuid', (AGENT,)); db.commit()
     assert not assignment.options(PROFILE, data)['allowed']
@@ -119,15 +118,14 @@ def test_group_opt_in_test_binding_disabled_agents_and_company_stop(old_dialog):
     assert assignment.options(PROFILE, data)['reason'] == 'emergency_stop'
 
 
-def test_candidate_reason_identifies_scope_disabled_and_test_binding(old_dialog):
+def test_candidate_reason_identifies_scope_and_disabled_agent(old_dialog):
     f=old_dialog;db=f['db'];data=payload(f)
     db.execute('UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE id=%s::uuid',
                (json.dumps([{'provider':'kommo','channel_id':'other'}]),AGENT));db.commit()
     assert assignment.options(PROFILE,data)['reason']=='no_connect_scope'
     db.execute('UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE id=%s::uuid',
-               (json.dumps([{'provider':'connect','channel_id':CA}]),AGENT))
-    db.execute('UPDATE saas_ai_agent_settings SET operating_mode=\'test\' WHERE tenant_id=%s::uuid',(A,));db.commit()
-    assert assignment.options(PROFILE,data)['reason']=='test_binding_required'
+               (json.dumps([{'provider':'connect','channel_id':CA}]),AGENT));db.commit()
+    assert assignment.options(PROFILE,data)['allowed']
     db.execute('UPDATE saas_ai_agents SET enabled=FALSE WHERE id=%s::uuid',(AGENT,));db.commit()
     assert assignment.options(PROFILE,data)['reason']=='agent_disabled'
 

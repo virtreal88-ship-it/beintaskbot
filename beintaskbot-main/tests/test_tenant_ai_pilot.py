@@ -31,7 +31,7 @@ def test_configured_dialog_is_blocked_until_pilot_is_armed_and_confirmed():
 def test_armed_pilot_fails_closed_for_scope_mismatch_or_missing_confirmation(monkeypatch):
     row = {'conversation_state': 'active', 'conversation_ai_enabled': True, 'conversation_manual_hold': False,
            'active': True, 'integration_status': 'connected', 'tenant_status': 'active',
-           'company_enabled': True, 'operating_mode': 'active', 'auto_send_enabled': True,
+           'company_enabled': True, 'auto_send_enabled': True,
            'emergency_stop': False, 'agent_enabled': True, 'agent_mode': 'automatic', 'exact_agent_scope': True}
     monkeypatch.setattr(pilot, '_snapshot', lambda *_: (row, 'fp'))
 
@@ -62,7 +62,7 @@ def test_armed_pilot_blocks_unknown_scope_and_handoff(monkeypatch):
 
     row = {'conversation_state': 'human', 'conversation_ai_enabled': True, 'conversation_manual_hold': False,
            'active': True, 'integration_status': 'connected', 'tenant_status': 'active',
-           'company_enabled': True, 'operating_mode': 'active', 'auto_send_enabled': True,
+           'company_enabled': True, 'auto_send_enabled': True,
            'emergency_stop': False, 'agent_enabled': True, 'agent_mode': 'automatic', 'exact_agent_scope': True}
     monkeypatch.setattr(pilot, '_snapshot', lambda *_: (row, 'fp'))
     with patch.dict('os.environ', pilot_env(AI_AGENTS_PILOT_SCOPE_ENABLED='true', AI_AGENTS_AUTO_SEND_ENABLED='true'), clear=True):
@@ -78,7 +78,7 @@ def test_channel_or_agent_setting_change_invalidates_scope_fingerprint():
     common = {'conversation_id':'test-chat','active':True,'channel_version':'v1',
         'integration_status':'connected','integration_version':'i1','conversation_ai_enabled':True,
         'conversation_manual_hold':False,'conversation_state':'active','company_enabled':True,
-        'operating_mode':'active','auto_send_enabled':True,'emergency_stop':False,'tenant_status':'active',
+        'auto_send_enabled':True,'emergency_stop':False,'tenant_status':'active',
         'agent_id':'agent-1','agent_enabled':True,'agent_mode':'automatic','agent_version':3,
         'agent_settings_version':'a1','scopes':[{'provider':'connect','channel_id':CHANNEL}]}
     _, initial = pilot._snapshot(Cursor(common), TENANT, scope)
@@ -90,7 +90,7 @@ def test_channel_or_agent_setting_change_invalidates_scope_fingerprint():
 
 def test_preflight_marks_kwid_as_unknown_until_fresh_manual_attestation(monkeypatch):
     row = {'active': True, 'integration_status': 'connected', 'conversation_id': 'test-chat',
-           'conversation_state': 'active', 'company_enabled': False, 'operating_mode': 'test',
+           'conversation_state': 'active', 'company_enabled': False,
            'auto_send_enabled': False, 'emergency_stop': True, 'tenant_status': 'active',
            'agent_id': None, 'agent_enabled': False, 'agent_mode': 'manual', 'scopes': []}
 
@@ -194,7 +194,7 @@ def test_owner_approval_rejects_admin_and_is_separate_from_kwid_attestation(monk
 def test_active_exact_scope_fails_closed_when_confirmation_table_is_missing(monkeypatch):
     row = {'conversation_state':'active','conversation_ai_enabled':True,'conversation_manual_hold':False,
         'active':True,'integration_status':'connected','tenant_status':'active','company_enabled':True,
-        'operating_mode':'active','auto_send_enabled':True,'emergency_stop':False,'agent_enabled':True,
+        'auto_send_enabled':True,'emergency_stop':False,'agent_enabled':True,
         'agent_mode':'automatic','exact_agent_scope':True}
     monkeypatch.setattr(pilot, '_snapshot', lambda *_: (row, 'fingerprint'))
     class Cursor:
@@ -250,7 +250,7 @@ def test_confirmation_schema_migration_is_idempotent_additive_ddl():
 def test_final_gate_rejects_agent_id_mismatch(monkeypatch):
     row = {'conversation_state': 'active', 'conversation_ai_enabled': True, 'conversation_manual_hold': False,
            'active': True, 'integration_status': 'connected', 'tenant_status': 'active',
-           'company_enabled': True, 'operating_mode': 'active', 'auto_send_enabled': True,
+           'company_enabled': True, 'auto_send_enabled': True,
            'emergency_stop': False, 'agent_enabled': True, 'agent_mode': 'automatic',
            'exact_agent_scope': True, 'agent_id': 'agent-ok'}
     monkeypatch.setattr(pilot, '_snapshot', lambda *_: (row, 'fp'))

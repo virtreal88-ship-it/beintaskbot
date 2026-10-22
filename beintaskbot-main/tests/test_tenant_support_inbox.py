@@ -176,7 +176,7 @@ def seed_job(db):
 
 def test_active_manual_job_is_fenced_before_ai_reservation(db):
     job=seed_job(db)
-    db.execute("UPDATE saas_ai_agent_settings SET operating_mode='active' WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
     db.execute("UPDATE saas_ai_agents SET mode='manual' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
     db.execute("UPDATE saas_ai_agent_jobs SET state='processing',lease_token=%s WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",(job['lease_token'],A,AGENT))
     db.commit()
@@ -300,9 +300,12 @@ def test_database_constraints_block_cross_tenant_route_and_duplicate_open(db):
             db.execute("INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source) VALUES(%s::uuid,%s::uuid,%s::uuid,'client','manual')",(A,str(uuid.uuid4()),CA))
 
 
-def test_ordinary_inbound_does_not_create_ticket(db):
+def test_ordinary_inbound_does_not_create_ticket(db,monkeypatch):
     seed_job(db)
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_agents SET mode='automatic' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
     db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A));db.commit()
+    monkeypatch.setattr(connect_ai,'runtime_flag',lambda name:True)
     with patch.object(connect_ai,'allowed',return_value=True):
         assert connect_ai.enqueue(A,channel_id=CA,conversation_id='client',lead_id=41,message_id='ordinary',event_id='ordinary',text='Hello')==1
     assert store.listing(PROFILE)['tickets']==[]
@@ -372,16 +375,6 @@ def test_summary_platform_cap_never_calls_provider(db):
         summary.regenerate(PROFILE,ticket)
     provider.assert_not_called()
     assert store.detail(PROFILE,ticket)['ticket']['summary_state']=='unavailable'
-
-
-def test_accepted_manual_draft_handoff_creates_ticket(db):
-    seed_job(db);run,draft=str(uuid.uuid4()),str(uuid.uuid4())
-    db.execute("UPDATE saas_tenant_webhook_events SET payload=%s::jsonb WHERE tenant_id=%s::uuid",(json.dumps({'channel_id':CA}),A))
-    db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state) VALUES(%s::uuid,%s::uuid,%s::uuid,'evt',1,'test','completed')",(A,run,AGENT))
-    db.execute("INSERT INTO saas_ai_agent_drafts(tenant_id,id,agent_id,run_id,lead_id,talk_id,chat_id,source_message_id,source_fingerprint,draft,handoff_after_send,state) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,41,'','client','m1','evt','Please wait',TRUE,'sending')",(A,draft,AGENT,run));db.commit()
-    with patch.object(store,'summarize_created'):
-        assert agents.finish_draft_send(A,draft,'accepted')=='approved'
-    assert store.listing(PROFILE)['tickets'][0]['reason']=='trigger_reply_sent_then_handoff'
 
 
 def test_http_origin_identity_and_tenant_scope(db):

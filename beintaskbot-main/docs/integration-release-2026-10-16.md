@@ -1,5 +1,7 @@
 # Coordinated release: voice, support inbox, Pause / Handoff / Resume
 
+Historical release record. Company Test Mode references describe the implementation at this date and were later retired; the current send gates are agent mode plus company/server permissions.
+
 Release ID: connect-agent-inbox-2026-10-16.
 Beintaskbot branch: codex/integration-voice-inbox-resume.
 Connect branch: codex/integration-voice-inbox-resume.

@@ -87,21 +87,6 @@ def child(dsn,kind,payload,barrier,results,cipher_key=None):
         elif kind=='assign':value=assignment.assign(PROFILE,payload)
         elif kind=='group_reserve':value=groups.reserve_delivery(**payload)
         elif kind=='group_state':value=agents.set_conversation_state(PROFILE,**payload)
-        elif kind in {'review_edit','review_reserve'}:
-            from tenant_linear_policy import TenantLinearError
-            import tenant_ai_draft_review as review
-            review._connect=factory
-            try:
-                value=review.edit(PROFILE,payload['id'],payload['data']) if kind=='review_edit' else agents.reserve_draft_send(PROFILE,payload['id'],payload['data'])
-            except TenantLinearError as error:
-                if error.status!=409:raise
-                value=None
-        elif kind=='group_draft':
-            from tenant_linear_policy import TenantLinearError
-            try:value=agents.reserve_draft_send(PROFILE,payload['draft_id'])
-            except TenantLinearError as error:
-                if error.status!=409:raise
-                value=None
         elif kind=='webhook':
             transport._verify_signature=lambda *a:True
             value=transport.ingest(json.dumps(payload).encode(),'mock-signature',payload)

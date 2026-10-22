@@ -139,7 +139,7 @@ def validate_audio(content, extension, mime, *, max_seconds=MAX_SECONDS):
 
 def active(job, reservation):
     """Recheck lease and takeover revision at each expensive voice boundary."""
-    from tenant_ai_agent_test_mode import allowed_job
+    from tenant_ai_agent_admission import allowed_job
     from tenant_ai_agent_run_store import load_agent_config
     if not allowed_job(job) or not load_agent_config(job):
         return False

@@ -35,7 +35,7 @@ class Cursor:
         # separate tenant-scoped runtime summary.
         if self._fetches == 1:
             return {
-                'company_instructions': '', 'enabled': True, 'operating_mode': 'active',
+                'company_instructions': '', 'enabled': True,
                 'emergency_stop': False, 'auto_send_enabled': True,
                 'crm_actions_enabled': False, 'max_replies_per_chat': 20,
                 'updated_at': None,

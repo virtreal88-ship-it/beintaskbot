@@ -161,7 +161,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
         cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, None,
             {'state': 'human', 'agent_id': CHANNEL, 'agent_enabled': True,
              'company_enabled': True, 'company_emergency_stop': False,
-             'scopes': [{'provider':'connect','channel_id':CHANNEL}], 'tenant_status': 'active', 'operating_mode': 'active'},
+             'scopes': [{'provider':'connect','channel_id':CHANNEL}], 'tenant_status': 'active'},
             {'connected': True},
         ])
         connection = Connection(cursor)
@@ -195,7 +195,7 @@ class TenantConnectHandoffTests(unittest.TestCase):
         profile = {'tenant_id': TENANT, 'telegram_id': 7}
         paused = {'state': 'paused', 'agent_id': CHANNEL, 'agent_enabled': True,
                   'company_enabled': True, 'company_emergency_stop': False,
-                  'scopes': [{'provider':'connect','channel_id':CHANNEL}], 'tenant_status': 'active', 'operating_mode': 'active'}
+                  'scopes': [{'provider':'connect','channel_id':CHANNEL}], 'tenant_status': 'active'}
         cursor = Cursor(rows=[[{'channel_id': CHANNEL}]], ones=[None, None, paused, {'connected': True}])
         with patch.object(agents_store, '_connect', return_value=Connection(cursor)), \
              patch.object(agents_store, 'ensure_schema'), \

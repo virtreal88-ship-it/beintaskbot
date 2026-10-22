@@ -17,14 +17,11 @@ NATIVE_ACTIONS={'native_find_create_contact','native_find_create_company','nativ
 
 
 def _allowed(cur,job,*,for_write=True):
-    if (job.get('provider')!='connect' or job.get('payload',{}).get('test_mode') is True
-            or '@g.us' in str(job.get('conversation_id') or '') or not runtime_flag('AI_NATIVE_CRM_ACTIONS_ENABLED')):
+    if (job.get('provider')!='connect' or '@g.us' in str(job.get('conversation_id') or '')
+            or not runtime_flag('AI_NATIVE_CRM_ACTIONS_ENABLED')):
         return False
     cur.execute('''SELECT j.state,j.revision,j.lease_token,a.enabled,a.mode,a.scopes,s.enabled AS settings_enabled,
-      s.native_crm_actions_enabled,s.operating_mode,s.emergency_stop,t.status AS tenant_status,cs.state AS conversation_state,
-      EXISTS(SELECT 1 FROM saas_ai_agent_connect_test_mode tm WHERE tm.tenant_id=j.tenant_id AND tm.enabled=TRUE
-        AND tm.verified=TRUE AND tm.channel_id=j.scope_channel_id AND tm.conversation_id=j.conversation_id
-        AND (tm.agent_id IS NULL OR tm.agent_id=j.agent_id)) AS test_route
+      s.native_crm_actions_enabled,s.auto_send_enabled,s.emergency_stop,t.status AS tenant_status,cs.state AS conversation_state
       FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
       JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id JOIN saas_tenants t ON t.id=j.tenant_id
       LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider='connect'
@@ -36,9 +33,9 @@ def _allowed(cur,job,*,for_write=True):
     row=cur.fetchone()
     if not row:return False
     if (row['enabled'] is not True or row['mode']!='automatic' or row['settings_enabled'] is not True
-        or row['native_crm_actions_enabled'] is not True or row['operating_mode']!='active'
+        or row['native_crm_actions_enabled'] is not True or row['auto_send_enabled'] is not True
         or row['emergency_stop'] is True or row['tenant_status']!='active'
-        or row['conversation_state'] in {'human','paused'} or row['test_route'] is True
+        or row['conversation_state'] in {'human','paused'}
         or not scope_matches(row.get('scopes'),str(job['channel_id']))):return False
     cur.execute("""SELECT 1 FROM saas_tenant_integrations i JOIN saas_connect_channels c
       ON c.tenant_id=i.tenant_id AND c.connect_channel_id=%s::uuid AND c.active=TRUE

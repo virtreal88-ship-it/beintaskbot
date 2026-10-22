@@ -214,10 +214,9 @@ def test_new_connect_state_does_not_change_same_named_kommo_state(channels):
     assert kommo['state']=='paused' and kommo['reason']=='kommo-only' and kommo['channel_id']==''
 
 
-def test_connect_test_mode_does_not_process_real_customer_messages(channels):
+def test_company_send_disabled_does_not_process_real_customer_messages(channels):
     f=channels;db=f['db']
-    db.execute("UPDATE saas_ai_agent_settings SET operating_mode='test' WHERE tenant_id=%s::uuid",(A,))
-    db.execute("INSERT INTO saas_ai_agent_connect_test_mode(tenant_id,enabled,verified,channel_id,conversation_id,agent_id) VALUES(%s::uuid,TRUE,TRUE,%s,'client',%s::uuid)",(A,CB,AGENT2));db.commit()
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=FALSE WHERE tenant_id=%s::uuid",(A,));db.commit()
     jobs_before=rows(f,'saas_ai_agent_jobs')
     assert f['incoming'](CA)[1]==0
     message_id,queued=f['incoming'](CB);assert queued==0
@@ -225,4 +224,4 @@ def test_connect_test_mode_does_not_process_real_customer_messages(channels):
     assert rows(f,'saas_ai_agent_drafts')==[]
     assert rows(f,'saas_ai_agent_jobs')==jobs_before
     event=db.execute("SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND provider='connect' AND external_id=%s",(A,message_id))[0]
-    assert event=={'state':'skipped','error_code':'virtual_test_only'}
+    assert event=={'state':'skipped','error_code':'connect_admission_blocked'}

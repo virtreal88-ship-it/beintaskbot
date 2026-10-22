@@ -12,7 +12,7 @@ Connect: отдельный feature/voice, база cb9ffcd09df53e78447d18a310b1
 2. Существующий подписанный webhook сохраняет входящее сообщение в tenant-local
    CRM и идемпотентно ставит работу в существующий worker. Connect UUID сообщения
    служит opaque reference; URL и mediaKey из WhatsApp не передаются.
-3. Worker использует действующие scope, расписание, Test Mode, enabled-флаги,
+3. Worker использует действующие scope, расписание, company/server auto-send и enabled-флаги,
    Human/Pause и правила выбора ключа. Для платформенных агентов используется
    центральный ключ, отдельный клиентский OpenAI-ключ не нужен.
 4. Beintaskbot проверяет локальные tenant/lead/channel/conversation и получает
@@ -56,7 +56,7 @@ Connect: отдельный feature/voice, база cb9ffcd09df53e78447d18a310b1
   Ошибка старого аудио оставляет маркер unavailable и не блокирует новый текст.
   Более старые/избыточные вложения явно остаются unavailable, без догадок.
 - После загрузки, после распознавания и перед генерацией перепроверяются
-  lease, revision, режим диалога, agent/company/Test Mode. Финальный send-lock
+  lease, revision, режим диалога, agent/company auto-send. Финальный send-lock
   сохраняет защиту от ручного перехвата во время генерации.
 - Резервируется один вызов генерации плюс число pending audio (до четырёх).
   Голосовая lease пропорционально продлевается. Резерв консервативный:
@@ -90,7 +90,7 @@ Connect: отдельный feature/voice, база cb9ffcd09df53e78447d18a310b1
    Старый worker совместим с добавочными колонками/таблицей.
 4. В изолированной тестовой компании проверить AZ/RU, быстрые text→voice→text,
    ошибки, duplicate webhook, ручной ответ во время распознавания и Pause.
-   Test Mode сохраняет draft-only поведение.
+   Manual Mode сохраняет draft-only поведение.
 5. После проверки отдельно согласовать production-релиз. Новые сервисы,
    изменения настроек Nizam Ai, Kommo и клиентские OpenAI-ключи не требуются.
    Rollback: сначала Beintaskbot; добавочные таблицы можно оставить.
