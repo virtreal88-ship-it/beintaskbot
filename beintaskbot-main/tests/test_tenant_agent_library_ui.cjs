@@ -21,7 +21,6 @@ function setup({role='owner',channels,denied=false}={}){
   }
   if(u.pathname.endsWith('/agents/settings'))return result(company);
   if(u.pathname.endsWith('/agents/options'))return result({connect_channels:[],pipelines:[{pipeline_id:'10',name:'Поддержка'}],stages:[{pipeline_id:'10',stage_id:'11',name:'Новое обращение'}],channels:[],models:[{id:'fixture-model',label:'Модель компании'}]});
-  if(u.pathname.endsWith('/agents/test-mode'))return result({connect:{enabled:false},enabled:false});
   if(u.pathname.endsWith('/knowledge/upload')){
    const saved=knowledge.get(data.setup_key)||{id:'source-'+(knowledge.size+1),agent_id:data.agent_id,title:data.title,active:true};knowledge.set(data.setup_key,saved);
    if(failUpload){failUpload=false;throw Error('Ответ загрузки потерян');}return result(saved);

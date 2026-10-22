@@ -4,7 +4,6 @@ from aiohttp import web
 from tenant_linear_policy import TenantLinearError
 from tenant_ai_testing_store import create,read,listing,control
 from tenant_ai_testing_service import turn
-from tenant_ai_testing_catalog import kommo_context
 
 
 def handler(member_from_request,origin,logger,resource,request_provider=None):
@@ -16,8 +15,7 @@ def handler(member_from_request,origin,logger,resource,request_provider=None):
             id=request.match_info.get('session_id')
             if request.method in {'GET','HEAD'}:
                 if request.query.get('expected_tenant_id') and request.query['expected_tenant_id']!=str(profile['tenant_id']):raise TenantLinearError('Компания изменилась.',409)
-                if resource=='catalog':result=await kommo_context(profile,request_provider,request.query.get('search',''),request.query.get('lead_id'))
-                else:result=await asyncio.to_thread(read,profile,id) if id else await asyncio.to_thread(listing,profile)
+                result=await asyncio.to_thread(read,profile,id) if id else await asyncio.to_thread(listing,profile)
             else:
                 if request.headers.get('Origin','').rstrip('/')!=origin.rstrip('/') or request.content_type!='application/json':raise TenantLinearError('Недопустимый источник запроса.',403)
                 data=await request.json()

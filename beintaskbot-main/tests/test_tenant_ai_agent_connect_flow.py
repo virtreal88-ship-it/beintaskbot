@@ -266,15 +266,15 @@ class ConnectAiFlowTests(unittest.TestCase):
         transition = next(params for sql, params in cursor.executed if "trigger_reply_sent_then_handoff" in sql)
         self.assertEqual(transition[1], 'connect')
 
-    def test_pause_route_is_mounted_and_connect_draft_send_has_final_state_guard(self):
+    def test_pause_route_remains_and_retired_draft_send_api_is_unmounted(self):
         context = TenantWebContext(member=lambda _request: None, origin='https://crm.pro.az', logger=MagicMock(),
                                   crm_request=MagicMock(), wait_slot=MagicMock(), bot=lambda: None)
         routes = {(method, path) for method, path, _handler in ai_agent_routes(context)}
         self.assertIn(('POST', '/api/platform/ai/conversations/{conversation_id}/pause'), routes)
         api_source = Path(__file__).resolve().parents[1].joinpath('tenant_ai_agents_api.py').read_text(encoding='utf-8-sig')
-        self.assertIn('send_ai_reply_if_active', api_source)
-        self.assertIn("reserved['expected_revision']", api_source)
-        self.assertIn("finish_draft_send,reserved['tenant_id'],reserved['id'],'accepted'", api_source)
+        self.assertNotIn('send_ai_reply_if_active', api_source)
+        self.assertNotIn('draft_send', api_source)
+        self.assertFalse(any('/agents/drafts' in path for _method, path in routes))
 
     def test_pause_is_diagnosed_as_pause_not_as_human_handoff(self):
         cursor = Cursor()
