@@ -98,6 +98,21 @@
  const chatObserver=new MutationObserver(()=>{if(document?.body)syncChatAgentControl();});chatObserver.observe(document.body,{childList:true,subtree:true});
  window.addEventListener('popstate',()=>syncChatAgentControl(true));
  installOverview();
+ function installWorkspaceTabs(){
+  const page=$('view-ai_agents'),teamSection=$('view-ai_teams'),teamRoot=$('aiTeamsCenter');if(!page||!teamRoot||$('aiWorkspaceTabs'))return;
+  const style=document.createElement('style');style.textContent='.ai-workspace-tabs{display:flex;gap:6px;margin:0 0 14px;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--paper);width:max-content;max-width:100%}.ai-workspace-tabs button{border:0;border-radius:8px;background:transparent;color:var(--muted);font:inherit;font-weight:650;padding:9px 16px;cursor:pointer}.ai-workspace-tabs button[aria-selected="true"]{background:var(--card);color:var(--ink);box-shadow:0 1px 4px #0002}.ai-workspace-panel[hidden]{display:none!important}@media(max-width:600px){.ai-workspace-tabs{width:100%}.ai-workspace-tabs button{flex:1}}';document.head.append(style);
+  const labels=()=>({ru:['Агенты','Команды'],az:['AI agentlər','Komandalar'],en:['Agents','Teams']}[window.tenantI18n?.language||'az']||['Agents','Teams']);
+  const tabs=document.createElement('div');tabs.id='aiWorkspaceTabs';tabs.className='ai-workspace-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label',labels().join(' / '));
+  tabs.innerHTML='<button type="button" role="tab" id="aiWorkspaceAgentsTab" aria-controls="aiWorkspaceAgents" aria-selected="true"></button><button type="button" role="tab" id="aiWorkspaceTeamsTab" aria-controls="aiWorkspaceTeams" aria-selected="false"></button>';
+  const agentsPane=document.createElement('div');agentsPane.id='aiWorkspaceAgents';agentsPane.className='ai-workspace-panel';agentsPane.setAttribute('role','tabpanel');agentsPane.setAttribute('aria-labelledby','aiWorkspaceAgentsTab');
+  const teamsPane=document.createElement('div');teamsPane.id='aiWorkspaceTeams';teamsPane.className='ai-workspace-panel';teamsPane.setAttribute('role','tabpanel');teamsPane.setAttribute('aria-labelledby','aiWorkspaceTeamsTab');teamsPane.hidden=true;
+  while(page.firstChild)agentsPane.append(page.firstChild);teamsPane.append(teamRoot);page.append(tabs,agentsPane,teamsPane);teamSection?.remove();
+  const activate=name=>{const teams=name==='teams';agentsPane.hidden=teams;teamsPane.hidden=!teams;$('aiWorkspaceAgentsTab').setAttribute('aria-selected',String(!teams));$('aiWorkspaceTeamsTab').setAttribute('aria-selected',String(teams));if(teams){if(window.tenantAiTeams)window.tenantAiTeams.refresh();else document.dispatchEvent(new CustomEvent('tenant-ai-team-tab'));}sessionStorage.setItem('tenant.ai.workspace.tab',teams?'teams':'agents');};
+  $('aiWorkspaceAgentsTab').addEventListener('click',()=>activate('agents'));$('aiWorkspaceTeamsTab').addEventListener('click',()=>activate('teams'));
+  const translateTabs=()=>{const text=labels();$('aiWorkspaceAgentsTab').textContent=text[0];$('aiWorkspaceTeamsTab').textContent=text[1];tabs.setAttribute('aria-label',text.join(' / '));};translateTabs();document.addEventListener('tenant-language',translateTabs);
+  const legacy=new URLSearchParams(location.search).get('view')==='ai_teams';if(legacy){const url=new URL(location.href);url.searchParams.set('view','ai_agents');history.replaceState({view:'ai_agents'},'',url);sessionStorage.setItem('tenant.app.view','ai_agents');$('aiAgentsNav')?.click();activate('teams');}else if(sessionStorage.getItem('tenant.ai.workspace.tab')==='teams')activate('teams');
+ }
+ installWorkspaceTabs();
  $('aiTestSource').onchange=()=>{testSourceChosen=true;renderTestSource(true);if($('aiTestSource').value==='connect')loadConnectTestDialogs();};
  $('aiConnectTestChannel').onchange=()=>{$('aiConnectTestConversation').replaceChildren();testDialogs=[];testDialogOffset=null;loadConnectTestDialogs();};
  $('aiConnectTestSearch').oninput=()=>loadConnectTestDialogs();
