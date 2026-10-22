@@ -121,23 +121,24 @@ def test_execution_pipeline_uses_mock_ai_and_saves_only_unpublished_draft(tmp_pa
         '00000000-0000-0000-0000-000000000039',PERMISSIONS,True)
     scope=TaskScope(tenant,task,primary,expert,'inventory.warehouse_transfer',False,False,
         None,None,30,20,12000)
-    actions=[{'action':'navigate','target':'transfers'},
-        {'action':'fill_demo','target':'source_warehouse','demo_value':'fixture.source_warehouse'},
-        {'action':'fill_demo','target':'destination_warehouse','demo_value':'fixture.destination_warehouse'},
-        {'action':'fill_demo','target':'product','demo_value':'fixture.product'},
-        {'action':'fill_demo','target':'quantity','demo_value':'fixture.quantity_one'},
-        {'action':'click','target':'save_demo_transfer'}]
     slides=[{'title':f'Step {i}','text':'Use only the synthetic demo.'} for i in range(6)]
     cues=[{'start_ms':i*4000,'end_ms':(i+1)*4000,'text':f'Step {i+1}'} for i in range(6)]
     scenario_json=json.dumps({'title':'Synthetic transfer','slides':slides,'subtitles':cues})
 
     class MockExecutor:
-        def __init__(self):self.files={};self.actions=[];self.done=False
+        def __init__(self):self.files={};self.actions=[];self.stage='start'
         async def open_demo(self,*_args):return 'isolated-session'
-        async def observe(self,*_args):return {'title':'SYNTHETIC DEMO','allowed_targets':['transfers','source_warehouse','destination_warehouse','product','quantity','save_demo_transfer'],'transfer_result':'Synthetic transfer saved' if self.done else '', 'result_verified':self.done}
+        async def observe(self,*_args):
+            targets={'start':['transfers'],'source':['source_warehouse'],'destination':['destination_warehouse'],
+                'product':['product'],'quantity':['quantity'],'save':['save_demo_transfer'],'saved':[]}[self.stage]
+            return {'title':'SYNTHETIC DEMO','allowed_targets':targets,
+                'transfer_result':'Synthetic transfer saved' if self.stage=='saved' else '',
+                'result_verified':self.stage=='saved'}
         async def act(self,_session,_scope,action):
             self.actions.append((action.action,action.target))
-            if action.target=='save_demo_transfer':self.done=True
+            transitions={'transfers':'source','source_warehouse':'destination','destination_warehouse':'product',
+                'product':'quantity','quantity':'save','save_demo_transfer':'saved'}
+            self.stage=transitions[action.target]
             return await self.observe()
         async def capture(self,*_args):
             aid='screen-'+str(len(self.files))
@@ -163,8 +164,17 @@ def test_execution_pipeline_uses_mock_ai_and_saves_only_unpublished_draft(tmp_pa
         settled.append((reservation_id,actual,uncertain));return True
     def primary_provider(prompt,*,max_output_tokens,timeout):
         if 'choose ONE next semantic browser action' in prompt:
-            step=len(planner_steps);planner_steps.append(prompt)
-            return json.dumps({'done':True} if step>=len(actions) else actions[step]),{'total_tokens':12}
+            planner_steps.append(prompt)
+            observation=json.loads(prompt.split('; observation=',1)[1].split('; completed_actions=',1)[0])
+            available=observation['allowed_targets']
+            decisions={'transfers':{'action':'navigate','target':'transfers'},
+                'source_warehouse':{'action':'fill_demo','target':'source_warehouse','demo_value':'fixture.source_warehouse'},
+                'destination_warehouse':{'action':'fill_demo','target':'destination_warehouse','demo_value':'fixture.destination_warehouse'},
+                'product':{'action':'fill_demo','target':'product','demo_value':'fixture.product'},
+                'quantity':{'action':'fill_demo','target':'quantity','demo_value':'fixture.quantity_one'},
+                'save_demo_transfer':{'action':'click','target':'save_demo_transfer'}}
+            assert len(available)==1
+            return json.dumps(decisions[available[0]]),{'total_tokens':12}
         return scenario_json,{'total_tokens':18}
     def expert_provider(prompt,*,max_output_tokens,timeout):
         if 'task_sha256=' in prompt:
@@ -191,7 +201,10 @@ def test_execution_pipeline_uses_mock_ai_and_saves_only_unpublished_draft(tmp_pa
     assert result['status']=='completed' and result['employee_review_required'] is True
     assert result['real_erp_pilot']=='unverified' and result['lesson']['published'] is False
     assert len(settled)==9 and len(artifacts)==10 and len(executor.actions)==6
-    assert len(planner_steps)==6 and all('observation=' in prompt for prompt in planner_steps)
+    observed=[json.loads(prompt.split('; observation=',1)[1].split('; completed_actions=',1)[0])
+              for prompt in planner_steps]
+    assert len(planner_steps)==6 and [x['allowed_targets'][0] for x in observed]==[
+        'transfers','source_warehouse','destination_warehouse','product','quantity','save_demo_transfer']
     assert len(actions_recorded)==13 and finished==[(tenant,task,'completed',None)]
     assert all(row[3].get('published') is False for row in events if row[2]=='lesson_saved')
 
