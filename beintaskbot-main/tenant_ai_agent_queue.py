@@ -100,10 +100,12 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
             cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.mode,a.schedule FROM saas_ai_agents a
               WHERE a.role='primary' AND a.tenant_id=%s::uuid AND a.enabled=TRUE'''+clause('a','kommo')+' ORDER BY a.created_at,a.id', (tenant,))
             agents = cur.fetchall()
-            # Keep isolated Test Mode drafts, but stop Active Mode webhook jobs
-            # from being enqueued for agents configured as Manual.
-            if connections[0].get('operating_mode') == 'active':
-                agents = [agent for agent in agents if agent.get('mode') == 'automatic']
+            # Real inbound traffic is never an AI test harness. The isolated
+            # virtual testing chat is the only test path; worker jobs are
+            # admitted only in Active Mode for explicitly automatic agents.
+            if connections[0].get('operating_mode') != 'active':
+                return result(0, 'virtual_test_only')
+            agents = [agent for agent in agents if agent.get('mode') == 'automatic']
             for event in normalized:
                 # Test Mode is deliberately fail-closed: Kommo webhook must
                 # carry every binding identifier, including contact and origin.
