@@ -21,15 +21,13 @@ EXPECTED_ASSETS = ["/assets/tenant-knowledge-campaigns.js","/assets/tenant-knowl
 EXPECTED_ASSETS += ['/app/instructions','/assets/tenant-instructions.js','/assets/tenant-instructions.css','/assets/tenant-instructor-lesson.js','/assets/tenant-instructor-lesson.css']
 
 AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
-    ('testing/kommo-context', ('GET',)), ('testing/sessions', ('GET','POST')),
+    ('testing/sessions', ('GET','POST')),
     ('testing/sessions/{session_id}', ('GET',)), ('testing/sessions/{session_id}/turn', ('POST',)),
     ('testing/sessions/{session_id}/control', ('POST',)),
-    ('agents/settings', ('GET','PATCH')), ('agents/test-mode', ('GET','PATCH')),
-    ('agents/test-mode/verify', ('POST',)), ('agents/test-mode/discover', ('POST',)),
+    ('agents/settings', ('GET','PATCH')),
     ('agents/pilot-preflight', ('GET',)), ('agents/pilot/kwid-confirmation', ('POST',)),
     ('agents/pilot/owner-approval', ('POST',)),
-    ('agents', ('GET','POST')), ('agents/options', ('GET',)), ('agents/drafts', ('GET',)),
-    ('agents/drafts/{draft_id}/review', ('POST',)), ('agents/drafts/{draft_id}/send', ('POST',)),
+    ('agents', ('GET','POST')), ('agents/options', ('GET',)),
     ('dialogs', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('POST',)), ('dialogs/display-name', ('POST',)),
     ('dialogs/agent-assignment', ('GET','POST')),
     ('dialogs/agent-assignment-bulk', ('GET','POST')),
@@ -92,7 +90,6 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         expected |= {(method,base+suffix) for suffix in ('','/preview','/{campaign_id}') for method in ('GET','HEAD')}
         expected |= {('POST',base+suffix) for suffix in ('','/{campaign_id}/start','/{campaign_id}/control')}
 
-        expected |= {('GET','/api/platform/ai/agents/drafts/{draft_id}'),('HEAD','/api/platform/ai/agents/drafts/{draft_id}'),('POST','/api/platform/ai/agents/drafts/{draft_id}/edit')}
         expected.add(('POST','/api/platform/ai/knowledge-candidates/{candidate_id}/improve'))
         expected |= {('HEAD', path) for method, path in EXPECTED_API if method == 'GET'}
         expected |= set(AI_API)
@@ -102,6 +99,19 @@ class Routes(unittest.IsolatedAsyncioTestCase):
             request, match = await self.resolve(method, path.replace('{company}', 'demo').replace('{lesson_id}', '00000000-0000-0000-0000-000000000001').replace('{token}', 'testtoken').replace('{asset_id}', 'test.jpg'))
             self.assertIsNone(match.http_exception)
             self.assertEqual((await match.handler(request)).status, 200)
+
+    async def test_retired_real_dialog_test_and_draft_apis_are_not_routed(self):
+        for method, path in [
+            ('GET', '/api/platform/ai/testing/kommo-context'),
+            ('PATCH', '/api/platform/ai/agents/test-mode'),
+            ('POST', '/api/platform/ai/agents/test-mode/verify'),
+            ('POST', '/api/platform/ai/agents/test-mode/discover'),
+            ('GET', '/api/platform/ai/agents/drafts'),
+            ('POST', '/api/platform/ai/agents/drafts/id/send'),
+        ]:
+            _, match = await self.resolve(method, path)
+            self.assertIsNotNone(match.http_exception)
+            self.assertIn(match.http_exception.status, (404, 405))
 
     async def test_methods_not_widened(self):
         for method, path in [('GET', '/api/platform/crm/chat/send'),

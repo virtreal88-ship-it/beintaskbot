@@ -3,14 +3,10 @@ import asyncio
 import os
 from aiohttp import web
 from tenant_ai_agents_store import (delete_agent, delete_knowledge, list_agents,
-    list_drafts, list_knowledge, read_settings, save_agent, save_knowledge, save_settings, configuration_options, refresh_configuration_catalog,
-    list_triggers, save_trigger, delete_trigger, set_conversation_state, read_conversation_state, read_conversation_for_lead, review_draft, list_handoffs, list_connect_diagnostics,
-    reserve_draft_send,finish_draft_send)
+    list_knowledge, read_settings, save_agent, save_knowledge, save_settings, configuration_options, refresh_configuration_catalog,
+    list_triggers, save_trigger, delete_trigger, set_conversation_state, read_conversation_state, read_conversation_for_lead, list_handoffs, list_connect_diagnostics)
 from tenant_ai_knowledge_files import extract
 from tenant_linear_policy import TenantLinearError
-from tenant_chat_send_service import run as send_chat_message
-from tenant_ai_agent_test_mode import (read_test_mode, save_test_mode, verify_test_mode,
-    discover_test_talks, assert_expected_route)
 from tenant_ai_agent_runtime_flags import (configured as runtime_configured,
     enabled as runtime_flag, staging_mode as runtime_staging_mode)
 from tenant_ai_expert_tools import registry_snapshot
@@ -106,8 +102,6 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 elif resource == 'pilot_preflight':
                     from tenant_ai_pilot import preflight
                     result = await asyncio.to_thread(preflight, profile)
-                elif resource == 'test_mode':
-                    result = await asyncio.to_thread(read_test_mode, profile)
                 elif resource == 'agents':
                     if request.query.get('view') == 'teams':
                         rows = await asyncio.to_thread(list_agents, profile)
@@ -148,11 +142,6 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                         result = await asyncio.to_thread(configuration_options, profile)
                 elif resource == 'handoffs':
                     result = await asyncio.to_thread(list_handoffs, profile, request.query.get('limit', 50))
-                elif resource == 'draft_detail':
-                    from tenant_ai_draft_review import read
-                    result = await asyncio.to_thread(read,profile,request.match_info['draft_id'])
-                elif resource == 'drafts':
-                    result = await asyncio.to_thread(list_drafts, profile, limit=request.query.get('limit', 50))
                 elif resource == 'triggers':
                     result = await asyncio.to_thread(list_triggers,profile,request.match_info['agent_id'])
                 elif resource == 'conversation_state':
@@ -225,22 +214,12 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     # show a just-saved auto-send switch as disabled.
                     await asyncio.to_thread(save_settings, profile, payload)
                     result = await asyncio.to_thread(read_settings, profile)
-                elif resource == 'test_mode':
-                    result = await asyncio.to_thread(save_test_mode, profile, payload)
                 elif resource == 'pilot_kwid_confirmation' and method == 'POST':
                     from tenant_ai_pilot import confirm_kwid_disabled
                     result = await asyncio.to_thread(confirm_kwid_disabled, profile, payload)
                 elif resource == 'pilot_owner_approval' and method == 'POST':
                     from tenant_ai_pilot import approve_pilot
                     result = await asyncio.to_thread(approve_pilot, profile, payload)
-                elif resource == 'test_mode_verify' and method == 'POST':
-                    if request_provider is None:
-                        raise TenantLinearError('Kommo read service is unavailable.',503)
-                    result = await verify_test_mode(profile, request_provider)
-                elif resource == 'test_mode_discover' and method == 'POST':
-                    if request_provider is None:
-                        raise TenantLinearError('Kommo read service is unavailable.',503)
-                    result = await discover_test_talks(profile,payload.get('lead_id'),payload.get('contact_id'),request_provider)
                 elif resource == 'agents' and method == 'POST':
                     result = await asyncio.to_thread(save_agent, profile, payload)
                 elif resource == 'agent' and method == 'PATCH':
@@ -253,41 +232,6 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     result = await asyncio.to_thread(save_trigger,profile,request.match_info['agent_id'],payload,trigger_id=request.match_info['trigger_id'])
                 elif resource == 'trigger' and method == 'DELETE':
                     result = await asyncio.to_thread(delete_trigger,profile,request.match_info['agent_id'],request.match_info['trigger_id'])
-                elif resource == 'draft_edit' and method == 'POST':
-                    from tenant_ai_draft_review import edit
-                    result=await asyncio.to_thread(edit,profile,request.match_info['draft_id'],payload)
-                elif resource == 'draft_review' and method == 'POST':
-                    if type(payload.get('expected_version')) is not int:raise TenantLinearError('draft_version_required',409)
-                    result = await asyncio.to_thread(review_draft,profile,request.match_info['draft_id'],payload.get('state'),payload['expected_version'])
-                elif resource == 'draft_send' and method == 'POST':
-                    if type(payload.get('expected_version')) is not int or not payload.get('expected_context_token'):raise TenantLinearError('draft_review_required',409)
-                    reserved=await asyncio.to_thread(reserve_draft_send,profile,request.match_info['draft_id'],payload)
-                    try:
-                        if reserved.get('provider') == 'connect':
-                            from tenant_connect_transport import send_ai_reply_if_active
-                            message_id = await asyncio.to_thread(send_ai_reply_if_active,
-                                reserved['tenant_id'], reserved['lead_id'], reserved['channel_id'],
-                                reserved['conversation_id'], reserved['draft'], reserved['id'],
-                                reserved['expected_revision'], draft_review={'profile':profile,'expected_version':payload['expected_version'],'expected_context_token':payload['expected_context_token']}, **({'handoff_fingerprint':reserved['source_fingerprint']}
-                                    if reserved.get('handoff_after_send') else {}))
-                            if not message_id:
-                                raise TenantLinearError('Qaralama köhnəlib və ya dialoq menecerə verilib.', 409)
-                            result = {'state': 'accepted', 'message_id': message_id, 'origin': 'connect'}
-                        else:
-                            # The reviewed draft must still point to the exact
-                            # live Kommo chat before its normal sender resolves
-                            # a route.  This guard used to be passed as an
-                            # unsupported keyword and therefore never ran.
-                            await assert_expected_route(reserved['tenant_id'], reserved['lead_id'],
-                                reserved['expected_route'], request_provider)
-                            result=await send_chat_message(profile,{'request_id':reserved['id'],'lead_id':reserved['lead_id'],'text':reserved['draft']},request_provider,wait_slot,logger)
-                    except TenantLinearError as error:
-                        await asyncio.to_thread(finish_draft_send,reserved['tenant_id'],reserved['id'],'unknown' if getattr(error,'keep_request',False) else 'blocked')
-                        raise
-                    except Exception:
-                        await asyncio.to_thread(finish_draft_send,reserved['tenant_id'],reserved['id'],'unknown')
-                        raise
-                    await asyncio.to_thread(finish_draft_send,reserved['tenant_id'],reserved['id'],'accepted')
                 elif resource == 'handoffs':
                     result = await asyncio.to_thread(list_handoffs,profile,request.query.get('limit',50))
                 elif resource in {'handoff','resume','pause'} and method == 'POST':
@@ -326,4 +270,3 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
             logger.error('Tenant AI Agents request failed')
             return web.json_response({'success': False, 'error': 'AI Agents xidməti əlçatan deyil.'}, status=503, headers=headers)
     return handle
-

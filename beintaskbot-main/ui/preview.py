@@ -100,7 +100,6 @@ class Preview(BaseHTTPRequestHandler):
         elif '/ai/' in path:
             value=[]
             if path.endswith('/agents/settings'):value=AI_SETTINGS
-            elif path.endswith('/agents/test-mode'):value=dict(enabled=False,verified=False,protection_state='blocked_unbound')
             elif path.endswith('/agents'):value=AGENTS
             elif path.endswith('/knowledge'):value=[dict(id='knowledge-1',title='Məhsul haqqında',active=True,chunks=3)]
             result.update(result=value)
