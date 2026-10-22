@@ -31,7 +31,7 @@
   $('aiAgentEditor').querySelectorAll('[data-ai-open-knowledge]').forEach(button=>button.addEventListener('click',()=>selected?showEditorSection('knowledge'):notice('Сначала сохраните агента, затем добавьте базу знаний.')));
   $('aiAgentEditor').querySelectorAll('[data-ai-open-dialogs]').forEach(button=>button.addEventListener('click',()=>{if(!confirmDiscardEditor())return;returnEditorHome();document.querySelector('.nav [data-view=dialogs]')?.click()}));
   $('aiAgentEditor').querySelectorAll('[data-ai-back-to-basics]').forEach(button=>button.addEventListener('click',()=>showEditorSection('basics')));
-  $('aiAgentsModalClose').addEventListener('click',closeModal);page.querySelector('[data-ai-modal-close]').addEventListener('click',closeModal);
+  $('aiAgentsModalClose')?.addEventListener('click',closeModal);document.querySelector('[data-ai-modal-close]')?.addEventListener('click',closeModal);
   document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('aiAgentsModal').hidden)closeModal()});
   window.tenantI18n?.capture(card);
  }

@@ -22,5 +22,6 @@ assert.match(script,/expected_version:Number\(row\.version\)/,'toggle uses optim
 assert.match(script,/confirm\(c\.confirmDelete\)/,'delete is confirmed');
 assert.match(script,/triggerLoadEpoch/,'stale trigger loads are ignored after agent switches');
 assert.match(script,/aria-live="polite"/,'loading feedback is announced accessibly');
+assert.ok(script.includes("aiAgentsModalClose')?.addEventListener"),'full-page editor does not require a detached legacy modal close control');
 assert.equal((section.match(/data-knowledge-center-link/g)||[]).length,0,'trigger pane contains no unrelated knowledge links');
 console.log('PASS: trigger manager structure, action coverage, safe Expert names, disabled copies, versioned toggles, confirmed delete, stale-load guard');
