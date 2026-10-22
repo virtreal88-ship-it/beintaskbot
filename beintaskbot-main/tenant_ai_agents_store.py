@@ -58,7 +58,7 @@ def _row(row):
         return None
     value = dict(row)
     for key in ('id', 'tenant_id', 'agent_id'):
-        if key in value:
+        if key in value and value[key] is not None:
             value[key] = str(value[key])
     for key in ('created_at', 'updated_at'):
         if value.get(key):
@@ -466,15 +466,24 @@ def list_knowledge(profile, source_id=None):
             tenant, _ = _authorize(cur, profile)
             if source_id:
                 source = identifier(source_id)
-                cur.execute('''SELECT id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at
-                  FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid''', (tenant, source))
+                cur.execute('''SELECT s.id,s.tenant_id,s.agent_id,a.name AS agent_name,s.title,s.kind,s.content,s.active,s.content_hash,
+                    CASE WHEN s.provenance ? 'instruction_id' THEN 'instruction'
+                         WHEN s.provenance ? 'candidate_id' THEN 'support_case' ELSE 'knowledge_source' END AS origin_type,
+                    COALESCE(s.provenance->>'instruction_id',s.provenance->>'candidate_id') AS origin_id,
+                    s.created_at,s.updated_at
+                  FROM saas_ai_knowledge_sources s LEFT JOIN saas_ai_agents a ON a.tenant_id=s.tenant_id AND a.id=s.agent_id
+                  WHERE s.tenant_id=%s::uuid AND s.id=%s::uuid''', (tenant, source))
                 row = _row(cur.fetchone())
                 if not row:
                     raise TenantLinearError('Bilik mənbəyi tapılmadı.', 404)
                 return row
-            cur.execute('''SELECT id,tenant_id,agent_id,title,kind,active,content_hash,created_at,updated_at,
+            cur.execute('''SELECT s.id,s.tenant_id,s.agent_id,a.name AS agent_name,s.title,s.kind,s.active,s.content_hash,
+              CASE WHEN s.provenance ? 'instruction_id' THEN 'instruction'
+                   WHEN s.provenance ? 'candidate_id' THEN 'support_case' ELSE 'knowledge_source' END AS origin_type,
+              COALESCE(s.provenance->>'instruction_id',s.provenance->>'candidate_id') AS origin_id,s.created_at,s.updated_at,
               (SELECT count(*) FROM saas_ai_knowledge_chunks c WHERE c.tenant_id=s.tenant_id AND c.source_id=s.id) AS chunks
-              FROM saas_ai_knowledge_sources s WHERE tenant_id=%s::uuid ORDER BY created_at DESC,id''', (tenant,))
+              FROM saas_ai_knowledge_sources s LEFT JOIN saas_ai_agents a ON a.tenant_id=s.tenant_id AND a.id=s.agent_id
+              WHERE s.tenant_id=%s::uuid ORDER BY s.created_at DESC,s.id''', (tenant,))
             return [_row(row) for row in cur.fetchall()]
 
 
