@@ -483,6 +483,15 @@ def test_simulation_public_config_is_json_serializable_with_psycopg_uuids():
     assert str(uuid.UUID(AGENT)) in encoded and 'tenant_id' not in config
 
 
+def test_simulation_public_runs_are_json_serializable_with_psycopg_uuids():
+    from tenant_ai_simulation_engine import _public_run
+    item=_public_run({'id':uuid.uuid4(),'queue_id':uuid.uuid4(),'channel_id':uuid.uuid4(),
+        'conversation_id':'client@g.us','primary_agent_id':uuid.UUID(AGENT),
+        'recheck_of_run_id':uuid.uuid4(),'created_at':Timestamp('2026-10-22T12:00:00Z'),
+        'outcome':'virtual_reply','events':[]})
+    assert json.loads(json.dumps(item))['conversation_id']=='client@g.us'
+
+
 def test_simulation_inbound_queue_dedupes_and_tenant_fences(db,monkeypatch):
     source=seed_simulation(db)
     monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)

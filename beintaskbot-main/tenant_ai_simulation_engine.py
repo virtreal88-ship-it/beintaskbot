@@ -902,7 +902,13 @@ def list_runs(profile, *, limit=50):
               WHERE r.tenant_id=%s::uuid ORDER BY r.created_at DESC LIMIT %s''',(tenant,safe_limit))
             rows=[]
             for row in cur.fetchall():
-                item=dict(row);item['created_at']=_iso(item.get('created_at'));item['sent']=False
-                item['recheck_of_run_id']=str(item['recheck_of_run_id']) if item.get('recheck_of_run_id') else None
-                rows.append(item)
+                rows.append(_public_run(row))
             return rows
+
+
+def _public_run(row):
+    item=dict(row)
+    item['created_at']=_iso(item.get('created_at'));item['sent']=False
+    for key in ('id','queue_id','channel_id','conversation_id','primary_agent_id','recheck_of_run_id'):
+        if item.get(key) is not None: item[key]=str(item[key])
+    return item
