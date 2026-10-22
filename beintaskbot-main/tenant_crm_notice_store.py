@@ -1,6 +1,7 @@
 """Bounded round-robin observations; plan/observe in one DB transaction."""
 import json
 import uuid
+import re
 from datetime import datetime, timezone
 from tenant_platform import _connect, _read_tenant_workflow
 from tenant_crm_notice_schema import ensure_schema
@@ -44,26 +45,59 @@ def hydrate(cur, tenant: str, kind: str, row: dict) -> dict:
     return row
 
 
-def plan(cur, tenant: str, kind: str, key: str, row: dict, event: str, version: str, members: list[dict], connection: str) -> None:
+def connect_dialog_route(row: dict) -> dict | None:
+    """Build a bounded route only from the persisted, tenant-owned Connect message facts."""
+    raw=row.get('raw') or {}
+    if (not isinstance(raw,dict) or row.get('direction')!='incoming'
+            or not str(row.get('channel') or '').startswith('connect:')):
+        return None
+    try:
+        channel=str(uuid.UUID(str(raw.get('channelId') or '')))
+        lead_id=int(row.get('kommo_lead_id'))
+    except (ValueError,TypeError,AttributeError):
+        return None
+    conversation=str(raw.get('conversationId') or '').strip()
+    if (str(row.get('channel'))!='connect:'+channel or not 0<lead_id<10**20
+            or not conversation or len(conversation)>220 or re.search(r'[\x00-\x1f\x7f]',conversation)):
+        return None
+    return {'provider':'connect','lead_id':lead_id,'channel_id':channel,'conversation_id':conversation}
+
+
+def plan(cur, tenant: str, kind: str, key: str, row: dict, event: str, version: str, members: list[dict], connection: str, *, channels=('telegram','push')) -> None:
     # Freeze permitted recipients now, then recheck at claim. No catch-up on opt-in.
     event_id = str(uuid.uuid4())
+    payload={'connection': connection, 'route': task_route(row), 'due_at': row.get('due_at')}
+    if event=='incoming_message' and kind=='message':
+        dialog_route=connect_dialog_route(row)
+        if dialog_route:payload['connect_dialog']=dialog_route
     cur.execute('''INSERT INTO saas_crm_notice_events(id,tenant_id,event,kind,source_key,version,payload)
       VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s::jsonb)
       ON CONFLICT(tenant_id,event,source_key,version) DO NOTHING RETURNING id''',
-      (event_id, tenant, event, kind, key, connection + ':' + version, json.dumps(
-          {'connection': connection, 'route': task_route(row), 'due_at': row.get('due_at')}, default=str)))
+      (event_id, tenant, event, kind, key, connection + ':' + version, json.dumps(payload, default=str)))
     if not cur.fetchone(): return
     for member in members:
         recipient = member['telegram_id']
-        if eligible(member, event, row, 'telegram'):
+        if 'telegram' in channels and eligible(member, event, row, 'telegram'):
             cur.execute('''INSERT INTO saas_crm_notice_deliveries(tenant_id,event_id,recipient_id,channel)
               VALUES(%s::uuid,%s::uuid,%s,'telegram') ON CONFLICT DO NOTHING''', (tenant, event_id, recipient))
-        if eligible(member, event, row, 'push'):
+        if 'push' in channels and eligible(member, event, row, 'push'):
             cur.execute('''INSERT INTO saas_crm_notice_deliveries(tenant_id,event_id,recipient_id,channel,endpoint_hash)
               SELECT %s::uuid,%s::uuid,b.telegram_id,'push',b.endpoint_hash
               FROM saas_member_push_devices b JOIN saas_push_devices p USING(endpoint_hash)
               WHERE b.tenant_id=%s::uuid AND b.telegram_id=%s AND b.active=TRUE
                 AND p.owner_telegram_id=b.telegram_id ON CONFLICT DO NOTHING''', (tenant, event_id, tenant, recipient))
+
+
+def plan_connect_message(cur, tenant: str, channel_id: str, conversation_id: str,
+                         lead_id: int, external_id: str, message: dict) -> None:
+    """Use the existing notice outbox for one newly accepted Connect inbound; no Telegram side effect."""
+    row={'tenant_id':str(tenant),'kommo_lead_id':lead_id,'external_id':str(external_id),
+         'channel':'connect:'+str(channel_id),'direction':'incoming','raw':message or {}}
+    route=connect_dialog_route(row)
+    if not route or route['channel_id']!=str(channel_id) or route['conversation_id']!=str(conversation_id):
+        return
+    plan(cur,str(tenant),'message',str(external_id),row,'incoming_message','incoming',
+         profiles(cur,str(tenant)),connection_id(cur,str(tenant)),channels=('push',))
 
 
 def observe() -> int:

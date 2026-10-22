@@ -1,17 +1,19 @@
 """CRM notices: no old broadcasts, shared Kommo seats, cross-tenant data or retries."""
 import copy
+import json
 import unittest
 from unittest.mock import Mock, MagicMock, AsyncMock
 from datetime import datetime, timezone
 from test_tenant_tasks import person
 from test_tenant_hot_orders import load
 from tenant_crm_notice_policy import transitions, eligible, task_route, timestamp
+from tenant_crm_notice_store import connect_dialog_route, plan_connect_message
 from tenant_push_payload import payload_for
 
 
 def member(role='manager', identity=20):
     p = person(role, identity)
-    p.update(tenant_status='active', permissions=['tasks','deals','customers'], modules={'tasks':True,'deals':True,'customers':True})
+    p.update(tenant_status='active', permissions=['tasks','deals','customers','dialogs'], modules={'tasks':True,'deals':True,'customers':True})
     p['workflow']['policies'] = {'members':{str(identity):{'notifications':{
         event:{'telegram':True,'push':True} for event in ('task_assigned','task_overdue','incoming_message','new_lead')}}}}
     return p
@@ -81,6 +83,57 @@ class NoticePolicyTests(unittest.TestCase):
         self.assertFalse(eligible(member(),'incoming_message',row,'telegram'))
         self.assertEqual(transitions('message',row,None,110,120)[1],[])
 
+    def test_connect_incoming_push_requires_dialog_permission_and_current_tenant(self):
+        row={'tenant_id':'company-a','channel':'connect:00000000-0000-0000-0000-000000000201',
+             'direction':'incoming','raw':{'channelId':'00000000-0000-0000-0000-000000000201',
+             'conversationId':'994501234567@s.whatsapp.net'}}
+        self.assertTrue(eligible(member('worker'),'incoming_message',row,'push'))
+        denied=member('worker');denied['permissions'].remove('dialogs')
+        self.assertFalse(eligible(denied,'incoming_message',row,'push'))
+        self.assertFalse(eligible(member('worker'),'incoming_message',{**row,'tenant_id':'company-b'},'push'))
+        self.assertFalse(eligible(member('worker'),'incoming_message',{**row,'direction':'outgoing'},'push'))
+
+    def test_connect_route_comes_only_from_persisted_matching_message(self):
+        channel='00000000-0000-0000-0000-000000000201'
+        row={'kommo_lead_id':41,'channel':'connect:'+channel,'direction':'incoming',
+             'raw':{'channelId':channel,'conversationId':'group@g.us'}}
+        self.assertEqual(connect_dialog_route(row),{'provider':'connect','lead_id':41,
+            'channel_id':channel,'conversation_id':'group@g.us'})
+        self.assertIsNone(connect_dialog_route({**row,'direction':'outgoing'}))
+        self.assertIsNone(connect_dialog_route({**row,'channel':'connect:00000000-0000-0000-0000-000000000202'}))
+
+
+class ConnectPushOutboxTests(unittest.TestCase):
+    def test_connect_message_uses_existing_push_outbox_once_without_telegram(self):
+        from tenant_crm_notice_store import plan_connect_message as enqueue
+        from unittest.mock import patch
+        channel='00000000-0000-0000-0000-000000000201'
+        row={'channelId':channel,'conversationId':'994501234567@s.whatsapp.net','text':'private message'}
+        cur=MagicMock();cur.fetchone.return_value={'id':'event'}
+        with patch('tenant_crm_notice_store.profiles',return_value=[member('worker')]), \
+             patch('tenant_crm_notice_store.connection_id',return_value=''), \
+             patch('tenant_crm_notice_store.eligible',return_value=True):
+            enqueue(cur,'company-a',channel,row['conversationId'],41,'connect:message-1',row)
+        inserts=[call for call in cur.execute.call_args_list if 'INSERT INTO saas_crm_notice_deliveries' in call.args[0]]
+        self.assertEqual(len(inserts),1)
+        self.assertIn("'push'",inserts[0].args[0])
+        event_insert=cur.execute.call_args_list[0]
+        payload=json.loads(event_insert.args[1][-1])
+        self.assertEqual(payload['connect_dialog'],{'provider':'connect','lead_id':41,
+            'channel_id':channel,'conversation_id':row['conversationId']})
+        self.assertNotIn('private message',str(payload))
+
+    def test_duplicate_connect_notice_event_does_not_make_a_second_delivery(self):
+        from tenant_crm_notice_store import plan_connect_message as enqueue
+        from unittest.mock import patch
+        channel='00000000-0000-0000-0000-000000000201';row={'channelId':channel,'conversationId':'client@s.whatsapp.net'}
+        cur=MagicMock();cur.fetchone.return_value=None
+        with patch('tenant_crm_notice_store.profiles',return_value=[member('worker')]), \
+             patch('tenant_crm_notice_store.connection_id',return_value=''), \
+             patch('tenant_crm_notice_store.eligible',return_value=True):
+            enqueue(cur,'company-a',channel,row['conversationId'],41,'connect:message-1',row)
+        self.assertFalse(any('INSERT INTO saas_crm_notice_deliveries' in call.args[0] for call in cur.execute.call_args_list))
+
     def test_timestamp_is_finite_and_timezone_aware(self):
         for value in (None,True,float('nan'),float('inf'),'bad',datetime(2026,1,1)):
             self.assertEqual(timestamp(value),0)
@@ -91,6 +144,13 @@ class NoticePolicyTests(unittest.TestCase):
             self.assertEqual(payload_for(event)['event'],event)
             self.assertNotIn('client',str(payload_for(event)))
 
+    def test_connect_push_target_is_bounded_and_visible_copy_stays_neutral(self):
+        target='/app?view=dialogs&open_dialog=1&provider=connect&lead_id=41&channel_id=00000000-0000-0000-0000-000000000201&conversation_id=client%40s.whatsapp.net'
+        payload=payload_for('incoming_message',target)
+        self.assertEqual(payload['url'],target)
+        self.assertEqual(payload['body'],'Yeni mesaj var. Kabinetdə yoxlayın.')
+        self.assertEqual(payload_for('incoming_message','https://evil.test/collect')['url'],'/app?view=customers')
+
 
 class OutboxTests(unittest.TestCase):
     def setUp(self):
@@ -98,7 +158,8 @@ class OutboxTests(unittest.TestCase):
         self.cur=self.conn.cursor.return_value.__enter__.return_value
         self.p=member();self.row=task()
         self.box=load('tenant_crm_notice_outbox',{'_connect':self.connect,'ensure_schema':Mock(),
-            'profiles':Mock(return_value=[self.p]),'resource':Mock(return_value=self.row),'connection_id':Mock(return_value='connection')},
+            'profiles':Mock(return_value=[self.p]),'resource':Mock(return_value=self.row),'connection_id':Mock(return_value='connection'),
+            'connect_dialog_route':connect_dialog_route},
             {'tenant_platform','tenant_crm_notice_schema','tenant_crm_notice_store'})
         self.item={'tenant_id':'company-a','event_id':'event','recipient_id':20,'channel':'telegram','endpoint_hash':'',
                    'event':'task_assigned','kind':'task','source_key':'9','payload':{'connection':'connection','route':task_route(self.row)},
@@ -127,6 +188,39 @@ class OutboxTests(unittest.TestCase):
         self.box.finish(self.item,'unknown')
         self.assertIn("status='sending'",self.cur.execute.call_args.args[0])
         self.assertEqual(self.cur.execute.call_args.args[1][0],'unknown')
+
+    def test_connect_push_revalidates_exact_current_route_and_builds_app_deep_link(self):
+        route={'provider':'connect','lead_id':41,'channel_id':'00000000-0000-0000-0000-000000000201','conversation_id':'client@g.us'}
+        item={**self.item,'channel':'push','event':'incoming_message','kind':'message','source_key':'connect:msg-1',
+              'payload':{'connection':'','connect_dialog':route},'subscription':{'endpoint':'private'},
+              'device_active':True,'owner_telegram_id':20}
+        row={'tenant_id':'company-a','kommo_lead_id':41,'external_id':'connect:msg-1',
+             'channel':'connect:'+route['channel_id'],'direction':'incoming',
+             'raw':{'channelId':route['channel_id'],'conversationId':route['conversation_id']}}
+        self.box.profiles.return_value=[member('worker')];self.box.resource.return_value=row
+        self.box.connection_id.return_value='';self.box.eligible.return_value=True
+        self.cur.fetchone.side_effect=[copy.deepcopy(item),{'present':1}]
+        result=self.box.claim('push')
+        self.assertTrue(result['send'])
+        self.assertEqual(result['target_url'],'/app?view=dialogs&open_dialog=1&provider=connect&lead_id=41&channel_id=00000000-0000-0000-0000-000000000201&conversation_id=client%40g.us')
+        route_sql=next(call for call in self.cur.execute.call_args_list if 'JOIN saas_connect_channels' in call.args[0])
+        self.assertIn('c.tenant_id=%s::uuid',route_sql.args[0])
+        self.assertEqual(route_sql.args[1],('company-a',route['channel_id'],route['conversation_id'],41))
+
+    def test_connect_push_is_skipped_when_stored_route_or_channel_is_ambiguous(self):
+        route={'provider':'connect','lead_id':41,'channel_id':'00000000-0000-0000-0000-000000000201','conversation_id':'client@g.us'}
+        bad_route={**route,'channel_id':'00000000-0000-0000-0000-000000000202'}
+        item={**self.item,'channel':'push','event':'incoming_message','kind':'message','source_key':'connect:msg-1',
+              'payload':{'connection':'','connect_dialog':bad_route},'subscription':{'endpoint':'private'},
+              'device_active':True,'owner_telegram_id':20}
+        row={'tenant_id':'company-a','kommo_lead_id':41,'channel':'connect:'+route['channel_id'],'direction':'incoming',
+             'raw':{'channelId':route['channel_id'],'conversationId':route['conversation_id']}}
+        self.box.profiles.return_value=[member('worker')];self.box.resource.return_value=row
+        self.box.connection_id.return_value='';self.box.eligible.return_value=True
+        self.cur.fetchone.return_value=copy.deepcopy(item)
+        result=self.box.claim('push')
+        self.assertFalse(result['send']);self.assertEqual(result['target_url'],'')
+        self.assertFalse(any('JOIN saas_connect_channels' in call.args[0] for call in self.cur.execute.call_args_list))
 
 
 class NoticeWorkerTests(unittest.IsolatedAsyncioTestCase):
