@@ -12,7 +12,7 @@ import json
 import os
 from datetime import datetime, timezone
 
-from tenant_ai_instructor_contract import DemoConnection, PERMISSIONS, TaskScope, ContractError
+from tenant_ai_instructor_contract import DemoConnection, RESEARCH_PERMISSIONS, DEMONSTRATION_PERMISSIONS, TaskScope, ContractError
 import tenant_ai_instructor_store as store
 
 
@@ -93,7 +93,8 @@ def _scope(job,connection):
                      int(job.get('tokens_used') or 0)-int(job.get('reserved_tokens') or 0)))
     actions=max(1,min(store.MAX_JOB_ACTIONS,int(job.get('max_actions') or store.MAX_JOB_ACTIONS)-int(job.get('actions_used') or 0)))
     return TaskScope(str(job['tenant_id']),str(job['id']),str(job['primary_agent_id']),str(job['expert_agent_id']),
-        'inventory.warehouse_transfer',False,False,None,None,seconds,actions,tokens)
+        'inventory.warehouse_transfer',False,False,None,None,seconds,actions,tokens,
+        str(job.get('permission_level') or 'demonstration_operation'))
 
 
 async def _heartbeat(tenant_id,job_id,stop):
@@ -112,9 +113,12 @@ async def process_job(job,*,executor_factory=None):
         from tenant_ai_instructor_browser import PlaywrightDemoExecutor
         from tenant_ai_instructor_execution import execute_job
         connection_data=job['connection']
+        permission_level=job.get('permission_level') or 'demonstration_operation'
+        permissions=RESEARCH_PERMISSIONS if permission_level=='research' else DEMONSTRATION_PERMISSIONS
         connection=DemoConnection(str(job['tenant_id']),str(connection_data['demo_company_id']),str(connection_data['id']),
             str(connection_data['origin']),str(connection_data['account_ref']),str(connection_data['attestation_ref']),
-            str(connection_data['restore_receipt_ref']),PERMISSIONS,True)
+            str(connection_data['restore_receipt_ref']) if connection_data.get('restore_receipt_ref') else None,
+            permissions,True)
         scope=_scope(job,connection)
         primary_key,primary_model,expert_model,secret=_provider_pair(job)
         credentials=job.get('credentials') if isinstance(job.get('credentials'),dict) else {}

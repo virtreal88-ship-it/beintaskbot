@@ -27,8 +27,8 @@ def handler(member, origin, logger, resource='collection'):
                     except Exception:worker_state='not_configured'
                     result={'enabled':store._feature_enabled(),'worker':worker_state,
                               'real_pilot':'unverified','customer_send_allowed':False,'auto_publish':False,
-                              'available_actions':['save_test_credentials','view_jobs'],
-                              'blocked_actions':['queue_job','activate_connection','run_real_erp','publish_lesson']}
+                              'available_actions':['save_test_credentials','verify_connection','queue_read_only_research','view_jobs'],
+                              'blocked_actions':['write_operation_without_restore_receipt','customer_messaging','publish_lesson']}
                 return web.json_response({'success':True,'result':result},headers=headers)
             _origin(request,origin)
             if request.content_type!='application/json': raise ValueError('json')
@@ -36,7 +36,11 @@ def handler(member, origin, logger, resource='collection'):
             if not isinstance(data,dict): raise ValueError('json')
             _expected(data,profile)
             data={k:v for k,v in data.items() if k not in {'expected_tenant_id','expected_user_id'}}
-            if resource=='connections': result=await asyncio.to_thread(store.save_connection,profile,data)
+            if resource=='connections':
+                if data.get('action')=='verify':
+                    if set(data)!={'action','connection_id'}:raise ValueError('invalid_connection_verification')
+                    result=await asyncio.to_thread(store.verify_connection,profile,data.get('connection_id'))
+                else:result=await asyncio.to_thread(store.save_connection,profile,data)
             elif resource=='jobs': result=await asyncio.to_thread(store.enqueue,profile,data)
             elif resource=='job':
                 if data.get('action')=='cancel':

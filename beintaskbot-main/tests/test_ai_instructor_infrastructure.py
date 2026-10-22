@@ -68,6 +68,95 @@ def test_browser_origin_and_private_network_checks_fail_closed():
     with pytest.raises(ValueError):_public_addresses('localhost')
 
 
+def test_research_permission_is_read_only_and_does_not_require_restore_receipt():
+    import uuid
+    from tenant_ai_instructor_contract import (DemoConnection,TaskScope,RESEARCH_PERMISSIONS,
+        BrowserAction,ContractError)
+    tenant=str(uuid.uuid4());task=str(uuid.uuid4());primary=str(uuid.uuid4());expert=str(uuid.uuid4())
+    connection=DemoConnection(tenant,str(uuid.uuid4()),str(uuid.uuid4()),'https://dev.akul.az',
+        str(uuid.uuid4()),str(uuid.uuid4()),None,RESEARCH_PERMISSIONS,True)
+    scope=TaskScope(tenant,task,primary,expert,'inventory.warehouse_transfer',False,False,
+        None,None,30,20,12000,'research')
+    connection.validate();scope.validate(connection)
+    BrowserAction('navigate','transfers').validate(scope,connection)
+    BrowserAction('fill_demo','quantity','fixture.quantity_one').validate(scope,connection)
+    with pytest.raises(ContractError,match='research_write_forbidden'):
+        BrowserAction('click','save_demo_transfer').validate(scope,connection)
+
+
+def test_demonstration_operation_requires_restore_receipt():
+    import uuid
+    from tenant_ai_instructor_contract import DemoConnection,TaskScope,RESEARCH_PERMISSIONS,ContractError
+    tenant=str(uuid.uuid4());connection=DemoConnection(tenant,str(uuid.uuid4()),str(uuid.uuid4()),
+        'https://dev.akul.az',str(uuid.uuid4()),str(uuid.uuid4()),None,RESEARCH_PERMISSIONS,True)
+    scope=TaskScope(tenant,str(uuid.uuid4()),str(uuid.uuid4()),str(uuid.uuid4()),
+        'inventory.warehouse_transfer',False,False,None,None,30,20,12000,'demonstration_operation')
+    with pytest.raises(ContractError,match='fixture_restore_required'):scope.validate(connection)
+
+
+def test_research_prompt_explicitly_forbids_persistent_actions():
+    from tenant_ai_instructor_execution import _next_action_prompt
+    prompt=_next_action_prompt({'permission_level':'research','title':'Explore transfer form'},'az',
+        {'allowed_targets':['transfers']},[],1)
+    assert 'strictly read-only' in prompt
+    assert 'do not save, submit, confirm, delete' in prompt
+
+
+def test_worker_scope_keeps_research_permission_level():
+    import uuid
+    from tenant_ai_instructor_worker import _scope
+    tenant=str(uuid.uuid4())
+    scope=_scope({'tenant_id':tenant,'id':str(uuid.uuid4()),'primary_agent_id':str(uuid.uuid4()),
+        'expert_agent_id':str(uuid.uuid4()),'permission_level':'research'}, {})
+    assert scope.permission_level=='research'
+
+
+def test_browser_network_fence_blocks_research_writes_and_caps_operation_to_one_request():
+    from tenant_ai_instructor_browser import _request_method_allowed
+    state={'enabled':False,'used':False}
+    assert _request_method_allowed('research','GET','/inventory')
+    assert _request_method_allowed('research','POST','/login',allow_auth=True,login_path='/login')
+    assert not _request_method_allowed('research','POST','/inventory/transfers',write_state=state,
+        transfer_path='/inventory/transfers')
+    assert not _request_method_allowed('demonstration_operation','POST','/inventory/transfers',
+        write_state=state,transfer_path='/inventory/transfers')
+    state['enabled']=True
+    assert _request_method_allowed('demonstration_operation','POST','/inventory/transfers',
+        write_state=state,transfer_path='/inventory/transfers')
+    assert state['used'] is True
+    assert not _request_method_allowed('demonstration_operation','POST','/inventory/transfers',
+        write_state=state,transfer_path='/inventory/transfers')
+    assert not _request_method_allowed('demonstration_operation','DELETE','/inventory/transfers',
+        write_state=state,transfer_path='/inventory/transfers')
+
+
+def test_local_preview_serves_instructor_route_and_assets():
+    import threading,urllib.request,json
+    from urllib.error import HTTPError
+    from http.server import ThreadingHTTPServer
+    from ui.preview import Preview,POSTS
+    server=ThreadingHTTPServer(('127.0.0.1',0),Preview)
+    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    try:
+        base=f'http://127.0.0.1:{server.server_port}'
+        page=urllib.request.urlopen(base+'/app/ai-instructor').read().decode()
+        assert 'aiInstructor' in page and 'Preview file missing' not in page
+        script=urllib.request.urlopen(base+'/assets/tenant-ai-instructor.js').read().decode()
+        assert 'permission_level' in script and 'Verify connection' in script
+        status=json.loads(urllib.request.urlopen(base+'/api/platform/ai/instructor').read())
+        assert status['result']['real_pilot']=='unverified'
+        assert status['result']['blocked_actions']
+        before=len(POSTS)
+        request=urllib.request.Request(base+'/api/platform/ai/instructor/connections',
+            data=json.dumps({'username':'test','password':'must-not-be-retained'}).encode(),
+            headers={'Content-Type':'application/json'},method='POST')
+        with pytest.raises(HTTPError) as blocked:urllib.request.urlopen(request)
+        assert blocked.value.code==403 and len(POSTS)==before
+        assert all('must-not-be-retained' not in str(row) for row in POSTS)
+    finally:
+        server.shutdown();server.server_close();thread.join(timeout=2)
+
+
 def test_browser_executor_requires_configured_private_artifact_storage(monkeypatch):
     import asyncio
     from tenant_ai_instructor_browser import PlaywrightDemoExecutor
@@ -283,6 +372,9 @@ def test_demo_credentials_are_encrypted_and_never_returned(monkeypatch):
     decrypted=json.loads(cipher.decrypt(encrypted))
     assert decrypted['password']=='very-secret-test-only'
     assert 'password' not in result and result['enabled'] is False and result['verification_required'] is True
+    assert result['verification_blockers']==['account_identity_unverified','demo_company_unverified',
+        'isolation_scope_unverified','connection_not_activated']
+    assert 'operation_blocker' not in result and result['research_ready'] is False
     with pytest.raises(ValueError):store.save_connection({'tenant_id':tenant,'telegram_id':7},
         {'label':'bad','origin':'https://example.com','username':'x','password':'y'})
     with pytest.raises(ValueError,match='verification_proofs_server_only'):
@@ -303,9 +395,13 @@ def test_postgres_schema_is_additive_and_idempotent(monkeypatch):
         schema(conn);conn.commit()
         schema(conn);conn.commit()
         with conn.cursor() as cur:
-            cur.execute("SELECT to_regclass('saas_ai_instructor_jobs') IS NOT NULL AS jobs, to_regclass('saas_ai_instructor_artifacts') IS NOT NULL AS artifacts")
+            cur.execute("""SELECT to_regclass('saas_ai_instructor_jobs') IS NOT NULL AS jobs,
+                to_regclass('saas_ai_instructor_artifacts') IS NOT NULL AS artifacts,
+                to_regclass('saas_ai_instructor_restore_claims') IS NOT NULL AS restore_claims,
+                EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='saas_ai_instructor_jobs'
+                  AND column_name='permission_level') AS permission_level""")
             row=cur.fetchone()
-            assert row['jobs'] and row['artifacts']
+            assert row['jobs'] and row['artifacts'] and row['restore_claims'] and row['permission_level']
 
 
 @pytest.mark.skipif(importlib.util.find_spec('playwright') is None,
@@ -372,7 +468,10 @@ def test_ai_instructor_app_preview_languages_themes_and_mobile():
             elif path=='/api/platform/me':
                 self._json({'member':{'tenant_id':'test-tenant','telegram_id':7}});return
             elif path.startswith('/api/platform/ai/instructor/connections'):
-                self._json({'success':True,'result':{'enabled':False,'connections':[]}});return
+                self._json({'success':True,'result':{'enabled':False,'connections':[{'id':'synthetic-connection',
+                    'label':'Synthetic demo','origin':'https://dev.akul.az','enabled':False,'verification_required':True,
+                    'verification_blockers':['demo_company_unverified','isolation_scope_unverified',
+                        'fixture_restore_unverified','connection_not_activated']}]}});return
             elif path.startswith('/api/platform/ai/instructor/jobs'):
                 self._json({'success':True,'result':[]});return
             elif path.startswith('/api/platform/ai/instructor'):
@@ -394,6 +493,10 @@ def test_ai_instructor_app_preview_languages_themes_and_mobile():
             page.goto(f'http://127.0.0.1:{server.server_port}/app/ai-instructor?site_lang=ru',wait_until='networkidle')
             assert page.locator('h1').inner_text()=='Создать урок с AI'
             assert 'Реальный ERP-пилот: не проверен' in page.locator('body').inner_text()
+            assert 'Просмотр разрешается только после серверной проверки' in page.locator('body').inner_text()
+            assert 'идентификатор компании не подтверждён доверенным ERP endpoint' in page.locator('body').inner_text()
+            assert 'для операции записи не подтверждено восстановление тестовых остатков' in page.locator('body').inner_text()
+            assert 'Исследование: просмотр, навигация, несохраняемые формы' in page.locator('body').inner_text()
             for lang,title in [('az','AI ilə dərs yaradın'),('en','Create a lesson with AI')]:
                 page.goto(f'http://127.0.0.1:{server.server_port}/app/ai-instructor?site_lang={lang}',wait_until='networkidle')
                 assert page.locator('h1').inner_text()==title

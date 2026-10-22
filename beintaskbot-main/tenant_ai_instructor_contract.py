@@ -11,12 +11,16 @@ import ipaddress
 
 OPERATION = 'inventory.warehouse_transfer'
 TOOL = 'beinsystems_demo_browser'
-PERMISSIONS = frozenset({'inventory.read', 'inventory.transfer.demo'})
+RESEARCH_PERMISSIONS = frozenset({'inventory.read'})
+DEMONSTRATION_PERMISSIONS = frozenset({'inventory.read', 'inventory.transfer.demo'})
+# Backwards-compatible name used by the existing demo-operation path.
+PERMISSIONS = DEMONSTRATION_PERMISSIONS
 ACTIONS = frozenset({'open_demo', 'observe', 'navigate', 'click', 'fill_demo', 'screenshot'})
 TARGETS = frozenset({'inventory', 'transfers', 'new_transfer', 'source_warehouse',
                      'destination_warehouse', 'product', 'quantity', 'save_demo_transfer', 'transfer_result'})
 DEMO_VALUES = frozenset({'fixture.source_warehouse', 'fixture.destination_warehouse',
                          'fixture.product', 'fixture.quantity_one'})
+PERMISSION_LEVELS = frozenset({'research', 'demonstration_operation'})
 
 
 class ContractError(ValueError):
@@ -36,13 +40,16 @@ class DemoConnection:
     origin: str
     account_ref: str
     attestation_ref: str  # owner/security-verified isolation and synthetic-data proof
-    restore_receipt_ref: str  # separately verified fixture restore; not an automated reset
+    restore_receipt_ref: str | None  # required only for data-changing demonstration operations
     permissions: frozenset
     isolated_session: bool
+    company_identity_verified: bool = True
+    isolation_verified: bool = True
 
     def validate(self):
         for value in (self.tenant_id,self.demo_company_id,self.connection_ref,self.account_ref,
-                      self.attestation_ref,self.restore_receipt_ref): identity(value)
+                      self.attestation_ref): identity(value)
+        if self.restore_receipt_ref: identity(self.restore_receipt_ref)
         parsed=urlsplit(self.origin)
         if (parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password
             or parsed.port not in (None,443) or parsed.path not in ('','/') or parsed.query or parsed.fragment
@@ -54,7 +61,9 @@ class DemoConnection:
         try: ipaddress.ip_address(parsed.hostname)
         except ValueError: pass
         else: raise ContractError('ip_origin_forbidden')
-        if self.permissions!=PERMISSIONS or self.isolated_session is not True:
+        if (self.permissions not in {RESEARCH_PERMISSIONS, DEMONSTRATION_PERMISSIONS} or
+            self.isolated_session is not True or self.company_identity_verified is not True or
+            self.isolation_verified is not True):
             raise ContractError('unsafe_demo_account')
         return self
 
@@ -73,12 +82,18 @@ class TaskScope:
     seconds_remaining: int
     actions_remaining: int
     tokens_remaining: int
+    permission_level: str = 'demonstration_operation'
 
     def validate(self,connection):
         connection.validate()
         for value in (self.tenant_id,self.task_id,self.primary_agent_id,self.expert_agent_id): identity(value)
         if identity(self.tenant_id)!=identity(connection.tenant_id): raise ContractError('tenant_mismatch')
         if identity(self.primary_agent_id)==identity(self.expert_agent_id) or self.operation!=OPERATION: raise ContractError('invalid_instructor_task')
+        if self.permission_level not in PERMISSION_LEVELS: raise ContractError('permission_level_invalid')
+        if self.permission_level=='research':
+            if connection.permissions!=RESEARCH_PERMISSIONS: raise ContractError('research_permission_mismatch')
+        elif connection.permissions!=DEMONSTRATION_PERMISSIONS or not connection.restore_receipt_ref:
+            raise ContractError('fixture_restore_required')
         if self.human_mode is not False or self.paused is not False: raise ContractError('parent_inactive')
         if self.group_revision is not None or self.live_group_revision is not None:
             if type(self.group_revision) is not int or type(self.live_group_revision) is not int or self.group_revision!=self.live_group_revision:
@@ -105,6 +120,8 @@ class BrowserAction:
                    'product':'fixture.product','quantity':'fixture.quantity_one'}
             if pairs.get(self.target)!=self.demo_value: raise ContractError('demo_value_forbidden')
         elif self.demo_value is not None: raise ContractError('unexpected_demo_value')
+        if scope.permission_level=='research' and self.target=='save_demo_transfer':
+            raise ContractError('research_write_forbidden')
         return self
 
 

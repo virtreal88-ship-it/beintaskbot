@@ -70,6 +70,16 @@ def schema(conn):
         c.execute('ALTER TABLE saas_ai_instructor_jobs ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ')
         c.execute('ALTER TABLE saas_ai_instructor_jobs ADD COLUMN IF NOT EXISTS ai_calls_used INT NOT NULL DEFAULT 0')
         c.execute('ALTER TABLE saas_ai_instructor_jobs ADD COLUMN IF NOT EXISTS ai_calls_max INT NOT NULL DEFAULT 16')
+        c.execute("ALTER TABLE saas_ai_instructor_jobs ADD COLUMN IF NOT EXISTS permission_level TEXT NOT NULL DEFAULT 'demonstration_operation'")
+        c.execute("SELECT 1 FROM pg_constraint WHERE conrelid='saas_ai_instructor_jobs'::regclass AND conname='saas_ai_instructor_jobs_permission_level_check'")
+        if not c.fetchone():
+            c.execute("ALTER TABLE saas_ai_instructor_jobs ADD CONSTRAINT saas_ai_instructor_jobs_permission_level_check CHECK(permission_level IN ('research','demonstration_operation'))")
+        c.execute('''CREATE TABLE IF NOT EXISTS saas_ai_instructor_restore_claims(
+          tenant_id UUID NOT NULL, restore_receipt_ref UUID NOT NULL, connection_id UUID NOT NULL,
+          job_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,restore_receipt_ref), UNIQUE(tenant_id,job_id),
+          FOREIGN KEY(tenant_id,connection_id) REFERENCES saas_ai_instructor_connections(tenant_id,id),
+          FOREIGN KEY(tenant_id,job_id) REFERENCES saas_ai_instructor_jobs(tenant_id,id))''')
         c.execute('''CREATE INDEX IF NOT EXISTS saas_ai_instructor_jobs_queue_idx
           ON saas_ai_instructor_jobs(status,created_at) WHERE status='queued' ''')
         c.execute('''CREATE TABLE IF NOT EXISTS saas_ai_instructor_events(
@@ -106,7 +116,17 @@ def _connection_dict(row):
     result={k: row[k] for k in ('id','label','origin','enabled','updated_at')}
     result['id']=str(result['id'])
     if hasattr(result.get('updated_at'),'isoformat'):result['updated_at']=result['updated_at'].isoformat()
-    result['verification_required']=not all(row.get(k) for k in ('account_ref','demo_company_id','attestation_ref','restore_receipt_ref'))
+    checks=(('account_ref','account_identity_unverified'),
+            ('demo_company_id','demo_company_unverified'),
+            ('attestation_ref','isolation_scope_unverified'))
+    result['research_ready']=bool(row.get('enabled') is True and all(row.get(field) for field,_ in checks))
+    result['operation_ready']=bool(result['research_ready'] and row.get('restore_receipt_ref'))
+    if result['research_ready'] and not row.get('restore_receipt_ref'):
+        result['operation_blocker']='fixture_restore_unverified'
+    result['verification_blockers']=[reason for field,reason in checks if not row.get(field)]
+    if row.get('enabled') is not True:
+        result['verification_blockers'].append('connection_not_activated')
+    result['verification_required']=bool(result['verification_blockers'])
     return result
 
 
@@ -169,6 +189,51 @@ def save_connection(profile, data):
     return _connection_dict(row)
 
 
+def verify_connection(profile, connection_id):
+    """Verify login and company via server-configured ERP identity response.
+
+    No company/account proof is accepted from the browser. A verified connection
+    becomes read-only research-ready; a fixture restore receipt remains a
+    separate prerequisite for data-changing demonstration operations.
+    """
+    tenant=identifier(profile.get('tenant_id'));connection_id=identifier(connection_id)
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as c:
+            current_tenant,actor=_authorize(c,profile)
+            if current_tenant!=tenant:raise TenantLinearError('Tenant mismatch',403)
+            c.execute('SELECT id,origin,credentials FROM saas_ai_instructor_connections WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,connection_id))
+            row=c.fetchone()
+            if not row:raise TenantLinearError('Demo connection not found',404)
+            origin=row['origin'];cipher=bytes(row['credentials'])
+        conn.commit()
+    try:credentials=json.loads(_fernet().decrypt(cipher).decode('utf-8'))
+    except Exception:raise TenantLinearError('Stored demo credentials are unavailable',409) from None
+    if credentials.get('tenant_id')!=tenant:
+        credentials.clear();raise TenantLinearError('Credential tenant mismatch',403)
+    try:
+        import asyncio
+        from tenant_ai_instructor_browser import PlaywrightDemoExecutor
+        proof=asyncio.run(PlaywrightDemoExecutor().verify_identity(origin,credentials))
+    finally:credentials.clear()
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as c:
+            current_tenant,actor=_authorize(c,profile)
+            if current_tenant!=tenant:raise TenantLinearError('Tenant mismatch',403)
+            c.execute('''UPDATE saas_ai_instructor_connections SET account_ref=%s::uuid,demo_company_id=%s::uuid,
+              attestation_ref=%s::uuid,enabled=TRUE,updated_at=now()
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND origin=%s AND credentials=%s
+              RETURNING id,label,origin,account_ref,demo_company_id,attestation_ref,restore_receipt_ref,enabled,updated_at''',
+              (proof['account_ref'],proof['demo_company_id'],proof['attestation_ref'],tenant,connection_id,origin,cipher))
+            verified=c.fetchone()
+            if not verified:raise TenantLinearError('Connection changed during verification; retry safely',409)
+            _audit(c,tenant,actor,'ai_instructor_connection_verified','ai_instructor_connection',connection_id,
+                   {'company_identity_verified':True,'isolation_attestation_verified':True,'restore_receipt_verified':False})
+        conn.commit()
+    return _connection_dict(verified)
+
+
 def list_connections(profile):
     with _connect() as conn:
         schema(conn)
@@ -185,8 +250,10 @@ def enqueue(profile, data):
     if not _feature_enabled():
         raise TenantLinearError('AI instructor is disabled by server configuration', 409)
     if not isinstance(data,dict) or set(data)-{'connection_id','primary_agent_id','expert_agent_id',
-        'idempotency_key','title','language','budget_tokens'}:
+        'idempotency_key','title','language','budget_tokens','permission_level'}:
         raise ValueError('invalid_job')
+    permission_level=data.get('permission_level','research')
+    if permission_level not in {'research','demonstration_operation'}:raise ValueError('permission_level_invalid')
     tenant=identifier(profile.get('tenant_id'));connection_id=identifier(data.get('connection_id'))
     primary=identifier(data.get('primary_agent_id'));expert=identifier(data.get('expert_agent_id'))
     idem=str(data.get('idempotency_key') or '').strip()
@@ -202,9 +269,13 @@ def enqueue(profile, data):
         with conn.cursor() as c:
             authorized_tenant,actor=_authorize(c,profile)
             if authorized_tenant!=tenant: raise TenantLinearError('Tenant mismatch',403)
-            c.execute('''SELECT id FROM saas_ai_instructor_connections
+            c.execute('''SELECT id,account_ref,demo_company_id,attestation_ref,restore_receipt_ref,enabled FROM saas_ai_instructor_connections
               WHERE tenant_id=%s::uuid AND id=%s::uuid AND enabled=TRUE FOR SHARE''',(tenant,connection_id))
-            if not c.fetchone(): raise TenantLinearError('No verified demo connection is available',409)
+            verified_connection=c.fetchone()
+            if (not verified_connection or not all(verified_connection.get(k) for k in ('account_ref','demo_company_id','attestation_ref'))):
+                raise TenantLinearError('No server-verified demo connection is available',409)
+            if permission_level=='demonstration_operation' and not verified_connection.get('restore_receipt_ref'):
+                raise TenantLinearError('A verified fixture restore receipt is required for a demonstration operation',409)
             c.execute("""SELECT id,role,enabled,mode,scopes,expert_policy FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[])
               ORDER BY role""",(tenant,[primary,expert]))
             agents={str(r['id']):r for r in c.fetchall()}
@@ -217,14 +288,20 @@ def enqueue(profile, data):
             if expert not in helper_ids(expert_policy(agents[primary].get('expert_policy') or {})):
                 raise TenantLinearError('The Expert is not authorized for this Primary',409)
             c.execute('''INSERT INTO saas_ai_instructor_jobs
-              (tenant_id,id,actor,connection_id,primary_agent_id,expert_agent_id,idempotency_key,title,language,
+              (tenant_id,id,actor,connection_id,primary_agent_id,expert_agent_id,idempotency_key,title,language,permission_level,
                budget_tokens,max_actions,ai_calls_max,deadline_at)
-              VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,now()+(%s * interval '1 second'))
+              VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,now()+(%s * interval '1 second'))
               ON CONFLICT(tenant_id,idempotency_key) DO NOTHING
               RETURNING id,status,created_at''',(tenant,job_id,actor,connection_id,primary,expert,idem,title,
-                    language,budget,MAX_JOB_ACTIONS,MAX_AI_CALLS_PER_JOB,MAX_JOB_SECONDS))
+                    language,permission_level,budget,MAX_JOB_ACTIONS,MAX_AI_CALLS_PER_JOB,MAX_JOB_SECONDS))
             row=c.fetchone()
             created=row is not None
+            if created and permission_level=='demonstration_operation':
+                c.execute('''INSERT INTO saas_ai_instructor_restore_claims(tenant_id,restore_receipt_ref,connection_id,job_id)
+                  VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid) ON CONFLICT(tenant_id,restore_receipt_ref) DO NOTHING
+                  RETURNING job_id''',(tenant,verified_connection['restore_receipt_ref'],connection_id,row['id']))
+                if not c.fetchone():
+                    raise TenantLinearError('The verified restore receipt has already been used',409)
             if not row:
                 c.execute('SELECT id,status,created_at FROM saas_ai_instructor_jobs WHERE tenant_id=%s::uuid AND idempotency_key=%s',(tenant,idem))
                 row=c.fetchone()
@@ -240,7 +317,7 @@ def list_jobs(profile, limit=50):
         schema(conn)
         with conn.cursor() as c:
             tenant,_actor=_authorize(c,profile)
-            c.execute('''SELECT id,title,language,status,progress,budget_tokens,tokens_used,reserved_tokens,max_actions,actions_used,ai_calls_used,ai_calls_max,
+            c.execute('''SELECT id,title,language,permission_level,status,progress,budget_tokens,tokens_used,reserved_tokens,max_actions,actions_used,ai_calls_used,ai_calls_max,
               lesson_id,error_code,created_at,updated_at FROM saas_ai_instructor_jobs
               WHERE tenant_id=%s::uuid ORDER BY created_at DESC LIMIT %s''',(tenant,limit))
             return [_json_row(r) for r in c.fetchall()]
@@ -270,7 +347,7 @@ def job_detail(profile, job_id):
               WHERE tenant_id=%s::uuid AND job_id=%s::uuid ORDER BY created_at''',(tenant,job_id))
             artifacts=[{**_json_row(r),'url':f"/api/platform/ai/instructor/jobs/{job_id}/artifacts/{r['id']}"} for r in c.fetchall()]
             view=_json_row(row)
-            result={k:view.get(k) for k in ('id','title','language','status','progress','budget_tokens','tokens_used','reserved_tokens',
+            result={k:view.get(k) for k in ('id','title','language','permission_level','status','progress','budget_tokens','tokens_used','reserved_tokens',
                     'max_actions','actions_used','ai_calls_used','ai_calls_max','lesson_id','error_code','created_at','updated_at')}
             result['events']=events;result['artifacts']=artifacts
             return result
@@ -332,11 +409,22 @@ def claim_one():
             row=c.fetchone();_event(c,tenant,job_id,'claimed',{})
             c.execute('SELECT * FROM saas_ai_instructor_connections WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,row['connection_id']))
             connection=c.fetchone()
+            permission_level=row.get('permission_level') or 'demonstration_operation'
+            required=('account_ref','demo_company_id','attestation_ref')
+            if permission_level=='demonstration_operation':required=(*required,'restore_receipt_ref')
             if (not connection or connection.get('enabled') is not True or
-                not all(connection.get(k) for k in ('account_ref','demo_company_id','attestation_ref','restore_receipt_ref'))):
+                not all(connection.get(k) for k in required)):
                 c.execute("UPDATE saas_ai_instructor_jobs SET status='blocked',error_code='demo_verification_required',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,job_id))
                 _event(c,tenant,job_id,'blocked',{'reason':'demo_verification_required'})
                 conn.commit();return None
+            if permission_level=='demonstration_operation':
+                c.execute('''SELECT 1 FROM saas_ai_instructor_restore_claims
+                  WHERE tenant_id=%s::uuid AND restore_receipt_ref=%s::uuid AND connection_id=%s::uuid AND job_id=%s::uuid''',
+                  (tenant,connection['restore_receipt_ref'],connection['id'],job_id))
+                if not c.fetchone():
+                    c.execute("UPDATE saas_ai_instructor_jobs SET status='blocked',error_code='fixture_restore_claim_missing',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,job_id))
+                    _event(c,tenant,job_id,'blocked',{'reason':'fixture_restore_claim_missing'})
+                    conn.commit();return None
             c.execute('''SELECT id,role,enabled,mode,scopes,expert_policy FROM saas_ai_agents
               WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) FOR SHARE''',
               (tenant,[row['primary_agent_id'],row['expert_agent_id']]))
@@ -357,6 +445,7 @@ def claim_one():
             if secret.get('tenant_id')!=tenant or (secret.get('account_ref') and secret.get('account_ref')!=str(connection['account_ref'])):
                 raise TenantLinearError('Connection credential scope mismatch',403)
             row=dict(row);row['tenant_id']=tenant;row['id']=job_id
+            row['permission_level']=permission_level
             row['connection']={k:connection[k] for k in ('id','origin','account_ref','demo_company_id','attestation_ref','restore_receipt_ref')}
             row['credentials']=secret
         conn.commit()

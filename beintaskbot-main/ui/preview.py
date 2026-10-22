@@ -38,10 +38,14 @@ class Preview(BaseHTTPRequestHandler):
         if path=='/__preview/posts':return self.respond(dict(success=True,posts=POSTS))
         if path.startswith('/api/'):
             return self.api(path)
-        name='tenant-app.html' if path in ['/','/app'] else path.removeprefix('/assets/')
+        # Real /app pages are stored as tenant-*.html in docs; map the
+        # instructor route explicitly so Preview never looks for docs/app/…
+        page_routes={'/app/ai-instructor':'tenant-ai-instructor.html'}
+        name='tenant-app.html' if path in ['/','/app'] else page_routes.get(path,path.removeprefix('/assets/'))
         file=(DOCS/name).resolve()
         if DOCS not in file.parents or not file.is_file():return self.respond(dict(success=False,error='Preview file missing'),404)
-        data=file.read_bytes();self.send_response(200);self.send_header('Content-Type','text/javascript; charset=utf-8' if file.suffix=='.js' else 'text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(data)
+        mime={'.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png'}.get(file.suffix,'text/html; charset=utf-8')
+        data=file.read_bytes();self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(data)
 
     def do_POST(self):self.write_api()
     def do_PATCH(self):self.write_api()
@@ -49,6 +53,10 @@ class Preview(BaseHTTPRequestHandler):
 
     def write_api(self):
         path=urlparse(self.path).path
+        # Never retain credential or job payloads in the local visual preview.
+        # This applies even when someone accidentally submits a real password.
+        if path.startswith('/api/platform/ai/instructor'):
+            return self.respond({'success':False,'error':'AI Instructor is view-only in local Preview'},403)
         data=json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))) or b'{}')
         POSTS.append(dict(path=path,method=self.command,data=data))
         if path.endswith('/members'):
@@ -73,7 +81,15 @@ class Preview(BaseHTTPRequestHandler):
 
     def api(self,path):
         result=dict(success=True)
-        if path.endswith('/me'):result=me()
+        if path=='/api/platform/ai/instructor':
+            result.update(enabled=False,worker='preview_only',real_pilot='unverified',customer_send_allowed=False,
+                          auto_publish=False,available_actions=['view_local_preview'],
+                          blocked_actions=['save_test_credentials','queue_job','activate_connection','run_real_erp','publish_lesson'])
+        elif path=='/api/platform/ai/instructor/connections':
+            result.update(enabled=False,connections=[],real_pilot='unverified',external_effects_allowed=False,
+                          preview_notice='Synthetic local preview; no ERP credentials or connection is loaded.')
+        elif path=='/api/platform/ai/instructor/jobs':result=[]
+        elif path.endswith('/me'):result=me()
         elif path.endswith('/access-requests'):result.update(requests=[])
         elif path.endswith('/workflow/catalog'):result.update(pipelines=PIPELINES,users=[],warnings=[])
         elif path.endswith('/workflow'):result=copy.deepcopy(CONFIG)
@@ -104,8 +120,11 @@ class Preview(BaseHTTPRequestHandler):
             elif path.endswith('/knowledge'):value=[dict(id='knowledge-1',title='Məhsul haqqında',active=True,chunks=3)]
             result.update(result=value)
         elif 'sync' in path:result.update(resources=[],state='idle',jobs=[])
+        if path.startswith('/api/platform/ai/instructor'):
+            return self.respond({'success':True,'result':result})
         return self.respond(result)
 
 if __name__=='__main__':
-    print('Synthetic UI preview: http://127.0.0.1:8766/app — no external services',flush=True)
-    ThreadingHTTPServer(('127.0.0.1',8766),Preview).serve_forever()
+    port=int(__import__('os').environ.get('BEINTASKBOT_PREVIEW_PORT','8766'))
+    print(f'Synthetic UI preview: http://127.0.0.1:{port}/app — no external services',flush=True)
+    ThreadingHTTPServer(('127.0.0.1',port),Preview).serve_forever()
