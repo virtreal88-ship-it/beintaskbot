@@ -24,6 +24,7 @@ function setup(){
 async function test(){
  const app=setup(),{w,calls}=app,d=w.document,$=id=>d.getElementById(id);await settle();await w.tenantAITesting.open();await settle();
  assert.ok($('view-ai_testing').classList.contains('active'));assert.ok(d.querySelector('main').contains($('view-ai_testing')),'AI testing view must stay inside the app main layout');assert.equal($('aiTestingCenter').parentElement.id,'aiTestingPage');assert.ok(!$('aiAgentsModalBody').contains($('aiTestingCenter')));
+ assert.match([...d.querySelectorAll('style')].map(style=>style.textContent).join('\n'),/\.testing-sidebar\{[^}]*height:auto;position:static\}/,'testing sidebar must not inherit full-height app navigation styles');
  assert.equal($('testingVirtualAgent').value,AGENT);assert.equal($('testingTabKommo'),null);assert.equal($('testingTabConnect'),null);assert.equal($('aiTestModePanel'),null);assert.match($('aiTestingCenter').textContent,/расходует лимит компании/);
  w.tenantI18n.setLanguage('en');await settle();assert.equal($('aiTestingCenter').querySelector('h1').textContent,'AI testing');assert.match($('testingNewSession').textContent,/New test chat/);w.tenantI18n.setLanguage('ru');await settle();
  $('testingNewSession').click();await settle();assert.equal($('testingChatTitle').textContent,'AI seller');const create=calls.find(c=>c.method==='POST'&&c.path.endsWith('/testing/sessions'));assert.equal(create.body.agent_id,AGENT);assert.equal(create.body.expected_tenant_id,A);assert.equal(create.body.scope_index,null);
