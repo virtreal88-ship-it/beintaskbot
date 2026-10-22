@@ -68,6 +68,22 @@ def test_browser_origin_and_private_network_checks_fail_closed():
     with pytest.raises(ValueError):_public_addresses('localhost')
 
 
+def test_connection_status_reports_saved_credentials_without_exposing_them():
+    from tenant_ai_instructor_store import _connection_dict
+    row={'id':'00000000-0000-0000-0000-000000000001','label':'ERP demo',
+         'origin':'https://dev.akul.az','enabled':False,'updated_at':None,
+         'account_ref':None,'demo_company_id':None,'attestation_ref':None,
+         'restore_receipt_ref':None,'credentials':b'encrypted-secret'}
+    saved=_connection_dict(row)
+    assert saved['label']=='ERP demo' and saved['origin']=='https://dev.akul.az'
+    assert saved['research_ready'] is False and saved['operation_ready'] is False
+    assert 'credentials' not in saved and 'password' not in saved
+    row.update(enabled=True,account_ref='a',demo_company_id='c',attestation_ref='i')
+    verified=_connection_dict(row)
+    assert verified['research_ready'] is True and verified['operation_ready'] is False
+    assert verified['operation_blocker']=='fixture_restore_unverified'
+
+
 def test_research_permission_is_read_only_and_does_not_require_restore_receipt():
     import uuid
     from tenant_ai_instructor_contract import (DemoConnection,TaskScope,RESEARCH_PERMISSIONS,
@@ -143,6 +159,7 @@ def test_local_preview_serves_instructor_route_and_assets():
         assert 'aiInstructor' in page and 'Preview file missing' not in page
         script=urllib.request.urlopen(base+'/assets/tenant-ai-instructor.js').read().decode()
         assert 'permission_level' in script and 'Verify connection' in script
+        assert 'Данные доступа сохранены' in script
         status=json.loads(urllib.request.urlopen(base+'/api/platform/ai/instructor').read())
         assert status['result']['real_pilot']=='unverified'
         assert status['result']['blocked_actions']
