@@ -14,6 +14,7 @@ import tenant_ai_agent_worker as worker
 import tenant_connect_transport as transport
 import tenant_support_inbox_store as inbox
 import tenant_operator_dialogs as dialogs
+import tenant_connect_avatars as avatars
 import tenant_operator_legacy as legacy
 from tenant_linear_policy import TenantLinearError
 
@@ -52,6 +53,31 @@ def test_two_agents_send_with_separate_history_and_duplicate_receipts(channels):
     assert 'second-channel-only' not in str(connect.history(A,41,CA))
     assert 'first-channel-only' not in str(connect.history(A,43,CB))
     assert states(f)=={CA:'active',CB:'active'}
+
+def test_avatar_attempt_status_is_returned_from_local_projection_without_remote_lookup(channels):
+    f=channels;f['incoming'](CA)
+    first=dialogs.listing(PROFILE,channel='connect:'+CA)['dialogs'][0]
+    assert first['avatar_status']==''
+    f['db'].execute("UPDATE saas_connect_conversations SET avatar_status='available' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CA));f['db'].commit()
+    refreshed=dialogs.listing(PROFILE,channel='connect:'+CA)['dialogs'][0]
+    assert refreshed['avatar_status']=='available'
+
+def test_avatar_endpoint_is_tenant_scoped_and_claims_only_once(channels,monkeypatch):
+    f=channels;db=f['db'];f['incoming'](CA)
+    monkeypatch.setattr(avatars,'_connect',lambda:db)
+    image=b'\x89PNG\r\n\x1a\n'+b'avatar-bytes'
+    fetch=Mock()
+    async def get_image(route):
+        fetch(route)
+        return image,'image/png'
+    monkeypatch.setattr(avatars,'_fetch',get_image)
+    params={'provider':'connect','lead_id':'41','channel_id':CA,'conversation_id':'client'}
+    assert asyncio.run(avatars.get_avatar(PROFILE,params))==(image,'image/png')
+    assert db.execute("SELECT avatar_status FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CA))[0]['avatar_status']=='available'
+    db.commit()
+    asyncio.run(avatars.get_avatar(PROFILE,params))
+    assert fetch.call_count==2  # app reads the cached Connect copy; Evolution is not called again
+    with pytest.raises(TenantLinearError):asyncio.run(avatars.get_avatar({**PROFILE,'tenant_id':B},params))
 
 @pytest.mark.parametrize('phase',['before','during'])
 def test_manual_takeover_only_cancels_its_channel_even_during_other_voice(channels,phase):
