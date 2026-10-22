@@ -107,6 +107,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('agents', ai_agents_handler(member, origin, logger, 'agents'), ('GET', 'POST')),
         ('agents/options', ai_agents_handler(member, origin, logger, 'options', context.crm_request), ('GET',)),
         ('dialogs', operator_handler(member, origin, logger, 'dialogs'), ('GET',)),
+        ('dialogs/avatar', operator_handler(member, origin, logger, 'avatar'), ('GET',)),
         ('dialogs/history', operator_handler(member, origin, logger, 'history'), ('GET',)),
         ('dialogs/copilot', operator_handler(member, origin, logger, 'copilot'), ('POST',)),
         ('dialogs/display-name', operator_handler(member, origin, logger, 'display_name'), ('POST',)),

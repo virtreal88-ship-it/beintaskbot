@@ -28,7 +28,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('agents/pilot-preflight', ('GET',)), ('agents/pilot/kwid-confirmation', ('POST',)),
     ('agents/pilot/owner-approval', ('POST',)),
     ('agents', ('GET','POST')), ('agents/options', ('GET',)),
-    ('dialogs', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('POST',)), ('dialogs/display-name', ('POST',)),
+    ('dialogs', ('GET',)), ('dialogs/avatar', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('POST',)), ('dialogs/display-name', ('POST',)),
     ('dialogs/agent-assignment', ('GET','POST')),
     ('dialogs/agent-assignment-bulk', ('GET','POST')),
     ('dialogs/legacy-continuation', ('GET','POST')),
@@ -58,11 +58,15 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('knowledge-candidates/{candidate_id}/reject', ('POST',)),
     ('knowledge', ('GET','POST')), ('knowledge/upload', ('POST',)),
     ('knowledge/{source_id}', ('PATCH','DELETE')),
+    ('simulation/settings', ('GET','PATCH')), ('simulation/runs', ('GET',)),
+    ('simulation/runs/{run_id}', ('GET',)), ('simulation/runs/{run_id}/recheck', ('POST',)),
+    ('simulation/issues', ('GET',)), ('simulation/issues/{run_id}/review', ('POST',)),
+    ('dashboard', ('GET',)), ('dashboard/events', ('GET',)),
 ] for method in methods)
 FACTORIES = ('instruction_handler', 'finance_handler', 'linear_handler', 'tasks_handler', 'news_handler',
     'news_telegram_handler', 'chat_ai_handler', 'chat_ai_model_handler', 'chat_send_handler', 'chat_upload_handler',
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler',
-    'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'night_report_handler', 'testing_handler', 'ai_state_handler')
+    'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'night_report_handler', 'testing_handler', 'simulation_handler', 'ai_state_handler')
 
 
 class Routes(unittest.IsolatedAsyncioTestCase):

@@ -28,6 +28,12 @@ class NotificationPreferencesTests(unittest.TestCase):
         profile['workflow']['policies']['members']['20']['notifications']['task_assigned']['telegram']=False
         self.assertEqual(self.channels(profile), ['push'])
 
+    def test_internal_notifications_are_an_explicit_channel(self):
+        profile=person()
+        profile['workflow']['policies']['members']['20']['notifications']['task_assigned']['internal']=True
+        self.assertIn('internal',self.channels(profile))
+        self.assertNotIn('internal',self.channels(person()))
+
     def test_unconfigured_employee_is_not_implicitly_subscribed(self):
         profile=person(); profile['workflow']={}
         profile['notification_rules']={'task_assigned':True}
@@ -47,6 +53,7 @@ class NotificationPreferencesTests(unittest.TestCase):
         self.assertIn('task_assigned', events)
         self.assertNotIn('incoming_message', events)
         self.assertNotIn('task_completion_requested', events)
+        self.assertIn('task_assigned',available_notification_events(TenantPolicy(person('operator'))))
 
     def test_inactive_member_denied_including_owner(self):
         for role in ('owner', 'admin', 'manager', 'worker', 'master'):

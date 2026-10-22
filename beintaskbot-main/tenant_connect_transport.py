@@ -164,6 +164,7 @@ def _schema(conn) -> None:
         # This is a local presentation override only.  It never changes the
         # WhatsApp group subject or an Evolution contact record.
         cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS manual_display_name TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS avatar_status TEXT NOT NULL DEFAULT ''")
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_participant_display_names (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
           connect_channel_id UUID NOT NULL,
@@ -704,6 +705,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
             if ai_origin:
                 data={**data,'ai_authored':True}
 
+            message_inserted=False
             if outbound:
                 # Direction comes from the signed event/fromMe fact, never the
                 # message text.  A known accepted AI row stays AI even when
@@ -779,13 +781,14 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                             (tenant,lead_id,deal_name,deal_name,phone,'connect:'+channel_id,str(data.get('text') or ''),occurred,occurred,_json({'source':'connect','channel_id':channel_id,'conversation_id':conversation,'conversation_kind':metadata.get('kind') or ''})))
                 external = 'connect:' + str(data.get('id') or event_id)
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
-              VALUES(%s,%s::uuid,%s,%s,'incoming',%s,%s,%s,%s,%s,%s::timestamptz,%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
+              VALUES(%s,%s::uuid,%s,%s,'incoming',%s,%s,%s,%s,%s,%s::timestamptz,%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING RETURNING id''',
                             # Connect does not currently provide a safe
                             # downloadable media URL in its signed event.  Do
                             # not store a fake non-empty placeholder: that
                             # would make every text look like an attachment and
                             # can incorrectly affect later AI context.
                             (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,author_name,str(data.get('text') or ''),str(data.get('type') or 'text'),'',occurred,_json(data)))
+                message_inserted=bool(cur.fetchone())
                 accepted = True
                 queued_payload = (tenant, channel_id, conversation, lead_id, str(data.get('id') or event_id), event_id,
                                   str(data.get('text') or ''), str(data.get('type') or 'text'))
@@ -797,33 +800,45 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 source_message=cur.fetchone()
                 if not source_message:
                     raise ConnectWebhookError('message_scope_conflict', 'Connect message scope mismatch.', 409)
-                if coordinated and (ai_origin or employee is not None or uncertain_origin or control_replayed):
-                    if employee is not None:
-                        stop_group(cur,tenant,conversation,reason='verified_employee_reply',actor=employee)
-                        from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
-                        enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],
-                            str(source_message['id']),actor_id=employee)
-                    conn.commit()
-                    return True
-                from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
-                enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],str(source_message['id']))
-                from tenant_ai_agent_connect import enqueue
-                enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
-                        lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
-                        text=queued_payload[6], message_type=queued_payload[7],
-                        is_group=metadata.get('kind') == 'group', provider_message_id=data.get('externalMessageId'), connection=conn)
-                # Simulation admits only the first durable inbound delivery.
-                # Webhook retries may repair the Active queue above but must
-                # never backfill Simulation or replay a paid virtual run.
-                from tenant_ai_agent_runtime_flags import enabled as runtime_flag
-                if inserted_event and runtime_flag('AI_SIMULATION_ENABLED'):
-                    from tenant_ai_simulation_schema import ensure_schema as ensure_simulation_schema
-                    from tenant_ai_simulation_engine import enqueue_inbound
-                    ensure_simulation_schema(conn)
-                    enqueue_inbound(cur,tenant_id=tenant,channel_id=channel_id,
-                        conversation_id=conversation,lead_id=queued_payload[3],
-                        source_message_id=str(source_message['id']),
-                        source_event_id=queued_payload[4],occurred_at=event.get('occurred_at'))
+            if (not outbound and message_inserted and not ai_origin and employee is None
+                    and not uncertain_origin and not control_replayed):
+                # Reuse the existing SaaS CRM notice outbox, push subscriptions and worker.
+                # Only initialize its additive schema if the normal notification worker has
+                # not done so yet; webhook delivery remains idempotent by persisted message ID.
+                from tenant_crm_notice_schema import ensure_schema as ensure_notice_schema
+                cur.execute("SELECT to_regclass('saas_crm_notice_events') AS existing")
+                if not (cur.fetchone() or {}).get('existing'):
+                    ensure_notice_schema(conn)
+                from tenant_crm_notice_store import plan_connect_message
+                plan_connect_message(cur,tenant,channel_id,conversation,queued_payload[3],
+                                     'connect:'+queued_payload[4],data)
+            if coordinated and (ai_origin or employee is not None or uncertain_origin or control_replayed):
+                if employee is not None:
+                    stop_group(cur,tenant,conversation,reason='verified_employee_reply',actor=employee)
+                    from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
+                    enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],
+                        str(source_message['id']),actor_id=employee)
+                conn.commit()
+                return True
+            from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
+            enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],str(source_message['id']))
+            from tenant_ai_agent_connect import enqueue
+            enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
+                    lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
+                    text=queued_payload[6], message_type=queued_payload[7],
+                    is_group=metadata.get('kind') == 'group', provider_message_id=data.get('externalMessageId'), connection=conn)
+            # Simulation admits only the first durable inbound delivery.
+            # Webhook retries may repair the Active queue above but must
+            # never backfill Simulation or replay a paid virtual run.
+            from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+            if inserted_event and runtime_flag('AI_SIMULATION_ENABLED'):
+                from tenant_ai_simulation_schema import ensure_schema as ensure_simulation_schema
+                from tenant_ai_simulation_engine import enqueue_inbound
+                ensure_simulation_schema(conn)
+                enqueue_inbound(cur,tenant_id=tenant,channel_id=channel_id,
+                    conversation_id=conversation,lead_id=queued_payload[3],
+                    source_message_id=str(source_message['id']),
+                    source_event_id=queued_payload[4],occurred_at=event.get('occurred_at'))
             conn.commit()
     return accepted
 

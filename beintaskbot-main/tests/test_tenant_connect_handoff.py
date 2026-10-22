@@ -38,6 +38,8 @@ class Cursor:
     def fetchone(self):
         if self.executed and 'SELECT id FROM saas_crm_messages' in self.executed[-1][0]:
             return {'id':'00000000-0000-0000-0000-000000000103'}
+        if self.executed and 'SELECT 1 FROM saas_crm_messages' in self.executed[-1][0]:
+            return {'?column?':1}
         return self.ones.pop(0) if self.ones else None
 
 
@@ -240,16 +242,22 @@ class TenantConnectHandoffTests(unittest.TestCase):
                           'groupSubject': 'Night support', 'participantAlt': '994501234567@s.whatsapp.net',
                           'participantName': 'Leyla', 'fromMe': False, 'type': 'text', 'text': 'Need help'}}
         cipher = MagicMock(); cipher.decrypt.return_value = json.dumps({'webhook_secret': 'secret'}).encode()
-        with patch.dict('os.environ', {'SUPPORT_CASES_LIVE_EXTRACTION_ENABLED':'true'}), \
+        with patch.dict('os.environ', {
+                 'SUPPORT_CASES_LIVE_EXTRACTION_ENABLED':'true',
+                 'SUPPORT_CASES_LIVE_EXTRACTION_TENANT_ID':TENANT,
+                 'SUPPORT_CASES_LIVE_EXTRACTION_CHANNEL_ID':CHANNEL,
+                 'SUPPORT_CASES_LIVE_EXTRACTION_CONVERSATION_ID':event['data']['conversationId'],
+                 'SUPPORT_CASES_LIVE_EXTRACTION_START_AFTER':'2026-10-01T00:00:00+00:00'}), \
              patch.object(transport, '_connect', return_value=connection), \
              patch.object(transport, '_fernet', return_value=cipher), \
              patch.object(transport, '_verify_signature', return_value=True), \
              patch.object(transport, '_schema'), \
              patch('tenant_ai_agents_schema.ensure_schema'), \
-             patch('tenant_knowledge_live_queue.extraction_enabled', return_value=True), \
+             patch('tenant_crm_notice_store.plan_connect_message'), \
              patch('tenant_ai_agent_connect.enqueue') as enqueue:
             self.assertTrue(transport.ingest(b'{}', 'sha256=valid', event))
-        queued = next(params for sql, params in cursor.executed if 'INSERT INTO saas_knowledge_live_queue' in sql)
+        queued = next((params for sql, params in cursor.executed if 'INSERT INTO saas_knowledge_live_queue' in sql), None)
+        self.assertIsNotNone(queued, [sql for sql, _ in cursor.executed])
         self.assertEqual(queued[:5], (TENANT, CHANNEL, event['data']['conversationId'], 42, None))
         self.assertEqual(queued[5], '00000000-0000-0000-0000-000000000103')
         conversation_sql, conversation_params = next((sql, params) for sql, params in cursor.executed

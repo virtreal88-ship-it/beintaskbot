@@ -1,7 +1,8 @@
 """Bounded PostgreSQL queue/checkpoints. Telegram transport lives separately."""
+import uuid
 from tenant_platform import _connect, _ensure_schema, _read_tenant_workflow
 from tenant_policy import TenantPolicy
-from tenant_notifications import notification_channels
+from tenant_notifications import notification_channels, notification_catalog
 
 
 def eligible(profile: dict, event: str, tenant_id: str, channel: str = 'telegram') -> bool:
@@ -38,6 +39,14 @@ def expand_events() -> int:
                     if key[0] not in profiles:
                         profiles[key[0]] = _profiles(cur, key[0])
                     for profile in profiles[key[0]]:
+                        if eligible(profile, item['event'], key[0], 'internal'):
+                            title=next((entry['label'] for entry in notification_catalog() if entry['key']==item['event']),'Şirkət bildirişi')
+                            module=next((entry['module'] for entry in notification_catalog() if entry['key']==item['event']),'tasks')
+                            event_key=f"{key[2]}:{item['event']}"
+                            cur.execute('''INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body,target_url)
+                                SELECT %s,%s::uuid,%s,%s,%s,'Təsdiq tələb olunur.',%s
+                                WHERE NOT EXISTS(SELECT 1 FROM saas_tenant_notifications WHERE tenant_id=%s::uuid AND telegram_id=%s AND event_key=%s)''',
+                                (uuid.uuid4(),key[0],profile['telegram_id'],event_key,title,f'/app?view={module}',key[0],profile['telegram_id'],event_key))
                         if eligible(profile, item['event'], key[0]):
                             cur.execute('''INSERT INTO saas_approval_notification_deliveries
                                            (tenant_id,actor_id,request_id,recipient_id,channel)

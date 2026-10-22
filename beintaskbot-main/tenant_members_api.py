@@ -19,12 +19,20 @@ class MemberApiContext:
     list_invite_requests: Callable[..., list]
     decide_invite_request: Callable[..., dict]
     platform_error: type[Exception]
+    can_manage: Callable[[dict], bool] | None = None
+    accept_email_invite: Callable[..., dict] | None = None
+    issue_session: Callable[[str, int], str] | None = None
+    cookie_name: str = 'csa_tenant_session'
+    cookie_ttl: int = 28800
+
+    def may_manage(self, profile: dict | None) -> bool:
+        return bool(profile and (self.can_manage(profile) if self.can_manage else profile.get('role') == 'owner'))
 
 
 def handlers(context: MemberApiContext) -> dict[str, Callable]:
     async def members(request: web.Request) -> web.Response:
-        profile = context.member(request, owner_only=True)
-        if not profile:
+        profile = context.member(request)
+        if not context.may_manage(profile):
             return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
         tenant_id, owner_id = profile["tenant_id"], int(profile["telegram_id"])
         if request.method == "GET":
@@ -60,8 +68,8 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
         return web.json_response({"success": True, "members": rows})
 
     async def create(request: web.Request) -> web.Response:
-        profile = context.member(request, owner_only=True)
-        if not profile:
+        profile = context.member(request)
+        if not context.may_manage(profile):
             return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
         try:
             data = await request.json()
@@ -69,10 +77,13 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
             data = {}
         data = data if isinstance(data, dict) else {}
         try:
+            invite_args={}
+            if str(data.get('email') or '').strip(): invite_args['invited_email']=str(data.get('email') or '')
             invite = await asyncio.to_thread(
                 context.create_invite, tenant_id=profile["tenant_id"], owner_id=int(profile["telegram_id"]),
                 display_name=str(data.get("display_name") or ""), role=str(data.get("role") or "worker"),
                 permissions=data.get("permissions") if isinstance(data.get("permissions"), list) else [],
+                **invite_args,
             )
         except context.platform_error as exc:
             return web.json_response({"success": False, "error": str(exc)}, status=400)
@@ -106,9 +117,27 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
         return web.json_response({"success": True, "pending": True,
             "message": "Sorğu administratora göndərildi. Təsdiqdən sonra /login səhifəsindən daxil olun."})
 
+    async def accept_email(request: web.Request) -> web.Response:
+        profile=context.member(request)
+        if not profile or not profile.get('email') or not context.accept_email_invite:
+            return web.json_response({'success':False,'error':'Dəvəti qəbul etmək üçün email hesabı ilə daxil olun.'},status=401)
+        if request.headers.get('Origin','').rstrip('/') != context.origin.rstrip('/'):
+            return web.json_response({'success':False,'error':'Sorğunun mənbəyi düzgün deyil.'},status=403)
+        try:
+            data=await request.json();data=data if isinstance(data,dict) else {}
+            result=await asyncio.to_thread(context.accept_email_invite,token=str(data.get('token') or ''),
+                actor_id=int(profile['telegram_id']),email=str(profile['email']),display_name=str(profile.get('display_name') or ''))
+            response=web.json_response({'success':True,'tenant':{'id':result['tenant_id'],'name':result['tenant_name']},'redirect':'/app'})
+            if context.issue_session:
+                response.set_cookie(context.cookie_name,context.issue_session(result['tenant_id'],int(profile['telegram_id'])),
+                    max_age=context.cookie_ttl,httponly=True,secure=True,samesite='Lax',path='/')
+            return response
+        except context.platform_error as exc:
+            return web.json_response({'success':False,'error':str(exc)},status=400)
+
     async def requests(request: web.Request) -> web.Response:
-        profile = context.member(request, owner_only=True)
-        if not profile:
+        profile = context.member(request)
+        if not context.may_manage(profile):
             return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
         tenant_id, owner_id = profile["tenant_id"], int(profile["telegram_id"])
         if request.method == "GET":
@@ -136,5 +165,5 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
         context.send_telegram(decided["telegram_id"], message)
         return web.json_response({"success": True, "requests": rows})
 
-    return {"members": members, "create_invite": create, "accept_invite": accept,
+    return {"members": members, "create_invite": create, "accept_invite": accept, "accept_email_invite": accept_email,
             "invite_requests": requests}

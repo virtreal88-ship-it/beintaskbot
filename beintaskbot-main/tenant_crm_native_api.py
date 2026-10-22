@@ -6,6 +6,7 @@ from aiohttp import web
 from tenant_crm_native_contacts import create_contact, get_contact, list_contacts, update_contact, archive_contact
 from tenant_request_origin import require_json_post
 from tenant_linear_policy import TenantLinearError
+from tenant_policy import TenantPolicy
 
 
 def _jsonable(value):
@@ -23,9 +24,10 @@ def _jsonable(value):
 def handler(member_from_request, origin, logger):
     async def handle(request):
         profile = member_from_request(request)
-        if not profile or profile.get('role') not in ('owner', 'admin', 'manager'):
+        if not profile:
             return web.json_response({'success': False, 'error': 'forbidden'}, status=403,
                                      headers={'Cache-Control': 'no-store'})
+        policy=TenantPolicy(profile)
         tenant_id = str(profile['tenant_id'])
         contact_id = request.match_info.get('id')
         if contact_id:
@@ -35,6 +37,8 @@ def handler(member_from_request, origin, logger):
                 return web.json_response({'success': False, 'error': 'invalid_id'}, status=400)
         try:
             if request.method == 'GET':
+                if not policy.allows_action('customers','view'):
+                    return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
                 if contact_id:
                     result = await asyncio.to_thread(get_contact, tenant_id, contact_id)
                 else:
@@ -47,6 +51,9 @@ def handler(member_from_request, origin, logger):
                 body = await request.json()
                 if not isinstance(body, dict):
                     raise ValueError('invalid body')
+                action='create' if not contact_id else ('delete' if body.get('action')=='archive' else 'update')
+                if not policy.allows_action('customers',action):
+                    return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
                 if request.method == 'POST' and not contact_id:
                     if set(body) - {'name', 'phone', 'email', 'id'}:
                         raise ValueError('unknown fields')

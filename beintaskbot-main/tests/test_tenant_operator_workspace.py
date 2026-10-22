@@ -34,6 +34,10 @@ def test_all_connect_conversations_are_visible_without_ai_or_kommo(operator_db):
     assert len(result['dialogs'])==1
     assert result['dialogs'][0]['display_state']=='unmanaged'
     assert result['dialogs'][0]['channel_id']==CA
+    assert result['dialogs'][0]['last_message_id']
+    assert result['dialogs'][0]['last_message_direction']=='incoming'
+    assert result['dialogs'][0]['last_message_type']=='text'
+    assert result['dialogs'][0]['last_message_text']=='Internet is down'
     assert result['attention_count']==0
     assert result['channels']==[{'id':'connect:'+CA,'name':'WhatsApp'}]
     page=dialogs.history(PROFILE,'connect',41,CA,'client')
@@ -321,9 +325,11 @@ def test_group_participant_name_priority_is_manual_then_saved_then_whatsapp_then
     assert dialogs._message({'direction':'incoming','author_name':'','raw':{'participantJid':'994501234567@s.whatsapp.net'}},group=True)['author_name']=='994501234567'
 
 
-def test_dialogue_actions_are_derived_from_availability_not_only_storage_state(operator_db):
+def test_dialogue_actions_are_derived_from_availability_not_only_storage_state(operator_db,monkeypatch):
+    monkeypatch.setattr(dialogs,'runtime_flag',lambda name: True)
+    monkeypatch.setattr('tenant_ai_agents_store.runtime_flag',lambda name: True)
     base={'provider':'connect','conversation_id':'client','channel_active':True,'unambiguous':True,'connected':True,
-          'tenant_status':'active','company_enabled':True,'company_emergency_stop':False,'agent_id':AGENT,
+          'tenant_status':'active','company_enabled':True,'company_auto_send_enabled':True,'auto_send_enabled':True,'company_emergency_stop':False,'agent_id':AGENT,
           'agent_enabled':True,'agent_mode':'automatic','agent_scopes':[{'provider':'connect','channel_id':'channel'}],'channel_id':'channel','state':'active','reason':'','latest_job_state':'queued','latest_job_error':'',
           'customer_name':'Client','phone':'994501234567','conversation_kind':'','updated_at':None,'display_state':'active'}
     active=dialogs.decorate(base)

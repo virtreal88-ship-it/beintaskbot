@@ -34,6 +34,13 @@ class AuthApiContext:
     email_auth: object | None = None
     sso: object | None = None
     legacy_member: Callable[..., dict | None] | None = None
+    account_profile: Callable[..., dict] | None = None
+    update_account_profile: Callable[..., dict] | None = None
+    list_sessions: Callable[..., list] | None = None
+    revoke_session: Callable[..., int] | None = None
+    session_id: Callable[..., str | None] | None = None
+    record_login: Callable[..., object] | None = None
+    accept_email_invite: Callable[..., dict] | None = None
 
 
 def _set_session(response: web.Response, context: AuthApiContext, tenant_id: str, chat_id: int) -> None:
@@ -137,7 +144,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             result = await asyncio.to_thread(context.email_auth.request_registration,
                 name=(data or {}).get('name'), company_name=(data or {}).get('company_name'),
                 phone=(data or {}).get('phone'), email=(data or {}).get('email'), request_ip=request_ip(request),
-                destination_product=(data or {}).get('destination_product'))
+                destination_product=(data or {}).get('destination_product'), invite_token=(data or {}).get('invite_token'))
             return web.json_response({'success': True, **result})
         except context.platform_error as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=400)
@@ -163,6 +170,15 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             if not result: return web.json_response({'success': False, 'error': 'Email və ya parol düzgün deyil.'}, status=401)
             companies = await asyncio.to_thread(context.tenants_for_user, int(result['actor_id']))
             requested_tenant = str(data.get('tenant_id') or '').strip()
+            invite_accepted = False
+            if data.get('invite_token') and context.accept_email_invite and context.account_profile:
+                account=await asyncio.to_thread(context.account_profile,actor_id=int(result['actor_id']))
+                invitation=await asyncio.to_thread(context.accept_email_invite,token=str(data.get('invite_token')),
+                    actor_id=int(result['actor_id']),email=str(account.get('email') or ''),
+                    display_name=str(account.get('display_name') or ''))
+                requested_tenant=str(invitation['tenant_id'])
+                invite_accepted = True
+                companies=await asyncio.to_thread(context.tenants_for_user,int(result['actor_id']))
             if requested_tenant:
                 tenant = next((item for item in companies if str(item.get('id')) == requested_tenant), None)
                 if not tenant: return web.json_response({'success': False, 'error': 'Bu şirkət üçün giriş icazəniz yoxdur.'}, status=403)
@@ -171,7 +187,8 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
                     'companies': [{'id': item['id'], 'name': item['name']} for item in companies]})
             else:
                 tenant = companies[0] if companies else {'id': result['tenant_id']}
-            response = web.json_response({'success': True, 'redirect': '/app'})
+            response = web.json_response({'success': True, 'redirect': '/app', 'invite_accepted': invite_accepted})
+            if context.record_login: await asyncio.to_thread(context.record_login, tenant_id=str(tenant['id']), actor_id=int(result['actor_id']))
             _set_session(response, context, str(tenant['id']), result['actor_id'])
             return response
         except context.platform_error as exc:
@@ -299,17 +316,19 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             integrations = await asyncio.to_thread(
                 context.list_integrations, tenant_id=profile["tenant_id"], telegram_id=telegram_id)
             companies = await asyncio.to_thread(context.tenants_for_user, telegram_id)
+            capabilities = context.capabilities(profile)
             members = await asyncio.to_thread(
                 context.list_members, tenant_id=profile["tenant_id"], owner_id=telegram_id,
-            ) if profile.get("role") == "owner" else []
+            ) if capabilities.get('can_manage_employees', profile.get('role') in {'owner', 'admin'}) else []
+            account = await asyncio.to_thread(context.account_profile, actor_id=telegram_id) if context.account_profile else {}
         except Exception:
             context.logger.exception("Platform session lookup failed")
             return web.json_response({"success": False, "error": "Platforma məlumatı yüklənmədi."}, status=500)
         safe_profile = {key: value for key, value in profile.items() if key != "workflow"}
         return web.json_response({
-            "success": True, "member": safe_profile, "capabilities": context.capabilities(profile),
+            "success": True, "member": safe_profile, "capabilities": capabilities,
             "role_permissions": context.role_permissions, "integrations": integrations,
-            "companies": companies, "members": members,
+            "companies": companies, "members": members, "account": account,
         })
 
     async def login(request: web.Request) -> web.Response:
@@ -341,6 +360,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         destination = "/app" if str(tenant.get("status") or "") not in {"", "onboarding"} else "/setup"
         response = web.json_response({"success": True, "redirect": destination,
                                       "tenant": {"id": tenant["id"], "name": tenant["name"]}})
+        if context.record_login: await asyncio.to_thread(context.record_login, tenant_id=str(tenant['id']), actor_id=chat_id)
         _set_session(response, context, tenant["id"], chat_id)
         return response
 
@@ -348,6 +368,15 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         if request.headers.get("Origin", "").rstrip("/") != context.origin.rstrip("/"):
             return web.json_response({"success": False, "error": "Sorğunun mənbəyi düzgün deyil."}, status=403)
         profile = context.member(request)
+        if profile and context.revoke_session and context.session_id:
+            sid = context.session_id(request)
+            if sid:
+                try:
+                    await asyncio.to_thread(context.revoke_session, tenant_id=str(profile['tenant_id']),
+                        actor_id=int(profile['telegram_id']), session_id=sid)
+                except Exception:
+                    context.logger.exception('Tenant browser session revocation failed')
+                    return web.json_response({"success": False, "error": "Sessiya bağlanmadı. Yenidən cəhd edin."}, status=503)
         device_id = request.cookies.get("tenant_push_device")
         if profile and device_id:
             try:
@@ -362,6 +391,59 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         response.del_cookie(context.cookie_name, path="/")
         return response
 
+    async def account(request: web.Request) -> web.Response:
+        profile = context.member(request)
+        if not profile: return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
+        actor_id = int(profile['telegram_id'])
+        try:
+            if request.method == 'GET':
+                result = await asyncio.to_thread(context.account_profile, actor_id=actor_id) if context.account_profile else {}
+            else:
+                if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
+                    return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
+                data = await request.json(); data = data if isinstance(data, dict) else {}
+                if not context.update_account_profile: return web.json_response({'success': False}, status=503)
+                result = await asyncio.to_thread(context.update_account_profile, actor_id=actor_id,
+                    first_name=data.get('first_name'), last_name=data.get('last_name'), phone=data.get('phone'),
+                    avatar_url=data.get('avatar_url'), login=data.get('login'))
+            return web.json_response({'success': True, 'account': result}, headers={'Cache-Control': 'no-store'})
+        except context.platform_error as exc:
+            return web.json_response({'success': False, 'error': str(exc)}, status=400)
+
+    async def sessions(request: web.Request) -> web.Response:
+        profile = context.member(request)
+        if not profile: return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
+        tenant_id, actor_id = str(profile['tenant_id']), int(profile['telegram_id'])
+        if request.method == 'GET':
+            rows = await asyncio.to_thread(context.list_sessions, tenant_id=tenant_id, actor_id=actor_id) if context.list_sessions else []
+            current = context.session_id(request) if context.session_id else None
+            return web.json_response({'success': True, 'sessions': [{**row, 'current': row.get('id') == current} for row in rows]}, headers={'Cache-Control':'no-store'})
+        if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
+            return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
+        data = await request.json(); data = data if isinstance(data, dict) else {}
+        sid = data.get('session_id')
+        if sid and context.session_id and str(sid) == context.session_id(request):
+            return web.json_response({'success': False, 'error': 'Cari sessiyanı bu siyahıdan bağlamaq olmaz. Çıxış edin.'}, status=400)
+        count = await asyncio.to_thread(context.revoke_session, tenant_id=tenant_id, actor_id=actor_id,
+            session_id=str(sid) if sid else None) if context.revoke_session else 0
+        return web.json_response({'success': True, 'revoked': count}, headers={'Cache-Control':'no-store'})
+
+    async def switch_workspace(request: web.Request) -> web.Response:
+        profile = context.member(request)
+        if not profile: return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
+        if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
+            return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
+        data = await request.json(); data = data if isinstance(data, dict) else {}
+        companies = await asyncio.to_thread(context.tenants_for_user, int(profile['telegram_id']))
+        tenant = next((item for item in companies if str(item.get('id')) == str(data.get('tenant_id') or '')), None)
+        if not tenant: return web.json_response({'success': False, 'error': 'Bu şirkət üçün giriş icazəniz yoxdur.'}, status=403)
+        previous=context.session_id(request) if context.session_id else None
+        if context.revoke_session and previous:
+            await asyncio.to_thread(context.revoke_session,tenant_id=str(profile['tenant_id']),actor_id=int(profile['telegram_id']),session_id=previous)
+        response = web.json_response({'success': True, 'tenant': {'id': tenant['id'], 'name': tenant['name']}, 'redirect': '/app'})
+        _set_session(response, context, str(tenant['id']), int(profile['telegram_id']))
+        return response
+
     return {
         "register": register, "me": me, "login": login, "logout": logout,
         'sso_authorize': sso_authorize, 'sso_token': sso_token,
@@ -370,6 +452,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         'password_reset_confirm': password_reset_confirm,
         'email_link_request': email_link_request, 'email_link_confirm': email_link_confirm,
         'legacy_email_link_request': legacy_email_link_request,
+        'account': account, 'sessions': sessions, 'switch_workspace': switch_workspace,
         "onboarding_page": lambda request: _page(context, "onboarding.html", "Platform onboarding page not found"),
         'auth_page': auth_page,
         'confirm_page': lambda request: _page(context, 'auth-confirm.html', 'Platform confirmation page not found'),

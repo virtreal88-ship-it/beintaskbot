@@ -38,13 +38,30 @@ class AppDesignTests(unittest.TestCase):
         self.assertIn('--app-sidebar:288px', css)
         self.assertIn('--app-sidebar:88px', css)
 
+    def test_collapsed_sidebar_keeps_badges_inside_centered_nav_items(self):
+        css = (ROOT / 'ui/src/app-theme.css').read_text(encoding='utf-8')
+        app = (ROOT / 'docs/tenant-app.html').read_text(encoding='utf-8')
+        collapsed = css.split('body[data-app-ui="kwid"][data-sidebar="collapsed"] .nav {', 1)[1].split('\n', 1)[0]
+        self.assertIn('overflow-x:hidden', collapsed)
+        self.assertIn('overflow-y:auto', collapsed)
+        self.assertIn('overscroll-behavior:contain', collapsed)
+        self.assertIn('min-width:0', collapsed)
+        self.assertIn('grid-template-rows:22px 10px', css)
+        self.assertIn('justify-items:center', css)
+        self.assertIn('position:static;inset:auto;transform:none', css)
+        self.assertIn('max-width:30px', css)
+        self.assertNotIn('right:2px;top:2px', css)
+        for badge in ('dialogsAttentionCount', 'supportUnresolvedCount', 'supportCasesPending'):
+            self.assertIn(f'id="{badge}"', app)
+            self.assertIn(f'#{badge}:not([hidden])', css)
+
     def test_topbar_instructions_and_single_localized_crm_nav(self):
         shell = (ROOT / 'ui/src/app-shell.js').read_text(encoding='utf-8')
         app = (ROOT / 'docs/tenant-app.html').read_text(encoding='utf-8')
         i18n = (ROOT / 'docs/tenant-operator-i18n.js').read_text(encoding='utf-8')
         self.assertIn('data-app-instructions', shell)
         self.assertIn("pages:['tasks','customers','companies','deals','hot_orders']", shell)
-        self.assertIn("button.querySelector('[data-crm-nav-label]')", shell)
+        self.assertIn("button.querySelector('.app-nav-label,[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-knowledge-center-label]')", shell)
         self.assertIn('extra!==label)extra.remove()', shell)
         self.assertIn("customers:'Контакты'", shell)
         self.assertIn("companies:'Şirkətlər'", shell)

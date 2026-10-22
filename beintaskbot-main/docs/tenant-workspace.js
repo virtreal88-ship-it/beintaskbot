@@ -150,10 +150,13 @@
   integrationRepository.id = 'integrationSettingsRepository';
   integrationRepository.hidden = true;
   document.body.append(integrationRepository);
+  const connectSettings=document.getElementById('connectWhatsAppSettings');
+  if(connectSettings)integrationRepository.append(connectSettings);
   const integrationPanels = {
     linear: ['tenantLinearPanel'],
     openai: ['tcAiPanel','tnAiPanel'],
     telegram: ['tnChannelPanel'],
+    connect: ['connectWhatsAppSettings'],
   };
   let activeIntegration = '';
   function placeIntegrationPanels(provider, hostId) {

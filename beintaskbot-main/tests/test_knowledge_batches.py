@@ -61,6 +61,17 @@ def test_multiple_cases_manual_batch_replay_and_knowledge_compatibility(batch):
     confirm=next(v for v in cards if v['outcome']['status']=='confirmed')
     assert store.mutate(PROFILE,confirm['id'],{'expected_version':1,'agent_ids':[AGENT]},'approve')['candidate']['status']=='approved'
 
+def test_batch_summary_is_tenant_scoped_and_counts_unique_usage(batch):
+    d,_,_=batch;result=run(batch);summary=result['summary']
+    assert summary['dialog_count']==1 and summary['new_candidates']==2
+    assert summary['total_tokens']==20
+    assert summary['input_tokens'] is not None and summary['output_tokens'] is not None
+    d.execute("""INSERT INTO saas_knowledge_batch_items(tenant_id,batch_id,ordinal,route,extraction_id,status,error_code,message_count)
+      SELECT tenant_id,batch_id,99,route,extraction_id,status,error_code,message_count
+      FROM saas_knowledge_batch_items WHERE tenant_id=%s::uuid AND batch_id=%s::uuid ORDER BY ordinal LIMIT 1""",(A,result['id']));d.commit()
+    assert batches.get(PROFILE,result['id'])['batch']['summary']['total_tokens']==20,'repeated extraction references do not inflate exact token usage'
+    with pytest.raises(TenantLinearError):batches.get({'tenant_id':B,'telegram_id':22},result['id'])
+
 def test_period_half_open_and_timezone_equivalence(batch):
     d,generation,data=batch
     d.execute("UPDATE saas_crm_messages SET happened_at='2026-10-19T00:00:00Z',body='OUTSIDE END' WHERE external_id='response-0'")

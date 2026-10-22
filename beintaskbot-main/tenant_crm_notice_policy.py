@@ -58,9 +58,14 @@ def eligible(profile: dict, event: str, row: dict, channel: str) -> bool:
         return False
     policy = TenantPolicy(profile)
     deal = row.get('deal') or row
-    allowed = task_owner(profile, row) if event.startswith('task_') else (not deal.get('deleted_at') and policy.can_access_deal(deal))
+    is_connect_message = (event == 'incoming_message' and str(row.get('channel') or '').startswith('connect:'))
+    allowed = task_owner(profile, row) if event.startswith('task_') else (
+        policy.allows('dialogs') if is_connect_message else
+        (not deal.get('deleted_at') and policy.can_access_deal(deal)))
     if event == 'incoming_message':
-        allowed = allowed and row.get('direction') == 'incoming' and positive_id((row.get('deal') or {}).get('status_id')) != 142
+        allowed = allowed and row.get('direction') == 'incoming'
+        if not is_connect_message:
+            allowed = allowed and positive_id((row.get('deal') or {}).get('status_id')) != 142
     return bool(allowed and channel in notification_channels(policy, event=event, tenant_id=str(row['tenant_id'])))
 
 

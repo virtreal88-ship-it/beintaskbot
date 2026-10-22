@@ -1,0 +1,43 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const root=path.join(__dirname,'..'),read=file=>fs.readFileSync(path.join(root,file),'utf8');
+const tenant='00000000-0000-0000-0000-000000000101',channel='00000000-0000-0000-0000-000000000201';
+const route={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'994501234567@s.whatsapp.net',customer_kind:'contact',customer_name:'Customer',channel_name:'WhatsApp',display_state:'human',state:'human',ai_availability:'stopped',available_actions:[],can_send:true,controls_allowed:true,agent_status:'manual',agent_mode:'manual'};
+const profile={member:{tenant_id:tenant,telegram_id:33,role:'worker',permissions:['dialogs'],active:true},capabilities:{modules:{dialogs:true}}};
+const page={success:true,result:{dialog:route,messages:[{id:'message-1',external_id:'external-1',direction:'incoming',message_type:'text',body:'Need assistance',author_type:'customer',author_name:'Customer',happened_at:'2026-10-21T10:00:00Z'}],next_before:null}};
+const settle=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediate(resolve));};
+function boot(url='https://crm.test/app?view=dialogs'){
+ const dom=new JSDOM(read('docs/tenant-app.html'),{url,runScripts:'outside-only'}),w=dom.window,calls=[],viewportListeners={};
+ w.tenantProfileSnapshot=profile;w.matchMedia=query=>({matches:query==='(max-width: 900px)',media:query,addListener(){},removeListener(){}});
+ Object.defineProperty(w,'innerHeight',{configurable:true,value:844});
+ const viewport={height:844,addEventListener:(name,handler)=>viewportListeners[name]=handler};Object.defineProperty(w,'visualViewport',{configurable:true,value:viewport});
+ w.fetch=async target=>{const value=String(target);calls.push(value);if(value.includes('/api/platform/me'))return{ok:true,json:async()=>profile};if(value.includes('/dialogs/history'))return{ok:true,json:async()=>page};if(value.includes('/dialogs?'))return{ok:true,json:async()=>({success:true,result:{dialogs:[{...route,last_message_id:'message-1',last_message_direction:'incoming',last_message_text:'Need assistance',last_message_at:'2026-10-21T10:00:00Z'}],channels:[{id:'connect:'+channel,name:'WhatsApp'}],agents:[],attention_count:0,next_offset:null}})};if(value.includes('/dialogs/copilot'))return{ok:true,json:async()=>({success:true,result:{text:'Draft answer'}})};throw Error('Unexpected API call '+value);};
+ w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));
+ return {dom,w,calls,viewport,viewportListeners};
+}
+(async()=>{
+ const app=boot();await settle();await app.w.tenantOperator.refresh();
+ const rowsNode=app.w.document.getElementById('operatorRows'),listCallsBefore=app.calls.filter(url=>url.includes('/dialogs?')).length;
+ const touch=(type,points)=>{const event=new app.w.Event(type,{bubbles:true});Object.defineProperty(event,type==='touchstart'?'touches':'changedTouches',{value:points.map(clientY=>({clientY}))});rowsNode.dispatchEvent(event);};
+ touch('touchstart',[40]);touch('touchend',[140]);await settle();
+ assert.equal(app.calls.filter(url=>url.includes('/dialogs?')).length,listCallsBefore+1,'pull-to-refresh reuses one existing list request');
+ assert.equal(rowsNode.hasAttribute('aria-busy'),false,'pull-to-refresh clears its loading state');
+ assert.equal(app.w.document.querySelector('.operator-page-top'),null,'desktop page header and manual refresh controls are removed');
+ assert.ok(app.w.document.getElementById('operatorToolsMenu')&&app.w.document.getElementById('operatorBulkAssignment'),'bulk preview remains under the compact tools menu');
+ const filterStyle=[...app.w.document.head.querySelectorAll('style')].map(style=>style.textContent).join('');assert.match(filterStyle,/\.operator-filters\{display:grid;grid-template-columns:minmax\(0,1fr\) auto/);assert.match(filterStyle,/\.operator-advanced\{grid-column:1\/-1;display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
+ await app.w.tenantOperator.openDialog(route);await settle();
+ const {w}=app,workspace=w.document.getElementById('operatorWorkspace'),composer=w.document.getElementById('chatText');
+ assert.equal(workspace.dataset.selected,'true','mobile chat takes over the list');assert.equal(w.document.getElementById('operatorDialogs').dataset.conversationOpen,'true','mobile chat hides the list page heading');assert.notEqual(w.document.activeElement,composer,'opening a chat does not summon the mobile keyboard');
+ composer.value='Draft survives';composer.dispatchEvent(new w.Event('input',{bubbles:true}));
+ const toggle=w.document.getElementById('operatorCopilotToggle');toggle.click();assert.equal(w.document.getElementById('operatorCopilot').hidden,false);assert.equal(w.document.getElementById('operatorDialogBody').dataset.copilotOpen,'true');assert.equal(w.document.getElementById('operatorCopilotBackdrop').hidden,false);
+ w.document.dispatchEvent(new w.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(w.document.getElementById('operatorCopilot').hidden,true);assert.equal(workspace.dataset.selected,'true','closing Copilot keeps the conversation open');
+ w.document.getElementById('operatorConversationHeader').querySelector('[data-operator-back]').click();assert.equal(workspace.dataset.selected,'false','Back returns to the one-column dialog list');assert.equal(w.document.getElementById('operatorDialogs').dataset.conversationOpen,'false','Back restores the list heading');
+ await w.tenantOperator.openDialog(route);await settle();assert.equal(w.document.getElementById('chatText').value,'Draft survives','switching away and back retains the draft');
+ app.viewport.height=500;app.viewportListeners.resize();assert.equal(w.document.documentElement.style.getPropertyValue('--operator-visual-height'),'500px','visual viewport tracks the keyboard height');
+ const mobileStyle=[...w.document.head.querySelectorAll('style')].map(style=>style.textContent).join('');assert.match(mobileStyle,/env\(safe-area-inset-bottom\)/);assert.match(mobileStyle,/operator-copilot-backdrop/);assert.match(mobileStyle,/@media\(max-width:900px\)/);assert.match(mobileStyle,/operator-chat-scrollarea\{flex:1 1 0;min-height:0\}/);assert.match(mobileStyle,/operator-chat-history\{flex:1 1 0;min-height:0;max-height:none/);
+ app.dom.window.close();
+ const link=boot(`https://crm.test/app?view=dialogs&open_dialog=1&provider=connect&lead_id=41&channel_id=${channel}&conversation_id=994501234567%40s.whatsapp.net`);await settle();await settle();
+ assert.ok(link.calls.some(url=>url.includes('/dialogs/history?')&&url.includes('channel_id='+channel)),'push deep link opens only through the existing authorized history API');
+ assert.equal(link.w.location.search,'?view=dialogs','route identifiers are removed from the URL after handling');assert.equal(link.w.document.getElementById('operatorWorkspace').dataset.selected,'true');link.dom.window.close();
+ console.log('PASS: mobile list/chat, back, Copilot sheet, draft preservation, visual viewport, safe area and authorized push deep link');
+})().catch(error=>{console.error(error);process.exitCode=1;});

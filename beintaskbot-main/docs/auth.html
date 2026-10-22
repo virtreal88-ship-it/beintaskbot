@@ -28,7 +28,7 @@
       <button id="register-submit" type="submit">Продолжить</button>
     </form>
     <form id="login" hidden>
-      <label>Email<input name="email" required type="email" autocomplete="email"></label>
+      <label>Email կամ login<input name="email" required autocomplete="username"></label>
       <label>Пароль<input name="password" required type="password" autocomplete="current-password"></label>
       <label id="company-picker" hidden>Компания<select name="tenant_id" id="tenant_id"></select></label>
       <button id="login-submit" type="submit">Войти</button>
@@ -57,6 +57,7 @@
     // shared page at `/register`, while existing Telegram access remains below.
     const connectorLogin = location.pathname === '/connector/login';
     const params = new URLSearchParams(location.search);
+    const inviteToken = params.get('invite_token') || '';
     const connectProduct = connectorLogin || params.get('product') === 'connect';
     const next = params.get('next') || '';
     const safeNext = next.startsWith('/api/platform/sso/authorize?') && !next.includes('\\') ? next : (connectProduct ? 'https://connect.crm.pro.az/login?autostart=1' : '');
@@ -85,7 +86,7 @@
     $('login').onsubmit = async event => {
       event.preventDefault(); const button = $('login-submit');
       setBusy(button, true, 'Входим…');
-      try { const form = Object.fromEntries(new FormData(event.target)); const result = await call('/api/platform/auth/email/login', form); if(result.select_company){const picker=$('company-picker'),select=$('tenant_id');select.replaceChildren(...result.companies.map(c=>{const option=document.createElement('option');option.value=c.id;option.textContent=c.name;return option}));picker.hidden=false;notice('Выберите компанию и нажмите «Войти» ещё раз.',true);return} location.href = safeNext || result.redirect || '/app'; }
+      try { const form = Object.fromEntries(new FormData(event.target)); if(inviteToken) form.invite_token = inviteToken; const result = await call('/api/platform/auth/email/login', form); if(result.select_company){const picker=$('company-picker'),select=$('tenant_id');select.replaceChildren(...result.companies.map(c=>{const option=document.createElement('option');option.value=c.id;option.textContent=c.name;return option}));picker.hidden=false;notice('Выберите компанию и нажмите «Войти» ещё раз.',true);return} location.href = inviteToken && !result.invite_accepted ? '/invite/'+encodeURIComponent(inviteToken) : (safeNext || result.redirect || '/app'); }
       catch (error) { notice(error.message); } finally { setBusy(button, false); }
     };
     $('forgot').onclick = async () => {

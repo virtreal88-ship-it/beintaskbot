@@ -37,6 +37,22 @@ class TenantPolicyTests(unittest.TestCase):
         person=profile();person['workflow']['policies'].append({'policy_key':'modules','value':{'deals':False}})
         self.assertFalse(TenantPolicy(person).allows('deals'))
 
+    def test_action_grants_narrow_a_legacy_module_grant_and_operator_role_is_supported(self):
+        person=profile('manager');person['permissions']=['tasks','tasks:view','tasks:create']
+        policy=TenantPolicy(person)
+        self.assertTrue(policy.allows_action('tasks','view'))
+        self.assertTrue(policy.allows_action('tasks','create'))
+        self.assertFalse(policy.allows_action('tasks','delete'))
+        operator=profile('operator');operator['permissions']=['tasks'];operator['modules']={'tasks':True}
+        self.assertTrue(TenantPolicy(operator).allows('tasks'))
+        self.assertFalse(TenantPolicy(operator).allows('deals'))
+
+    def test_employee_manage_grant_exposes_employee_module(self):
+        person=profile('manager');person['permissions']=['employees:manage']
+        policy=TenantPolicy(person)
+        self.assertTrue(policy.allows('employees'))
+        self.assertTrue(policy.allows_action('employees','manage'))
+
     def test_master_only_has_hot_orders_and_worker_no_deals(self):
         policy=TenantPolicy(profile('master'))
         self.assertTrue(policy.allows('hot_orders'))

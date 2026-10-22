@@ -91,6 +91,10 @@
     if (watching) { generation++; poll(generation); }
   });
   const syncPanel=document.getElementById('externalCrmSyncPanel');
+  const syncStatus=document.getElementById('externalCrmSyncStatus');
+  const syncText=key=>window.tenantI18n?.t(key)||key;
+  function setSyncStatus(key){if(!syncStatus)return;syncStatus.dataset.i18n=key;syncStatus.textContent=syncText(key)}
+  document.addEventListener('tenant-language',()=>{if(syncStatus?.dataset.i18n)setSyncStatus(syncStatus.dataset.i18n)});
   const fieldOptions={contact:{kommo:['name','phone','email']},deal:{kommo:['title','pipeline_id','stage_id','contact_id'],beinsystems:['title','pipeline_id','stage_id','contact_id','description']}};
   function renderProviderStatus(result){
     const root=document.getElementById('externalCrmProviderStatus');if(!root)return;
@@ -123,11 +127,11 @@
         const counts=(data.result.outbox||[]).filter(x=>x.entity_type===entity&&x.provider===provider.value).map(x=>`${x.state}: ${x.count}`).join(' · ');const conflicts=(data.result.conflicts||[]).filter(x=>x.entity_type===entity&&x.provider===provider.value).reduce((n,x)=>n+Number(x.count||0),0);card.querySelector('[data-counts]').textContent=`Növbə: ${counts||'boş'}; həll edilməmiş münaqişə: ${conflicts}; bağlantı: ${(data.result.integrations||{})[provider.value]||'yoxlanılmayıb'}`;
         root.append(card);
       }
-      document.getElementById('externalCrmSyncStatus').textContent='Ayarlar yükləndi. Sinxronizasiya yalnız açıq şəkildə seçildikdə başlayır.';
-    }catch(_){document.getElementById('externalCrmSyncStatus').textContent='Sinxronizasiya ayarlarını yükləmək mümkün olmadı.'}
+      setSyncStatus('crmSyncLoaded');
+    }catch(_){setSyncStatus('crmSyncLoadError')}
   }
   document.getElementById('externalCrmSyncSave')?.addEventListener('click',async()=>{
-    const status=document.getElementById('externalCrmSyncStatus');status.textContent='Yadda saxlanılır…';
-    try{const settings=[...document.querySelectorAll('#externalCrmSyncSettings [data-entity]')].map(card=>{const entity=card.dataset.entity,provider=card.querySelector('[data-provider]').value,direction=card.querySelector('[data-direction]').value;return{entity_type:entity,provider,sync_direction:direction,mode:direction==='bidirectional'?'selective':direction==='from_external'?'external':'beintaskbot',primary_provider:direction==='to_external'?'beintaskbot':provider,allowed_fields:[...card.querySelectorAll('[data-field]:checked')].map(x=>x.dataset.field)}});const res=await fetch('/api/platform/crm/external-sync',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings})}),data=await res.json();if(!res.ok||!data.success)throw new Error(data.error||'Yoxlama uğursuz oldu.');status.textContent='Ayarlar saxlanıldı. Mövcud CRM yazıları dəyişdirilmədi.';await loadExternalSync()}catch(e){status.textContent=e.message||'Ayarları saxlamaq mümkün olmadı.'}
+    const status=syncStatus;status.dataset.i18n='crmSyncSaving';status.textContent=syncText('crmSyncSaving');
+    try{const settings=[...document.querySelectorAll('#externalCrmSyncSettings [data-entity]')].map(card=>{const entity=card.dataset.entity,provider=card.querySelector('[data-provider]').value,direction=card.querySelector('[data-direction]').value;return{entity_type:entity,provider,sync_direction:direction,mode:direction==='bidirectional'?'selective':direction==='from_external'?'external':'beintaskbot',primary_provider:direction==='to_external'?'beintaskbot':provider,allowed_fields:[...card.querySelectorAll('[data-field]:checked')].map(x=>x.dataset.field)}});const res=await fetch('/api/platform/crm/external-sync',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings})}),data=await res.json();if(!res.ok||!data.success)throw new Error(data.error||'Yoxlama uğursuz oldu.');status.dataset.i18n='crmSyncSaved';status.textContent=syncText('crmSyncSaved');await loadExternalSync()}catch(e){status.dataset.i18n='';status.textContent=e.message||syncText('crmSyncSaveError')}
   });
 })();

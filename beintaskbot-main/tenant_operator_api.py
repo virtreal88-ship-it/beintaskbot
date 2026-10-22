@@ -10,6 +10,7 @@ from tenant_operator_assignment import options as assignment_options, assign as 
 from tenant_operator_continuation import options as continuation_options, grant as grant_continuation
 from tenant_operator_legacy import options as legacy_options, recover as recover_legacy
 from tenant_operator_copilot import run as run_copilot
+from tenant_connect_avatars import get_avatar
 
 
 def handler(member_from_request,origin,logger,resource):
@@ -20,7 +21,12 @@ def handler(member_from_request,origin,logger,resource):
             if not profile:raise TenantLinearError('Нет доступа.',403)
             query=request.query
             if request.method=='GET':
-                if resource=='dialogs':
+                if resource=='avatar':
+                    content,mime=await get_avatar(profile,dict(query))
+                    return web.Response(body=content,content_type=mime,headers={
+                        'Cache-Control':'private, max-age=3600',
+                        'X-Content-Type-Options':'nosniff','Vary':'Cookie'})
+                elif resource=='dialogs':
                     result=await asyncio.to_thread(listing,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
                 elif resource=='history':
                     result=await asyncio.to_thread(history,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),query.get('before'),query.get('anchor'))
