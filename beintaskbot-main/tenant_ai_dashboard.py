@@ -206,6 +206,8 @@ def simulation_run(profile, run_id):
             row=cur.fetchone()
             if not row: raise TenantLinearError('Simulation qeydi tapılmadı.',404)
             item=dict(row)
+            # Tenant identity is authorization context, never part of the public run detail.
+            item.pop('tenant_id',None)
             cur.execute('''SELECT id,direction,author_name,body,message_type,happened_at,created_at
               FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
                 AND COALESCE(happened_at,created_at)<=COALESCE((SELECT happened_at FROM saas_crm_messages

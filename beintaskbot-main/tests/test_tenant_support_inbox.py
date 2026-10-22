@@ -800,7 +800,9 @@ def test_ai_dashboard_is_tenant_scoped_and_uses_recorded_values(db,monkeypatch):
     assert board['simulation']['trigger_matches']==1
     assert board['agents'][0]['active_runs']==0  # unrelated AI runs are not Active worker jobs
     assert all(item['tenant_id']==A for item in ai_dashboard.events(PROFILE,mode='simulation'))
-    assert ai_dashboard.simulation_run(PROFILE,run_id)['sent'] is False
+    detail=ai_dashboard.simulation_run(PROFILE,run_id)
+    assert detail['sent'] is False and 'tenant_id' not in detail
+    json.dumps(detail)
     foreign={**PROFILE,'tenant_id':B,'telegram_id':22}
     assert ai_dashboard.events(foreign,mode='simulation')==[]
     with pytest.raises(TenantLinearError): ai_dashboard.simulation_run(foreign,run_id)
