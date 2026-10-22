@@ -16,7 +16,16 @@ function boot(url='https://crm.test/app?view=dialogs'){
  return {dom,w,calls,viewport,viewportListeners};
 }
 (async()=>{
- const app=boot();await settle();await app.w.tenantOperator.refresh();await app.w.tenantOperator.openDialog(route);await settle();
+ const app=boot();await settle();await app.w.tenantOperator.refresh();
+ const rowsNode=app.w.document.getElementById('operatorRows'),listCallsBefore=app.calls.filter(url=>url.includes('/dialogs?')).length;
+ const touch=(type,points)=>{const event=new app.w.Event(type,{bubbles:true});Object.defineProperty(event,type==='touchstart'?'touches':'changedTouches',{value:points.map(clientY=>({clientY}))});rowsNode.dispatchEvent(event);};
+ touch('touchstart',[40]);touch('touchend',[140]);await settle();
+ assert.equal(app.calls.filter(url=>url.includes('/dialogs?')).length,listCallsBefore+1,'pull-to-refresh reuses one existing list request');
+ assert.equal(rowsNode.hasAttribute('aria-busy'),false,'pull-to-refresh clears its loading state');
+ assert.equal(app.w.document.querySelector('.operator-page-top'),null,'desktop page header and manual refresh controls are removed');
+ assert.ok(app.w.document.getElementById('operatorToolsMenu')&&app.w.document.getElementById('operatorBulkAssignment'),'bulk preview remains under the compact tools menu');
+ const filterStyle=[...app.w.document.head.querySelectorAll('style')].map(style=>style.textContent).join('');assert.match(filterStyle,/\.operator-filters\{display:grid;grid-template-columns:minmax\(0,1fr\) auto/);assert.match(filterStyle,/\.operator-advanced\{grid-column:1\/-1;display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
+ await app.w.tenantOperator.openDialog(route);await settle();
  const {w}=app,workspace=w.document.getElementById('operatorWorkspace'),composer=w.document.getElementById('chatText');
  assert.equal(workspace.dataset.selected,'true','mobile chat takes over the list');assert.equal(w.document.getElementById('operatorDialogs').dataset.conversationOpen,'true','mobile chat hides the list page heading');assert.notEqual(w.document.activeElement,composer,'opening a chat does not summon the mobile keyboard');
  composer.value='Draft survives';composer.dispatchEvent(new w.Event('input',{bubbles:true}));
