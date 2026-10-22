@@ -39,13 +39,17 @@ def dashboard(profile):
                 sr.last_simulation,COALESCE(su.tokens,0) AS simulation_tokens
               FROM saas_ai_agents a
               LEFT JOIN LATERAL (
-                SELECT count(*) AS run_count,count(*) FILTER(WHERE state IN ('failed','unknown')) AS error_count,
+                SELECT count(*) AS run_count,count(*) FILTER(WHERE r.state IN ('failed','unknown')) AS error_count,
                        max(created_at) AS last_active
-                FROM saas_ai_agent_runs r WHERE r.tenant_id=a.tenant_id AND r.agent_id=a.id
+                FROM saas_ai_agent_runs r JOIN saas_ai_agent_jobs j
+                  ON j.tenant_id=r.tenant_id AND j.agent_id=r.agent_id AND j.event_fingerprint=r.event_fingerprint
+                WHERE r.tenant_id=a.tenant_id AND r.agent_id=a.id
                   AND r.created_at>=now()-interval '30 days'
               ) ar ON TRUE
               LEFT JOIN LATERAL (
                 SELECT COALESCE(sum(total_tokens),0) AS tokens FROM saas_ai_agent_token_usage u
+                JOIN saas_ai_agent_runs r ON r.tenant_id=u.tenant_id AND r.id=u.run_id
+                JOIN saas_ai_agent_jobs j ON j.tenant_id=r.tenant_id AND j.agent_id=r.agent_id AND j.event_fingerprint=r.event_fingerprint
                 WHERE u.tenant_id=a.tenant_id AND u.agent_id=a.id AND u.created_at>=now()-interval '30 days'
               ) au ON TRUE
               LEFT JOIN LATERAL (
@@ -148,7 +152,8 @@ def events(profile, *, limit=100, mode='all', event_type=''):
                         if not isinstance(item,dict): continue
                         kind=str(item.get('type') or 'simulation_event')[:80]
                         if event_type and event_type!=kind: continue
-                        meta={key:item[key] for key in ('reason','actions','tokens','sent','source_ids','trigger_id','executed','message_type') if key in item}
+                        meta={key:item[key] for key in ('reason','actions','tokens','sent','source_ids','trigger_id','executed','message_type',
+                            'enabled_count','matched','matched_trigger_ids','possible_topic') if key in item}
                         result.append({'tenant_id':tenant,'run_id':str(row['run_id']),'agent_id':str(row['agent_id']) if row.get('agent_id') else None,
                           'agent_name':row.get('agent_name') or '', 'conversation_id':str(row['conversation_id']),'channel_id':str(row['channel_id']),
                           'event_type':kind,'timestamp':_iso(row.get('created_at')),'status':str(row.get('outcome') or ''),
@@ -256,9 +261,9 @@ def issues(profile, *, limit=100):
                 run=str(row['id']);events_list=_json_value(row.get('events'),[]);refs=_json_value(row.get('knowledge_refs'),[])
                 candidates=[]
                 outcome=str(row.get('outcome') or '')
-                if outcome in {'error','unknown','blocked','unsupported'}:
-                    candidates.append(('processing_error' if outcome in {'error','unknown'} else 'blocked_or_unsupported',
-                        'high' if outcome in {'error','unknown'} else 'medium',outcome,str(row.get('virtual_stop_reason') or outcome),
+                if outcome in {'error','blocked','unsupported'}:
+                    candidates.append(('processing_error' if outcome=='error' else 'blocked_or_unsupported',
+                        'high' if outcome=='error' else 'medium',outcome,str(row.get('virtual_stop_reason') or outcome),
                         'Open the simulation run and inspect recorded diagnostics.'))
                 for event in events_list:
                     if not isinstance(event,dict):continue
@@ -269,8 +274,12 @@ def issues(profile, *, limit=100):
                         candidates.append(('unsupported_tool_or_media','medium',kind,str(event.get('reason') or 'An operation was not simulated.'),'Review the unsupported capability before using this scenario to assess readiness.'))
                     elif kind=='provider_result_unknown':
                         candidates.append(('provider_result_unknown','high',kind,'Provider result is unknown; the call will not be repeated automatically.','Check provider usage before deciding whether to rerun.'))
+                    elif kind=='trigger_checked' and event.get('matched') is False and event.get('possible_topic'):
+                        candidates.append(('possible_trigger_miss','low','No enabled trigger matched the recorded scenario.',
+                            'A possible '+str(event.get('possible_topic'))+' topic was noted for this recorded check; review manually.',
+                            'Compare the trigger configuration with the original scenario. This is a review prompt, not proof of a missed trigger.'))
                 if outcome=='virtual_reply' and not refs:
-                    candidates.append(('no_knowledge_references','low','knowledge_retrieved','No knowledge source references were recorded for this run.','Review whether the reply needs a relevant source; this is a review prompt, not proof of a bad answer.'))
+                    candidates.append(('no_knowledge_references','low','No knowledge source references were recorded by this run.','No knowledge source was attached to the recorded result.','Review whether the reply needs a relevant source; this is a review prompt, not proof of a bad answer.'))
                 for key,priority,fact,reason,action in candidates:
                     cur.execute('SELECT status,updated_at FROM saas_ai_dashboard_issue_reviews WHERE tenant_id=%s::uuid AND run_id=%s::uuid AND issue_key=%s',(tenant,run,key))
                     review=cur.fetchone() or {}
@@ -296,11 +305,13 @@ def review_issue(profile, run_id, issue_key, status):
             run=cur.fetchone()
             if not run: raise TenantLinearError('Issue is invalid.',404)
             events_value=_json_value(run.get('events'),[]);knowledge_value=_json_value(run.get('knowledge_refs'),[])
-            valid_keys={'processing_error':str(run.get('outcome')) in {'error','unknown'},
+            valid_keys={'processing_error':str(run.get('outcome'))=='error',
                 'blocked_or_unsupported':str(run.get('outcome')) in {'blocked','unsupported'},
                 'expert_unavailable':any(isinstance(item,dict) and item.get('type')=='expert_unavailable' for item in events_value),
                 'unsupported_tool_or_media':any(isinstance(item,dict) and item.get('type')=='simulation_unsupported' for item in events_value),
                 'provider_result_unknown':any(isinstance(item,dict) and item.get('type')=='provider_result_unknown' for item in events_value),
+                'possible_trigger_miss':any(isinstance(item,dict) and item.get('type')=='trigger_checked'
+                    and item.get('matched') is False and item.get('possible_topic') for item in events_value),
                 'no_knowledge_references':str(run.get('outcome'))=='virtual_reply' and not knowledge_value}
             if not valid_keys.get(str(issue_key),False): raise TenantLinearError('Issue is invalid.',404)
             cur.execute('''INSERT INTO saas_ai_dashboard_issue_reviews(tenant_id,run_id,issue_key,status,updated_by,updated_at)

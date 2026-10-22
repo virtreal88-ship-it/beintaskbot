@@ -791,10 +791,14 @@ def test_simulation_executor_has_no_live_side_effect_imports():
 
 def test_ai_dashboard_is_tenant_scoped_and_uses_recorded_values(db,monkeypatch):
     run_id,_source,_queue=seed_simulation_run(db,events=[{'type':'trigger_matched','trigger_id':'t1'}])
+    fingerprint='case-extraction-not-active-job'
+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,payload,state) VALUES(%s::uuid,%s,'connect','knowledge_extraction','{}'::jsonb,'completed')",(A,fingerprint))
+    db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,result) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,'local-preview','completed','{}'::jsonb)",(A,str(uuid.uuid4()),AGENT,fingerprint));db.commit()
     board=ai_dashboard.dashboard(PROFILE)
     assert [agent['id'] for agent in board['agents']]==[AGENT]
     assert board['simulation']['runs']==1 and board['simulation']['tokens']==17
     assert board['simulation']['trigger_matches']==1
+    assert board['agents'][0]['active_runs']==0  # unrelated AI runs are not Active worker jobs
     assert all(item['tenant_id']==A for item in ai_dashboard.events(PROFILE,mode='simulation'))
     assert ai_dashboard.simulation_run(PROFILE,run_id)['sent'] is False
     foreign={**PROFILE,'tenant_id':B,'telegram_id':22}
@@ -811,6 +815,15 @@ def test_ai_dashboard_issues_are_evidence_based_and_reviewable(db):
     assert result['status']=='in_review'
     assert ai_dashboard.issues(PROFILE)[0]['status']=='in_review'
     with pytest.raises(TenantLinearError): ai_dashboard.review_issue(PROFILE,run_id,'provider_result_unknown','confirmed')
+
+
+def test_ai_dashboard_marks_possible_trigger_miss_as_review_prompt(db):
+    run_id,_source,_queue=seed_simulation_run(db,events=[{'type':'trigger_checked','enabled_count':2,
+        'matched':False,'possible_topic':'price'}],refs=[{'source_id':'demo-source'}])
+    issues=ai_dashboard.issues(PROFILE)
+    assert len(issues)==1 and issues[0]['category']=='possible_trigger_miss'
+    assert 'not proof' in issues[0]['suggested_action'].lower()
+    assert ai_dashboard.review_issue(PROFILE,run_id,'possible_trigger_miss','confirmed')['status']=='confirmed'
 
 
 def test_ai_dashboard_recheck_is_tenant_scoped_and_idempotent(db,monkeypatch):

@@ -728,6 +728,8 @@ def process(job):
                             matched=matching_triggers(triggers,text,first_inquiry=first,phone=_whatsapp_phone(conversation))
                             matched_payload=[{'id':str(x.get('id') or ''),'name':str(x.get('name') or '')[:120],
                                               'actions':[str(a) for a in x.get('actions') or []]} for x in matched]
+                            events.append({'type':'trigger_checked','enabled_count':len(triggers),
+                                'matched':bool(matched),'matched_trigger_ids':[item['id'] for item in matched_payload]})
                             events.extend([{'type':'trigger_matched','trigger_id':x['id'],'actions':x['actions']} for x in matched_payload])
                             handoff=handoff_reason('\n'.join(str(x.get('text') or '') for x in lines if x.get('role')=='client'))
                             action_names={action for item in matched for action in item.get('actions') or []}
