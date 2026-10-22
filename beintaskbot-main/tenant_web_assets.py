@@ -5,6 +5,9 @@ from aiohttp import web
 
 ASSETS = (
     ('/app/instructions', 'tenant-instructions.html', 'no-store'),
+    ('/app/ai-instructor', 'tenant-ai-instructor.html', 'no-store'),
+    ('/assets/tenant-ai-instructor.js', 'tenant-ai-instructor.js', 'no-store'),
+    ('/assets/tenant-ai-instructor.css', 'tenant-ai-instructor.css', 'no-store'),
     ('/assets/tenant-instructions.js', 'tenant-instructions.js', 'no-store'),
     ('/assets/tenant-instructions.css', 'tenant-instructions.css', 'no-store'),
     ('/assets/tenant-instructor-lesson.js', 'tenant-instructor-lesson.js', 'no-store'),

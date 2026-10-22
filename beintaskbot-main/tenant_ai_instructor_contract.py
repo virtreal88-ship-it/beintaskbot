@@ -1,4 +1,4 @@
-"""Connection contract ONLY. No browser adapter, runtime registration or model calls.
+"""Tenant-scoped contract shared by the browser adapter and execution pipeline.
 
 Objects must come from server-owned configuration/live expert task authority, never
 from model output or client JSON. Validation is not proof that a demo is safe.
@@ -130,7 +130,7 @@ class DemoBrowserAdapter(Protocol):
     Every call must validate live authority, identity banner, destination origin,
     private network/redirect policy and cumulative budgets, not just these shapes.
     """
-    async def open_demo(self, connection: DemoConnection, scope: TaskScope) -> str: ...
+    async def open_demo(self, connection: DemoConnection, scope: TaskScope, credentials: dict | None = None) -> str: ...
     async def observe(self, session_ref: str, scope: TaskScope) -> dict: ...
     async def act(self, session_ref: str, scope: TaskScope, action: BrowserAction) -> dict: ...
     async def capture(self, session_ref: str, scope: TaskScope) -> ScreenshotEvidence: ...
@@ -141,5 +141,5 @@ def availability():
     """Honest capability response: never fabricate a browser run or verified guide."""
     return {'tool':TOOL,'status':'integration_unavailable','operation':OPERATION,
             'verified':False,'screenshots':[],'customer_send_allowed':False,
-            'missing':['verified_demo_connection','isolated_browser_adapter','approved_ui_map',
-                       'private_sanitized_artifacts','verified_fixture_restore']}
+            'missing':['verified_demo_connection','worker_provider_binding',
+                       'private_artifact_storage_configuration','verified_fixture_restore']}
