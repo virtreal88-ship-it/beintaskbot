@@ -3,12 +3,8 @@ from __future__ import annotations
 
 import os
 import json
-import math
-import re
 import shutil
 import subprocess
-import re
-from dataclasses import dataclass
 from pathlib import Path
 
 from tenant_ai_instructor_contract import ContractError
@@ -70,7 +66,7 @@ def generate_script(generator, events, language='az', *, token_budget_remaining=
             'Do not claim successful completion unless an observed result confirms it. '
             'Return JSON with title, slides[{title,text}], subtitles[{start_ms,end_ms,text}]. '
             'Language='+language+'; events='+json.dumps(bounded,ensure_ascii=False,separators=(',',':')))
-    raw,usage=generator(prompt,max_output_tokens=min(2400,token_budget_remaining),timeout=30)
+    raw,usage=generator(prompt,max_output_tokens=min(700,token_budget_remaining),timeout=30)
     if not isinstance(usage,dict) or type(usage.get('total_tokens')) is not int or not 0<=usage['total_tokens']<=token_budget_remaining:
         raise ContractError('instructor_token_budget_exceeded')
     try: parsed=json.loads(raw)
@@ -101,7 +97,7 @@ def review_script(reviewer, scenario, observed_events, *, token_budget_remaining
             'issues:[short strings]}. This is advice for an employee and must never approve or publish. '
             'Draft='+json.dumps({'title':scenario.get('title','')[:180],'slides':slides},ensure_ascii=False)[:12000]+
             '; observed='+json.dumps(evidence,ensure_ascii=False,separators=(',',':')))
-    raw,usage=reviewer(prompt,max_output_tokens=min(700,token_budget_remaining),timeout=30)
+    raw,usage=reviewer(prompt,max_output_tokens=min(300,token_budget_remaining),timeout=30)
     if not isinstance(usage,dict) or type(usage.get('total_tokens')) is not int or not 0<=usage['total_tokens']<=token_budget_remaining:
         raise ContractError('instructor_token_budget_exceeded')
     try: result=json.loads(raw)
@@ -151,73 +147,3 @@ def render_mp4(recording, subtitles, output, *, ffmpeg_path=None):
         output.unlink(missing_ok=True)
         raise RuntimeError('ffmpeg_render_failed') from None
     return {'path':str(output),'size_bytes':output.stat().st_size,'mime':'video/mp4'}
-
-
-@dataclass(frozen=True)
-class ElevenLabsBudget:
-    max_usd: float=1.0
-    max_characters: int=2000
-    # Pricing metadata must be supplied and reviewed by an operator; no guessed default.
-    confirmed_usd_per_1000_chars: float=0.0
-    confirmation_id: str=''
-    allow_one_call: bool=False
-
-
-class ElevenLabsAdapter:
-    """Optional TTS connector. Refuses before network access unless cap is provable."""
-    def __init__(self, api_key=None, *, budget=None, transport=None, reserve_one_call=None, model_id='eleven_multilingual_v2'):
-        self.api_key=api_key or os.environ.get('ELEVENLABS_API_KEY','')
-        self.budget=budget or ElevenLabsBudget()
-        self.model_id=model_id
-        self.transport=transport or self._request_audio
-        self.reserve_one_call=reserve_one_call
-        self._calls=0
-
-    def preflight(self, text):
-        chars=len(str(text or ''))
-        rate=self.budget.confirmed_usd_per_1000_chars
-        if (not self.budget.allow_one_call or self._calls>=1 or not self.api_key or not self.reserve_one_call or
-            not self.budget.confirmation_id or type(self.budget.max_usd) not in (int,float) or not math.isfinite(self.budget.max_usd) or self.budget.max_usd<=0 or self.budget.max_usd>1.0 or
-            type(rate) not in (int,float) or not math.isfinite(rate) or rate<=0 or
-            chars<1 or chars>self.budget.max_characters):
-            return {'allowed':False,'reason':'price_cap_unverified_or_call_unavailable','estimated_usd':None}
-        cost=chars*rate/1000
-        if cost>self.budget.max_usd:
-            return {'allowed':False,'reason':'price_cap_exceeded','estimated_usd':round(cost,6)}
-        return {'allowed':True,'reason':'within_confirmed_cap','estimated_usd':round(cost,6)}
-
-    def synthesize(self, text, *, voice_id):
-        check=self.preflight(text)
-        if not check['allowed']: raise RuntimeError(check['reason'])
-        if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',str(voice_id or '')):raise RuntimeError('elevenlabs_voice_id_invalid')
-        if self.model_id not in {'eleven_multilingual_v2','eleven_flash_v2_5','eleven_v3','eleven_v4'}:
-            raise RuntimeError('elevenlabs_model_not_allowlisted')
-        # Count before the first outbound request: timeout/uncertain outcomes can
-        # never result in an automatic paid retry.
-        self._calls+=1
-        if self.reserve_one_call(self.budget.confirmation_id,check['estimated_usd']) is not True:
-            raise RuntimeError('elevenlabs_single_call_budget_already_used')
-        return self.transport(self.api_key,str(voice_id),str(text),timeout=20)
-
-    def _request_audio(self,api_key,voice_id,text,*,timeout):
-        import requests
-        url='https://api.elevenlabs.io/v1/text-to-speech/'+voice_id
-        try:
-            response=requests.post(url,headers={'xi-api-key':api_key,'Content-Type':'application/json',
-                'Accept':'audio/mpeg'},params={'output_format':'mp3_44100_128'},
-                json={'text':text,'model_id':self.model_id},timeout=(3,timeout),allow_redirects=False,stream=True)
-            with response:
-                if response.status_code<200 or response.status_code>=300:raise RuntimeError('elevenlabs_http_'+str(response.status_code))
-                if not str(response.headers.get('Content-Type','')).lower().startswith('audio/'):raise RuntimeError('elevenlabs_unexpected_content_type')
-                audio=bytearray()
-                for chunk in response.iter_content(65536):
-                    if chunk:
-                        audio.extend(chunk)
-                        if len(audio)>12_000_000:raise RuntimeError('elevenlabs_audio_too_large')
-                if not audio:raise RuntimeError('elevenlabs_empty_audio')
-                return bytes(audio)
-        except requests.RequestException:
-            # A timeout after reservation is treated as an unknown paid call;
-            # adapter never automatically retries.
-            raise RuntimeError('elevenlabs_request_unknown') from None
-

@@ -8,8 +8,7 @@ import pytest
 from unittest.mock import patch
 
 from tenant_ai_instructor_contract import ContractError
-from tenant_ai_instructor_media import (ElevenLabsAdapter, ElevenLabsBudget, build_script,
-                                         generate_script, review_script, srt_text)
+from tenant_ai_instructor_media import (build_script, generate_script, review_script, srt_text)
 from tenant_ai_instructor_browser import _same_origin, _public_addresses
 
 
@@ -34,9 +33,18 @@ def test_scenario_subtitles_are_bounded_and_localized():
     with pytest.raises(ContractError):build_script([{'action':'send_whatsapp','target':'external'}])
 
 
+def test_edited_subtitle_file_is_bounded_plain_text_and_roundtrips():
+    from tenant_ai_instructor_media import srt_text
+    from tenant_ai_instructor_store import _parse_srt
+    cues=[{'start_ms':0,'end_ms':2500,'text':'Məhsulu yoxlayın.'},
+          {'start_ms':2500,'end_ms':5000,'text':'Anbarı seçin.'}]
+    assert _parse_srt(srt_text(cues))==cues
+    with pytest.raises(ValueError):_parse_srt('1\n00:00:00,000 --> 00:00:02,000\n<script>alert(1)</script>')
+
+
 def test_ai_scenario_injection_respects_token_budget_and_validates_output():
     def generator(_prompt,*,max_output_tokens,timeout):
-        assert max_output_tokens==1800 and timeout==30
+        assert max_output_tokens==700 and timeout==30
         return json.dumps({'title':'Demo transfer','slides':[{'title':'Open form','text':'Use the demo form.'}],
                            'subtitles':[{'start_ms':0,'end_ms':4000,'text':'Open the form'}]}),{'total_tokens':42}
     result=generate_script(generator,_events(),'en',token_budget_remaining=1800)
@@ -51,33 +59,6 @@ def test_ai_scenario_injection_respects_token_budget_and_validates_output():
     review=review_script(reviewer,scenario,_events(),token_budget_remaining=20)
     assert review['review_status']=='employee_review_required' and review['verified'] is False
     assert not review['published'] and review['supported'] is False
-
-
-def test_elevenlabs_fails_closed_without_confirmed_preflight_and_persistent_reservation():
-    calls=[]
-    adapter=ElevenLabsAdapter('fake',budget=ElevenLabsBudget(allow_one_call=True),transport=lambda *a,**k:calls.append(a))
-    assert adapter.preflight('Salam')['allowed'] is False
-    with pytest.raises(RuntimeError):adapter.synthesize('Salam',voice_id='voice')
-    assert not calls
-
-
-def test_elevenlabs_hard_one_dollar_ceiling_and_one_durable_reservation():
-    calls=[];reservations=[]
-    adapter=ElevenLabsAdapter('fake',budget=ElevenLabsBudget(max_usd=1,max_characters=100,
-        confirmed_usd_per_1000_chars=100,confirmation_id='review-1',allow_one_call=True),
-        transport=lambda *a,**k:calls.append(a) or b'audio',
-        reserve_one_call=lambda ref,cost:reservations.append((ref,cost)) is None)
-    assert adapter.preflight('a'*20)['estimated_usd']==2
-    with pytest.raises(RuntimeError):adapter.synthesize('a'*20,voice_id='x')
-    assert not calls and not reservations
-
-    ok=ElevenLabsAdapter('fake',budget=ElevenLabsBudget(max_usd=1,max_characters=100,
-        confirmed_usd_per_1000_chars=10,confirmation_id='review-1',allow_one_call=True),
-        transport=lambda *a,**k:calls.append(a) or b'audio',
-        reserve_one_call=lambda ref,cost:reservations.append((ref,cost)) or True)
-    assert ok.synthesize('a'*20,voice_id='x')==b'audio'
-    with pytest.raises(RuntimeError):ok.synthesize('a'*20,voice_id='x')
-    assert len(calls)==1 and len(reservations)==1 and reservations[0][1]<=1
 
 
 def test_browser_origin_and_private_network_checks_fail_closed():
@@ -146,7 +127,6 @@ def test_execution_pipeline_uses_mock_ai_and_saves_only_unpublished_draft(tmp_pa
         {'action':'fill_demo','target':'product','demo_value':'fixture.product'},
         {'action':'fill_demo','target':'quantity','demo_value':'fixture.quantity_one'},
         {'action':'click','target':'save_demo_transfer'}]
-    plan_json=json.dumps({'actions':actions})
     slides=[{'title':f'Step {i}','text':'Use only the synthetic demo.'} for i in range(6)]
     cues=[{'start_ms':i*4000,'end_ms':(i+1)*4000,'text':f'Step {i+1}'} for i in range(6)]
     scenario_json=json.dumps({'title':'Synthetic transfer','slides':slides,'subtitles':cues})
@@ -154,7 +134,7 @@ def test_execution_pipeline_uses_mock_ai_and_saves_only_unpublished_draft(tmp_pa
     class MockExecutor:
         def __init__(self):self.files={};self.actions=[];self.done=False
         async def open_demo(self,*_args):return 'isolated-session'
-        async def observe(self,*_args):return {'title':'SYNTHETIC DEMO','transfer_result':'Synthetic transfer saved' if self.done else ''}
+        async def observe(self,*_args):return {'title':'SYNTHETIC DEMO','allowed_targets':['transfers','source_warehouse','destination_warehouse','product','quantity','save_demo_transfer'],'transfer_result':'Synthetic transfer saved' if self.done else '', 'result_verified':self.done}
         async def act(self,_session,_scope,action):
             self.actions.append((action.action,action.target))
             if action.target=='save_demo_transfer':self.done=True
@@ -173,20 +153,23 @@ def test_execution_pipeline_uses_mock_ai_and_saves_only_unpublished_draft(tmp_pa
             return {'recording_path':str(recording)}
 
     executor=MockExecutor();monkeypatch.setenv('AI_INSTRUCTOR_ARTIFACT_DIR',str(tmp_path/'private'))
-    reservations={};settled=[];events=[];actions_recorded=[];artifacts=[];finished=[]
-    def reserve(prompt,cap):
-        estimate=len(prompt.encode())+cap+512
+    reservations={};settled=[];events=[];actions_recorded=[];artifacts=[];finished=[];planner_steps=[]
+    def reserve(prompt,cap,model=None):
+        assert model is None or isinstance(model,str)
+        estimate=(len(prompt.encode())+2)//3+cap+256
         if sum(x['reserved_tokens'] for x in reservations.values())+estimate>12000:return None
         key=str(len(reservations)+1);reservations[key]={'id':key,'reserved_tokens':estimate};return reservations[key]
     def settle(reservation_id,actual,*,uncertain):
         settled.append((reservation_id,actual,uncertain));return True
     def primary_provider(prompt,*,max_output_tokens,timeout):
-        if 'Return JSON {actions:' in prompt:return plan_json,{'total_tokens':12}
+        if 'choose ONE next semantic browser action' in prompt:
+            step=len(planner_steps);planner_steps.append(prompt)
+            return json.dumps({'done':True} if step>=len(actions) else actions[step]),{'total_tokens':12}
         return scenario_json,{'total_tokens':18}
     def expert_provider(prompt,*,max_output_tokens,timeout):
-        if 'plan_sha256=' in prompt:
-            digest=prompt.split('plan_sha256=',1)[1].split(';',1)[0]
-            return json.dumps({'approved':True,'plan_sha256':digest}),{'total_tokens':8}
+        if 'task_sha256=' in prompt:
+            digest=prompt.split('task_sha256=',1)[1].split(';',1)[0]
+            return json.dumps({'approved':True,'task_sha256':digest}),{'total_tokens':8}
         return json.dumps({'supported':True,'issues':[]}),{'total_tokens':7}
     def add_artifact(_tenant,_task,kind,path,mime,receipt):
         item={'id':f'00000000-0000-0000-0000-{len(artifacts)+41:012d}','kind':kind,'path':str(path),'mime':mime}
@@ -203,12 +186,13 @@ def test_execution_pipeline_uses_mock_ai_and_saves_only_unpublished_draft(tmp_pa
         primary_script_writer=primary_provider,expert_script_reviewer=expert_provider,
         reserve_tokens=reserve,settle_tokens=settle,record_action=lambda *_args:actions_recorded.append(_args),
         event_sink=lambda *_args:events.append(_args),add_artifact=add_artifact,save_lesson=save_lesson,
-        verify_transfer=lambda observation,_job:observation.get('transfer_result')=='Synthetic transfer saved',
+        verify_transfer=lambda observation,_job:observation.get('result_verified') is True,
         finish_job=lambda *args:finished.append(args)))
     assert result['status']=='completed' and result['employee_review_required'] is True
     assert result['real_erp_pilot']=='unverified' and result['lesson']['published'] is False
-    assert len(settled)==4 and len(artifacts)==9 and len(executor.actions)==6
-    assert len(actions_recorded)==14 and finished==[(tenant,task,'completed',None)]
+    assert len(settled)==9 and len(artifacts)==10 and len(executor.actions)==6
+    assert len(planner_steps)==6 and all('observation=' in prompt for prompt in planner_steps)
+    assert len(actions_recorded)==13 and finished==[(tenant,task,'completed',None)]
     assert all(row[3].get('published') is False for row in events if row[2]=='lesson_saved')
 
 
@@ -218,11 +202,43 @@ def test_provider_usage_over_reservation_fails_closed_without_retry():
     from tenant_ai_instructor_contract import ContractError
     settled=[];calls=[]
     def provider(*_args,**_kwargs):calls.append(1);return '{}',{'total_tokens':11}
-    def reserve(_prompt,_cap):return {'id':'reservation-1','reserved_tokens':10}
+    def reserve(_prompt,_cap,_model=None):return {'id':'reservation-1','reserved_tokens':10}
     def settle(reservation,actual,*,uncertain):settled.append((reservation['id'],actual,uncertain))
     with pytest.raises(ContractError,match='instructor_usage_unknown'):
         asyncio.run(_provider_call(provider,'bounded prompt',100,reserve,settle))
     assert len(calls)==1 and settled==[('reservation-1',None,True)]
+
+
+def test_reservation_callback_typeerror_is_not_retried():
+    import asyncio
+    from tenant_ai_instructor_execution import _provider_call
+    reservations=[];provider_calls=[]
+    def reserve(*_args):
+        reservations.append(1)
+        raise TypeError('reservation storage failed after write')
+    def provider(*_args,**_kwargs):provider_calls.append(1);return '{}',{'total_tokens':1}
+    with pytest.raises(TypeError,match='reservation storage failed'):
+        asyncio.run(_provider_call(provider,'bounded prompt',100,reserve,lambda *_args,**_kwargs:None))
+    assert len(reservations)==1 and provider_calls==[]
+
+
+def test_token_budget_uses_selected_model_and_fails_closed(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    import tenant_ai_instructor_store as store
+    from tenant_linear_policy import TenantLinearError
+    calls=[]
+    class Encoding:
+        def encode(self,text):return list(text.split())
+    def encoding_for_model(model):
+        calls.append(model)
+        if model!='demo-model':raise KeyError(model)
+        return Encoding()
+    monkeypatch.setitem(sys.modules,'tiktoken',SimpleNamespace(encoding_for_model=encoding_for_model))
+    assert store.estimate_provider_tokens('one two','demo-model')==258
+    assert calls==['demo-model']
+    with pytest.raises(TenantLinearError,match='requires a tokenizer'):
+        store.estimate_provider_tokens('prompt','unknown-model')
 
 
 def test_demo_credentials_are_encrypted_and_never_returned(monkeypatch):
@@ -368,10 +384,13 @@ def test_ai_instructor_app_preview_languages_themes_and_mobile():
             for lang,title in [('az','AI ilə dərs yaradın'),('en','Create a lesson with AI')]:
                 page.goto(f'http://127.0.0.1:{server.server_port}/app/ai-instructor?site_lang={lang}',wait_until='networkidle')
                 assert page.locator('h1').inner_text()==title
-            page.set_viewport_size({'width':390,'height':844});page.emulate_media(color_scheme='dark')
-            page.reload(wait_until='networkidle')
-            assert page.locator('h1').is_visible()
-            assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
+            for width,height in [(1440,900),(1920,1080),(390,844)]:
+                page.set_viewport_size({'width':width,'height':height})
+                for theme in ('light','dark'):
+                    page.emulate_media(color_scheme=theme)
+                    page.goto(f'http://127.0.0.1:{server.server_port}/app/ai-instructor?site_lang=az',wait_until='networkidle')
+                    assert page.locator('h1').is_visible()
+                    assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'),(width,theme)
             assert 'customer_send_allowed' not in page.locator('body').inner_text()
             browser.close()
     finally:

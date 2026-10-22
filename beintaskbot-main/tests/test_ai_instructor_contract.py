@@ -34,17 +34,21 @@ def test_scope_and_approved_semantic_actions(connection,scope):
 
 @pytest.mark.parametrize('origin',['http://demo.example.test','https://user:password@demo.example.test',
     'https://127.0.0.1','https://localhost','https://demo.example.test/?token=secret',
-    'https://demo.example.test/users','https://demo.example.test:8080','https://db.railway.internal'])
+    'https://demo.example.test/users','https://demo.example.test:8080','https://db.railway.internal','https://akul.az'])
 def test_unsafe_connection_locations_rejected(connection,origin):
     with pytest.raises((ContractError,ValueError)):replace(connection,origin=origin).validate()
 
 
 @pytest.mark.parametrize('patch',[{'tenant_id':IDS[9]},{'human_mode':True},{'paused':True},
     {'group_revision':3},{'group_revision':None},{'group_revision':True},
-    {'seconds_remaining':0},{'seconds_remaining':31},{'actions_remaining':0},
+    {'seconds_remaining':0},{'seconds_remaining':901},{'actions_remaining':0},
     {'tokens_remaining':12001},{'operation':'users.create'},{'primary_agent_id':IDS[8]}])
 def test_tenant_human_pause_revision_and_budgets(connection,scope,patch):
     with pytest.raises(ContractError):replace(scope,**patch).validate(connection)
+
+
+def test_job_runtime_budget_supports_video_capture_window(connection,scope):
+    assert replace(scope,seconds_remaining=900).validate(connection).seconds_remaining==900
 
 
 @pytest.mark.parametrize('action',[BrowserAction('sql'),BrowserAction('shell'),BrowserAction('send_whatsapp'),

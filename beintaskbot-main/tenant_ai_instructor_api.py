@@ -20,7 +20,12 @@ def handler(member, origin, logger, resource='collection'):
                 if resource=='connections': result=await asyncio.to_thread(store.list_connections,profile)
                 elif resource=='jobs': result=await asyncio.to_thread(store.list_jobs,profile,request.query.get('limit',50))
                 elif resource=='job': result=await asyncio.to_thread(store.job_detail,profile,request.match_info['job_id'])
-                else: result={'enabled':store._feature_enabled(),'worker':'not_configured',
+                else:
+                    try:
+                        from tenant_ai_instructor_worker import enabled as instructor_worker_enabled
+                        worker_state='ready' if instructor_worker_enabled() else 'not_configured'
+                    except Exception:worker_state='not_configured'
+                    result={'enabled':store._feature_enabled(),'worker':worker_state,
                               'real_pilot':'unverified','customer_send_allowed':False,'auto_publish':False,
                               'available_actions':['save_test_credentials','view_jobs'],
                               'blocked_actions':['queue_job','activate_connection','run_real_erp','publish_lesson']}
@@ -34,8 +39,13 @@ def handler(member, origin, logger, resource='collection'):
             if resource=='connections': result=await asyncio.to_thread(store.save_connection,profile,data)
             elif resource=='jobs': result=await asyncio.to_thread(store.enqueue,profile,data)
             elif resource=='job':
-                if data.get('action')!='cancel': raise ValueError('action')
-                result=await asyncio.to_thread(store.cancel,profile,request.match_info['job_id'])
+                if data.get('action')=='cancel':
+                    result=await asyncio.to_thread(store.cancel,profile,request.match_info['job_id'])
+                elif data.get('action')=='rerender':
+                    subtitles=data.get('subtitles')
+                    if not isinstance(subtitles,str) or len(subtitles)>12000:raise ValueError('subtitles')
+                    result=await asyncio.to_thread(store.rerender_draft_video,profile,request.match_info['job_id'],subtitles)
+                else: raise ValueError('action')
             else: raise TenantLinearError('Method not allowed',405)
             return web.json_response({'success':True,'result':result},headers=headers)
         except TenantLinearError as exc: return web.json_response({'success':False,'error':str(exc)},status=exc.status,headers=headers)

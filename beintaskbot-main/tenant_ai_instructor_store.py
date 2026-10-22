@@ -19,8 +19,9 @@ from tenant_linear_policy import TenantLinearError, identifier
 
 MAX_CREDENTIAL_BYTES = 8192
 MAX_JOB_TOKENS = 12000
+MAX_AI_CALLS_PER_JOB = 16
 MAX_JOB_ACTIONS = 20
-MAX_JOB_SECONDS = 30
+MAX_JOB_SECONDS = 900
 _JOB_STATES = {'queued', 'running', 'blocked', 'completed', 'failed', 'cancelled'}
 
 
@@ -67,6 +68,8 @@ def schema(conn):
           FOREIGN KEY(tenant_id,connection_id) REFERENCES saas_ai_instructor_connections(tenant_id,id))''')
         c.execute('ALTER TABLE saas_ai_instructor_jobs ADD COLUMN IF NOT EXISTS reserved_tokens INT NOT NULL DEFAULT 0')
         c.execute('ALTER TABLE saas_ai_instructor_jobs ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ')
+        c.execute('ALTER TABLE saas_ai_instructor_jobs ADD COLUMN IF NOT EXISTS ai_calls_used INT NOT NULL DEFAULT 0')
+        c.execute('ALTER TABLE saas_ai_instructor_jobs ADD COLUMN IF NOT EXISTS ai_calls_max INT NOT NULL DEFAULT 16')
         c.execute('''CREATE INDEX IF NOT EXISTS saas_ai_instructor_jobs_queue_idx
           ON saas_ai_instructor_jobs(status,created_at) WHERE status='queued' ''')
         c.execute('''CREATE TABLE IF NOT EXISTS saas_ai_instructor_events(
@@ -88,6 +91,13 @@ def schema(conn):
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,id),
           FOREIGN KEY(tenant_id,job_id) REFERENCES saas_ai_instructor_jobs(tenant_id,id) ON DELETE CASCADE,
           CHECK(kind IN ('screenshot','recording','subtitle','scenario')))''')
+        c.execute("SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid='saas_ai_instructor_artifacts'::regclass AND conname='saas_ai_instructor_artifacts_kind_check'")
+        check=c.fetchone()
+        if check and 'source_recording' not in str(check.get('definition') or ''):
+            c.execute('ALTER TABLE saas_ai_instructor_artifacts DROP CONSTRAINT saas_ai_instructor_artifacts_kind_check')
+            c.execute("ALTER TABLE saas_ai_instructor_artifacts ADD CONSTRAINT saas_ai_instructor_artifacts_kind_check CHECK(kind IN ('screenshot','recording','source_recording','subtitle','scenario'))")
+        elif not check:
+            c.execute("ALTER TABLE saas_ai_instructor_artifacts ADD CONSTRAINT saas_ai_instructor_artifacts_kind_check CHECK(kind IN ('screenshot','recording','source_recording','subtitle','scenario'))")
 
 
 def _connection_dict(row):
@@ -208,11 +218,11 @@ def enqueue(profile, data):
                 raise TenantLinearError('The Expert is not authorized for this Primary',409)
             c.execute('''INSERT INTO saas_ai_instructor_jobs
               (tenant_id,id,actor,connection_id,primary_agent_id,expert_agent_id,idempotency_key,title,language,
-               budget_tokens,max_actions,deadline_at)
-              VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,now()+(%s * interval '1 second'))
+               budget_tokens,max_actions,ai_calls_max,deadline_at)
+              VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,now()+(%s * interval '1 second'))
               ON CONFLICT(tenant_id,idempotency_key) DO NOTHING
               RETURNING id,status,created_at''',(tenant,job_id,actor,connection_id,primary,expert,idem,title,
-                    language,budget,MAX_JOB_ACTIONS,MAX_JOB_SECONDS))
+                    language,budget,MAX_JOB_ACTIONS,MAX_AI_CALLS_PER_JOB,MAX_JOB_SECONDS))
             row=c.fetchone()
             created=row is not None
             if not row:
@@ -230,7 +240,7 @@ def list_jobs(profile, limit=50):
         schema(conn)
         with conn.cursor() as c:
             tenant,_actor=_authorize(c,profile)
-            c.execute('''SELECT id,title,language,status,progress,budget_tokens,tokens_used,reserved_tokens,max_actions,actions_used,
+            c.execute('''SELECT id,title,language,status,progress,budget_tokens,tokens_used,reserved_tokens,max_actions,actions_used,ai_calls_used,ai_calls_max,
               lesson_id,error_code,created_at,updated_at FROM saas_ai_instructor_jobs
               WHERE tenant_id=%s::uuid ORDER BY created_at DESC LIMIT %s''',(tenant,limit))
             return [_json_row(r) for r in c.fetchall()]
@@ -261,7 +271,7 @@ def job_detail(profile, job_id):
             artifacts=[{**_json_row(r),'url':f"/api/platform/ai/instructor/jobs/{job_id}/artifacts/{r['id']}"} for r in c.fetchall()]
             view=_json_row(row)
             result={k:view.get(k) for k in ('id','title','language','status','progress','budget_tokens','tokens_used','reserved_tokens',
-                    'max_actions','actions_used','lesson_id','error_code','created_at','updated_at')}
+                    'max_actions','actions_used','ai_calls_used','ai_calls_max','lesson_id','error_code','created_at','updated_at')}
             result['events']=events;result['artifacts']=artifacts
             return result
 
@@ -272,8 +282,8 @@ def cancel(profile, job_id):
         schema(conn)
         with conn.cursor() as c:
             tenant,actor=_authorize(c,profile)
-            c.execute('''UPDATE saas_ai_instructor_jobs SET status='cancelled',updated_at=now()
-              WHERE tenant_id=%s::uuid AND id=%s::uuid AND actor=%s AND status='queued'
+            c.execute('''UPDATE saas_ai_instructor_jobs SET status='cancelled',lease_until=NULL,updated_at=now()
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND actor=%s AND status IN ('queued','running')
               RETURNING id''',(tenant,job_id,actor))
             if not c.fetchone(): raise TenantLinearError('Only a queued job owned by you can be cancelled',409)
             _event(c,tenant,job_id,'cancelled',{})
@@ -283,8 +293,8 @@ def cancel(profile, job_id):
 
 
 def _event(cur,tenant,job_id,event_type,detail):
-    if event_type not in {'queued','claimed','action_started','action_completed','screenshot_captured',
-                          'scenario_created','video_rendered','lesson_saved','blocked','failed','cancelled'}:
+    if event_type not in {'queued','claimed','connecting','researching','action_started','action_completed','screenshot_captured',
+                          'preparing_script','scenario_created','rendering_video','video_rendered','saving_lesson','lesson_saved','blocked','failed','cancelled'}:
         raise ValueError('event_type')
     allowed={'action','target','reason','lesson_id','artifact_id','evidence_ref','status','published','sha256','kind'}
     safe={str(k):str(v)[:300] for k,v in (detail or {}).items() if str(k) in allowed and not isinstance(v,(dict,list))}
@@ -314,7 +324,9 @@ def claim_one():
               WHERE status='queued' AND deadline_at>now() ORDER BY created_at
               FOR UPDATE SKIP LOCKED LIMIT 1''')
             item=c.fetchone()
-            if not item: return None
+            if not item:
+                conn.commit()
+                return None
             tenant,job_id=str(item['tenant_id']),str(item['id'])
             c.execute("UPDATE saas_ai_instructor_jobs SET status='running',lease_until=now()+interval '3 minutes',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING *",(tenant,job_id))
             row=c.fetchone();_event(c,tenant,job_id,'claimed',{})
@@ -378,6 +390,25 @@ def record_action(tenant_id,job_id,action,target=None):
     return dict(row)
 
 
+def renew_lease(tenant_id,job_id):
+    tenant=identifier(tenant_id);job_id=identifier(job_id)
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as c:
+            c.execute("UPDATE saas_ai_instructor_jobs SET lease_until=now()+interval '3 minutes',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND status='running' AND deadline_at>now() RETURNING id",(tenant,job_id))
+            active=bool(c.fetchone())
+        conn.commit()
+    return active
+
+
+def is_running(tenant_id,job_id):
+    tenant=identifier(tenant_id);job_id=identifier(job_id)
+    with _connect() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT 1 FROM saas_ai_instructor_jobs WHERE tenant_id=%s::uuid AND id=%s::uuid AND status='running' AND deadline_at>now()",(tenant,job_id))
+            return bool(c.fetchone())
+
+
 def consume_tokens(tenant_id,job_id,amount):
     tenant=identifier(tenant_id);job_id=identifier(job_id)
     if type(amount) is not int or amount<0: raise ValueError('token_usage')
@@ -393,22 +424,30 @@ def consume_tokens(tenant_id,job_id,amount):
     return dict(row)
 
 
-def reserve_token_budget(tenant_id,job_id,prompt,max_output_tokens):
-    """Reserve a conservative UTF-8-byte upper bound before a provider call."""
+def estimate_provider_tokens(prompt,model):
+    """Tokenize with the selected provider model; unknown encodings fail closed."""
+    try:
+        import tiktoken
+        encoding=tiktoken.encoding_for_model(str(model))
+        return len(encoding.encode(str(prompt)))+256
+    except Exception:
+        raise TenantLinearError('AI Instructor requires a tokenizer for the selected model',503) from None
+
+
+def reserve_token_budget(tenant_id,job_id,prompt,max_output_tokens,*,model=None):
+    """Reserve model-tokenized input plus output and request-envelope overhead."""
     tenant=identifier(tenant_id);job_id=identifier(job_id)
     if not isinstance(prompt,str) or type(max_output_tokens) is not int or not 1<=max_output_tokens<=12000:
         raise ValueError('token_reservation')
-    # One token per UTF-8 byte is a conservative upper bound for prompt content;
-    # the additional fixed envelope covers provider/system framing.
-    amount=len(prompt.encode('utf-8'))+max_output_tokens+512
+    amount=estimate_provider_tokens(prompt,model)+max_output_tokens
     if amount>12000:raise TenantLinearError('Prompt exceeds the 12,000 token job ceiling',429)
     reservation_id=uuid.uuid4()
     with _connect() as conn:
         schema(conn)
         with conn.cursor() as c:
-            c.execute('''UPDATE saas_ai_instructor_jobs SET reserved_tokens=reserved_tokens+%s,updated_at=now()
+            c.execute('''UPDATE saas_ai_instructor_jobs SET reserved_tokens=reserved_tokens+%s,ai_calls_used=ai_calls_used+1,updated_at=now()
               WHERE tenant_id=%s::uuid AND id=%s::uuid AND status='running'
-                AND tokens_used+reserved_tokens+%s<=budget_tokens RETURNING id''',(amount,tenant,job_id,amount))
+                AND tokens_used+reserved_tokens+%s<=budget_tokens AND ai_calls_used<ai_calls_max RETURNING id''',(amount,tenant,job_id,amount))
             if not c.fetchone():raise TenantLinearError('Job token budget exhausted',429)
             c.execute('''INSERT INTO saas_ai_instructor_token_reservations(tenant_id,job_id,id,reserved_tokens)
               VALUES(%s::uuid,%s::uuid,%s::uuid,%s)''',(tenant,job_id,reservation_id,amount))
@@ -444,7 +483,7 @@ def settle_token_budget(tenant_id,job_id,reservation_id,actual_tokens=None,*,unc
 
 def finish_job(tenant_id,job_id,state,error_code=None):
     tenant=identifier(tenant_id);job_id=identifier(job_id)
-    transitions={'completed','blocked','failed'}
+    transitions={'completed','blocked','failed','cancelled'}
     if state not in transitions: raise ValueError('job_state')
     code=(str(error_code or '')[:80] or None)
     with _connect() as conn:
@@ -452,7 +491,11 @@ def finish_job(tenant_id,job_id,state,error_code=None):
         with conn.cursor() as c:
             c.execute('''UPDATE saas_ai_instructor_jobs SET status=%s,error_code=%s,lease_until=NULL,updated_at=now()
               WHERE tenant_id=%s::uuid AND id=%s::uuid AND status='running' RETURNING id''',(state,code,tenant,job_id))
-            if not c.fetchone(): raise TenantLinearError('Job state conflict',409)
+            if not c.fetchone():
+                c.execute("SELECT status FROM saas_ai_instructor_jobs WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,job_id))
+                current=c.fetchone()
+                if state!='cancelled' or not current or current.get('status')!='cancelled':
+                    raise TenantLinearError('Job state conflict',409)
             _event(c,tenant,job_id,state,{'reason':code or ''})
         conn.commit()
 
@@ -462,7 +505,7 @@ def add_artifact(tenant_id,job_id,kind,path,mime,receipt_ref):
     path=Path(path).resolve();root=_artifact_root()
     try: relative=path.relative_to(root)
     except ValueError: raise TenantLinearError('Artifact path is outside private storage',403) from None
-    if kind not in {'screenshot','recording','subtitle','scenario'} or not path.is_file(): raise ValueError('artifact')
+    if kind not in {'screenshot','recording','source_recording','subtitle','scenario'} or not path.is_file(): raise ValueError('artifact')
     size=path.stat().st_size
     if size<1 or size>250_000_000: raise ValueError('artifact_size')
     digest=hashlib.sha256(path.read_bytes()).hexdigest()
@@ -515,6 +558,88 @@ def attach_recording_to_draft(profile,job_id,lesson_id,artifact_id):
             _audit(c,tenant,actor,'ai_instructor_recording_attached','instruction',lesson_id,{'job_id':job_id,'artifact_id':artifact_id,'published':False})
         conn.commit()
     return {'lesson_id':lesson_id,'state':'draft','published':False}
+
+
+def _parse_srt(value):
+    value=str(value or '')
+    if not value or len(value)>12000:raise ValueError('subtitle_size')
+    blocks=[part.strip() for part in re.split(r'\r?\n\s*\r?\n',value) if part.strip()]
+    if not 1<=len(blocks)<=20:raise ValueError('subtitle_count')
+    def stamp(raw):
+        match=re.fullmatch(r'(\d{2}):(\d{2}):(\d{2})[,.](\d{3})',raw)
+        if not match:raise ValueError('subtitle_timestamp')
+        hours,minutes,seconds,millis=map(int,match.groups())
+        return ((hours*60+minutes)*60+seconds)*1000+millis
+    cues=[];previous=0
+    for index,block in enumerate(blocks,1):
+        rows=block.splitlines()
+        if len(rows)<3 or rows[0].strip()!=str(index):raise ValueError('subtitle_sequence')
+        timing=re.fullmatch(r'([^ ]+)\s+-->\s+([^ ]+)',rows[1].strip())
+        if not timing:raise ValueError('subtitle_timestamp')
+        start,end=stamp(timing.group(1)),stamp(timing.group(2));text=' '.join(rows[2:]).strip()
+        if start<previous or end<=start or end>600000 or not 1<=len(text)<=120 or re.search(r'[<>\x00-\x08\x0b\x0c\x0e-\x1f]',text):
+            raise ValueError('subtitle_text_or_timing')
+        cues.append({'start_ms':start,'end_ms':end,'text':text});previous=end
+    return cues
+
+
+def rerender_draft_video(profile,job_id,subtitle_text):
+    """Rebuild a private video from the retained browser recording; keep lesson a draft."""
+    job_id=identifier(job_id);cues=_parse_srt(subtitle_text)
+    from tenant_ai_instructor_media import render_mp4,srt_text
+    tenant=None;actor=None;source=None;subtitle_path=None;video_path=None
+    root=_artifact_root()
+    try:
+        with _connect() as conn:
+            schema(conn)
+            with conn.cursor() as c:
+                tenant,actor=_authorize(c,profile)
+                c.execute("SELECT id,lesson_id,status FROM saas_ai_instructor_jobs WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE",(tenant,job_id))
+                job=c.fetchone()
+                if not job or job.get('status')!='completed' or not job.get('lesson_id'):
+                    raise TenantLinearError('A completed instructor draft is required',409)
+                c.execute("SELECT state,doc,version FROM saas_instruction_lessons WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE",(tenant,job['lesson_id']))
+                lesson=c.fetchone()
+                if not lesson or lesson.get('state')!='draft':raise TenantLinearError('Only an unpublished draft can be rebuilt',409)
+                c.execute("SELECT id,relpath,size_bytes,sha256 FROM saas_ai_instructor_artifacts WHERE tenant_id=%s::uuid AND job_id=%s::uuid AND kind='source_recording' ORDER BY created_at DESC LIMIT 1",(tenant,job_id))
+                row=c.fetchone()
+                if not row:raise TenantLinearError('Original browser recording is unavailable',410)
+                source=(root/row['relpath']).resolve()
+                try:source.relative_to(root)
+                except ValueError:raise TenantLinearError('Artifact unavailable',404) from None
+                if not source.is_file() or source.stat().st_size!=row['size_bytes'] or hashlib.sha256(source.read_bytes()).hexdigest()!=row['sha256']:
+                    raise TenantLinearError('Original browser recording is unavailable',410)
+                work=root/tenant/job_id/('subtitle-edit-'+str(uuid.uuid4()));work.mkdir(parents=True,exist_ok=False)
+                subtitle_path=work/'captions.srt';video_path=work/'lesson.mp4'
+                subtitle_path.write_text(srt_text(cues),encoding='utf-8')
+                rendered=render_mp4(source,subtitle_path,video_path)
+                subtitle_id=uuid.uuid4();video_id=uuid.uuid4()
+                new_paths=[(subtitle_id,'subtitle',subtitle_path,'application/x-subrip'),
+                           (video_id,'recording',video_path,'video/mp4')]
+                for artifact_id,kind,path,mime in new_paths:
+                    rel=path.resolve().relative_to(root).as_posix();size=path.stat().st_size
+                    digest=hashlib.sha256(path.read_bytes()).hexdigest()
+                    c.execute('''INSERT INTO saas_ai_instructor_artifacts(tenant_id,job_id,id,kind,relpath,mime,size_bytes,sha256,sanitization_receipt_ref)
+                      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s::uuid)''',
+                      (tenant,job_id,artifact_id,kind,rel,mime,size,digest,uuid.uuid4()))
+                doc=lesson['doc'] if isinstance(lesson['doc'],dict) else json.loads(lesson['doc'])
+                video=doc.get('video') if isinstance(doc.get('video'),dict) else {}
+                video.update({'artifact_id':str(video_id),'job_id':job_id,'mime':'video/mp4','review_status':'pending_review'})
+                doc['video']=video;doc['review_status']='pending_review'
+                c.execute("UPDATE saas_instruction_lessons SET doc=%s::jsonb,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",
+                    (_json(doc),tenant,job['lesson_id']))
+                _audit(c,tenant,actor,'ai_instructor_subtitles_rerendered','instruction',job['lesson_id'],{'job_id':job_id,'published':False,'video_artifact_id':str(video_id)})
+                _event(c,tenant,job_id,'video_rendered',{'kind':'recording','artifact_id':str(video_id)})
+                conn.commit()
+        return {'lesson_id':str(job['lesson_id']),'state':'draft','published':False,
+                'subtitle_artifact_id':str(subtitle_id),'video_artifact_id':str(video_id),
+                'video_size_bytes':rendered['size_bytes']}
+    except Exception:
+        for path in (subtitle_path,video_path):
+            try:
+                if path and path.exists():path.unlink()
+            except Exception:pass
+        raise
 
 
 def save_generated_lesson_draft(profile,job_id,scenario,screenshot_paths,recording_artifact_id):

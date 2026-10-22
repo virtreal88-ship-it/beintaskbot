@@ -17,6 +17,6 @@ The `/app/ai-instructor` setup page and `/app/instructions` “Create with AI”
 
 This branch provides the tenant-scoped connection/job/event/artifact store, authenticated API/UI, Playwright executor, injected Primary/Expert orchestration, subtitle generation, FFmpeg muxing and draft persistence. It deliberately does not start a background worker or bind model providers yet; the API reports `worker=not_configured`, and jobs cannot be run until the verified demo and worker/provider binding exist. The local Chromium smoke uses only `tests/fixtures/ai_instructor_demo/` and does not represent the Akul ERP pilot.
 
-ElevenLabs is an optional adapter. It refuses network access unless a durable one-call reservation and confirmed cost calculation fit within the $1 ceiling. No audio generation was run as part of these tests.
+Voice generation and TTS providers are out of scope for V1 and are not wired into the instructor.
 
-PostgreSQL integration tests require `AI_INSTRUCTOR_TEST_DATABASE_URL` pointing to a disposable local test database. The production database, ERP credentials, WhatsApp, AI provider and TTS provider are not used by the test suite.
+PostgreSQL integration tests require `AI_INSTRUCTOR_TEST_DATABASE_URL` pointing to a disposable local test database. The production database, ERP credentials, WhatsApp and AI provider are not used by the test suite.

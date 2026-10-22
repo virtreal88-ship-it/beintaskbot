@@ -187,10 +187,26 @@ class PlaywrightDemoExecutor:
     async def _observe_page(self, session):
         page=session.page
         result={'title':(await page.title())[:160],'url_path':urlsplit(page.url).path}
+        allowed=[]
+        for target,test_id in _TEST_IDS.items():
+            locator=page.get_by_test_id(test_id)
+            try:
+                if await locator.count()==1 and await locator.is_visible():allowed.append(target)
+            except Exception:pass
+        for target,path in _PATHS.items():
+            link=page.locator('a[href="'+path+'"]')
+            try:
+                if await link.count()==1 and await link.is_visible():allowed.append(target)
+            except Exception:pass
+        result['allowed_targets']=sorted(set(allowed))
         status=page.locator('[data-demo-status]')
         if await status.count(): result['status']=(await status.first.inner_text())[:300]
         transfer=page.locator('[data-testid="transfer-result"]')
-        if await transfer.count() and await transfer.is_visible(): result['transfer_result']=(await transfer.inner_text())[:300]
+        result['result_verified']=False
+        if await transfer.count() and await transfer.is_visible():
+            result['transfer_result']=(await transfer.inner_text())[:300]
+            normalized=result['transfer_result'].casefold()
+            result['result_verified']='demo transfer saved' in normalized or 'synthetic transfer saved' in normalized
         return result
 
     async def act(self, session_ref: str, scope: TaskScope, action: BrowserAction):

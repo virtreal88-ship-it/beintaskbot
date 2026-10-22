@@ -48,6 +48,9 @@ class DemoConnection:
             or parsed.port not in (None,443) or parsed.path not in ('','/') or parsed.query or parsed.fragment
             or parsed.hostname.endswith(('.localhost','.local','.internal')) or '.' not in parsed.hostname):
             raise ContractError('invalid_demo_origin')
+        host=(parsed.hostname or '').casefold().rstrip('.')
+        if host in {'akul.az','www.akul.az','crm.pro.az','www.crm.pro.az'} or any(part in host.split('.') for part in ('prod','production')):
+            raise ContractError('production_origin_forbidden')
         try: ipaddress.ip_address(parsed.hostname)
         except ValueError: pass
         else: raise ContractError('ip_origin_forbidden')
@@ -80,7 +83,7 @@ class TaskScope:
         if self.group_revision is not None or self.live_group_revision is not None:
             if type(self.group_revision) is not int or type(self.live_group_revision) is not int or self.group_revision!=self.live_group_revision:
                 raise ContractError('stale_group_revision')
-        for value,ceiling in ((self.seconds_remaining,30),(self.actions_remaining,20),(self.tokens_remaining,12000)):
+        for value,ceiling in ((self.seconds_remaining,900),(self.actions_remaining,20),(self.tokens_remaining,12000)):
             if type(value) is not int or not 1<=value<=ceiling: raise ContractError('instructor_budget')
         return self
 
