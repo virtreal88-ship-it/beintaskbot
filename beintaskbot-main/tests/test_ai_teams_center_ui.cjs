@@ -18,6 +18,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
  w.document.querySelector('.team-save').click();for(let i=0;i<30&&!patchBody;i++)await tick();
  assert.ok(patchBody,`no PATCH received; notice=${w.document.querySelector('#teamNotice').textContent}; buttonDisabled=${w.document.querySelector('.team-save').disabled}`);assert.deepEqual(patchBody.expert_policy,{max_tokens:6500});assert.equal(patchBody.role,'primary');assert.equal(patchBody.expected_version,7);assert.equal(patchBody.expected_tenant_id,tenant);assert.equal(patchBody.expected_user_id,user);
  assert.equal(agents[0].version,8);assert.equal(w.document.querySelectorAll('.team-selected').length,1);assert.equal(w.document.getElementById('aiTeamsNav').hidden,true);assert.equal(patchBody.customer_send_allowed,undefined);
+ w.tenantI18n.language='az';w.document.dispatchEvent(new w.CustomEvent('tenant-language'));
  w.tenantI18n.language='en';w.document.dispatchEvent(new w.CustomEvent('tenant-language'));
  for(let i=0;i<30&&(!w.document.querySelector('.team-selected')||w.document.querySelector('#aiTeamsCenter h1')?.textContent!=='AI Teams');i++)await tick();
  assert.equal(w.document.querySelector('#aiTeamsCenter h1')?.textContent,'AI Teams','language changes should refresh the complete Teams shell');
