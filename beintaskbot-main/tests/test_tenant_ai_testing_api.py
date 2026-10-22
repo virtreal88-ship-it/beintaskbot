@@ -29,11 +29,13 @@ class TestingAPI(unittest.IsolatedAsyncioTestCase):
             response=await api.handler(lambda _:profile,'https://crm.test',Mock(),'turn')(self.request(data=data))
             turn.assert_awaited_once_with(profile,'private-id',{'text':'hello','request_id':'request'})
             self.assertTrue(json.loads(response.body)['result']['simulation'])
-    def test_only_catalog_has_read_only_crm_capability(self):
+    def test_virtual_testing_routes_do_not_receive_crm_capability(self):
         with patch('tenant_web_routes.testing_handler',return_value=Mock()) as factory:
             context=TenantWebContext(member=Mock(),origin='https://crm.test',logger=Mock(),crm_request=Mock(),wait_slot=Mock(),bot=Mock())
             ai_agent_routes(context)
-            self.assertEqual(len(factory.call_args_list),5)
+            # The obsolete Kommo catalog route was removed when AI Testing
+            # became transport-independent. Virtual sessions must not gain a
+            # CRM client capability through any remaining route.
+            self.assertEqual(len(factory.call_args_list),4)
             for call in factory.call_args_list:
-                if call.args[3]=='catalog':self.assertIs(call.args[4],context.crm_request)
-                else:self.assertEqual(len(call.args),4)
+                self.assertEqual(len(call.args),4)

@@ -77,7 +77,7 @@ class Connection:
 
 
 class ConnectAiFlowTests(unittest.TestCase):
-    def test_manual_agents_never_create_background_drafts_in_active_or_test_mode(self):
+    def test_only_automatic_agents_enter_background_queue(self):
         rows = [{'enabled': True, 'mode': 'manual'}, {'enabled': True, 'mode': 'automatic'},
                 {'enabled': False, 'mode': 'automatic'}]
         self.assertEqual(connect_ai.eligible_connect_agents(rows), [rows[1]])
@@ -145,17 +145,6 @@ class ConnectAiFlowTests(unittest.TestCase):
         state_sql = next(sql for sql, _params in cursor.executed if "state='human'" in sql)
         self.assertIn('trigger_reply_sent_then_handoff', state_sql)
         self.assertTrue(any("state='sent'" in sql for sql, _params in cursor.executed))
-
-    def test_connect_test_draft_cannot_be_promoted_to_a_real_whatsapp_send(self):
-        cursor = Cursor(ones=[{'provider': 'connect', 'test_mode': 'true'}])
-        connection = Connection(cursor)
-        profile = {'tenant_id': TENANT, 'telegram_id': 7}
-        with patch.object(agents_store, '_connect', return_value=connection), \
-             patch.object(agents_store, 'ensure_schema'), \
-             patch.object(agents_store, '_authorize', return_value=(TENANT, 7)):
-            with self.assertRaises(TenantLinearError):
-                agents_store.reserve_draft_send(profile, DRAFT)
-        self.assertFalse(any("state='sending'" in sql for sql, _params in cursor.executed))
 
     def test_wizard_retry_keys_return_existing_tenant_records_without_another_insert(self):
         profile = {'tenant_id': TENANT, 'telegram_id': 7}
@@ -254,27 +243,15 @@ class ConnectAiFlowTests(unittest.TestCase):
             self.assertEqual(agents_store.save_knowledge(profile, source_data)['id'], DRAFT)
         self.assertFalse(any('INSERT INTO saas_ai_knowledge_sources' in sql for sql, _params in cursor.executed))
 
-    def test_accepted_connect_manual_draft_handoff_uses_connect_state_not_kommo(self):
-        cursor = Cursor(ones=[{'provider': 'connect','payload':{'channel_id':CHANNEL},'source_fingerprint':'event-a'}, {'chat_id': 'client@s.whatsapp.net', 'handoff_after_send': True}])
-        connection = Connection(cursor)
-        with patch.object(agents_store, '_connect', return_value=connection), \
-             patch.object(agents_store, 'ensure_schema'), \
-             patch('tenant_support_inbox_store.handoff_ticket'), \
-             patch('tenant_support_inbox_store.handoff_recorded', return_value=False), \
-             patch('tenant_support_inbox_store.summarize_created'):
-            self.assertEqual(agents_store.finish_draft_send(TENANT, DRAFT, 'accepted'), 'approved')
-        transition = next(params for sql, params in cursor.executed if "trigger_reply_sent_then_handoff" in sql)
-        self.assertEqual(transition[1], 'connect')
-
-    def test_pause_route_is_mounted_and_connect_draft_send_has_final_state_guard(self):
+    def test_pause_route_remains_and_retired_draft_send_api_is_unmounted(self):
         context = TenantWebContext(member=lambda _request: None, origin='https://crm.pro.az', logger=MagicMock(),
                                   crm_request=MagicMock(), wait_slot=MagicMock(), bot=lambda: None)
         routes = {(method, path) for method, path, _handler in ai_agent_routes(context)}
         self.assertIn(('POST', '/api/platform/ai/conversations/{conversation_id}/pause'), routes)
         api_source = Path(__file__).resolve().parents[1].joinpath('tenant_ai_agents_api.py').read_text(encoding='utf-8-sig')
-        self.assertIn('send_ai_reply_if_active', api_source)
-        self.assertIn("reserved['expected_revision']", api_source)
-        self.assertIn("finish_draft_send,reserved['tenant_id'],reserved['id'],'accepted'", api_source)
+        self.assertNotIn('send_ai_reply_if_active', api_source)
+        self.assertNotIn('draft_send', api_source)
+        self.assertFalse(any('/agents/drafts' in path for _method, path in routes))
 
     def test_pause_is_diagnosed_as_pause_not_as_human_handoff(self):
         cursor = Cursor()

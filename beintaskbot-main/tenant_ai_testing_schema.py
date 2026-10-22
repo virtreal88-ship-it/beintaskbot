@@ -2,11 +2,6 @@
 
 def create_schema(conn):
     with conn.cursor() as cur:
-        for table in ('saas_ai_agent_test_mode','saas_ai_agent_connect_test_mode'):
-            cur.execute('ALTER TABLE '+table+' ADD COLUMN IF NOT EXISTS agent_id UUID NULL')
-            constraint=table+'_testing_agent_fk'
-            cur.execute('ALTER TABLE '+table+' DROP CONSTRAINT IF EXISTS '+constraint)
-            cur.execute('ALTER TABLE '+table+' ADD CONSTRAINT '+constraint+' FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE')
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_test_sessions(
           tenant_id UUID NOT NULL, id UUID NOT NULL, agent_id UUID NOT NULL, created_by BIGINT NOT NULL,
           scope JSONB NOT NULL DEFAULT '{}'::jsonb,state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','paused','human')),

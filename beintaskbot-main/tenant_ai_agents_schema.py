@@ -22,43 +22,14 @@ def ensure_schema(conn):
               tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id) ON DELETE CASCADE,
               company_instructions TEXT NOT NULL DEFAULT '',
               enabled BOOLEAN NOT NULL DEFAULT FALSE,
-              operating_mode TEXT NOT NULL DEFAULT 'test' CHECK(operating_mode IN ('test','active')),
               emergency_stop BOOLEAN NOT NULL DEFAULT FALSE,
               auto_send_enabled BOOLEAN NOT NULL DEFAULT FALSE CHECK(auto_send_enabled=FALSE),
               crm_actions_enabled BOOLEAN NOT NULL DEFAULT FALSE CHECK(crm_actions_enabled=FALSE),
               updated_by BIGINT NULL,
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               FOREIGN KEY(tenant_id,updated_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
-            cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_agent_test_mode(
-              tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id) ON DELETE CASCADE,
-              enabled BOOLEAN NOT NULL DEFAULT FALSE,
-              emergency_stop BOOLEAN NOT NULL DEFAULT FALSE,
-              account_domain TEXT NOT NULL DEFAULT '',
-              company_phone TEXT NOT NULL DEFAULT '',
-              company_phone_attested BOOLEAN NOT NULL DEFAULT FALSE,
-              client_phone TEXT NOT NULL DEFAULT '',
-              channel_id TEXT NOT NULL DEFAULT '',
-              lead_id BIGINT NULL,
-              contact_id BIGINT NULL,
-              talk_id TEXT NOT NULL DEFAULT '',
-              chat_id TEXT NOT NULL DEFAULT '',
-              verified BOOLEAN NOT NULL DEFAULT FALSE,
-              verified_at TIMESTAMPTZ NULL,
-              updated_by BIGINT NULL,
-              updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-              FOREIGN KEY(tenant_id,updated_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
-              CHECK(NOT enabled OR (verified AND company_phone_attested AND account_domain<>'' AND company_phone<>'' AND client_phone<>''
-                AND channel_id<>'' AND lead_id IS NOT NULL AND contact_id IS NOT NULL AND talk_id<>'' AND chat_id<>'')))''')
-            cur.execute('ALTER TABLE saas_ai_agent_test_mode ADD COLUMN IF NOT EXISTS company_phone_attested BOOLEAN NOT NULL DEFAULT FALSE')
-            cur.execute('ALTER TABLE saas_ai_agent_test_mode DROP CONSTRAINT IF EXISTS saas_ai_agent_test_mode_check')
-            cur.execute('''ALTER TABLE saas_ai_agent_test_mode ADD CONSTRAINT saas_ai_agent_test_mode_check CHECK(NOT enabled OR
-              (verified AND company_phone_attested AND account_domain<>'' AND company_phone<>'' AND client_phone<>''
-                AND channel_id<>'' AND lead_id IS NOT NULL AND contact_id IS NOT NULL AND talk_id<>'' AND chat_id<>''))''')
             cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS company_instructions TEXT NOT NULL DEFAULT ''")
-            cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS operating_mode TEXT NOT NULL DEFAULT 'test'")
             cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS emergency_stop BOOLEAN NOT NULL DEFAULT FALSE")
-            cur.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_operating_mode_check')
-            cur.execute("ALTER TABLE saas_ai_agent_settings ADD CONSTRAINT saas_ai_agent_settings_operating_mode_check CHECK(operating_mode IN ('test','active'))")
             cur.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_auto_send_enabled_check')
             cur.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_crm_actions_enabled_check')
             cur.execute('ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS max_replies_per_chat INTEGER NOT NULL DEFAULT 20')
@@ -252,20 +223,6 @@ def ensure_schema(conn):
               last_agent_message_id TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 1,
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(tenant_id,provider,conversation_id),
               FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE)''')
-            # Connect Test Mode is deliberately separate from the historical
-            # Kommo binding.  It has no deal, pipeline or contact dependency:
-            # the signed Connect webhook and tenant-owned channel are the
-            # authority.  Test runs always create drafts, never send WhatsApp.
-            cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_agent_connect_test_mode(
-              tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id) ON DELETE CASCADE,
-              enabled BOOLEAN NOT NULL DEFAULT FALSE,
-              emergency_stop BOOLEAN NOT NULL DEFAULT FALSE,
-              channel_id TEXT NOT NULL DEFAULT '', conversation_id TEXT NOT NULL DEFAULT '',
-              verified BOOLEAN NOT NULL DEFAULT FALSE, verified_at TIMESTAMPTZ NULL,
-              updated_by BIGINT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-              FOREIGN KEY(tenant_id,updated_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
-              CHECK(NOT enabled OR (verified AND channel_id<>'' AND conversation_id<>'')))''')
-            cur.execute("ALTER TABLE saas_ai_agent_connect_test_mode ADD COLUMN IF NOT EXISTS agent_id UUID NULL")
             cur.execute("ALTER TABLE saas_ai_conversation_state ADD COLUMN IF NOT EXISTS first_inbound_message_id TEXT NOT NULL DEFAULT ''")
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_agent_action_runs(
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -312,9 +269,31 @@ def ensure_schema(conn):
         from tenant_ai_legacy_permit import schema as permit_schema
         with conn.cursor() as cur:
             permit_schema(cur)
-            from tenant_ai_draft_review import schema as draft_review_schema
-            draft_review_schema(cur)
         from tenant_ai_group_coordination import create_schema as create_group_schema
         create_group_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_compat_migrations(
+              version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+            cur.execute('SELECT 1 FROM saas_ai_compat_migrations WHERE version=1')
+            if not cur.fetchone():
+                # Retire legacy company Test Mode without dropping historical
+                # columns/tables. Preserve its no-send guarantee and quarantine
+                # work admitted only through old test bindings.
+                cur.execute("""DO $$ BEGIN
+                  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='saas_ai_agent_settings' AND column_name='operating_mode') THEN
+                    EXECUTE 'UPDATE saas_ai_agent_settings SET auto_send_enabled=FALSE WHERE operating_mode=''test''';
+                    EXECUTE 'UPDATE saas_ai_agent_jobs SET state=''skipped'',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code=''legacy_test_mode_retired'',updated_at=now() WHERE state IN (''queued'',''processing'') AND tenant_id IN (SELECT tenant_id FROM saas_ai_agent_settings WHERE operating_mode=''test'')';
+                    EXECUTE 'UPDATE saas_tenant_webhook_events e SET state=''skipped'',completed_at=now(),error_code=''legacy_test_mode_retired'' WHERE state IN (''queued'',''processing'') AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE error_code=''legacy_test_mode_retired'')';
+                    EXECUTE 'UPDATE saas_ai_agent_drafts d SET state=''rejected'' FROM saas_ai_agent_settings s JOIN saas_ai_agents a ON a.tenant_id=s.tenant_id WHERE d.tenant_id=s.tenant_id AND d.agent_id=a.id AND d.state=''pending'' AND a.mode=''automatic'' AND s.operating_mode=''test''';
+                  END IF;
+                END $$""")
+                cur.execute('''UPDATE saas_ai_agent_jobs j SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,
+                  error_code='legacy_test_mode_retired',updated_at=now()
+                  WHERE j.state IN ('queued','processing') AND EXISTS (
+                    SELECT 1 FROM saas_tenant_webhook_events e WHERE e.tenant_id=j.tenant_id
+                      AND e.fingerprint=j.event_fingerprint AND e.payload->>'test_mode'='true')''')
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='legacy_test_mode_retired' WHERE state IN ('queued','processing') AND payload->>'test_mode'='true'")
+                cur.execute("UPDATE saas_ai_agent_drafts SET state='rejected' WHERE state='pending' AND source_fingerprint IN (SELECT fingerprint FROM saas_tenant_webhook_events WHERE payload->>'test_mode'='true')")
+                cur.execute('INSERT INTO saas_ai_compat_migrations(version) VALUES(1) ON CONFLICT DO NOTHING')
         conn.commit()
         _ready = True

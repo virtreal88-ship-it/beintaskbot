@@ -58,7 +58,7 @@ def _snapshot(cur, tenant, scope):
             cv.ai_enabled AS conversation_ai_enabled,
             cv.manual_hold AS conversation_manual_hold,
             cs.state AS conversation_state, cs.reason AS handoff_reason,
-            s.enabled AS company_enabled, s.operating_mode, s.auto_send_enabled,
+            s.enabled AS company_enabled, s.auto_send_enabled,
             s.emergency_stop, s.updated_at AS settings_version, t.status AS tenant_status,
             a.id::text AS agent_id, a.enabled AS agent_enabled, a.mode AS agent_mode,
             a.version AS agent_version, a.updated_at AS agent_settings_version, a.scopes
@@ -85,7 +85,7 @@ def _snapshot(cur, tenant, scope):
         str(row.get('channel_version') or ''), row.get('integration_status'),
         str(row.get('integration_version') or ''), row.get('conversation_lead_id'), row.get('conversation_ai_enabled'),
         row.get('conversation_manual_hold'), row.get('conversation_state'), row.get('handoff_reason'), row.get('company_enabled'),
-        row.get('operating_mode'), row.get('auto_send_enabled'), row.get('emergency_stop'),
+        row.get('auto_send_enabled'), row.get('emergency_stop'),
         str(row.get('settings_version') or ''), row.get('tenant_status'), row.get('agent_id'),
         row.get('agent_enabled'), row.get('agent_mode'), row.get('agent_version'),
         str(row.get('agent_settings_version') or ''), row['exact_agent_scope'],
@@ -192,7 +192,7 @@ def automatic_send_allowed(job, connection=None):
                             or row.get('conversation_manual_hold') is True
                             or row.get('active') is not True or row.get('integration_status') != 'connected'
                             or row.get('tenant_status') != 'active' or row.get('company_enabled') is not True
-                            or row.get('operating_mode') != 'active' or row.get('auto_send_enabled') is not True
+                            or row.get('auto_send_enabled') is not True
                             or row.get('emergency_stop') is True or row.get('agent_enabled') is not True
                             or row.get('agent_mode') != 'automatic' or not row.get('exact_agent_scope')
                     or (job.get('agent_id') and str(row.get('agent_id') or '') != str(job.get('agent_id')))
@@ -217,7 +217,7 @@ def automatic_send_allowed(job, connection=None):
                     or row.get('conversation_manual_hold') is True
                     or row.get('active') is not True or row.get('integration_status') != 'connected'
                     or row.get('tenant_status') != 'active' or row.get('company_enabled') is not True
-                    or row.get('operating_mode') != 'active' or row.get('auto_send_enabled') is not True
+                    or row.get('auto_send_enabled') is not True
                     or row.get('emergency_stop') is True or row.get('agent_enabled') is not True
                     or row.get('agent_mode') != 'automatic' or not row.get('exact_agent_scope')
                     or (job.get('agent_id') and str(row.get('agent_id') or '') != str(job.get('agent_id')))
@@ -338,7 +338,7 @@ def preflight(profile):
             if result['channel'] != 'active': result['blockers'].append('connect_channel_or_integration_unavailable')
             if result['conversation'] != 'verified': result['blockers'].append('conversation_not_found_on_selected_channel')
             if result['agent'] != 'eligible': result['blockers'].append('automatic_agent_not_active_for_conversation')
-            if row.get('tenant_status') != 'active' or row.get('company_enabled') is not True or row.get('operating_mode') != 'active' or row.get('emergency_stop') is True:
+            if row.get('tenant_status') != 'active' or row.get('company_enabled') is not True or row.get('emergency_stop') is True:
                 result['blockers'].append('company_ai_not_in_active_state')
             if row.get('auto_send_enabled') is not True or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'):
                 result['blockers'].append('automatic_send_not_enabled')

@@ -72,10 +72,10 @@ assert.match(source, /provider==='connect'&&!channels\.length/,
   'the editor must refuse to save a Connect agent without an explicit WhatsApp channel');
 assert.match(source, /aiScheduleEnabled/,
   'the editor must expose the durable schedule rather than a hidden fixed window');
-assert.match(appSource, /data-ai-section-nav="stopping"/,
-  'the editor must expose a separate stop/handoff section');
-assert.match(fs.readFileSync(path.join(root,'docs/tenant-operator-dialogs.js'),'utf8'), /actions\.has\('pause'\).*actionButton\('pause','pause'\)/,
-  'an active dialogue must offer Pause rather than only a handoff action');
+assert.match(appSource, /id="aiStoppingPolicy"[\s\S]*Управление ответами/,
+  'the editor must preserve the existing stop/handoff policy section');
+assert.match(fs.readFileSync(path.join(root,'docs/tenant-operator-dialogs.js'),'utf8'), /actions\.has\('pause'\).*actionButton\('switchToManual','pause',true\)/,
+  'an active dialogue must offer the existing pause/switch-to-manual action rather than only a handoff action');
 assert.match(appSource, /id="aiHandoffCapabilityNote"[\s\S]*явное недовольство[\s\S]*AZ\/RU\/EN[\s\S]*без отдельного AI-запроса/,
   'The editor must explain the supported multilingual deterministic dissatisfaction handoff.');
 assert.match(appSource, /id="aiAllowGroupMessages"/,

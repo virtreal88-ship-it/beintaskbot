@@ -27,6 +27,7 @@ from tenant_ai_agents_api import handler as ai_agents_handler
 from tenant_knowledge_candidates_api import handler as knowledge_candidates_handler
 from tenant_support_inbox_api import handler as support_handler
 from tenant_ai_testing_api import handler as testing_handler
+from tenant_ai_simulation_api import handler as simulation_handler
 from tenant_ai_state_api import handler as ai_state_handler
 from tenant_operator_api import handler as operator_handler
 from tenant_instruction_library_api import handler as instruction_handler
@@ -87,26 +88,26 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
     """AI Agents are a tenant product module, independent of message transports."""
     member, origin, logger = context.member, context.origin, context.logger
     routes = [
-        ('testing/kommo-context', testing_handler(member, origin, logger, 'catalog', context.crm_request), ('GET',)),
         ('testing/sessions', testing_handler(member, origin, logger, 'sessions'), ('GET','POST')),
         ('testing/sessions/{session_id}', testing_handler(member, origin, logger, 'session'), ('GET',)),
         ('testing/sessions/{session_id}/turn', testing_handler(member, origin, logger, 'turn'), ('POST',)),
         ('testing/sessions/{session_id}/control', testing_handler(member, origin, logger, 'control'), ('POST',)),
+        ('simulation/settings', simulation_handler(member, origin, logger, 'settings'), ('GET','PATCH')),
+        ('simulation/runs', simulation_handler(member, origin, logger, 'runs'), ('GET',)),
+        ('simulation/runs/{run_id}', simulation_handler(member, origin, logger, 'run'), ('GET',)),
+        ('simulation/runs/{run_id}/recheck', simulation_handler(member, origin, logger, 'recheck'), ('POST',)),
+        ('simulation/issues', simulation_handler(member, origin, logger, 'issues'), ('GET',)),
+        ('simulation/issues/{run_id}/review', simulation_handler(member, origin, logger, 'issue_review'), ('POST',)),
+        ('dashboard', simulation_handler(member, origin, logger, 'dashboard'), ('GET',)),
+        ('dashboard/events', simulation_handler(member, origin, logger, 'events'), ('GET',)),
         ('agents/settings', ai_agents_handler(member, origin, logger, 'settings'), ('GET', 'PATCH')),
-        ('agents/test-mode', ai_agents_handler(member, origin, logger, 'test_mode'), ('GET', 'PATCH')),
-        ('agents/test-mode/verify', ai_agents_handler(member, origin, logger, 'test_mode_verify', context.crm_request), ('POST',)),
-        ('agents/test-mode/discover', ai_agents_handler(member, origin, logger, 'test_mode_discover', context.crm_request), ('POST',)),
         ('agents/pilot-preflight', ai_agents_handler(member, origin, logger, 'pilot_preflight'), ('GET',)),
         ('agents/pilot/kwid-confirmation', ai_agents_handler(member, origin, logger, 'pilot_kwid_confirmation'), ('POST',)),
         ('agents/pilot/owner-approval', ai_agents_handler(member, origin, logger, 'pilot_owner_approval'), ('POST',)),
         ('agents', ai_agents_handler(member, origin, logger, 'agents'), ('GET', 'POST')),
         ('agents/options', ai_agents_handler(member, origin, logger, 'options', context.crm_request), ('GET',)),
-        ('agents/drafts', ai_agents_handler(member, origin, logger, 'drafts'), ('GET',)),
-        ('agents/drafts/{draft_id}', ai_agents_handler(member, origin, logger, 'draft_detail'), ('GET',)),
-        ('agents/drafts/{draft_id}/edit', ai_agents_handler(member, origin, logger, 'draft_edit'), ('POST',)),
-        ('agents/drafts/{draft_id}/review', ai_agents_handler(member, origin, logger, 'draft_review'), ('POST',)),
-        ('agents/drafts/{draft_id}/send', ai_agents_handler(member, origin, logger, 'draft_send', context.crm_request, context.wait_slot), ('POST',)),
         ('dialogs', operator_handler(member, origin, logger, 'dialogs'), ('GET',)),
+        ('dialogs/avatar', operator_handler(member, origin, logger, 'avatar'), ('GET',)),
         ('dialogs/history', operator_handler(member, origin, logger, 'history'), ('GET',)),
         ('dialogs/copilot', operator_handler(member, origin, logger, 'copilot'), ('POST',)),
         ('dialogs/display-name', operator_handler(member, origin, logger, 'display_name'), ('POST',)),
@@ -129,9 +130,9 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('state/technical', ai_state_handler(member, logger, 'technical'), ('GET',)),
         ('reliability', ai_agents_handler(member, origin, logger, 'reliability'), ('GET',)),
         ('diagnostics', ai_agents_handler(member, origin, logger, 'diagnostics'), ('GET',)),
-        ('agents/{agent_id}', ai_agents_handler(member, origin, logger, 'agent'), ('PATCH', 'DELETE')),
-        ('agents/{agent_id}/triggers', ai_agents_handler(member, origin, logger, 'triggers'), ('GET', 'POST')),
-        ('agents/{agent_id}/triggers/{trigger_id}', ai_agents_handler(member, origin, logger, 'trigger'), ('PATCH', 'DELETE')),
+        ('agents/{agent_id:[0-9a-fA-F-]{36}}', ai_agents_handler(member, origin, logger, 'agent'), ('PATCH', 'DELETE')),
+        ('agents/{agent_id:[0-9a-fA-F-]{36}}/triggers', ai_agents_handler(member, origin, logger, 'triggers'), ('GET', 'POST')),
+        ('agents/{agent_id:[0-9a-fA-F-]{36}}/triggers/{trigger_id:[0-9a-fA-F-]{36}}', ai_agents_handler(member, origin, logger, 'trigger'), ('PATCH', 'DELETE')),
         ('conversations/{conversation_id}/state', ai_agents_handler(member, origin, logger, 'conversation_state'), ('GET',)),
         ('conversations/for-lead/{lead_id}', ai_agents_handler(member, origin, logger, 'conversation_for_lead'), ('GET',)),
         ('conversations/{conversation_id}/handoff', ai_agents_handler(member, origin, logger, 'handoff'), ('POST',)),

@@ -164,6 +164,7 @@ def _schema(conn) -> None:
         # This is a local presentation override only.  It never changes the
         # WhatsApp group subject or an Evolution contact record.
         cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS manual_display_name TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS avatar_status TEXT NOT NULL DEFAULT ''")
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_participant_display_names (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
           connect_channel_id UUID NOT NULL,
@@ -704,6 +705,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
             if ai_origin:
                 data={**data,'ai_authored':True}
 
+            message_inserted=False
             if outbound:
                 # Direction comes from the signed event/fromMe fact, never the
                 # message text.  A known accepted AI row stays AI even when
@@ -779,13 +781,14 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                             (tenant,lead_id,deal_name,deal_name,phone,'connect:'+channel_id,str(data.get('text') or ''),occurred,occurred,_json({'source':'connect','channel_id':channel_id,'conversation_id':conversation,'conversation_kind':metadata.get('kind') or ''})))
                 external = 'connect:' + str(data.get('id') or event_id)
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
-              VALUES(%s,%s::uuid,%s,%s,'incoming',%s,%s,%s,%s,%s,%s::timestamptz,%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
+              VALUES(%s,%s::uuid,%s,%s,'incoming',%s,%s,%s,%s,%s,%s::timestamptz,%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING RETURNING id''',
                             # Connect does not currently provide a safe
                             # downloadable media URL in its signed event.  Do
                             # not store a fake non-empty placeholder: that
                             # would make every text look like an attachment and
                             # can incorrectly affect later AI context.
                             (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,author_name,str(data.get('text') or ''),str(data.get('type') or 'text'),'',occurred,_json(data)))
+                message_inserted=bool(cur.fetchone())
                 accepted = True
                 queued_payload = (tenant, channel_id, conversation, lead_id, str(data.get('id') or event_id), event_id,
                                   str(data.get('text') or ''), str(data.get('type') or 'text'))
@@ -797,21 +800,45 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 source_message=cur.fetchone()
                 if not source_message:
                     raise ConnectWebhookError('message_scope_conflict', 'Connect message scope mismatch.', 409)
-                if coordinated and (ai_origin or employee is not None or uncertain_origin or control_replayed):
-                    if employee is not None:
-                        stop_group(cur,tenant,conversation,reason='verified_employee_reply',actor=employee)
-                        from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
-                        enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],
-                            str(source_message['id']),actor_id=employee)
-                    conn.commit()
-                    return True
-                from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
-                enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],str(source_message['id']))
-                from tenant_ai_agent_connect import enqueue
-                enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
-                        lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
-                        text=queued_payload[6], message_type=queued_payload[7],
-                        is_group=metadata.get('kind') == 'group', provider_message_id=data.get('externalMessageId'), connection=conn)
+            if (not outbound and message_inserted and not ai_origin and employee is None
+                    and not uncertain_origin and not control_replayed):
+                # Reuse the existing SaaS CRM notice outbox, push subscriptions and worker.
+                # Only initialize its additive schema if the normal notification worker has
+                # not done so yet; webhook delivery remains idempotent by persisted message ID.
+                from tenant_crm_notice_schema import ensure_schema as ensure_notice_schema
+                cur.execute("SELECT to_regclass('saas_crm_notice_events') AS existing")
+                if not (cur.fetchone() or {}).get('existing'):
+                    ensure_notice_schema(conn)
+                from tenant_crm_notice_store import plan_connect_message
+                plan_connect_message(cur,tenant,channel_id,conversation,queued_payload[3],
+                                     'connect:'+queued_payload[4],data)
+            if coordinated and (ai_origin or employee is not None or uncertain_origin or control_replayed):
+                if employee is not None:
+                    stop_group(cur,tenant,conversation,reason='verified_employee_reply',actor=employee)
+                    from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
+                    enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],
+                        str(source_message['id']),actor_id=employee)
+                conn.commit()
+                return True
+            from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
+            enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],str(source_message['id']))
+            from tenant_ai_agent_connect import enqueue
+            enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
+                    lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
+                    text=queued_payload[6], message_type=queued_payload[7],
+                    is_group=metadata.get('kind') == 'group', provider_message_id=data.get('externalMessageId'), connection=conn)
+            # Simulation admits only the first durable inbound delivery.
+            # Webhook retries may repair the Active queue above but must
+            # never backfill Simulation or replay a paid virtual run.
+            from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+            if inserted_event and runtime_flag('AI_SIMULATION_ENABLED'):
+                from tenant_ai_simulation_schema import ensure_schema as ensure_simulation_schema
+                from tenant_ai_simulation_engine import enqueue_inbound
+                ensure_simulation_schema(conn)
+                enqueue_inbound(cur,tenant_id=tenant,channel_id=channel_id,
+                    conversation_id=conversation,lead_id=queued_payload[3],
+                    source_message_id=str(source_message['id']),
+                    source_event_id=queued_payload[4],occurred_at=event.get('occurred_at'))
             conn.commit()
     return accepted
 
@@ -852,7 +879,7 @@ def send_ai_reply(route: dict, text: str, run_id: str) -> str:
 
 def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversation_id: str,
                             text: str, run_id: str, expected_revision: int, *, handoff_fingerprint: str = '',
-                            pilot_scope_fenced: bool = False, draft_review=None) -> str | None:
+                            pilot_scope_fenced: bool = False) -> str | None:
     """Serialize Connect send with an observed human takeover.
 
     The row lock intentionally spans the short Connect request. If the human
@@ -873,14 +900,6 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
         conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, "connect", channel_id, conversation_id)
-            if draft_review is not None:
-                from tenant_ai_draft_review import snapshot
-                view,d,_,_=snapshot(cur,draft_review['profile'],run_id,locked=True)
-                if (d['state']!='sending' or d['mode']!='manual' or not d['enabled'] or d['role']!='primary'
-                    or not d['company_enabled'] or d['emergency_stop'] or d['operating_mode']!='active' or d['tenant_status']!='active'
-                    or d['version']!=draft_review['expected_version'] or d['draft']!=text
-                    or view['context_token']!=draft_review['expected_context_token']):
-                    return None
             if coordinated:
                 # Lock candidate settings before choosing the scheduled speaker.
                 cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid ORDER BY id FOR SHARE',(tenant,))
@@ -905,8 +924,8 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
               JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
               JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id AND cs.channel_id=c.connect_channel_id::text
               WHERE c.tenant_id=%s::uuid AND c.lead_id=%s AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s
-                AND NOT ai_legacy_blocked(c.tenant_id,c.connect_channel_id::text,c.conversation_id,COALESCE((SELECT event_fingerprint FROM saas_ai_agent_runs WHERE tenant_id=c.tenant_id AND id=%s::uuid),(SELECT source_fingerprint FROM saas_ai_agent_drafts WHERE tenant_id=c.tenant_id AND id=%s::uuid),''))
-              FOR UPDATE OF c,cs''', (tenant, int(lead_id), channel_id, conversation_id,run_id,run_id))
+                AND NOT ai_legacy_blocked(c.tenant_id,c.connect_channel_id::text,c.conversation_id,COALESCE((SELECT event_fingerprint FROM saas_ai_agent_runs WHERE tenant_id=c.tenant_id AND id=%s::uuid),''))
+              FOR UPDATE OF c,cs''', (tenant, int(lead_id), channel_id, conversation_id,run_id))
             row = cur.fetchone()
             if (not row or row.get('state') != 'active' or int(row.get('revision') or 0) != int(expected_revision)):
                 conn.rollback()
@@ -918,25 +937,23 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
             route = {'provider':'connect','channel_id':str(row['connect_channel_id']),'conversation_id':str(row['conversation_id']),
                      'api_key':str(secret.get('api_key') or '')}
             # Revalidate the single-dialog pilot confirmation at the final
-            # provider boundary. Human-reviewed drafts are already explicitly
-            # approved and do not use the automatic-pilot gate.
-            if draft_review is None:
-                from tenant_ai_pilot import automatic_send_allowed
-                if send_source is None:
-                    try:
-                        send_source = delivery_source(cur, tenant, run_id)
-                    except Exception:
-                        # No source fingerprint is a pilot denial; unconfigured
-                        # deployments retain their existing send policy.
-                        send_source = None
-                gate_context = {'provider':'connect', 'tenant_id':tenant, 'channel_id':channel_id,
-                    'conversation_id':conversation_id,
-                    'event_fingerprint':str((send_source or {}).get('event_fingerprint') or ''),
-                    'agent_id':(send_source or {}).get('agent_id'),
-                    '_pilot_scope_fenced':pilot_scope_fenced is True}
-                if not automatic_send_allowed(gate_context, connection=conn):
-                    conn.rollback()
-                    return None
+            # provider boundary for every automated send.
+            from tenant_ai_pilot import automatic_send_allowed
+            if send_source is None:
+                try:
+                    send_source = delivery_source(cur, tenant, run_id)
+                except Exception:
+                    # No source fingerprint is a pilot denial; unconfigured
+                    # deployments retain their existing send policy.
+                    send_source = None
+            gate_context = {'provider':'connect', 'tenant_id':tenant, 'channel_id':channel_id,
+                'conversation_id':conversation_id,
+                'event_fingerprint':str((send_source or {}).get('event_fingerprint') or ''),
+                'agent_id':(send_source or {}).get('agent_id'),
+                '_pilot_scope_fenced':pilot_scope_fenced is True}
+            if not automatic_send_allowed(gate_context, connection=conn):
+                conn.rollback()
+                return None
             message_id = send_ai_reply(route, text, run_id)
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,'AI Agent',%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',

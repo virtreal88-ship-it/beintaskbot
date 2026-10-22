@@ -13,7 +13,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
  w.eval(source);await tick();
  const click=()=>w.document.querySelector('[data-ai-reliability-open]').click();
  const response=text=>({ok:true,json:async()=>({success:true,result:{
-  health:{label:'Worker доступен',blockers:[],operating_mode:'active',automatic_send_enabled:true},
+  health:{label:'Worker доступен',blockers:[],automatic_send_enabled:true},
   metrics:{queued:1,processing:0,overdue:0,expired_leases:0,ai_errors_24h:1,unsuccessful_sends_24h:1},
   messages:[{status:'error',provider:'connect',message_id:text,reason:'Connect: результат отправки неизвестен',checkpoints:{received:true,queued:true,processing:true,generated:true,sent:false},attempts:1,received_at:'2026-10-16'}]
  }})});

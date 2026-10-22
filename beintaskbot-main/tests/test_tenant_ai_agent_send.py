@@ -29,9 +29,9 @@ class Cursor:
         self.sql.append(sql)
         if 'SELECT j.state,j.lease_token' in sql:
             self.row = {'state': 'processing', 'lease_token': 'lease-1', 'revision': 2,
-                'enabled': True, 'operating_mode': 'active', 'auto_send_enabled': True,
+                'enabled': True, 'auto_send_enabled': True,
                 'emergency_stop': False, 'settings_version': 'settings-v1',
-                'agent_enabled': True, 'agent_version': 3, 'tenant_status': 'active',
+                'agent_enabled': True, 'agent_mode': 'automatic', 'agent_version': 3, 'tenant_status': 'active',
                 'config_version': 'config-v1'}
         elif 'SELECT state,revision FROM saas_ai_conversation_state' in sql or 'SELECT state,revision FROM saas_ai_conversation_state' in sql:
             self.row = {'state': 'active', 'revision': 7}

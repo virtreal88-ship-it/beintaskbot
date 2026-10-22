@@ -213,11 +213,11 @@ def test_multiple_channels_one_agent_and_catalog_not_disabled_by_manual_company_
     assert all(c['ai']['available'] for c in catalog.catalog(PROFILE)['channels'])
 
 
-def test_test_mode_without_binding_is_not_reported_as_ready(system):
-    d = system['db']; d.execute("UPDATE saas_ai_agent_settings SET operating_mode='test'"); d.commit()
+def test_automatic_agent_is_not_reported_as_ready_when_company_send_is_disabled(system):
+    d = system['db']; d.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=FALSE"); d.commit()
     result = state.snapshot(PROFILE)
     assert result['summary']['eligible_agents'] == 0
-    assert all('test_binding_mismatch' in c['reason_codes'] for a in result['agents'] for c in a['channels'])
+    assert all('auto_send_disabled' in c['reason_codes'] for a in result['agents'] for c in a['channels'])
 
 
 def test_diagnostic_reads_do_not_enqueue_or_send_or_change_settings(system):

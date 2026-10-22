@@ -19,6 +19,9 @@ import tenant_ai_agents_store as agents
 import tenant_ai_agent_run_store as run_store
 import tenant_support_inbox_store as store
 import tenant_support_inbox_summary as summary
+import tenant_ai_simulation_schema as simulation_schema
+import tenant_ai_simulation_engine as simulation
+import tenant_ai_dashboard as ai_dashboard
 from tenant_linear_policy import TenantLinearError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,7 +93,7 @@ def database():
 @pytest.fixture
 def db(database,monkeypatch):
     database.execute('TRUNCATE saas_tenants CASCADE');database.commit()
-    for module in (store,summary,actions,connect_ai,agents,run_store):monkeypatch.setattr(module,'_connect',lambda:database)
+    for module in (store,summary,actions,connect_ai,agents,run_store,simulation,ai_dashboard):monkeypatch.setattr(module,'_connect',lambda:database)
     for tenant,user,channel,lead in ((A,11,CA,41),(B,22,CB,42)):
         database.execute("INSERT INTO saas_tenants(id,slug,name,status,owner_telegram_id) VALUES(%s::uuid,%s,'Company','active',%s)",(tenant,tenant,user))
         database.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name) VALUES(%s::uuid,%s,'owner','Owner')",(tenant,user))
@@ -176,7 +179,7 @@ def seed_job(db):
 
 def test_active_manual_job_is_fenced_before_ai_reservation(db):
     job=seed_job(db)
-    db.execute("UPDATE saas_ai_agent_settings SET operating_mode='active' WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
     db.execute("UPDATE saas_ai_agents SET mode='manual' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
     db.execute("UPDATE saas_ai_agent_jobs SET state='processing',lease_token=%s WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",(job['lease_token'],A,AGENT))
     db.commit()
@@ -300,9 +303,12 @@ def test_database_constraints_block_cross_tenant_route_and_duplicate_open(db):
             db.execute("INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source) VALUES(%s::uuid,%s::uuid,%s::uuid,'client','manual')",(A,str(uuid.uuid4()),CA))
 
 
-def test_ordinary_inbound_does_not_create_ticket(db):
+def test_ordinary_inbound_does_not_create_ticket(db,monkeypatch):
     seed_job(db)
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_agents SET mode='automatic' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
     db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A));db.commit()
+    monkeypatch.setattr(connect_ai,'runtime_flag',lambda name:True)
     with patch.object(connect_ai,'allowed',return_value=True):
         assert connect_ai.enqueue(A,channel_id=CA,conversation_id='client',lead_id=41,message_id='ordinary',event_id='ordinary',text='Hello')==1
     assert store.listing(PROFILE)['tickets']==[]
@@ -374,16 +380,6 @@ def test_summary_platform_cap_never_calls_provider(db):
     assert store.detail(PROFILE,ticket)['ticket']['summary_state']=='unavailable'
 
 
-def test_accepted_manual_draft_handoff_creates_ticket(db):
-    seed_job(db);run,draft=str(uuid.uuid4()),str(uuid.uuid4())
-    db.execute("UPDATE saas_tenant_webhook_events SET payload=%s::jsonb WHERE tenant_id=%s::uuid",(json.dumps({'channel_id':CA}),A))
-    db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state) VALUES(%s::uuid,%s::uuid,%s::uuid,'evt',1,'test','completed')",(A,run,AGENT))
-    db.execute("INSERT INTO saas_ai_agent_drafts(tenant_id,id,agent_id,run_id,lead_id,talk_id,chat_id,source_message_id,source_fingerprint,draft,handoff_after_send,state) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,41,'','client','m1','evt','Please wait',TRUE,'sending')",(A,draft,AGENT,run));db.commit()
-    with patch.object(store,'summarize_created'):
-        assert agents.finish_draft_send(A,draft,'accepted')=='approved'
-    assert store.listing(PROFILE)['tickets'][0]['reason']=='trigger_reply_sent_then_handoff'
-
-
 def test_http_origin_identity_and_tenant_scope(db):
     import asyncio
     import logging
@@ -427,3 +423,418 @@ def test_last_message_time_includes_outbound_messages(db):
     ticket=manual()['ticket']['id']
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,happened_at) VALUES(%s::uuid,%s::uuid,41,'later-outgoing',%s,'outgoing','Checking','2099-01-01T00:00:00Z')",(str(uuid.uuid4()),A,'connect:'+CA));db.commit()
     assert store.listing(PROFILE)['tickets'][0]['last_message_at'].startswith('2099-01-01')
+
+
+def seed_simulation(db, *, enabled=True, channel=CA, conversation='client', lead_id=41, group=False):
+    simulation_schema._ready=False
+    simulation_schema.ensure_schema(db)
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT DO NOTHING",(A,))
+    db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,emergency_stop,auto_send_enabled) VALUES(%s::uuid,TRUE,FALSE,FALSE) ON CONFLICT(tenant_id) DO UPDATE SET enabled=TRUE,emergency_stop=FALSE,auto_send_enabled=FALSE",(A,))
+    db.execute("INSERT INTO saas_ai_agents(id,tenant_id,name,created_by,enabled,mode,role,scopes,expert_policy,model,instructions) VALUES(%s::uuid,%s::uuid,'Simulation Primary',11,TRUE,'automatic','primary',%s::jsonb,'{}'::jsonb,'test-model','Answer from evidence only')",(AGENT,A,json.dumps([{'provider':'connect','channel_id':channel,'allow_group_messages':group}])))
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,%s,'Simulation client',now()) ON CONFLICT DO NOTHING",(A,channel,conversation,lead_id))
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type) VALUES(%s::uuid,%s::uuid,%s,%s,%s,'incoming','Client','Simulation question','text') ON CONFLICT DO NOTHING",(str(uuid.uuid4()),A,lead_id,'connect:'+('group-message' if group else 'simulation-message'),'connect:'+channel))
+    db.execute("INSERT INTO saas_ai_simulation_configs(tenant_id,enabled,agent_id,channel_ids,conversation_ids,starts_at,token_budget,message_limit,max_parallel,max_calls_per_event,max_output_tokens) VALUES(%s::uuid,%s,%s::uuid,%s::jsonb,'[]'::jsonb,now()-interval '1 minute',20000,10,1,3,128)",(A,enabled,AGENT,json.dumps([channel])))
+    row=db.execute("SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s ORDER BY created_at DESC LIMIT 1",(A,lead_id,'connect:'+channel))[0]
+    db.commit()
+    return str(row['id'])
+
+
+def queue_simulation(db, *, tenant=A, channel=CA, source, event='new-message',conversation='client',lead_id=41):
+    with db.cursor() as cur:
+        result=simulation.enqueue_inbound(cur,tenant_id=tenant,channel_id=channel,
+            conversation_id=conversation,lead_id=lead_id,source_message_id=source,
+            source_event_id=event,occurred_at=None)
+    db.commit()
+    return result
+
+
+def seed_simulation_run(db, *, outcome='virtual_reply', events=None, refs=None):
+    source=seed_simulation(db)
+    queue_id=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_ai_simulation_queue(id,tenant_id,channel_id,conversation_id,lead_id,source_message_id,
+        source_event_id,event_fingerprint,state,completed_at)
+        VALUES(%s::uuid,%s::uuid,%s::uuid,'client',41,%s::uuid,'demo-event','demo-fingerprint','completed',now())''',
+        (queue_id,A,CA,source))
+    run_id=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_ai_simulation_runs( id,tenant_id,queue_id,channel_id,conversation_id,source_message_id,
+        primary_agent_id,outcome,virtual_reply,events,knowledge_refs,total_tokens)
+        VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s::uuid,%s,'Virtual draft',%s::jsonb,%s::jsonb,17)''',
+        (run_id,A,queue_id,CA,source,AGENT,outcome,json.dumps(events or []),json.dumps(refs or [])))
+    db.commit()
+    return run_id,source,queue_id
+
+
+def test_simulation_schema_defaults_off_and_is_tenant_scoped(db,monkeypatch):
+    source=seed_simulation(db,enabled=False)
+    monkeypatch.setattr(simulation,'runtime_flag',lambda name: name!='AI_SIMULATION_ENABLED')
+    assert simulation.enqueue_inbound(db,tenant_id=A,channel_id=CA,conversation_id='client',lead_id=41,
+        source_message_id=source,source_event_id='new-message',occurred_at=None) is False
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_simulation_queue')[0]['n']==0
+    assert simulation.list_runs(PROFILE)==[]
+
+
+def test_simulation_public_config_is_json_serializable_with_psycopg_uuids():
+    from tenant_ai_simulation_engine import _public_config
+    config=_public_config({'tenant_id':uuid.UUID(A),'agent_id':uuid.UUID(AGENT),'channel_ids':[CA],
+        'conversation_ids':[],'enabled':False,'emergency_stop':False,'state':'stopped','token_budget':0,
+        'message_limit':0,'max_parallel':1,'max_calls_per_event':3,'max_output_tokens':800,
+        'starts_at':None,'ends_at':None,'updated_at':None})
+    encoded=json.dumps(config)
+    assert str(uuid.UUID(AGENT)) in encoded and 'tenant_id' not in config
+
+
+def test_simulation_public_runs_are_json_serializable_with_psycopg_uuids():
+    from tenant_ai_simulation_engine import _public_run
+    item=_public_run({'id':uuid.uuid4(),'queue_id':uuid.uuid4(),'channel_id':uuid.uuid4(),
+        'conversation_id':'client@g.us','primary_agent_id':uuid.UUID(AGENT),
+        'recheck_of_run_id':uuid.uuid4(),'created_at':Timestamp('2026-10-22T12:00:00Z'),
+        'outcome':'virtual_reply','events':[]})
+    assert json.loads(json.dumps(item))['conversation_id']=='client@g.us'
+
+
+def test_simulation_inbound_queue_dedupes_and_tenant_fences(db,monkeypatch):
+    source=seed_simulation(db)
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    assert queue_simulation(db,source=source)
+    assert not queue_simulation(db,source=source)
+    assert not queue_simulation(db,tenant=B,source=source,event='foreign-tenant')
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_simulation_queue WHERE tenant_id=%s::uuid',(A,))[0]['n']==1
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_simulation_queue WHERE tenant_id=%s::uuid',(B,))[0]['n']==0
+
+
+def test_simulation_admission_enforces_message_limit_before_queueing(db,monkeypatch):
+    first=seed_simulation(db)
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    db.execute("UPDATE saas_ai_simulation_configs SET message_limit=1 WHERE tenant_id=%s::uuid",(A,));db.commit()
+    assert queue_simulation(db,source=first,event='first')
+    second=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type) VALUES(%s::uuid,%s::uuid,41,'connect:second-message',%s,'incoming','Client','Another question','text')",
+               (second,A,'connect:'+CA));db.commit()
+    assert not queue_simulation(db,source=second,event='second')
+    assert db.execute("SELECT count(*) AS n FROM saas_ai_simulation_queue WHERE tenant_id=%s::uuid",(A,))[0]['n']==1
+
+
+def test_simulation_claims_only_one_message_per_dialog_at_a_time(db,monkeypatch):
+    source=seed_simulation(db)
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    assert queue_simulation(db,source=source,event='first')
+    second=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type) VALUES(%s::uuid,%s::uuid,41,'connect:second-message',%s,'incoming','Client','One more question','text')",
+               (second,A,'connect:'+CA));db.commit()
+    assert queue_simulation(db,source=second,event='second')
+    first_claim=simulation.claim_next()
+    assert first_claim
+    assert simulation.claim_next() is None
+    simulation._complete(first_claim,'skipped',stop_reason='test_complete')
+    assert simulation.claim_next()
+
+
+def test_simulation_recovers_only_work_interrupted_before_provider(db,monkeypatch):
+    source=seed_simulation(db)
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    assert queue_simulation(db,source=source)
+    first=simulation.claim_next();assert first and first['attempts']==1
+    db.execute("UPDATE saas_ai_simulation_queue SET lease_until=now()-interval '1 second' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,first['id']));db.commit()
+    recovered=simulation.claim_next()
+    assert recovered and recovered['id']==first['id'] and recovered['attempts']==2
+    assert recovered['provider_started_at'] is None
+
+
+def test_simulation_revalidates_agent_mode_before_provider_call(db,monkeypatch):
+    source=seed_simulation(db)
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    assert queue_simulation(db,source=source)
+    monkeypatch.setattr(actions,'enabled_triggers',lambda *_: [])
+    monkeypatch.setattr(run_store,'knowledge_context',lambda *_a,**_k: [])
+    def credentials(*_args):
+        db.execute("UPDATE saas_ai_agents SET mode='manual' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));db.commit()
+        return 'mock-key','test-model','company',{}
+    monkeypatch.setattr(simulation,'_provider_credentials',credentials)
+    monkeypatch.setattr('tenant_chat_ai_provider.generate',lambda *_a,**_k: pytest.fail('Revoked agent reached provider'))
+    job=simulation.claim_next()
+    assert simulation.process(job)
+    run=simulation.list_runs(PROFILE)[0]
+    assert run['outcome']=='blocked' and run['virtual_stop_reason']=='simulation_stopped_before_provider'
+    assert db.execute("SELECT count(*) AS n FROM saas_ai_simulation_usage WHERE state IN ('reserved','unknown','succeeded')")[0]['n']==0
+
+
+def test_simulation_executor_records_virtual_reply_and_has_no_live_effects(db,monkeypatch):
+    source=seed_simulation(db)
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    assert queue_simulation(db,source=source)
+    monkeypatch.setattr(actions,'enabled_triggers',lambda *_: [])
+    monkeypatch.setattr(run_store,'knowledge_context',lambda *_args,**_kwargs: [])
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: ('mock-key','test-model','company',{}))
+    calls=[]
+    def fake_generate(*args,**kwargs):
+        calls.append((args,kwargs))
+        return 'Please share the order number so I can check this.',{'input_tokens':25,'output_tokens':12,'total_tokens':37}
+    monkeypatch.setattr('tenant_chat_ai_provider.generate',fake_generate)
+    import tenant_connect_transport as transport
+    monkeypatch.setattr(transport,'send_ai_reply_if_active',lambda *_a,**_k: pytest.fail('Simulation attempted an external send'))
+    before={table:db.execute(f'SELECT count(*) AS n FROM {table}')[0]['n'] for table in
+            ('saas_crm_messages','saas_crm_deals','saas_crm_tasks','saas_support_tickets',
+             'saas_tenant_notifications','saas_ai_agent_jobs','saas_ai_conversation_state','saas_ai_group_coordination')}
+    job=simulation.claim_next()
+    assert job and job['tenant_id']==A
+    assert simulation.process(job)
+    run=simulation.list_runs(PROFILE)[0]
+    assert len(calls)==1,json.dumps(run,default=str)
+    assert run['outcome']=='virtual_reply' and run['sent'] is False
+    assert run['virtual_reply'].startswith('Please share')
+    state=db.execute("SELECT session_started_at,virtual_state FROM saas_ai_simulation_dialog_state WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id='client'",(A,CA))[0]
+    assert state['virtual_state']['sent'] is False and state['virtual_state']['last_reply']==run['virtual_reply']
+    assert db.execute("SELECT count(*) AS n FROM saas_ai_simulation_dialog_state WHERE tenant_id=%s::uuid",(B,))[0]['n']==0
+    after={table:db.execute(f'SELECT count(*) AS n FROM {table}')[0]['n'] for table in before}
+    assert after==before
+    assert db.execute("SELECT sum(actual_tokens) AS n FROM saas_ai_simulation_usage WHERE tenant_id=%s::uuid",(A,))[0]['n']==37
+
+
+def test_simulation_calls_only_explicitly_allowed_expert_and_accounts_tokens(db,monkeypatch):
+    source=seed_simulation(db)
+    expert=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_ai_agents(id,tenant_id,name,created_by,enabled,mode,role,scopes,expert_policy,model,instructions) VALUES(%s::uuid,%s::uuid,'Internal Expert',11,TRUE,'manual','expert','[]'::jsonb,%s::jsonb,'expert-test-model','Internal analysis only')",
+               (expert,A,json.dumps({'internal':True,'allowed_primary_ids':[AGENT],'tools':[]})))
+    db.execute("UPDATE saas_ai_agents SET expert_policy=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+               (json.dumps({'expert_agent_id':expert}),A,AGENT));db.commit()
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    db.execute("INSERT INTO saas_ai_agent_triggers(tenant_id,id,agent_id,name,trigger_type,condition,actions,enabled) VALUES(%s::uuid,%s::uuid,%s::uuid,'Ask expert','phrase',%s::jsonb,'[\"call_expert\"]'::jsonb,TRUE)",
+               (A,str(uuid.uuid4()),AGENT,json.dumps({'phrase':'Simulation','expert_agent_ids':[expert]})));db.commit()
+    monkeypatch.setattr(run_store,'knowledge_context',lambda *_a,**_k: [])
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: ('mock-key','test-model','company',{}))
+    calls=[]
+    def fake_generate(_key,_model,mode,*_args,**_kwargs):
+        calls.append(mode)
+        if mode=='expert':
+            return json.dumps({'cause':'unknown','evidence':[],'confidence':'low','safe_actions':[],
+                'additional_information':'Check the order status.','requires_human':False,'ticket_summary':'New customer inquiry.'}),{'total_tokens':19}
+        return 'I can check the order status for you.',{'total_tokens':31}
+    monkeypatch.setattr('tenant_chat_ai_provider.generate',fake_generate)
+    assert queue_simulation(db,source=source)
+    assert simulation.process(simulation.claim_next())
+    run=simulation.list_runs(PROFILE)[0]
+    assert calls==['expert','reply'],json.dumps(run,default=str)
+    assert run['outcome']=='virtual_reply' and len(run['expert_results'])==1
+    assert db.execute("SELECT sum(actual_tokens) AS n FROM saas_ai_simulation_usage WHERE tenant_id=%s::uuid",(A,))[0]['n']==50
+
+
+def test_simulation_executor_blocks_ambiguous_primary_before_provider(db,monkeypatch):
+    source=seed_simulation(db)
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    assert queue_simulation(db,source=source)
+    second=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_ai_agents(id,tenant_id,name,created_by,enabled,mode,role,scopes,expert_policy,model) VALUES(%s::uuid,%s::uuid,'Second Primary',11,TRUE,'automatic','primary',%s::jsonb,'{}'::jsonb,'test-model')",(second,A,json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':False}])))
+    db.commit()
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    monkeypatch.setattr(actions,'enabled_triggers',lambda *_: [])
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: pytest.fail('Ambiguous simulation reached credentials'))
+    job=simulation.claim_next()
+    assert simulation.process(job)
+    run=simulation.list_runs(PROFILE)[0]
+    assert run['outcome']=='blocked',json.dumps(run,default=str)
+    assert run['virtual_stop_reason']=='primary_not_unique_or_scope_mismatch'
+
+
+def test_simulation_enable_requires_explicit_start_confirmation(db,monkeypatch):
+    seed_simulation(db,enabled=False)
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT DO NOTHING",(A,));db.commit()
+    monkeypatch.setattr(simulation,'runtime_flag',lambda name: name in {'AI_SIMULATION_ENABLED','AI_AGENTS_ENABLED'})
+    base={'enabled':True,'agent_id':AGENT,'channel_ids':[CA],'conversation_ids':[],
+          'token_budget':10000,'message_limit':10,'max_parallel':1,'max_calls_per_event':2,
+          'max_output_tokens':128}
+    with pytest.raises(TenantLinearError):simulation.save_config(PROFILE,base)
+    with pytest.raises(TenantLinearError):simulation.save_config(PROFILE,{**base,'enabled':'true','confirm_start':True})
+    saved=simulation.save_config(PROFILE,{**base,'confirm_start':True})
+    assert saved['enabled'] is True and saved['starts_at']
+    assert saved['runtime_enabled'] is True
+    foreign=simulation.read_config({'tenant_id':B,'telegram_id':22})
+    assert foreign['enabled'] is False and foreign['agent_id'] is None and foreign['channel_ids']==[]
+
+
+def test_simulation_api_requires_same_origin_and_explicit_tenant(db,monkeypatch):
+    import asyncio,logging
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient,TestServer
+    from tenant_ai_simulation_api import handler
+    seed_simulation(db,enabled=False)
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT DO NOTHING",(A,));db.commit()
+    monkeypatch.setattr(simulation,'runtime_flag',lambda name: name in {'AI_SIMULATION_ENABLED','AI_AGENTS_ENABLED'})
+    async def scenario():
+        app=web.Application();app.router.add_route('GET','/settings',handler(lambda _r:PROFILE,'https://crm.test',logging.getLogger('test'),'settings'))
+        app.router.add_route('PATCH','/settings',handler(lambda _r:PROFILE,'https://crm.test',logging.getLogger('test'),'settings'))
+        async with TestClient(TestServer(app)) as client:
+            assert (await client.get('/settings')).status==200
+            payload={'expected_tenant_id':A,'expected_user_id':11,'enabled':True,'confirm_start':True,
+                'agent_id':AGENT,'channel_ids':[CA],'conversation_ids':[],'token_budget':10000,'message_limit':5,
+                'max_parallel':1,'max_calls_per_event':2,'max_output_tokens':128}
+            assert (await client.patch('/settings',json=payload)).status==403
+            assert (await client.patch('/settings',headers={'Origin':'https://crm.test'},json={**payload,'expected_tenant_id':B})).status==409
+            response=await client.patch('/settings',headers={'Origin':'https://crm.test'},json=payload)
+            assert response.status==200 and (await response.json())['result']['enabled'] is True
+    asyncio.run(scenario())
+
+
+def test_simulation_emergency_stop_fences_queued_and_pre_provider_work(db,monkeypatch):
+    source=seed_simulation(db)
+    monkeypatch.setattr(simulation,'runtime_flag',lambda name: name in {'AI_SIMULATION_ENABLED','AI_AGENTS_ENABLED'})
+    assert queue_simulation(db,source=source)
+    saved=simulation.save_config(PROFILE,{'emergency_stop':True})
+    assert saved['emergency_stop'] is True
+    assert db.execute("SELECT state,error_code FROM saas_ai_simulation_queue WHERE tenant_id=%s::uuid",(A,))[0]=={'state':'skipped','error_code':'emergency_stop'}
+    assert simulation.claim_next() is None
+
+
+def test_simulation_unknown_provider_outcome_is_not_retried(db,monkeypatch):
+    source=seed_simulation(db)
+    monkeypatch.setattr(simulation,'runtime_flag',lambda name: name in {'AI_SIMULATION_ENABLED','AI_AGENTS_ENABLED'})
+    assert queue_simulation(db,source=source)
+    queue=db.execute('SELECT id FROM saas_ai_simulation_queue WHERE tenant_id=%s::uuid',(A,))[0]['id']
+    db.execute("UPDATE saas_ai_simulation_queue SET state='processing',lease_token=%s::uuid,lease_until=now()-interval '1 second',provider_started_at=now()-interval '4 minutes' WHERE id=%s::uuid",(str(uuid.uuid4()),queue))
+    db.execute("INSERT INTO saas_ai_simulation_usage(tenant_id,queue_id,call_no,agent_id,call_kind,reserved_tokens,state) VALUES(%s::uuid,%s::uuid,1,%s::uuid,'primary',100,'reserved')",(A,queue,AGENT));db.commit()
+    assert simulation.claim_next() is None
+    assert db.execute("SELECT state,error_code FROM saas_ai_simulation_queue WHERE id=%s::uuid",(queue,))[0]=={'state':'unknown','error_code':'provider_result_unknown'}
+    assert db.execute("SELECT state FROM saas_ai_simulation_usage WHERE queue_id=%s::uuid",(queue,))[0]['state']=='unknown'
+
+
+def test_simulation_skips_event_already_claimed_by_active_mode(db,monkeypatch):
+    source=seed_simulation(db)
+    monkeypatch.setattr(simulation,'runtime_flag',lambda name: name in {'AI_SIMULATION_ENABLED','AI_AGENTS_ENABLED'})
+    assert queue_simulation(db,source=source)
+    fingerprint=simulation._event_fingerprint('new-message')
+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,payload,state) VALUES(%s::uuid,%s,'connect','incoming_message','{}'::jsonb,'completed')",(A,fingerprint))
+    db.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,chat_id,channel_id,lead_id,event_fingerprint,talk_id,due_at,state) VALUES(%s::uuid,%s::uuid,'connect','client','client',%s,41,%s,'',now(),'sent')",(A,AGENT,CA,fingerprint));db.commit()
+    monkeypatch.setattr(actions,'enabled_triggers',lambda *_: [])
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: pytest.fail('Active-owned event must not call provider again'))
+    job=simulation.claim_next()
+    assert simulation.process(job)
+    run=simulation.list_runs(PROFILE)[0]
+    assert run['outcome']=='skipped' and run['virtual_stop_reason']=='active_mode_already_processed'
+
+
+def test_simulation_does_not_overlap_active_work_on_same_dialog(db,monkeypatch):
+    source=seed_simulation(db)
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    assert queue_simulation(db,source=source)
+    active_fingerprint=simulation._event_fingerprint('other-active-event')
+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,payload,state) VALUES(%s::uuid,%s,'connect','incoming_message','{}'::jsonb,'processing')",(A,active_fingerprint))
+    db.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,chat_id,channel_id,lead_id,event_fingerprint,talk_id,due_at,state) VALUES(%s::uuid,%s::uuid,'connect','client','client',%s,41,%s,'',now(),'processing')",(A,AGENT,CA,active_fingerprint));db.commit()
+    monkeypatch.setattr(actions,'enabled_triggers',lambda *_: [])
+    monkeypatch.setattr(run_store,'knowledge_context',lambda *_a,**_k: [])
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: ('mock-key','test-model','company',{}))
+    monkeypatch.setattr('tenant_chat_ai_provider.generate',lambda *_a,**_k: pytest.fail('Concurrent Active dialog reached provider'))
+    assert simulation.process(simulation.claim_next())
+    run=simulation.list_runs(PROFILE)[0]
+    assert run['outcome']=='blocked' and run['virtual_stop_reason']=='simulation_stopped_before_provider'
+
+
+def test_simulation_respects_legacy_channel_quarantine(db,monkeypatch):
+    source=seed_simulation(db)
+    db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,agent_id,state,reason,revision) VALUES(%s::uuid,'connect','','client',%s::uuid,'active','legacy',1)",(A,AGENT));db.commit()
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    assert queue_simulation(db,source=source)
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: pytest.fail('Ambiguous legacy route reached credentials'))
+    assert simulation.process(simulation.claim_next())
+    run=simulation.list_runs(PROFILE)[0]
+    assert run['outcome']=='blocked' and run['virtual_stop_reason']=='legacy_channel_ambiguous'
+
+
+def test_simulation_marks_unavailable_media_unsupported_without_provider_call(db,monkeypatch):
+    source=seed_simulation(db)
+    db.execute("UPDATE saas_crm_messages SET body='',message_type='audio' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,source));db.commit()
+    monkeypatch.setattr(simulation,'runtime_flag',lambda name: name in {'AI_SIMULATION_ENABLED','AI_AGENTS_ENABLED'})
+    assert queue_simulation(db,source=source)
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: pytest.fail('Unavailable media reached provider'))
+    job=simulation.claim_next()
+    assert simulation.process(job)
+    run=simulation.list_runs(PROFILE)[0]
+    assert run['outcome']=='unsupported'
+    assert run['virtual_stop_reason']=='simulation_media_context_unavailable'
+
+
+def test_simulation_group_requires_live_group_authority_without_mutating_it(db,monkeypatch):
+    group='12345@g.us';source=seed_simulation(db,conversation=group,lead_id=43,group=True)
+    db.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,assignments,reason) VALUES(%s::uuid,%s,'[]'::jsonb,'group_assignment_required') ON CONFLICT DO NOTHING",(A,group));db.commit()
+    monkeypatch.setattr(simulation,'runtime_flag',lambda name: name in {'AI_SIMULATION_ENABLED','AI_AGENTS_ENABLED'})
+    assert queue_simulation(db,source=source,conversation=group,lead_id=43)
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: pytest.fail('Paused group reached provider'))
+    job=simulation.claim_next()
+    assert simulation.process(job)
+    run=simulation.list_runs(PROFILE)[0]
+    assert run['outcome']=='virtual_stop' and run['virtual_stop_reason']=='group_not_active_or_primary_not_bound'
+    assert db.execute("SELECT state,assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s",(A,group))[0]['state']=='paused'
+
+
+def test_simulation_token_budget_blocks_provider_call(db,monkeypatch):
+    source=seed_simulation(db)
+    db.execute("UPDATE saas_ai_simulation_configs SET token_budget=100 WHERE tenant_id=%s::uuid",(A,));db.commit()
+    monkeypatch.setattr(simulation,'runtime_flag',lambda name: name in {'AI_SIMULATION_ENABLED','AI_AGENTS_ENABLED'})
+    assert queue_simulation(db,source=source)
+    monkeypatch.setattr(actions,'enabled_triggers',lambda *_: [])
+    monkeypatch.setattr(run_store,'knowledge_context',lambda *_a,**_k: [])
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: ('mock-key','test-model','company',{}))
+    monkeypatch.setattr('tenant_chat_ai_provider.generate',lambda *_a,**_k: pytest.fail('Budget exhaustion reached paid provider'))
+    job=simulation.claim_next();assert simulation.process(job)
+    run=simulation.list_runs(PROFILE)[0]
+    assert run['outcome']=='blocked' and run['virtual_stop_reason']=='simulation_budget_exhausted'
+    assert db.execute("SELECT count(*) AS n FROM saas_ai_simulation_usage WHERE state IN ('reserved','succeeded','unknown')")[0]['n']==0
+
+
+def test_simulation_executor_has_no_live_side_effect_imports():
+    import ast
+    tree=ast.parse((ROOT/'tenant_ai_simulation_engine.py').read_text(encoding='utf-8'))
+    imports={node.module for node in ast.walk(tree) if isinstance(node,ast.ImportFrom)}
+    imports.update(alias.name for node in ast.walk(tree) if isinstance(node,ast.Import) for alias in node.names)
+    assert not any(name in imports for name in {'tenant_ai_agent_worker','tenant_connect_transport','tenant_chat_send_api','tenant_linear_tasks_api','tenant_ai_agent_actions.handoff'})
+    calls={node.func.attr for node in ast.walk(tree) if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)}
+    assert not calls.intersection({'send','send_ai_reply','send_ai_reply_if_active','handoff','execute_matching_actions','create_task','move_stage','update_phone'})
+
+
+def test_ai_dashboard_is_tenant_scoped_and_uses_recorded_values(db,monkeypatch):
+    run_id,_source,_queue=seed_simulation_run(db,events=[{'type':'trigger_matched','trigger_id':'t1'}])
+    fingerprint='case-extraction-not-active-job'
+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,payload,state) VALUES(%s::uuid,%s,'connect','knowledge_extraction','{}'::jsonb,'completed')",(A,fingerprint))
+    db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,result) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,'local-preview','completed','{}'::jsonb)",(A,str(uuid.uuid4()),AGENT,fingerprint));db.commit()
+    board=ai_dashboard.dashboard(PROFILE)
+    assert [agent['id'] for agent in board['agents']]==[AGENT]
+    assert board['simulation']['runs']==1 and board['simulation']['tokens']==17
+    assert board['simulation']['trigger_matches']==1
+    assert board['agents'][0]['active_runs']==0  # unrelated AI runs are not Active worker jobs
+    assert all(item['tenant_id']==A for item in ai_dashboard.events(PROFILE,mode='simulation'))
+    detail=ai_dashboard.simulation_run(PROFILE,run_id)
+    assert detail['sent'] is False and 'tenant_id' not in detail
+    json.dumps(detail)
+    foreign={**PROFILE,'tenant_id':B,'telegram_id':22}
+    assert ai_dashboard.events(foreign,mode='simulation')==[]
+    with pytest.raises(TenantLinearError): ai_dashboard.simulation_run(foreign,run_id)
+
+
+def test_ai_dashboard_issues_are_evidence_based_and_reviewable(db):
+    run_id,_source,_queue=seed_simulation_run(db,events=[{'type':'expert_unavailable','reason':'expert_scope_denied'}],refs=[{'source_id':'synthetic-source'}])
+    issues=ai_dashboard.issues(PROFILE)
+    assert len(issues)==1 and issues[0]['category']=='expert_unavailable'
+    assert issues[0]['status']=='new'
+    result=ai_dashboard.review_issue(PROFILE,run_id,'expert_unavailable','in_review')
+    assert result['status']=='in_review'
+    assert ai_dashboard.issues(PROFILE)[0]['status']=='in_review'
+    with pytest.raises(TenantLinearError): ai_dashboard.review_issue(PROFILE,run_id,'provider_result_unknown','confirmed')
+
+
+def test_ai_dashboard_marks_possible_trigger_miss_as_review_prompt(db):
+    run_id,_source,_queue=seed_simulation_run(db,events=[{'type':'trigger_checked','enabled_count':2,
+        'matched':False,'possible_topic':'price'}],refs=[{'source_id':'demo-source'}])
+    issues=ai_dashboard.issues(PROFILE)
+    assert len(issues)==1 and issues[0]['category']=='possible_trigger_miss'
+    assert 'not proof' in issues[0]['suggested_action'].lower()
+    assert ai_dashboard.review_issue(PROFILE,run_id,'possible_trigger_miss','confirmed')['status']=='confirmed'
+
+
+def test_ai_dashboard_recheck_is_tenant_scoped_and_idempotent(db,monkeypatch):
+    run_id,_source,_queue=seed_simulation_run(db)
+    monkeypatch.setattr('tenant_ai_agent_runtime_flags.enabled',lambda _name:True)
+    first=ai_dashboard.enqueue_recheck(PROFILE,run_id,'request-123')
+    second=ai_dashboard.enqueue_recheck(PROFILE,run_id,'request-123')
+    assert first['queued'] and not first['idempotent']
+    assert second['idempotent'] and first['queue_id']==second['queue_id']
+    assert db.execute("SELECT count(*) AS n FROM saas_ai_simulation_queue WHERE tenant_id=%s::uuid AND recheck_of_run_id=%s::uuid",(A,run_id))[0]['n']==1
+    foreign={**PROFILE,'tenant_id':B,'telegram_id':22}
+    with pytest.raises(TenantLinearError): ai_dashboard.enqueue_recheck(foreign,run_id,'other-tenant')

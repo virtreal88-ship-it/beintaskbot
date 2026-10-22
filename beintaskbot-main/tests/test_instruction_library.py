@@ -50,6 +50,19 @@ def test_stale_edit_no_duplicate_publish_and_unpublish_on_edit(ready):
  assert db.execute('SELECT active FROM saas_ai_knowledge_sources')[0]['active'] is False;db.commit()
  with pytest.raises(TenantLinearError):lib.shared(token)
 
+def test_unpublish_is_distinct_from_public_link_revoke_and_disables_sources(ready):
+ db,_=ready;r=save(ready);r=mutate(mutate(r,'submit'),'approve',review_confirmed=True);r=mutate(r,'publish',agent_ids=[AGENT])
+ source=db.execute('SELECT id FROM saas_ai_knowledge_sources')[0]['id'];token=mutate(r,'share')['token']
+ r=lib.operation(PROFILE,'read',lesson_id=r['id']);r=mutate(r,'unpublish')
+ assert r['state']=='approved' and r['published_doc'] is None and r['public_hash'] is None
+ assert db.execute('SELECT active FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(source,))[0]['active'] is False;db.commit()
+ with pytest.raises(TenantLinearError):lib.shared(token)
+ with pytest.raises(TenantLinearError):
+  import tenant_ai_agents_store as agents
+  agents.save_knowledge(PROFILE,{'content':'bypass edit'},source_id=source)
+ with pytest.raises(TenantLinearError):agents.delete_knowledge(PROFILE,source)
+ assert db.execute('SELECT count(*) AS n FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(source,))[0]['n']==1;db.commit()
+
 @pytest.mark.parametrize('fault',['path','bounds','duration','cue','language','order'])
 def test_document_bounds(fault):
  v=doc(uid());s=v['slides'][0]

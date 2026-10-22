@@ -7,9 +7,8 @@ import pytest
 from test_tenant_support_inbox import database,db,A,B,CA,CB,AGENT,PROFILE,seed_job
 import tenant_ai_testing_store as store
 import tenant_ai_testing_service as service
-import tenant_ai_testing_catalog as catalog
-import tenant_ai_agent_test_mode as binding
 import tenant_ai_agent_connect as connect
+import tenant_ai_agent_queue as kommo_queue
 import tenant_ai_agents_store as agents
 from tenant_ai_testing_budget import TOKEN_USAGE_SQL
 from tenant_linear_policy import TenantLinearError
@@ -19,7 +18,7 @@ def uid():return str(uuid.uuid4())
 
 @pytest.fixture
 def sandbox(db,monkeypatch):
-    for module in (store,binding,catalog):monkeypatch.setattr(module,'_connect',lambda:db)
+    for module in (store,kommo_queue):monkeypatch.setattr(module,'_connect',lambda:db)
     monkeypatch.setattr(store,'runtime_flag',lambda _:True)
     monkeypatch.setattr(connect,'runtime_flag',lambda _:True)
     monkeypatch.setattr(store,'choose_api_credential',lambda *args:('test-key','platform'))
@@ -202,56 +201,6 @@ def test_key_or_model_not_available_is_clear_no_generation(sandbox,monkeypatch):
     with pytest.raises(TenantLinearError):store.reserve(PROFILE,id,message())
 
 
-def test_connect_selected_agent_exact_route_and_queue(sandbox):
-    db=sandbox;other=uid()
-    db.execute("UPDATE saas_ai_agents SET mode='automatic' WHERE tenant_id=%s::uuid",(A,))
-    db.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,enabled,created_by,scopes) SELECT tenant_id,%s::uuid,'Second',TRUE,11,scopes FROM saas_ai_agents WHERE id=%s::uuid",(other,AGENT))
-    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected')",(A,));db.commit()
-    data={'provider':'connect','agent_id':AGENT,'channel_id':CA,'conversation_id':'client','enabled':True,'emergency_stop':False}
-    binding.save_test_mode(PROFILE,data);assert binding.read_test_mode(PROFILE)['connect']['agent_id']==AGENT
-    with db.cursor() as cur:
-        assert connect.test_allowed(cur,A,CA,'client',agent_id=AGENT)
-        assert not connect.test_allowed(cur,A,CA,'client',agent_id=other)
-        assert not connect.test_allowed(cur,A,CB,'client',agent_id=AGENT)
-        assert not connect.test_allowed(cur,A,CA,'another',agent_id=AGENT)
-        assert not connect.test_allowed(cur,B,CA,'client',agent_id=AGENT)
-    db.commit()
-    assert connect.enqueue(A,channel_id=CA,conversation_id='client',lead_id=41,message_id='bound-only',event_id='e',text='Internet')==1
-    assert {str(r['agent_id']) for r in db.execute('SELECT agent_id FROM saas_ai_agent_jobs')}=={AGENT}
-    db.commit()
-    for delta in ({'agent_id':uid()},{'channel_id':CB},{'conversation_id':'another'}):
-        with pytest.raises(TenantLinearError):binding.save_test_mode(PROFILE,{**data,**delta})
-
-
-def test_kommo_agent_boundary_keeps_full_strict_route(sandbox,monkeypatch):
-    db=sandbox;monkeypatch.setattr(binding,'COMPANY_PHONE','+15555550102');monkeypatch.setattr(binding,'CLIENT_PHONE','+15555550101')
-    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain) VALUES(%s::uuid,'kommo','connected','test.kommo.com')",(A,));db.commit()
-    data={'agent_id':AGENT,'company_phone':'+15555550102','client_phone':'+15555550101','company_phone_attested':True,'channel_id':'wa','lead_id':7,'contact_id':8,'talk_id':'9','chat_id':'chat','enabled':False}
-    result=binding.save_test_mode(PROFILE,data);assert result['agent_id']==AGENT
-    # Saving an unverified binding cannot enable it and cannot stop Connect jobs.
-    assert db.execute("SELECT state FROM saas_ai_agent_jobs WHERE provider='connect'")[0]['state']=='queued';db.commit()
-    with pytest.raises(TenantLinearError):binding.save_test_mode(PROFILE,{**data,'enabled':True})
-    db.execute('UPDATE saas_ai_agent_test_mode SET enabled=TRUE,verified=TRUE WHERE tenant_id=%s::uuid',(A,));db.commit()
-    job={'tenant_id':A,'provider':'kommo','agent_id':AGENT,'lead_id':7,'talk_id':'9','chat_id':'chat','channel_id':'wa','payload':{'contact_id':8}}
-    assert binding.allowed_job(job)
-    for change in ({'agent_id':uid()},{'chat_id':'foreign'},{'channel_id':'other'},{'payload':{'contact_id':99}},{'lead_id':42}):assert not binding.allowed_job({**job,**change})
-
-
-def test_catalog_scopes_company_and_rechecks_access(sandbox):
-    db=sandbox
-    with pytest.raises(TenantLinearError):catalog.catalog(PROFILE)
-    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain) VALUES(%s::uuid,'kommo','connected','own.kommo.com')",(A,));db.commit()
-    calls=[]
-    async def provider(tenant,method,path,**kw):
-        calls.append((tenant,method,path))
-        if path.startswith('leads/'):return {'id':7,'_embedded':{'contacts':[{'id':8,'name':'Own contact'}]}}
-        return {'_embedded':{'talks':[{'id':9,'entity_id':7,'entity_type':'lead','chat_id':'own-chat','origin':'wa'}]}}
-    result=asyncio.run(catalog.kommo_context(PROFILE,provider,lead_id='7'))
-    assert result['contacts'][0]['id']==8 and result['talks'][0]['chat_id']=='own-chat'
-    assert all(tenant==A and method=='GET' for tenant,method,path in calls)
-    with pytest.raises(TenantLinearError):asyncio.run(catalog.kommo_context({'tenant_id':B,'telegram_id':22},provider,lead_id='7'))
-
-
 def test_old_inflight_timeout_is_not_replayed_and_new_request_can_proceed(sandbox):
     id=new();first=store.reserve(PROFILE,id,message('old request'))
     with pytest.raises(TenantLinearError):store.reserve(PROFILE,id,message('too soon'))
@@ -272,25 +221,43 @@ def test_shared_limit_also_counts_real_agent_runs(sandbox):
     assert error.value.status==429
 
 
-def test_worker_configuration_rechecks_selected_test_agent(sandbox,monkeypatch):
+def test_company_mode_retirement_migration_is_safe_and_one_time(sandbox,monkeypatch):
+    import tenant_ai_agents_schema as schema
     import tenant_ai_agent_run_store as runs
     monkeypatch.setattr(runs,'_connect',lambda:sandbox);monkeypatch.setattr(runs,'platform_key_ready',lambda *args:True)
     monkeypatch.setattr(runs,'platform_model_allowed',lambda _:True)
     lease=uid();sandbox.execute("UPDATE saas_ai_agent_jobs SET state='processing',lease_token=%s::uuid,lease_until=now()+interval '3 minutes'",(lease,))
-    sandbox.execute("UPDATE saas_tenant_webhook_events SET payload='{\"test_mode\":true}'::jsonb")
-    sandbox.execute("INSERT INTO saas_ai_agent_connect_test_mode(tenant_id,channel_id,conversation_id,agent_id,enabled,verified,updated_by) VALUES(%s::uuid,%s,'client',%s::uuid,TRUE,TRUE,11)",(A,CA,AGENT));sandbox.commit()
-    job={'tenant_id':A,'agent_id':AGENT,'provider':'connect','channel_id':CA,'conversation_id':'client','lease_token':lease,'revision':1}
-    assert runs.load_agent_config(job,with_block_reason=True)==(None,'manual_mode_requires_operator_request')
-    sandbox.execute("UPDATE saas_ai_agents SET mode='automatic' WHERE id=%s::uuid",(AGENT,));sandbox.commit()
-    assert runs.load_agent_config(job)['mode']=='automatic'
-    other=uid();sandbox.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled) VALUES(%s::uuid,%s::uuid,'Second',11,TRUE)",(A,other));sandbox.execute('UPDATE saas_ai_agent_connect_test_mode SET agent_id=%s::uuid',(other,));sandbox.commit()
-    assert runs.load_agent_config(job,with_block_reason=True)==(None,'test_binding_mismatch')
-    # Even coincident Kommo identifiers cannot authorize a Connect job.
-    sandbox.execute("UPDATE saas_ai_agent_jobs SET talk_id='9'")
-    sandbox.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain) VALUES(%s::uuid,'kommo','connected','test.kommo.com')",(A,))
-    sandbox.execute("INSERT INTO saas_ai_agent_test_mode(tenant_id,agent_id,account_domain,channel_id,lead_id,contact_id,talk_id,chat_id,enabled,verified,updated_by,company_phone,client_phone,company_phone_attested) VALUES(%s::uuid,%s::uuid,'test.kommo.com',%s,41,8,'9','client',TRUE,TRUE,11,'+15555550102','+15555550101',TRUE)",(A,AGENT,CA))
-    sandbox.execute("UPDATE saas_tenant_webhook_events SET payload=payload||'{\"contact_id\":8}'::jsonb");sandbox.commit()
-    assert runs.load_agent_config(job,with_block_reason=True)==(None,'test_binding_mismatch')
+    sandbox.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS operating_mode TEXT")
+    sandbox.execute("UPDATE saas_ai_agent_settings SET operating_mode='test',auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
+    sandbox.execute("UPDATE saas_ai_agent_jobs SET state='processing'")
+    sandbox.execute("UPDATE saas_tenant_webhook_events SET state='processing'")
+    sandbox.execute("DELETE FROM saas_ai_compat_migrations WHERE version=1")
+    sandbox.commit();schema._ready=False;schema.ensure_schema(sandbox)
+    assert sandbox.execute("SELECT auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]['auto_send_enabled'] is False
+    assert sandbox.execute("SELECT state,error_code FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid",(A,))[0]=={'state':'skipped','error_code':'legacy_test_mode_retired'}
+    assert sandbox.execute("SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid",(A,))[0]=={'state':'skipped','error_code':'legacy_test_mode_retired'}
+    sandbox.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,));sandbox.commit()
+    schema._ready=False;schema.ensure_schema(sandbox)
+    assert sandbox.execute("SELECT auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]['auto_send_enabled'] is True
+    assert sandbox.execute("SELECT 1 FROM information_schema.columns WHERE table_name='saas_ai_agent_settings' AND column_name='operating_mode'")
+    sandbox.commit()
+
+
+def test_kommo_manual_agent_never_queues_and_company_send_gate_blocks_automatic(sandbox):
+    db=sandbox
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain) VALUES(%s::uuid,'kommo','connected','own.kommo.com')",(A,))
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=FALSE WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_agents SET mode='automatic',scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+               (json.dumps([{'provider':'kommo','pipeline_id':'5','stage_id':'6','channel_id':'wa'}]),A,AGENT))
+    db.commit()
+    event={'id':'manual-mode-message','type':'incoming','entity_id':41,'contact_id':8,'talk_id':'9','chat_id':'kommo-chat','origin':'wa'}
+    before=count(db,'saas_tenant_webhook_events')
+    assert kommo_queue.ingest_kommo_messages({'account':{'domain':'own.kommo.com'}},[event],with_reason=True)==(0,'company_settings_unavailable')
+    assert count(db,'saas_tenant_webhook_events')==before
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_agents SET mode='manual' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));db.commit()
+    assert kommo_queue.ingest_kommo_messages({'account':{'domain':'own.kommo.com'}},[event],with_reason=True)==(0,'no_enabled_agent')
+    assert count(db,'saas_ai_agent_jobs')==1  # fixture job only; incoming did not schedule AI
 
 
 @pytest.mark.parametrize('foreign',[False,True])
@@ -323,43 +290,31 @@ def test_kommo_crm_commit_boundaries_recheck_selected_agent(sandbox,monkeypatch)
     import tenant_ai_agent_crm_actions as crm
     monkeypatch.setattr(crm,'_connect',lambda:sandbox);monkeypatch.setattr(crm,'runtime_flag',lambda _:True)
     lease=uid();sandbox.execute("UPDATE saas_ai_agents SET mode='automatic'")
-    sandbox.execute('UPDATE saas_ai_agent_settings SET crm_actions_enabled=TRUE')
+    sandbox.execute('UPDATE saas_ai_agent_settings SET crm_actions_enabled=TRUE,auto_send_enabled=TRUE')
     sandbox.execute("UPDATE saas_ai_agent_jobs SET provider='kommo',talk_id='9',channel_id='wa',state='processing',lease_token=%s::uuid",(lease,))
     sandbox.execute("UPDATE saas_ai_conversation_state SET provider='kommo'")
     sandbox.execute("UPDATE saas_tenant_webhook_events SET provider='kommo',payload='{\"contact_id\":8}'::jsonb")
     sandbox.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain) VALUES(%s::uuid,'kommo','connected','test.kommo.com')",(A,))
-    sandbox.execute("INSERT INTO saas_ai_agent_test_mode(tenant_id,agent_id,account_domain,channel_id,lead_id,contact_id,talk_id,chat_id,enabled,verified,updated_by,company_phone,client_phone,company_phone_attested) VALUES(%s::uuid,%s::uuid,'test.kommo.com','wa',41,8,'9','client',TRUE,TRUE,11,'+15555550102','+15555550101',TRUE)",(A,AGENT));sandbox.commit()
     job={'tenant_id':A,'agent_id':AGENT,'provider':'kommo','conversation_id':'client','lease_token':lease,'revision':1,'event_fingerprint':'evt'}
     assert crm._action_still_allowed(job)
     assert crm._reserve_action(job,'first','create_task',{'text':'test'})[1]=='running'
-    other=uid();sandbox.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled) VALUES(%s::uuid,%s::uuid,'Second',11,TRUE)",(A,other));sandbox.execute('UPDATE saas_ai_agent_test_mode SET agent_id=%s::uuid',(other,));sandbox.commit()
+    sandbox.execute("UPDATE saas_ai_agents SET enabled=FALSE WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));sandbox.commit()
     assert not crm._action_still_allowed(job)
     with pytest.raises(TenantLinearError):crm._reserve_action(job,'second','create_task',{'text':'test'})
     assert count(sandbox,'saas_ai_agent_action_runs')==1
 
 
-@pytest.mark.parametrize('operating_mode,selected',[('active',False),('active',True),('test',False),('test',True)])
-def test_saving_disabled_kommo_binding_never_cancels_active_or_other_contacts(sandbox,monkeypatch,operating_mode,selected):
-    db=sandbox;monkeypatch.setattr(binding,'COMPANY_PHONE','+15555550102');monkeypatch.setattr(binding,'CLIENT_PHONE','+15555550101')
-    db.execute('UPDATE saas_ai_agent_settings SET operating_mode=%s',(operating_mode,))
-    db.execute("UPDATE saas_ai_agent_jobs SET provider='kommo',conversation_id=%s,chat_id=%s,lead_id=7,talk_id='9',channel_id='wa'",('chat' if selected else 'other','chat' if selected else 'other'))
-    db.execute("UPDATE saas_tenant_webhook_events SET provider='kommo',state='queued'")
-    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain) VALUES(%s::uuid,'kommo','connected','test.kommo.com')",(A,));db.commit()
-    binding.save_test_mode(PROFILE,{'agent_id':AGENT,'company_phone':'+15555550102','client_phone':'+15555550101','company_phone_attested':True,'channel_id':'wa','lead_id':7,'contact_id':8,'talk_id':'9','chat_id':'chat','enabled':False})
-    expected='skipped' if operating_mode=='test' and selected else 'queued'
-    assert db.execute('SELECT state FROM saas_ai_agent_jobs')[0]['state']==expected
-    assert db.execute('SELECT state FROM saas_tenant_webhook_events')[0]['state']==expected
-
-
-def test_schema_repeat_preserves_private_history_and_existing_bindings(sandbox,monkeypatch):
+def test_schema_repeat_preserves_virtual_chat_and_does_not_create_company_test_mode(sandbox,monkeypatch):
     from tenant_ai_testing_schema import create_schema
     monkeypatch.setattr(service,'generate',Mock(return_value=('Answer',{'total_tokens':12})))
     id=new();before=run(id)
-    sandbox.execute("INSERT INTO saas_ai_agent_connect_test_mode(tenant_id,channel_id,conversation_id,enabled,verified) VALUES(%s::uuid,%s::uuid,'client',FALSE,FALSE)",(A,CA));sandbox.commit()
+    sandbox.execute("CREATE TABLE saas_ai_agent_connect_test_mode(tenant_id UUID,conversation_id TEXT)")
+    sandbox.execute("INSERT INTO saas_ai_agent_connect_test_mode VALUES(%s::uuid,'legacy-history')",(A,));sandbox.commit()
     for _ in range(2):
         create_schema(sandbox);sandbox.commit()
     assert store.read(PROFILE,id)==before
-    old=sandbox.execute('SELECT agent_id,enabled,verified FROM saas_ai_agent_connect_test_mode WHERE tenant_id=%s::uuid',(A,))[0]
-    assert old=={'agent_id':None,'enabled':False,'verified':False}
+    old=sandbox.execute('SELECT conversation_id FROM saas_ai_agent_connect_test_mode WHERE tenant_id=%s::uuid',(A,))[0]
+    assert old=={'conversation_id':'legacy-history'}
+    assert not sandbox.execute("SELECT 1 FROM information_schema.tables WHERE table_name='saas_ai_agent_test_mode'")
     constraints=sandbox.execute("SELECT conname FROM pg_constraint WHERE conrelid='saas_ai_test_sessions'::regclass AND contype='f'")
     assert len(constraints)==2

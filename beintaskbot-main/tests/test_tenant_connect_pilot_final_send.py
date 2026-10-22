@@ -34,7 +34,7 @@ def test_final_send_passes_saved_run_context_to_real_pilot_gate():
            'secrets': b'ciphertext', 'revision': 4, 'state': 'active'}
     pilot_row = {'conversation_state': 'active', 'conversation_ai_enabled': True,
         'conversation_manual_hold': False, 'active': True, 'integration_status': 'connected',
-        'tenant_status': 'active', 'company_enabled': True, 'operating_mode': 'active',
+        'tenant_status': 'active', 'company_enabled': True,
         'auto_send_enabled': True, 'emergency_stop': False, 'agent_enabled': True,
         'agent_mode': 'automatic', 'exact_agent_scope': True, 'agent_id': AGENT}
 

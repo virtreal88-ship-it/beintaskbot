@@ -1,5 +1,7 @@
 # AI testing center integration — release blocked
 
+Historical release report. The corporate Test Mode, real-conversation bindings, and their draft-only worker path described below were retired later; the isolated virtual testing chat remains.
+
 Date: 2026-10-16. Branch: `codex/integration-ai-testing-center`.
 Base: production `f49e8b5ca7d22adb1e61008a270057bb05d9021d`.
 Source: `codex/ai-testing-center` / `f3c8c3c6` (squashed without conflicts).

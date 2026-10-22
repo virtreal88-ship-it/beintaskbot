@@ -4,7 +4,7 @@ import themeCss from './app-theme.css?inline'
 if (document.body.dataset.appUi === 'kwid') {
   const style=document.createElement('style')
   style.id='app-design-system'
-  style.textContent=themeCss
+  style.textContent=themeCss+'\n.app-nav-route-hidden{display:none!important}'
   document.head.append(style)
   const body=document.body, sidebar=document.querySelector('.shell>aside'), nav=sidebar.querySelector('.nav')
   const icon=path=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"/></svg>`
@@ -24,13 +24,14 @@ if (document.body.dataset.appUi === 'kwid') {
   const t=key=>window.tenantI18n?.t(key)||key
   const language=()=>window.tenantI18n?.language||document.documentElement.lang||'az'
   const crmLabels={ru:{tasks:'Задачи',customers:'Контакты',companies:'Компании',deals:'Сделки',instructions:'Инструкции'},az:{tasks:'Tapşırıqlar',customers:'Əlaqələr',companies:'Şirkətlər',deals:'Sövdələşmələr',instructions:'Təlimatlar'},en:{tasks:'Tasks',customers:'Contacts',companies:'Companies',deals:'Deals',instructions:'Instructions'}}
-  const pageLabel=page=>crmLabels[language()]?.[page]||t(page)
+  const aiLabels={ru:{ai_agents:'AI-агенты',ai_dashboard:'AI-панель',knowledge_center:'Центр знаний',support_cases:'Кейсы поддержки',ai_testing:'Тестирование AI'},az:{ai_agents:'AI agentlər',ai_dashboard:'AI paneli',knowledge_center:'Bilik mərkəzi',support_cases:'Dəstək halları',ai_testing:'AI sınağı'},en:{ai_agents:'AI agents',ai_dashboard:'AI Dashboard',knowledge_center:'Knowledge Center',support_cases:'Support Cases',ai_testing:'AI testing'}}
+  const pageLabel=page=>crmLabels[language()]?.[page]||aiLabels[language()]?.[page]||t(page)
   const originalHeader=sidebar.firstElementChild, brand=originalHeader.querySelector('.brand')
   const header=document.createElement('div');header.className='app-sidebar-header'
   const collapse=document.createElement('button');collapse.type='button';collapse.className='app-icon-button';collapse.innerHTML=icon(icons.chevron)
   header.append(brand,collapse);originalHeader.before(header)
   const topbar=document.createElement('header');topbar.className='app-topbar'
-  topbar.innerHTML=`<button type="button" class="app-icon-button app-mobile-menu" aria-label="Menyunu aç" aria-expanded="false">${icon(icons.menu)}</button><div class="app-topbar-context"></div><div class="app-topbar-actions"><select class="app-language-select" aria-label="Interface language" data-app-language><option value="ru">RU</option><option value="az">AZ</option><option value="en">EN</option></select><a class="app-instructions-link" data-app-instructions href="/app/instructions" title="Instructions">${icon('M4 4h11l5 5v11H4zM15 4v6h5M8 14h8M8 17h8')}<span></span></a><button type="button" class="app-icon-button" data-app-open="settings" aria-label="Tənzimləmələr" title="Tənzimləmələr">${icon(icons.settings)}</button><button type="button" class="app-avatar-button" aria-label="İstifadəçi menyusu" aria-expanded="false" aria-controls="appUserMenu">CS</button></div><div class="app-user-menu" id="appUserMenu" hidden><div class="app-user-name"><span id="appUserName">CRM Smart Assistant</span><small id="appUserCompany"></small></div><button type="button" data-app-open="profile">${icon(icons.profile)} <span data-i18n="profile">${t('profile')}</span></button><button type="button" data-app-open="settings">${icon(icons.settings)} <span data-i18n="settings">${t('settings')}</span></button><button type="button" data-app-logout>${icon(icons.exit)} <span data-i18n="logout">${t('logout')}</span></button><div class="app-theme-options">${['light','dark','system'].map(value=>`<button type="button" data-app-theme-choice="${value}" aria-label="${{light:'İşıqlı görünüş',dark:'Tünd görünüş',system:'Sistem görünüşü'}[value]}" title="${{light:'İşıqlı',dark:'Tünd',system:'Sistem'}[value]}" aria-pressed="false">${icon(icons[value==='light'?'sun':value==='dark'?'moon':'system'])}</button>`).join('')}</div></div>`
+  topbar.innerHTML=`<button type="button" class="app-icon-button app-mobile-menu" aria-label="Menyunu aç" aria-expanded="false">${icon(icons.menu)}</button><div class="app-topbar-context"></div><div class="app-topbar-actions"><select class="app-language-select" aria-label="Interface language" data-app-language><option value="ru">RU</option><option value="az">AZ</option><option value="en">EN</option></select><a class="app-instructions-link" data-app-instructions href="/app/instructions" title="Instructions">${icon('M4 4h11l5 5v11H4zM15 4v6h5M8 14h8M8 17h8')}<span></span></a><button type="button" class="app-avatar-button" aria-label="İstifadəçi menyusu" aria-expanded="false" aria-controls="appUserMenu">CS</button></div><div class="app-user-menu" id="appUserMenu" hidden><div class="app-user-name"><span id="appUserName">CRM Smart Assistant</span><small id="appUserCompany"></small></div><button type="button" data-app-open="profile">${icon(icons.profile)} <span data-i18n="profile">${t('profile')}</span></button><button type="button" data-app-open="settings">${icon(icons.settings)} <span data-i18n="settings">${t('settings')}</span></button><button type="button" data-app-logout>${icon(icons.exit)} <span data-i18n="logout">${t('logout')}</span></button><div class="app-theme-options">${['light','dark','system'].map(value=>`<button type="button" data-app-theme-choice="${value}" aria-label="${{light:'İşıqlı görünüş',dark:'Tünd görünüş',system:'Sistem görünüşü'}[value]}" title="${{light:'İşıqlı',dark:'Tünd',system:'Sistem'}[value]}" aria-pressed="false">${icon(icons[value==='light'?'sun':value==='dark'?'moon':'system'])}</button>`).join('')}</div></div>`
   document.querySelector('.shell').append(topbar)
   const backdrop=document.createElement('button');backdrop.type='button';backdrop.className='app-sidebar-backdrop';backdrop.setAttribute('aria-label','Menyunu bağla');backdrop.tabIndex=-1;body.append(backdrop)
   const avatar=topbar.querySelector('.app-avatar-button'), userMenu=topbar.querySelector('.app-user-menu'), mobileButton=topbar.querySelector('.app-mobile-menu')
@@ -62,7 +63,7 @@ if (document.body.dataset.appUi === 'kwid') {
   document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeUserMenu();mobileMenu(false)}})
   applyTheme()
 
-  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support','night_report']},{id:'crm',label:'CRM',pages:['tasks','customers','companies','deals','hot_orders']},{id:'ai',label:'AI',pages:['ai_agents','ai_testing']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['integrations','settings','profile']}]
+  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support','night_report']},{id:'crm',label:'CRM',pages:['tasks','customers','companies','deals','hot_orders']},{id:'ai',label:'AI',pages:['ai_agents','ai_dashboard','knowledge_center','support_cases','ai_testing']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['integrations','settings','profile']}]
   const containers=new Map()
   for(const group of groups){
     const section=document.createElement('div');section.className='app-nav-group';section.dataset.group=group.id
@@ -73,10 +74,11 @@ if (document.body.dataset.appUi === 'kwid') {
   function organizeNav() {
     for(const button of [...nav.querySelectorAll('[data-view],[data-report-link]')]){
       const page=button.dataset.view||button.dataset.reportLink
-      let label=button.querySelector('.app-nav-label')||button.querySelector('[data-i18n]')||button.querySelector('[data-crm-nav-label]')
+      if(page==='settings'||page==='profile'){button.classList.add('app-nav-route-hidden');button.setAttribute('aria-hidden','true');button.tabIndex=-1;continue}
+      let label=button.querySelector('.app-nav-label,[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-knowledge-center-label]')
       if(!label){label=document.createElement('span');label.textContent=[...button.childNodes].filter(node=>node.nodeType===Node.TEXT_NODE).map(node=>node.textContent).join('').trim()||page}
       for(const node of [...button.childNodes])if(node.nodeType===Node.TEXT_NODE)node.remove()
-      for(const extra of button.querySelectorAll('[data-i18n],[data-crm-nav-label],.app-nav-label'))if(extra!==label)extra.remove()
+      for(const extra of button.querySelectorAll('[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-knowledge-center-label],.app-nav-label'))if(extra!==label)extra.remove()
       label.removeAttribute('data-crm-nav-label')
       label.className='app-nav-label';label.dataset.appNavLabel=page
       label.removeAttribute('data-i18n')

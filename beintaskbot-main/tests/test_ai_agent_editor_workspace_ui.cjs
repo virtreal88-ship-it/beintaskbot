@@ -1,0 +1,10 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const root=path.join(__dirname,'..'),html=fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8'),agents=fs.readFileSync(path.join(root,'docs/tenant-ai-agents.js'),'utf8'),expert=fs.readFileSync(path.join(root,'docs/tenant-ai-expert-editor.js'),'utf8'),knowledge=fs.readFileSync(path.join(root,'docs/tenant-knowledge-center.js'),'utf8');
+const editorTabs=[...html.matchAll(/data-ai-section-nav="([^"]+)"/g)].map(x=>x[1]);
+assert.deepEqual(editorTabs,['basics','scope','schedule','triggers','knowledge']);
+assert.ok(!html.includes('data-ai-editor-section="stopping"'),'Stop settings are no longer a separate editor tab');
+assert.match(html,/id="aiStoppingPolicy"[\s\S]*?id="aiResponseManagementDescription"/);
+assert.ok(!expert.includes('id="aiNewExpert"'),'Expert creation is not duplicated inside the editor');
+assert.match(agents,/aiEditorPage/);assert.match(agents,/confirmDiscardEditor/);assert.match(agents,/beforeunload/);assert.match(agents,/returnEditorHome/);
+assert.match(knowledge,/String\(x\.agentId\)===agentFilter/,'Knowledge Center honors the selected-agent filter');
+console.log('PASS: full-page editor contract, five tabs, stop policy placement, safe leave guard, no duplicate Expert create, agent-filtered knowledge link');

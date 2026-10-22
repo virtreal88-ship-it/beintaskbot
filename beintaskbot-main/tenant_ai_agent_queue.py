@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 
 from tenant_ai_agents_schema import ensure_schema
 from tenant_platform import TenantPlatformError, _connect, _json
-from tenant_ai_agent_test_mode import allowed_event
+from tenant_ai_agent_admission import allowed_event
 
 
 def _account_domain(data, fallback=''):
@@ -85,9 +85,10 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT i.tenant_id,t.status AS tenant_status,cfg.operating_mode FROM saas_tenant_integrations i
+            cur.execute('''SELECT i.tenant_id,t.status AS tenant_status,cfg.auto_send_enabled FROM saas_tenant_integrations i
               JOIN saas_tenants t ON t.id=i.tenant_id
               JOIN saas_ai_agent_settings cfg ON cfg.tenant_id=i.tenant_id AND cfg.enabled=TRUE
+                AND cfg.auto_send_enabled=TRUE AND cfg.emergency_stop=FALSE
               WHERE i.provider='kommo' AND i.status='connected' AND i.account_domain=%s
               FOR SHARE OF i,t''', (domain,))
             connections = cur.fetchall()
@@ -96,19 +97,15 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
             if not connections or connections[0]['tenant_status'] != 'active':
                 return result(0, 'company_settings_unavailable')
             tenant = str(connections[0]['tenant_id'])
-            from tenant_ai_testing_scope import clause
             cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.mode,a.schedule FROM saas_ai_agents a
-              WHERE a.role='primary' AND a.tenant_id=%s::uuid AND a.enabled=TRUE'''+clause('a','kommo')+' ORDER BY a.created_at,a.id', (tenant,))
+              WHERE a.role='primary' AND a.tenant_id=%s::uuid AND a.enabled=TRUE ORDER BY a.created_at,a.id''', (tenant,))
             agents = cur.fetchall()
-            # Keep isolated Test Mode drafts, but stop Active Mode webhook jobs
-            # from being enqueued for agents configured as Manual.
-            if connections[0].get('operating_mode') == 'active':
-                agents = [agent for agent in agents if agent.get('mode') == 'automatic']
+            # Customer messages reach the worker only when the company owner
+            # and server permit auto-send; Manual agents stay staff-initiated.
+            agents = [agent for agent in agents if agent.get('mode') == 'automatic']
             for event in normalized:
-                # Test Mode is deliberately fail-closed: Kommo webhook must
-                # carry every binding identifier, including contact and origin.
                 if not allowed_event(cur,tenant,domain,event):
-                    reasons.add('test_binding_rejected')
+                    reasons.add('company_or_integration_blocked')
                     continue
                 # Webhook payloads do not consistently include channel/origin.
                 # Queue stage/channel candidates and let the worker verify the
@@ -180,7 +177,7 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
         if queued:
             reasons.add('queued')
         conn.commit()
-    reason_order = ('queued', 'test_binding_rejected', 'no_enabled_agent', 'duplicate_event')
+    reason_order = ('queued', 'no_enabled_agent', 'duplicate_event')
     reason = next((item for item in reason_order if item in reasons), 'no_eligible_event')
     return result(queued, reason)
 

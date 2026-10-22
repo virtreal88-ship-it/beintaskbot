@@ -38,7 +38,7 @@ class Cursor:
 
     def fetchone(self):
         return {'tenant_status': 'active', 'company_ai_enabled': True,
-                'company_settings_configured': True, 'operating_mode': 'active', 'emergency_stop': False,
+                'company_settings_configured': True, 'emergency_stop': False,
                 'auto_send_enabled': False, 'connected_connect_accounts': 1,
                 'active_connect_channels': 1}
 
@@ -70,7 +70,7 @@ class AiAgentDiagnosticsTests(unittest.TestCase):
         cursor = Cursor([{
             'received_at': datetime(2026, 10, 15, tzinfo=timezone.utc), 'event_state': 'completed',
             'event_error': '', 'channel_id': 'channel-a', 'agent_name': 'Agent A',
-            'agent_enabled': True, 'agent_mode': 'manual', 'operating_mode': 'test',
+            'agent_enabled': True, 'agent_mode': 'manual',
             'company_ai_enabled': True, 'auto_send_enabled': False,
             'job_state': 'drafted', 'job_error': '', 'attempts': 1,
             'run_state': 'completed', 'run_updated_at': datetime(2026, 10, 15, tzinfo=timezone.utc),
@@ -83,7 +83,7 @@ class AiAgentDiagnosticsTests(unittest.TestCase):
 
         self.assertEqual(cursor.params, ('tenant-a', 50))
         self.assertEqual(result['system']['tenant_id'], 'tenant-a')
-        self.assertEqual(result['system']['operating_mode'], 'active')
+        self.assertFalse(result['system']['auto_send_enabled'])
         self.assertEqual(result['channels'][0]['channel_id'], 'channel-a')
         self.assertEqual(result['agents'][0]['connect_scope_channel_ids'], ['channel-a'])
         self.assertTrue(result['runtime']['ai_agents_enabled'])

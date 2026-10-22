@@ -82,3 +82,17 @@ class SessionTests(unittest.TestCase):
         self.member.reset_mock()
         self.assertIsNone(self.session.profile(SimpleNamespace(cookies={})))
         self.member.assert_not_called()
+
+    def test_revocable_session_id_is_signed_and_checked(self):
+        active = {'value': True}
+        created = Mock()
+        def valid(*, session_id, tenant_id, actor_id):
+            return active['value'] and session_id == created.call_args.kwargs['session_id'] and tenant_id == TENANT and actor_id == 42
+        stateful = TenantBrowserSession(lambda: self.secret, self.member, self.demo, StoreError,
+            clock=lambda: self.now, create_session=created, session_active=valid)
+        token = stateful.issue(TENANT, 42)
+        request = self.request(token)
+        self.assertEqual(stateful.identity(request), (TENANT, 42))
+        self.assertEqual(stateful.session_id(request), created.call_args.kwargs['session_id'])
+        active['value'] = False
+        self.assertIsNone(stateful.identity(request))

@@ -14,6 +14,8 @@ import tenant_ai_agent_worker as worker
 import tenant_connect_transport as transport
 import tenant_support_inbox_store as inbox
 import tenant_operator_dialogs as dialogs
+import tenant_connect_avatars as avatars
+import tenant_operator_legacy as legacy
 from tenant_linear_policy import TenantLinearError
 
 AGENT2=str(uuid.UUID(int=302))
@@ -51,6 +53,31 @@ def test_two_agents_send_with_separate_history_and_duplicate_receipts(channels):
     assert 'second-channel-only' not in str(connect.history(A,41,CA))
     assert 'first-channel-only' not in str(connect.history(A,43,CB))
     assert states(f)=={CA:'active',CB:'active'}
+
+def test_avatar_attempt_status_is_returned_from_local_projection_without_remote_lookup(channels):
+    f=channels;f['incoming'](CA)
+    first=dialogs.listing(PROFILE,channel='connect:'+CA)['dialogs'][0]
+    assert first['avatar_status']==''
+    f['db'].execute("UPDATE saas_connect_conversations SET avatar_status='available' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CA));f['db'].commit()
+    refreshed=dialogs.listing(PROFILE,channel='connect:'+CA)['dialogs'][0]
+    assert refreshed['avatar_status']=='available'
+
+def test_avatar_endpoint_is_tenant_scoped_and_claims_only_once(channels,monkeypatch):
+    f=channels;db=f['db'];f['incoming'](CA)
+    monkeypatch.setattr(avatars,'_connect',lambda:db)
+    image=b'\x89PNG\r\n\x1a\n'+b'avatar-bytes'
+    fetch=Mock()
+    async def get_image(route):
+        fetch(route)
+        return image,'image/png'
+    monkeypatch.setattr(avatars,'_fetch',get_image)
+    params={'provider':'connect','lead_id':'41','channel_id':CA,'conversation_id':'client'}
+    assert asyncio.run(avatars.get_avatar(PROFILE,params))==(image,'image/png')
+    assert db.execute("SELECT avatar_status FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CA))[0]['avatar_status']=='available'
+    db.commit()
+    asyncio.run(avatars.get_avatar(PROFILE,params))
+    assert fetch.call_count==2  # app reads the cached Connect copy; Evolution is not called again
+    with pytest.raises(TenantLinearError):asyncio.run(avatars.get_avatar({**PROFILE,'tenant_id':B},params))
 
 @pytest.mark.parametrize('phase',['before','during'])
 def test_manual_takeover_only_cancels_its_channel_even_during_other_voice(channels,phase):
@@ -160,6 +187,39 @@ def test_unresolved_legacy_state_blocks_both_channels_without_losing_history(cha
     f['send'].assert_not_called();assert len(rows(f,'saas_crm_messages'))>=2
 
 
+def test_legacy_channel_review_shows_tenant_routes_but_operator_choice_cannot_resolve_ambiguity(channels,monkeypatch):
+    f=channels;db=f['db'];f['incoming'](CA,'channel one proof');f['incoming'](CB,'channel two proof')
+    db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,channel_id,agent_id,state,reason) VALUES(%s::uuid,'connect','client','',%s::uuid,'paused','legacy')",(A,AGENT));db.commit()
+    monkeypatch.setattr(legacy,'_connect',lambda:db)
+    result=legacy.options(PROFILE,{'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41})
+    assert result['reason']=='multiple_channels' and result['allowed'] is False
+    assert {(item['channel_id'],item['name']) for item in result['channels']}=={(CA,'WhatsApp'),(CB,'Second')}
+    assert all(item['message_count']>0 for item in result['channels'])
+    assert all(item['job_count']>0 and item['event_count']>0 for item in result['channels'])
+    assert result['evidence']['draft_count']==0 and result['evidence']['event_channel_count']==2
+    assert result['evidence']['route_count']==2 and result['evidence']['message_count']==sum(item['message_count'] for item in result['channels'])
+    # A foreign tenant cannot inspect or select either tenant A route.
+    with pytest.raises(TenantLinearError):
+        legacy.options({'tenant_id':B,'telegram_id':22},{'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41})
+
+
+def test_legacy_channel_recovery_requires_verified_single_route_and_is_idempotent(channels,monkeypatch):
+    f=channels;db=f['db'];f['incoming'](CA,'persisted source message')
+    db.execute("DELETE FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CB))
+    db.execute("UPDATE saas_ai_agent_jobs SET state='skipped' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s",(A,CA))
+    db.execute("UPDATE saas_ai_conversation_state SET channel_id='',state='paused',reason='legacy' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA));db.commit()
+    monkeypatch.setattr(legacy,'_connect',lambda:db)
+    data={'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41}
+    preview=legacy.options(PROFILE,data)
+    assert preview['allowed'] and preview['reason']=='unique_verified_route'
+    saved=legacy.recover(PROFILE,{**data,'confirmed':True,'expected_token':preview['expected_token']})
+    assert saved['recovered'] and saved['resume_required'] and saved['state']=='paused'
+    replay=legacy.recover(PROFILE,{**data,'confirmed':True,'expected_token':preview['expected_token']})
+    assert replay['replayed'] and replay['state']=='paused'
+    assert db.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='ai_legacy_channel_recovered'",(A,))[0]['n']==1
+    assert db.execute("SELECT channel_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id='client'",(A,))[0]=={'channel_id':CA,'state':'paused','reason':'legacy'}
+
+
 def test_duplicate_message_cannot_change_its_channel(channels):
     f=channels;mid,_=f['incoming'](CA)
     with pytest.raises(ValueError,match='scope mismatch'):f['incoming'](CB,mid=mid)
@@ -214,13 +274,14 @@ def test_new_connect_state_does_not_change_same_named_kommo_state(channels):
     assert kommo['state']=='paused' and kommo['reason']=='kommo-only' and kommo['channel_id']==''
 
 
-def test_connect_test_mode_selects_channel_and_agent_and_never_sends(channels):
+def test_company_send_disabled_does_not_process_real_customer_messages(channels):
     f=channels;db=f['db']
-    db.execute("UPDATE saas_ai_agent_settings SET operating_mode='test' WHERE tenant_id=%s::uuid",(A,))
-    db.execute("INSERT INTO saas_ai_agent_connect_test_mode(tenant_id,enabled,verified,channel_id,conversation_id,agent_id) VALUES(%s::uuid,TRUE,TRUE,%s,'client',%s::uuid)",(A,CB,AGENT2));db.commit()
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=FALSE WHERE tenant_id=%s::uuid",(A,));db.commit()
+    jobs_before=rows(f,'saas_ai_agent_jobs')
     assert f['incoming'](CA)[1]==0
-    assert f['incoming'](CB)[1]==1
+    message_id,queued=f['incoming'](CB);assert queued==0
     f['process']();f['send'].assert_not_called()
-    drafts=rows(f,'saas_ai_agent_drafts');assert len(drafts)==1
-    assert drafts[0]['lead_id']==43 and drafts[0]['agent_id']==AGENT2
-    with pytest.raises(TenantLinearError):agents.reserve_draft_send(PROFILE,drafts[0]['id'])
+    assert rows(f,'saas_ai_agent_drafts')==[]
+    assert rows(f,'saas_ai_agent_jobs')==jobs_before
+    event=db.execute("SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND provider='connect' AND external_id=%s",(A,message_id))[0]
+    assert event=={'state':'skipped','error_code':'connect_admission_blocked'}

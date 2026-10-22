@@ -16,21 +16,19 @@ EXPECTED_API += tuple((method,path) for path,methods in [
  ('/api/platform/instructions/{lesson_id}/assets/{asset_id}',('GET',)),
  ('/api/instructions/shared/{token}',('GET',)),
  ('/api/instructions/shared/{token}/assets/{asset_id}',('GET',))] for method in methods)
-EXPECTED_ASSETS = ["/assets/tenant-knowledge-campaigns.js","/assets/tenant-knowledge-pilot-admin.js","/assets/tenant-ai-expert-editor.js","/assets/tenant-ai-state.js","/assets/tenant-ai-state.css","/assets/tenant-agent-catalog.js","/assets/tenant-agent-library.js","/assets/tenant-agent-library.css","/assets/tenant-ai-testing.js","/assets/tenant-ai-testing.css","/assets/tenant-night-l10n.js","/assets/tenant-night-integration.js","/app/night-report","/assets/tenant-night-report.js","/assets/tenant-night-report.css","/assets/tenant-ai-reliability.js","/app/push-sw.js","/assets/tenant-push.js","/assets/task-date-fields.js","/assets/tenant-chat-import.js","/assets/tenant-chat-history.js","/assets/tenant-chat-attachments.js","/assets/tenant-chat-review.js","/assets/tenant-finance.js","/assets/tenant-chat-ai.js","/assets/tenant-chat-ai-settings.js","/assets/tenant-news-telegram-settings.js","/updates/{company}","/assets/tenant-news.js","/assets/tenant-news-ai-settings.js","/assets/tenant-linear-settings.js","/assets/tenant-linear-board.js","/assets/tenant-linear-rules.js","/assets/tenant-task-approvals.js","/assets/tenant-task-completion.js","/assets/tenant-deal-completion.js","/assets/tenant-diagnostics.js","/assets/tenant-chat-send.js","/assets/tenant-ai-agents.js","/assets/tenant-night-agent-template.js","/assets/tenant-support-inbox.js","/assets/tenant-operator-i18n.js","/assets/tenant-operator-dialogs.js","/assets/tenant-knowledge-candidates.js","/assets/tenant-workflow.js","/assets/tenant-chakra-ui.js","/assets/tenant-workspace.js","/assets/tenant-hot-order-settings.js","/assets/tenant-hot-orders.js","/assets/tenant-hot-order-completion.js","/assets/tenant-crm-sync.js","/assets/tenant-tasks.js"]
+EXPECTED_ASSETS = ["/assets/tenant-knowledge-campaigns.js","/assets/tenant-knowledge-pilot-admin.js","/assets/tenant-ai-expert-editor.js","/assets/tenant-ai-state.js","/assets/tenant-ai-state.css","/assets/tenant-agent-catalog.js","/assets/tenant-agent-library.js","/assets/tenant-agent-library.css","/assets/tenant-ai-testing.js","/assets/tenant-ai-testing.css","/assets/tenant-night-l10n.js","/assets/tenant-night-integration.js","/app/night-report","/assets/tenant-night-report.js","/assets/tenant-night-report.css","/assets/tenant-ai-reliability.js","/app/push-sw.js","/assets/tenant-push.js","/assets/task-date-fields.js","/assets/tenant-chat-import.js","/assets/tenant-chat-history.js","/assets/tenant-chat-attachments.js","/assets/tenant-chat-review.js","/assets/tenant-finance.js","/assets/tenant-chat-ai.js","/assets/tenant-chat-ai-settings.js","/assets/tenant-news-telegram-settings.js","/updates/{company}","/assets/tenant-news.js","/assets/tenant-news-ai-settings.js","/assets/tenant-linear-settings.js","/assets/tenant-linear-board.js","/assets/tenant-linear-rules.js","/assets/tenant-task-approvals.js","/assets/tenant-task-completion.js","/assets/tenant-deal-completion.js","/assets/tenant-diagnostics.js","/assets/tenant-chat-send.js","/assets/tenant-ai-agents.js","/assets/tenant-ai-teams.js","/assets/tenant-ai-teams.css","/assets/tenant-knowledge-center.js","/assets/tenant-knowledge-center.css","/assets/tenant-night-agent-template.js","/assets/tenant-support-inbox.js","/assets/tenant-operator-i18n.js","/assets/tenant-operator-dialogs.js","/assets/tenant-knowledge-candidates.js","/assets/tenant-workflow.js","/assets/tenant-chakra-ui.js","/assets/tenant-workspace.js","/assets/tenant-hot-order-settings.js","/assets/tenant-hot-orders.js","/assets/tenant-hot-order-completion.js","/assets/tenant-crm-sync.js","/assets/tenant-tasks.js"]
 
 EXPECTED_ASSETS += ['/app/instructions','/assets/tenant-instructions.js','/assets/tenant-instructions.css','/assets/tenant-instructor-lesson.js','/assets/tenant-instructor-lesson.css']
 
 AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
-    ('testing/kommo-context', ('GET',)), ('testing/sessions', ('GET','POST')),
+    ('testing/sessions', ('GET','POST')),
     ('testing/sessions/{session_id}', ('GET',)), ('testing/sessions/{session_id}/turn', ('POST',)),
     ('testing/sessions/{session_id}/control', ('POST',)),
-    ('agents/settings', ('GET','PATCH')), ('agents/test-mode', ('GET','PATCH')),
-    ('agents/test-mode/verify', ('POST',)), ('agents/test-mode/discover', ('POST',)),
+    ('agents/settings', ('GET','PATCH')),
     ('agents/pilot-preflight', ('GET',)), ('agents/pilot/kwid-confirmation', ('POST',)),
     ('agents/pilot/owner-approval', ('POST',)),
-    ('agents', ('GET','POST')), ('agents/options', ('GET',)), ('agents/drafts', ('GET',)),
-    ('agents/drafts/{draft_id}/review', ('POST',)), ('agents/drafts/{draft_id}/send', ('POST',)),
-    ('dialogs', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('POST',)), ('dialogs/display-name', ('POST',)),
+    ('agents', ('GET','POST')), ('agents/options', ('GET',)),
+    ('dialogs', ('GET',)), ('dialogs/avatar', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('POST',)), ('dialogs/display-name', ('POST',)),
     ('dialogs/agent-assignment', ('GET','POST')),
     ('dialogs/agent-assignment-bulk', ('GET','POST')),
     ('dialogs/legacy-continuation', ('GET','POST')),
@@ -60,11 +58,15 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('knowledge-candidates/{candidate_id}/reject', ('POST',)),
     ('knowledge', ('GET','POST')), ('knowledge/upload', ('POST',)),
     ('knowledge/{source_id}', ('PATCH','DELETE')),
+    ('simulation/settings', ('GET','PATCH')), ('simulation/runs', ('GET',)),
+    ('simulation/runs/{run_id}', ('GET',)), ('simulation/runs/{run_id}/recheck', ('POST',)),
+    ('simulation/issues', ('GET',)), ('simulation/issues/{run_id}/review', ('POST',)),
+    ('dashboard', ('GET',)), ('dashboard/events', ('GET',)),
 ] for method in methods)
 FACTORIES = ('instruction_handler', 'finance_handler', 'linear_handler', 'tasks_handler', 'news_handler',
     'news_telegram_handler', 'chat_ai_handler', 'chat_ai_model_handler', 'chat_send_handler', 'chat_upload_handler',
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler',
-    'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'night_report_handler', 'testing_handler', 'ai_state_handler')
+    'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'night_report_handler', 'testing_handler', 'simulation_handler', 'ai_state_handler')
 
 
 class Routes(unittest.IsolatedAsyncioTestCase):
@@ -92,7 +94,6 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         expected |= {(method,base+suffix) for suffix in ('','/preview','/{campaign_id}') for method in ('GET','HEAD')}
         expected |= {('POST',base+suffix) for suffix in ('','/{campaign_id}/start','/{campaign_id}/control')}
 
-        expected |= {('GET','/api/platform/ai/agents/drafts/{draft_id}'),('HEAD','/api/platform/ai/agents/drafts/{draft_id}'),('POST','/api/platform/ai/agents/drafts/{draft_id}/edit')}
         expected.add(('POST','/api/platform/ai/knowledge-candidates/{candidate_id}/improve'))
         expected |= {('HEAD', path) for method, path in EXPECTED_API if method == 'GET'}
         expected |= set(AI_API)
@@ -102,6 +103,19 @@ class Routes(unittest.IsolatedAsyncioTestCase):
             request, match = await self.resolve(method, path.replace('{company}', 'demo').replace('{lesson_id}', '00000000-0000-0000-0000-000000000001').replace('{token}', 'testtoken').replace('{asset_id}', 'test.jpg'))
             self.assertIsNone(match.http_exception)
             self.assertEqual((await match.handler(request)).status, 200)
+
+    async def test_retired_real_dialog_test_and_draft_apis_are_not_routed(self):
+        for method, path in [
+            ('GET', '/api/platform/ai/testing/kommo-context'),
+            ('PATCH', '/api/platform/ai/agents/test-mode'),
+            ('POST', '/api/platform/ai/agents/test-mode/verify'),
+            ('POST', '/api/platform/ai/agents/test-mode/discover'),
+            ('GET', '/api/platform/ai/agents/drafts'),
+            ('POST', '/api/platform/ai/agents/drafts/id/send'),
+        ]:
+            _, match = await self.resolve(method, path)
+            self.assertIsNotNone(match.http_exception)
+            self.assertIn(match.http_exception.status, (404, 405))
 
     async def test_methods_not_widened(self):
         for method, path in [('GET', '/api/platform/crm/chat/send'),

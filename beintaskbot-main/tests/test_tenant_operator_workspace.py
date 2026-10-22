@@ -34,6 +34,10 @@ def test_all_connect_conversations_are_visible_without_ai_or_kommo(operator_db):
     assert len(result['dialogs'])==1
     assert result['dialogs'][0]['display_state']=='unmanaged'
     assert result['dialogs'][0]['channel_id']==CA
+    assert result['dialogs'][0]['last_message_id']
+    assert result['dialogs'][0]['last_message_direction']=='incoming'
+    assert result['dialogs'][0]['last_message_type']=='text'
+    assert result['dialogs'][0]['last_message_text']=='Internet is down'
     assert result['attention_count']==0
     assert result['channels']==[{'id':'connect:'+CA,'name':'WhatsApp'}]
     page=dialogs.history(PROFILE,'connect',41,CA,'client')
@@ -42,7 +46,7 @@ def test_all_connect_conversations_are_visible_without_ai_or_kommo(operator_db):
 
 
 def test_existing_unassigned_dialog_lists_candidate_without_mutating_state(operator_db):
-    operator_db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,operating_mode) VALUES(%s::uuid,TRUE,'active') ON CONFLICT(tenant_id) DO UPDATE SET enabled=TRUE,operating_mode='active'",(A,))
+    operator_db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,auto_send_enabled) VALUES(%s::uuid,TRUE,TRUE) ON CONFLICT(tenant_id) DO UPDATE SET enabled=TRUE,auto_send_enabled=TRUE",(A,))
     operator_db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT(tenant_id,provider) DO UPDATE SET status='connected'",(A,))
     operator_db.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled,mode,scopes) VALUES(%s::uuid,%s::uuid,'Night support',11,TRUE,'manual',%s::jsonb)",
         (A,AGENT,json.dumps([{'provider':'connect','channel_id':CA}])));operator_db.commit()
@@ -134,7 +138,7 @@ def test_dialog_filters_counters_and_ticket_search(operator_db):
 def test_normalized_status_filter_runs_before_pagination_and_returns_total(operator_db):
     import uuid
     db=operator_db
-    db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,operating_mode) VALUES(%s::uuid,TRUE,'active') ON CONFLICT(tenant_id) DO UPDATE SET enabled=TRUE,operating_mode='active'",(A,))
+    db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,auto_send_enabled) VALUES(%s::uuid,TRUE,TRUE) ON CONFLICT(tenant_id) DO UPDATE SET enabled=TRUE,auto_send_enabled=TRUE",(A,))
     db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT(tenant_id,provider) DO UPDATE SET status='connected'",(A,))
     db.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled,mode,scopes) VALUES(%s::uuid,%s::uuid,'Manual agent',11,TRUE,'manual',%s::jsonb)",(A,AGENT,json.dumps([{'provider':'connect','channel_id':CA}])))
     for index in range(55):
@@ -149,12 +153,12 @@ def test_normalized_status_filter_runs_before_pagination_and_returns_total(opera
     assert second['total_count']==55 and len(second['dialogs'])==5 and second['next_offset'] is None
 
 
-def test_automatic_agent_in_test_mode_is_not_classified_as_live_automatic(operator_db):
+def test_automatic_agent_with_company_send_disabled_is_not_classified_as_live_automatic(operator_db):
     seed_job(operator_db)
     operator_db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT(tenant_id,provider) DO UPDATE SET status='connected'",(A,))
     operator_db.execute("UPDATE saas_ai_agents SET mode='automatic' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));operator_db.commit()
     row=dialogs.listing(PROFILE,state='attention')['dialogs'][0]
-    assert row['agent_status']=='attention' and row['agent_status_reason']=='test_binding_required'
+    assert row['agent_status']=='attention' and row['agent_status_reason']=='auto_send_disabled'
     assert dialogs.listing(PROFILE,state='automatic')['total_count']==0
 
 
@@ -321,9 +325,11 @@ def test_group_participant_name_priority_is_manual_then_saved_then_whatsapp_then
     assert dialogs._message({'direction':'incoming','author_name':'','raw':{'participantJid':'994501234567@s.whatsapp.net'}},group=True)['author_name']=='994501234567'
 
 
-def test_dialogue_actions_are_derived_from_availability_not_only_storage_state(operator_db):
+def test_dialogue_actions_are_derived_from_availability_not_only_storage_state(operator_db,monkeypatch):
+    monkeypatch.setattr(dialogs,'runtime_flag',lambda name: True)
+    monkeypatch.setattr('tenant_ai_agents_store.runtime_flag',lambda name: True)
     base={'provider':'connect','conversation_id':'client','channel_active':True,'unambiguous':True,'connected':True,
-          'tenant_status':'active','company_enabled':True,'company_emergency_stop':False,'agent_id':AGENT,
+          'tenant_status':'active','company_enabled':True,'company_auto_send_enabled':True,'auto_send_enabled':True,'company_emergency_stop':False,'agent_id':AGENT,
           'agent_enabled':True,'agent_mode':'automatic','agent_scopes':[{'provider':'connect','channel_id':'channel'}],'channel_id':'channel','state':'active','reason':'','latest_job_state':'queued','latest_job_error':'',
           'customer_name':'Client','phone':'994501234567','conversation_kind':'','updated_at':None,'display_state':'active'}
     active=dialogs.decorate(base)

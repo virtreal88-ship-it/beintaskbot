@@ -57,7 +57,7 @@ RU/AZ/EN labels; no technical agent IDs in visible controls. /webapp untouched.
 
 Python suites: test_ai_teams, test_ai_teams_postgres, test_tenant_ai_expert,
 test_coordination_expert_integration, test_group_coordination,
-test_tenant_agent_library, test_ai_agent_test_mode,
+test_tenant_agent_library,
 test_tenant_ai_agent_connect_admission, test_tenant_kommo.
 Real local PostgreSQL races verify one conflicting activation winner and one
 expert receipt under simultaneous admission. Mock provider/transport tests cover
