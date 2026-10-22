@@ -9,6 +9,11 @@ def diagnose(tool, *, tenant_id, channel_id, conversation_id):
     if tool not in TOOLS: raise ValueError('tool_not_allowed')
     return {'tool':tool,'status':'integration_unavailable','read_only':True,'evidence':[]}
 
+def registry_snapshot():
+    """Report registered tools and their real backend adapter state, read-only."""
+    return [{'id':tool,'registered':True,'status':'integration_unavailable',
+             'read_only':True,'customer_send_allowed':False} for tool in TOOLS]
+
 def mock_diagnose(tool, fixture):
     if tool not in TOOLS: raise ValueError('tool_not_allowed')
     return {'tool':tool,'status':'mock','read_only':True,'evidence':[str(fixture)[:500]],'simulation':True}
