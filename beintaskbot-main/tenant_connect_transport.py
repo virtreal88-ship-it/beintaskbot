@@ -164,6 +164,7 @@ def _schema(conn) -> None:
         # This is a local presentation override only.  It never changes the
         # WhatsApp group subject or an Evolution contact record.
         cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS manual_display_name TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS avatar_status TEXT NOT NULL DEFAULT ''")
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_participant_display_names (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
           connect_channel_id UUID NOT NULL,

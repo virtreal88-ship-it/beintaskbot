@@ -14,7 +14,7 @@ async function setup(previous=false,group=false,shared=false){
  w.addEventListener('error',e=>errors.push(e.error));w.Blob=Blob;w.AbortController=AbortController;w.URL.createObjectURL=()=> 'blob:test/'+Math.random();w.URL.revokeObjectURL=v=>revoked.push(v);
  const member={tenant_id:A,telegram_id:33,role:'worker',permissions:['dialogs'],active:true};
  const profile={member,capabilities:{modules:{dialogs:true}}};w.tenantProfileSnapshot=profile;
- const route={provider:'connect',lead_id:41,channel_id:C,conversation_id:group?'group@g.us':'direct@s.whatsapp.net',customer_kind:group?'group':'contact',customer_name:group?'Test group':'Test customer',display_state:'human',state:'human',ai_availability:'stopped',available_actions:[],can_send:false};
+ const route={provider:'connect',lead_id:41,channel_id:C,conversation_id:group?'group@g.us':'direct@s.whatsapp.net',customer_kind:group?'group':'contact',customer_name:group?'Test group':'Test customer',avatar_status:'',display_state:'human',state:'human',ai_availability:'stopped',available_actions:[],can_send:false};
  const messages=[{external_id:'connect:00000000-0000-0000-0000-000000000501',source:'connect',direction:'incoming',message_type:'image',body:'Photo',author_type:group?'participant':'customer',author_name:'Alice'},
  {external_id:'connect:00000000-0000-0000-0000-000000000502',source:'connect',direction:'outgoing',message_type:'audio',body:'Salam! Привет!',duration_seconds:42,...(previous?{}:{has_transcription:true}),author_type:'operator',author_name:'Operator'}];
  let unavailable=false,mediaBytes=0,jsonBytes=0;
@@ -35,7 +35,9 @@ async function setup(previous=false,group=false,shared=false){
  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-chat-attachments.js',...(shared?['docs/tenant-chat-ai.js','docs/tenant-chat-history.js','docs/tenant-chat-import.js']:[]),'docs/tenant-operator-dialogs.js'])w.eval(previous?baseline(file):read(file));
  w.document.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:profile}));await settle();
  const listCalls=calls.length,listBytes=jsonBytes;
- await w.tenantOperator.openDialog(route);await settle();
+ assert.equal(w.document.querySelectorAll('#operatorRows .operator-row-avatar-image').length,0,'unattempted history is not loaded from the list');
+ await w.tenantOperator.openDialog(route);
+ const avatar=w.document.querySelector('#operatorConversationHeader .operator-header-avatar');if(!previous){assert.ok(avatar,'opening the selected dialog starts the one-time avatar request');assert.ok(avatar.querySelector('img')?.getAttribute('src').includes('dialogs/avatar'));assert.ok(avatar.querySelector('img')?.getAttribute('src').includes(C));}await settle();
  return {dom,w,calls,revoked,errors,route,profile,listCalls,listBytes,historyCalls:calls.length-listCalls,historyBytes:jsonBytes-listBytes,get mediaBytes(){return mediaBytes},setUnavailable:()=>unavailable=true};
 }
 (async()=>{
