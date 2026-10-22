@@ -26,5 +26,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
  assert.equal(w.document.getElementById('kcCategory').getAttribute('aria-label'),'Material növü');
  for(let i=0;i<20&&!w.document.querySelectorAll('.kc-card').length;i++)await tick();
  assert.ok(w.document.querySelector('#kcList').textContent.includes('Mümkün dublikat'));
+ assert.ok(w.document.querySelector('#kcList').textContent.includes('Bilik mənbəyi'));
+ assert.ok(!w.document.querySelector('#kcList').textContent.includes('Knowledge Source'));
  console.log('PASS: tenant-scoped unified sources, instruction/case links, filters and localization');dom.window.close();
 })().catch(error=>{console.error(error.stack||error,error.message);dom.window.close();process.exitCode=1;});
