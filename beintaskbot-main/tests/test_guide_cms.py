@@ -1,13 +1,16 @@
-import unittest,tempfile,json,threading,copy,zipfile,io,asyncio,base64
+import unittest,tempfile,json,copy,zipfile,io,asyncio,base64
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 from guide_cms import GuideCMS,validate_article,export_zip,validate_images,public_projection
 from types import SimpleNamespace
 from aiohttp import web
 class Storage:
- def __init__(self):self._cache={};self._lock=threading.Lock();self.ok=True
- def _load_file(self,name):return self._cache.get(name,{})
- def _save_file(self,name):return self.ok
+ def __init__(self):self.documents={};self.ok=True
+ def read_json(self,name):return copy.deepcopy(self.documents.get(name,{}))
+ def write_json(self,name,value):
+  if self.ok:self.documents[name]=copy.deepcopy(value)
+  return self.ok
 class Tests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.base=Path(self.temp.name);(self.base/'guide_site').mkdir()
@@ -44,6 +47,34 @@ class Tests(unittest.TestCase):
   self.storage.ok=False
   with self.assertRaises(RuntimeError):self.cms.save(self.data,1)
   self.assertEqual(self.cms.read()['version'],0)
+ def test_public_storage_contract_needs_no_private_methods(self):
+  import gh_storage
+  self.assertFalse(hasattr(gh_storage,'_load_file'))
+  published={'slug':'/published','title':'Public','body':'Approved','category':'guide','body_format':'text','images':[]}
+  stored={'version':4,'items':[{'slug':'/published','published':published,'draft':{'title':'Private draft'}},
+                              {'slug':'/draft','published':None,'draft':{'title':'Not public'}}]}
+  with patch('gh_storage.read_json',return_value=stored):
+   cms=GuideCMS(self.base,lambda actor:True,gh_storage)
+   self.assertEqual(cms.read(),stored)
+   response=asyncio.run(cms.public_feed(SimpleNamespace()))
+   self.assertEqual(response.status,200)
+   body=json.loads(response.text)
+   self.assertEqual([item['title'] for item in body['items']],['Public'])
+   self.assertNotIn('draft',body['items'][0])
+
+ def test_document_write_failure_restores_previous_cache_value(self):
+  import legacy_document_storage as storage
+  key='test_guide_'+__import__('uuid').uuid4().hex
+  storage._cache.pop(key,None)
+  try:
+   with patch.object(storage,'_save_file',return_value=False):
+    self.assertFalse(storage.write_json(key,{'new':True}))
+    self.assertNotIn(key,storage._cache)
+   storage._cache[key]={'old':True}
+   with patch.object(storage,'_save_file',return_value=False):
+    self.assertFalse(storage.write_json(key,{'new':True}))
+    self.assertEqual(storage._cache[key],{'old':True})
+  finally:storage._cache.pop(key,None)
  def test_bad_slug_rejected(self):
   for slug in ['/../private','https://a.com','//host','/a/','/a?b']:
    with self.assertRaises(ValueError):validate_article({**self.data,'slug':slug})

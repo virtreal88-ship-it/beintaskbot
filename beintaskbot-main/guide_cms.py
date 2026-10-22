@@ -83,7 +83,7 @@ class GuideCMS:
         return json.loads((self.base / 'guide_site' / 'seed.json').read_text(encoding='utf-8'))
 
     def read(self):
-        doc = self.storage._load_file(self.filename)
+        doc = self.storage.read_json(self.filename)
         if not doc: return {'version': 0, 'items': self.seed()}
         if not isinstance(doc, dict) or not isinstance(doc.get('items'), list):
             raise RuntimeError('Invalid guide storage')
@@ -104,11 +104,7 @@ class GuideCMS:
             old['updated_at'] = datetime.now(timezone.utc).isoformat()
             old['updated_by'] = actor
             doc['version'] = doc.get('version', 0) + 1
-            with self.storage._lock:
-                previous = copy.deepcopy(self.storage._cache.get(self.filename, {}))
-                self.storage._cache[self.filename] = doc
-            if not self.storage._save_file(self.filename):
-                with self.storage._lock: self.storage._cache[self.filename] = previous
+            if not self.storage.write_json(self.filename, doc):
                 raise RuntimeError('Saxlama alınmadı; dəyişikliklər yadda saxlanılmadı')
             return doc
 
