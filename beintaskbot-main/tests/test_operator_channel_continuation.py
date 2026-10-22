@@ -19,6 +19,7 @@ def stopped(channels,monkeypatch):
     d.execute('DELETE FROM saas_ai_legacy_permits')
     d.execute('DELETE FROM saas_ai_channel_legacy_state')
     d.execute("UPDATE saas_ai_agents SET mode='manual'")
+    d.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
     d.execute("UPDATE saas_ai_conversation_state SET state='human',reason='manager_replied',agent_id=NULL")
     d.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,state,reason,revision,agent_id) VALUES(%s::uuid,'connect','','client','human','manager_replied',22,%s::uuid),(%s::uuid,'connect',%s,'client','human','manager_replied',9,NULL)",(A,AGENT,A,CB))
     d.commit()
@@ -49,10 +50,10 @@ def test_channel_only_preserves_legacy_human_manual_and_requires_new_message(sto
     assert f['incoming'](CA,mid=before)[1]==0
     assert f['incoming'](CB)[1]==0
     assert f['process']() is None
-    assert f['incoming'](CA)[1]==1
-    f['process']()
-    assert len(d.execute("SELECT id FROM saas_ai_agent_drafts WHERE state='pending'"))==1;d.commit()
-    f['send'].assert_not_called();f['generate'].assert_called_once()
+    assert f['incoming'](CA)[1]==0
+    assert f['process']() is None
+    assert d.execute("SELECT id FROM saas_ai_agent_drafts WHERE state='pending'")==[];d.commit()
+    f['send'].assert_not_called();f['generate'].assert_not_called()
 
 @pytest.mark.parametrize('change',['legacy','channel','agent'])
 def test_revision_or_binding_change_revokes_permission(stopped,change):
@@ -124,42 +125,20 @@ def test_intervention_during_generation_cancels_stale_response(stopped,change):
     f['generate'].side_effect=intervene
     f['incoming'](CA);f['process']();f['send'].assert_not_called();assert blocked(d)
 
-def test_final_transport_rechecks_permission_after_draft_reservation(stopped):
-    import tenant_connect_transport as transport
-    f=stopped;d=f['db'];continuation.grant(PROFILE,request())
-    agents.set_conversation_state(PROFILE,'client','active','resume','connect',CA)
-    f['incoming'](CA);f['process']()
-    draft=d.execute("SELECT id FROM saas_ai_agent_drafts WHERE state='pending'")[0]['id'];d.commit()
-    reserved=agents.reserve_draft_send(PROFILE,draft)
-    d.execute("UPDATE saas_ai_conversation_state SET revision=revision+1 WHERE channel_id=''");d.commit()
-    assert transport.send_ai_reply_if_active(A,41,CA,'client','stale',draft,reserved['expected_revision']) is None
-    f['send'].assert_not_called()
-
 def test_pending_old_draft_and_unknown_run_prevent_grant(stopped):
     f=stopped;d=f['db'];continuation.grant(PROFILE,request())
     agents.set_conversation_state(PROFILE,'client','active','resume','connect',CA)
-    f['incoming'](CA);f['process']();connect.mark_operator_reply(A,41,CA,'client')
+    mid,_=f['incoming'](CA);f['process']();connect.mark_operator_reply(A,41,CA,'client')
     # Even a historical draft made pending again cannot acquire send permission.
-    d.execute("UPDATE saas_ai_agent_drafts SET state='pending'");d.commit()
-    draft=d.execute('SELECT id FROM saas_ai_agent_drafts')[0]['id'];d.commit()
+    fingerprint=d.execute("SELECT fingerprint FROM saas_tenant_webhook_events WHERE external_id=%s",(mid,))[0]['fingerprint']
+    run,draft=str(__import__('uuid').uuid4()),str(__import__('uuid').uuid4())
+    d.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,'legacy','completed')",(A,run,AGENT,fingerprint))
+    d.execute("INSERT INTO saas_ai_agent_drafts(tenant_id,id,agent_id,run_id,lead_id,talk_id,chat_id,source_message_id,source_fingerprint,draft,state) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,41,'','client',%s,%s,'Historical reply','pending')",(A,draft,AGENT,run,mid,fingerprint));d.commit()
     assert continuation.options(PROFILE,DATA)['reason']=='outstanding_work'
-    with pytest.raises(TenantLinearError):agents.reserve_draft_send(PROFILE,draft)
     d.execute("UPDATE saas_ai_agent_drafts SET state='superseded'")
     d.execute("UPDATE saas_ai_agent_jobs SET state='skipped'")
     d.execute("UPDATE saas_ai_agent_runs SET state='unknown'");d.commit()
     assert continuation.options(PROFILE,DATA)['reason']=='outstanding_work'
-    f['send'].assert_not_called()
-
-def test_recreated_pending_old_draft_is_rejected_after_new_grant_and_resume(stopped):
-    f=stopped;d=f['db'];continuation.grant(PROFILE,request())
-    agents.set_conversation_state(PROFILE,'client','active','resume','connect',CA)
-    f['incoming'](CA);f['process']();connect.mark_operator_reply(A,41,CA,'client')
-    d.execute("UPDATE saas_ai_agent_drafts SET state='superseded'")
-    d.execute("UPDATE saas_ai_agent_jobs SET state='skipped'");d.commit()
-    continuation.grant(PROFILE,request());agents.set_conversation_state(PROFILE,'client','active','resume','connect',CA)
-    d.execute("UPDATE saas_ai_agent_drafts SET state='pending'")
-    draft=d.execute('SELECT id FROM saas_ai_agent_drafts')[0]['id'];d.commit()
-    with pytest.raises(TenantLinearError):agents.reserve_draft_send(PROFILE,draft)
     f['send'].assert_not_called()
 
 def test_schema_rerun_preserves_original_and_permit(stopped):
@@ -223,9 +202,9 @@ def test_owner_close_atomic_preserves_budget_and_second_channel(stopped):
     agents.set_conversation_state(PROFILE,'client','active','resume','connect',CA)
     assert f['incoming'](CA,mid=mid)[1]==0 and f['incoming'](CB)[1]==0
     assert f['process']() is None
-    assert f['incoming'](CA)[1]==1
-    f['process']();f['send'].assert_not_called()
-    assert len(d.execute("SELECT id FROM saas_ai_agent_drafts WHERE state='pending'"))==1
+    assert f['incoming'](CA)[1]==0
+    assert f['process']() is None;f['send'].assert_not_called()
+    assert d.execute("SELECT id FROM saas_ai_agent_drafts WHERE state='pending'")==[]
     d.commit()
 
 

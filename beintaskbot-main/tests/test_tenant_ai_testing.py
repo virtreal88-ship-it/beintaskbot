@@ -290,7 +290,7 @@ def test_kommo_crm_commit_boundaries_recheck_selected_agent(sandbox,monkeypatch)
     import tenant_ai_agent_crm_actions as crm
     monkeypatch.setattr(crm,'_connect',lambda:sandbox);monkeypatch.setattr(crm,'runtime_flag',lambda _:True)
     lease=uid();sandbox.execute("UPDATE saas_ai_agents SET mode='automatic'")
-    sandbox.execute('UPDATE saas_ai_agent_settings SET crm_actions_enabled=TRUE')
+    sandbox.execute('UPDATE saas_ai_agent_settings SET crm_actions_enabled=TRUE,auto_send_enabled=TRUE')
     sandbox.execute("UPDATE saas_ai_agent_jobs SET provider='kommo',talk_id='9',channel_id='wa',state='processing',lease_token=%s::uuid",(lease,))
     sandbox.execute("UPDATE saas_ai_conversation_state SET provider='kommo'")
     sandbox.execute("UPDATE saas_tenant_webhook_events SET provider='kommo',payload='{\"contact_id\":8}'::jsonb")
@@ -298,7 +298,7 @@ def test_kommo_crm_commit_boundaries_recheck_selected_agent(sandbox,monkeypatch)
     job={'tenant_id':A,'agent_id':AGENT,'provider':'kommo','conversation_id':'client','lease_token':lease,'revision':1,'event_fingerprint':'evt'}
     assert crm._action_still_allowed(job)
     assert crm._reserve_action(job,'first','create_task',{'text':'test'})[1]=='running'
-    other=uid();sandbox.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled) VALUES(%s::uuid,%s::uuid,'Second',11,TRUE)",(A,other));sandbox.commit()
+    sandbox.execute("UPDATE saas_ai_agents SET enabled=FALSE WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));sandbox.commit()
     assert not crm._action_still_allowed(job)
     with pytest.raises(TenantLinearError):crm._reserve_action(job,'second','create_task',{'text':'test'})
     assert count(sandbox,'saas_ai_agent_action_runs')==1

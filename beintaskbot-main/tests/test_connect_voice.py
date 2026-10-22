@@ -93,7 +93,6 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
         self.failed = mocked(worker, 'finish_unknown')
         self.superseded = mocked(worker, 'finish_superseded')
         self.skip = mocked(worker, 'skip_job')
-        self.draft = mocked(worker, 'complete_run')
         mocked(voice, '_claim', side_effect=claim)
         self.finish_voice = mocked(voice, '_finish', side_effect=finish)
         mocked(voice, 'active', side_effect=lambda *_: self.active)

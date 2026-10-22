@@ -52,15 +52,3 @@ def test_group_competing_final_senders(group):
     values=race(d,[('send',payload)]*3,key)
     assert sum(v is not None for v in values)==1
     assert len(d.execute('SELECT * FROM test_external_sends WHERE run_id=%s',(str(draft),)))==1;d.commit()
-
-
-def test_competing_reviewers_and_group_takeover(group):
-    ready(group);d=group['db'];incoming(group,CA,'REVIEW_PROCESS');group['process']()
-    draft=d.execute('SELECT id FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid',(A,))[0]['id'];d.commit()
-    values=race(d,[('group_draft',{'draft_id':str(draft)})]*2)
-    assert sum(v is not None for v in values)==1
-    result=race(d,[('group_state',{'conversation_id':G,'state':'human','provider':'connect','channel_id':CB}),
-                   ('group_reserve',dict(tenant=A,channel=CA,conversation=G,run_id=str(draft)))])
-    with d.cursor() as c:assert groups.read(c,A,G)['state']=='human'
-    d.commit()
-    assert not race(d,[('group_reserve',dict(tenant=A,channel=CA,conversation=G,run_id=str(draft)))])[0]

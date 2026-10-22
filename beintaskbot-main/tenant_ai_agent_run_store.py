@@ -128,7 +128,7 @@ def load_agent_config(job, *, with_block_reason=False):
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''SELECT a.role,a.enabled AS agent_enabled,a.scopes,a.model AS agent_model,a.safety,a.schedule,a.mode,
-              s.enabled AS settings_enabled,s.auto_send_enabled,s.emergency_stop,s.crm_actions_enabled,s.native_crm_actions_enabled,i.metadata,i.secrets,t.status AS tenant_status,cs.state AS conversation_state,
+              s.enabled AS settings_enabled,s.auto_send_enabled,s.emergency_stop,s.crm_actions_enabled,s.native_crm_actions_enabled,i.metadata,i.secrets,t.status AS tenant_status,cs.state AS conversation_state
               FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
               JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id
               LEFT JOIN saas_tenant_integrations i ON i.tenant_id=j.tenant_id AND i.provider='chat_ai'
@@ -421,63 +421,6 @@ def record_token_usage(job, reservation, usage, *, cumulative=False, generated=F
         conn.commit()
 
 
-def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False):
-    with _connect() as conn:
-        ensure_schema(conn)
-        with conn.cursor() as cur:
-            lock_dialog(cur, job["tenant_id"], job["provider"], job.get("channel_id"), job["conversation_id"])
-            if job["provider"] == "connect":
-                assert_resolved(cur, job["tenant_id"], job["channel_id"], job["conversation_id"], job.get("event_fingerprint") or "")
-            cur.execute('''SELECT j.revision,j.lease_token,j.state,a.enabled AS agent_enabled,a.role,a.mode,a.version AS agent_version,s.enabled AS settings_enabled,s.auto_send_enabled,s.emergency_stop,s.updated_at AS settings_version,
-              i.updated_at AS config_version,i.metadata,t.status AS tenant_status,
-              cs.state AS conversation_state,cs.revision AS conversation_revision
-              FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
-              JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id
-              LEFT JOIN saas_tenant_integrations i ON i.tenant_id=j.tenant_id AND i.provider='chat_ai'
-              JOIN saas_tenants t ON t.id=j.tenant_id
-              LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id AND cs.channel_id=j.scope_channel_id
-              WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s AND j.scope_channel_id=%s
-              -- See reserve_run: `i` is a nullable LEFT JOIN and cannot be
-              -- locked by PostgreSQL. The version check below invalidates a
-              -- result if the Chat AI configuration changed while generating.
-              FOR UPDATE OF j,a,s''', (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job_scope(job)))
-            current = cur.fetchone()
-            from tenant_ai_group_coordination import job_allowed
-            if not job_allowed(cur, job):
-                current = None
-            config = current.get('metadata') if current and isinstance(current.get('metadata'),dict) else {}
-            if (not current or current['state']!='processing' or current['lease_token']!=job['lease_token']
-                    or current['revision']!=job['revision'] or current['agent_enabled'] is not True
-                    or current['agent_version']!=reservation['agent_version'] or current['settings_enabled'] is not True
-                    or str(current['settings_version'])!=reservation['settings_version']
-                    or current['conversation_state'] in {'human','paused'}
-                    or current['conversation_revision']!=reservation.get('conversation_revision')
-                    or not tenant_status_allows_ai(current['tenant_status'],job.get('provider')) or current.get('emergency_stop') is True
-                    or current.get('auto_send_enabled') is not True or current.get('mode')!='automatic'
-                    or str(current.get('config_version'))!=str(reservation.get('config_version'))
-                    or (reservation.get('credential_source') != 'platform' and config.get('consent') is not True)):
-                cur.execute("UPDATE saas_ai_agent_runs SET state='superseded',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",
-                            (job['tenant_id'],reservation['run_id']))
-                conn.commit()
-                return False
-            cur.execute('''UPDATE saas_ai_agent_runs SET state='completed',result=%s::jsonb,updated_at=now()
-              WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating' ''',
-              (_json({'source_ids':source_ids}),job['tenant_id'],reservation['run_id']))
-            draft_id = uuid.uuid4()
-            payload = job.get('payload') or {}
-            cur.execute('''INSERT INTO saas_ai_agent_drafts
-              (tenant_id,id,agent_id,run_id,lead_id,talk_id,chat_id,source_message_id,source_fingerprint,draft,source_ids,handoff_after_send)
-              VALUES(%s::uuid,%s,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)''',
-              (job['tenant_id'],draft_id,job['agent_id'],reservation['run_id'],job['lead_id'],job['talk_id'],job['chat_id'],
-               str(payload.get('message_id') or ''),job['event_fingerprint'],draft,_json(source_ids),bool(stop_after_reply)))
-            cur.execute('''UPDATE saas_ai_agent_jobs SET state='drafted',lease_token=NULL,lease_until=NULL,error_code='',updated_at=now()
-              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s
-                AND lease_token=%s AND revision=%s''',
-              (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job_scope(job),job['lease_token'],job['revision']))
-            cur.execute("UPDATE saas_tenant_webhook_events SET state='completed',completed_at=now(),error_code='' WHERE tenant_id=%s::uuid AND fingerprint=%s",
-                        (job['tenant_id'],job['event_fingerprint']))
-        conn.commit()
-    return True
 
 
 def finish_unknown(job, reservation, error_code='provider_result_unknown'):

@@ -1,4 +1,4 @@
-"""Server-side inbound processing that creates manual drafts without /app."""
+"""Server-side inbound processing for explicitly enabled automatic agents."""
 import asyncio
 import hashlib
 import json
@@ -9,7 +9,7 @@ from tenant_ai_expert_service import request_expert
 from tenant_ai_agent_queue import _scope_matches
 from tenant_ai_agent_actions import handoff_reason, enabled_triggers, matching_triggers, handoff
 from tenant_ai_agent_crm_actions import execute_matching_actions
-from tenant_ai_agent_run_store import (claim_next, complete_run, defer_job,
+from tenant_ai_agent_run_store import (claim_next, defer_job,
     finish_unknown, finish_superseded, finish_sent, knowledge_context, record_token_usage,
     reserve_run, retry_or_fail, skip_job)
 from tenant_ai_agent_send import send_agent
@@ -429,11 +429,6 @@ async def process_one(job, kommo_request, wait_slot, logger):
                     await asyncio.to_thread(finish_superseded,job,reservation,
                         f'automatic_send_blocked_{reason}')
                 return
-        stop_after_reply=any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matched)
-        saved = await asyncio.to_thread(complete_run,job,reservation,str(draft)[:16000],source_ids,stop_after_reply=stop_after_reply)
-        _ai_diag(logger, job, 'draft_persist', 'saved' if saved else 'revision_changed')
-        if not saved:
-            logger.info('AI agent draft discarded after revision change: tenant=%s agent=%s',tenant,job['agent_id'])
     except asyncio.CancelledError:
         if reservation:
             await asyncio.to_thread(finish_unknown,job,reservation,'worker_stopped')
@@ -688,9 +683,6 @@ async def process_connect_one(job, logger):
             else:
                 await asyncio.to_thread(finish_sent, job, reservation, message_id)
             return
-        await asyncio.to_thread(complete_run, job, reservation, draft[:16000],
-                                [item['source_id'] for item in knowledge],
-                                stop_after_reply=any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matched))
     except asyncio.CancelledError:
         if reservation:
             await asyncio.to_thread(finish_unknown, job, reservation, 'worker_stopped')

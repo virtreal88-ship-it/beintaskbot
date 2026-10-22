@@ -83,15 +83,15 @@ def test_report_retains_pre_reservation_failure_after_job_replacement(flow,monke
     assert result['metrics']['ai_errors']==1 and result['metrics']['connect_errors']==0
 
 
-def test_report_counts_failed_manual_draft_send(flow,monkeypatch):
+def test_report_counts_historical_unknown_draft_send(flow,monkeypatch):
     f=flow;db=f['db'];monkeypatch.setattr(report,'_connect',lambda:db)
-    db.execute("UPDATE saas_ai_agents SET mode='manual'");db.commit()
-    f['inbound']();f['process']()
-    draft=db.execute('SELECT id FROM saas_ai_agent_drafts')[0]['id'];db.commit()
-    agents.reserve_draft_send(PROFILE,draft)
-    agents.finish_draft_send(A,draft,'unknown')
-    db.execute("UPDATE saas_ai_agent_drafts SET send_started_at='2026-10-15T22:01Z'")
-    db.execute("UPDATE saas_ai_agent_runs SET created_at='2026-10-15T22:00Z',updated_at='2026-10-15T22:01Z'");db.commit()
+    mid,_=f['inbound']()
+    fingerprint=db.execute("SELECT fingerprint FROM saas_tenant_webhook_events WHERE provider='connect' ORDER BY received_at DESC LIMIT 1")[0]['fingerprint']
+    run,draft=str(uuid.uuid4()),str(uuid.uuid4())
+    db.execute("UPDATE saas_tenant_webhook_events SET received_at='2026-10-15T22:00Z' WHERE tenant_id=%s::uuid AND fingerprint=%s",(A,fingerprint))
+    db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,'legacy','unknown')",(A,run,AGENT,fingerprint))
+    db.execute("INSERT INTO saas_ai_agent_drafts(tenant_id,id,agent_id,run_id,lead_id,talk_id,chat_id,source_message_id,source_fingerprint,draft,state,send_started_at) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,41,'','client',%s,%s,'Legacy reply','unknown','2026-10-15T22:01Z')",(A,draft,AGENT,run,mid,fingerprint));db.commit()
     result=report.report(PROFILE,'2026-10-15','UTC','19:00','09:00',now=datetime(2026,10,16,12,tzinfo=timezone.utc))
     assert result['metrics']['connect_errors']==1 and result['metrics']['ai_errors']==0
     f['send'].assert_not_called()
+    assert f['generate'].call_count==0

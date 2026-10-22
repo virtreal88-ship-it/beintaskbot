@@ -243,18 +243,6 @@ class ConnectAiFlowTests(unittest.TestCase):
             self.assertEqual(agents_store.save_knowledge(profile, source_data)['id'], DRAFT)
         self.assertFalse(any('INSERT INTO saas_ai_knowledge_sources' in sql for sql, _params in cursor.executed))
 
-    def test_accepted_connect_manual_draft_handoff_uses_connect_state_not_kommo(self):
-        cursor = Cursor(ones=[{'provider': 'connect','payload':{'channel_id':CHANNEL},'source_fingerprint':'event-a'}, {'chat_id': 'client@s.whatsapp.net', 'handoff_after_send': True}])
-        connection = Connection(cursor)
-        with patch.object(agents_store, '_connect', return_value=connection), \
-             patch.object(agents_store, 'ensure_schema'), \
-             patch('tenant_support_inbox_store.handoff_ticket'), \
-             patch('tenant_support_inbox_store.handoff_recorded', return_value=False), \
-             patch('tenant_support_inbox_store.summarize_created'):
-            self.assertEqual(agents_store.finish_draft_send(TENANT, DRAFT, 'accepted'), 'approved')
-        transition = next(params for sql, params in cursor.executed if "trigger_reply_sent_then_handoff" in sql)
-        self.assertEqual(transition[1], 'connect')
-
     def test_pause_route_remains_and_retired_draft_send_api_is_unmounted(self):
         context = TenantWebContext(member=lambda _request: None, origin='https://crm.pro.az', logger=MagicMock(),
                                   crm_request=MagicMock(), wait_slot=MagicMock(), bot=lambda: None)

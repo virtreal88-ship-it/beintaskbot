@@ -69,9 +69,6 @@ class AiAgentRunStoreLockTests(unittest.TestCase):
     def test_reserve_run_never_locks_nullable_chat_ai_integration(self):
         self.assert_nullable_integration_is_not_locked(run_store.reserve_run)
 
-    def test_complete_run_never_locks_nullable_chat_ai_integration(self):
-        self.assert_nullable_integration_is_not_locked(run_store.complete_run)
-
     def test_deferring_reserved_run_supersedes_receipt_before_requeue(self):
         cursor = Cursor(({'id': 'run-a'}, {'ok': 1}))
         connection = Connection(cursor)
