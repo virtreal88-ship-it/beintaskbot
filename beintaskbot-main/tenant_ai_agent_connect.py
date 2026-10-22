@@ -326,7 +326,10 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             # but distinguish it from a disabled agent in the durable reason.
             scoped_agents = [row for row in tenant_agents if scope_matches(row.get('scopes'), channel_id)]
             enabled_scoped_agents = [row for row in scoped_agents if row.get('enabled') is True]
-            automatic_agents = eligible_connect_agents(enabled_scoped_agents)
+            # Manual mode is human-only. Test Mode is exercised in the
+            # isolated virtual chat, never by processing customer messages.
+            automatic_agents = (eligible_connect_agents(enabled_scoped_agents)
+                                if settings.get('operating_mode') == 'active' else [])
             group_agents = [row for row in automatic_agents
                             if scope_matches(row.get('scopes'), channel_id, is_group=True)]
             agents = group_agents if is_group else automatic_agents
@@ -338,7 +341,8 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             if selection_ambiguous:
                 agents = []
             if not agents:
-                reason = ('agent_not_found' if not tenant_agents else
+                reason = ('virtual_test_only' if settings.get('operating_mode') != 'active' else
+                          'agent_not_found' if not tenant_agents else
                           'no_connect_scope' if not scoped_agents else
                           'agent_disabled' if not enabled_scoped_agents else
                           'agent_selection_required' if selection_ambiguous else

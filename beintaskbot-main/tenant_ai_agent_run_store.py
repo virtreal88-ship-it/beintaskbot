@@ -171,6 +171,10 @@ def load_agent_config(job, *, with_block_reason=False):
         # Fence queued/recovered legacy Manual Draft jobs before provider I/O
         # in both operating modes. Copilot remains employee-initiated.
         reason = 'manual_mode_requires_operator_request'
+    elif row.get('operating_mode') != 'active':
+        # Legacy Kommo/Connect test bindings no longer turn customer traffic
+        # into AI work. Test conversations use the private virtual-test API.
+        reason = 'virtual_test_only'
     elif row.get('conversation_state') in {'human', 'paused'}:
         reason = 'conversation_paused_or_human'
     elif row.get('emergency_stop') is True:
@@ -486,7 +490,7 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
                     or current['conversation_state'] in {'human','paused'}
                     or current['conversation_revision']!=reservation.get('conversation_revision')
                     or not tenant_status_allows_ai(current['tenant_status'],job.get('provider')) or current.get('emergency_stop') is True
-                    or (current.get('operating_mode')!='active' and current.get('test_mode_allowed') is not True)
+                    or current.get('operating_mode')!='active'
                     or (current.get('operating_mode')=='active' and reservation.get('mode')=='manual')
                     or str(current.get('config_version'))!=str(reservation.get('config_version'))
                     or (reservation.get('credential_source') != 'platform' and config.get('consent') is not True)):
