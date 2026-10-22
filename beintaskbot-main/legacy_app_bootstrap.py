@@ -59,4 +59,5 @@ def build_telegram_application(
 
 
 def run_polling(app) -> None:
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    # Keep updates queued while deployments overlap or the worker restarts.
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)

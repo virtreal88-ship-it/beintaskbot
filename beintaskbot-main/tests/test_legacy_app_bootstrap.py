@@ -48,7 +48,7 @@ class BootstrapTests(unittest.TestCase):
         bootstrap.run_polling(app)
         app.run_polling.assert_called_once_with(
             allowed_updates=bootstrap.Update.ALL_TYPES,
-            drop_pending_updates=True,
+            drop_pending_updates=False,
         )
 
 
