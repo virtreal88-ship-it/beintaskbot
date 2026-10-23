@@ -131,7 +131,10 @@ def test_browser_network_fence_blocks_research_writes_and_caps_operation_to_one_
     from tenant_ai_instructor_browser import _request_method_allowed
     state={'enabled':False,'used':False}
     assert _request_method_allowed('research','GET','/inventory')
+    assert _request_method_allowed('research','GET','/p=move')
+    assert _request_method_allowed('research','GET','/newmove')
     assert _request_method_allowed('research','POST','/login',allow_auth=True,login_path='/login')
+    assert not _request_method_allowed('research','POST','/newmove',write_state=state,transfer_path='/newmove')
     assert not _request_method_allowed('research','POST','/inventory/transfers',write_state=state,
         transfer_path='/inventory/transfers')
     assert not _request_method_allowed('demonstration_operation','POST','/inventory/transfers',
@@ -144,6 +147,13 @@ def test_browser_network_fence_blocks_research_writes_and_caps_operation_to_one_
         write_state=state,transfer_path='/inventory/transfers')
     assert not _request_method_allowed('demonstration_operation','DELETE','/inventory/transfers',
         write_state=state,transfer_path='/inventory/transfers')
+
+
+def test_live_erp_transfer_navigation_uses_observed_routes_and_button():
+    from tenant_ai_instructor_browser import _PATHS,_BUTTONS
+    assert _PATHS=={'inventory':'/p=product','transfers':'/p=move','new_transfer':'/newmove'}
+    assert _BUTTONS=={'new_transfer':('button','Yerdəyişmə')}
+    assert all(path.startswith('/') and not path.startswith('//') for path in _PATHS.values())
 
 
 def test_local_preview_serves_instructor_route_and_assets():

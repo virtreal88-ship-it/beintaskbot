@@ -21,7 +21,8 @@ from urllib.parse import urlsplit
 
 from tenant_ai_instructor_contract import BrowserAction, DemoConnection, ScreenshotEvidence, TaskScope
 
-_PATHS = {'inventory':'/inventory','transfers':'/inventory/transfers','new_transfer':'/inventory/transfers/new'}
+_PATHS = {'inventory':'/p=product','transfers':'/p=move','new_transfer':'/newmove'}
+_BUTTONS = {'new_transfer':('button','Yerdəyişmə')}
 _TEST_IDS = {'source_warehouse':'source-warehouse','destination_warehouse':'destination-warehouse',
              'product':'product','quantity':'quantity','save_demo_transfer':'save-transfer',
              'transfer_result':'transfer-result'}
@@ -299,6 +300,11 @@ class PlaywrightDemoExecutor:
             try:
                 if await link.count()==1 and await link.is_visible():allowed.append(target)
             except Exception:pass
+        for target,(role,name) in _BUTTONS.items():
+            locator=page.get_by_role(role,name=name,exact=True)
+            try:
+                if await locator.count()==1 and await locator.is_visible():allowed.append(target)
+            except Exception:pass
         result['allowed_targets']=sorted(set(allowed))
         status=page.locator('[data-demo-status]')
         if await status.count(): result['status']=(await status.first.inner_text())[:300]
@@ -321,15 +327,22 @@ class PlaywrightDemoExecutor:
             if not path: raise ValueError('target_forbidden')
             await page.goto(session.connection.origin+path,wait_until='domcontentloaded',timeout=10000)
         elif action.action=='click':
-            test_id=_TEST_IDS.get(action.target)
-            if not test_id: raise ValueError('target_forbidden')
-            write_state=getattr(session.context,'_ai_instructor_write_state',None)
-            if action.target=='save_demo_transfer' and scope.permission_level=='demonstration_operation':
-                if not write_state or write_state.get('used'):raise RuntimeError('demo_transfer_write_budget_exhausted')
-                write_state['enabled']=True
-            try:await page.get_by_test_id(test_id).click(timeout=5000)
-            finally:
-                if write_state:write_state['enabled']=False
+            if action.target in _BUTTONS:
+                role,name=_BUTTONS[action.target]
+                locator=page.get_by_role(role,name=name,exact=True)
+                if await locator.count()!=1 or not await locator.is_visible():
+                    raise RuntimeError('approved_button_unavailable')
+                await locator.click(timeout=5000)
+            else:
+                test_id=_TEST_IDS.get(action.target)
+                if not test_id: raise ValueError('target_forbidden')
+                write_state=getattr(session.context,'_ai_instructor_write_state',None)
+                if action.target=='save_demo_transfer' and scope.permission_level=='demonstration_operation':
+                    if not write_state or write_state.get('used'):raise RuntimeError('demo_transfer_write_budget_exhausted')
+                    write_state['enabled']=True
+                try:await page.get_by_test_id(test_id).click(timeout=5000)
+                finally:
+                    if write_state:write_state['enabled']=False
         elif action.action=='fill_demo':
             test_id=_TEST_IDS.get(action.target)
             values={'fixture.source_warehouse':'Main warehouse','fixture.destination_warehouse':'Store 1',
