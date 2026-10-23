@@ -1,4 +1,5 @@
-.kc-toolbar{display:grid;grid-template-columns:minmax(220px,1fr) minmax(170px,220px) minmax(160px,200px);gap:10px;margin:14px 0}
+.kc-tabs{display:flex;gap:7px;border-bottom:1px solid var(--line);margin:16px 0 0}.kc-tabs button{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);padding:10px 12px;font:inherit;font-weight:600}.kc-tabs button[aria-selected=true]{color:var(--brand-deep);border-color:var(--brand)}
+.kc-toolbar{display:grid;grid-template-columns:minmax(220px,1fr) minmax(160px,200px);gap:10px;margin:14px 0}
 .kc-toolbar select{min-width:0;border:1px solid var(--line);border-radius:11px;background:var(--card);color:var(--ink);padding:10px 12px}
 .kc-list{display:grid;gap:10px}
 .kc-card{display:flex;align-items:center;justify-content:space-between;gap:18px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:15px 17px;min-width:0}

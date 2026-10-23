@@ -755,14 +755,17 @@ def search_knowledge(profile, query, *, limit=6):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, _ = _authorize(cur, profile)
+            from tenant_knowledge_search import tsquery, patterns
+            semantic_query=tsquery(query)
+            semantic_patterns=patterns(query)
             cur.execute('''SELECT s.id AS source_id,s.title,c.chunk_no,c.content,
-              ts_rank(c.search_vector,plainto_tsquery('simple',%s)) AS rank
+              ts_rank(c.search_vector,to_tsquery('simple',%s)) AS rank
               FROM saas_ai_knowledge_chunks c JOIN saas_ai_knowledge_sources s
                 ON s.tenant_id=c.tenant_id AND s.id=c.source_id
               WHERE c.tenant_id=%s::uuid AND s.active=TRUE
-                AND (c.search_vector @@ plainto_tsquery('simple',%s) OR c.content ILIKE %s)
+                AND (c.search_vector @@ to_tsquery('simple',%s) OR c.content ILIKE ANY(%s))
               ORDER BY rank DESC,s.updated_at DESC,c.chunk_no LIMIT %s''',
-              (query, tenant, query, '%' + query[:120] + '%', max(1, min(int(limit), 12))))
+              (semantic_query, tenant, semantic_query, semantic_patterns, max(1, min(int(limit), 12))))
             return [{**dict(row), 'source_id': str(row['source_id'])} for row in cur.fetchall()]
 
 
