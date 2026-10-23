@@ -297,11 +297,16 @@ def issues(profile, *, limit=100):
 def review_issue(profile, run_id, issue_key, status):
     try: run_id=str(uuid.UUID(str(run_id)))
     except (ValueError,TypeError): raise TenantLinearError('Issue is invalid.',404) from None
-    if status not in {'new','in_review','confirmed','dismissed','fixed'}: raise TenantLinearError('Issue status is invalid.')
+    if status not in {'new','in_review','confirmed','dismissed','fixed','deferred','fixing','recheck_pending'}: raise TenantLinearError('Issue status is invalid.')
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
+            if str(issue_key).startswith('learning:'):
+                from tenant_ai_learning import review_improvement
+                result=review_improvement(cur,tenant,actor,run_id,str(issue_key),status)
+                conn.commit()
+                return result
             cur.execute('''SELECT r.outcome,r.events,r.knowledge_refs FROM saas_ai_simulation_runs r
               WHERE r.tenant_id=%s::uuid AND r.id=%s::uuid FOR SHARE''',(tenant,run_id))
             run=cur.fetchone()
