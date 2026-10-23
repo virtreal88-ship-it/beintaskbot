@@ -46,6 +46,13 @@ def document(value):
         for c in rows:
             if type(c['at_ms']) is not int or not prev<c['at_ms']<slides[i]['playback']['duration_ms'] or not isinstance(c['text'],str) or not 1<=len(c['text'])<=120: raise ValueError('subtitle')
             prev=c['at_ms']
+    video=v.get('video')
+    if video is not None:
+        if (not isinstance(video,dict) or set(video)-{'artifact_id','job_id','mime','review_status'} or
+            video.get('mime')!='video/mp4' or video.get('review_status') not in ('pending_review','approved')):
+            raise ValueError('video')
+        identifier(video.get('artifact_id'));identifier(video.get('job_id'))
+        video['review_status']='pending_review' # every edit invalidates prior review
     v['review_status']='pending_review' # authoritative lifecycle is server-owned
     return v
 
@@ -70,6 +77,18 @@ def _assets(c,tenant,doc):
     for s in doc['slides']:
         im=s['image'];c.execute('SELECT width,height,sha256 FROM saas_instruction_assets WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,im['asset_id'][:-4]));a=c.fetchone()
         if not a or any(a[k]!=im[k] for k in ('width','height','sha256')): raise TenantLinearError('Image unavailable',403)
+
+def _video(c,tenant,doc):
+    video=doc.get('video')
+    if not video:return
+    c.execute("SELECT to_regclass('saas_ai_instructor_artifacts') IS NOT NULL AS available")
+    if not c.fetchone()['available']:raise TenantLinearError('Video unavailable',403)
+    c.execute('''SELECT kind,mime FROM saas_ai_instructor_artifacts
+      WHERE tenant_id=%s::uuid AND job_id=%s::uuid AND id=%s::uuid''',
+      (tenant,video['job_id'],video['artifact_id']))
+    row=c.fetchone()
+    if not row or row['kind']!='recording' or row['mime']!='video/mp4':
+        raise TenantLinearError('Video unavailable',403)
 
 def operation(profile,action,data=None,lesson_id=None):
     data=data or {}
@@ -107,7 +126,7 @@ def operation(profile,action,data=None,lesson_id=None):
                 if not row: raise TenantLinearError('Not found',404)
                 return _row(row)
             if action=='save':
-                v=document(data['doc']);_assets(c,tenant,v)
+                v=document(data['doc']);_assets(c,tenant,v);_video(c,tenant,v)
                 if row:
                     if data.get('expected_version')!=row['version']: raise TenantLinearError('Version conflict; reload before saving',409)
                     c.execute("UPDATE saas_instruction_lessons SET doc=%s::jsonb,state='draft',public_hash=NULL,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(_json(v),tenant,key))
@@ -134,7 +153,13 @@ def operation(profile,action,data=None,lesson_id=None):
                 elif action!='unpublish':
                     state=transition(row['state'],action)
                     if action=='approve' and data.get('review_confirmed') is not True: raise TenantLinearError('Explicit employee review required',400)
-                    v=document(row['doc']);_assets(c,tenant,v)
+                    v=document(row['doc']);_assets(c,tenant,v);_video(c,tenant,v)
+                    if action=='approve':
+                        v['review_status']='approved'
+                        if v.get('video'):v['video']['review_status']='approved'
+                    if action=='publish' and v.get('video') and (row['doc'].get('video') or {}).get('review_status')!='approved':
+                        raise TenantLinearError('Review the attached MP4 before publishing',409)
+                    if action=='publish' and v.get('video'):v['video']['review_status']='approved'
                     if action=='publish':
                         agents=data.get('agent_ids',[])
                         if not isinstance(agents,list) or not 1<=len(agents)<=8 or len(set(agents))!=len(agents): raise ValueError('agents')

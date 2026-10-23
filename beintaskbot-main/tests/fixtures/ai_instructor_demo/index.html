@@ -1,0 +1,13 @@
+<!doctype html><html lang="az" data-ui-version="synthetic-1"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Synthetic demo inventory</title>
+<style>body{font:16px system-ui;max-width:760px;margin:40px auto;padding:0 18px;color:#1a2940}nav{display:flex;gap:14px}section{padding:18px;border:1px solid #ccd6e2;border-radius:10px;margin-top:18px}label{display:block;margin:12px 0}input,select,button{font:inherit;padding:8px}#result{padding:10px;background:#e6f7ed}</style>
+<header data-demo-banner="">SYNTHETIC DEMO</header><nav><a href="/inventory" data-testid="inventory">Anbar</a><a href="/inventory/transfers" data-testid="transfers">Köçürmələr</a><a href="/inventory/transfers/new" data-testid="new-transfer">Yeni köçürmə</a></nav>
+<main><h1>Demo inventory transfer</h1><section><h2>Warehouse transfer</h2>
+<label>Source warehouse <select data-testid="source-warehouse"><option>Main warehouse</option></select></label>
+<label>Destination warehouse <select data-testid="destination-warehouse"><option>Store 1</option></select></label>
+<label>Product <select data-testid="product"><option>Demo shirt</option></select></label>
+<label>Quantity <input data-testid="quantity" type="number" min="1" max="1" value="1"></label>
+<button type="button" data-testid="save-transfer">Save demo transfer</button>
+<p id="result" data-testid="transfer-result" hidden></p>
+</section></main><p data-demo-status>Ready</p>
+<script>document.querySelector('[data-testid="save-transfer"]').addEventListener('click',()=>{const r=document.querySelector('[data-testid="transfer-result"]');r.textContent='Demo transfer saved: Main warehouse → Store 1 · Demo shirt · 1';r.dataset.transferId='synthetic-transfer-001';r.hidden=false;document.querySelector('[data-demo-status]').textContent='Saved';});</script>
+</html>

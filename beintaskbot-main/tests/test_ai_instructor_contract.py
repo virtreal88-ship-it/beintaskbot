@@ -2,7 +2,7 @@
 from dataclasses import replace
 import pytest
 from tenant_ai_instructor_contract import (DemoConnection,TaskScope,BrowserAction,ScreenshotEvidence,
-    ContractError,OPERATION,PERMISSIONS,availability)
+    ContractError,OPERATION,PERMISSIONS,RESEARCH_PERMISSIONS,availability)
 
 IDS=[f'00000000-0000-0000-0000-{i:012d}' for i in range(1,12)]
 
@@ -34,17 +34,21 @@ def test_scope_and_approved_semantic_actions(connection,scope):
 
 @pytest.mark.parametrize('origin',['http://demo.example.test','https://user:password@demo.example.test',
     'https://127.0.0.1','https://localhost','https://demo.example.test/?token=secret',
-    'https://demo.example.test/users','https://demo.example.test:8080','https://db.railway.internal'])
+    'https://demo.example.test/users','https://demo.example.test:8080','https://db.railway.internal','https://akul.az'])
 def test_unsafe_connection_locations_rejected(connection,origin):
     with pytest.raises((ContractError,ValueError)):replace(connection,origin=origin).validate()
 
 
 @pytest.mark.parametrize('patch',[{'tenant_id':IDS[9]},{'human_mode':True},{'paused':True},
     {'group_revision':3},{'group_revision':None},{'group_revision':True},
-    {'seconds_remaining':0},{'seconds_remaining':31},{'actions_remaining':0},
+    {'seconds_remaining':0},{'seconds_remaining':901},{'actions_remaining':0},
     {'tokens_remaining':12001},{'operation':'users.create'},{'primary_agent_id':IDS[8]}])
 def test_tenant_human_pause_revision_and_budgets(connection,scope,patch):
     with pytest.raises(ContractError):replace(scope,**patch).validate(connection)
+
+
+def test_job_runtime_budget_supports_video_capture_window(connection,scope):
+    assert replace(scope,seconds_remaining=900).validate(connection).seconds_remaining==900
 
 
 @pytest.mark.parametrize('action',[BrowserAction('sql'),BrowserAction('shell'),BrowserAction('send_whatsapp'),
@@ -55,9 +59,18 @@ def test_dangerous_actions_and_real_data_rejected(connection,scope,action):
     with pytest.raises(ContractError):action.validate(scope,connection)
 
 
-def test_minimum_rights_and_isolated_session_required(connection):
-    for patch in ({'permissions':PERMISSIONS|{'admin'}},{'isolated_session':False},{'restore_receipt_ref':''}):
+def test_minimum_rights_and_isolated_session_required(connection,scope):
+    for patch in ({'permissions':PERMISSIONS|{'admin'}},{'isolated_session':False}):
         with pytest.raises(ContractError):replace(connection,**patch).validate()
+
+    # Read-only research does not mutate inventory, so a restore receipt is
+    # intentionally required only when a write-capable operation is queued.
+    no_receipt=replace(connection,restore_receipt_ref=None)
+    assert no_receipt.validate() is no_receipt
+    research=replace(no_receipt,permissions=RESEARCH_PERMISSIONS)
+    assert replace(scope,permission_level='research').validate(research)
+    with pytest.raises(ContractError,match='fixture_restore_required'):
+        replace(scope,permission_level='demonstration_operation').validate(no_receipt)
 
 
 def test_screenshot_contract_rejects_external_scope_and_missing_sanitization(scope):

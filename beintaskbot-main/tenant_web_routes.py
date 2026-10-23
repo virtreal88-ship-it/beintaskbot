@@ -32,6 +32,7 @@ from tenant_ai_state_api import handler as ai_state_handler
 from tenant_operator_api import handler as operator_handler
 from tenant_instruction_library_api import handler as instruction_handler
 from tenant_night_report_api import handler as night_report_handler
+from tenant_ai_instructor_api import handler as ai_instructor_handler
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 MemberReader = Callable[[web.Request], dict | None]
@@ -105,6 +106,11 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('agents/pilot/kwid-confirmation', ai_agents_handler(member, origin, logger, 'pilot_kwid_confirmation'), ('POST',)),
         ('agents/pilot/owner-approval', ai_agents_handler(member, origin, logger, 'pilot_owner_approval'), ('POST',)),
         ('agents', ai_agents_handler(member, origin, logger, 'agents'), ('GET', 'POST')),
+        ('instructor', ai_instructor_handler(member, origin, logger), ('GET',)),
+        ('instructor/connections', ai_instructor_handler(member, origin, logger, 'connections'), ('GET','POST')),
+        ('instructor/jobs', ai_instructor_handler(member, origin, logger, 'jobs'), ('GET','POST')),
+        ('instructor/jobs/{job_id:[0-9a-fA-F-]{36}}', ai_instructor_handler(member, origin, logger, 'job'), ('GET','POST')),
+        ('instructor/jobs/{job_id:[0-9a-fA-F-]{36}}/artifacts/{artifact_id:[0-9a-fA-F-]{36}}', ai_instructor_handler(member, origin, logger, 'artifact'), ('GET',)),
         ('agents/options', ai_agents_handler(member, origin, logger, 'options', context.crm_request), ('GET',)),
         ('dialogs', operator_handler(member, origin, logger, 'dialogs'), ('GET',)),
         ('dialogs/avatar', operator_handler(member, origin, logger, 'avatar'), ('GET',)),
