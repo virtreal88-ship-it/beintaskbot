@@ -323,13 +323,15 @@ def ensure_schema(conn):
             # it to the safest explicit company mode. NULL is only a legacy
             # compatibility value in schemas that permit it; it is not needed
             # to retire Test Mode and must never abort application startup.
+            # Older deployed constraints allowed `test` but not `manual`, so
+            # remove the legacy check before performing the compatibility update.
+            cur.execute("ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_operating_mode_check")
             cur.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=FALSE,operating_mode='manual' WHERE operating_mode='test' RETURNING tenant_id")
             legacy_test_tenants=[str(row['tenant_id']) for row in cur.fetchall()]
             if legacy_test_tenants:
                 cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='legacy_test_mode_retired',updated_at=now() WHERE state IN ('queued','processing') AND tenant_id=ANY(%s::uuid[])", (legacy_test_tenants,))
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='legacy_test_mode_retired' WHERE state IN ('queued','processing') AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=ANY(%s::uuid[]) AND error_code='legacy_test_mode_retired')", (legacy_test_tenants,))
                 cur.execute("UPDATE saas_ai_agent_drafts SET state='rejected' WHERE state='pending' AND tenant_id=ANY(%s::uuid[]) AND source_fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=ANY(%s::uuid[]) AND error_code='legacy_test_mode_retired')", (legacy_test_tenants,legacy_test_tenants))
-            cur.execute("ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_operating_mode_check")
             cur.execute("ALTER TABLE saas_ai_agent_settings ADD CONSTRAINT saas_ai_agent_settings_operating_mode_check CHECK(operating_mode IS NULL OR operating_mode IN ('manual','active','simulation'))")
         conn.commit()
         _ready = True
