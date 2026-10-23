@@ -15,7 +15,7 @@ import socket
 import time
 import uuid
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -26,6 +26,17 @@ _BUTTONS = {'new_transfer':('button','Yerdəyişmə')}
 _TEST_IDS = {'source_warehouse':'source-warehouse','destination_warehouse':'destination-warehouse',
              'product':'product','quantity':'quantity','save_demo_transfer':'save-transfer',
              'transfer_result':'transfer-result'}
+
+
+async def _fill_demo_locator(locator,value):
+    """Use the native select API for dropdowns and fill only editable fields."""
+    tag=str(await locator.evaluate('(element) => element.tagName')).casefold()
+    if tag=='select':
+        await locator.select_option(label=value,timeout=5000)
+    elif tag in {'input','textarea'}:
+        await locator.fill(value,timeout=5000)
+    else:
+        raise RuntimeError('approved_demo_field_not_editable')
 
 
 def _allowed_origin(origin):
@@ -76,6 +87,7 @@ class _Session:
     connection: DemoConnection
     scope: TaskScope
     recording_dir: Path
+    timeline_events: list = field(default_factory=list)
     closed: bool=False
 
 
@@ -230,6 +242,7 @@ class PlaywrightDemoExecutor:
             await auth_context.close()
             write_state={'enabled':False,'used':False}
             context=await make_context(storage_state,record=True,write_state=write_state)
+            recording_started=time.monotonic()
             context._ai_instructor_write_state=write_state
             for cookie in storage_state.get('cookies',[]):cookie.clear()
             for entry in storage_state.get('origins',[]):entry.get('localStorage',[]).clear()
@@ -239,7 +252,7 @@ class PlaywrightDemoExecutor:
             if response is None or response.status>=400:raise RuntimeError('demo_unavailable')
             if not await self._verify_page_identity(page,connection):raise RuntimeError('demo_company_identity_mismatch')
             session_id=str(uuid.uuid4())
-            session=_Session(playwright,browser,context,page,time.monotonic(),time.monotonic()+scope.seconds_remaining,
+            session=_Session(playwright,browser,context,page,recording_started,recording_started+scope.seconds_remaining,
                              min(scope.actions_remaining,20),connection,scope,run_dir)
             self._sessions[session_id]=session
             return session_id
@@ -319,6 +332,19 @@ class PlaywrightDemoExecutor:
     async def act(self, session_ref: str, scope: TaskScope, action: BrowserAction):
         session=self._session(session_ref,scope);action.validate(scope,session.connection);session.actions_left-=1
         page=session.page
+        started=time.monotonic()
+        focus=None
+        if action.target in _TEST_IDS:
+            try:
+                box=await page.get_by_test_id(_TEST_IDS[action.target]).bounding_box()
+                if box:focus={key:round(float(box[key]),2) for key in ('x','y','width','height')}
+            except Exception:pass
+        elif action.target in _BUTTONS:
+            try:
+                role,name=_BUTTONS[action.target]
+                box=await page.get_by_role(role,name=name,exact=True).bounding_box()
+                if box:focus={key:round(float(box[key]),2) for key in ('x','y','width','height')}
+            except Exception:pass
         if action.action=='open_demo':
             await page.goto(session.connection.origin,wait_until='domcontentloaded',timeout=10000)
         elif action.action=='observe': return await self._observe_page(session)
@@ -348,9 +374,12 @@ class PlaywrightDemoExecutor:
             values={'fixture.source_warehouse':'Main warehouse','fixture.destination_warehouse':'Store 1',
                     'fixture.product':'Demo shirt','fixture.quantity_one':'1'}
             if not test_id or action.demo_value not in values: raise ValueError('demo_value_forbidden')
-            await page.get_by_test_id(test_id).fill(values[action.demo_value],timeout=5000)
+            await _fill_demo_locator(page.get_by_test_id(test_id),values[action.demo_value])
         elif action.action=='screenshot': return await self._capture(session)
         else: raise ValueError('action_forbidden')
+        session.timeline_events.append({'action':action.action,'target':action.target or '',
+            'at_ms':max(0,round((started-session.started)*1000)),
+            'viewport_width':1280,'viewport_height':720,'focus':focus})
         # The action itself was counted above. Observing the resulting page is
         # part of that action and must not consume a second action-budget unit.
         return await self._observe_page(session)
@@ -391,5 +420,6 @@ class PlaywrightDemoExecutor:
         finally:
             try: await session.browser.close()
             finally: await session.playwright.stop()
-        return {'recording_dir':str(session.recording_dir),'recording_path':str(recording) if recording else None}
+        return {'recording_dir':str(session.recording_dir),'recording_path':str(recording) if recording else None,
+                'timeline_events':list(session.timeline_events)}
 

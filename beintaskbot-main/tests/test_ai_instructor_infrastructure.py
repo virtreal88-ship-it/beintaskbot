@@ -8,7 +8,7 @@ import pytest
 from unittest.mock import patch
 
 from tenant_ai_instructor_contract import ContractError
-from tenant_ai_instructor_media import (build_script, generate_script, review_script, srt_text)
+from tenant_ai_instructor_media import (align_subtitles_to_timeline, build_script, generate_script, review_script, srt_text, _zoom_expressions)
 from tenant_ai_instructor_browser import _same_origin, _public_addresses
 
 
@@ -31,6 +31,23 @@ def test_scenario_subtitles_are_bounded_and_localized():
     text=srt_text(result['subtitles'])
     assert '00:00:00,000 --> 00:00:04,500' in text
     with pytest.raises(ContractError):build_script([{'action':'send_whatsapp','target':'external'}])
+
+
+def test_subtitle_timing_tracks_observed_actions_and_zoom_stays_inside_viewport():
+    cues=[{'start_ms':0,'end_ms':4500,'text':'Bölməni açın.'},
+          {'start_ms':4500,'end_ms':9000,'text':'Anbarı seçin.'}]
+    timeline=[{'action':'navigate','target':'transfers','at_ms':1000},
+              {'action':'click','target':'source_warehouse','at_ms':6000,'viewport_width':1280,'viewport_height':720,
+               'focus':{'x':20,'y':100,'width':260,'height':40}}]
+    aligned=align_subtitles_to_timeline(cues,timeline)
+    assert aligned[0]['start_ms']==350 and aligned[1]['start_ms']==5350
+    assert aligned[0]['end_ms']<=aligned[1]['start_ms']
+    late=align_subtitles_to_timeline(cues,[{'action':'click','target':'quantity','at_ms':599_000}])
+    shifted=[{**cue,'start_ms':cue['start_ms']+4000,'end_ms':cue['end_ms']+4000} for cue in late]
+    assert max(cue['end_ms'] for cue in shifted)<=600_000 and srt_text(shifted)
+    zoom,x,y,highlights=_zoom_expressions(timeline)
+    assert '1.28' in zoom and 'iw/zoom' in x and 'ih/zoom' in y
+    assert highlights and all(0<=left<1920 and 0<=top<1080 for left,top,_,_,_ in highlights)
 
 
 def test_edited_subtitle_file_is_bounded_plain_text_and_roundtrips():
@@ -66,6 +83,22 @@ def test_browser_origin_and_private_network_checks_fail_closed():
     assert not _same_origin('https://evil.example/inventory','https://demo.example.test')
     assert not _same_origin('http://demo.example.test','https://demo.example.test')
     with pytest.raises(ValueError):_public_addresses('localhost')
+
+
+def test_demo_browser_selects_dropdown_options_without_treating_them_as_text_inputs():
+    import asyncio
+    from tenant_ai_instructor_browser import _fill_demo_locator
+    class Locator:
+        def __init__(self,tag):self.tag=tag;self.selected=None;self.filled=None
+        async def evaluate(self,_script):return self.tag
+        async def select_option(self,*,label,timeout):self.selected=(label,timeout)
+        async def fill(self,value,*,timeout):self.filled=(value,timeout)
+    select=Locator('SELECT');asyncio.run(_fill_demo_locator(select,'Əsas anbar'))
+    assert select.selected==('Əsas anbar',5000) and select.filled is None
+    field=Locator('INPUT');asyncio.run(_fill_demo_locator(field,'1'))
+    assert field.filled==('1',5000)
+    with pytest.raises(RuntimeError,match='approved_demo_field_not_editable'):
+        asyncio.run(_fill_demo_locator(Locator('DIV'),'1'))
 
 
 def test_connection_status_reports_saved_credentials_without_exposing_them():
@@ -303,7 +336,9 @@ def test_execution_pipeline_uses_mock_ai_and_saves_only_unpublished_draft(tmp_pa
     def save_lesson(_tenant,_task,scenario,screenshots,video_id):
         assert len(screenshots)==6 and scenario['verified'] is False and video_id
         return {'lesson_id':'synthetic-draft','published':False}
-    def render(_recording,_subs,out,ffmpeg_path=None):Path(out).write_bytes(b'fake-mp4');return {'mime':'video/mp4'}
+    def render(_recording,_subs,out,ffmpeg_path=None,**kwargs):
+        assert 'timeline_events' in kwargs and 'subtitle_cues' in kwargs
+        Path(out).write_bytes(b'fake-mp4');return {'mime':'video/mp4'}
     monkeypatch.setattr(pipeline,'render_mp4',render)
     result=asyncio.run(pipeline.execute_job(job={'tenant_id':tenant,'id':task,'primary_agent_id':primary,
         'expert_agent_id':expert,'title':'Synthetic stock transfer','language':'en'},connection=connection,scope=scope,
@@ -472,7 +507,11 @@ def test_chromium_synthetic_program_recording(tmp_path):
             captions=tmp_path/'captions.srt'
             captions.write_text(srt_text([{'start_ms':0,'end_ms':2000,'text':'Sintetik demo köçürməsi'}]),encoding='utf-8')
             output=tmp_path/'lesson.mp4'
-            rendered=render_mp4(recording,captions,output)
+            rendered=render_mp4(recording,captions,output,
+                timeline_events=[{'action':'click','target':'source_warehouse','at_ms':250,'viewport_width':1280,
+                    'viewport_height':720,'focus':{'x':24,'y':100,'width':260,'height':40}}],
+                title='Anbarlar arasında yerdəyişmə',disclaimer='Bu videoda sənəd saxlanılmayıb.',
+                subtitle_cues=[{'start_ms':4000,'end_ms':6500,'text':'Anbar seçin.'}])
             assert output.is_file() and rendered['mime']=='video/mp4' and output.stat().st_size>1024
     finally:
         server.shutdown();server.server_close();thread.join(timeout=2)
