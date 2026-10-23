@@ -85,7 +85,7 @@
   const settingsAnchor = settings.querySelector(':scope > .top');
   settingsAnchor.after(advancedTitle,sections,help);
   function classify(panel) {
-    if (panel.id === 'chakra-settings-root') return 'employees';
+    if (panel.id === 'chakra-settings-root' || panel.id === 'staffManagement') return 'employees';
     if (panel.id === 'connectWhatsAppSettings') return 'integrations';
     if (panel.id === 'companyManagement') return 'companies';
     if (['tenantLinearPanel','tcAiPanel','tnAiPanel','tnChannelPanel'].includes(panel.id)) return 'external-integration';
@@ -97,7 +97,7 @@
     const languageCopy=settingsLanguage();
     sections.querySelectorAll('[data-settings-tab]').forEach(button=>{button.textContent=languageCopy[button.dataset.settingsTab][0];});
     advancedTitle.querySelector('h2').textContent=languageCopy.title;advancedTitle.querySelector('p').textContent=languageCopy.description;
-    const panels = [...settings.querySelectorAll(':scope > #chakra-settings-root,:scope > .panel,:scope > .grid > .panel')].filter(panel => !panel.hasAttribute('data-basic-settings'));
+    const panels = [...settings.querySelectorAll(':scope > #chakra-settings-root,:scope > #staffManagement,:scope > .panel,:scope > .grid > .panel')].filter(panel => !panel.hasAttribute('data-basic-settings'));
     const settingsPanels = panels.filter(panel => classify(panel) !== 'external-integration');
     const available = groups.find(key => settingsPanels.some(panel => panel.dataset.settingsSection === key || classify(panel) === key));
     if (!settingsPanels.some(panel => (panel.dataset.settingsSection || classify(panel)) === section) && available) section = available[0];
@@ -144,7 +144,7 @@
   };
   const observer = new MutationObserver(showSettings);
   observer.observe(settings,{childList:true}); observer.observe(settings.querySelector('.grid'),{childList:true});
-  document.addEventListener('tenant-profile', e => {catalog=e.detail.capabilities?.deal_board || [];if(['owner','admin'].includes(e.detail.member?.role)&&section==='employees')section='integrations';updateIcons();showSettings();refresh();});
+  document.addEventListener('tenant-profile', e => {catalog=e.detail.capabilities?.deal_board || [];updateIcons();showSettings();refresh();});
   document.addEventListener('tenant-language',showSettings);
   const integrationRepository = document.createElement('div');
   integrationRepository.id = 'integrationSettingsRepository';

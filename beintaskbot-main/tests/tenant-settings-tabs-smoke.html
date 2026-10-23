@@ -4,10 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Settings tabs browser smoke</title>
+  <link rel="stylesheet" href="/docs/tenant-members-ui.css">
   <style>
     :root{--paper:#f4f6f8;--line:#d5dce1;--ink:#172b32;--muted:#73818a;--card:#fff;--brand-soft:#e3f1ec;--brand:#146954}
     :root[data-theme=dark]{--paper:#18242b;--line:#34444c;--ink:#edf4f6;--muted:#a1b0b7;--card:#202e36;--brand-soft:#25473e;--brand:#8dd6bd}
-    body{margin:0;background:var(--paper);color:var(--ink);font:14px system-ui,sans-serif}.nav{display:flex;gap:8px;padding:10px;background:var(--card)}main{padding:20px}.view{background:var(--card);padding:18px;border:1px solid var(--line);border-radius:12px}.top{min-height:60px}.panel{padding:14px;border:1px solid var(--line);border-radius:8px;margin:8px 0}.grid,.toolbar{display:flex;gap:8px}.grid>.panel{flex:1}button{color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:7px;padding:8px 12px}
+    body{margin:0;background:var(--paper);color:var(--ink);font:14px system-ui,sans-serif}.nav{display:flex;gap:8px;padding:10px;background:var(--card)}main{padding:20px}.view:not(#view-settings){display:none}.view{background:var(--card);padding:18px;border:1px solid var(--line);border-radius:12px}.top{min-height:60px}.panel{padding:14px;border:1px solid var(--line);border-radius:8px;margin:8px 0}.grid,.toolbar{display:flex;gap:8px}.grid>.panel{flex:1}button{color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:7px;padding:8px 12px}
   </style>
 </head>
 <body>
@@ -21,7 +22,14 @@
       <div class="grid"><article class="panel" id="connectWhatsAppSettings"></article><article class="panel" id="companyManagement"></article><article class="panel" id="workflowPanel"></article><article class="panel" id="extraDiagnostics"></article></div>
     </section>
   </main>
-  <script>window.tenantI18n={language:'ru'};window.setSmokeLanguage=language=>{window.tenantI18n.language=language;document.documentElement.lang=language;document.dispatchEvent(new CustomEvent('tenant-language',{detail:{language}}))};window.setSmokeTheme=theme=>document.documentElement.dataset.theme=theme;</script>
+  <script>
+    window.tenantI18n={language:'ru'};
+    window.tenantProfileSnapshot={member:{tenant_id:'smoke-tenant',telegram_id:1,role:'owner'}};
+    window.fetch=async url=>({ok:true,json:async()=>new URL(url,location.href).pathname==='/api/platform/members'?{success:true,members:[{telegram_id:1,display_name:'Demo owner',role:'owner',active:true,email:'owner@example.test',whatsapp_numbers:[]}]}:{success:true,requests:[]}});
+    window.setSmokeLanguage=language=>{window.tenantI18n.language=language;document.documentElement.lang=language;document.dispatchEvent(new CustomEvent('tenant-language',{detail:{language}}))};
+    window.setSmokeTheme=theme=>document.documentElement.dataset.theme=theme;
+  </script>
   <script src="/docs/tenant-workspace.js"></script>
+  <script src="/docs/tenant-members-ui.js"></script>
 </body>
 </html>
