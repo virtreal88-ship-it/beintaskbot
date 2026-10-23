@@ -879,7 +879,7 @@ def send_ai_reply(route: dict, text: str, run_id: str) -> str:
 
 def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversation_id: str,
                             text: str, run_id: str, expected_revision: int, *, handoff_fingerprint: str = '',
-                            pilot_scope_fenced: bool = False) -> str | None:
+                            pilot_scope_fenced: bool = False, stop_after_reply: bool = False) -> str | None:
     """Serialize Connect send with an observed human takeover.
 
     The row lock intentionally spans the short Connect request. If the human
@@ -971,6 +971,12 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
                     'channel_id':channel_id,'conversation_id':conversation_id,
                     'event_fingerprint':handoff_fingerprint}, 'trigger_reply_sent_then_handoff')
                 cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s",
+                            (tenant,conversation_id,channel_id))
+            elif stop_after_reply:
+                if coordinated:
+                    from tenant_ai_group_coordination import stop
+                    stop(cur,tenant,conversation_id,state='paused',reason='ai_no_answer')
+                cur.execute("UPDATE saas_ai_conversation_state SET state='paused',reason='ai_no_answer',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s AND state='active'",
                             (tenant,conversation_id,channel_id))
         conn.commit()
     if ticket:

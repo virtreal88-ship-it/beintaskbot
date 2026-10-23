@@ -56,7 +56,7 @@ def agent(data, *, creating=False):
     if not isinstance(data, dict):
         raise TenantLinearError('Agent ayarları düzgün deyil.')
     allowed = {'name', 'instructions', 'enabled', 'mode', 'language', 'style',
-               'delay_seconds', 'schedule', 'scopes', 'model', 'safety', 'setup_key', 'role', 'expert_policy'}
+               'delay_seconds', 'schedule', 'scopes', 'model', 'safety', 'response_policy', 'setup_key', 'role', 'expert_policy'}
     if set(data) - allowed:
         raise TenantLinearError('Naməlum agent ayarı var.')
     result = {}
@@ -156,6 +156,9 @@ def agent(data, *, creating=False):
         result['model'] = _text(data.get('model', ''), 'Model', 100)
     if creating or 'safety' in data:
         result['safety'] = safety_policy(data.get('safety'))
+    if creating or 'response_policy' in data:
+        from tenant_ai_agent_no_answer import validate_policy
+        result['response_policy'] = validate_policy(data.get('response_policy'))
     if 'setup_key' in data:
         if not creating:
             raise TenantLinearError('Yenidən cəhd açarı dəyişdirilə bilməz.')

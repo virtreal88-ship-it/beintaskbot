@@ -68,7 +68,7 @@ def test_legacy_test_mode_is_quarantined_without_deleting_history(creation):
     setting=creation.execute("SELECT operating_mode,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]
     job=creation.execute("SELECT state,error_code FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint='evt'",(A,))[0]
     event=creation.execute("SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint='evt'",(A,))[0]
-    assert setting=={'operating_mode':None,'auto_send_enabled':False}
+    assert setting=={'operating_mode':'manual','auto_send_enabled':False}
     assert job=={'state':'skipped','error_code':'legacy_test_mode_retired'}
     assert event=={'state':'skipped','error_code':'legacy_test_mode_retired'}
     assert creation.execute("SELECT count(*) AS n FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint='evt'",(A,))[0]['n']==1

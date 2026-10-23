@@ -39,6 +39,7 @@ async def send_agent(job, reservation, text, kommo_request, wait_slot, logger):
     route.update({'event_fingerprint': str(job['event_fingerprint']),
                   'revision': int(job['revision']), 'run_id': run_id,
                   'handoff_after_reply': bool(route.get('handoff_after_reply')),
+                  'stop_after_reply': bool(route.get('stop_after_reply')),
                   'text_hash': hashlib.sha256(text.strip().encode('utf-8')).hexdigest()})
     input_hash = hashlib.sha256(_json([tenant, job['agent_id'], job['event_fingerprint'],
                                       job['revision'], text]).encode('utf-8')).hexdigest()
@@ -198,12 +199,11 @@ async def send_agent(job, reservation, text, kommo_request, wait_slot, logger):
                 cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s AND channel_id='' AND state='active'", (tenant, chat))
                 cur.execute("UPDATE saas_ai_agent_runs SET state='superseded',updated_at=now() WHERE tenant_id=%s::uuid AND state='generating' AND event_fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s)", (tenant, tenant, chat))
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='human_handoff' WHERE tenant_id=%s::uuid AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s AND state IN ('queued','processing'))", (tenant, tenant, chat))
-                cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='human_handoff',updated_at=now() WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s AND state IN ('queued','processing')", (tenant, chat))
-                cur.execute('''INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body,target_url)
-                  SELECT gen_random_uuid(),m.tenant_id,m.telegram_id,%s,'AI: əməkdaşın müdaxiləsi tələb olunur',%s,%s
-                  FROM saas_tenant_members m WHERE m.tenant_id=%s::uuid AND m.active=TRUE AND m.role IN ('owner','admin')
-                    AND NOT EXISTS (SELECT 1 FROM saas_tenant_notifications n WHERE n.tenant_id=m.tenant_id AND n.telegram_id=m.telegram_id AND n.event_key=%s)''',
-                  ('ai_handoff:'+chat+':'+job['event_fingerprint'], 'AI cavabı göndərildi; əməkdaşın davam etməsi tələb olunur.', '/app?view=deals&deal_id='+str(job['lead_id']), tenant, 'ai_handoff:'+chat+':'+job['event_fingerprint']))
+            elif route['stop_after_reply']:
+                cur.execute("UPDATE saas_ai_conversation_state SET state='paused',reason='ai_no_answer',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s AND channel_id='' AND state='active'",(tenant,chat))
+                cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='ai_no_answer',updated_at=now() WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s AND state IN ('queued','processing')",(tenant,chat))
+                cur.execute("UPDATE saas_ai_agent_runs SET state='superseded',updated_at=now() WHERE tenant_id=%s::uuid AND state='generating' AND event_fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s AND state='skipped' AND error_code='ai_no_answer')",(tenant,tenant,chat))
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='ai_no_answer' WHERE tenant_id=%s::uuid AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s AND state='skipped' AND error_code='ai_no_answer')",(tenant,tenant,chat))
         conn.commit()
     logger.info('AI agent message accepted: tenant=%s agent=%s receipt=%s', tenant, job['agent_id'], 'accepted')
     return {'state': 'accepted', 'message_id': message_id}

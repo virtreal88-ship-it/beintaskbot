@@ -80,6 +80,25 @@ def test_reply_and_stop_commits_acceptance_and_handoff_after_one_provider_accept
     assert "author_name,body,message_type,raw" in statements
 
 
+def test_no_answer_stop_reply_pauses_without_recording_a_handoff():
+    connections, dbs = harness()
+    route = {**ROUTE, 'handoff_after_reply': False, 'stop_after_reply': True}
+    reservation = {**RESERVATION, 'route': route}
+    post = AsyncMock(return_value={'id': 'out-stop'})
+    with patch.object(sender, '_connect', side_effect=lambda: next(dbs)), \
+         patch.object(sender, 'ensure_schema'), patch.object(sender, 'ensure_receipt_schema'), \
+         patch('tenant_ai_agent_runtime_flags.enabled', return_value=True), \
+         patch('tenant_chat_reader.read_messages', new=AsyncMock(return_value=messages())):
+        result = asyncio.run(sender.send_agent(JOB, reservation, 'We need to check this.', post, Mock(), Mock()))
+    assert result['state'] == 'accepted'
+    post.assert_awaited_once()
+    statements = '\n'.join(sql for connection in connections for sql in connection.c.sql)
+    assert "state='paused',reason='ai_no_answer'" in statements
+    assert "error_code='ai_no_answer'" in statements
+    assert "error_code='human_handoff'" not in statements
+    assert 'INSERT INTO saas_tenant_notifications' not in statements
+
+
 def test_unknown_provider_outcome_is_not_marked_accepted_or_retried():
     connections, dbs = harness()
     post = AsyncMock(side_effect=RuntimeError('ambiguous network result'))

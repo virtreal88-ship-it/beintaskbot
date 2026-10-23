@@ -60,6 +60,22 @@ def test_real_reservation_structured_result_usage_and_idempotency(expert):
     assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_drafts')[0]['n']==0
     assert db.execute('SELECT state FROM saas_ai_conversation_state')[0]['state']=='active'
 
+
+def test_expert_returns_only_server_verified_source_quotes(expert,monkeypatch):
+    db,job,parent=expert
+    source={'source_id':'tenant-source-1','title':'Returns policy',
+        'content':'Returns accepted within fourteen days with a receipt.'}
+    monkeypatch.setattr(service,'knowledge_context',lambda *args,**kwargs:[source])
+    quoted={**GOOD,'evidence':['Returns accepted within fourteen days with a receipt.']}
+    monkeypatch.setattr(service,'generate',lambda *args,**kwargs:(json.dumps(quoted),{'total_tokens':23}))
+    response=perform(expert)
+    assert response['result']==quoted
+    assert response['grounded_sources']==[{'source_id':'tenant-source-1','title':'Returns policy',
+        'quote':'Returns accepted within fourteen days with a receipt.'}]
+    assert service.reserve(job,parent)['existing']==response
+    stored=db.execute('SELECT grounded_sources FROM saas_ai_expert_tasks')[0]['grounded_sources']
+    assert stored==response['grounded_sources']
+
 @pytest.mark.parametrize('state',['human','paused'])
 def test_human_pause_before_and_during_expert(expert,state):
     db,job,parent=expert

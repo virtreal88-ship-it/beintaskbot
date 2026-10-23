@@ -590,6 +590,33 @@ def test_simulation_executor_records_virtual_reply_and_has_no_live_effects(db,mo
     assert db.execute("SELECT sum(actual_tokens) AS n FROM saas_ai_simulation_usage WHERE tenant_id=%s::uuid",(A,))[0]['n']==37
 
 
+@pytest.mark.parametrize('action,expected_outcome,event_type',[
+    ('stop','virtual_stop',None),('handoff','virtual_stop','virtual_handoff'),
+    ('create_task','virtual_stop','virtual_employee_request'),('clarify','virtual_reply',None),
+])
+def test_simulation_virtualizes_no_answer_action_without_live_side_effects(db,monkeypatch,action,expected_outcome,event_type):
+    source=seed_simulation(db)
+    policy={'enabled':True,'action':action,'fallback_action':'handoff','max_clarifications':1,'stop_reply':''}
+    db.execute("UPDATE saas_ai_agents SET response_policy=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+               (json.dumps(policy),A,AGENT));db.commit()
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    assert queue_simulation(db,source=source)
+    monkeypatch.setattr(actions,'enabled_triggers',lambda *_: [])
+    monkeypatch.setattr(run_store,'knowledge_context',lambda *_args,**_kwargs: [])
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: pytest.fail('no-answer stop must not make an AI call'))
+    monkeypatch.setattr('tenant_chat_ai_provider.generate',lambda *_a,**_k: pytest.fail('no-answer stop must not call the provider'))
+    before={table:db.execute(f'SELECT count(*) AS n FROM {table}')[0]['n'] for table in
+            ('saas_crm_messages','saas_crm_deals','saas_crm_tasks','saas_support_tickets',
+             'saas_tenant_notifications','saas_ai_agent_jobs','saas_ai_conversation_state','saas_ai_group_coordination')}
+    assert simulation.process(simulation.claim_next())
+    run=simulation.list_runs(PROFILE)[0]
+    assert run['outcome']==expected_outcome and run['virtual_stop_reason']==f'no_answer_{action}'
+    assert {'type':'virtual_no_answer_action','action':action,'reason':'missing_knowledge','executed':False} in run['events']
+    if event_type: assert any(event.get('type')==event_type and event.get('executed') is False for event in run['events'])
+    after={table:db.execute(f'SELECT count(*) AS n FROM {table}')[0]['n'] for table in before}
+    assert after==before
+
+
 def test_simulation_calls_only_explicitly_allowed_expert_and_accounts_tokens(db,monkeypatch):
     source=seed_simulation(db)
     expert=str(uuid.uuid4())
