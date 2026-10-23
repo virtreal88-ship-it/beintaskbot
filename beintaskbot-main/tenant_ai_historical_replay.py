@@ -52,7 +52,7 @@ def config(cur, profile):
             or str(row.get('simulation_agent')) != PILOT_AGENT
             or PILOT_CHANNEL not in (row.get('channel_ids') or [])
             or not tenant_status_allows_ai(row.get('tenant_status'),'connect')
-            or not row.get('channel_active') or row.get('enabled') is not True
+            or not row.get('channel_active') or row.get('enabled') is not True or row.get('archived_at')
             or row.get('role') != 'primary' or row.get('mode') not in {'manual','automatic'}
             or not scope_matches(row.get('scopes'),PILOT_CHANNEL)
             or not is_open(row.get('schedule') or {})):
@@ -127,7 +127,7 @@ def _paid(profile, job, agent_version, agent_id, call_key, mode, lines, instruct
                             (tenant,agent_id))
                 expert=dict(cur.fetchone() or {})
                 cfg=policy(current.get('expert_policy') or {})
-                if (str(agent_id) not in helper_ids(cfg) or expert.get('enabled') is not True
+                if (str(agent_id) not in helper_ids(cfg) or expert.get('enabled') is not True or expert.get('archived_at')
                         or expert.get('role')!='expert' or expert.get('mode')!='manual'
                         or expert.get('scopes') or not is_open(expert.get('schedule') or {})):
                     raise TenantLinearError('replay_expert_revoked',409)
@@ -204,7 +204,7 @@ def one(profile,message_id):
                 with conn.cursor() as cur:
                     cur.execute('SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',
                                 (tenant,expert_ids[0]));expert=dict(cur.fetchone() or {})
-                    if not expert or not expert.get('enabled') or expert.get('role')!='expert' or expert.get('mode')!='manual' or expert.get('scopes') or not is_open(expert.get('schedule') or {}):
+                    if not expert or not expert.get('enabled') or expert.get('archived_at') or expert.get('role')!='expert' or expert.get('mode')!='manual' or expert.get('scopes') or not is_open(expert.get('schedule') or {}):
                         raise TenantLinearError('replay_expert_unavailable',409)
                     permissions=effective(cfg,expert,PILOT_AGENT)
             sources=knowledge_context(tenant,selected['body'],agent_id=expert_ids[0]) if 'instruction_library' in permissions.get('tools',[]) else []

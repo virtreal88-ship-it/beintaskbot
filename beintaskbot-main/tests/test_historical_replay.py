@@ -64,7 +64,7 @@ def test_five_replays_share_ledger_and_leave_business_and_queue_unchanged(ready,
     assert len(calls)==5
 
 
-@pytest.mark.parametrize('case',['missing_price','exhausted','provider_unknown','settlement_unknown','disabled','foreign'])
+@pytest.mark.parametrize('case',['missing_price','exhausted','provider_unknown','settlement_unknown','disabled','foreign','archived'])
 def test_replay_fails_closed_and_never_automatically_retries(ready,monkeypatch,case):
     db,ids=ready;provider=Mock(return_value=('Virtual',{'total_tokens':120}));monkeypatch.setattr(replay,'generate',provider)
     if case=='missing_price':monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION','{}')
@@ -74,6 +74,7 @@ def test_replay_fails_closed_and_never_automatically_retries(ready,monkeypatch,c
     if case=='provider_unknown':provider.side_effect=TimeoutError('synthetic timeout')
     if case=='settlement_unknown':provider.return_value=('Virtual',None)
     if case=='disabled':monkeypatch.setenv('AI_SIMULATION_ENABLED','false')
+    if case=='archived':db.execute('UPDATE saas_ai_agents SET archived_at=now() WHERE id=%s::uuid',(AGENT,));db.commit()
     profile={'tenant_id':B,'telegram_id':22} if case=='foreign' else PROFILE
     with pytest.raises((TenantLinearError,TimeoutError)):replay.one(profile,ids[0])
     assert provider.call_count==(1 if case in {'provider_unknown','settlement_unknown'} else 0)
