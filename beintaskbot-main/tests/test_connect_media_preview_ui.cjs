@@ -35,9 +35,9 @@ async function setup(previous=false,group=false,shared=false){
  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-chat-attachments.js',...(shared?['docs/tenant-chat-ai.js','docs/tenant-chat-history.js','docs/tenant-chat-import.js']:[]),'docs/tenant-operator-dialogs.js'])w.eval(previous?baseline(file):read(file));
  w.document.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:profile}));await settle();
  const listCalls=calls.length,listBytes=jsonBytes;
- assert.equal(w.document.querySelectorAll('#operatorRows .operator-row-avatar-image').length,0,'unattempted history is not loaded from the list');
+ if(!previous)assert.ok(w.document.querySelector('#operatorRows .operator-row-avatar-image'),'visible list rows can request a missing avatar with bounded lazy hydration');
  await w.tenantOperator.openDialog(route);
- const avatar=w.document.querySelector('#operatorConversationHeader .operator-header-avatar');if(!previous){assert.ok(avatar,'opening the selected dialog starts the one-time avatar request');assert.ok(avatar.querySelector('img')?.getAttribute('src').includes('dialogs/avatar'));assert.ok(avatar.querySelector('img')?.getAttribute('src').includes(C));}await settle();
+ const avatar=w.document.querySelector('#operatorConversationHeader .operator-header-avatar');if(!previous){assert.ok(avatar,'opening the selected dialog starts the one-time avatar request');assert.ok(avatar.querySelector('img')?.getAttribute('src')?.includes('dialogs/avatar')||avatar.querySelector('img')?.getAttribute('data-avatar-src')?.includes('dialogs/avatar'));assert.ok(avatar.querySelector('img')?.getAttribute('src')?.includes(C)||avatar.querySelector('img')?.getAttribute('data-avatar-src')?.includes(C));}await settle();
  return {dom,w,calls,revoked,errors,route,profile,listCalls,listBytes,historyCalls:calls.length-listCalls,historyBytes:jsonBytes-listBytes,get mediaBytes(){return mediaBytes},setUnavailable:()=>unavailable=true};
 }
 (async()=>{

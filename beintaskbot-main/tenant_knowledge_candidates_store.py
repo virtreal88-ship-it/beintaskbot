@@ -66,6 +66,8 @@ def author_role(row):
     raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
     if raw.get('ai_authored') is True or raw.get('run_id') or row.get('author_name')=='AI Agent' or any(v.get('author_name')=='AI Agent' for v in row.get('sources',[])):
         return 'ai'
+    if str(row.get('channel') or '').startswith('connect:') and raw.get('verified_employee_id') is not None:
+        return 'operator'
     return {'incoming':'customer','outgoing':'operator'}.get(row.get('direction'),'system')
 
 

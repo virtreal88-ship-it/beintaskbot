@@ -94,6 +94,9 @@ def history(rows, transcripts, *, analyzed_media=None, focus_media_ids=None, doc
     documents = documents if isinstance(documents, dict) else {}
     for row in rows[-30:]:
         role = {'incoming': 'CLIENT', 'outgoing': 'SALES MANAGER'}.get(row.get('direction'), 'UNKNOWN SPEAKER')
+        raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}
+        if str(row.get('channel') or '').startswith('connect:') and raw.get('verified_employee_id') is not None:
+            role = 'SALES MANAGER'
         text = str(row.get('body') or '')[:2000]
         if audio(row):
             transcript = transcripts.get(str(row['external_id']))

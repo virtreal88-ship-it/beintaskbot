@@ -93,6 +93,15 @@ async def get_avatar(profile, params):
     body, mime = await _fetch(route)
     with _connect() as conn:
         with conn.cursor() as cur:
+            # Membership, selected workspace and transport authority may change
+            # while the protected image download is in flight.
+            current_tenant, _, current_policy = access(cur, profile, 'dialogs')
+            current = assert_route(cur, current_tenant, current_policy, 'connect',
+                params.get('conversation_id', ''), params.get('channel_id', ''), params.get('lead_id'))
+            latest = connect_route(cur, current_tenant, current['lead_id'])
+            if (current_tenant != tenant or not latest or
+                    any(latest.get(key) != route.get(key) for key in ('channel_id','conversation_id','api_key'))):
+                raise TenantLinearError('WhatsApp-kanal artıq əlçatan deyil.', 404)
             cur.execute('''UPDATE saas_connect_conversations SET avatar_status='available',updated_at=now()
               WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s AND avatar_status='unavailable' ''',
               (tenant, route['channel_id'], route['conversation_id']))

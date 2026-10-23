@@ -19,7 +19,7 @@ def pilot_queue(db, monkeypatch):
     monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_START_AFTER', AFTER)
     with db.cursor() as cur:
         live.create_schema(db)
-    db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled) VALUES(%s::uuid,true),(%s::uuid,true)", (A, B))
+    db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,support_case_extraction_enabled,support_case_extraction_started_at) VALUES(%s::uuid,true,true,%s::timestamptz),(%s::uuid,true,false,NULL)", (A, AFTER, B))
     db.commit()
     return db
 
@@ -56,3 +56,12 @@ def test_claim_ignores_pre_pilot_and_foreign_backlog_then_accepts_fresh_message(
     assert claimed['conversation_id'] == 'client' and claimed['last_message_id'] == fresh
     assert claimed['last_message_at'] >= AFTER
     assert db.execute("SELECT state FROM saas_knowledge_live_queue WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id='other-chat'", (A, CA))[0]['state'] == 'pending'
+
+
+def test_legacy_scope_does_not_override_disabled_tenant_extraction(pilot_queue):
+    db=pilot_queue
+    db.execute('UPDATE saas_ai_agent_settings SET support_case_extraction_enabled=FALSE WHERE tenant_id=%s::uuid',(A,));db.commit()
+    fresh=add_message(db,A,CA,41,'disabled-tenant','2026-10-20T13:00:00Z');db.commit()
+    live.enqueue(db.cursor(),A,CA,'client',41,fresh)
+    assert not db.execute('SELECT 1 FROM saas_knowledge_live_queue WHERE tenant_id=%s::uuid',(A,))
+    assert live.claim() is None

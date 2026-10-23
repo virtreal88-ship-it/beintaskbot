@@ -121,7 +121,7 @@ def test_concurrent_assignment_retries_and_other_channel_webhook(channels):
     assert len(assigned)==2 and sorted(v['replayed'] for v in assigned)==[False,True]
     states={r['channel_id']:r['state'] for r in db.execute('SELECT * FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid',(A,))}
     assert states=={CA:'human',CB:'active'}
-    assert len(db.execute("SELECT * FROM saas_tenant_audit_events WHERE action='ai_conversation_agent_assigned'"))==1
+    assert len(db.execute("SELECT * FROM saas_tenant_audit_events WHERE action='ai_conversation_agent_configured'"))==1
     assert not db.execute('SELECT * FROM saas_ai_agent_jobs WHERE channel_id=%s',(CA,))
     assert not db.execute('SELECT * FROM test_external_sends');db.commit()
 

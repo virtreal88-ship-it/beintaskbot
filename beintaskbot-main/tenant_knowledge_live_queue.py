@@ -57,6 +57,9 @@ def _configured(cur, tenant, channel, happened_at=None, conversation=None):
     """Check the global guard and tenant/channel scope at every queue fence."""
     if not extraction_enabled():
         return None
+    from tenant_connect_identity import conflicted
+    if conversation and conflicted(cur, tenant, channel, conversation):
+        return None
     legacy=pilot_scope()
     if legacy:
         if not _scope_matches(legacy,tenant,channel,conversation, happened_at):
@@ -96,6 +99,7 @@ def _scope_matches(scope, tenant, channel, conversation, happened_at=None):
 
 def create_schema(conn):
     with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(hashtextextended('tenant-knowledge-live-schema',0))")
         cur.execute("""CREATE TABLE IF NOT EXISTS saas_knowledge_live_queue(
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
           channel_id UUID NOT NULL,
@@ -226,7 +230,6 @@ def require_extraction_enabled(item=None):
     if legacy:
         if item and not _scope_matches(legacy,item['tenant_id'],item['channel_id'],item.get('conversation_id'),item.get('last_message_at')):
             raise LiveExtractionDisabled()
-        return
     if item:
         with _connect() as conn:
             with conn.cursor() as cur:
