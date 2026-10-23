@@ -62,6 +62,53 @@ def test_avatar_attempt_status_is_returned_from_local_projection_without_remote_
     refreshed=dialogs.listing(PROFILE,channel='connect:'+CA)['dialogs'][0]
     assert refreshed['avatar_status']=='available'
 
+
+def test_dialog_unread_counts_are_persistent_route_scoped_and_inbound_only(channels):
+    f=channels;db=f['db'];f['incoming'](CA,'baseline message')
+    first=dialogs.listing(PROFILE,channel='connect:'+CA)['dialogs'][0]
+    assert first['unread_count']==0
+    incoming_id,_=f['incoming'](CA,'new incoming')
+    unread=dialogs.listing(PROFILE,channel='connect:'+CA)
+    assert unread['dialogs'][0]['unread_count']==1 and unread['unread_count']==1
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,%s,%s,'outgoing','reply','text',clock_timestamp())",
+               (str(uuid.uuid4()),A,'connect:reply-'+str(uuid.uuid4()),'connect:'+CA));db.commit()
+    assert dialogs.listing(PROFILE,channel='connect:'+CA)['unread_count']==1
+    f['incoming'](CA,'duplicate',mid=incoming_id)
+    assert dialogs.listing(PROFILE,channel='connect:'+CA)['unread_count']==1
+    latest=db.execute("SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41 AND channel='connect:'||%s ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 1",(A,CA))[0]['id']
+    assert dialogs.mark_read(PROFILE,{'provider':'connect','lead_id':41,'channel_id':CA,'conversation_id':'client','message_id':latest})['updated']
+    assert dialogs.listing(PROFILE,channel='connect:'+CA)['unread_count']==0
+    with pytest.raises(TenantLinearError):
+        dialogs.mark_read({'tenant_id':B,'telegram_id':22},{'provider':'connect','lead_id':41,'channel_id':CA,'conversation_id':'client','message_id':latest})
+
+
+def test_unread_isolated_by_channel_and_filter_does_not_change_sidebar_total(channels):
+    f=channels;f['incoming'](CA,'first');f['incoming'](CB,'second')
+    dialogs.listing(PROFILE)
+    f['incoming'](CA,'new first');f['incoming'](CB,'new second')
+    all_result=dialogs.listing(PROFILE)
+    first=dialogs.listing(PROFILE,channel='connect:'+CA)
+    second=dialogs.listing(PROFILE,channel='connect:'+CB)
+    assert all_result['unread_count']==2
+    assert first['unread_count']==2 and first['dialogs'][0]['unread_count']==1
+    assert second['unread_count']==2 and second['dialogs'][0]['unread_count']==1
+
+
+def test_unread_totals_cover_more_than_one_page_and_cap_only_in_the_ui(channels):
+    f=channels;db=f['db']
+    db.execute('''INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id)
+      SELECT %s::uuid,%s::uuid,'bulk-'||n||'@s.whatsapp.net',1000+n FROM generate_series(1,60) n''',(A,CA))
+    db.commit();dialogs.listing(PROFILE,offset=0)
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type,happened_at)
+      SELECT md5('unread-'||n)::uuid,%s::uuid,41,'connect:unread-'||n,'connect:'||%s,'incoming','message','text',
+        clock_timestamp()+n*interval '1 microsecond' FROM generate_series(1,101) n''',(A,CA));db.commit()
+    first=dialogs.listing(PROFILE,offset=0)
+    second=dialogs.listing(PROFILE,offset=50)
+    assert first['total_count']==62 and len(first['dialogs'])==50 and first['next_offset']==50
+    assert second['total_count']==62 and len(second['dialogs'])==12 and second['next_offset'] is None
+    assert first['unread_count']==101
+    assert next(row for row in first['dialogs'] if row['lead_id']==41)['unread_count']==101
+
 def test_avatar_endpoint_is_tenant_scoped_and_claims_only_once(channels,monkeypatch):
     f=channels;db=f['db'];f['incoming'](CA)
     monkeypatch.setattr(avatars,'_connect',lambda:db)

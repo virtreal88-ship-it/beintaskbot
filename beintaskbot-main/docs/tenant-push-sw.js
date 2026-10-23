@@ -13,6 +13,13 @@ function allowedTarget(value){
   }catch{}
   return '/app';
 }
+function dialogNoticeTag(target){
+  try{
+    const url=new URL(target||'/app',self.location.origin),seed=['channel_id','lead_id','conversation_id'].map(key=>url.searchParams.get(key)||'').join('|');
+    let hash=2166136261;for(let i=0;i<seed.length;i++){hash^=seed.charCodeAt(i);hash=Math.imul(hash,16777619);}
+    return 'crm-dialog-'+(hash>>>0).toString(16);
+  }catch{return 'crm-notice';}
+}
 self.addEventListener('push',event=>{
   let kind='';try{kind=event.data?.json()?.kind || '';}catch{}
   if(kind==='crm_notice'){
@@ -20,7 +27,7 @@ self.addEventListener('push',event=>{
     const task=['task_assigned','task_overdue'].includes(eventKey);
     event.waitUntil(self.registration.showNotification('CRM Smart Assistant',{
       body:task?'Tapşırıq üzrə yenilik var. Kabinetdə yoxlayın.':eventKey==='incoming_message'?'Yeni mesaj var. Kabinetdə yoxlayın.':'Yeni mesaj və ya sövdələşmə var. Kabinetdə yoxlayın.',
-      tag:task?'crm-task-notice':'crm-notice',data:{url:task?'/app?view=tasks':target}
+      tag:task?'crm-task-notice':eventKey==='incoming_message'?dialogNoticeTag(target):'crm-notice',data:{url:task?'/app?view=tasks':target}
     }));return;
   }
   const linear=kind==='linear',hot=kind==='hot_order',review=['hot_order_review','hot_order_decided'].includes(kind);
