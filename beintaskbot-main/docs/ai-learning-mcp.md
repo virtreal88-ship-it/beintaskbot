@@ -27,18 +27,22 @@ Learning Loop records are modified.
 1. In ChatGPT on the web, open **Plugins**, then **Add custom MCP server**.
 2. Use the Streaming HTTP server URL `https://crm.pro.az/mcp/ai-learning` and
    select OAuth authentication.
-3. ChatGPT discovers the protected-resource metadata and opens Beintaskbot's
-   consent page.  Sign in as the owner of the configured tenant and explicitly
-   choose **Allow read-only access**.
+3. ChatGPT discovers the protected-resource metadata and the OAuth server's
+   CIMD capability. It uses its published client metadata document
+   `https://chatgpt.com/oauth/client.json`; no client ID or secret is entered
+   manually. Beintaskbot accepts only that document and ChatGPT's exact current
+   redirect URI, then opens the consent page. Sign in as the owner of the
+   configured tenant and explicitly choose **Allow read-only access**.
 4. Install the plugin and ask for `simulation_runs` with no context first.
    The tool result must contain only the configured agent and channel IDs.
 
 ChatGPT requires OAuth authorization for customer-specific MCP data; an API
 key in a URL or frontend is neither used nor supported.  The authorization
-server accepts only ChatGPT's HTTPS client metadata and connector redirect
-URLs, requires PKCE S256, and issues an opaque 8-hour token.  Reads are capped
-at 60 requests per token per hour and every call is written to the existing
-tenant audit log as `ai_learning_mcp_read`.
+server advertises `client_id_metadata_document_supported`, requires PKCE S256,
+and issues opaque 8-hour access tokens. When ChatGPT requests `offline_access`,
+it also receives a rotating opaque refresh token valid for 30 days. Reads are
+capped at 60 requests per token per hour and every call is written to the
+existing tenant audit log as `ai_learning_mcp_read`.
 
 ## Available tools and privacy
 
