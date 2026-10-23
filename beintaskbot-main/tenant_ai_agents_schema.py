@@ -9,6 +9,11 @@ _lock = Lock()
 def ensure_schema(conn):
     global _ready
     _ensure_schema(conn)
+    # Monetary reservations are additive and shared by every AI execution
+    # path.  Creating them with the core AI schema avoids worker-specific
+    # ledgers or migrations.
+    from tenant_ai_spend_budget import ensure_schema as ensure_spend_schema
+    ensure_spend_schema(conn)
     if _ready:
         return
     with _lock:

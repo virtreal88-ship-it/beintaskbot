@@ -140,7 +140,14 @@ def prepare(profile,data,review=None):
             if vision_calls and not campaign_source:raise TenantLinearError('Vision-кеш доступен только утверждённой кампании.',403)
 
             if extra_calls and int(meta.get('daily_limit') or 50)<=int(0): raise TenantLinearError('Недостаточно бюджета.',429)
+            # The shared monetary ledger has no price catalog for media models.
+            # Under a hard tenant cap, fail closed instead of silently bypassing it.
+            from tenant_ai_spend_budget import limit_microusd
+            if limit_microusd(tenant) and (data.get('allow_paid_asr') or data.get('allow_vision')):
+                raise TenantLinearError('ai_spend_unsupported_extra_model',409)
             event='knowledge_extraction:'+request_id
+            from tenant_ai_spend_budget import reserve as reserve_spend
+            reserve_spend(cur,tenant,'extraction:'+request_id,'live_case_extraction',model,MAX_TOKENS,1800)
             cur.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,state) VALUES(%s::uuid,%s,'connect','knowledge_extraction','completed')",(tenant,event))
             cur.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,reserved_calls) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,%s,'generating',1)",(tenant,request_id,agent['id'],event,model))
             cur.execute("INSERT INTO saas_ai_agent_token_usage(tenant_id,id,run_id,agent_id,model,reserved_tokens) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s)",(tenant,str(uuid.uuid4()),request_id,agent['id'],model,MAX_TOKENS))
@@ -280,6 +287,11 @@ def finish(profile,item,values,usage,error,attempted,proposal=None):
             cur.execute('UPDATE saas_ai_agent_runs SET state=%s,error_code=%s,generated_at=CASE WHEN %s THEN now() ELSE generated_at END,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',
                 ('completed' if status=='completed' else ('unknown' if attempted else 'skipped'),error,bool(usage),tenant,request_id))
         conn.commit()
+    from tenant_ai_spend_budget import settle as settle_spend, release as release_spend
+    if not attempted:
+        release_spend(item['tenant'],'extraction:'+str(item['id']))
+    else:
+        settle_spend(item['tenant'],'extraction:'+str(item['id']),usage or {},unknown=(status=='unknown'))
 
 
 def check_active(profile,item):

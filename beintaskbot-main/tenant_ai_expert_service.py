@@ -135,6 +135,9 @@ def reserve(job,parent,expert_id=None):
             used=int(cur.fetchone()['tokens'])
             if cap and used+cfg['max_tokens']>cap: raise TenantLinearError('expert_company_token_limit',429)
             task=str(uuid.uuid4())
+            from tenant_ai_spend_budget import reserve as reserve_spend
+            spend_call_key='expert:'+task
+            reserve_spend(cur,job['tenant_id'],spend_call_key,'expert',model,32768,cfg['max_tokens'])
             cur.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,reserved_calls) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,'generating',1)",
                 (job['tenant_id'],task,str(expert['id']),job['event_fingerprint'],job['revision'],model))
             cur.execute("""INSERT INTO saas_ai_expert_tasks(tenant_id,id,parent_run_id,principal_agent_id,expert_agent_id,provider,channel_id,conversation_id,expert_version,deadline)
@@ -143,7 +146,7 @@ def reserve(job,parent,expert_id=None):
             cur.execute("INSERT INTO saas_ai_agent_token_usage(tenant_id,id,run_id,agent_id,model,reserved_tokens) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s)",
                 (job['tenant_id'],str(uuid.uuid4()),task,str(expert['id']),model,cfg['max_tokens']))
         conn.commit()
-    return {'task_id':task,'config':cfg,'expert':expert,'model':model,'key':key,'authority':authority,'company_instructions':row['company_instructions']}
+    return {'task_id':task,'config':cfg,'expert':expert,'model':model,'key':key,'authority':authority,'company_instructions':row['company_instructions'],'spend_call_key':spend_call_key}
 
 def bounded_context(job,config,problem,lines,knowledge,tools,checks=(),previous_actions=()):
     # Select recent text fields only; never copy raw events, media URLs or credentials.
@@ -194,6 +197,13 @@ def _settle(job,parent,reservation,value,usage,status,code,attempted=True,ground
             cur.execute("UPDATE saas_ai_agent_runs SET state=%s,generated_at=CASE WHEN %s THEN now() ELSE generated_at END,updated_at=now(),error_code=%s WHERE tenant_id=%s::uuid AND id=%s::uuid",
                 ('completed' if status=='completed' else ('unknown' if attempted else 'skipped'),usage is not None and attempted,code,job['tenant_id'],reservation['task_id']))
         conn.commit()
+    from tenant_ai_spend_budget import settle as settle_spend, release as release_spend
+    if reservation.get('spend_call_key'):
+        if not attempted:
+            release_spend(job['tenant_id'],reservation['spend_call_key'])
+        else:
+            # Any attempted call without an authoritative usage receipt is ambiguous.
+            settle_spend(job['tenant_id'],reservation['spend_call_key'],usage or {},unknown=usage is None)
     return {'task_id':reservation['task_id'],'status':status,'result':value,'grounded_sources':grounded_sources or []}
 
 def _expert_live(cur,job,reservation):

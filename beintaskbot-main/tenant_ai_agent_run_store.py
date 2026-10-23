@@ -372,6 +372,13 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
             if existing + reserved_calls > limit:
                 raise TenantLinearError('Şirkətin gündəlik Chat AI limiti dolub.', 429)
             run_id = uuid.uuid4()
+            # The prompt is bounded by the worker contracts. Reserve against a
+            # deliberately conservative upper input bound before crossing the
+            # provider boundary; tenants without a server-owned monetary cap
+            # preserve the established behaviour.
+            from tenant_ai_spend_budget import reserve as reserve_spend
+            spend_key='active:'+str(run_id)
+            reserve_spend(cur, tenant, spend_key, 'active_primary', selected_model, 32768, 1800)
             cur.execute('''INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,reserved_calls)
               VALUES(%s::uuid,%s,%s::uuid,%s,%s,%s,'generating',%s)''',
               (tenant,run_id,job['agent_id'],job['event_fingerprint'],job['revision'],selected_model,reserved_calls))
@@ -398,6 +405,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
               'max_replies_per_chat':row['max_replies_per_chat'],
               'source_message_id':str((job.get('payload') or {}).get('message_id') or ''),
               'model':selected_model,'credential_source':credential_source,'pipeline_id':str(pipeline_id),'stage_id':str(stage_id)}
+            result['spend_call_key']=spend_key
         conn.commit()
     return result
 
@@ -436,6 +444,9 @@ def record_token_usage(job, reservation, usage, *, cumulative=False, generated=F
                 cur.execute("UPDATE saas_ai_agent_runs SET generated_at=COALESCE(generated_at,now()) WHERE tenant_id=%s::uuid AND id=%s::uuid AND agent_id=%s::uuid",
                             (job['tenant_id'],reservation['run_id'],job['agent_id']))
         conn.commit()
+    if generated and reservation.get('spend_call_key'):
+        from tenant_ai_spend_budget import settle
+        settle(job['tenant_id'],reservation['spend_call_key'],usage)
 
 
 
@@ -456,6 +467,9 @@ def finish_unknown(job, reservation, error_code='provider_result_unknown'):
             cur.execute("UPDATE saas_tenant_webhook_events SET state='unknown',error_code=%s WHERE tenant_id=%s::uuid AND fingerprint=%s",
                         (str(error_code)[:80],job['tenant_id'],job['event_fingerprint']))
         conn.commit()
+    if reservation.get('spend_call_key'):
+        from tenant_ai_spend_budget import settle
+        settle(job['tenant_id'],reservation['spend_call_key'],{},unknown=True)
 
 
 def finish_superseded(job,reservation,error_code='conversation_changed'):
@@ -471,6 +485,9 @@ def finish_superseded(job,reservation,error_code='conversation_changed'):
                 return False
             cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',error_code=%s,completed_at=now() WHERE tenant_id=%s::uuid AND fingerprint=%s",(error_code,job['tenant_id'],job['event_fingerprint']))
         conn.commit()
+    if reservation.get('spend_call_key'):
+        from tenant_ai_spend_budget import release
+        release(job['tenant_id'],reservation['spend_call_key'])
 
 
 def finish_sent(job, reservation, message_id: str) -> bool:
