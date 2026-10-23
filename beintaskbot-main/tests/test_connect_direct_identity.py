@@ -36,6 +36,14 @@ def test_conflicting_identity_keeps_history_and_blocks_all_ai_fences(channels, m
             source_message_id=str(uuid.uuid4()),source_event_id='synthetic',occurred_at='2026-10-23T16:00:00Z') is False
         assert simulation._mark_provider_started(cur,{'tenant_id':A,'channel_id':CA,'conversation_id':'client'},1) is False
     assert active.allowed({'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':'client','agent_id':AGENT},connection=db) is False
+    import tenant_operator_assignment as assignment
+    from tenant_linear_policy import TenantLinearError
+    data={'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41}
+    with db.cursor() as cur:
+        tenant,_,channel,conversation,route,state,has_job,config=assignment.context(cur,{'tenant_id':A,'telegram_id':11},data)
+        assert assignment.candidates(cur,tenant,channel,conversation,route,state,has_job,config)==([], 'conversation_identity_conflict')
+        with pytest.raises(TenantLinearError,match='conversation_identity_conflict'):
+            assignment.context(cur,{'tenant_id':A,'telegram_id':11},data,writing=True)
     db.commit()
 
 
@@ -82,6 +90,25 @@ def test_only_confirmed_database_rollbacks_are_retried(monkeypatch):
     assert action.call_count==1
 
 
+@pytest.mark.parametrize('code,expected',[
+    ('voice_media_unavailable','file_unavailable'),('voice_download_timeout','file_unavailable'),
+    ('voice_unsupported','unsupported'),('voice_transcription_failed','transcription_unavailable'),
+    ('other_error','failed')])
+def test_known_media_failures_have_distinct_display_reasons(code,expected):
+    from tenant_operator_dialogs import _message
+    assert _message({'channel':'connect:'+CA,'message_type':'audio',
+        'raw':{'voice_transcription':{'status':'failed','error_code':code}}})['analysis_state']==expected
+
+
+def test_inactive_channel_history_is_readable_but_never_a_send_route(channels):
+    db=channels['db']
+    db.execute("UPDATE saas_connect_channels SET active=FALSE,status='disconnected' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid",(A,CA));db.commit()
+    with db.cursor() as cur:
+        assert transport.connect_route(cur,A,41) is None
+        assert transport.connect_route(cur,A,41,historical_read=True)['channel_id']==CA
+        assert transport.connect_route(cur,B,41,historical_read=True) is None
+
+
 def test_avatar_authority_is_rechecked_after_download(channels,monkeypatch):
     import tenant_connect_avatars as avatars
     from tenant_linear_policy import TenantLinearError
@@ -93,3 +120,22 @@ def test_avatar_authority_is_rechecked_after_download(channels,monkeypatch):
     monkeypatch.setattr(avatars,'_fetch',revoked)
     with pytest.raises(TenantLinearError):
         asyncio.run(avatars.get_avatar(PROFILE,{'provider':'connect','lead_id':'41','channel_id':CA,'conversation_id':'client'}))
+
+
+@pytest.mark.parametrize('state,age,allowed',[('unavailable','1 hour',False),('unavailable','8 days',True),
+    ('loading','1 minute',False),('loading','4 minutes',True)])
+def test_avatar_negative_cache_and_interrupted_download_have_bounded_retry(channels,monkeypatch,state,age,allowed):
+    import tenant_connect_avatars as avatars
+    from tenant_linear_policy import TenantLinearError
+    from test_tenant_support_inbox import PROFILE
+    db=channels['db'];monkeypatch.setattr(avatars,'_connect',lambda:db)
+    db.execute("UPDATE saas_connect_conversations SET avatar_status=%s,avatar_checked_at=now()-%s::interval WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(state,age,A,CA));db.commit()
+    calls=[]
+    async def fetch(route):
+        calls.append(route['conversation_id']);return b'png','image/png'
+    monkeypatch.setattr(avatars,'_fetch',fetch)
+    params={'provider':'connect','lead_id':'41','channel_id':CA,'conversation_id':'client'}
+    if allowed:assert asyncio.run(avatars.get_avatar(PROFILE,params))==(b'png','image/png')
+    else:
+        with pytest.raises(TenantLinearError):asyncio.run(avatars.get_avatar(PROFILE,params))
+    assert len(calls)==int(allowed)

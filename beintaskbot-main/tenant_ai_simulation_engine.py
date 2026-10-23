@@ -317,17 +317,23 @@ def claim_next():
 def _load_context(cur, job):
     cur.execute('''SELECT id,external_id,direction,author_name,body,message_type,happened_at,raw
       FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
-        AND channel=%s AND COALESCE(happened_at,created_at) <= (
-          SELECT COALESCE(happened_at,created_at) FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid)
-      ORDER BY COALESCE(happened_at,created_at) DESC,created_at DESC LIMIT %s''',
-      (job['tenant_id'],job['lead_id'],'connect:'+str(job['channel_id']),job['tenant_id'],job['source_message_id'],MAX_CONTEXT_MESSAGES))
+        AND channel=%s AND ((COALESCE(happened_at,created_at),created_at) < (
+          SELECT COALESCE(happened_at,created_at),created_at FROM saas_crm_messages
+          WHERE tenant_id=%s::uuid AND id=%s::uuid)
+          OR id=%s::uuid)
+      ORDER BY COALESCE(happened_at,created_at) DESC,created_at DESC,id DESC LIMIT %s''',
+      (job['tenant_id'],job['lead_id'],'connect:'+str(job['channel_id']),job['tenant_id'],job['source_message_id'],job['source_message_id'],MAX_CONTEXT_MESSAGES))
     rows=list(reversed(cur.fetchall()))
     if not rows or str(rows[-1]['id']) != str(job['source_message_id']):
         raise TenantLinearError('simulation_source_message_unavailable',409)
     if rows[-1].get('direction') != 'incoming':
         raise TenantLinearError('simulation_source_not_inbound',409)
+    if (rows[-1].get('raw') or {}).get('verified_employee_id') is not None:
+        raise TenantLinearError('simulation_source_is_employee',409)
     out=[];size=0
-    for row in rows:
+    # Allocate from the selected customer message backwards. The old forward
+    # truncation could exhaust the budget before reaching that very message.
+    for row in reversed(rows):
         body=str(row.get('body') or '')[:3000]
         raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
         employee=raw.get('verified_employee_id') is not None
@@ -339,7 +345,7 @@ def _load_context(cur, job):
             if not out: out.append({**line,'text':body[:max(0,MAX_CONTEXT_CHARS//3)]})
             break
         out.append(line);size+=length
-    return rows,out
+    return rows,list(reversed(out))
 
 
 def _group_active_binding(cur,tenant,channel,conversation,agent_id):

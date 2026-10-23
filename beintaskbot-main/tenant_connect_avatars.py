@@ -1,5 +1,6 @@
-"""Protected, one-time WhatsApp avatar retrieval through Connect."""
+"""Protected, bounded WhatsApp avatar cache retrieval through Connect."""
 import uuid
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlsplit
 
 import aiohttp
@@ -80,17 +81,33 @@ async def get_avatar(profile, params):
             if not route or route['channel_id'] != str(selected['connect_channel_id']) or route['conversation_id'] != selected['conversation_id']:
                 raise TenantLinearError('WhatsApp-kanal artıq əlçatan deyil.', 404)
             status = str(selected.get('avatar_status') or '')
-            if status == 'unavailable':
+            checked = selected.get('avatar_checked_at')
+            if isinstance(checked,str): checked=datetime.fromisoformat(checked.replace('Z','+00:00'))
+            fresh=checked is not None and checked>datetime.now(timezone.utc)-timedelta(days=7)
+            if status == 'unavailable' and fresh:
                 raise TenantLinearError('WhatsApp fotosu yoxdur.', 404)
-            if status == '':
-                cur.execute('''UPDATE saas_connect_conversations SET avatar_status='unavailable',updated_at=now()
-                  WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s AND avatar_status=''
+            loading=checked is not None and checked>datetime.now(timezone.utc)-timedelta(minutes=3)
+            if status == 'loading' and loading:
+                raise TenantLinearError('WhatsApp fotosu yüklənir. Sonra yenidən yoxlayın.', 409)
+            if not fresh or status=='loading':
+                cur.execute('''UPDATE saas_connect_conversations SET avatar_status='loading',avatar_checked_at=now(),updated_at=now()
+                  WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s
+                    AND (avatar_checked_at IS NULL OR avatar_checked_at<now()-interval '7 days'
+                      OR (avatar_status='loading' AND avatar_checked_at<now()-interval '3 minutes'))
                   RETURNING conversation_id''', (tenant, route['channel_id'], route['conversation_id']))
                 claimed = cur.fetchone() is not None
                 if not claimed:
                     raise TenantLinearError('WhatsApp fotosu yüklənir. Sonra yenidən yoxlayın.', 409)
                 conn.commit()
-    body, mime = await _fetch(route)
+    try:
+        body, mime = await _fetch(route)
+    except TenantLinearError:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute('''UPDATE saas_connect_conversations SET avatar_status='unavailable'
+                  WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s
+                    AND avatar_status='loading' ''',(tenant,route['channel_id'],route['conversation_id']))
+        raise
     with _connect() as conn:
         with conn.cursor() as cur:
             # Membership, selected workspace and transport authority may change
@@ -103,6 +120,6 @@ async def get_avatar(profile, params):
                     any(latest.get(key) != route.get(key) for key in ('channel_id','conversation_id','api_key'))):
                 raise TenantLinearError('WhatsApp-kanal artıq əlçatan deyil.', 404)
             cur.execute('''UPDATE saas_connect_conversations SET avatar_status='available',updated_at=now()
-              WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s AND avatar_status='unavailable' ''',
+              WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s ''',
               (tenant, route['channel_id'], route['conversation_id']))
     return body, mime

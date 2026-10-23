@@ -40,6 +40,10 @@ def context(cur, profile, data, *, writing=False):
     if writing:
         lock_dialog(cur, tenant, 'connect', channel, conversation)
     route = assert_route(cur, tenant, policy, 'connect', conversation, channel, lead)
+    from tenant_connect_identity import conflicted
+    identity_conflict=conflicted(cur,tenant,channel,conversation)
+    if writing and identity_conflict:
+        raise TenantLinearError('conversation_identity_conflict',409)
     assert_resolved(cur, tenant, channel, conversation)
     cur.execute('''SELECT state,reason,revision,agent_id,agent_assignment_id
       FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect'
@@ -60,10 +64,13 @@ def context(cur, profile, data, *, writing=False):
       LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=t.id WHERE t.id=%s::uuid
       FOR SHARE OF t,ch''', (channel, tenant))
     config = dict(cur.fetchone() or {})
+    config['identity_conflict']=identity_conflict
     return tenant, actor, channel, conversation, route, state, has_job, config
 
 
 def candidates(cur, tenant, channel, conversation, route, state, has_job, config, *, allow_current=False):
+    if config.get('identity_conflict'):
+        return [], 'conversation_identity_conflict'
     if has_job:
         return [], 'agent_already_assigned'
     if state.get('agent_id') and not allow_current:
