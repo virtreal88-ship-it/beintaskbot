@@ -244,6 +244,44 @@ def test_company_mode_retirement_migration_is_safe_and_one_time(sandbox,monkeypa
     sandbox.commit()
 
 
+def test_repeated_schema_upgrade_handles_legacy_test_with_not_null_mode(sandbox):
+    import tenant_ai_agents_schema as schema
+    # Match production's older schema variant: mode is NOT NULL, and the
+    # compatibility migration has already been recorded by the first startup.
+    schema._ready=False
+    schema.ensure_schema(sandbox)
+    sandbox.execute("UPDATE saas_ai_agent_settings SET operating_mode='manual' WHERE tenant_id=%s::uuid",(A,))
+    sandbox.execute("ALTER TABLE saas_ai_agent_settings ALTER COLUMN operating_mode SET NOT NULL")
+    sandbox.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_operating_mode_check')
+    sandbox.execute("UPDATE saas_ai_agent_settings SET operating_mode='test',auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
+    sandbox.execute("UPDATE saas_ai_agent_jobs SET state='queued',error_code='' WHERE tenant_id=%s::uuid",(A,))
+    sandbox.execute("UPDATE saas_tenant_webhook_events SET state='queued',error_code='' WHERE tenant_id=%s::uuid",(A,))
+    before_agents=sandbox.execute("SELECT id::text AS id,enabled,mode FROM saas_ai_agents WHERE tenant_id=%s::uuid",(A,))
+    before_messages=sandbox.execute("SELECT id::text AS id,external_id,body FROM saas_crm_messages WHERE tenant_id=%s::uuid",(A,))
+    before_dialogues=sandbox.execute("SELECT connect_channel_id::text AS channel_id,conversation_id,lead_id,contact_name FROM saas_connect_conversations WHERE tenant_id=%s::uuid",(A,))
+    before_cases=sandbox.execute("SELECT id::text AS id,status FROM saas_support_tickets WHERE tenant_id=%s::uuid",(A,))
+    sandbox.commit()
+
+    schema._ready=False
+    schema.ensure_schema(sandbox)
+
+    setting=sandbox.execute("SELECT operating_mode,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]
+    job=sandbox.execute("SELECT state,error_code FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid",(A,))[0]
+    assert setting=={'operating_mode':'manual','auto_send_enabled':False}
+    assert job=={'state':'skipped','error_code':'legacy_test_mode_retired'}
+    assert sandbox.execute("SELECT id::text AS id,enabled,mode FROM saas_ai_agents WHERE tenant_id=%s::uuid",(A,))==before_agents
+    assert sandbox.execute("SELECT id::text AS id,external_id,body FROM saas_crm_messages WHERE tenant_id=%s::uuid",(A,))==before_messages
+    assert sandbox.execute("SELECT connect_channel_id::text AS channel_id,conversation_id,lead_id,contact_name FROM saas_connect_conversations WHERE tenant_id=%s::uuid",(A,))==before_dialogues
+    assert sandbox.execute("SELECT id::text AS id,status FROM saas_support_tickets WHERE tenant_id=%s::uuid",(A,))==before_cases
+
+    # Repeated startup must remain idempotent and preserve all business rows.
+    sandbox.commit();schema._ready=False;schema.ensure_schema(sandbox)
+    assert sandbox.execute("SELECT operating_mode FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]['operating_mode']=='manual'
+    assert sandbox.execute("SELECT count(*) AS n FROM saas_crm_messages WHERE tenant_id=%s::uuid",(A,))[0]['n']==len(before_messages)
+    sandbox.execute("ALTER TABLE saas_ai_agent_settings ALTER COLUMN operating_mode DROP NOT NULL")
+    sandbox.commit()
+
+
 def test_kommo_manual_agent_never_queues_and_company_send_gate_blocks_automatic(sandbox):
     db=sandbox
     db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain) VALUES(%s::uuid,'kommo','connected','own.kommo.com')",(A,))

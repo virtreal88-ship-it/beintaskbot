@@ -315,10 +315,15 @@ def ensure_schema(conn):
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='legacy_test_mode_retired' WHERE state IN ('queued','processing') AND payload->>'test_mode'='true'")
                 cur.execute("UPDATE saas_ai_agent_drafts SET state='rejected' WHERE state='pending' AND source_fingerprint IN (SELECT fingerprint FROM saas_tenant_webhook_events WHERE payload->>'test_mode'='true')")
                 cur.execute('INSERT INTO saas_ai_compat_migrations(version) VALUES(1) ON CONFLICT DO NOTHING')
-            # Old Test Mode is first quarantined above, then reduced to the
-            # compatibility NULL so the new three-value company selector can
-            # be constrained without losing historical rows.
-            cur.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=FALSE,operating_mode=NULL WHERE operating_mode='test' RETURNING tenant_id")
+            # Old Test Mode is first quarantined above, then mapped to Manual
+            # with automatic sending disabled. This works for both nullable
+            # and NOT NULL variants of the deployed schema.
+            # A previous deployed schema made this column NOT NULL. Keep the
+            # legacy Test Mode retirement compatible with that shape and map
+            # it to the safest explicit company mode. NULL is only a legacy
+            # compatibility value in schemas that permit it; it is not needed
+            # to retire Test Mode and must never abort application startup.
+            cur.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=FALSE,operating_mode='manual' WHERE operating_mode='test' RETURNING tenant_id")
             legacy_test_tenants=[str(row['tenant_id']) for row in cur.fetchall()]
             if legacy_test_tenants:
                 cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='legacy_test_mode_retired',updated_at=now() WHERE state IN ('queued','processing') AND tenant_id=ANY(%s::uuid[])", (legacy_test_tenants,))
