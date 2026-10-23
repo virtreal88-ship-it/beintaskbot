@@ -83,7 +83,7 @@ def _media_filename(raw):
     return ''
 
 
-def _message(item, *, group=False, participant_names=None, contact_name=''):
+def _message(item, *, group=False, participant_names=None, employee_participants=None, contact_name=''):
     value = dict(item)
     raw = value.pop('raw', None) or {}
     direction = str(value.get('direction') or '')
@@ -99,6 +99,9 @@ def _message(item, *, group=False, participant_names=None, contact_name=''):
     if group and isinstance(raw,dict) and raw.get('ai_authored') is True:
         author_type='ai'
     participant_jid, participant_alt, whatsapp_name = _participant_fields(raw)
+    employee_key=(str(value.get('source_channel_id') or value.get('channel','').removeprefix('connect:')),participant_jid)
+    if direction == 'incoming' and group and employee_key in (employee_participants or set()):
+        author_type='employee'
     if group and direction=='outgoing' and author in {'Operator','WhatsApp operator'} and whatsapp_name:
         author=whatsapp_name
     if direction in {'incoming','outgoing'} and group and author_type!='ai':
@@ -594,16 +597,23 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                   WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s'''+clause+'''
                   ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 51''',tuple(args))
                 messages=cur.fetchall()
-            participant_names={}
+            participant_names={};employee_participants=set()
             if provider == 'connect' and dialog.get('customer_kind') == 'group':
                 # The override's primary key includes the tenant, exact Connect
                 # channel and exact conversation/JID.  This deliberately does
                 # not build a global LID/phone contact directory.
-                participant_ids=[]
+                participant_ids=[];employee_participants=set()
                 for message in messages:
                     participant_jid, _, _ = _participant_fields(message.get('raw'))
                     if participant_jid and participant_jid not in participant_ids:
                         participant_ids.append(participant_jid)
+                if participant_ids:
+                    from tenant_ai_group_coordination import verified_employee
+                    for message in messages:
+                        participant_jid, _, _ = _participant_fields(message.get('raw'))
+                        source_channel=str(message.get('source_channel_id') or message.get('channel','').removeprefix('connect:'))
+                        if participant_jid and verified_employee(cur,tenant,{'participantJid':participant_jid,'channelId':source_channel}) is not None:
+                            employee_participants.add((source_channel,participant_jid))
                 if participant_ids:
                     cur.execute('''SELECT connect_channel_id::text AS channel_id,participant_jid,display_name FROM saas_connect_participant_display_names
                       WHERE tenant_id=%s::uuid AND connect_channel_id::text=ANY(%s::text[]) AND conversation_id=%s
@@ -611,7 +621,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     participant_names={(str(item['channel_id']),str(item['participant_jid'])):str(item['display_name']) for item in cur.fetchall()
                                        if str(item.get('display_name') or '')}
     anchor_target=next((str(m['id']) for m in messages[:50] if anchor_row and (str(m['id'])==str(anchor_row['id']) or any(s.get('external_id')==anchor_row['external_id'] for s in m.get('sources',[])))),None)
-    return {'dialog':dialog,'anchor_message_id':anchor_target,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,
+    return {'dialog':dialog,'anchor_message_id':anchor_target,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
                                          contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '')
                                         for r in reversed(messages[:50])],
             'next_before':str(messages[49]['id']) if len(messages)>50 else None}

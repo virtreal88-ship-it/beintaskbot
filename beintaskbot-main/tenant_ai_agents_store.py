@@ -186,6 +186,7 @@ def read_settings(profile):
                 'active_connect_channels': int(runtime.get('active_connect_channels') or 0),
                 'enabled_agents': int(runtime.get('enabled_agents') or 0),
                 'simulation_runtime_enabled': runtime_flag('AI_SIMULATION_ENABLED'),
+                'simulation_runtime_block_reason': '' if runtime_flag('AI_SIMULATION_ENABLED') else 'global_feature_flag_disabled',
                 'support_case_extraction_runtime_enabled': _support_case_extraction_runtime_enabled(tenant),
                 'support_case_extraction_block_reason': '' if _support_case_extraction_runtime_enabled(tenant) else 'server_or_pilot_scope_disabled',
             }

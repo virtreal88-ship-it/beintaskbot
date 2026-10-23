@@ -20,6 +20,8 @@ class MemberApiContext:
     decide_invite_request: Callable[..., dict]
     platform_error: type[Exception]
     can_manage: Callable[[dict], bool] | None = None
+    set_member_whatsapp_numbers: Callable[..., object] | None = None
+    add_member_whatsapp_number: Callable[..., object] | None = None
     accept_email_invite: Callable[..., dict] | None = None
     issue_session: Callable[[str, int], str] | None = None
     cookie_name: str = 'csa_tenant_session'
@@ -40,7 +42,7 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
                 rows = await asyncio.to_thread(context.list_members, tenant_id=tenant_id, owner_id=owner_id)
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
-            return web.json_response({"success": True, "members": rows})
+            return web.json_response({"success": True, "members": rows},headers={'Cache-Control':'no-store','Vary':'Cookie'})
         try:
             data = await request.json()
         except Exception:
@@ -49,7 +51,28 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
         action = str(data.get("action") or "upsert").strip().casefold()
         try:
             telegram_id = int(data.get("telegram_id") or 0)
-            if action == "deactivate":
+            if action == "whatsapp_numbers":
+                if request.headers.get('Origin','').rstrip('/') != context.origin.rstrip('/'):
+                    return web.json_response({'success':False,'error':'Sorğunun mənbəyi düzgün deyil.'},status=403)
+                if (str(data.get('expected_tenant_id') or '')!=str(tenant_id)
+                        or str(data.get('expected_user_id') or '')!=str(owner_id)):
+                    return web.json_response({'success':False,'error':'Şirkət dəyişib. Yeniləyin.'},status=409)
+                if not context.set_member_whatsapp_numbers:
+                    return web.json_response({'success':False,'error':'Bu funksiya əlçatan deyil.'},status=503)
+                await asyncio.to_thread(context.set_member_whatsapp_numbers,tenant_id=tenant_id,
+                    owner_id=owner_id,telegram_id=telegram_id,
+                    numbers=data.get('numbers') if isinstance(data.get('numbers'),list) else None)
+            elif action == "add_whatsapp_number":
+                if request.headers.get('Origin','').rstrip('/') != context.origin.rstrip('/'):
+                    return web.json_response({'success':False,'error':'Sorğunun mənbəyi düzgün deyil.'},status=403)
+                if (str(data.get('expected_tenant_id') or '')!=str(tenant_id)
+                        or str(data.get('expected_user_id') or '')!=str(owner_id)):
+                    return web.json_response({'success':False,'error':'Şirkət dəyişib. Yeniləyin.'},status=409)
+                if not context.add_member_whatsapp_number:
+                    return web.json_response({'success':False,'error':'Bu funksiya əlçatan deyil.'},status=503)
+                await asyncio.to_thread(context.add_member_whatsapp_number,tenant_id=tenant_id,
+                    owner_id=owner_id,telegram_id=telegram_id,phone=str(data.get('phone') or ''))
+            elif action == "deactivate":
                 await asyncio.to_thread(context.deactivate_member, tenant_id=tenant_id, owner_id=owner_id,
                                         telegram_id=telegram_id)
             elif action == "upsert":
@@ -65,7 +88,7 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
             return web.json_response({"success": False, "error": "Telegram ID düzgün deyil."}, status=400)
         except context.platform_error as exc:
             return web.json_response({"success": False, "error": str(exc)}, status=400)
-        return web.json_response({"success": True, "members": rows})
+        return web.json_response({"success": True, "members": rows},headers={'Cache-Control':'no-store','Vary':'Cookie'})
 
     async def create(request: web.Request) -> web.Response:
         profile = context.member(request)

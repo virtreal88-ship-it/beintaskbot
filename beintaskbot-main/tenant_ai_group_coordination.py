@@ -6,6 +6,7 @@ All mutations and final sends use the group advisory lock before channel locks.
 import hashlib
 import json
 import re
+import uuid
 from datetime import datetime, timezone
 
 from tenant_linear_policy import TenantLinearError
@@ -291,16 +292,32 @@ def view(cur, tenant, conversation):
 
 
 def verified_employee(cur, tenant, data):
-    """Exact, owner-confirmed company account identity, never inferred LID/phone."""
+    """Resolve only an explicitly configured tenant employee identity.
+
+    LIDs are never equated with phone JIDs. Phone matching uses a unique,
+    administrator-configured number on an active employee card.
+    """
     jid = data.get('participantJid')
     if not isinstance(jid,str) or not re.fullmatch(r'[0-9]{5,22}@(s\.whatsapp\.net|lid)',jid):
         return None
-    cur.execute('''SELECT DISTINCT s.member_id FROM saas_ai_group_staff s
-      JOIN saas_tenant_members m ON m.tenant_id=s.tenant_id AND m.telegram_id=s.member_id AND m.active=TRUE
-      JOIN saas_connect_channels ch ON ch.tenant_id=s.tenant_id AND ch.connect_channel_id=s.channel_id AND ch.active=TRUE
-      WHERE s.tenant_id=%s::uuid AND s.jid=%s''', (tenant,jid))
-    matches=cur.fetchall()
-    return matches[0]['member_id'] if len(matches)==1 else None
+    matches=set()
+    if jid.endswith('@s.whatsapp.net'):
+      cur.execute('''SELECT DISTINCT m.telegram_id AS member_id
+      FROM saas_tenant_members m
+      JOIN saas_tenant_member_whatsapp_numbers n ON n.tenant_id=m.tenant_id AND n.telegram_id=m.telegram_id
+      WHERE m.tenant_id=%s::uuid AND m.active=TRUE AND n.recognition_enabled=TRUE
+        AND n.phone_digits=%s''',(tenant,jid.split('@',1)[0]))
+      matches.update(int(row['member_id']) for row in cur.fetchall())
+    channel=data.get('channelId') or data.get('channel_id')
+    try:channel=str(uuid.UUID(str(channel)))
+    except (ValueError,TypeError,AttributeError):channel=''
+    if channel:
+      cur.execute('''SELECT DISTINCT m.telegram_id AS member_id FROM saas_ai_group_staff s
+        JOIN saas_tenant_members m ON m.tenant_id=s.tenant_id AND m.telegram_id=s.member_id AND m.active=TRUE
+        JOIN saas_connect_channels ch ON ch.tenant_id=s.tenant_id AND ch.connect_channel_id=s.channel_id AND ch.active=TRUE
+        WHERE s.tenant_id=%s::uuid AND s.channel_id=%s::uuid AND s.jid=%s''',(tenant,channel,jid))
+      matches.update(int(row['member_id']) for row in cur.fetchall())
+    return next(iter(matches)) if len(matches)==1 else None
 
 
 def register_employee(profile,data):

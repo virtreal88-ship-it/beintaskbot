@@ -325,6 +325,16 @@ def test_group_participant_name_priority_is_manual_then_saved_then_whatsapp_then
     assert dialogs._message({'direction':'incoming','author_name':'','raw':{'participantJid':'994501234567@s.whatsapp.net'}},group=True)['author_name']=='994501234567'
 
 
+def test_employee_role_badge_is_scoped_to_exact_channel_and_jid():
+    row={'direction':'incoming','author_name':'WhatsApp name','source_channel_id':CA,
+         'raw':{'participantJid':'994501234567@s.whatsapp.net'}}
+    employee=dialogs._message(row,group=True,employee_participants={(CA,'994501234567@s.whatsapp.net')})
+    other_channel=dialogs._message({**row,'source_channel_id':CB},group=True,
+        employee_participants={(CA,'994501234567@s.whatsapp.net')})
+    assert employee['author_type']=='employee'
+    assert other_channel['author_type']=='participant'
+
+
 def test_dialogue_actions_are_derived_from_availability_not_only_storage_state(operator_db,monkeypatch):
     monkeypatch.setattr(dialogs,'runtime_flag',lambda name: True)
     monkeypatch.setattr('tenant_ai_agents_store.runtime_flag',lambda name: True)

@@ -132,6 +132,23 @@ def migrate_identity_schema(cur) -> None:
     cur.execute("ALTER TABLE saas_tenant_members DROP CONSTRAINT IF EXISTS saas_tenant_members_role_check")
     cur.execute("ALTER TABLE saas_tenant_members ADD CONSTRAINT saas_tenant_members_role_check CHECK (role IN ('owner', 'admin', 'manager', 'operator', 'worker', 'master'))")
     cur.execute("ALTER TABLE saas_tenant_members ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ NULL")
+    # Explicit WhatsApp identities are tenant-owned membership metadata. Keep
+    # them outside account phone fields: a login/recovery phone is not
+    # automatically proof that its owner is a WhatsApp group participant.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS saas_tenant_member_whatsapp_numbers (
+            tenant_id UUID NOT NULL,
+            telegram_id BIGINT NOT NULL,
+            phone_digits TEXT NOT NULL CHECK (phone_digits ~ '^[1-9][0-9]{7,14}$'),
+            recognition_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            created_by BIGINT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (tenant_id, phone_digits),
+            FOREIGN KEY (tenant_id, telegram_id) REFERENCES saas_tenant_members(tenant_id, telegram_id) ON DELETE CASCADE
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS saas_tenant_member_whatsapp_member_idx ON saas_tenant_member_whatsapp_numbers(tenant_id,telegram_id)")
     cur.execute("ALTER TABLE saas_tenant_invites DROP CONSTRAINT IF EXISTS saas_tenant_invites_role_check")
     cur.execute("ALTER TABLE saas_tenant_invites ADD CONSTRAINT saas_tenant_invites_role_check CHECK (role IN ('admin', 'manager', 'operator', 'worker', 'master'))")
     cur.execute("ALTER TABLE saas_tenant_invites ADD COLUMN IF NOT EXISTS invited_email TEXT NOT NULL DEFAULT ''")

@@ -57,6 +57,7 @@
   effectiveCompanyMode=settings.operating_mode||'manual';mode.value=effectiveCompanyMode;
   const runtime=settings.runtime||{},simulationAllowed=runtime.simulation_runtime_enabled===true;const simOption=mode.querySelector('option[value="simulation"]');if(simOption)simOption.disabled=!simulationAllowed;
   help.textContent=({manual:t('modeManual'),active:t('modeActive'),simulation:t('modeSimulation')})[mode.value]||t('modeManual');
+  if(!simulationAllowed&&runtime.simulation_runtime_block_reason==='global_feature_flag_disabled')help.textContent+=' '+t('simulationUnavailable');
   if(mode.value==='simulation'&&!simulationAllowed){status.textContent=t('simulationUnavailable');status.dataset.state='blocked';}
   else if(mode.value==='simulation'){status.textContent=t('modeExecution')+': '+(simulationConfig?.enabled===true?t('simulationRunning'):t('simulationNotStarted'));status.dataset.state=simulationConfig?.enabled===true?'good':'warn';}
   else if(mode.value==='active'){const ready=!!(settings.enabled&&!settings.emergency_stop&&settings.auto_send_enabled&&settings.server_auto_send_enabled&&settings.server_ai_agents_enabled&&agents.some(agent=>agent.role!=='expert'&&agent.enabled&&agent.mode==='automatic'));status.textContent=t('modeExecution')+': '+(ready?t('activeConfigured'):t(settings.emergency_stop?'emergency_stop':'activeBlocked'));status.dataset.state=ready?'good':'warn';}

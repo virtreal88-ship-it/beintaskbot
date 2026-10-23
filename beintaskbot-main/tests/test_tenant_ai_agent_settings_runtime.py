@@ -85,6 +85,7 @@ class TenantAiAgentSettingsRuntimeTests(unittest.TestCase):
             'daily_ai_limit': 50,
             'platform_token_limit': 0,
             'simulation_runtime_enabled': False,
+            'simulation_runtime_block_reason': 'global_feature_flag_disabled',
             'support_case_extraction_runtime_enabled': False,
             'support_case_extraction_block_reason': 'server_or_pilot_scope_disabled',
         })
