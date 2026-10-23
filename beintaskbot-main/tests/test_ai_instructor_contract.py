@@ -2,7 +2,7 @@
 from dataclasses import replace
 import pytest
 from tenant_ai_instructor_contract import (DemoConnection,TaskScope,BrowserAction,ScreenshotEvidence,
-    ContractError,OPERATION,PERMISSIONS,availability)
+    ContractError,OPERATION,PERMISSIONS,RESEARCH_PERMISSIONS,availability)
 
 IDS=[f'00000000-0000-0000-0000-{i:012d}' for i in range(1,12)]
 
@@ -59,9 +59,18 @@ def test_dangerous_actions_and_real_data_rejected(connection,scope,action):
     with pytest.raises(ContractError):action.validate(scope,connection)
 
 
-def test_minimum_rights_and_isolated_session_required(connection):
-    for patch in ({'permissions':PERMISSIONS|{'admin'}},{'isolated_session':False},{'restore_receipt_ref':''}):
+def test_minimum_rights_and_isolated_session_required(connection,scope):
+    for patch in ({'permissions':PERMISSIONS|{'admin'}},{'isolated_session':False}):
         with pytest.raises(ContractError):replace(connection,**patch).validate()
+
+    # Read-only research does not mutate inventory, so a restore receipt is
+    # intentionally required only when a write-capable operation is queued.
+    no_receipt=replace(connection,restore_receipt_ref=None)
+    assert no_receipt.validate() is no_receipt
+    research=replace(no_receipt,permissions=RESEARCH_PERMISSIONS)
+    assert replace(scope,permission_level='research').validate(research)
+    with pytest.raises(ContractError,match='fixture_restore_required'):
+        replace(scope,permission_level='demonstration_operation').validate(no_receipt)
 
 
 def test_screenshot_contract_rejects_external_scope_and_missing_sanitization(scope):
