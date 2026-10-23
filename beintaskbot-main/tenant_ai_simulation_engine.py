@@ -53,9 +53,11 @@ def enqueue_inbound(cur, *, tenant_id, channel_id, conversation_id, lead_id,
             occurred = occurred.replace(tzinfo=timezone.utc)
     except (TypeError, ValueError):
         occurred = datetime.now(timezone.utc)
-    cur.execute('''SELECT tenant_id,channel_ids,conversation_ids,starts_at,ends_at,message_limit
-      FROM saas_ai_simulation_configs WHERE tenant_id=%s::uuid AND enabled=TRUE
-        AND emergency_stop=FALSE FOR UPDATE''', (tenant_id,))
+    cur.execute('''SELECT c.tenant_id,c.channel_ids,c.conversation_ids,c.starts_at,c.ends_at,c.message_limit
+      FROM saas_ai_simulation_configs c JOIN saas_ai_agent_settings s ON s.tenant_id=c.tenant_id
+      WHERE c.tenant_id=%s::uuid AND c.enabled=TRUE
+        AND (s.operating_mode IS NULL OR s.operating_mode='simulation')
+        AND c.emergency_stop=FALSE FOR UPDATE OF c,s''', (tenant_id,))
     config = cur.fetchone()
     if not config or not config.get('starts_at'):
         return False
@@ -131,13 +133,13 @@ def save_config(profile, data):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
-            cur.execute('''SELECT c.*,t.status AS tenant_status,s.enabled AS ai_enabled,s.emergency_stop AS ai_emergency
+            cur.execute('''SELECT c.*,t.status AS tenant_status,s.enabled AS ai_enabled,s.operating_mode AS company_mode,s.emergency_stop AS ai_emergency
               FROM saas_ai_simulation_configs c JOIN saas_tenants t ON t.id=c.tenant_id
               LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=c.tenant_id
               WHERE c.tenant_id=%s::uuid FOR UPDATE OF c,t''', (tenant,))
             current = cur.fetchone()
             if not current:
-                cur.execute('''SELECT t.status AS tenant_status,s.enabled AS ai_enabled,s.emergency_stop AS ai_emergency
+                cur.execute('''SELECT t.status AS tenant_status,s.enabled AS ai_enabled,s.operating_mode AS company_mode,s.emergency_stop AS ai_emergency
                   FROM saas_tenants t LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=t.id
                   WHERE t.id=%s::uuid FOR SHARE OF t''', (tenant,))
                 current = cur.fetchone() or {}
@@ -151,6 +153,8 @@ def save_config(profile, data):
             enabling = values.get('enabled') is True and current.get('enabled') is not True
             if enabling and data.get('confirm_start') is not True:
                 raise TenantLinearError('Simulation başlatmaq üçün təsdiq tələb olunur.', 409)
+            if values.get('enabled') is True and current.get('company_mode') not in (None,'simulation'):
+                raise TenantLinearError('Əvvəlcə şirkət AI rejimini Simulation seçin.',409)
             requested_state=data.get('state')
             if requested_state not in (None,'running','paused','stopped'):
                 raise TenantLinearError('Simulation statusu düzgün deyil.')
@@ -254,7 +258,9 @@ def claim_next():
             cur.execute("UPDATE saas_ai_simulation_queue SET state='failed',error_code='worker_interrupted',completed_at=now() WHERE state='processing' AND lease_until<now() AND provider_started_at IS NULL AND attempts>=5")
             cur.execute('''SELECT q.tenant_id
               FROM saas_ai_simulation_queue q JOIN saas_ai_simulation_configs c ON c.tenant_id=q.tenant_id
+              JOIN saas_ai_agent_settings s ON s.tenant_id=q.tenant_id
               WHERE q.state='queued' AND q.available_at<=now() AND c.enabled=TRUE AND c.emergency_stop=FALSE
+                AND (s.operating_mode IS NULL OR s.operating_mode='simulation')
                 AND c.starts_at<=now() AND (c.ends_at IS NULL OR c.ends_at>now())
                 AND (c.channel_ids @> jsonb_build_array(q.channel_id::text))
               ORDER BY q.created_at LIMIT 1''')
@@ -267,8 +273,10 @@ def claim_next():
             # lock order. It also serializes dialog ordering across claimers.
             cur.execute('''SELECT q.*,c.agent_id,c.starts_at AS simulation_started_at,c.token_budget,c.message_limit,c.max_parallel,c.max_calls_per_event,c.max_output_tokens
               FROM saas_ai_simulation_queue q JOIN saas_ai_simulation_configs c ON c.tenant_id=q.tenant_id
+              JOIN saas_ai_agent_settings s ON s.tenant_id=q.tenant_id
               WHERE q.tenant_id=%s::uuid AND q.state='queued' AND q.available_at<=now()
                 AND c.enabled=TRUE AND c.emergency_stop=FALSE AND c.starts_at<=now()
+                AND (s.operating_mode IS NULL OR s.operating_mode='simulation')
                 AND (c.ends_at IS NULL OR c.ends_at>now())
                 AND c.channel_ids @> jsonb_build_array(q.channel_id::text)
                 AND (jsonb_array_length(c.conversation_ids)=0 OR c.conversation_ids @> jsonb_build_array(q.conversation_id))
@@ -354,9 +362,10 @@ def _reserve_call(cur, job, agent_id, call_no, call_kind, reserve_tokens):
     config=cur.fetchone() or {}
     if not config.get('enabled') or config.get('emergency_stop'):
         return False
-    cur.execute("SELECT enabled,emergency_stop FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid FOR UPDATE",(job['tenant_id'],))
+    cur.execute("SELECT enabled,operating_mode,emergency_stop FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid FOR UPDATE",(job['tenant_id'],))
     company=cur.fetchone() or {}
-    if company.get('enabled') is not True or company.get('emergency_stop') is True:
+    if (company.get('enabled') is not True or company.get('emergency_stop') is True
+            or company.get('operating_mode') not in (None,'simulation')):
         return False
     if config.get('message_limit') and int(config.get('messages') or 0)>int(config['message_limit']):
         return False
@@ -386,12 +395,12 @@ def _adjust_reservation(cur,job,call_no,required_tokens):
     if not runtime_flag('AI_SIMULATION_ENABLED'):
         return False
     cur.execute('''SELECT c.enabled,c.emergency_stop,c.token_budget,c.max_calls_per_event,c.starts_at,
-        s.enabled AS company_enabled,s.emergency_stop AS company_stop
+        s.enabled AS company_enabled,s.operating_mode AS company_mode,s.emergency_stop AS company_stop
       FROM saas_ai_simulation_configs c JOIN saas_ai_agent_settings s ON s.tenant_id=c.tenant_id
       WHERE c.tenant_id=%s::uuid FOR UPDATE OF c,s''',(job['tenant_id'],))
     config=cur.fetchone() or {}
     if (config.get('enabled') is not True or config.get('emergency_stop') is True
-            or config.get('company_enabled') is not True or config.get('company_stop') is True
+            or config.get('company_enabled') is not True or config.get('company_mode') not in (None,'simulation') or config.get('company_stop') is True
             or int(call_no)>int(config.get('max_calls_per_event') or 0)):
         return False
     cur.execute("SELECT reserved_tokens,state FROM saas_ai_simulation_usage WHERE tenant_id=%s::uuid AND queue_id=%s::uuid AND call_no=%s FOR UPDATE",(job['tenant_id'],job['id'],call_no))
@@ -415,7 +424,7 @@ def _mark_provider_started(cur,job,call_no):
     if not runtime_flag('AI_SIMULATION_ENABLED') or not runtime_flag('AI_AGENTS_ENABLED'):
         return False
     cur.execute('''SELECT c.agent_id AS configured_agent,c.enabled,c.emergency_stop,c.starts_at,c.ends_at,c.channel_ids,c.conversation_ids,
-        s.enabled AS company_enabled,s.emergency_stop AS company_stop,t.status AS tenant_status,
+        s.enabled AS company_enabled,s.operating_mode AS company_mode,s.emergency_stop AS company_stop,t.status AS tenant_status,
         q.channel_id,q.conversation_id,q.lead_id,q.source_event_id,q.recheck_of_run_id,u.agent_id AS call_agent,u.call_kind
       FROM saas_ai_simulation_configs c JOIN saas_ai_agent_settings s ON s.tenant_id=c.tenant_id
       JOIN saas_tenants t ON t.id=c.tenant_id
@@ -434,7 +443,7 @@ def _mark_provider_started(cur,job,call_no):
         except ValueError: dialogs=[]
     starts=_as_datetime(row.get('starts_at'));ends=_as_datetime(row.get('ends_at'));now=datetime.now(timezone.utc)
     valid=(row.get('enabled') is True and row.get('emergency_stop') is not True
-      and row.get('company_enabled') is True and row.get('company_stop') is not True
+      and row.get('company_enabled') is True and row.get('company_mode') in (None,'simulation') and row.get('company_stop') is not True
       and tenant_status_allows_ai(row.get('tenant_status'),'connect') and starts and starts<=now
       and (not ends or ends>now) and str(job['channel_id']) in {str(x) for x in channels}
       and (not dialogs or str(job['conversation_id']) in {str(x) for x in dialogs})
@@ -649,7 +658,7 @@ def process(job):
                 cur.execute('''SELECT q.id,q.recheck_of_run_id,c.enabled,c.emergency_stop,c.agent_id,c.channel_ids,c.conversation_ids,
                     c.starts_at,c.ends_at,c.token_budget,c.message_limit,c.max_parallel,c.max_calls_per_event,c.max_output_tokens,
                     a.id AS primary_id,a.name,a.instructions,a.enabled AS agent_enabled,a.role,a.mode,a.scopes,a.schedule,a.model,a.language,a.style,a.safety,a.expert_policy,
-                    s.enabled AS company_enabled,s.emergency_stop AS company_stop,t.status AS tenant_status,
+                    s.enabled AS company_enabled,s.operating_mode AS company_mode,s.emergency_stop AS company_stop,t.status AS tenant_status,
                     ch.active AS channel_active,EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=q.tenant_id
                       AND i.provider='connect' AND i.status='connected') AS connect_active,
                     EXISTS(SELECT 1 FROM saas_connect_conversations d WHERE d.tenant_id=q.tenant_id
@@ -674,7 +683,8 @@ def process(job):
                 cur.execute('SELECT ai_legacy_blocked(%s::uuid,%s,%s,%s) AS blocked',
                             (tenant,channel,conversation,_event_fingerprint(job['source_event_id'])))
                 row['legacy_blocked']=bool((cur.fetchone() or {}).get('blocked'))
-                if not row.get('enabled') or row.get('emergency_stop') or row.get('company_stop'):
+                if (not row.get('enabled') or row.get('emergency_stop') or row.get('company_stop')
+                        or row.get('company_mode') not in (None,'simulation')):
                     outcome='blocked';reason='emergency_stop' if row.get('emergency_stop') or row.get('company_stop') else 'simulation_disabled'
                     events.append({'type':'simulation_blocked','reason':reason})
                     result=(outcome,reason,None,[],[],[],[],0)
@@ -756,7 +766,7 @@ def process(job):
             with conn.cursor() as cur:
                 cur.execute('''SELECT c.enabled,c.emergency_stop,c.max_output_tokens,c.max_calls_per_event,c.token_budget,
                     a.id,a.instructions,a.model,a.language,a.style,a.safety,a.expert_policy,a.schedule,
-                    s.enabled AS company_enabled,s.emergency_stop AS company_stop,t.status AS tenant_status,
+                    s.enabled AS company_enabled,s.operating_mode AS company_mode,s.emergency_stop AS company_stop,t.status AS tenant_status,
                     i.metadata,i.secrets FROM saas_ai_simulation_configs c
                   JOIN saas_ai_agents a ON a.tenant_id=c.tenant_id AND a.id=c.agent_id
                   JOIN saas_ai_agent_settings s ON s.tenant_id=c.tenant_id JOIN saas_tenants t ON t.id=c.tenant_id
@@ -765,6 +775,7 @@ def process(job):
                 config=cur.fetchone() or {}
                 if (not runtime_flag('AI_SIMULATION_ENABLED') or not runtime_flag('AI_AGENTS_ENABLED')
                     or not config.get('enabled') or config.get('emergency_stop') or config.get('company_stop')
+                    or config.get('company_mode') not in (None,'simulation')
                     or not config.get('company_enabled') or not tenant_status_allows_ai(config.get('tenant_status'),'connect')
                     or not is_open(config.get('schedule') or {})):
                     _complete(job,'blocked',stop_reason='simulation_revoked_or_schedule_closed',agent_id=primary_id,events=events)

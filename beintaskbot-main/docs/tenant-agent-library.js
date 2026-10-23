@@ -63,8 +63,8 @@
  $('agentLibraryBlank').onclick=()=>launch('blank');$('agentLibraryChannelFilter').onchange=()=>{channelFilter=$('agentLibraryChannelFilter').value;render()};
  $('agentLibraryRetry').onclick=()=>{close();open()};modal.querySelectorAll('[data-library-close]').forEach(node=>node.onclick=close);
  document.addEventListener('keydown',event=>{if(modal.hidden)return;if(event.key==='Escape'){event.preventDefault();close()}if(event.key==='Tab'){const nodes=[...modal.querySelectorAll('button:not([disabled]),select:not([disabled])')].filter(n=>!n.hidden),first=nodes[0],last=nodes.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}}});
- document.addEventListener('click',event=>{const button=event.target.closest?.('[data-ai-overview-create],#aiNewAgent');if(!button||button.disabled)return;event.preventDefault();event.stopImmediatePropagation();window.tenantAgentWizard.open()},true);
- document.addEventListener('tenant-ai-create-request',()=>window.tenantAgentWizard.open());
+ document.addEventListener('click',event=>{const button=event.target.closest?.('[data-ai-overview-create],#aiNewAgent');if(!button||button.disabled)return;event.preventDefault();event.stopImmediatePropagation();open()},true);
+ document.addEventListener('tenant-ai-create-request',()=>open());
  document.addEventListener('tenant-language',()=>{if(!modal.hidden){render();window.tenantNightL10n?.translate(modal)}});
  window.tenantAgentLibrary=Object.freeze({open});
 })();

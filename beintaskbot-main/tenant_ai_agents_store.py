@@ -1,6 +1,8 @@
 """Tenant-scoped persistence for agent settings and knowledge sources."""
 import hashlib
+import json
 import uuid
+from datetime import datetime, timezone
 from tenant_ai_dialog_scope import channel_scope, lock_dialog, assert_resolved
 
 from tenant_ai_agents_policy import (MAX_AGENTS, MAX_SOURCES, agent as validate_agent,
@@ -13,6 +15,15 @@ from tenant_ai_agent_runtime_flags import enabled as runtime_flag
 from tenant_ai_agent_key_policy import (platform_key_ready, platform_model,
     platform_model_choices, platform_model_allowed, platform_service_ready)
 from tenant_platform import _connect, _json
+
+
+def _support_case_extraction_runtime_enabled(tenant_id=None):
+    if not runtime_flag('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED'):
+        return False
+    # The existing exact pilot allowlist remains a second server-side boundary.
+    from tenant_knowledge_live_queue import pilot_scope
+    scope=pilot_scope()
+    return bool(scope and (tenant_id is None or str(scope.get('tenant_id'))==str(tenant_id)))
 
 
 def _authorize(cur, profile):
@@ -127,9 +138,29 @@ def read_settings(profile):
             tenant, _ = _authorize(cur, profile)
             cur.execute('''INSERT INTO saas_ai_agent_settings(tenant_id) VALUES(%s::uuid)
               ON CONFLICT(tenant_id) DO NOTHING''', (tenant,))
-            cur.execute('''SELECT company_instructions,enabled,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,max_replies_per_chat,updated_at
+            cur.execute('''SELECT company_instructions,enabled,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,
+                operating_mode,support_case_extraction_enabled,support_case_extraction_started_at,max_replies_per_chat,updated_at
               FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid''', (tenant,))
             result = _row(cur.fetchone())
+            result['configured_operating_mode']=result.get('operating_mode')
+            # NULL is the compatibility state for companies configured before
+            # the company-level selector existed. Derive its current effective
+            # behavior without rewriting any existing agent or company setting.
+            if not result.get('operating_mode'):
+                cur.execute("SELECT to_regclass('saas_ai_simulation_configs') IS NOT NULL AS available")
+                sim_available=bool((cur.fetchone() or {}).get('available'))
+                sim_row={}
+                if sim_available:
+                    cur.execute("SELECT EXISTS(SELECT 1 FROM saas_ai_simulation_configs WHERE tenant_id=%s::uuid AND enabled=TRUE AND state='running') AS running",(tenant,))
+                    sim_row=cur.fetchone() or {}
+                if sim_row.get('running') is True:
+                    result['operating_mode']='simulation'
+                else:
+                    cur.execute("SELECT EXISTS(SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND role='primary' AND enabled=TRUE AND mode='automatic') AS automatic",(tenant,))
+                    automatic=(cur.fetchone() or {}).get('automatic') is True
+                    active_ready=bool(result.get('enabled') and result.get('auto_send_enabled')
+                                      and runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED') and automatic)
+                    result['operating_mode']='active' if active_ready else 'manual'
             result['server_native_crm_actions_enabled']=runtime_flag('AI_NATIVE_CRM_ACTIONS_ENABLED')
             # This summary is intentionally scoped by the already-authorized
             # tenant.  It lets the browser distinguish a saved company switch
@@ -151,6 +182,9 @@ def read_settings(profile):
                 'connect_connected': runtime.get('connect_connected') is True,
                 'active_connect_channels': int(runtime.get('active_connect_channels') or 0),
                 'enabled_agents': int(runtime.get('enabled_agents') or 0),
+                'simulation_runtime_enabled': runtime_flag('AI_SIMULATION_ENABLED'),
+                'support_case_extraction_runtime_enabled': _support_case_extraction_runtime_enabled(tenant),
+                'support_case_extraction_block_reason': '' if _support_case_extraction_runtime_enabled(tenant) else 'server_or_pilot_scope_disabled',
             }
         conn.commit()
     return result
@@ -174,27 +208,63 @@ def save_settings(profile, data):
                     raise TenantLinearError('Əvvəlcə mövcud Chat AI ayarlarını və razılığı tamamlayın.', 409)
             cur.execute('''INSERT INTO saas_ai_agent_settings(tenant_id) VALUES(%s::uuid)
               ON CONFLICT(tenant_id) DO NOTHING''', (tenant,))
-            cur.execute('''SELECT company_instructions,enabled,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,max_replies_per_chat FROM saas_ai_agent_settings
+            cur.execute('''SELECT company_instructions,enabled,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,
+                operating_mode,support_case_extraction_enabled,support_case_extraction_started_at,max_replies_per_chat FROM saas_ai_agent_settings
               WHERE tenant_id=%s::uuid FOR UPDATE''', (tenant,))
             previous = cur.fetchone() or {}
             values = {'company_instructions': str(previous.get('company_instructions') or ''),
                       **{key: bool(previous.get(key, False)) for key in ('enabled','auto_send_enabled','crm_actions_enabled','native_crm_actions_enabled')},
                       'emergency_stop': bool(previous.get('emergency_stop',False)),
+                      'operating_mode': previous.get('operating_mode'),
+                      'support_case_extraction_enabled': bool(previous.get('support_case_extraction_enabled',False)),
+                      'support_case_extraction_started_at': previous.get('support_case_extraction_started_at'),
                       'max_replies_per_chat': int(previous.get('max_replies_per_chat') or 20)}
             values.update(patch)
+            if values.get('operating_mode')=='simulation' and not runtime_flag('AI_SIMULATION_ENABLED'):
+                raise TenantLinearError('Simulation hazırda serverdə söndürülüb; şirkət rejimi dəyişdirilmədi.',409)
+            if values.get('support_case_extraction_enabled') and not _support_case_extraction_runtime_enabled(tenant):
+                raise TenantLinearError('Dəstək case-lərinin avtomatik təhlili serverdə söndürülüb; parametr aktivləşdirilmədi.',409)
+            was_case_extraction=bool(previous.get('support_case_extraction_enabled'))
+            if values.get('support_case_extraction_enabled') and not was_case_extraction:
+                values['support_case_extraction_started_at']=datetime.now(timezone.utc)
+            elif not values.get('support_case_extraction_enabled'):
+                values['support_case_extraction_started_at']=None
             cur.execute('''UPDATE saas_ai_agent_settings SET company_instructions=%s,enabled=%s,emergency_stop=%s,
-              auto_send_enabled=%s,crm_actions_enabled=%s,native_crm_actions_enabled=%s,max_replies_per_chat=%s,updated_by=%s,updated_at=now() WHERE tenant_id=%s::uuid
-              RETURNING company_instructions,enabled,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,max_replies_per_chat,updated_at''',
+              auto_send_enabled=%s,crm_actions_enabled=%s,native_crm_actions_enabled=%s,operating_mode=%s,
+              support_case_extraction_enabled=%s,support_case_extraction_started_at=%s,
+              max_replies_per_chat=%s,updated_by=%s,updated_at=now() WHERE tenant_id=%s::uuid
+              RETURNING company_instructions,enabled,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,
+                operating_mode,support_case_extraction_enabled,support_case_extraction_started_at,max_replies_per_chat,updated_at''',
               (values['company_instructions'], values['enabled'], values['emergency_stop'], values['auto_send_enabled'], values['crm_actions_enabled'], values['native_crm_actions_enabled'],
+               values['operating_mode'],values['support_case_extraction_enabled'],values['support_case_extraction_started_at'],
                values['max_replies_per_chat'], actor, tenant))
             result = _row(cur.fetchone())
+            if (('operating_mode' in patch and values.get('operating_mode')!='active')
+                    or values['emergency_stop'] or not values['enabled']):
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='company_mode_not_active' WHERE tenant_id=%s::uuid AND state IN ('queued','processing') AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND state IN ('queued','processing'))",(tenant,tenant))
+                cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='company_mode_not_active',updated_at=now() WHERE tenant_id=%s::uuid AND state IN ('queued','processing')",(tenant,))
+            if 'operating_mode' in patch and values.get('operating_mode')!='simulation':
+                cur.execute("SELECT to_regclass('saas_ai_simulation_queue') IS NOT NULL AS available")
+                if (cur.fetchone() or {}).get('available'):
+                    cur.execute("UPDATE saas_ai_simulation_queue SET state='skipped',error_code='company_mode_changed',completed_at=now(),lease_token=NULL,lease_until=NULL WHERE tenant_id=%s::uuid AND state='queued'",(tenant,))
+                cur.execute("SELECT to_regclass('saas_ai_simulation_configs') IS NOT NULL AS available")
+                if (cur.fetchone() or {}).get('available'):
+                    cur.execute("UPDATE saas_ai_simulation_configs SET enabled=FALSE,state='stopped',updated_by=%s,updated_at=now(),version=version+1 WHERE tenant_id=%s::uuid AND enabled=TRUE",(actor,tenant))
+            if was_case_extraction and not values.get('support_case_extraction_enabled'):
+                cur.execute("SELECT to_regclass('saas_knowledge_live_queue') IS NOT NULL AS available")
+                if (cur.fetchone() or {}).get('available'):
+                    cur.execute("UPDATE saas_knowledge_live_queue SET state='blocked',lease_until=NULL,error_code='live_extraction_disabled',updated_at=now() WHERE tenant_id=%s::uuid AND state='pending'",(tenant,))
             # A company-wide stop revokes work already admitted by any agent mode.
             if values['emergency_stop'] or not values['enabled']:
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='ai_emergency_stop' WHERE tenant_id=%s::uuid AND state IN ('queued','processing') AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND state IN ('queued','processing'))", (tenant, tenant))
                 cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='ai_emergency_stop',updated_at=now() WHERE tenant_id=%s::uuid AND state IN ('queued','processing')", (tenant,))
-            _audit(cur, tenant, actor, 'ai_agents_settings_updated', 'ai_agents', '', {'enabled': values['enabled']})
+            _audit(cur, tenant, actor, 'ai_agents_settings_updated', 'ai_agents', '', {
+                'enabled': values['enabled'],'operating_mode':values['operating_mode'],
+                'support_case_extraction_enabled':values['support_case_extraction_enabled']})
         conn.commit()
-    return result
+    # Return the same tenant-scoped effective state as GET, including runtime
+    # gates used by the company-mode controls.
+    return read_settings(profile)
 
 
 def list_agents(profile):
@@ -246,8 +316,14 @@ def configuration_options(profile):
         if item not in model_ids:
             models.append({'id':item,'label':item,'source':'company'})
             model_ids.add(item)
+    company_ready=bool(chat.get('secrets') and meta.get('enabled') is True and meta.get('consent') is True)
+    permitted=bool(platform_available or company_ready)
+    visible_models=models if permitted else []
     return {'pipelines':pipelines,'stages':stages,'channels':channels,'connect_channels':connect_channels,
-            'models':models if platform_available or (chat.get('secrets') and meta.get('enabled') is True and meta.get('consent') is True) else []}
+            'models':visible_models,
+            'model_catalog':{'state':'ready' if visible_models else 'unavailable',
+              'source':'platform' if platform_available else ('company' if company_ready else ''),
+              'reason':'' if visible_models else ('no_models_configured' if permitted else 'chat_ai_provider_not_ready')}}
 
 
 def refresh_configuration_catalog(profile, remote_pipelines):
@@ -464,7 +540,7 @@ def list_knowledge(profile, source_id=None):
             tenant, _ = _authorize(cur, profile)
             if source_id:
                 source = identifier(source_id)
-                cur.execute('''SELECT s.id,s.tenant_id,s.agent_id,a.name AS agent_name,s.title,s.kind,s.content,s.active,s.content_hash,
+                cur.execute('''SELECT s.id,s.tenant_id,s.agent_id,a.name AS agent_name,s.title,s.kind,s.content,s.active,s.content_hash,s.created_by,s.provenance,
                     CASE WHEN s.provenance ? 'instruction_id' THEN 'instruction'
                          WHEN s.provenance ? 'candidate_id' THEN 'support_case' ELSE 'knowledge_source' END AS origin_type,
                     COALESCE(s.provenance->>'instruction_id',s.provenance->>'candidate_id') AS origin_id,
@@ -474,15 +550,61 @@ def list_knowledge(profile, source_id=None):
                 row = _row(cur.fetchone())
                 if not row:
                     raise TenantLinearError('Bilik mənbəyi tapılmadı.', 404)
-                return row
-            cur.execute('''SELECT s.id,s.tenant_id,s.agent_id,a.name AS agent_name,s.title,s.kind,s.active,s.content_hash,
+                return _enrich_knowledge_rows(cur,[row],tenant)[0]
+            cur.execute('''SELECT s.id,s.tenant_id,s.agent_id,a.name AS agent_name,s.title,s.kind,s.active,s.content_hash,s.created_by,s.provenance,
               CASE WHEN s.provenance ? 'instruction_id' THEN 'instruction'
                    WHEN s.provenance ? 'candidate_id' THEN 'support_case' ELSE 'knowledge_source' END AS origin_type,
               COALESCE(s.provenance->>'instruction_id',s.provenance->>'candidate_id') AS origin_id,s.created_at,s.updated_at,
               (SELECT count(*) FROM saas_ai_knowledge_chunks c WHERE c.tenant_id=s.tenant_id AND c.source_id=s.id) AS chunks
               FROM saas_ai_knowledge_sources s LEFT JOIN saas_ai_agents a ON a.tenant_id=s.tenant_id AND a.id=s.agent_id
               WHERE s.tenant_id=%s::uuid ORDER BY s.created_at DESC,s.id''', (tenant,))
-            return [_row(row) for row in cur.fetchall()]
+            rows=[_row(row) for row in cur.fetchall()]
+            return _enrich_knowledge_rows(cur,rows,tenant)
+
+
+def _enrich_knowledge_rows(cur,rows,tenant):
+    parsed=[];candidate_ids=set();instruction_ids=set()
+    for row in rows:
+        provenance=row.get('provenance') or {}
+        if isinstance(provenance,str):
+            try: provenance=json.loads(provenance)
+            except (TypeError,ValueError): provenance={}
+        if not isinstance(provenance,dict): provenance={}
+        if provenance.get('candidate_id'): candidate_ids.add(str(provenance['candidate_id']))
+        if provenance.get('instruction_id'): instruction_ids.add(str(provenance['instruction_id']))
+        parsed.append((row,provenance))
+    candidates={}
+    if candidate_ids:
+        cur.execute("SELECT id::text AS id,status,reviewed_by FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[])",(tenant,list(candidate_ids)))
+        candidates={str(item['id']):item for item in cur.fetchall()}
+    instructions={};cur.execute("SELECT to_regclass('saas_instruction_lessons') IS NOT NULL AS available")
+    if instruction_ids and bool((cur.fetchone() or {}).get('available')):
+        cur.execute("SELECT id::text AS id,state,published_doc->>'review_status' AS review_status FROM saas_instruction_lessons WHERE tenant_id=%s::uuid AND id::text=ANY(%s::text[])",(tenant,list(instruction_ids)))
+        instructions={str(item['id']):item for item in cur.fetchall()}
+    for row,provenance in parsed:
+        origin_id=str(provenance.get('instruction_id') or provenance.get('candidate_id') or '')
+        approved_by=str(provenance.get('approved_by') or '')
+        origin_type=row.get('origin_type')
+        review='not_reviewed';published=False;ai_available=False
+        if origin_type=='support_case':
+            candidate=candidates.get(origin_id) or {};review=str(candidate.get('status') or 'missing')
+            confirmed=bool(candidate.get('reviewed_by') is not None and approved_by and str(candidate.get('reviewed_by'))==approved_by and review=='approved')
+            published=confirmed and row.get('active') is True
+            ai_available=published
+        elif origin_type=='instruction':
+            lesson=instructions.get(origin_id) or {};review_status=str(provenance.get('review_status') or 'not_reviewed')
+            review='approved' if review_status=='approved' and approved_by else review_status
+            published=bool(lesson.get('state')=='published' and lesson.get('review_status')=='approved' and review=='approved' and row.get('active') is True)
+            ai_available=published
+        else:
+            review='available' if row.get('active') is True else 'revoked'
+            published=row.get('active') is True;ai_available=row.get('active') is True
+        clean={key:provenance[key] for key in ('review_status','approved_by','instruction_id','candidate_id') if key in provenance}
+        row['provenance']=clean;row['review_status']=review;row['approved_by']=approved_by
+        row['material_status']='revoked' if row.get('active') is not True else ('published' if published else review)
+        row['ai_available']=bool(ai_available);row['access_scope']='agent' if row.get('agent_id') else 'company'
+        row['origin_id']=origin_id
+    return rows
 
 
 def save_knowledge(profile, data, *, source_id=None, connection=None):

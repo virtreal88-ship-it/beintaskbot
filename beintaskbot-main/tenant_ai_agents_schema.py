@@ -25,11 +25,17 @@ def ensure_schema(conn):
               emergency_stop BOOLEAN NOT NULL DEFAULT FALSE,
               auto_send_enabled BOOLEAN NOT NULL DEFAULT FALSE CHECK(auto_send_enabled=FALSE),
               crm_actions_enabled BOOLEAN NOT NULL DEFAULT FALSE CHECK(crm_actions_enabled=FALSE),
+              operating_mode TEXT NULL CHECK(operating_mode IS NULL OR operating_mode IN ('manual','active','simulation')),
+              support_case_extraction_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+              support_case_extraction_started_at TIMESTAMPTZ NULL,
               updated_by BIGINT NULL,
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               FOREIGN KEY(tenant_id,updated_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
             cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS company_instructions TEXT NOT NULL DEFAULT ''")
             cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS emergency_stop BOOLEAN NOT NULL DEFAULT FALSE")
+            cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS operating_mode TEXT NULL")
+            cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS support_case_extraction_enabled BOOLEAN NOT NULL DEFAULT FALSE")
+            cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS support_case_extraction_started_at TIMESTAMPTZ NULL")
             cur.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_auto_send_enabled_check')
             cur.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_crm_actions_enabled_check')
             cur.execute('ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS max_replies_per_chat INTEGER NOT NULL DEFAULT 20')
@@ -309,5 +315,16 @@ def ensure_schema(conn):
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='legacy_test_mode_retired' WHERE state IN ('queued','processing') AND payload->>'test_mode'='true'")
                 cur.execute("UPDATE saas_ai_agent_drafts SET state='rejected' WHERE state='pending' AND source_fingerprint IN (SELECT fingerprint FROM saas_tenant_webhook_events WHERE payload->>'test_mode'='true')")
                 cur.execute('INSERT INTO saas_ai_compat_migrations(version) VALUES(1) ON CONFLICT DO NOTHING')
+            # Old Test Mode is first quarantined above, then reduced to the
+            # compatibility NULL so the new three-value company selector can
+            # be constrained without losing historical rows.
+            cur.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=FALSE,operating_mode=NULL WHERE operating_mode='test' RETURNING tenant_id")
+            legacy_test_tenants=[str(row['tenant_id']) for row in cur.fetchall()]
+            if legacy_test_tenants:
+                cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='legacy_test_mode_retired',updated_at=now() WHERE state IN ('queued','processing') AND tenant_id=ANY(%s::uuid[])", (legacy_test_tenants,))
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='legacy_test_mode_retired' WHERE state IN ('queued','processing') AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=ANY(%s::uuid[]) AND error_code='legacy_test_mode_retired')", (legacy_test_tenants,))
+                cur.execute("UPDATE saas_ai_agent_drafts SET state='rejected' WHERE state='pending' AND tenant_id=ANY(%s::uuid[]) AND source_fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=ANY(%s::uuid[]) AND error_code='legacy_test_mode_retired')", (legacy_test_tenants,legacy_test_tenants))
+            cur.execute("ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_operating_mode_check")
+            cur.execute("ALTER TABLE saas_ai_agent_settings ADD CONSTRAINT saas_ai_agent_settings_operating_mode_check CHECK(operating_mode IS NULL OR operating_mode IN ('manual','active','simulation'))")
         conn.commit()
         _ready = True

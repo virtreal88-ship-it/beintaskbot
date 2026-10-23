@@ -164,7 +164,7 @@ def agent(data, *, creating=False):
 
 
 def company_settings(data):
-    if not isinstance(data, dict) or set(data) - {'company_instructions', 'enabled', 'auto_send_enabled', 'crm_actions_enabled','native_crm_actions_enabled','max_replies_per_chat','emergency_stop'}:
+    if not isinstance(data, dict) or set(data) - {'company_instructions', 'enabled', 'auto_send_enabled', 'crm_actions_enabled','native_crm_actions_enabled','max_replies_per_chat','emergency_stop','operating_mode','support_case_extraction_enabled'}:
         raise TenantLinearError('AI Agents ayarları düzgün deyil.')
     result = {}
     if 'company_instructions' in data:
@@ -178,6 +178,15 @@ def company_settings(data):
         if not isinstance(data['emergency_stop'], bool):
             raise TenantLinearError('AI Agents ayarları düzgün deyil.')
         result['emergency_stop'] = data['emergency_stop']
+    if 'operating_mode' in data:
+        mode=data['operating_mode']
+        if mode not in {'manual','active','simulation'}:
+            raise TenantLinearError('AI iş rejimi düzgün deyil.')
+        result['operating_mode']=mode
+    if 'support_case_extraction_enabled' in data:
+        if not isinstance(data['support_case_extraction_enabled'],bool):
+            raise TenantLinearError('Case extraction setting is invalid.')
+        result['support_case_extraction_enabled']=data['support_case_extraction_enabled']
     if 'max_replies_per_chat' in data:
         limit = data['max_replies_per_chat']
         if type(limit) is not int or limit not in {20,60,300,500}:

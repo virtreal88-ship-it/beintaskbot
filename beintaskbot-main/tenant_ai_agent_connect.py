@@ -175,7 +175,7 @@ def allowed(job: dict, connection=None) -> bool:
         if connection is None:
             ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT s.enabled,s.emergency_stop,s.auto_send_enabled,t.status
+            cur.execute('''SELECT s.enabled,s.operating_mode,s.emergency_stop,s.auto_send_enabled,t.status
               FROM saas_ai_agent_settings s JOIN saas_tenants t ON t.id=s.tenant_id
               WHERE s.tenant_id=%s::uuid FOR SHARE OF s,t''', (tenant,))
             settings = cur.fetchone() or {}
@@ -197,6 +197,7 @@ def allowed(job: dict, connection=None) -> bool:
             connected = bool(cur.fetchone())
             tenant_active = tenant_status_allows_ai(settings.get('status'), 'connect')
             result = bool(tenant_active and connected and settings.get('enabled') is True
+                          and settings.get('operating_mode') in (None,'active')
                           and settings.get('auto_send_enabled') is True and settings.get('emergency_stop') is not True
                           and runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'))
             from tenant_ai_group_coordination import group_jid, authority, job_allowed
@@ -224,7 +225,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             ensure_schema(conn)
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, 'connect', channel_id, conversation_id)
-            cur.execute('SELECT enabled,auto_send_enabled,emergency_stop FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid', (tenant,))
+            cur.execute('SELECT enabled,operating_mode,auto_send_enabled,emergency_stop FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid', (tenant,))
             settings = cur.fetchone() or {}
             payload = {'message_id': str(message_id or event_id), 'channel_id': str(channel_id),
                        'conversation_id': str(conversation_id), 'text': str(text or '')[:8000],
@@ -261,6 +262,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 return 0
             if not allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel_id,'conversation_id':conversation_id,'lead_id':lead_id,'event_fingerprint':fingerprint}, connection=conn):
                 reason = ('ai_agents_server_disabled' if not runtime_flag('AI_AGENTS_ENABLED') else
+                          'company_mode_not_active' if settings.get('operating_mode') not in (None,'active') else
                           'company_ai_disabled' if settings.get('enabled') is not True else
                           'emergency_stop' if settings.get('emergency_stop') else 'connect_admission_blocked')
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code=%s WHERE tenant_id=%s::uuid AND fingerprint=%s",

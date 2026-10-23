@@ -42,6 +42,12 @@ def candidate(ready):
     return service.analyze(PROFILE,data)['candidates'][0]
 
 
+def confirmed_case(ready):
+    db,generation,data=ready;ticket_id=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,status,completion_outcome,completion_note,created_by) VALUES(%s::uuid,%s::uuid,%s::uuid,'client','manual','resolved','resolved_confirmed','Customer confirmed the fix',11)",(A,ticket_id,CA));db.commit()
+    return db,generation,{**data,'ticket_id':ticket_id}
+
+
 def test_case_customer_and_company_are_read_from_tenant_native_crm(ready):
     db,_,_=ready;value=candidate(ready)
     company=str(uuid.UUID(int=9901));contact=str(uuid.UUID(int=9902))
@@ -146,12 +152,14 @@ def test_boundary_adjustment_requires_owner_or_admin(ready):
 
 
 def test_published_case_boundaries_are_immutable(ready):
+    ready=confirmed_case(ready)
     value=candidate(ready)
     approved=store.mutate(PROFILE,value['id'],{'expected_version':1,'agent_ids':[AGENT]},'approve')['candidate']
     with pytest.raises(TenantLinearError,match='опубликованного кейса'):
         store.mutate(PROFILE,value['id'],{'expected_version':approved['version'],'start_message_id':approved['start_message_id'],'end_message_id':approved['end_message_id']},'boundaries')
 
 def test_private_pending_review_edit_approve_agent_scoped_idempotent(ready):
+    ready=confirmed_case(ready)
     db,generation,data=ready
     before=db.execute('SELECT enabled,mode,scopes,version FROM saas_ai_agents ORDER BY id');db.commit()
     first=service.analyze(PROFILE,data);value=first['candidates'][0]
@@ -253,6 +261,7 @@ def test_revoked_access_during_model_discards_cards_but_charges_usage(ready):
     assert int(db.execute(TOKEN_USAGE_SQL,(A,A))[0]['tokens'])==19
 
 def test_atomic_publication_rollback_foreign_agent(ready):
+    ready=confirmed_case(ready)
     db,generation,data=ready;value=candidate(ready)
     with pytest.raises(TenantLinearError):store.mutate(PROFILE,value['id'],{'expected_version':1,'agent_ids':[AGENT,str(uuid.uuid4())]},'approve')
     assert not db.execute('SELECT id FROM saas_ai_knowledge_sources')
@@ -295,6 +304,7 @@ def test_empty_result_is_valid_and_no_training_or_send_imports(ready):
     assert not any(word in source for word in ('send_ai_reply','requests.post','subprocess','fine_tun'))
 
 def test_approval_publication_is_one_transaction(ready,monkeypatch):
+    ready=confirmed_case(ready)
     db,generation,data=ready;value=candidate(ready);original=store.save_knowledge;count=[0]
     def save(*a,**kw):
         count[0]+=1
@@ -328,6 +338,7 @@ def test_extraction_daily_cap_and_concurrency(ready):
 def test_live_queue_is_idempotent_and_channel_scoped(ready,monkeypatch):
     _enable_live_pilot(monkeypatch)
     db,generation,data=ready
+    db.execute("UPDATE saas_ai_agent_settings SET support_case_extraction_enabled=TRUE,support_case_extraction_started_at='2026-10-20T12:00:00Z' WHERE tenant_id=%s::uuid",(A,));db.commit()
     monkeypatch.setattr(live,'_connect',lambda:db)
     live.create_schema(db)
     first=db.execute("SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))[0]['id']
@@ -362,6 +373,7 @@ def _enable_live_pilot(monkeypatch):
 def test_live_queue_obeys_company_ai_emergency_stop(ready,monkeypatch):
     _enable_live_pilot(monkeypatch)
     db,generation,data=ready
+    db.execute("UPDATE saas_ai_agent_settings SET support_case_extraction_enabled=TRUE,support_case_extraction_started_at='2026-10-20T12:00:00Z' WHERE tenant_id=%s::uuid",(A,));db.commit()
     monkeypatch.setattr(live,'_connect',lambda:db)
     live.create_schema(db)
     message=str(uuid.uuid4())
@@ -378,11 +390,32 @@ def test_live_queue_obeys_company_ai_emergency_stop(ready,monkeypatch):
     assert generation.call_count==0
 
 def test_deactivate_published_source_stops_agent_retrieval(ready):
+    ready=confirmed_case(ready)
     db,generation,data=ready;value=candidate(ready)
     result=store.mutate(PROFILE,value['id'],{'expected_version':1,'agent_ids':[AGENT]},'approve')['candidate']
     assert runs.knowledge_context(A,'Симптомы',agent_id=AGENT)
     agents.save_knowledge(PROFILE,{'active':False},source_id=result['publications'][0]['source_id'])
     assert not runs.knowledge_context(A,'Симптомы',agent_id=AGENT)
+
+def test_candidate_rejected_after_publication_is_excluded_from_retrieval(ready):
+    db,generation,data=ready;value=candidate(ready)
+    source_id=str(uuid.uuid4())
+    db.execute("UPDATE saas_knowledge_candidates SET status='approved',reviewed_by=11,reviewed_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,value['id']))
+    provenance=json.dumps({'candidate_id':value['id'],'approved_by':'11','review_status':'approved'})
+    db.execute("INSERT INTO saas_ai_knowledge_sources(id,tenant_id,agent_id,title,kind,content,active,content_hash,created_by,provenance) VALUES(%s::uuid,%s::uuid,%s::uuid,'Published case','text','Symptoms and verified resolution',TRUE,'case-hash',11,%s::jsonb)",(source_id,A,AGENT,provenance))
+    db.execute("INSERT INTO saas_knowledge_candidate_sources(tenant_id,candidate_id,agent_id,source_id) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid)",(A,value['id'],AGENT,source_id))
+    db.execute("INSERT INTO saas_ai_knowledge_chunks(tenant_id,source_id,chunk_no,content) VALUES(%s::uuid,%s::uuid,0,'Symptoms and verified resolution')",(A,source_id));db.commit()
+    assert runs.knowledge_context(A,'Symptoms',agent_id=AGENT)
+    db.execute("UPDATE saas_knowledge_candidates SET status='rejected',reviewed_by=11,reviewed_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,value['id']));db.commit()
+    assert not runs.knowledge_context(A,'Симптомы',agent_id=AGENT)
+
+def test_approved_case_without_publication_binding_is_excluded_from_retrieval(ready):
+    db,generation,data=ready;value=candidate(ready);source_id=str(uuid.uuid4())
+    db.execute("UPDATE saas_knowledge_candidates SET status='approved',reviewed_by=11,reviewed_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,value['id']))
+    provenance=json.dumps({'candidate_id':value['id'],'approved_by':'11','review_status':'approved'})
+    db.execute("INSERT INTO saas_ai_knowledge_sources(id,tenant_id,agent_id,title,kind,content,active,content_hash,created_by,provenance) VALUES(%s::uuid,%s::uuid,%s::uuid,'Unpublished case','text','Symptoms and unapproved resolution',TRUE,'case-unpublished',11,%s::jsonb)",(source_id,A,AGENT,provenance))
+    db.execute("INSERT INTO saas_ai_knowledge_chunks(tenant_id,source_id,chunk_no,content) VALUES(%s::uuid,%s::uuid,0,'Symptoms and unapproved resolution')",(A,source_id));db.commit()
+    assert not runs.knowledge_context(A,'Symptoms',agent_id=AGENT)
 
 def test_http_origin_identity_scope_and_no_store(monkeypatch):
     import asyncio
@@ -420,6 +453,7 @@ def test_model_cannot_certify_its_own_cause(ready):
 
 
 def test_confirmed_cause_requires_exact_human_source_evidence_and_rechecks_source(ready):
+    ready=confirmed_case(ready)
     db,generation,data=ready;value=candidate(ready)
     evidence={'message_id':value['source_message_ids'][1],'quote':'Проверьте соединение и повторите синхронизацию'}
     edited=store.mutate(PROFILE,value['id'],{'expected_version':1,
