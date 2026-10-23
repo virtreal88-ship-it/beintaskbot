@@ -5,6 +5,7 @@ The existing provider, knowledge, trigger, expert and monetary policies remain
 authoritative. A reserved/unknown call key is never submitted again.
 """
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from tenant_platform import _connect
@@ -33,6 +34,9 @@ def config(cur, profile):
     tenant, actor = _authorize(cur, profile)
     if tenant != PILOT_TENANT:
         raise TenantLinearError('replay_tenant_not_allowed', 403)
+    cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',(tenant,actor))
+    if (cur.fetchone() or {}).get('role')!='owner':
+        raise TenantLinearError('replay_owner_required',403)
     cur.execute('''SELECT a.*,s.enabled AS company_enabled,s.emergency_stop,
       s.company_instructions,s.operating_mode AS company_mode,t.status AS tenant_status,ch.active AS channel_active,
       c.enabled AS simulation_enabled,c.emergency_stop AS simulation_stop,c.channel_ids,
@@ -94,6 +98,7 @@ def source(cur, tenant, message_id):
 def preflight(profile, message_ids):
     if not isinstance(message_ids,list) or len(message_ids)!=5 or len(set(message_ids))!=5:
         raise TenantLinearError('replay_requires_five_distinct_messages',400)
+    message_ids=[str(uuid.UUID(str(value))) for value in message_ids]
     with _connect() as conn:
         with conn.cursor() as cur:
             tenant,_,agent,_,model=config(cur,profile)
@@ -104,6 +109,10 @@ def preflight(profile, message_ids):
               ELSE COALESCE(actual_microusd,reserved_microusd) END),0) AS used
               FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid''',(tenant,))
             used=int(cur.fetchone()['used'])
+            cur.execute('SELECT DISTINCT split_part(call_key,\':\',2) AS source FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key LIKE %s',(tenant,'historical-replay:%'))
+            attempted={row['source'] for row in cur.fetchall()}
+            if len(attempted|set(message_ids))>5:
+                raise TenantLinearError('replay_five_source_limit_reached',409)
     return {'model':model,'price_input_microusd_per_million':price(model)[0],
         'price_output_microusd_per_million':price(model)[1],'cap_microusd':limit_microusd(tenant),
         'used_or_held_microusd':used,'remaining_microusd':max(0,limit_microusd(tenant)-used),
@@ -143,6 +152,10 @@ def _paid(profile, job, agent_version, agent_id, call_key, mode, lines, instruct
                         (tenant,call_key))
             if cur.fetchone():
                 raise TenantLinearError('replay_call_already_attempted_no_automatic_retry',409)
+            cur.execute('SELECT DISTINCT split_part(call_key,\':\',2) AS source FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key LIKE %s',(tenant,'historical-replay:%'))
+            attempted={row['source'] for row in cur.fetchall()}
+            if str(job['source_message_id']) not in attempted and len(attempted)>=5:
+                raise TenantLinearError('replay_five_source_limit_reached',409)
             # A UTF-8 byte bound plus framing overhead, maximum output and the
             # larger text tariff. No images, ASR, tools, fallback or retries.
             bound=len(json.dumps({'mode':mode,'conversation':lines,'manager_draft':'',
@@ -170,6 +183,7 @@ def _paid(profile, job, agent_version, agent_id, call_key, mode, lines, instruct
 
 
 def one(profile,message_id):
+    message_id=str(uuid.UUID(str(message_id)))
     with _connect() as conn:
         with conn.cursor() as cur:
             tenant,_,agent,_,model=config(cur,profile)

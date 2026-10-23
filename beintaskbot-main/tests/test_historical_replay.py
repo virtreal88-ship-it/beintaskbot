@@ -61,6 +61,14 @@ def test_five_replays_share_ledger_and_leave_business_and_queue_unchanged(ready,
     assert db.execute('SELECT mode FROM saas_ai_agents WHERE id=%s::uuid',(AGENT,))[0]['mode']=='manual'
     db.commit()
     with pytest.raises(TenantLinearError,match='already_attempted'):replay.one(PROFILE,ids[0])
+    with pytest.raises(TenantLinearError,match='already_attempted'):replay.one(PROFILE,ids[0].upper())
+    assert len(calls)==5
+    sixth=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type,happened_at)
+      SELECT %s::uuid,tenant_id,kommo_lead_id,%s,channel,direction,body,message_type,clock_timestamp()
+      FROM saas_crm_messages WHERE id=%s::uuid''',(sixth,'connect:'+sixth,ids[0]));db.commit()
+    with pytest.raises(TenantLinearError,match='five_source_limit'):replay.one(PROFILE,sixth)
+    with pytest.raises(TenantLinearError,match='five_source_limit'):replay.preflight(PROFILE,[sixth,*ids[1:]])
     assert len(calls)==5
 
 

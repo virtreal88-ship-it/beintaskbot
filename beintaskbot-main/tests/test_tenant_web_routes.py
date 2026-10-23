@@ -8,6 +8,12 @@ from aiohttp.test_utils import make_mocked_request
 from test_tenant_hot_orders import load, ROOT
 from tenant_notice_transport import TelegramBot
 from tenant_web_assets import ASSETS, register_assets
+from tenant_ai_learning_mcp import routes as learning_routes
+
+MCP_API=(('POST','/mcp/ai-learning'),('GET','/mcp/ai-learning'),
+ ('GET','/.well-known/oauth-protected-resource/mcp/ai-learning'),
+ ('GET','/.well-known/oauth-authorization-server'),('GET','/oauth/authorize'),
+ ('POST','/oauth/authorize'),('POST','/oauth/token'))
 
 EXPECTED_API = (("POST","/api/platform/crm/deals/complete"),("GET","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/chat/send"),("POST","/api/platform/crm/chat/send-file"),("GET","/api/platform/diagnostics"),("GET","/api/platform/crm/chat/history"),("GET","/api/platform/crm/chat/attachment"),("GET","/api/platform/crm/chat/receipts"),("POST","/api/platform/crm/chat/receipts"),("GET","/api/platform/finance"),("POST","/api/platform/finance"),("GET","/api/platform/linear/settings"),("POST","/api/platform/linear/settings"),("GET","/api/platform/linear/tasks"),("POST","/api/platform/linear/tasks"),("GET","/api/platform/news"),("POST","/api/platform/news"),("GET","/api/platform/news/ai"),("POST","/api/platform/news/ai"),("GET","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai/settings"),("GET","/api/platform/chat/ai/models"),("POST","/api/platform/chat/ai/model-probe"),("POST","/api/platform/chat/ai"),("GET","/api/platform/news/telegram/settings"),("POST","/api/platform/news/telegram/settings"),("GET","/api/platform/news/telegram"),("POST","/api/platform/news/telegram"),("GET","/api/platform/news/public/{company}"))
 EXPECTED_API += tuple((method,path) for path,methods in [
@@ -24,6 +30,7 @@ EXPECTED_ASSETS += ['/assets/tenant-members-ui.js','/assets/tenant-members-ui.cs
 AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialogs/read', ('POST',)),
     ('testing/sessions', ('GET','POST')),
+    ('testing/historical-replay', ('GET','POST')),
     ('testing/sessions/{session_id}', ('GET',)), ('testing/sessions/{session_id}/turn', ('POST',)),
     ('testing/sessions/{session_id}/control', ('POST',)),
     ('simulation/settings', ('GET','PATCH')), ('simulation/runs', ('GET',)),
@@ -74,7 +81,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
 ] for method in methods)
 FACTORIES = ('instruction_handler', 'finance_handler', 'linear_handler', 'tasks_handler', 'news_handler',
     'news_telegram_handler', 'chat_ai_handler', 'chat_ai_model_handler', 'chat_send_handler', 'chat_upload_handler',
-    'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler',
+    'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler', 'historical_replay_handler',
     'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'night_report_handler', 'testing_handler', 'simulation_handler', 'ai_state_handler', 'ai_instructor_handler')
 
 
@@ -84,7 +91,7 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         imports = {node.module for node in ast.parse((ROOT/'tenant_web_routes.py').read_text()).body
                    if isinstance(node, ast.ImportFrom) and (node.module or '').startswith('tenant_')}
         self.provider = Mock(return_value=AsyncMock())
-        self.module = load('tenant_web_routes', {**self.factories, 'deal_provider': self.provider,
+        self.module = load('tenant_web_routes', {**self.factories, 'deal_provider': self.provider, 'learning_mcp_routes':learning_routes,
                            'TelegramBot': TelegramBot}, imports)
         self.context = self.module.TenantWebContext(member=Mock(), origin='https://crm.pro.az',
             logger=Mock(), crm_request=AsyncMock(), wait_slot=Mock(), bot=Mock())
@@ -106,6 +113,8 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         expected.add(('POST','/api/platform/ai/knowledge-candidates/{candidate_id}/improve'))
         expected |= {('HEAD', path) for method, path in EXPECTED_API if method == 'GET'}
         expected |= set(AI_API)
+        expected |= set(MCP_API)
+        expected |= {('HEAD',path) for method,path in MCP_API if method=='GET'}
         expected |= {('HEAD', path) for method, path in AI_API if method == 'GET'}
         self.assertEqual(actual, expected)
         for method, path in EXPECTED_API:
@@ -146,6 +155,7 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         self.context.member.assert_not_called()
         self.context.crm_request.assert_not_called()
         self.context.bot.assert_not_called()
+        self.factories['historical_replay_handler'].assert_called_once_with(self.context.member,self.context.origin,self.context.logger)
 
     def test_special_modes_remain_explicit(self):
         self.assertEqual([call.kwargs for call in self.factories['news_handler'].call_args_list],

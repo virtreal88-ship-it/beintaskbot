@@ -1,7 +1,26 @@
 WhatsApp recovery / historical replay — operator runbook
 
-No script is imported by an HTTP handler or a production worker loop. No
-feature flag, agent setting, live queue or CRM mutation is enabled by this PR.
+The CLI and owner-only API explicitly invoke the same one-shot runner. No
+production worker loop imports or starts it. No feature flag, agent setting,
+live queue or CRM mutation is enabled by deployment.
+
+CLI-free administrative transport (existing authenticated /app owner session)
+  GET /api/platform/ai/testing/historical-replay?inventory=1
+  POST /api/platform/ai/testing/historical-replay
+    {"action":"preflight","message_ids":["UUID1","UUID2","UUID3","UUID4","UUID5"]}
+  POST the same route with action="execute" and request_id="NEW-UUID".
+  GET the same route with ?request_id=NEW-UUID to read a partial/final report.
+POST requires exact same Origin and JSON, at most 4096 bytes. No client-supplied
+tenant, actor, model, budget or path is accepted. Only an active company owner
+of the approved pilot tenant may invoke it. Shared financial reservations cap
+all historic calls at five distinct source IDs, including unknown calls, across
+HTTP/CLI and process restarts. UUID casing cannot create a different call key.
+Duplicate requests return saved reports and never retry paid calls. Private
+reports are 0600 server-temporary files: retrieve them before deployment/restart.
+If the HTTP request times out, read its report and ledger; do not start another
+batch. A process restart may lose the file, but never its financial receipts.
+GET has no paid execution path. This endpoint is not added to the read-only
+Learning MCP and does not widen that connector's OAuth scope. There is no UI.
 
 Identity inventory (read-only, existing worker environment only)
   python scripts/audit_whatsapp_recovery.py --actor OWNER_TELEGRAM_ID --output /private/inventory.json
@@ -45,14 +64,21 @@ The private output distinguishes replies, virtual stops and errors. Zero
 answers is never a successful replay. Cancellation is checked between calls;
 an already transmitted provider request cannot be recalled.
 
-Operational dependency: execution needs an authorized shell in the existing
-worker with its credentials in situ. OAuth read-only APIs cannot execute this
-command. Do not build a public database endpoint or a second worker to bypass
-that missing access. No five real responses are claimed by the tests.
+The owner-authenticated route is the alternative when CLI/SSH is unavailable.
+Read-only Railway/Learning MCP tools still cannot invoke paid execution. No
+public database endpoint, new credentials or second worker is introduced.
+No five real responses are claimed by the tests.
 
 Channel retirement requires the compatible Connect release. That DELETE archives
 an already disconnected channel rather than cascade-deleting its history or
 deleting its provider instance. It is not safe to invoke DELETE on older code.
+The existing /api/platform/integrations/connect POST supports the owner-only
+action {"action":"retire_channel","channel_id":"4993eadb-6794-4ffa-90b4-f7062331807a","confirm":true}.
+It is restricted to the approved tenant/old number, verifies the authenticated
+Connect retain_history_v1 capability and confirmed phone, rejects active local
+channels/enabled-agent bindings/unresolved AI work, preserves disabled Nizam
+configuration and every historical row, and audits the retirement. It never
+touches +994102135101. It fails closed until compatible Connect is deployed.
 Existing inactive-channel attachment reads remain tenant/member/route-scoped;
 normal sends and AI media still require an active channel. Historical provider
 media may nevertheless be unavailable after provider expiry; no fake success.

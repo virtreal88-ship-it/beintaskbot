@@ -27,6 +27,7 @@ from tenant_ai_agents_api import handler as ai_agents_handler
 from tenant_knowledge_candidates_api import handler as knowledge_candidates_handler
 from tenant_support_inbox_api import handler as support_handler
 from tenant_ai_testing_api import handler as testing_handler
+from tenant_ai_historical_replay_api import handler as historical_replay_handler
 from tenant_ai_simulation_api import handler as simulation_handler
 from tenant_ai_state_api import handler as ai_state_handler
 from tenant_operator_api import handler as operator_handler
@@ -92,6 +93,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
     member, origin, logger = context.member, context.origin, context.logger
     routes = [
         ('testing/sessions', testing_handler(member, origin, logger, 'sessions'), ('GET','POST')),
+        ('testing/historical-replay', historical_replay_handler(member,origin,logger), ('GET','POST')),
         ('testing/sessions/{session_id}', testing_handler(member, origin, logger, 'session'), ('GET',)),
         ('testing/sessions/{session_id}/turn', testing_handler(member, origin, logger, 'turn'), ('POST',)),
         ('testing/sessions/{session_id}/control', testing_handler(member, origin, logger, 'control'), ('POST',)),

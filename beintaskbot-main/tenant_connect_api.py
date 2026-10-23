@@ -36,6 +36,11 @@ def settings_handler(member_from_request, origin: str, logger):
                     result = await asyncio.to_thread(disconnect, profile)
                 elif data.get('action') == 'disconnect_channel':
                     result = await asyncio.to_thread(disconnect_channel, profile, str(data.get('channel_id') or ''))
+                elif data.get('action') == 'retire_channel':
+                    if set(data)!={'action','channel_id','confirm'}:
+                        raise TenantLinearError('channel_retirement_request_invalid',400)
+                    from tenant_connect_retirement import retire
+                    result=await asyncio.to_thread(retire,profile,str(data.get('channel_id') or ''),confirmed=data['confirm'] is True)
                 elif data.get('action') in {'channel_status', 'reconnect_channel'}:
                     result = await asyncio.to_thread(
                         channel_status, profile, str(data.get('channel_id') or ''),
