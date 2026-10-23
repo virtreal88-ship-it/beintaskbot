@@ -250,9 +250,10 @@ def test_repeated_schema_upgrade_handles_legacy_test_with_not_null_mode(sandbox)
     # compatibility migration has already been recorded by the first startup.
     schema._ready=False
     schema.ensure_schema(sandbox)
-    sandbox.execute("UPDATE saas_ai_agent_settings SET operating_mode='manual' WHERE tenant_id=%s::uuid",(A,))
+    sandbox.execute("UPDATE saas_ai_agent_settings SET operating_mode='active'")
     sandbox.execute("ALTER TABLE saas_ai_agent_settings ALTER COLUMN operating_mode SET NOT NULL")
     sandbox.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_operating_mode_check')
+    sandbox.execute("ALTER TABLE saas_ai_agent_settings ADD CONSTRAINT saas_ai_agent_settings_operating_mode_check CHECK(operating_mode IN ('active','test'))")
     sandbox.execute("UPDATE saas_ai_agent_settings SET operating_mode='test',auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
     sandbox.execute("UPDATE saas_ai_agent_jobs SET state='queued',error_code='' WHERE tenant_id=%s::uuid",(A,))
     sandbox.execute("UPDATE saas_tenant_webhook_events SET state='queued',error_code='' WHERE tenant_id=%s::uuid",(A,))
