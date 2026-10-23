@@ -1,0 +1,78 @@
+"""Existing OAuth grants: bounded company reads, no privilege or secret leaks."""
+import asyncio
+import hashlib
+import json
+import uuid
+
+import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient,TestServer
+
+from test_tenant_support_inbox import A,B,CA,PROFILE,database,db
+from test_ai_learning_mcp import _setup
+import tenant_ai_learning_mcp as mcp
+import tenant_ai_administrator_read as admin
+
+
+def test_existing_connection_company_reads_and_immediate_owner_revocation(db,monkeypatch):
+    token=_setup(monkeypatch,db)
+    async def check():
+        app=web.Application();app.router.add_post('/mcp',mcp.mcp)
+        async with TestClient(TestServer(app)) as client:
+            async def call(name,args={}):
+                return await client.post('/mcp',headers={'Authorization':'Bearer '+token},json={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':name,'arguments':args}})
+            result=await call('channels_read')
+            assert result.status==200
+            payload=json.loads((await result.json())['result']['content'][0]['text'])
+            assert len(payload['items'])==1 and payload['items'][0]['connect_channel_id']==CA
+            denied=await call('channels_read',{'tenant_id':B});assert denied.status==400
+            db.execute("UPDATE saas_tenant_members SET role='operator' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));db.commit()
+            assert (await call('channels_read')).status==403
+    asyncio.run(check())
+
+
+def test_all_read_projections_are_valid_bounded_and_tenant_scoped(db,monkeypatch):
+    _setup(monkeypatch,db)
+    cfg=mcp._require_cfg();cfg['granted_scopes']=[admin.READ_SCOPE,admin.CONTENT_SCOPE]
+    for name in admin.SPECS:
+        with db.cursor() as cur:
+            if name=='system_status_read':
+                assert admin.read(cur,cfg,name,{})['writes_enabled'] is False
+                continue
+            result=admin.read(cur,cfg,name,{'limit':1,'include_content':True})
+            assert len(result['items'])<=1
+            assert B not in json.dumps(result)
+    assert db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n']==2
+
+
+def test_message_content_redacts_secrets_and_preserves_ids(db,monkeypatch):
+    _setup(monkeypatch,db)
+    db.execute("UPDATE saas_crm_messages SET body='password=private sk-abcdefghijklmnopqrst https://private.test/media?token=secret user@example.com +994501234567',raw='{\"api_key\":\"raw-secret\"}'::jsonb WHERE tenant_id=%s::uuid",(A,));db.commit()
+    cfg=mcp._require_cfg();cfg['granted_scopes']=[admin.READ_SCOPE,admin.CONTENT_SCOPE]
+    with db.cursor() as cur:
+        public=admin.read(cur,cfg,'messages_read',{})
+        detailed=admin.read(cur,cfg,'messages_read',{'include_content':True})
+    assert 'body' not in public['items'][0]
+    body=detailed['items'][0]['body']
+    assert all(value not in body for value in ['private','sk-','https://','example.com','994501234567'])
+    assert str(uuid.UUID(detailed['items'][0]['id']))==detailed['items'][0]['id']
+    assert 'raw' not in detailed['items'][0]
+
+
+def test_cursor_is_bound_to_tenant_tool_and_content_policy(db,monkeypatch):
+    _setup(monkeypatch,db)
+    cfg=mcp._require_cfg();cfg['granted_scopes']=[admin.READ_SCOPE,admin.CONTENT_SCOPE]
+    marker=admin._page_key(cfg,'messages_read',{},1)
+    with db.cursor() as cur:
+        for name,args in [('channels_read',{'cursor':marker}),('messages_read',{'cursor':marker,'include_content':True}),('messages_read',{'cursor':marker+'bad'})]:
+            with pytest.raises(Exception):admin.read(cur,cfg,name,args)
+        with pytest.raises(Exception):admin.read(cur,{**cfg,'AI_LEARNING_MCP_TENANT_ID':B},'messages_read',{'cursor':marker})
+    for args in [{'limit':True},{'limit':1000},{'sql':'SELECT 1'},{'include_content':'true'},{'id':1}]:
+        with pytest.raises(Exception):admin.validate(args)
+
+
+def test_read_tool_registry_has_strict_schema_no_write_tools():
+    for tool in admin.definitions():
+        assert tool['inputSchema']['additionalProperties'] is False
+        assert tool['securitySchemes'][0]['scopes']==['ai_learning.read']
+        assert tool['annotations']=={'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False}

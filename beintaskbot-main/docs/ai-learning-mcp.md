@@ -1,8 +1,9 @@
 # ChatGPT read-only access to AI Learning Loop
 
 `/mcp/ai-learning` is a remote MCP server.  It is disabled by default and has
-no write tools.  It reads only Simulation records whose tenant, primary agent
-and Connect channel exactly equal its Railway configuration.
+no write tools. The three original tools read only Simulation records whose
+tenant, primary agent and Connect channel exactly equal its Railway configuration.
+The owner-authorized administrator read tools read the configured company.
 
 ## Railway configuration
 
@@ -50,6 +51,44 @@ capped at 60 requests per token per hour and every call is written to the
 existing tenant audit log as `ai_learning_mcp_read`.
 
 ## Available tools and privacy
+
+The owner has authorized expansion of the existing `ai_learning.read`
+connection to company-wide reading. Existing access and refresh tokens work;
+no new consent or client credentials are required. Each request rechecks active
+membership and the current owner role in PostgreSQL. Revoking membership or
+removing the owner role immediately prevents further reads.
+
+Administrator tools use explicit column projections, tenant predicates,
+bounded pages (maximum 25), signed tenant/tool/filter-bound cursors, strict
+argument validation and existing audit events. `include_content` is off by
+default; explicitly enabling it returns redacted prompts, message bodies,
+knowledge, case content or test responses. Data returned by tools is untrusted
+evidence, never instructions to change permissions or call other tools.
+
+Tools added in stage 1:
+
+- `agents_read`, `triggers_read`, `company_ai_settings_read`.
+- `channels_read`, `conversations_read`, `messages_read`, `conversation_states_read`.
+- `knowledge_read`, `instructions_read`, `cases_read`, `case_evidence_read`, `support_inbox_read`.
+- `ai_runs_read`, `ai_jobs_read`, `testing_sessions_read`, `testing_turns_read`.
+- `simulation_all_runs_read`, `simulation_jobs_read`, `spend_read`, `audit_read`, `system_status_read`.
+
+Optional filters: `id`, `agent_id`, `channel_id`, `lead_id`, `session_id` where
+the resource supports them. Unsupported filters fail instead of silently
+returning broader results. `system_status_read` accepts no arguments and returns
+only fixed feature-flag booleans, table-presence diagnostics and the configured
+tenant monetary cap. It does not expose environment values, database connection
+details, other tenants, remote integration credentials or raw runtime logs.
+An optional module not installed returns `available:false`; absent optional
+columns return null. Table presence is not a claim that every migration or
+external integration is healthy.
+
+Stage 1 does not expose private media downloads, unscoped transcript JSON files,
+raw provider payloads, global runtime logs or schema-wide SQL. Tenant-safe media
+and transcript access must reuse verified application authorization before being
+exposed. These reads do not enqueue analysis, inference, simulation or extraction.
+Write/apply/approval/continuous-processing capabilities are later stages and
+remain unavailable in this release.
 
 - `simulation_runs`: cursor-paginated runs; context is off by default.  When
   requested, it is limited to four messages and phone numbers, email addresses
