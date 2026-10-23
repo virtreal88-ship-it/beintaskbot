@@ -228,6 +228,7 @@ def test_company_mode_retirement_migration_is_safe_and_one_time(sandbox,monkeypa
     monkeypatch.setattr(runs,'platform_model_allowed',lambda _:True)
     lease=uid();sandbox.execute("UPDATE saas_ai_agent_jobs SET state='processing',lease_token=%s::uuid,lease_until=now()+interval '3 minutes'",(lease,))
     sandbox.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS operating_mode TEXT")
+    sandbox.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_operating_mode_check')
     sandbox.execute("UPDATE saas_ai_agent_settings SET operating_mode='test',auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
     sandbox.execute("UPDATE saas_ai_agent_jobs SET state='processing'")
     sandbox.execute("UPDATE saas_tenant_webhook_events SET state='processing'")

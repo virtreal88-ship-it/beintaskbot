@@ -128,7 +128,7 @@ def load_agent_config(job, *, with_block_reason=False):
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''SELECT a.role,a.enabled AS agent_enabled,a.scopes,a.model AS agent_model,a.safety,a.schedule,a.mode,
-              s.enabled AS settings_enabled,s.auto_send_enabled,s.emergency_stop,s.crm_actions_enabled,s.native_crm_actions_enabled,i.metadata,i.secrets,t.status AS tenant_status,cs.state AS conversation_state
+              s.enabled AS settings_enabled,s.operating_mode,s.auto_send_enabled,s.emergency_stop,s.crm_actions_enabled,s.native_crm_actions_enabled,i.metadata,i.secrets,t.status AS tenant_status,cs.state AS conversation_state
               FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
               JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id
               LEFT JOIN saas_tenant_integrations i ON i.tenant_id=j.tenant_id AND i.provider='chat_ai'
@@ -147,6 +147,8 @@ def load_agent_config(job, *, with_block_reason=False):
         reason = 'agent_disabled'
     elif row['settings_enabled'] is not True:
         reason = 'company_ai_disabled'
+    elif row.get('operating_mode') not in (None,'active'):
+        reason = 'company_mode_not_active'
     elif row.get('mode') != 'automatic':
         reason = 'manual_mode_requires_operator_request'
     elif row.get('auto_send_enabled') is not True:
@@ -249,12 +251,22 @@ def knowledge_context(tenant_id, query, *, limit=6, agent_id=None):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('saas_instruction_lessons') IS NOT NULL AS available")
+            instruction_library_available=bool((cur.fetchone() or {}).get('available'))
+            instruction_guard=(" AND (NOT (s.provenance ? 'instruction_id') OR EXISTS(SELECT 1 FROM saas_instruction_lessons l WHERE l.tenant_id=s.tenant_id AND l.id::text=s.provenance->>'instruction_id' AND l.state='published' AND l.published_doc->>'review_status'='approved' AND s.provenance->>'review_status'='approved' AND s.provenance->>'approved_by' IS NOT NULL))" if instruction_library_available else " AND NOT (s.provenance ? 'instruction_id')")
             cur.execute('''SELECT s.id AS source_id,s.title,c.content,
               ts_rank(c.search_vector,plainto_tsquery('simple',%s)) AS rank
               FROM saas_ai_knowledge_chunks c JOIN saas_ai_knowledge_sources s
                 ON s.tenant_id=c.tenant_id AND s.id=c.source_id
-              WHERE c.tenant_id=%s::uuid AND s.active=TRUE AND (s.agent_id IS NULL OR s.agent_id=%s::uuid)
-                AND (c.search_vector @@ plainto_tsquery('simple',%s) OR c.content ILIKE %s)
+               WHERE c.tenant_id=%s::uuid AND s.active=TRUE AND (s.agent_id IS NULL OR s.agent_id=%s::uuid)
+                AND (NOT (s.provenance ? 'candidate_id') OR EXISTS(SELECT 1 FROM saas_knowledge_candidates k
+                  JOIN saas_knowledge_candidate_sources ks ON ks.tenant_id=k.tenant_id AND ks.candidate_id=k.id
+                    AND ks.source_id=s.id AND (ks.agent_id=s.agent_id OR s.agent_id IS NULL)
+                  WHERE k.tenant_id=s.tenant_id AND k.id::text=s.provenance->>'candidate_id'
+                    AND k.status='approved' AND k.reviewed_by IS NOT NULL
+                    AND k.reviewed_by::text=s.provenance->>'approved_by'))
+              ''' + instruction_guard + '''
+              AND (c.search_vector @@ plainto_tsquery('simple',%s) OR c.content ILIKE %s)
               ORDER BY rank DESC,s.updated_at DESC,c.chunk_no LIMIT %s''',
               (query,str(tenant_id),agent_id,query,'%'+query[:120]+'%',max(1,min(int(limit),8))))
             return [{'source_id':str(row['source_id']),'title':str(row['title']),
@@ -276,7 +288,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
             tenant = str(job['tenant_id'])
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('tenant-chat-ai:' + tenant,))
             cur.execute('''SELECT j.*,a.role,a.name,a.instructions,a.enabled AS agent_enabled,a.mode,a.version AS agent_version,a.scopes,a.language,a.style,
-              a.model AS configured_model,a.safety,s.company_instructions,s.enabled AS settings_enabled,s.auto_send_enabled,s.emergency_stop,
+              a.model AS configured_model,a.safety,s.company_instructions,s.enabled AS settings_enabled,s.operating_mode,s.auto_send_enabled,s.emergency_stop,
               s.crm_actions_enabled,s.max_replies_per_chat,s.updated_at AS settings_version,
               cs.state AS conversation_state,cs.revision AS conversation_revision,
               i.secrets,i.metadata,i.updated_at AS config_version,t.status AS tenant_status
@@ -313,7 +325,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
                     raise TenantLinearError('AI təhlükəsizlik ayarlarını yoxlayın.', 503) from None
             api_key, credential_source = choose_api_credential(tenant, job['agent_id'], job.get('provider'), company_key, selected_model)
             use_platform_key = credential_source == 'platform'
-            if (not tenant_status_allows_ai(row['tenant_status'],job.get('provider')) or row['settings_enabled'] is not True or row.get('emergency_stop') is True or row['agent_enabled'] is not True or row.get('role','primary')!='primary'
+            if (not tenant_status_allows_ai(row['tenant_status'],job.get('provider')) or row['settings_enabled'] is not True or row.get('operating_mode') not in (None,'active') or row.get('emergency_stop') is True or row['agent_enabled'] is not True or row.get('role','primary')!='primary'
                     or row.get('mode')=='manual'
                     or row['conversation_state'] in {'human','paused'}
                     or (not use_platform_key and (config.get('enabled') is not True or config.get('consent') is not True or not company_key))):

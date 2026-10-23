@@ -89,6 +89,7 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
               JOIN saas_tenants t ON t.id=i.tenant_id
               JOIN saas_ai_agent_settings cfg ON cfg.tenant_id=i.tenant_id AND cfg.enabled=TRUE
                 AND cfg.auto_send_enabled=TRUE AND cfg.emergency_stop=FALSE
+                AND (cfg.operating_mode IS NULL OR cfg.operating_mode='active')
               WHERE i.provider='kommo' AND i.status='connected' AND i.account_domain=%s
               FOR SHARE OF i,t''', (domain,))
             connections = cur.fetchall()

@@ -4,6 +4,7 @@ import uuid
 import pytest
 from test_tenant_support_inbox import database,db,A,B,CA,CB,AGENT,PROFILE,seed_job
 import tenant_ai_agents_store as agents
+import tenant_ai_agents_schema as agent_schema
 from tenant_linear_policy import TenantLinearError
 
 @pytest.fixture
@@ -33,6 +34,44 @@ def test_template_and_blank_creation_use_safe_existing_api_defaults(creation):
     assert template['schedule']['start']=='19:00' and template['schedule']['end']=='09:00'
     assert blank['schedule']=={}
     assert creation.execute('SELECT * FROM saas_ai_agent_settings')[0]==before
+
+
+def test_company_active_mode_does_not_enable_or_change_agents(creation):
+    before=creation.execute("SELECT enabled,mode FROM saas_ai_agents WHERE tenant_id=%s::uuid",(A,))[0]
+    company_before=creation.execute("SELECT enabled,auto_send_enabled,emergency_stop FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]
+    saved=agents.save_settings(PROFILE,{'operating_mode':'active'})
+    assert saved['operating_mode']=='active'
+    assert creation.execute("SELECT enabled,mode FROM saas_ai_agents WHERE tenant_id=%s::uuid",(A,))[0]==before
+    after=creation.execute("SELECT enabled,auto_send_enabled,emergency_stop FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]
+    assert after==company_before
+
+
+def test_global_simulation_and_case_extraction_gates_are_not_bypassable(creation,monkeypatch):
+    monkeypatch.setattr(agents,'runtime_flag',lambda name:name!='AI_SIMULATION_ENABLED')
+    with pytest.raises(TenantLinearError,match='Simulation'):
+        agents.save_settings(PROFILE,{'operating_mode':'simulation'})
+    monkeypatch.setattr(agents,'_support_case_extraction_runtime_enabled',lambda tenant:False)
+    with pytest.raises(TenantLinearError,match='Dəstək case'):
+        agents.save_settings(PROFILE,{'support_case_extraction_enabled':True})
+    assert creation.execute("SELECT support_case_extraction_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]['support_case_extraction_enabled'] is False
+
+
+def test_legacy_test_mode_is_quarantined_without_deleting_history(creation):
+    creation.execute("UPDATE saas_ai_agent_settings SET operating_mode=NULL,auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
+    creation.execute("UPDATE saas_tenant_webhook_events SET state='queued' WHERE tenant_id=%s::uuid AND fingerprint='evt'",(A,))
+    creation.execute("UPDATE saas_ai_agent_jobs SET state='queued' WHERE tenant_id=%s::uuid AND event_fingerprint='evt'",(A,))
+    creation.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_operating_mode_check')
+    creation.execute("UPDATE saas_ai_agent_settings SET operating_mode='test' WHERE tenant_id=%s::uuid",(A,))
+    creation.commit()
+    agent_schema._ready=False
+    agent_schema.ensure_schema(creation)
+    setting=creation.execute("SELECT operating_mode,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]
+    job=creation.execute("SELECT state,error_code FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint='evt'",(A,))[0]
+    event=creation.execute("SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint='evt'",(A,))[0]
+    assert setting=={'operating_mode':None,'auto_send_enabled':False}
+    assert job=={'state':'skipped','error_code':'legacy_test_mode_retired'}
+    assert event=={'state':'skipped','error_code':'legacy_test_mode_retired'}
+    assert creation.execute("SELECT count(*) AS n FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint='evt'",(A,))[0]['n']==1
 
 
 def test_retry_keys_keep_agent_trigger_and_knowledge_agent_bound(creation):

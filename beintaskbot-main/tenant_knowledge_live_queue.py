@@ -95,7 +95,10 @@ def enqueue(cur, tenant, channel_id, conversation_id, lead_id, message_id, actor
     # refreshed into apparently new work.
     cur.execute("""SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid
       AND kommo_lead_id=%s AND channel=%s AND happened_at >= %s::timestamptz
-      AND direction IN ('incoming','outgoing')""",
+      AND direction IN ('incoming','outgoing') AND EXISTS(
+        SELECT 1 FROM saas_ai_agent_settings s WHERE s.tenant_id=saas_crm_messages.tenant_id
+          AND s.support_case_extraction_enabled=TRUE AND s.support_case_extraction_started_at IS NOT NULL
+          AND saas_crm_messages.happened_at>=s.support_case_extraction_started_at)""",
       (scope['tenant_id'], str(uuid.UUID(str(message_id))), int(lead_id), 'connect:' + scope['channel_id'], scope['start_after']))
     if not cur.fetchone():
         return
@@ -132,6 +135,10 @@ def claim():
                 AND source.happened_at >= %s::timestamptz AND source.direction IN ('incoming','outgoing')
               JOIN saas_tenant_members m ON m.tenant_id=q.tenant_id AND m.active=TRUE
                 AND m.role IN ('owner','admin')
+              JOIN saas_ai_agent_settings extraction ON extraction.tenant_id=q.tenant_id
+                AND extraction.support_case_extraction_enabled=TRUE
+                AND extraction.support_case_extraction_started_at IS NOT NULL
+                AND source.happened_at>=extraction.support_case_extraction_started_at
               JOIN saas_ai_agent_settings s ON s.tenant_id=q.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE
               JOIN saas_tenants t ON t.id=q.tenant_id AND t.status='active'
               WHERE q.tenant_id=%s::uuid AND q.channel_id=%s::uuid AND q.conversation_id=%s
@@ -160,6 +167,15 @@ def require_extraction_enabled(item=None):
     scope = pilot_scope()
     if not scope or (item and not _scope_matches(scope,item['tenant_id'],item['channel_id'],item['conversation_id'],item.get('last_message_at'))):
         raise LiveExtractionDisabled()
+    if item:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT 1 FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid
+                  AND support_case_extraction_enabled=TRUE AND support_case_extraction_started_at IS NOT NULL
+                  AND %s::timestamptz>=support_case_extraction_started_at""",
+                  (item['tenant_id'],item.get('last_message_at')))
+                if not cur.fetchone():
+                    raise LiveExtractionDisabled()
 
 
 def finish(item, extraction_id=None, error_code=''):

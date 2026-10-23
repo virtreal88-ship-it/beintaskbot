@@ -84,6 +84,9 @@ class TenantAiAgentSettingsRuntimeTests(unittest.TestCase):
             'enabled_agents': 1,
             'daily_ai_limit': 50,
             'platform_token_limit': 0,
+            'simulation_runtime_enabled': False,
+            'support_case_extraction_runtime_enabled': False,
+            'support_case_extraction_block_reason': 'server_or_pilot_scope_disabled',
         })
         summary = next(call for call in cursor.calls if 'active_connect_channels' in call[0])
         self.assertEqual(summary[1], (tenant, tenant, tenant, tenant))

@@ -69,6 +69,18 @@ class ConnectAdmissionTests(unittest.TestCase):
                     'conversation_id': 'test-conversation',
                 }))
 
+    def test_company_manual_and_simulation_modes_cannot_enter_active_send_admission(self):
+        for mode in ('manual','simulation','test'):
+            cursor=Cursor({'enabled':True,'operating_mode':mode,'auto_send_enabled':True,
+                           'emergency_stop':False,'status':'active'})
+            with self.subTest(mode=mode), \
+                 patch.object(connect_ai,'_connect',return_value=Connection(cursor)), \
+                 patch.object(connect_ai,'ensure_schema'), \
+                 patch.object(connect_ai,'runtime_flag',return_value=True):
+                self.assertFalse(connect_ai.allowed({
+                    'provider':'connect','tenant_id':'00000000-0000-0000-0000-000000000001',
+                    'channel_id':'00000000-0000-0000-0000-000000000002','conversation_id':'test-conversation'}))
+
     def test_setup_stage_tenants_can_use_connect_but_not_archived_tenants(self):
         for status in ('onboarding', 'ready_for_integration', 'active'):
             cursor = Cursor({'enabled': True, 'auto_send_enabled': True, 'emergency_stop': False,

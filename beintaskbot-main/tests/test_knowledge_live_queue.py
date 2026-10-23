@@ -69,6 +69,7 @@ def test_worker_reuses_stable_receipt_and_only_requests_az(monkeypatch):
     assert args[1]['period_end']=='2026-10-20T12:00:00.000001+00:00'
     assert args[1]['request_id']==live._request_id(item)
     assert live._request_id(item)==live._request_id(dict(item))
+    monkeypatch.setattr(live,'_connect',lambda:Connection())
     assert analyze.call_args.kwargs['before_provider']() is None
     finish.assert_called_once_with(item,args[1]['request_id'],'')
 

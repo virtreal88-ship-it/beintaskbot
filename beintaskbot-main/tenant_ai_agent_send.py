@@ -85,7 +85,7 @@ async def send_agent(job, reservation, text, kommo_request, wait_slot, logger):
         ensure_receipt_schema(conn)
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, 'kommo', '', chat)
-            cur.execute('''SELECT j.state,j.lease_token,j.revision,s.enabled,s.auto_send_enabled,
+            cur.execute('''SELECT j.state,j.lease_token,j.revision,s.enabled,s.operating_mode,s.auto_send_enabled,
                 s.emergency_stop,s.updated_at AS settings_version,a.enabled AS agent_enabled,a.mode AS agent_mode,
                 a.version AS agent_version,t.status AS tenant_status,i.updated_at AS config_version
               FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
@@ -100,7 +100,7 @@ async def send_agent(job, reservation, text, kommo_request, wait_slot, logger):
             if (not current or current['state'] != 'processing' or current['lease_token'] != job['lease_token']
                     or current['revision'] != job['revision'] or not state or state['state'] != 'active'
                     or state['revision'] != reservation.get('conversation_revision')
-                    or current['enabled'] is not True or current['agent_enabled'] is not True
+                    or current['enabled'] is not True or current.get('operating_mode') not in (None,'active') or current['agent_enabled'] is not True
                     or current['emergency_stop'] is True or current['auto_send_enabled'] is not True
                     or current['agent_mode'] != 'automatic' or current['tenant_status'] != 'active'
                     or str(current['settings_version']) != str(reservation.get('settings_version'))
@@ -128,7 +128,7 @@ async def send_agent(job, reservation, text, kommo_request, wait_slot, logger):
         ensure_receipt_schema(conn)
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, 'kommo', '', chat)
-            cur.execute('''SELECT j.state,j.lease_token,j.revision,s.enabled,s.auto_send_enabled,
+            cur.execute('''SELECT j.state,j.lease_token,j.revision,s.enabled,s.operating_mode,s.auto_send_enabled,
                 s.emergency_stop,s.updated_at AS settings_version,a.enabled AS agent_enabled,a.mode AS agent_mode,
                 a.version AS agent_version,t.status AS tenant_status,i.updated_at AS config_version
               FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
@@ -148,7 +148,7 @@ async def send_agent(job, reservation, text, kommo_request, wait_slot, logger):
                 raise _blocked('send_receipt_changed')
             if (not current or current['state'] != 'processing' or current['lease_token'] != job['lease_token']
                     or current['revision'] != job['revision'] or current['enabled'] is not True
-                    or current['agent_enabled'] is not True or current['emergency_stop'] is True
+                    or current['agent_enabled'] is not True or current.get('operating_mode') not in (None,'active') or current['emergency_stop'] is True
                     or current['auto_send_enabled'] is not True or current['agent_mode'] != 'automatic'
                     or current['tenant_status'] != 'active'
                     or str(current['settings_version']) != str(reservation.get('settings_version'))

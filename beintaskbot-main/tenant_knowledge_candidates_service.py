@@ -341,6 +341,15 @@ def analyze(profile,data,*,before_provider=None):
     except (ValueError,TypeError,KeyError): error='invalid_model_result'
     except Exception: pass
     finally:
+        # A company switch may be turned off while the provider is running.
+        # Retain any usage receipt, but do not persist newly generated case
+        # candidates from work that was cancelled mid-flight.
+        if live_enabled is not None:
+            try:
+                check_live_enabled()
+            except LiveExtractionDisabled:
+                values=None
+                error='live_extraction_disabled_after_provider'
         audio_usage=item.get('asr_usage')
         if audio_usage: usage={k:int((usage or {}).get(k) or 0)+int(audio_usage.get(k) or 0) for k in ('input_tokens','output_tokens','total_tokens')}
         for visual_usage in item.get('vision_usage',[]):
