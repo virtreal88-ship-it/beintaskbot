@@ -1,0 +1,21 @@
+name: Codex task handoff
+description: Evidence-bound, tenant-safe task for Codex
+title: "P?: "
+labels: ["codex:ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form creates a durable task only. It cannot authorize a production
+        write. Never enter client messages, secrets, tokens, or passwords.
+  - type: textarea
+    id: contract
+    attributes:
+      label: codex-handoff contract
+      description: Copy the exact JSON contract from docs/codex-issue-handoff.md.
+      value: |
+        <!-- codex-handoff
+        {"schema_version":1,"mode":"read_only","evidence":[""],"tenant_safe_ids":{"tenant_id":""},"severity":"P1","acceptance_criteria":[""],"approval_state":"not_required_read_only","dedupe_key":""}
+        -->
+    validations:
+      required: true

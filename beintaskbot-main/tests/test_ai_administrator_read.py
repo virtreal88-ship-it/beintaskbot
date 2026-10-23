@@ -8,7 +8,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient,TestServer
 
-from test_tenant_support_inbox import A,B,CA,PROFILE,database,db
+from test_tenant_support_inbox import A,B,CA,PROFILE,database,db,seed_simulation
 from test_ai_learning_mcp import _setup
 import tenant_ai_learning_mcp as mcp
 import tenant_ai_administrator_read as admin
@@ -38,6 +38,8 @@ def test_all_read_projections_are_valid_bounded_and_tenant_scoped(db,monkeypatch
         with db.cursor() as cur:
             if name=='system_status_read':
                 assert admin.read(cur,cfg,name,{})['writes_enabled'] is False
+                continue
+            if name=='simulation_queue_diagnostic_read':
                 continue
             result=admin.read(cur,cfg,name,{'limit':1,'include_content':True})
             assert len(result['items'])<=1
@@ -76,3 +78,27 @@ def test_read_tool_registry_has_strict_schema_no_write_tools():
         assert tool['inputSchema']['additionalProperties'] is False
         assert tool['securitySchemes'][0]['scopes']==['ai_learning.read']
         assert tool['annotations']=={'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False}
+
+
+def test_simulation_queue_diagnostic_is_tenant_bound_read_only(db,monkeypatch):
+    source = seed_simulation(db)
+    queue_id = str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_ai_simulation_queue(id,tenant_id,channel_id,conversation_id,lead_id,source_message_id,
+        source_event_id,event_fingerprint,state,attempts) VALUES(%s::uuid,%s::uuid,%s::uuid,'client',41,%s::uuid,
+        'issue-152','issue-152-fingerprint','queued',0)''', (queue_id,A,CA,source))
+    db.execute("UPDATE saas_ai_agent_settings SET operating_mode='simulation' WHERE tenant_id=%s::uuid", (A,))
+    db.commit()
+    monkeypatch.setenv('AI_SIMULATION_ENABLED','true')
+    monkeypatch.setenv('AI_AGENTS_ENABLED','true')
+    _setup(monkeypatch,db)
+    cfg=mcp._require_cfg();cfg['granted_scopes']=[admin.READ_SCOPE,admin.CONTENT_SCOPE]
+    with db.cursor() as cur:
+        item=admin.read(cur,cfg,'simulation_queue_diagnostic_read',{'id':queue_id})
+    assert item['id']==queue_id and item['attempts']==0 and item['read_only'] is True
+    assert item['admission_eligible_now'] is True and item['blockers']==[]
+    db.execute("UPDATE saas_ai_simulation_configs SET enabled=FALSE WHERE tenant_id=%s::uuid",(A,));db.commit()
+    with db.cursor() as cur:
+        stopped=admin.read(cur,cfg,'simulation_queue_diagnostic_read',{'id':queue_id})
+    assert stopped['admission_eligible_now'] is False and 'simulation_disabled' in stopped['blockers']
+    with db.cursor() as cur:
+        with pytest.raises(Exception): admin.read(cur,{**cfg,'AI_LEARNING_MCP_TENANT_ID':B},'simulation_queue_diagnostic_read',{'id':queue_id})
