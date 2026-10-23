@@ -64,6 +64,8 @@ ASSETS = (
     ('/assets/tenant-workflow.js', 'tenant-workflow.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-chakra-ui.js', 'tenant-chakra-ui.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-workspace.js', 'tenant-workspace.js', None),
+    ('/assets/tenant-members-ui.js', 'tenant-members-ui.js', 'no-cache, max-age=0, must-revalidate'),
+    ('/assets/tenant-members-ui.css', 'tenant-members-ui.css', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-hot-order-settings.js', 'tenant-hot-order-settings.js', 'no-store'),
     ('/assets/tenant-hot-orders.js', 'tenant-hot-orders.js', 'no-store'),
     ('/assets/tenant-hot-order-completion.js', 'tenant-hot-order-completion.js', 'no-cache'),

@@ -75,6 +75,7 @@
     en:{employees:['Employees','Invitations, access requests and your team.'],integrations:['Integrations','Manage Connect WhatsApp channels and other company connections.'],companies:['Companies','Manage company names and access.'],workflow:['Work rules','Pipelines, stages, employee permissions and approvals.'],advanced:['Diagnostics','System status and technical checks.'],title:'Advanced settings',description:'Adjust company workflows and technical settings when needed.'}
   };
   const groups = ['employees','integrations','companies','workflow','advanced'];
+  const pageCopy={ru:['Настройки','Управляйте командой, правами и рабочими процессами компании.'],az:['Tənzimləmələr','Komandanı, hüquqları və şirkətin iş qaydalarını idarə edin.'],en:['Settings','Manage your team, access rights and company workflows.']};
   const settingsLanguage=()=>settingsCopy[window.tenantI18n?.language||document.documentElement.lang]||settingsCopy.az;
   let section = 'employees';
   const sections = document.createElement('div'); sections.className = 'settings-sections'; sections.setAttribute('role','tablist');
@@ -98,13 +99,18 @@
   }
   function showSettings() {
     const languageCopy=settingsLanguage();
+    const page=pageCopy[window.tenantI18n?.language||document.documentElement.lang]||pageCopy.az;
+    const heading=settings.querySelector(':scope > .top');
+    if(heading?.querySelector('h1'))heading.querySelector('h1').textContent=page[0];
+    if(heading?.querySelector('p'))heading.querySelector('p').textContent=page[1];
     sections.querySelectorAll('[data-settings-tab]').forEach(button=>{button.textContent=languageCopy[button.dataset.settingsTab][0];});
     advancedTitle.querySelector('h2').textContent=languageCopy.title;advancedTitle.querySelector('p').textContent=languageCopy.description;
     const panels = [...settings.querySelectorAll(':scope > #chakra-settings-root,:scope > #staffManagement,:scope > .panel,:scope > .grid > .panel')].filter(panel => !panel.hasAttribute('data-basic-settings'));
-    const settingsPanels = panels.filter(panel => classify(panel) !== 'external-integration');
+    const staffDenied=panel=>panel.id==='staffManagement'&&panel.dataset.staffAllowed==='false';
+    const settingsPanels = panels.filter(panel => classify(panel) !== 'external-integration'&&!staffDenied(panel));
     const available = groups.find(key => settingsPanels.some(panel => panel.dataset.settingsSection === key || classify(panel) === key));
     if (!settingsPanels.some(panel => (panel.dataset.settingsSection || classify(panel)) === section) && available) section = available;
-    panels.forEach(panel => {panel.dataset.settingsSection = classify(panel);panel.hidden = panel.dataset.settingsSection === 'external-integration' || panel.dataset.settingsSection !== section;});
+    panels.forEach(panel => {panel.dataset.settingsSection = classify(panel);panel.hidden = staffDenied(panel) || panel.dataset.settingsSection === 'external-integration' || panel.dataset.settingsSection !== section;});
     sections.querySelectorAll('button').forEach(button => {
       button.hidden = !settingsPanels.some(panel => panel.dataset.settingsSection === button.dataset.settingsTab);
       button.setAttribute('aria-selected',String(button.dataset.settingsTab === section));
