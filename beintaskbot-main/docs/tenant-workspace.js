@@ -85,7 +85,10 @@
   const settingsAnchor = settings.querySelector(':scope > .top');
   settingsAnchor.after(advancedTitle,sections,help);
   function classify(panel) {
-    if (panel.id === 'chakra-settings-root' || panel.id === 'staffManagement') return 'employees';
+    // The member manager is the only employee editor.  Chakra keeps personal
+    // account, notification and session preferences under Diagnostics.
+    if (panel.id === 'staffManagement') return 'employees';
+    if (panel.id === 'chakra-settings-root') return 'advanced';
     if (panel.id === 'connectWhatsAppSettings') return 'integrations';
     if (panel.id === 'companyManagement') return 'companies';
     if (['tenantLinearPanel','tcAiPanel','tnAiPanel','tnChannelPanel'].includes(panel.id)) return 'external-integration';
@@ -100,7 +103,7 @@
     const panels = [...settings.querySelectorAll(':scope > #chakra-settings-root,:scope > #staffManagement,:scope > .panel,:scope > .grid > .panel')].filter(panel => !panel.hasAttribute('data-basic-settings'));
     const settingsPanels = panels.filter(panel => classify(panel) !== 'external-integration');
     const available = groups.find(key => settingsPanels.some(panel => panel.dataset.settingsSection === key || classify(panel) === key));
-    if (!settingsPanels.some(panel => (panel.dataset.settingsSection || classify(panel)) === section) && available) section = available[0];
+    if (!settingsPanels.some(panel => (panel.dataset.settingsSection || classify(panel)) === section) && available) section = available;
     panels.forEach(panel => {panel.dataset.settingsSection = classify(panel);panel.hidden = panel.dataset.settingsSection === 'external-integration' || panel.dataset.settingsSection !== section;});
     sections.querySelectorAll('button').forEach(button => {
       button.hidden = !settingsPanels.some(panel => panel.dataset.settingsSection === button.dataset.settingsTab);
@@ -145,6 +148,7 @@
   const observer = new MutationObserver(showSettings);
   observer.observe(settings,{childList:true}); observer.observe(settings.querySelector('.grid'),{childList:true});
   document.addEventListener('tenant-profile', e => {catalog=e.detail.capabilities?.deal_board || [];updateIcons();showSettings();refresh();});
+  document.addEventListener('tenant-staff-management-ready', () => { section='employees';showSettings(); });
   document.addEventListener('tenant-language',showSettings);
   const integrationRepository = document.createElement('div');
   integrationRepository.id = 'integrationSettingsRepository';

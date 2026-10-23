@@ -19,9 +19,11 @@ const settle=async()=>{for(let i=0;i<10;i++)await new Promise(resolve=>setImmedi
  assert.notEqual(tabs.closest('#supportPilotModal'),d.getElementById('supportPilotModal'),'tabs do not render in the hidden pilot modal');
  const workflow=d.createElement('article');workflow.id='workflowPanel';workflow.className='panel';settings.append(workflow);
  const advanced=d.createElement('article');advanced.className='panel';settings.append(advanced);
+ const staff=d.createElement('section');staff.id='staffManagement';settings.append(staff);
  await settle();
  assert.deepEqual([...tabs.querySelectorAll('[role=tab]')].map(button=>button.textContent),['Сотрудники','Интеграции','Компании','Правила работы','Диагностика']);
- assert.equal([...tabs.querySelectorAll('[role=tab]')].filter(button=>!button.hidden).length,5);
+ assert.equal([...tabs.querySelectorAll('[role=tab]')].filter(button=>!button.hidden).length,4,'only sections with a mounted panel are shown');
+ assert.equal(tabs.querySelector('[data-settings-tab=employees]').hidden,false,'the mounted staff manager activates the Employees section');
  w.tenantI18n.language='az';d.dispatchEvent(new w.CustomEvent('tenant-language',{detail:{language:'az'}}));
  assert.deepEqual([...tabs.querySelectorAll('[role=tab]')].map(button=>button.textContent),['Əməkdaşlar','İnteqrasiyalar','Şirkətlər','İş qaydaları','Diaqnostika']);
  w.tenantI18n.language='en';d.dispatchEvent(new w.CustomEvent('tenant-language',{detail:{language:'en'}}));
