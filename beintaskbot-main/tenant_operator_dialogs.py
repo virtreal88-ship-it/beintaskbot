@@ -368,6 +368,54 @@ def apply_group_view(cur,tenant,dialog):
     return dialog
 
 
+def _unread_counts(cur,tenant,telegram_id,rows):
+    """Initialize per-route read cursors from the first visible snapshot, then count later inbound messages."""
+    routes=[]
+    for row in rows:
+        try:
+            route=(str(row.get('provider') or ''),str(row.get('channel_id') or ''),
+                   str(row.get('conversation_id') or ''),int(row.get('lead_id')))
+            if route[0] not in {'connect','kommo'}:continue
+            message_id=row.get('last_message_id')
+            if message_id:
+                try:message_id=str(uuid.UUID(str(message_id)))
+                except (ValueError,TypeError,AttributeError):message_id=None
+            routes.append(route)
+        except (TypeError,ValueError):
+            continue
+    if not routes:return 0
+    routes=list({tuple(route[:4]):route for route in routes}.values())
+    cur.execute('''WITH routes(provider,channel_id,conversation_id,lead_id) AS (
+        SELECT * FROM unnest(%s::text[],%s::text[],%s::text[],%s::bigint[]))
+      INSERT INTO saas_operator_dialog_reads(tenant_id,telegram_id,provider,channel_id,conversation_id,lead_id,last_read_at,last_read_message_id)
+      SELECT %s::uuid,%s,r.provider,r.channel_id,r.conversation_id,r.lead_id,
+          GREATEST(COALESCE((SELECT max(m.created_at) FROM saas_crm_messages m WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=r.lead_id
+            AND m.channel=CASE WHEN r.provider='connect' THEN 'connect:'||r.channel_id ELSE r.channel_id END),'-infinity'::timestamptz),clock_timestamp()),NULL FROM routes r
+      ON CONFLICT(tenant_id,telegram_id,provider,channel_id,conversation_id,lead_id) DO NOTHING''',
+      ([r[0] for r in routes],[r[1] for r in routes],[r[2] for r in routes],[r[3] for r in routes],tenant,telegram_id,tenant))
+    cur.execute('''WITH routes(provider,channel_id,conversation_id,lead_id) AS (
+        SELECT * FROM unnest(%s::text[],%s::text[],%s::text[],%s::bigint[])), counts AS (
+        SELECT r.provider,r.channel_id,r.conversation_id,r.lead_id,count(m.id)::int AS unread_count
+        FROM routes r JOIN saas_operator_dialog_reads rc ON rc.tenant_id=%s::uuid AND rc.telegram_id=%s
+          AND rc.provider=r.provider AND rc.channel_id=r.channel_id AND rc.conversation_id=r.conversation_id AND rc.lead_id=r.lead_id
+        LEFT JOIN saas_crm_messages m ON m.tenant_id=%s::uuid AND m.kommo_lead_id=r.lead_id
+          AND m.channel=CASE WHEN r.provider='connect' THEN 'connect:'||r.channel_id ELSE r.channel_id END
+          AND m.direction='incoming'
+          AND (m.created_at,m.id)>(rc.last_read_at,COALESCE(rc.last_read_message_id,'00000000-0000-0000-0000-000000000000'::uuid))
+        GROUP BY r.provider,r.channel_id,r.conversation_id,r.lead_id)
+      SELECT provider,channel_id,conversation_id,lead_id,unread_count FROM counts''',
+      ([r[0] for r in routes],[r[1] for r in routes],[r[2] for r in routes],[r[3] for r in routes],tenant,telegram_id,tenant))
+    counts={}
+    for item in cur.fetchall():
+        key=(str(item['provider']),str(item['channel_id']),str(item['conversation_id']),int(item['lead_id']))
+        counts[key]=int(item['unread_count'] or 0)
+    for row in rows:
+        try:key=(str(row.get('provider') or ''),str(row.get('channel_id') or ''),str(row.get('conversation_id') or ''),int(row.get('lead_id')))
+        except (TypeError,ValueError):continue
+        row['unread_count']=counts.get(key,0)
+    return sum(counts.values())
+
+
 def listing(profile,search='',channel='',agent='',state='',offset=0):
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
@@ -384,10 +432,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
             channels=[dict(r) for r in cur.fetchall()]
             cur.execute(sql+'SELECT DISTINCT agent_id::text AS id,agent_name AS name FROM visible WHERE agent_id IS NOT NULL ORDER BY name',params)
             agents=[dict(r) for r in cur.fetchall()]
-            where,args=[],[]
-            if search:where.append("concat_ws(' ',customer_name,phone,conversation_id) ILIKE %s");args.append('%'+str(search)[:200]+'%')
-            if channel:where.append("provider||':'||channel_id=%s");args.append(str(channel)[:250])
-            cur.execute(sql+"SELECT * FROM (SELECT visible.*,row_number() OVER(PARTITION BY CASE WHEN provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$' THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END ORDER BY last_message_at DESC NULLS LAST,lead_id) AS logical_rank FROM visible"+(' WHERE '+' AND '.join(where) if where else '')+') folded WHERE logical_rank=1 ORDER BY last_message_at DESC NULLS LAST,provider,lead_id',(*params,*args))
+            cur.execute(sql+"SELECT * FROM (SELECT visible.*,row_number() OVER(PARTITION BY CASE WHEN provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$' THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END ORDER BY last_message_at DESC NULLS LAST,lead_id) AS logical_rank FROM visible) folded WHERE logical_rank=1 ORDER BY last_message_at DESC NULLS LAST,provider,lead_id",params)
             rows=cur.fetchall()
             from tenant_ai_group_coordination import group_jid,view as group_view
             rows=[decorate(r) for r in rows]
@@ -411,6 +456,11 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
                     r['agent_status']='needs_assignment' if r['agent_assignment'].get('agents') else 'no_agent'
                     r['agent_status_reason']=('assignment_required' if len(r['agent_assignment'].get('agents') or [])==1 else
                       'agent_selection_required' if len(r['agent_assignment'].get('agents') or [])>1 else r['agent_assignment'].get('reason') or '')
+            unread_total=_unread_counts(cur,tenant,int(profile['telegram_id']),rows)
+            if search:
+                query_text='%'+str(search)[:200]+'%'
+                rows=[r for r in rows if any(query_text[1:-1].casefold() in str(r.get(key) or '').casefold() for key in ('customer_name','phone','conversation_id'))]
+            if channel:rows=[r for r in rows if str(r.get('provider') or '')+':'+str(r.get('channel_id') or '')==str(channel)[:250]]
             for r in rows:
                 if r.get('agent_id') and r.get('agent_name') and not any(str(a.get('id'))==str(r['agent_id']) for a in agents):
                     agents.append({'id':str(r['agent_id']),'name':r['agent_name']})
@@ -423,8 +473,39 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
             total_count=len(rows)
             rows=rows[offset:offset+51]
     return {'dialogs':rows[:50],'channels':channels,'agents':agents,
-            'attention_count':count,'total_count':total_count,
+            'attention_count':count,'unread_count':unread_total,'total_count':total_count,
             'next_offset':offset+50 if len(rows)>50 else None}
+
+
+def mark_read(profile,payload):
+    """Advance one authorized dialogue cursor through a message actually stored on that route."""
+    if not isinstance(payload,dict):raise TenantLinearError('Некорректный запрос.')
+    provider=str(payload.get('provider') or '')
+    if provider not in {'connect','kommo'}:raise TenantLinearError('Некорректный канал.')
+    message_id=identifier(payload.get('message_id'))
+    lead_id=int(payload.get('lead_id'))
+    channel=str(payload.get('channel_id') or '')[:250]
+    conversation=str(payload.get('conversation_id') or '')[:250]
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant,_,policy=access(cur,profile,'dialogs')
+            route=assert_route(cur,tenant,policy,provider,conversation,channel,lead_id)
+            channel=str(route.get('connect_channel_id') or channel) if provider=='connect' else channel
+            history_channel='connect:'+channel if provider=='connect' else str(route.get('history_channel') or channel)
+            cur.execute('''SELECT id,created_at AS at FROM saas_crm_messages
+              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid
+                AND direction IN ('incoming','outgoing')''',(tenant,lead_id,history_channel,message_id))
+            message=cur.fetchone()
+            if not message:raise TenantLinearError('Сообщение не найдено в этом диалоге.',404)
+            cur.execute('''INSERT INTO saas_operator_dialog_reads(tenant_id,telegram_id,provider,channel_id,conversation_id,lead_id,last_read_at,last_read_message_id,updated_at)
+              VALUES(%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,clock_timestamp())
+              ON CONFLICT(tenant_id,telegram_id,provider,channel_id,conversation_id,lead_id) DO UPDATE SET
+                last_read_at=EXCLUDED.last_read_at,last_read_message_id=EXCLUDED.last_read_message_id,updated_at=clock_timestamp()
+              WHERE (EXCLUDED.last_read_at,COALESCE(EXCLUDED.last_read_message_id,'00000000-0000-0000-0000-000000000000'::uuid))>
+                    (saas_operator_dialog_reads.last_read_at,COALESCE(saas_operator_dialog_reads.last_read_message_id,'00000000-0000-0000-0000-000000000000'::uuid))''',
+              (tenant,int(profile['telegram_id']),provider,channel,conversation,lead_id,message['at'],str(message['id'])))
+    return {'read_through_message_id':str(message_id),'updated':True}
 
 
 def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None):

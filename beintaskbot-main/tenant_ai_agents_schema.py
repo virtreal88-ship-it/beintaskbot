@@ -224,6 +224,20 @@ def ensure_schema(conn):
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(tenant_id,provider,conversation_id),
               FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE)''')
             cur.execute("ALTER TABLE saas_ai_conversation_state ADD COLUMN IF NOT EXISTS first_inbound_message_id TEXT NOT NULL DEFAULT ''")
+            # Per-employee, per-route read cursor for the operator inbox. Existing
+            # messages are initialized at the latest message seen in the listing;
+            # only messages arriving after that snapshot are counted as unread.
+            cur.execute('''CREATE TABLE IF NOT EXISTS saas_operator_dialog_reads(
+              tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+              telegram_id BIGINT NOT NULL,
+              provider TEXT NOT NULL CHECK(provider IN ('connect','kommo')),
+              channel_id TEXT NOT NULL DEFAULT '',conversation_id TEXT NOT NULL DEFAULT '',lead_id BIGINT NOT NULL,
+              last_read_at TIMESTAMPTZ NOT NULL,last_read_message_id UUID NULL,
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              PRIMARY KEY(tenant_id,telegram_id,provider,channel_id,conversation_id,lead_id),
+              FOREIGN KEY(tenant_id,telegram_id) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE CASCADE)''')
+            cur.execute('''CREATE INDEX IF NOT EXISTS saas_operator_dialog_reads_member_idx
+              ON saas_operator_dialog_reads(tenant_id,telegram_id,updated_at DESC)''')
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_agent_action_runs(
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
               id UUID NOT NULL,agent_id UUID NOT NULL,event_fingerprint TEXT NOT NULL,action_key TEXT NOT NULL,
