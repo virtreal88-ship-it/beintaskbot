@@ -32,7 +32,8 @@ def config(cur,tenant,agent):
     cur.execute('''SELECT a.*,s.enabled AS company_enabled,s.emergency_stop,s.company_instructions,s.max_replies_per_chat,
       s.updated_at AS settings_version,i.metadata,i.secrets,i.updated_at AS config_version FROM saas_ai_agents a
       JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id LEFT JOIN saas_tenant_integrations i
-      ON i.tenant_id=a.tenant_id AND i.provider='chat_ai' WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid FOR SHARE OF a,s''',(tenant,agent))
+      ON i.tenant_id=a.tenant_id AND i.provider='chat_ai' WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid
+      AND a.archived_at IS NULL FOR SHARE OF a,s''',(tenant,agent))
     row=cur.fetchone()
     if not row:raise TenantLinearError('Агент или настройки компании недоступны.',404)
     return dict(row)

@@ -99,7 +99,7 @@ def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
                 return result(0, 'company_settings_unavailable')
             tenant = str(connections[0]['tenant_id'])
             cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.mode,a.schedule FROM saas_ai_agents a
-              WHERE a.role='primary' AND a.tenant_id=%s::uuid AND a.enabled=TRUE ORDER BY a.created_at,a.id''', (tenant,))
+              WHERE a.role='primary' AND a.tenant_id=%s::uuid AND a.archived_at IS NULL AND a.enabled=TRUE ORDER BY a.created_at,a.id''', (tenant,))
             agents = cur.fetchall()
             # Customer messages reach the worker only when the company owner
             # and server permit auto-send; Manual agents stay staff-initiated.
