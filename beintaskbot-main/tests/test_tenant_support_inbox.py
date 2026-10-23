@@ -22,6 +22,7 @@ import tenant_support_inbox_summary as summary
 import tenant_ai_simulation_schema as simulation_schema
 import tenant_ai_simulation_engine as simulation
 import tenant_ai_dashboard as ai_dashboard
+import tenant_ai_spend_budget as spend_budget
 from tenant_linear_policy import TenantLinearError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -92,6 +93,9 @@ def database():
 
 @pytest.fixture
 def db(database,monkeypatch):
+    # This additive monetary ledger intentionally has no destructive production
+    # cleanup path; isolate each PGlite fixture explicitly.
+    database.execute('TRUNCATE saas_ai_spend_reservations');database.commit()
     database.execute('TRUNCATE saas_tenants CASCADE');database.commit()
     for module in (store,summary,actions,connect_ai,agents,run_store,simulation,ai_dashboard):monkeypatch.setattr(module,'_connect',lambda:database)
     for tenant,user,channel,lead in ((A,11,CA,41),(B,22,CB,42)):
@@ -540,8 +544,10 @@ def test_simulation_recovers_only_work_interrupted_before_provider(db,monkeypatc
     assert recovered['provider_started_at'] is None
 
 
-def test_simulation_revalidates_agent_mode_before_provider_call(db,monkeypatch):
+def test_simulation_accepts_manual_primary_without_changing_real_mode(db,monkeypatch):
     source=seed_simulation(db)
+    _enable_spend_budget(db, monkeypatch)
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION', json.dumps({'test-model': {'input': 1_000_000, 'output': 2_000_000}}))
     monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
     assert queue_simulation(db,source=source)
     monkeypatch.setattr(actions,'enabled_triggers',lambda *_: [])
@@ -550,12 +556,13 @@ def test_simulation_revalidates_agent_mode_before_provider_call(db,monkeypatch):
         db.execute("UPDATE saas_ai_agents SET mode='manual' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));db.commit()
         return 'mock-key','test-model','company',{}
     monkeypatch.setattr(simulation,'_provider_credentials',credentials)
-    monkeypatch.setattr('tenant_chat_ai_provider.generate',lambda *_a,**_k: pytest.fail('Revoked agent reached provider'))
+    monkeypatch.setattr('tenant_chat_ai_provider.generate',lambda *_a,**_k: ('Virtual draft',{'total_tokens':7}))
     job=simulation.claim_next()
     assert simulation.process(job)
     run=simulation.list_runs(PROFILE)[0]
-    assert run['outcome']=='blocked' and run['virtual_stop_reason']=='simulation_stopped_before_provider'
-    assert db.execute("SELECT count(*) AS n FROM saas_ai_simulation_usage WHERE state IN ('reserved','unknown','succeeded')")[0]['n']==0
+    assert run['outcome']=='virtual_reply' and run['sent'] is False
+    assert db.execute("SELECT mode FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]['mode']=='manual'
+    assert db.execute("SELECT kind,state FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid",(A,))[0] == {'kind':'simulation_primary','state':'settled'}
 
 
 def test_simulation_executor_records_virtual_reply_and_has_no_live_effects(db,monkeypatch):
@@ -664,6 +671,9 @@ def test_simulation_executor_blocks_ambiguous_primary_before_provider(db,monkeyp
 
 def test_simulation_enable_requires_explicit_start_confirmation(db,monkeypatch):
     seed_simulation(db,enabled=False)
+    # A Simulation run is virtual: the primary remains Manual for real
+    # conversations and does not acquire an Active-mode send capability.
+    db.execute("UPDATE saas_ai_agents SET mode='manual' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));db.commit()
     db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT DO NOTHING",(A,));db.commit()
     monkeypatch.setattr(simulation,'runtime_flag',lambda name: name in {'AI_SIMULATION_ENABLED','AI_AGENTS_ENABLED'})
     base={'enabled':True,'agent_id':AGENT,'channel_ids':[CA],'conversation_ids':[],
@@ -674,6 +684,7 @@ def test_simulation_enable_requires_explicit_start_confirmation(db,monkeypatch):
     saved=simulation.save_config(PROFILE,{**base,'confirm_start':True})
     assert saved['enabled'] is True and saved['starts_at']
     assert saved['runtime_enabled'] is True
+    assert db.execute("SELECT mode FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]['mode']=='manual'
     foreign=simulation.read_config({'tenant_id':B,'telegram_id':22})
     assert foreign['enabled'] is False and foreign['agent_id'] is None and foreign['channel_ids']==[]
 
@@ -865,3 +876,62 @@ def test_ai_dashboard_recheck_is_tenant_scoped_and_idempotent(db,monkeypatch):
     assert db.execute("SELECT count(*) AS n FROM saas_ai_simulation_queue WHERE tenant_id=%s::uuid AND recheck_of_run_id=%s::uuid",(A,run_id))[0]['n']==1
     foreign={**PROFILE,'tenant_id':B,'telegram_id':22}
     with pytest.raises(TenantLinearError): ai_dashboard.enqueue_recheck(foreign,run_id,'other-tenant')
+
+
+
+def _enable_spend_budget(db, monkeypatch, cap=5_000_000):
+    monkeypatch.setattr(spend_budget, '_connect', lambda: db)
+    monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD', json.dumps({A: cap, B: cap}))
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION', json.dumps({
+        'priced-model': {'input': 1_000_000, 'output': 2_000_000},
+    }))
+    spend_budget.ensure_schema(db)
+    db.commit()
+
+
+def test_shared_spend_reservation_is_atomic_idempotent_and_tenant_scoped(db, monkeypatch):
+    _enable_spend_budget(db, monkeypatch)
+    with db.cursor() as cur:
+        one = spend_budget.reserve(cur, A, 'simulation:one', 'simulation_primary', 'priced-model', 1_000_000, 1_000_000)
+        assert one
+        # Retries for the same webhook/call key neither consume nor reserve twice.
+        assert spend_budget.reserve(cur, A, 'simulation:one', 'simulation_primary', 'priced-model', 1_000_000, 1_000_000) == one
+    db.commit()
+    with db.cursor() as cur:
+        with pytest.raises(TenantLinearError) as exhausted:
+            spend_budget.reserve(cur, A, 'expert:two', 'expert', 'priced-model', 1_000_000, 1_000_000)
+        assert exhausted.value.status == 429
+        # A different tenant receives its own cap, never A's reservation.
+        assert spend_budget.reserve(cur, B, 'expert:two', 'expert', 'priced-model', 1_000_000, 1_000_000)
+    db.commit()
+    spend_budget.settle(A, 'simulation:one', {'input_tokens': 100, 'output_tokens': 100, 'total_tokens': 200})
+    with db.cursor() as cur:
+        assert spend_budget.reserve(cur, A, 'extraction:three', 'live_case_extraction', 'priced-model', 1_000_000, 1_000_000)
+    db.commit()
+
+
+def test_shared_spend_budget_fails_closed_and_retains_unknown_provider_result(db, monkeypatch):
+    _enable_spend_budget(db, monkeypatch)
+    with db.cursor() as cur:
+        with pytest.raises(TenantLinearError) as unknown_price:
+            spend_budget.reserve(cur, A, 'active:missing-price', 'active_primary', 'unpriced-model', 1, 1)
+        assert unknown_price.value.status == 409
+        spend_budget.reserve(cur, A, 'active:ambiguous', 'active_primary', 'priced-model', 1_000_000, 1_000_000)
+    db.commit()
+    spend_budget.settle(A, 'active:ambiguous', {}, unknown=True)
+    row = db.execute("SELECT state,reserved_microusd,actual_microusd FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key='active:ambiguous'", (A,))[0]
+    assert row['state'] == 'unknown' and row['actual_microusd'] is None and row['reserved_microusd'] == 3_000_000
+    with db.cursor() as cur:
+        with pytest.raises(TenantLinearError):
+            spend_budget.reserve(cur, A, 'simulation:cannot-fit', 'simulation_primary', 'priced-model', 1_000_000, 1_000_000)
+
+
+def test_shared_spend_budget_rejects_provider_usage_above_preflight_upper_bound(db, monkeypatch):
+    _enable_spend_budget(db, monkeypatch)
+    with db.cursor() as cur:
+        spend_budget.reserve(cur, A, 'expert:bounded', 'expert', 'priced-model', 10, 10)
+    db.commit()
+    # A later receipt beyond the preflight cap is ambiguous: retain, don't undercharge.
+    spend_budget.settle(A, 'expert:bounded', {'input_tokens': 100, 'output_tokens': 100, 'total_tokens': 200})
+    row = db.execute("SELECT state FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key='expert:bounded'", (A,))[0]
+    assert row['state'] == 'unknown'

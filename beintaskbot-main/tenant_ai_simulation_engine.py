@@ -208,8 +208,12 @@ def save_config(profile, data):
                             (tenant,agent_id))
                 agent = cur.fetchone()
                 from tenant_ai_agent_connect import scope_matches
-                if not agent or agent.get('enabled') is not True or agent.get('role') != 'primary' or agent.get('mode') != 'automatic':
-                    raise TenantLinearError('Simulation üçün aktiv Automatic Primary tələb olunur.',409)
+                # Simulation has its own isolated executor.  A Manual primary
+                # may therefore be evaluated virtually without changing the
+                # production agent's mode or admitting an Active send.
+                if (not agent or agent.get('enabled') is not True or agent.get('role') != 'primary'
+                        or agent.get('mode') not in {'automatic','manual'}):
+                    raise TenantLinearError('Simulation üçün aktiv Primary tələb olunur.',409)
                 if any(not scope_matches(agent.get('scopes'), channel) for channel in channels):
                     raise TenantLinearError('Seçilmiş Primary bütün kanallar üçün icazəli deyil.',409)
                 # Verify every selected channel, not merely at least one.
@@ -457,8 +461,11 @@ def _mark_provider_started(cur,job,call_no):
         cur.execute("SELECT id,enabled,role,mode,scopes,schedule,expert_policy FROM saas_ai_agents WHERE tenant_id=%s::uuid AND role='primary' ORDER BY created_at,id FOR SHARE",(job['tenant_id'],))
         primaries=[dict(item) for item in cur.fetchall()]
         primary,_reason=unique_connect_candidate(primaries,str(job['channel_id']),is_group=is_group)
+        # This is the last fence before a Simulation provider call.  Manual is
+        # safe here because the executor is virtual and has no send/CRM/handoff
+        # imports; it must never relax the Active worker's automatic-only gate.
         valid=bool(primary and str(primary['id'])==str(row.get('configured_agent'))
-          and primary.get('mode')=='automatic' and is_open(primary.get('schedule') or {}))
+          and primary.get('mode') in {'automatic','manual'} and is_open(primary.get('schedule') or {}))
         if valid and row.get('call_kind')=='primary':
             valid=str(row.get('call_agent'))==str(primary['id'])
         elif valid and row.get('call_kind')=='expert':
@@ -575,7 +582,12 @@ def _safe_expert(cur, job, primary, trigger, problem, lines, primary_advisory, c
     if not _adjust_reservation(cur,job,call_no,expert_reservation):
         cur.execute("UPDATE saas_ai_simulation_usage SET state='released',actual_tokens=0,completed_at=now() WHERE tenant_id=%s::uuid AND queue_id=%s::uuid AND call_no=%s AND state='reserved'",(job['tenant_id'],job['id'],call_no))
         return None,'simulation_budget_exhausted',call_no
+    from tenant_ai_spend_budget import reserve as reserve_spend, release as release_spend, settle as settle_spend
+    spend_key='simulation:'+str(job['id'])+':'+str(call_no)
+    reserve_spend(cur,job['tenant_id'],spend_key,'simulation_expert',model,total_upper=expert_reservation)
     if not _mark_provider_started(cur,job,call_no):
+        cur.connection.commit()
+        release_spend(job['tenant_id'],spend_key)
         return None,'simulation_stopped_before_provider',call_no
     cur.connection.commit()
     try:
@@ -584,13 +596,18 @@ def _safe_expert(cur, job, primary, trigger, problem, lines, primary_advisory, c
     except Exception:
         cur.execute("UPDATE saas_ai_simulation_usage SET state='unknown',actual_tokens=reserved_tokens,completed_at=now() WHERE tenant_id=%s::uuid AND queue_id=%s::uuid AND call_no=%s AND state='reserved'",(job['tenant_id'],job['id'],call_no))
         cur.connection.commit()
+        settle_spend(job['tenant_id'],spend_key,{},unknown=True)
         raise
     total=max(0,int(usage.get('total_tokens') or 0))
     try: result=validate_result(json.loads(raw))
     except Exception:
         cur.execute("UPDATE saas_ai_simulation_usage SET state='failed',actual_tokens=CASE WHEN %s>0 THEN %s ELSE reserved_tokens END,completed_at=now() WHERE tenant_id=%s::uuid AND queue_id=%s::uuid AND call_no=%s",(total,total,job['tenant_id'],job['id'],call_no))
+        cur.connection.commit()
+        settle_spend(job['tenant_id'],spend_key,usage or {},unknown=usage is None)
         return None,'expert_invalid_result',call_no
     cur.execute("UPDATE saas_ai_simulation_usage SET actual_tokens=CASE WHEN %s>0 THEN %s ELSE reserved_tokens END,state='succeeded',completed_at=now() WHERE tenant_id=%s::uuid AND queue_id=%s::uuid AND call_no=%s",(total,total,job['tenant_id'],job['id'],call_no))
+    cur.connection.commit()
+    settle_spend(job['tenant_id'],spend_key,usage or {},unknown=usage is None)
     return {'agent_id':expert_id,'result':result,'knowledge':knowledge,'tokens':total},'',call_no
 
 
@@ -702,8 +719,9 @@ def process(job):
                         result=('blocked','primary_not_unique_or_scope_mismatch',None,[],[],[],[],0)
                     elif not row.get('recheck_of_run_id') and row.get('assigned_agent') and str(row['assigned_agent'])!=str(chosen['id']):
                         result=('blocked','explicit_assignment_preserved',None,[],[],[],[],0)
-                    elif row.get('role')!='primary' or row.get('agent_enabled') is not True or row.get('mode')!='automatic':
-                        result=('blocked','primary_not_active_eligible',None,[],[],[],[],0)
+                    elif (row.get('role')!='primary' or row.get('agent_enabled') is not True
+                          or row.get('mode') not in {'automatic','manual'}):
+                        result=('blocked','primary_not_simulation_eligible',None,[],[],[],[],0)
                     elif is_group and not _group_active_binding(cur,tenant,channel,conversation,str(chosen['id'])):
                         result=('virtual_stop','group_not_active_or_primary_not_bound',str(chosen['id']),[],[],[],
                                 events+[{'type':'virtual_stop','reason':'group_not_active_or_primary_not_bound'}],0)
@@ -877,7 +895,7 @@ def process(job):
                 stop_reason='no_answer_'+action,agent_id=primary_id,triggers=triggers,knowledge=knowledge,
                 experts=expert_results,events=events,total_tokens=total_tokens)
             return True
-        prompt=('You are simulating the configured Active-mode Primary for one new incoming message. '
+        prompt=('You are simulating the configured Primary for one new incoming message. '
           'Return only a concise customer reply draft. Never claim any message was sent, CRM action performed, '
           'or handoff executed. Do not invent facts. If the evidence is insufficient, ask for clarification. '
           'Respect company and agent instructions, channel scope, safety policy, and schedule.\n'
@@ -914,8 +932,12 @@ def process(job):
                     _complete(job,'blocked',stop_reason='simulation_budget_exhausted',agent_id=primary_id,
                               triggers=triggers,knowledge=knowledge,experts=expert_results,events=events)
                     return True
+                from tenant_ai_spend_budget import reserve as reserve_spend, release as release_spend, settle as settle_spend
+                primary_spend_key='simulation:'+str(job['id'])+':'+str(primary_call)
+                reserve_spend(cur,tenant,primary_spend_key,'simulation_primary',model,total_upper=reservation_tokens)
                 if not _mark_provider_started(cur,job,primary_call):
-                    conn.commit()
+                    cur.connection.commit()
+                    release_spend(tenant,primary_spend_key)
                     _complete(job,'blocked',stop_reason='simulation_stopped_before_provider',agent_id=primary_id,
                               triggers=triggers,knowledge=knowledge,experts=expert_results,events=events)
                     return True
@@ -948,6 +970,7 @@ def process(job):
                     elif action=='stop':draft=str(response_policy.get('stop_reply') or '')
                     if action!='clarify' and action!='stop' or not draft:
                         _finish_call(job,primary_call,state='succeeded',actual=max(0,int(usage.get('total_tokens') or 0)))
+                        settle_spend(tenant,primary_spend_key,usage or {},unknown=usage is None)
                         total_tokens+=max(0,int(usage.get('total_tokens') or 0))
                         _complete(job,'virtual_stop',stop_reason='no_answer_'+action,agent_id=primary_id,
                             triggers=triggers,knowledge=knowledge,experts=expert_results,events=events,total_tokens=total_tokens)
@@ -956,6 +979,7 @@ def process(job):
             draft=sanitize_draft(draft,bound_primary.get('language') or 'auto')
             used=max(0,int(usage.get('total_tokens') or 0));total_tokens+=used
             _finish_call(job,primary_call,state='succeeded',actual=used)
+            settle_spend(tenant,primary_spend_key,usage or {},unknown=usage is None)
             events.append({'type':'primary_reply_prepared','agent_id':primary_id,'tokens':used,'sent':False})
             if any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matching):
                 events.append({'type':'virtual_handoff_after_reply','reason':'configured_trigger','executed':False})
@@ -963,6 +987,7 @@ def process(job):
                       experts=expert_results,events=events,total_tokens=total_tokens)
         except Exception:
             _finish_call(job,primary_call,state='unknown')
+            settle_spend(tenant,primary_spend_key,{},unknown=True)
             _complete(job,'unknown',stop_reason='provider_result_unknown',agent_id=primary_id,triggers=triggers,
                       knowledge=knowledge,experts=expert_results,events=events+[{'type':'provider_result_unknown'}],
                       total_tokens=total_tokens,error='provider_result_unknown')
