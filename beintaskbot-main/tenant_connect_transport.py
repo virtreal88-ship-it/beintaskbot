@@ -239,7 +239,7 @@ def status(profile: dict) -> dict:
         with conn.cursor() as cur:
             cur.execute("SELECT status,metadata,secrets,updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='connect'", (tenant,))
             row = cur.fetchone()
-            cur.execute("SELECT connect_channel_id,name,status,active FROM saas_connect_channels WHERE tenant_id=%s::uuid ORDER BY name", (tenant,))
+            cur.execute("SELECT connect_channel_id,name,status,active FROM saas_connect_channels WHERE tenant_id=%s::uuid AND status<>'disabled' ORDER BY name", (tenant,))
             channels = [_public_channel(channel) for channel in cur.fetchall()]
     return {'connected': bool(row and row['status'] == 'connected'), 'channels': channels,
             'updated_at': row['updated_at'].isoformat() if row and row.get('updated_at') else None,

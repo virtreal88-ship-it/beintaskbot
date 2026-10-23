@@ -1,4 +1,4 @@
-"""Explicit server-local replay, never imported by a worker or HTTP route.
+"""Explicit replay shared by the CLI and the owner-authenticated HTTP boundary.
 
 python scripts/whatsapp_replay.py --actor OWNER_ID --messages UUID UUID UUID UUID UUID --output /private/replay.json
 Add --execute only after reviewing the saved preflight. Uses the worker's existing
@@ -29,17 +29,9 @@ def write_private(path, value):
         raise
 
 
-def main():
-    parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--actor',type=int,required=True)
-    parser.add_argument('--messages',nargs=5,required=True)
-    parser.add_argument('--output',type=Path,required=True)
-    parser.add_argument('--execute',action='store_true')
-    args=parser.parse_args()
-    if args.output.exists():
-        parser.error('Use a new private output path; existing receipts are never overwritten.')
-    profile={'tenant_id':PILOT_TENANT,'telegram_id':args.actor}
-    result={'preflight':preflight(profile,args.messages),'results':[],'recorded_paid_receipts':0}
+def run_batch(profile,messages,output,*,execute=False):
+    if output.exists():raise RuntimeError('replay_output_already_exists')
+    result={'preflight':preflight(profile,messages),'results':[],'recorded_paid_receipts':0}
     # Session lock is held on a dedicated connection for the whole batch.
     # Financial reservations still use the shared transaction-level tenant lock.
     with _connect() as lease:
@@ -49,45 +41,57 @@ def main():
             if not cur.fetchone()['locked']:raise RuntimeError('Another replay is running.')
         lease.commit()
         try:
-            write_private(args.output,result)
-            if args.execute:
-                for message in args.messages:
+            write_private(output,result)
+            if execute:
+                for message in messages:
                     try:
                         item=one(profile,message)
                     except BaseException as exc:
                         code=str(exc) if re.fullmatch(r'[a-z0-9_]{1,100}',str(exc)) else 'replay_request_failed'
                         result['stopped']={'source_message_id':message,'error_type':type(exc).__name__,
                                            'reason':code,'paid_outcome_requires_ledger_check':True}
-                        write_private(args.output,result)
+                        write_private(output,result)
                         raise
                     result['results'].append(item)
                     result['recorded_paid_receipts']=sum(len(x.get('receipts') or []) for x in result['results'])
-                    write_private(args.output,result)
+                    write_private(output,result)
                 # Comparison evidence is read only AFTER all AI responses and
                 # is never appended to the model's time-bounded input.
                 with _connect() as conn:
                     with conn.cursor() as cur:
                         for item in result['results']:
-                            cur.execute('''SELECT m.body,m.direction,m.message_type,m.id
+                            cur.execute('''SELECT m.body,m.direction,m.message_type,m.id,m.author_name,m.raw,m.channel
                               FROM saas_crm_messages m JOIN saas_crm_messages source
                                 ON source.tenant_id=m.tenant_id AND source.kommo_lead_id=m.kommo_lead_id
                                   AND source.channel=m.channel
                               WHERE source.tenant_id=%s::uuid AND source.id=%s::uuid
-                                AND m.direction='outgoing'
-                                AND (COALESCE(m.happened_at,m.created_at),m.created_at,m.id)>
-                                  (COALESCE(source.happened_at,source.created_at),source.created_at,source.id)
-                              ORDER BY COALESCE(m.happened_at,m.created_at),m.created_at,m.id LIMIT 8''',
+                                AND (m.direction='outgoing' OR m.raw ? 'verified_employee_id')
+                                AND (COALESCE(m.happened_at,m.created_at),m.created_at)>
+                                  (COALESCE(source.happened_at,source.created_at),source.created_at)
+                              ORDER BY COALESCE(m.happened_at,m.created_at),m.created_at,m.id LIMIT 30''',
                               (PILOT_TENANT,item['source_message_id']))
-                            item['comparison_only_employee_replies']=[dict(row) for row in cur.fetchall()]
-                result['final_budget']=preflight(profile,args.messages)
-                write_private(args.output,result)
+                            from tenant_operator_dialogs import _message
+                            comparison=[_message(dict(row)) for row in cur.fetchall()]
+                            item['comparison_only_employee_replies']=[row for row in comparison if row['author_type'] in {'operator','employee'}][:8]
+                result['final_budget']=preflight(profile,messages)
+                write_private(output,result)
         finally:
             with lease.cursor() as cur:
                 cur.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))',
                             ('historical-replay:'+PILOT_TENANT,))
             lease.commit()
-    print(json.dumps({'output':str(args.output),'completed':len(result['results']),
-                      'executed':args.execute}))
+    return result
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--actor',type=int,required=True)
+    parser.add_argument('--messages',nargs=5,required=True)
+    parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--execute',action='store_true')
+    args=parser.parse_args()
+    result=run_batch({'tenant_id':PILOT_TENANT,'telegram_id':args.actor},args.messages,args.output,execute=args.execute)
+    print(json.dumps({'output':str(args.output),'completed':len(result['results']),'executed':args.execute}))
 
 
 if __name__=='__main__':
