@@ -497,8 +497,12 @@ def _mark_provider_started(cur,job,call_no):
             cur.execute("SELECT agent_id,state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s",
                         (job['tenant_id'],str(job['channel_id']),str(job['conversation_id'])))
             live=cur.fetchone() or {}
-            valid=(live.get('state') not in {'human','paused'} and
-                   (not live.get('agent_id') or str(live.get('agent_id'))==str(primary['id'])))
+            # A human handoff or pause remains an Active-mode stop condition,
+            # but Simulation only observes the live state.  It must not resume
+            # or mutate that state and can safely evaluate the inbound message
+            # in its isolated virtual dialog state.  Keep the assignment fence:
+            # another explicitly assigned primary must never be impersonated.
+            valid=(not live.get('agent_id') or str(live.get('agent_id'))==str(primary['id']))
         if valid:
             cur.execute('''SELECT 1 FROM saas_connect_conversations d
               JOIN saas_connect_channels ch ON ch.tenant_id=d.tenant_id AND ch.connect_channel_id=d.connect_channel_id AND ch.active=TRUE
@@ -733,12 +737,16 @@ def process(job):
                     elif is_group and not _group_active_binding(cur,tenant,channel,conversation,str(chosen['id'])):
                         result=('virtual_stop','group_not_active_or_primary_not_bound',str(chosen['id']),[],[],[],
                                 events+[{'type':'virtual_stop','reason':'group_not_active_or_primary_not_bound'}],0)
-                    elif not row.get('recheck_of_run_id') and row.get('live_state') in {'human','paused'}:
-                        result=('virtual_stop','conversation_human_or_paused',str(chosen['id']),[],[],[],
-                                events+[{'type':'virtual_stop','reason':'conversation_human_or_paused'}],0)
                     elif not is_open(row.get('schedule') or {}):
                         result=('skipped','outside_schedule',str(chosen['id']),[],[],[],[],0)
                     else:
+                        if not row.get('recheck_of_run_id') and row.get('live_state') in {'human','paused'}:
+                            # Mirror the decision the real Active worker would
+                            # make without changing the live dialog or stopping
+                            # this isolated virtual evaluation.
+                            events.append({'type':'active_mode_stop_observed',
+                                'reason':'conversation_human_or_paused',
+                                'live_state':row['live_state'],'executed':False})
                         from tenant_ai_agent_connect import _whatsapp_phone
                         source_rows,lines=_load_context(cur,job)
                         source=source_rows[-1];text=str(source.get('body') or '')
