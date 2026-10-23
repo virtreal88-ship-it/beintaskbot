@@ -282,6 +282,31 @@ def test_repeated_schema_upgrade_handles_legacy_test_with_not_null_mode(sandbox)
     sandbox.commit()
 
 
+def test_legacy_case_pilot_setting_migrates_to_manual_without_channel_widening(sandbox,monkeypatch):
+    import tenant_ai_agents_schema as schema
+    # This represents the persisted boolean-only pilot configuration before
+    # tenant/channel selection existed.  Upgrade must retain it for the legacy
+    # exact scope, not interpret it as permission for all Connect channels.
+    sandbox.execute("""UPDATE saas_ai_agent_settings
+      SET support_case_extraction_enabled=TRUE,support_case_extraction_mode='off',
+          support_case_extraction_channels='[]'::jsonb
+      WHERE tenant_id=%s::uuid""",(A,))
+    sandbox.commit();schema._ready=False;schema.ensure_schema(sandbox)
+    setting=sandbox.execute("""SELECT support_case_extraction_enabled,support_case_extraction_mode,
+      support_case_extraction_channels FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid""",(A,))[0]
+    assert setting == {'support_case_extraction_enabled':True,
+                       'support_case_extraction_mode':'manual',
+                       'support_case_extraction_channels':[]}
+    # Saving an unrelated company setting must not silently turn the retained
+    # pilot off before the owner has selected explicit tenant channels.
+    monkeypatch.setattr(agents,'_connect',lambda:sandbox)
+    monkeypatch.setattr(agents,'runtime_flag',lambda _:False)
+    agents.save_settings(PROFILE,{'company_instructions':'updated safely'})
+    retained=sandbox.execute("""SELECT support_case_extraction_enabled,support_case_extraction_mode,
+      support_case_extraction_channels FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid""",(A,))[0]
+    assert retained == setting
+
+
 def test_agent_settings_read_and_save_create_manual_row_on_legacy_not_null_schema(sandbox,monkeypatch):
     import tenant_ai_agents_schema as schema
     # Production may retain NOT NULL after Test Mode retirement. Verify both

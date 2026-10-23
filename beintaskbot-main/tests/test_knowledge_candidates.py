@@ -362,6 +362,33 @@ def test_live_queue_is_idempotent_and_channel_scoped(ready,monkeypatch):
     assert generation.call_count==0
 
 
+def test_tenant_channel_scope_never_reuses_legacy_pilot_as_all_channels(ready,monkeypatch):
+    # New settings work with no legacy scope variables, but only the explicitly
+    # selected Connect channel is admitted.  A pre-existing boolean setting is
+    # therefore not silently widened during the migration.
+    monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
+    for name in live.SCOPE_ENV.values():
+        monkeypatch.delenv(name,raising=False)
+    db,generation,_=ready
+    db.execute("""UPDATE saas_ai_agent_settings
+      SET support_case_extraction_enabled=TRUE,support_case_extraction_mode='automatic',
+          support_case_extraction_channels=%s::jsonb,support_case_extraction_started_at='2026-10-20T12:00:00Z'
+      WHERE tenant_id=%s::uuid""",(json.dumps([CA]),A))
+    first=db.execute("SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))[0]['id']
+    db.execute("UPDATE saas_crm_messages SET happened_at='2026-10-20T13:00:00Z' WHERE id=%s::uuid",(first,))
+    foreign=str(uuid.UUID(int=9911))
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,'other-channel',%s,'incoming','new','2026-10-20T13:00:00Z')""",(foreign,A,'connect:'+CB))
+    db.commit();monkeypatch.setattr(live,'_connect',lambda:db);live.create_schema(db)
+    with db.cursor() as cur:
+        live.enqueue(cur,A,CA,'client',41,first,actor_id=11)
+        live.enqueue(cur,A,CB,'other',41,foreign,actor_id=11)
+    db.commit()
+    rows=db.execute("SELECT channel_id::text AS channel_id FROM saas_knowledge_live_queue WHERE tenant_id=%s::uuid",(A,))
+    assert [row['channel_id'] for row in rows]==[CA]
+    assert generation.call_count==0
+
+
 def _enable_live_pilot(monkeypatch):
     monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
     monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_TENANT_ID',A)

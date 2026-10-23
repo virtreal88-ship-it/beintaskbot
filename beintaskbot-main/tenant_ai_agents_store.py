@@ -18,12 +18,8 @@ from tenant_platform import _connect, _json
 
 
 def _support_case_extraction_runtime_enabled(tenant_id=None):
-    if not runtime_flag('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED'):
-        return False
-    # The existing exact pilot allowlist remains a second server-side boundary.
-    from tenant_knowledge_live_queue import pilot_scope
-    scope=pilot_scope()
-    return bool(scope and (tenant_id is None or str(scope.get('tenant_id'))==str(tenant_id)))
+    # Tenant configuration never bypasses the global deployment guard.
+    return runtime_flag('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED')
 
 
 def _authorize(cur, profile):
@@ -142,7 +138,7 @@ def read_settings(profile):
             cur.execute('''INSERT INTO saas_ai_agent_settings(tenant_id,operating_mode) VALUES(%s::uuid,'manual')
               ON CONFLICT(tenant_id) DO NOTHING''', (tenant,))
             cur.execute('''SELECT company_instructions,enabled,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,
-                operating_mode,support_case_extraction_enabled,support_case_extraction_started_at,max_replies_per_chat,updated_at
+                operating_mode,support_case_extraction_enabled,support_case_extraction_mode,support_case_extraction_channels,support_case_extraction_started_at,max_replies_per_chat,updated_at
               FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid''', (tenant,))
             result = _row(cur.fetchone())
             result['configured_operating_mode']=result.get('operating_mode')
@@ -188,6 +184,9 @@ def read_settings(profile):
                 'simulation_runtime_enabled': runtime_flag('AI_SIMULATION_ENABLED'),
                 'simulation_runtime_block_reason': '' if runtime_flag('AI_SIMULATION_ENABLED') else 'global_feature_flag_disabled',
                 'support_case_extraction_runtime_enabled': _support_case_extraction_runtime_enabled(tenant),
+                # Preserve the API's established reason code for clients that
+                # still render the former pilot control.  The configuration
+                # remains tenant/channel scoped once the global gate is on.
                 'support_case_extraction_block_reason': '' if _support_case_extraction_runtime_enabled(tenant) else 'server_or_pilot_scope_disabled',
             }
         conn.commit()
@@ -216,7 +215,7 @@ def save_settings(profile, data):
             cur.execute('''INSERT INTO saas_ai_agent_settings(tenant_id,operating_mode) VALUES(%s::uuid,'manual')
               ON CONFLICT(tenant_id) DO NOTHING''', (tenant,))
             cur.execute('''SELECT company_instructions,enabled,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,
-                operating_mode,support_case_extraction_enabled,support_case_extraction_started_at,max_replies_per_chat FROM saas_ai_agent_settings
+                operating_mode,support_case_extraction_enabled,support_case_extraction_mode,support_case_extraction_channels,support_case_extraction_started_at,max_replies_per_chat FROM saas_ai_agent_settings
               WHERE tenant_id=%s::uuid FOR UPDATE''', (tenant,))
             previous = cur.fetchone() or {}
             values = {'company_instructions': str(previous.get('company_instructions') or ''),
@@ -224,26 +223,50 @@ def save_settings(profile, data):
                       'emergency_stop': bool(previous.get('emergency_stop',False)),
                       'operating_mode': previous.get('operating_mode'),
                       'support_case_extraction_enabled': bool(previous.get('support_case_extraction_enabled',False)),
+                      'support_case_extraction_mode': str(previous.get('support_case_extraction_mode') or ('automatic' if previous.get('support_case_extraction_enabled') else 'off')),
+                      'support_case_extraction_channels': list(previous.get('support_case_extraction_channels') or []),
                       'support_case_extraction_started_at': previous.get('support_case_extraction_started_at'),
                       'max_replies_per_chat': int(previous.get('max_replies_per_chat') or 20)}
             values.update(patch)
+            # Compatibility with the former boolean-only API.  An existing
+            # enabled legacy pilot keeps its exact environment scope while an
+            # unrelated setting is saved; it is never promoted to automatic
+            # tenant-wide analysis.  An explicit new-mode save owns the state.
+            if 'support_case_extraction_enabled' in patch and 'support_case_extraction_mode' not in patch:
+                values['support_case_extraction_mode']='manual' if patch['support_case_extraction_enabled'] else 'off'
+            requested_channels=values.get('support_case_extraction_channels') or []
+            if requested_channels:
+                cur.execute('''SELECT connect_channel_id::text AS id FROM saas_connect_channels
+                  WHERE tenant_id=%s::uuid AND active=TRUE AND connect_channel_id::text=ANY(%s::text[])''',
+                    (tenant, requested_channels))
+                if {str(row['id']) for row in cur.fetchall()} != set(requested_channels):
+                    raise TenantLinearError('Seçilmiş analiz kanalı əlçatan deyil.',403)
             if values.get('operating_mode')=='simulation' and not runtime_flag('AI_SIMULATION_ENABLED'):
                 raise TenantLinearError('Simulation hazırda serverdə söndürülüb; şirkət rejimi dəyişdirilmədi.',409)
-            if values.get('support_case_extraction_enabled') and not _support_case_extraction_runtime_enabled(tenant):
+            if values.get('support_case_extraction_mode')=='automatic' and not _support_case_extraction_runtime_enabled(tenant):
                 raise TenantLinearError('Dəstək case-lərinin avtomatik təhlili serverdə söndürülüb; parametr aktivləşdirilmədi.',409)
+            if values.get('support_case_extraction_mode')=='automatic' and not values.get('support_case_extraction_channels'):
+                raise TenantLinearError('Avtomatik təhlil üçün ən azı bir kanal seçin.',409)
             was_case_extraction=bool(previous.get('support_case_extraction_enabled'))
-            if values.get('support_case_extraction_enabled') and not was_case_extraction:
+            legacy_pilot_unchanged=(values.get('support_case_extraction_mode')=='manual'
+                                   and bool(previous.get('support_case_extraction_enabled'))
+                                   and not previous.get('support_case_extraction_channels')
+                                   and 'support_case_extraction_mode' not in patch
+                                   and 'support_case_extraction_channels' not in patch)
+            values['support_case_extraction_enabled']=(values.get('support_case_extraction_mode')=='automatic'
+                                                       or legacy_pilot_unchanged)
+            if values['support_case_extraction_enabled'] and not was_case_extraction:
                 values['support_case_extraction_started_at']=datetime.now(timezone.utc)
-            elif not values.get('support_case_extraction_enabled'):
+            elif not values['support_case_extraction_enabled']:
                 values['support_case_extraction_started_at']=None
             cur.execute('''UPDATE saas_ai_agent_settings SET company_instructions=%s,enabled=%s,emergency_stop=%s,
               auto_send_enabled=%s,crm_actions_enabled=%s,native_crm_actions_enabled=%s,operating_mode=%s,
-              support_case_extraction_enabled=%s,support_case_extraction_started_at=%s,
+              support_case_extraction_enabled=%s,support_case_extraction_mode=%s,support_case_extraction_channels=%s::jsonb,support_case_extraction_started_at=%s,
               max_replies_per_chat=%s,updated_by=%s,updated_at=now() WHERE tenant_id=%s::uuid
               RETURNING company_instructions,enabled,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,
-                operating_mode,support_case_extraction_enabled,support_case_extraction_started_at,max_replies_per_chat,updated_at''',
+                operating_mode,support_case_extraction_enabled,support_case_extraction_mode,support_case_extraction_channels,support_case_extraction_started_at,max_replies_per_chat,updated_at''',
               (values['company_instructions'], values['enabled'], values['emergency_stop'], values['auto_send_enabled'], values['crm_actions_enabled'], values['native_crm_actions_enabled'],
-               values['operating_mode'],values['support_case_extraction_enabled'],values['support_case_extraction_started_at'],
+               values['operating_mode'],values['support_case_extraction_enabled'],values['support_case_extraction_mode'],_json(values['support_case_extraction_channels']),values['support_case_extraction_started_at'],
                values['max_replies_per_chat'], actor, tenant))
             result = _row(cur.fetchone())
             if (('operating_mode' in patch and values.get('operating_mode')!='active')
@@ -267,7 +290,7 @@ def save_settings(profile, data):
                 cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='ai_emergency_stop',updated_at=now() WHERE tenant_id=%s::uuid AND state IN ('queued','processing')", (tenant,))
             _audit(cur, tenant, actor, 'ai_agents_settings_updated', 'ai_agents', '', {
                 'enabled': values['enabled'],'operating_mode':values['operating_mode'],
-                'support_case_extraction_enabled':values['support_case_extraction_enabled']})
+                'support_case_extraction_mode':values['support_case_extraction_mode'],'support_case_extraction_enabled':values['support_case_extraction_enabled']})
         conn.commit()
     # Return the same tenant-scoped effective state as GET, including runtime
     # gates used by the company-mode controls.

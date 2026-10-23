@@ -167,7 +167,7 @@ def agent(data, *, creating=False):
 
 
 def company_settings(data):
-    if not isinstance(data, dict) or set(data) - {'company_instructions', 'enabled', 'auto_send_enabled', 'crm_actions_enabled','native_crm_actions_enabled','max_replies_per_chat','emergency_stop','operating_mode','support_case_extraction_enabled'}:
+    if not isinstance(data, dict) or set(data) - {'company_instructions', 'enabled', 'auto_send_enabled', 'crm_actions_enabled','native_crm_actions_enabled','max_replies_per_chat','emergency_stop','operating_mode','support_case_extraction_enabled','support_case_extraction_mode','support_case_extraction_channels'}:
         raise TenantLinearError('AI Agents ayarları düzgün deyil.')
     result = {}
     if 'company_instructions' in data:
@@ -190,6 +190,15 @@ def company_settings(data):
         if not isinstance(data['support_case_extraction_enabled'],bool):
             raise TenantLinearError('Case extraction setting is invalid.')
         result['support_case_extraction_enabled']=data['support_case_extraction_enabled']
+    if 'support_case_extraction_mode' in data:
+        if data['support_case_extraction_mode'] not in {'off','manual','automatic'}:
+            raise TenantLinearError('Case analysis mode is invalid.')
+        result['support_case_extraction_mode']=data['support_case_extraction_mode']
+    if 'support_case_extraction_channels' in data:
+        channels=data['support_case_extraction_channels']
+        if not isinstance(channels,list) or len(channels)>100:
+            raise TenantLinearError('Case analysis channels are invalid.')
+        result['support_case_extraction_channels']=list(dict.fromkeys(identifier(value) for value in channels))
     if 'max_replies_per_chat' in data:
         limit = data['max_replies_per_chat']
         if type(limit) is not int or limit not in {20,60,300,500}:

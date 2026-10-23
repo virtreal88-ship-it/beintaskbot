@@ -27,6 +27,8 @@ def ensure_schema(conn):
               crm_actions_enabled BOOLEAN NOT NULL DEFAULT FALSE CHECK(crm_actions_enabled=FALSE),
               operating_mode TEXT NULL CHECK(operating_mode IS NULL OR operating_mode IN ('manual','active','simulation')),
               support_case_extraction_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+              support_case_extraction_mode TEXT NOT NULL DEFAULT 'off' CHECK(support_case_extraction_mode IN ('off','manual','automatic')),
+              support_case_extraction_channels JSONB NOT NULL DEFAULT '[]'::jsonb,
               support_case_extraction_started_at TIMESTAMPTZ NULL,
               updated_by BIGINT NULL,
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -35,7 +37,18 @@ def ensure_schema(conn):
             cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS emergency_stop BOOLEAN NOT NULL DEFAULT FALSE")
             cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS operating_mode TEXT NULL")
             cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS support_case_extraction_enabled BOOLEAN NOT NULL DEFAULT FALSE")
+            cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS support_case_extraction_mode TEXT NOT NULL DEFAULT 'off'")
+            cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS support_case_extraction_channels JSONB NOT NULL DEFAULT '[]'::jsonb")
+            cur.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_support_case_extraction_mode_check')
+            cur.execute("ALTER TABLE saas_ai_agent_settings ADD CONSTRAINT saas_ai_agent_settings_support_case_extraction_mode_check CHECK(support_case_extraction_mode IN ('off','manual','automatic'))")
             cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS support_case_extraction_started_at TIMESTAMPTZ NULL")
+            # Boolean-only pilot settings predate tenant channel selection.
+            # Preserve their narrow environment-scoped behaviour as Manual;
+            # never infer that every current Connect channel was approved.
+            cur.execute("""UPDATE saas_ai_agent_settings
+              SET support_case_extraction_mode='manual',support_case_extraction_channels='[]'::jsonb
+              WHERE support_case_extraction_enabled=TRUE
+                AND support_case_extraction_mode='off'""")
             cur.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_auto_send_enabled_check')
             cur.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_crm_actions_enabled_check')
             cur.execute('ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS max_replies_per_chat INTEGER NOT NULL DEFAULT 20')

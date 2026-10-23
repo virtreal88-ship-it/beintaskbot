@@ -185,12 +185,16 @@ def test_enqueue_rejects_other_tenant_channel_and_conversation(monkeypatch,tenan
     assert connection.value.calls==[]
 
 
-def test_flag_without_complete_scope_stays_fail_closed(monkeypatch):
+def test_global_flag_without_legacy_scope_does_not_grant_any_tenant(monkeypatch):
     monkeypatch.setenv('SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','true')
     monkeypatch.delenv('SUPPORT_CASES_LIVE_EXTRACTION_TENANT_ID',raising=False)
-    assert not live.extraction_enabled()
-    connection=Connection();live.enqueue(connection.cursor(),TENANT,CHANNEL,'client',42,MESSAGE)
-    assert connection.value.calls==[] and live.claim() is None
+    # The global flag only enables evaluation of explicit tenant settings.  It
+    # must not by itself widen the former pilot to every company or channel.
+    assert live.extraction_enabled() and live.pilot_scope() is None
+    connection=Connection()
+    monkeypatch.setattr(live,'_configured',lambda *_args,**_kwargs:None)
+    live.enqueue(connection.cursor(),TENANT,CHANNEL,'client',42,MESSAGE)
+    assert connection.value.calls==[]
 
 
 def test_claim_filters_exact_pilot_and_source_timestamp(monkeypatch):
