@@ -148,4 +148,9 @@ def ensure_schema(conn):
               FOREIGN KEY(tenant_id,run_id) REFERENCES saas_ai_simulation_runs(tenant_id,id) ON DELETE CASCADE,
               FOREIGN KEY(tenant_id,updated_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT
             )''')
+            cur.execute("ALTER TABLE saas_ai_dashboard_issue_reviews ADD COLUMN IF NOT EXISTS history JSONB NOT NULL DEFAULT '[]'::jsonb")
+            # Expand the existing review workflow without deleting reviews or runs.
+            cur.execute("ALTER TABLE saas_ai_dashboard_issue_reviews DROP CONSTRAINT IF EXISTS saas_ai_dashboard_issue_reviews_status_check")
+            cur.execute("ALTER TABLE saas_ai_dashboard_issue_reviews ADD CONSTRAINT saas_ai_dashboard_issue_reviews_status_check CHECK(status IN ('new','in_review','confirmed','dismissed','fixed','deferred','fixing','recheck_pending'))")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS saas_ai_dashboard_learning_review_idx ON saas_ai_dashboard_issue_reviews(tenant_id,issue_key) WHERE left(issue_key,9)='learning:'")
         _ready = True

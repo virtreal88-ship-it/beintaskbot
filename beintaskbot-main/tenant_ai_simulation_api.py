@@ -23,7 +23,12 @@ def handler(member_from_request, canonical_origin, logger, resource):
                     result=await asyncio.to_thread(events,profile,limit=request.query.get('limit',100),
                         mode=request.query.get('mode','all'),event_type=request.query.get('type',''))
                 elif resource=='issues':
-                    result=await asyncio.to_thread(issues,profile,limit=request.query.get('limit',100))
+                    if request.query.get('grouped')=='1':
+                        from tenant_ai_learning import improvements
+                        result=await asyncio.to_thread(improvements,profile,limit=request.query.get('limit',30),
+                            cursor=request.query.get('cursor',''),status=request.query.get('status',''))
+                    else:
+                        result=await asyncio.to_thread(issues,profile,limit=request.query.get('limit',100))
                 elif resource=='run':
                     result=await asyncio.to_thread(simulation_run,profile,request.match_info.get('run_id',''))
                 else:
@@ -46,6 +51,8 @@ def handler(member_from_request, canonical_origin, logger, resource):
                 result=await asyncio.to_thread(review_issue,profile,request.match_info.get('run_id',''),
                     clean.get('issue_key'),clean.get('status'))
             elif resource=='recheck':
+                if clean.get('confirm_paid_recheck') is not True:
+                    raise TenantLinearError('Confirm a potentially paid recheck within the existing AI budget.',409)
                 result=await asyncio.to_thread(enqueue_recheck,profile,request.match_info.get('run_id',''),clean.get('request_key'))
             elif resource=='settings':
                 result=await asyncio.to_thread(save_config,profile,clean)
