@@ -1,4 +1,5 @@
 """Tenant, membership and onboarding persistence."""
+import re
 import uuid
 
 from tenant_platform_common import (
@@ -120,7 +121,126 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
                 ORDER BY CASE WHEN m.role = 'owner' THEN 0 ELSE 1 END, m.display_name, m.telegram_id
             """, (tenant_id,))
             rows = cur.fetchall()
-    return [_member_payload(row) for row in rows]
+            ids=[int(row['telegram_id']) for row in rows]
+            numbers={member_id:[] for member_id in ids}
+            if ids:
+                cur.execute('''SELECT telegram_id,phone_digits,recognition_enabled
+                  FROM saas_tenant_member_whatsapp_numbers
+                  WHERE tenant_id=%s::uuid AND telegram_id=ANY(%s::bigint[])
+                  ORDER BY telegram_id,phone_digits''',(tenant_id,ids))
+                for item in cur.fetchall():
+                    numbers[int(item['telegram_id'])].append({
+                        'phone':'+'+str(item['phone_digits']),
+                        'recognition_enabled':bool(item['recognition_enabled'])})
+    result=[]
+    for row in rows:
+        value=_member_payload(row)
+        value['whatsapp_numbers']=numbers.get(int(row['telegram_id']),[])
+        result.append(value)
+    return result
+
+
+def _whatsapp_digits(value):
+    raw=str(value or '').strip()
+    if not raw or any(char not in '+0123456789 ()-.' for char in raw):
+        return ''
+    if '+' in raw and (not raw.startswith('+') or raw.count('+')!=1):
+        return ''
+    digits=re.sub(r'\D','',raw)
+    if raw.startswith('00'):
+        digits=digits[2:]
+    elif raw.startswith('+'):
+        pass
+    elif digits.startswith('0') and len(digits)==10:
+        # Azerbaijan national notation: 0XX XXX XX XX.
+        digits='994'+digits[1:]
+    elif not digits.startswith('994'):
+        # A country code must be explicit outside the supported AZ local form.
+        return ''
+    return digits if re.fullmatch(r'[1-9][0-9]{7,14}',digits) else ''
+
+
+def set_member_whatsapp_numbers(*, tenant_id: str, owner_id: int, telegram_id: int,
+                                numbers: list[dict]) -> list[dict]:
+    """Replace one member's explicit WhatsApp recognition numbers, tenant-locally."""
+    current=member(tenant_id,owner_id)
+    if not _can_manage_members(current):
+        raise TenantPlatformError('İcazə yoxdur.')
+    try:target=int(telegram_id)
+    except (TypeError,ValueError):target=0
+    if target<=0 or not isinstance(numbers,list) or len(numbers)>10:
+        raise TenantPlatformError('WhatsApp nömrələri düzgün deyil.')
+    selected=[];seen=set()
+    for item in numbers:
+        if not isinstance(item,dict) or set(item)-{'phone','recognition_enabled'}:
+            raise TenantPlatformError('WhatsApp nömrələri düzgün deyil.')
+        digits=_whatsapp_digits(item.get('phone'))
+        if not digits:
+            raise TenantPlatformError('Nömrəni beynəlxalq formatda yazın; Azərbaycan üçün +994, 994 və ya 0 ilə başlayan lokal format uyğundur.')
+        if digits in seen:continue
+        seen.add(digits)
+        enabled=item.get('recognition_enabled',True)
+        if type(enabled) is not bool:raise TenantPlatformError('Nömrənin tanınma statusu düzgün deyil.')
+        selected.append((digits,enabled))
+    target_member=member(tenant_id,target)
+    if not target_member:
+        raise TenantPlatformError('Əməkdaş bu şirkətdə aktiv deyil.')
+    if current.get('role')!='owner' and target_member.get('role') in {'owner','admin'}:
+        raise TenantPlatformError('Administrator sahibin və ya başqa administratorun nömrələrini dəyişə bilməz.')
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''SELECT phone_digits,telegram_id FROM saas_tenant_member_whatsapp_numbers
+              WHERE tenant_id=%s::uuid AND phone_digits=ANY(%s::text[]) FOR UPDATE''',
+              (tenant_id,[item[0] for item in selected]))
+            for row in cur.fetchall():
+                if int(row['telegram_id'])!=target:
+                    raise TenantPlatformError('Bu WhatsApp nömrəsi artıq başqa əməkdaşa məxsusdur.')
+            cur.execute('DELETE FROM saas_tenant_member_whatsapp_numbers WHERE tenant_id=%s::uuid AND telegram_id=%s',
+                        (tenant_id,target))
+            for digits,enabled in selected:
+                cur.execute('''INSERT INTO saas_tenant_member_whatsapp_numbers
+                  (tenant_id,telegram_id,phone_digits,recognition_enabled,created_by)
+                  VALUES(%s::uuid,%s,%s,%s,%s)''',(tenant_id,target,digits,enabled,int(owner_id)))
+            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+              VALUES(%s,%s::uuid,%s,'employee.whatsapp_numbers.updated','employee',%s,%s::jsonb)''',
+              (uuid.uuid4(),tenant_id,int(owner_id),str(target),_json({'number_count':len(selected)})))
+        conn.commit()
+    return [{'phone':'+'+digits,'recognition_enabled':enabled} for digits,enabled in selected]
+
+
+def add_member_whatsapp_number(*, tenant_id: str, owner_id: int, telegram_id: int, phone: str) -> dict:
+    """Add one explicitly attested employee number without replacing other numbers."""
+    current=member(tenant_id,owner_id)
+    if not _can_manage_members(current):
+        raise TenantPlatformError('İcazə yoxdur.')
+    try:target=int(telegram_id)
+    except (TypeError,ValueError):target=0
+    digits=_whatsapp_digits(phone)
+    if target<=0 or not digits:
+        raise TenantPlatformError('WhatsApp nömrələri düzgün deyil.')
+    target_member=member(tenant_id,target)
+    if not target_member:
+        raise TenantPlatformError('Əməkdaş bu şirkətdə aktiv deyil.')
+    if current.get('role')!='owner' and target_member.get('role') in {'owner','admin'}:
+        raise TenantPlatformError('Administrator sahibin və ya başqa administratorun nömrələrini dəyişə bilməz.')
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''INSERT INTO saas_tenant_member_whatsapp_numbers
+              (tenant_id,telegram_id,phone_digits,recognition_enabled,created_by)
+              VALUES(%s::uuid,%s,%s,TRUE,%s)
+              ON CONFLICT(tenant_id,phone_digits) DO UPDATE
+                SET recognition_enabled=TRUE,updated_at=now()
+                WHERE saas_tenant_member_whatsapp_numbers.telegram_id=EXCLUDED.telegram_id
+              RETURNING telegram_id''',(tenant_id,target,digits,int(owner_id)))
+            if not cur.fetchone():
+                raise TenantPlatformError('Bu WhatsApp nömrəsi artıq başqa əməkdaşa məxsusdur.')
+            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+              VALUES(%s,%s::uuid,%s,'employee.whatsapp_number.attested','employee',%s,%s::jsonb)''',
+              (uuid.uuid4(),tenant_id,int(owner_id),str(target),_json({'recognition_enabled':True})))
+        conn.commit()
+    return {'phone':'+'+digits,'recognition_enabled':True}
 
 
 def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_name: str,

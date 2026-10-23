@@ -56,6 +56,14 @@ assert.match(source, /knowledge\/upload/, 'Knowledge files must use the existing
 assert.match(source, /localStorage\.setItem/, 'An interrupted setup must be recoverable after a reload.');
 assert.match(source, /data-night-entry="0"/, 'The existing wizard must start by selecting the agent type.');
 assert.match(source, /data-night-entry="1"/, 'The existing wizard must then select a template or a blank start.');
+assert.match(source, /name="nightAgentRole"[^>]*value="primary"/);
+assert.match(source, /name="nightAgentRole"[^>]*value="expert"/);
+assert.match(source, /if\(entryStage===0\)\{agentRole=document\.querySelector\('\[name=nightAgentRole\]:checked'\)/,
+  'The type transition is handled only by the explicit Continue button handler.');
+assert.match(source, /if\(entryStage===0\).*?renderEntry\(1\);return/s,
+  'Selecting a radio option alone must not advance the wizard.');
+assert.doesNotMatch(source, /agentRole\s*=\s*['"]expert['"].*?loadModels/s,
+  'Model loading must not silently change the selected role.');
 assert.match(source, /agentRole==='expert'\?\[\]/, 'Internal agents must skip external channel scopes.');
 assert.match(source, /confirm\(window\.tenantNightL10n\.text\('Закрыть мастер/, 'Closing a dirty wizard must require confirmation.');
 assert.match(source, /setup_key/, 'Agent, handoff and knowledge retries must use idempotency keys.');
@@ -63,6 +71,11 @@ assert.match(source, /Настройки автоматической отпра
   'The UI must explain that agent setup does not change the company auto-send permission.');
 assert.doesNotMatch(source, /api\('agents\/settings','PATCH'/,
   'The template must not patch company settings while being created.');
+const companyControls = fs.readFileSync(path.join(root, 'docs', 'tenant-ai-agents.js'), 'utf8');
+assert.match(companyControls, /runtime\.simulation_runtime_enabled===true/,
+  'Simulation remains disabled unless the server explicitly reports the global runtime gate as open.');
+assert.match(companyControls, /simulation_runtime_block_reason==='global_feature_flag_disabled'.*?simulationUnavailable/s,
+  'The UI shows the specific global feature-flag reason without bypassing the server gate.');
 for (const phrase of ['вежливый', 'только на основе доступной базы знаний', 'уточняющий вопрос', 'Не выдумывайте', 'нерешённое обращение', 'выбранные дни и часы']) {
   assert.match(source, new RegExp(phrase, 'i'), `Template instruction must include: ${phrase}`);
 }

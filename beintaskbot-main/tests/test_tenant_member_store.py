@@ -32,6 +32,16 @@ class Connection:
 
 
 class MemberStoreTests(unittest.TestCase):
+    def test_whatsapp_number_normalization_is_exact_and_tenant_input_safe(self):
+        normalize=tenant_member_store._whatsapp_digits
+        self.assertEqual(normalize('+994 50 123 45 67'),'994501234567')
+        self.assertEqual(normalize('994501234567'),'994501234567')
+        self.assertEqual(normalize('0501234567'),'994501234567')
+        self.assertEqual(normalize('501234567'),'')
+        self.assertEqual(normalize('https://wa.me/994501234567'),'')
+        self.assertEqual(normalize('99450+1234567'),'')
+        self.assertEqual(normalize('++994501234567'),'')
+
     def test_upsert_creates_member_and_audits_without_overwriting_owner(self):
         connection = Connection()
         owner = {"tenant_id": "tenant-a", "telegram_id": 1, "role": "owner", "active": True}

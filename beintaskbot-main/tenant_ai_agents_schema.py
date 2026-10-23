@@ -56,6 +56,7 @@ def ensure_schema(conn):
               scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
               model TEXT NOT NULL DEFAULT '',
               safety JSONB NOT NULL DEFAULT '{}'::jsonb,
+              response_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
               version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
               created_by BIGINT NOT NULL,
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -67,6 +68,7 @@ def ensure_schema(conn):
             # This is deliberately additive: existing agents receive the
             # server-enforced default policy on their next read.
             cur.execute("ALTER TABLE saas_ai_agents ADD COLUMN IF NOT EXISTS safety JSONB NOT NULL DEFAULT '{}'::jsonb")
+            cur.execute("ALTER TABLE saas_ai_agents ADD COLUMN IF NOT EXISTS response_policy JSONB NOT NULL DEFAULT '{}'::jsonb")
             # A wizard may survive a browser refresh after its first request.
             # The opaque setup key makes that retry return the same record
             # instead of creating another agent for the same employee.
@@ -258,6 +260,17 @@ def ensure_schema(conn):
             # NULL preserves automatic routing for existing dialogues. A token
             # records an explicit operator binding and deduplicates its retries.
             cur.execute("ALTER TABLE saas_ai_conversation_state ADD COLUMN IF NOT EXISTS agent_assignment_id UUID NULL")
+            cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_no_answer_state(
+              tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+              agent_id UUID NOT NULL,
+              provider TEXT NOT NULL CHECK(provider IN ('connect','kommo')),
+              channel_id TEXT NOT NULL DEFAULT '',
+              conversation_id TEXT NOT NULL,
+              clarification_count INTEGER NOT NULL DEFAULT 0 CHECK(clarification_count BETWEEN 0 AND 3),
+              last_inbound_id TEXT NOT NULL DEFAULT '',
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              PRIMARY KEY(tenant_id,agent_id,provider,channel_id,conversation_id),
+              FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE)''')
         with conn.cursor() as cur:
             cur.execute("ALTER TABLE saas_ai_knowledge_sources ADD COLUMN IF NOT EXISTS agent_id UUID")
             cur.execute("ALTER TABLE saas_ai_knowledge_sources ADD COLUMN IF NOT EXISTS setup_key TEXT NULL")

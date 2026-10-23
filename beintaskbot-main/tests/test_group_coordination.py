@@ -6,9 +6,11 @@ from test_integrated_connect_release import flow
 from test_connect_channel_isolation import channels, AGENT2
 import tenant_ai_group_coordination as groups
 import tenant_ai_agents_store as agents
+import tenant_member_store as member_store
 import tenant_ai_agent_connect as connect
 import tenant_operator_assignment as assignment
 from tenant_linear_policy import TenantLinearError
+from tenant_platform_core import TenantPlatformError
 
 G='120363431037910651@g.us'
 
@@ -27,6 +29,29 @@ def test_no_assignment_fails_closed(group):
     with group['db'].cursor() as c:
         assert groups.authority(c,A,CA,G) is None
         assert groups.admit(c,A,CA,G,'SAME_EVENT') is None
+
+def test_employee_phone_is_tenant_scoped_and_requires_explicit_recognition(group):
+    d=group['db']
+    d.execute("INSERT INTO saas_tenant_member_whatsapp_numbers(tenant_id,telegram_id,phone_digits,recognition_enabled,created_by) VALUES(%s::uuid,11,'994501234567',TRUE,11)",(A,))
+    d.execute("INSERT INTO saas_tenant_member_whatsapp_numbers(tenant_id,telegram_id,phone_digits,recognition_enabled,created_by) VALUES(%s::uuid,11,'994551234567',FALSE,11)",(A,))
+    d.commit()
+    with d.cursor() as c:
+        assert groups.verified_employee(c,A,{'participantJid':'994501234567@s.whatsapp.net'})==11
+        assert groups.verified_employee(c,A,{'participantJid':'994551234567@s.whatsapp.net'}) is None
+        assert groups.verified_employee(c,B,{'participantJid':'994501234567@s.whatsapp.net'}) is None
+        assert groups.verified_employee(c,A,{'participantJid':'994509999999@lid'}) is None
+
+def test_quick_employee_link_is_idempotent_and_rejects_cross_member_conflict(group,monkeypatch):
+    d=group['db'];monkeypatch.setattr(member_store,'_connect',lambda:d)
+    monkeypatch.setattr(member_store,'_ensure_schema',lambda _conn:None)
+    first=member_store.add_member_whatsapp_number(tenant_id=A,owner_id=11,telegram_id=11,phone='+994501112233')
+    again=member_store.add_member_whatsapp_number(tenant_id=A,owner_id=11,telegram_id=11,phone='0501112233')
+    assert first==again=={'phone':'+994501112233','recognition_enabled':True}
+    with d.cursor() as cur:
+        assert groups.verified_employee(cur,A,{'participantJid':'994501112233@s.whatsapp.net'})==11
+    d.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name) VALUES(%s::uuid,12,'operator','Second')",(A,));d.commit()
+    with pytest.raises(TenantPlatformError):
+        member_store.add_member_whatsapp_number(tenant_id=A,owner_id=11,telegram_id=12,phone='+994501112233')
 
 def test_configuration_pauses_resume_and_cross_channel_dedup(group):
     d=group['db']; groups.configure(PROFILE,config())
@@ -224,7 +249,7 @@ def test_signed_group_authorship(group,monkeypatch,source,outbound):
     import tenant_connect_transport as transport
     d=group['db'];groups.configure(PROFILE,config());agents.set_conversation_state(PROFILE,G,'active',provider='connect',channel_id=CA)
     incoming(group,CA,'READY_FOR_TAKEOVER')
-    d.execute('INSERT INTO saas_ai_group_staff(tenant_id,channel_id,jid,member_id,verified_by) VALUES(%s::uuid,%s::uuid,%s,11,11)',(A,CA,'994500000000@s.whatsapp.net'));d.commit()
+    d.execute('INSERT INTO saas_ai_group_staff(tenant_id,channel_id,jid,member_id,verified_by) VALUES(%s::uuid,%s::uuid,%s,11,11)',(A,CB,'994500000000@s.whatsapp.net'));d.commit()
     monkeypatch.setattr(transport,'_verify_signature',lambda *a:True)
     data={'id':str(uuid.uuid4()),'externalMessageId':'STAFF_EVENT_ID','channelId':CB,'conversationId':G,'isGroup':True,'conversationType':'group','fromMe':outbound,'participantJid':'994500000000@s.whatsapp.net','type':'text','text':'local test'}
     if source=='unknown':data['participantJid']='994599999999@s.whatsapp.net'
@@ -301,8 +326,10 @@ def test_staff_registration_requires_owner_and_observed_company_identity(group):
     d.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,raw) VALUES(%s::uuid,%s::uuid,1001,'staff-proof',%s,'outgoing','test',%s::jsonb)",(str(uuid.uuid4()),A,'connect:'+CA,json.dumps({'fromMe':True,'source':'linked_phone','participantJid':data['jid']})));d.commit()
     assert groups.register_employee(PROFILE,data)=={'verified':True}
     with d.cursor() as c:
-        assert groups.verified_employee(c,A,{'participantJid':data['jid']})==11
-        assert groups.verified_employee(c,B,{'participantJid':data['jid']}) is None
+        assert groups.verified_employee(c,A,{'participantJid':data['jid'],'channelId':CA})==11
+        assert groups.verified_employee(c,A,{'participantJid':data['jid'],'channelId':CB}) is None
+        assert groups.verified_employee(c,A,{'participantJid':data['jid']}) is None
+        assert groups.verified_employee(c,B,{'participantJid':data['jid'],'channelId':CA}) is None
     d.commit()
 
 

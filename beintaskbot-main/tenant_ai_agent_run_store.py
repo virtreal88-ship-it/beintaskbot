@@ -127,7 +127,7 @@ def load_agent_config(job, *, with_block_reason=False):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT a.role,a.enabled AS agent_enabled,a.scopes,a.model AS agent_model,a.safety,a.schedule,a.mode,
+            cur.execute('''SELECT a.role,a.enabled AS agent_enabled,a.scopes,a.model AS agent_model,a.safety,a.response_policy,a.schedule,a.mode,
               s.enabled AS settings_enabled,s.operating_mode,s.auto_send_enabled,s.emergency_stop,s.crm_actions_enabled,s.native_crm_actions_enabled,i.metadata,i.secrets,t.status AS tenant_status,cs.state AS conversation_state
               FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
               JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id
@@ -177,6 +177,7 @@ def load_agent_config(job, *, with_block_reason=False):
     if reason:
         return (None, reason) if with_block_reason else None
     result = {'scopes':row['scopes'],'agent_model':selected_model,'safety':row.get('safety') or {},
+      'response_policy':row.get('response_policy') or {},
       'chat_model':str(config.get('model') or ''),'schedule':row['schedule'],'mode':row['mode'],
       'crm_actions_enabled':row['crm_actions_enabled'] is True,
       'native_crm_actions_enabled':row.get('native_crm_actions_enabled') is True}
@@ -288,7 +289,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
             tenant = str(job['tenant_id'])
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('tenant-chat-ai:' + tenant,))
             cur.execute('''SELECT j.*,a.role,a.name,a.instructions,a.enabled AS agent_enabled,a.mode,a.version AS agent_version,a.scopes,a.language,a.style,
-              a.model AS configured_model,a.safety,s.company_instructions,s.enabled AS settings_enabled,s.operating_mode,s.auto_send_enabled,s.emergency_stop,
+              a.model AS configured_model,a.safety,a.response_policy,s.company_instructions,s.enabled AS settings_enabled,s.operating_mode,s.auto_send_enabled,s.emergency_stop,
               s.crm_actions_enabled,s.max_replies_per_chat,s.updated_at AS settings_version,
               cs.state AS conversation_state,cs.revision AS conversation_revision,
               i.secrets,i.metadata,i.updated_at AS config_version,t.status AS tenant_status
@@ -387,6 +388,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
               'config_version':str(row['config_version']),'company_instructions':row['company_instructions'],
               'settings_version':str(row['settings_version']),
               'agent_name':row['name'],'agent_instructions':row['instructions'],'agent_language':row['language'],
+              'response_policy':row.get('response_policy') or {},
               'agent_style':row['style'],'agent_safety':row.get('safety') or {},'scope_instructions':str(scope.get('instructions') or ''),
               'agent_version':row['agent_version'],'conversation_revision':conversation.get('revision') if conversation else row.get('conversation_revision'),
               'mode':row['mode'],'auto_send_enabled':row['auto_send_enabled'],'crm_actions_enabled':row['crm_actions_enabled'],

@@ -27,14 +27,17 @@ class MembersApiTests(unittest.IsolatedAsyncioTestCase):
         self.requests = Mock(return_value=[])
         self.decide = Mock(return_value={"telegram_id": 22, "approved": True})
         self.accept_email = Mock(return_value={'tenant_id':'company-b','tenant_name':'Other company'})
+        self.add_whatsapp = Mock(return_value={'phone':'+994501234567','recognition_enabled':True})
         self.api = handlers(MemberApiContext(self.member, self.identity, self.name, self.send,
             "https://crm.pro.az", self.listing, self.upsert, self.deactivate, self.create,
             self.accept, self.requests, self.decide, StoreError,
-            accept_email_invite=self.accept_email,issue_session=lambda tenant_id,actor_id:f'{tenant_id}:{actor_id}'))
+            accept_email_invite=self.accept_email,add_member_whatsapp_number=self.add_whatsapp,
+            issue_session=lambda tenant_id,actor_id:f'{tenant_id}:{actor_id}'))
 
     def request(self, method="POST", data=None):
         request = Mock(method=method)
         request.json = AsyncMock(return_value={} if data is None else data)
+        request.headers = {'Origin':'https://crm.pro.az'}
         return request
 
     @staticmethod
@@ -58,6 +61,16 @@ class MembersApiTests(unittest.IsolatedAsyncioTestCase):
         await self.api["members"](self.request(data={"action": "deactivate", "telegram_id": 22}))
         self.deactivate.assert_called_once_with(tenant_id="company", owner_id=1, telegram_id=22)
         self.assertEqual(self.listing.call_count, 3)
+
+    async def test_quick_phone_link_requires_same_origin_and_expected_tenant(self):
+        result=await self.api['members'](self.request(data={'action':'add_whatsapp_number','telegram_id':22,
+            'phone':'+994501234567','expected_tenant_id':'company','expected_user_id':'1'}))
+        self.assertEqual(result.status,200)
+        self.add_whatsapp.assert_called_once_with(tenant_id='company',owner_id=1,telegram_id=22,phone='+994501234567')
+        bad=self.request(data={'action':'add_whatsapp_number','telegram_id':22,'phone':'+994501234567',
+            'expected_tenant_id':'other','expected_user_id':'1'})
+        self.assertEqual((await self.api['members'](bad)).status,409)
+        self.add_whatsapp.assert_called_once()
 
     async def test_invalid_member_identity_does_not_write(self):
         response = await self.api["members"](self.request(data={"telegram_id": "not-number"}))

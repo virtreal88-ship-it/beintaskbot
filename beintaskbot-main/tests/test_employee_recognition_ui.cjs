@@ -1,0 +1,18 @@
+const fs=require('node:fs');
+const path=require('node:path');
+const assert=require('node:assert/strict');
+const root=path.resolve(__dirname,'..');
+const app=fs.readFileSync(path.join(root,'docs','tenant-app.html'),'utf8');
+const dialogs=fs.readFileSync(path.join(root,'docs','tenant-operator-dialogs.js'),'utf8');
+const i18n=fs.readFileSync(path.join(root,'docs','tenant-operator-i18n.js'),'utf8');
+assert.match(app,/data-member-wa-list="\$\{m\.telegram_id\}"/,'Employee cards expose additional WhatsApp numbers.');
+assert.match(app,/employeeWaRow=\(id,item=\{\}\)/,'Each number has its own row and recognition flag.');
+assert.match(app,/data-member-wa-recognition/,'Recognition can be explicitly disabled per number.');
+assert.match(app,/action:"whatsapp_numbers"/,'Card edits use the existing tenant member API.');
+assert.match(app,/expected_tenant_id:d\.member\.tenant_id/,'Card edits pin the selected tenant.');
+assert.match(dialogs,/data-participant-employee-link/,'Group participant actions expose employee linking.');
+assert.ok(dialogs.includes('@s\\.whatsapp\\.net'),'Only exact phone JIDs may be linked from a participant action; LIDs stay unresolved.');
+assert.match(dialogs,/action:'add_whatsapp_number'/,'Quick linking adds a number atomically without replacing other numbers.');
+assert.match(dialogs,/expected_tenant_id:member\?\.tenant_id/,'Quick linking is bound to the active tenant and user.');
+for(const text of ['Отметить как сотрудника','Əməkdaş kimi qeyd et','Mark as employee','Этот идентификатор нельзя безопасно сопоставить','Bu identifikatorı telefon nömrəsi ilə təhlükəsiz əlaqələndirmək mümkün deyil','This identifier cannot be safely matched'])assert.ok(i18n.includes(text),`Missing localized employee-link copy: ${text}`);
+console.log('PASS: employee numbers are tenant-scoped, explicitly recognized, safely linked from exact phone JIDs, and localized.');

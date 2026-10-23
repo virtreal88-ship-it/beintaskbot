@@ -650,14 +650,14 @@ def process(job):
     tenant=str(job['tenant_id']);channel=str(job['channel_id']);conversation=str(job['conversation_id'])
     events=[{'type':'inbound_received','source_message_id':str(job['source_message_id'])},
             {'type':'scope_checked','channel_id':channel,'conversation_id':conversation}]
-    total_tokens=0;call_no=0
+    total_tokens=0;call_no=0;precomputed_no_answer=None
     try:
         with _connect() as conn:
             ensure_schema(conn)
             with conn.cursor() as cur:
                 cur.execute('''SELECT q.id,q.recheck_of_run_id,c.enabled,c.emergency_stop,c.agent_id,c.channel_ids,c.conversation_ids,
                     c.starts_at,c.ends_at,c.token_budget,c.message_limit,c.max_parallel,c.max_calls_per_event,c.max_output_tokens,
-                    a.id AS primary_id,a.name,a.instructions,a.enabled AS agent_enabled,a.role,a.mode,a.scopes,a.schedule,a.model,a.language,a.style,a.safety,a.expert_policy,
+                    a.id AS primary_id,a.name,a.instructions,a.enabled AS agent_enabled,a.role,a.mode,a.scopes,a.schedule,a.model,a.language,a.style,a.safety,a.expert_policy,a.response_policy,
                     s.enabled AS company_enabled,s.operating_mode AS company_mode,s.emergency_stop AS company_stop,t.status AS tenant_status,
                     ch.active AS channel_active,EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=q.tenant_id
                       AND i.provider='connect' AND i.status='connected') AS connect_active,
@@ -765,7 +765,7 @@ def process(job):
             ensure_schema(conn)
             with conn.cursor() as cur:
                 cur.execute('''SELECT c.enabled,c.emergency_stop,c.max_output_tokens,c.max_calls_per_event,c.token_budget,
-                    a.id,a.instructions,a.model,a.language,a.style,a.safety,a.expert_policy,a.schedule,
+                    a.id,a.instructions,a.model,a.language,a.style,a.safety,a.expert_policy,a.response_policy,a.schedule,
                     s.enabled AS company_enabled,s.operating_mode AS company_mode,s.emergency_stop AS company_stop,t.status AS tenant_status,
                     i.metadata,i.secrets FROM saas_ai_simulation_configs c
                   JOIN saas_ai_agents a ON a.tenant_id=c.tenant_id AND a.id=c.agent_id
@@ -786,17 +786,42 @@ def process(job):
                 # logged, never model reasoning or secrets.
                 from tenant_ai_agent_run_store import knowledge_context
                 knowledge=knowledge_context(tenant,problem,agent_id=primary_id)
+                response_policy=config.get('response_policy') or {}
                 triggers_live=enabled_triggers(tenant,primary_id)
                 matching=matching_triggers(triggers_live,text,
                     first_inquiry=sum(1 for x in source_rows if x.get('direction')=='incoming')==1,
                     phone=_whatsapp_phone(conversation))
-                key,model,_source,_meta=_provider_credentials(cur,tenant,primary_id,'connect',config.get('model'))
-                reserve=max(1,min(int(config['max_output_tokens']),1800))+512
-                call_no=1
-                if not _reserve_call(cur,job,primary_id,call_no,'primary',reserve):
-                    conn.commit();_complete(job,'blocked',stop_reason='simulation_budget_exhausted',agent_id=primary_id,events=events);return True
-                bound_primary=dict(config)
+                if response_policy.get('enabled') is True and response_policy.get('action')=='call_expert':
+                    matching=list(matching)+[{'id':'no_answer_policy','name':'Configured no-answer Expert',
+                        'condition':{},'actions':['call_expert']}]
+                if response_policy.get('enabled') is True and not knowledge and response_policy.get('action')!='call_expert':
+                    from tenant_ai_agent_no_answer import selected_action
+                    precomputed_no_answer=selected_action(response_policy,'missing_knowledge')
+                else:
+                    key,model,_source,_meta=_provider_credentials(cur,tenant,primary_id,'connect',config.get('model'))
+                    reserve=max(1,min(int(config['max_output_tokens']),1800))+512
+                    call_no=1
+                    if not _reserve_call(cur,job,primary_id,call_no,'primary',reserve):
+                        conn.commit();_complete(job,'blocked',stop_reason='simulation_budget_exhausted',agent_id=primary_id,events=events);return True
+                    bound_primary=dict(config)
                 conn.commit()
+        if precomputed_no_answer:
+            action=precomputed_no_answer['action'];reply=''
+            events.append({'type':'virtual_no_answer_action','action':action,
+                'reason':precomputed_no_answer['reason'],'executed':False})
+            if action=='handoff':events.append({'type':'virtual_handoff','reason':'no_answer','executed':False})
+            elif action=='create_task':events.append({'type':'virtual_employee_request','reason':'no_answer','executed':False})
+            elif action=='clarify':
+                reply={'ru':'Уточните, пожалуйста, о каком товаре или заказе идёт речь и что именно нужно проверить.',
+                    'en':'Could you share which product or order this concerns and what you need us to check?',
+                    'tr':'Lütfen hansı məhsul və ya sifariş haqqında olduğunu və neyi dəqiqləşdirməli olduğumuzu belirtin.',
+                    'az':'Zəhmət olmasa, hansı məhsul və ya sifariş barədə olduğunu və nəyi dəqiqləşdirməli olduğumuzu yazın.'}.get(str(config.get('language') or 'auto'),
+                    'Zəhmət olmasa, hansı məhsul və ya sifariş barədə olduğunu və nəyi dəqiqləşdirməli olduğumuzu yazın.')
+            elif action=='stop':reply=str(response_policy.get('stop_reply') or '')
+            _complete(job,'virtual_reply' if reply else 'virtual_stop',reply=reply,
+                stop_reason='no_answer_'+action,agent_id=primary_id,triggers=matched_payload,knowledge=knowledge,
+                experts=[],events=events,total_tokens=total_tokens)
+            return True
         expert_results=[];advisory=[]
         called_experts=set()
         for trigger in matching:
@@ -832,6 +857,26 @@ def process(job):
             except Exception:
                 expert_results.append({'status':'unavailable','reason':'expert_adapter_unavailable'})
                 events.append({'type':'expert_unavailable','reason':'expert_adapter_unavailable'})
+        if response_policy.get('enabled') is True and not knowledge:
+            from tenant_ai_agent_no_answer import selected_action
+            policy=(dict(response_policy) if response_policy.get('action')!='call_expert' else
+                {**response_policy,'action':response_policy.get('fallback_action','stop')})
+            decision=selected_action(policy,'expert_failed' if response_policy.get('action')=='call_expert' else 'missing_knowledge')
+            action=decision['action'];reply=''
+            events.append({'type':'virtual_no_answer_action','action':action,'reason':decision['reason'],'executed':False})
+            if action=='handoff': events.append({'type':'virtual_handoff','reason':'no_answer','executed':False})
+            elif action=='create_task': events.append({'type':'virtual_employee_request','reason':'no_answer','executed':False})
+            elif action=='clarify':
+                reply={'ru':'Уточните, пожалуйста, о каком товаре или заказе идёт речь и что именно нужно проверить.',
+                    'en':'Could you share which product or order this concerns and what you need us to check?',
+                    'tr':'Lütfen hangi ürün veya sipariş hakkında olduğunu ve neyi kontrol etmemizi istediğinizi belirtin.',
+                    'az':'Zəhmət olmasa, hansı məhsul və ya sifariş barədə olduğunu və nəyi dəqiqləşdirməli olduğumuzu yazın.'}.get(str(bound_primary.get('language') or 'auto'),
+                    'Zəhmət olmasa, hansı məhsul və ya sifariş barədə olduğunu və nəyi dəqiqləşdirməli olduğumuzu yazın.')
+            elif action=='stop': reply=str(response_policy.get('stop_reply') or '')
+            _complete(job,'virtual_reply' if reply else 'virtual_stop',reply=reply,
+                stop_reason='no_answer_'+action,agent_id=primary_id,triggers=triggers,knowledge=knowledge,
+                experts=expert_results,events=events,total_tokens=total_tokens)
+            return True
         prompt=('You are simulating the configured Active-mode Primary for one new incoming message. '
           'Return only a concise customer reply draft. Never claim any message was sent, CRM action performed, '
           'or handoff executed. Do not invent facts. If the evidence is insufficient, ask for clarification. '
@@ -840,6 +885,9 @@ def process(job):
           'Agent instructions: '+str(bound_primary.get('instructions') or '')[:5000]+'\n'
           'Style: '+str(bound_primary.get('style') or 'balanced')+'; language: '+str(bound_primary.get('language') or 'auto')+'\n'
           'Safety: '+json.dumps(bound_primary.get('safety') or {},ensure_ascii=False)[:3000])
+        if response_policy.get('enabled') is True:
+            from tenant_ai_agent_no_answer import prompt_instructions
+            prompt+='\n\n'+prompt_instructions()
         prior_state=bound_primary.get('prior_virtual_state') or {}
         if isinstance(prior_state,str):
             try: prior_state=json.loads(prior_state)
@@ -847,7 +895,7 @@ def process(job):
         prior_state={key:prior_state[key] for key in ('outcome','last_reply','stop_reason','sent')
                      if isinstance(prior_state,dict) and key in prior_state}
         extra={'simulation_label':'Предполагаемое поведение AI на основе фактического контекста',
-               'knowledge':[{'title':x.get('title'),'content':x.get('content')} for x in knowledge[:6]],
+               'knowledge':[{'source_id':x.get('source_id'),'title':x.get('title'),'content':x.get('content')} for x in knowledge[:6]],
                'expert_advisory':advisory,'trigger_actions':[x.get('actions') for x in triggers],
                'prior_simulation_state':prior_state,'virtual_only':True,'sent':False,'external_tools':[]}
         events.append({'type':'knowledge_retrieved','source_ids':[str(x.get('source_id')) for x in knowledge[:8]]})
@@ -877,6 +925,33 @@ def process(job):
         try:
             draft,usage=generate(key,model,'reply',lines,'',instructions=prompt,extra_context=extra,
                 with_usage=True,max_output_tokens=min(int(bound_primary['max_output_tokens']),1800),request_timeout=45)
+            if response_policy.get('enabled') is True:
+                from tenant_ai_agent_no_answer import assess, selected_action
+                assessment=assess(draft,knowledge)
+                if assessment['status']!='supported':
+                    signal='conflicting_evidence' if assessment['status']=='conflicting' else 'unsupported_evidence'
+                    policy=dict(response_policy)
+                    if policy.get('action')=='call_expert':
+                        successful=next((item for item in reversed(expert_results) if item.get('status')=='completed'),None)
+                        if not successful or not (successful.get('result') or {}).get('evidence'):
+                            policy['action']=policy.get('fallback_action','stop')
+                        else:
+                            # The expert already ran in this Simulation event.
+                            # Never recursively call it after an unsupported Primary result.
+                            policy['action']=policy.get('fallback_action','stop')
+                    decision=selected_action(policy,signal)
+                    action=decision['action'];events.append({'type':'virtual_no_answer_action',
+                        'action':action,'reason':decision['reason'],'executed':False})
+                    if action=='handoff':events.append({'type':'virtual_handoff','reason':'no_answer','executed':False})
+                    elif action=='create_task':events.append({'type':'virtual_employee_request','reason':'no_answer','executed':False})
+                    elif action=='clarify':draft=assessment.get('clarification_question') or 'Zəhmət olmasa, əlavə məlumat verin.'
+                    elif action=='stop':draft=str(response_policy.get('stop_reply') or '')
+                    if action!='clarify' and action!='stop' or not draft:
+                        _finish_call(job,primary_call,state='succeeded',actual=max(0,int(usage.get('total_tokens') or 0)))
+                        total_tokens+=max(0,int(usage.get('total_tokens') or 0))
+                        _complete(job,'virtual_stop',stop_reason='no_answer_'+action,agent_id=primary_id,
+                            triggers=triggers,knowledge=knowledge,experts=expert_results,events=events,total_tokens=total_tokens)
+                        return True
             from tenant_ai_agent_safety import sanitize_draft
             draft=sanitize_draft(draft,bound_primary.get('language') or 'auto')
             used=max(0,int(usage.get('total_tokens') or 0));total_tokens+=used
