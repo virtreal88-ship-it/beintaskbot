@@ -31,6 +31,12 @@ def boundary(ready,monkeypatch,tmp_path):
 
 def test_owner_http_preflight_execute_and_duplicate_use_existing_shared_ledger(boundary):
     db,ids,calls=boundary;request_id=str(uuid.uuid4())
+    for author,direction,raw in [('AI Agent','outgoing',{'run_id':'synthetic'}),('Operator','outgoing',{}),('Employee','incoming',{'verified_employee_id':11})]:
+        mid=str(uuid.uuid4())
+        db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type,happened_at,raw)
+          SELECT %s::uuid,tenant_id,kommo_lead_id,%s,channel,%s,%s,'Future comparison only','text',clock_timestamp()+interval '1 second',%s::jsonb
+          FROM saas_crm_messages WHERE id=%s::uuid''',(mid,'connect:'+mid,direction,author,json.dumps(raw),ids[0]))
+    db.commit()
     before=db.execute('SELECT row_to_json(m) AS r FROM saas_crm_messages m');db.commit()
     async def run():
         app=web.Application();app.router.add_route('*','/replay',api.handler(lambda request:PROFILE,'https://crm.test',logging.getLogger(__name__)))
@@ -44,6 +50,7 @@ def test_owner_http_preflight_execute_and_duplicate_use_existing_shared_ledger(b
             assert result.status==200
             report=(await result.json())['result']
             assert len(report['results'])==5 and all(not item['sent'] and not item['crm_mutations'] for item in report['results'])
+            assert [row['author_type'] for row in report['results'][0]['comparison_only_employee_replies']]==['operator','employee']
             assert (await client.post('/replay',json=data,headers=headers)).status==200
             assert (await client.get('/replay',params={'request_id':request_id})).status==200
             assert (await client.post('/replay',json={**data,'message_ids':list(reversed(ids))},headers=headers)).status==409

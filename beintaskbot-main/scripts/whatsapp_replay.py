@@ -60,17 +60,19 @@ def run_batch(profile,messages,output,*,execute=False):
                 with _connect() as conn:
                     with conn.cursor() as cur:
                         for item in result['results']:
-                            cur.execute('''SELECT m.body,m.direction,m.message_type,m.id
+                            cur.execute('''SELECT m.body,m.direction,m.message_type,m.id,m.author_name,m.raw,m.channel
                               FROM saas_crm_messages m JOIN saas_crm_messages source
                                 ON source.tenant_id=m.tenant_id AND source.kommo_lead_id=m.kommo_lead_id
                                   AND source.channel=m.channel
                               WHERE source.tenant_id=%s::uuid AND source.id=%s::uuid
-                                AND m.direction='outgoing'
-                                AND (COALESCE(m.happened_at,m.created_at),m.created_at,m.id)>
-                                  (COALESCE(source.happened_at,source.created_at),source.created_at,source.id)
-                              ORDER BY COALESCE(m.happened_at,m.created_at),m.created_at,m.id LIMIT 8''',
+                                AND (m.direction='outgoing' OR m.raw ? 'verified_employee_id')
+                                AND (COALESCE(m.happened_at,m.created_at),m.created_at)>
+                                  (COALESCE(source.happened_at,source.created_at),source.created_at)
+                              ORDER BY COALESCE(m.happened_at,m.created_at),m.created_at,m.id LIMIT 30''',
                               (PILOT_TENANT,item['source_message_id']))
-                            item['comparison_only_employee_replies']=[dict(row) for row in cur.fetchall()]
+                            from tenant_operator_dialogs import _message
+                            comparison=[_message(dict(row)) for row in cur.fetchall()]
+                            item['comparison_only_employee_replies']=[row for row in comparison if row['author_type'] in {'operator','employee'}][:8]
                 result['final_budget']=preflight(profile,messages)
                 write_private(output,result)
         finally:
