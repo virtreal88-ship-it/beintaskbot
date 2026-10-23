@@ -262,7 +262,6 @@ def test_repeated_schema_upgrade_handles_legacy_test_with_not_null_mode(sandbox)
     before_dialogues=sandbox.execute("SELECT connect_channel_id::text AS channel_id,conversation_id,lead_id,contact_name FROM saas_connect_conversations WHERE tenant_id=%s::uuid",(A,))
     before_cases=sandbox.execute("SELECT id::text AS id,status FROM saas_support_tickets WHERE tenant_id=%s::uuid",(A,))
     sandbox.commit()
-
     schema._ready=False
     schema.ensure_schema(sandbox)
 
@@ -279,6 +278,39 @@ def test_repeated_schema_upgrade_handles_legacy_test_with_not_null_mode(sandbox)
     sandbox.commit();schema._ready=False;schema.ensure_schema(sandbox)
     assert sandbox.execute("SELECT operating_mode FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]['operating_mode']=='manual'
     assert sandbox.execute("SELECT count(*) AS n FROM saas_crm_messages WHERE tenant_id=%s::uuid",(A,))[0]['n']==len(before_messages)
+    sandbox.execute("ALTER TABLE saas_ai_agent_settings ALTER COLUMN operating_mode DROP NOT NULL")
+    sandbox.commit()
+
+
+def test_agent_settings_read_and_save_create_manual_row_on_legacy_not_null_schema(sandbox,monkeypatch):
+    import tenant_ai_agents_schema as schema
+    # Production may retain NOT NULL after Test Mode retirement. Verify both
+    # settings entry points can materialize a missing row without enabling
+    # automation or weakening the legacy constraint.
+    schema._ready=False
+    schema.ensure_schema(sandbox)
+    sandbox.execute("UPDATE saas_ai_agent_settings SET operating_mode='active'")
+    sandbox.execute("ALTER TABLE saas_ai_agent_settings ALTER COLUMN operating_mode SET NOT NULL")
+    sandbox.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_operating_mode_check')
+    sandbox.execute("ALTER TABLE saas_ai_agent_settings ADD CONSTRAINT saas_ai_agent_settings_operating_mode_check CHECK(operating_mode IN ('manual','active','simulation'))")
+    sandbox.execute("DELETE FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))
+    sandbox.commit()
+    monkeypatch.setattr(agents,'_connect',lambda:sandbox)
+    monkeypatch.setattr(agents,'runtime_flag',lambda _:False)
+    import tenant_ai_agent_key_policy as key_policy
+    monkeypatch.setattr(key_policy,'platform_token_limit',lambda _:0)
+    schema._ready=True
+
+    settings=agents.read_settings(PROFILE)
+    assert settings['operating_mode']=='manual'
+    assert settings['auto_send_enabled'] is False
+
+    sandbox.execute("DELETE FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,));sandbox.commit()
+    settings=agents.save_settings(PROFILE,{'company_instructions':'Safe test setting'})
+    assert settings['operating_mode']=='manual'
+    assert settings['auto_send_enabled'] is False
+    saved=sandbox.execute("SELECT operating_mode,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]
+    assert saved=={'operating_mode':'manual','auto_send_enabled':False}
     sandbox.execute("ALTER TABLE saas_ai_agent_settings ALTER COLUMN operating_mode DROP NOT NULL")
     sandbox.commit()
 
