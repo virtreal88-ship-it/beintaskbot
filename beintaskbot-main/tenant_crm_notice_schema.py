@@ -5,6 +5,7 @@ from tenant_platform import _ensure_schema
 def ensure_schema(conn) -> None:
     _ensure_schema(conn)
     with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(hashtextextended('tenant-crm-notice-schema',0))")
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_crm_notice_scan (
           tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id),
           baseline TIMESTAMPTZ NOT NULL DEFAULT now(),positions JSONB NOT NULL DEFAULT '{}',

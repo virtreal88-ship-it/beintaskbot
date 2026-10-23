@@ -47,6 +47,9 @@ def enqueue_inbound(cur, *, tenant_id, channel_id, conversation_id, lead_id,
     """Enqueue only a newly accepted, post-start inbound; caller owns txn."""
     if not runtime_flag('AI_SIMULATION_ENABLED'):
         return False
+    from tenant_connect_identity import conflicted
+    if conflicted(cur, tenant_id, channel_id, conversation_id):
+        return False
     try:
         occurred = datetime.fromisoformat(str(occurred_at).replace('Z', '+00:00'))
         if occurred.tzinfo is None:
@@ -326,7 +329,9 @@ def _load_context(cur, job):
     out=[];size=0
     for row in rows:
         body=str(row.get('body') or '')[:3000]
-        line={'role':'client' if row['direction']=='incoming' else 'sales_manager',
+        raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
+        employee=raw.get('verified_employee_id') is not None
+        line={'role':'client' if row['direction']=='incoming' and not employee else 'sales_manager',
               'author':str(row.get('author_name') or '')[:100],
               'text':body,'at':_iso(row.get('happened_at'))}
         length=len(json.dumps(line,ensure_ascii=False).encode('utf-8'))
@@ -426,6 +431,9 @@ def _adjust_reservation(cur,job,call_no,required_tokens):
 def _mark_provider_started(cur,job,call_no):
     """Durably fence one paid call immediately before crossing provider boundary."""
     if not runtime_flag('AI_SIMULATION_ENABLED') or not runtime_flag('AI_AGENTS_ENABLED'):
+        return False
+    from tenant_connect_identity import conflicted
+    if conflicted(cur, job['tenant_id'], job['channel_id'], job['conversation_id']):
         return False
     cur.execute('''SELECT c.agent_id AS configured_agent,c.enabled,c.emergency_stop,c.starts_at,c.ends_at,c.channel_ids,c.conversation_ids,
         s.enabled AS company_enabled,s.operating_mode AS company_mode,s.emergency_stop AS company_stop,t.status AS tenant_status,

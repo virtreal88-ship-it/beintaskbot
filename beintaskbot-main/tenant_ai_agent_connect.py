@@ -175,6 +175,9 @@ def allowed(job: dict, connection=None) -> bool:
         if connection is None:
             ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_connect_identity import conflicted
+            if conflicted(cur, tenant, channel, conversation):
+                return False
             cur.execute('''SELECT s.enabled,s.operating_mode,s.emergency_stop,s.auto_send_enabled,t.status
               FROM saas_ai_agent_settings s JOIN saas_tenants t ON t.id=s.tenant_id
               WHERE s.tenant_id=%s::uuid FOR SHARE OF s,t''', (tenant,))
@@ -448,7 +451,7 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''SELECT * FROM (
-              SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,m.id,
+              SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,m.id,m.channel,m.raw,
                 COALESCE(v.state,'') AS voice_state,
                 NOT EXISTS (SELECT 1 FROM saas_connect_conversations c
                   JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id

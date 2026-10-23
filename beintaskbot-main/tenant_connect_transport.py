@@ -639,6 +639,23 @@ def _verify_signature(secret: str, raw: bytes, signature: str) -> bool:
 
 
 def ingest(raw: bytes, signature: str, event: dict) -> bool:
+    """Retry only transactions PostgreSQL confirms it rolled back.
+
+    Ingestion persists observations/queues and never performs external sends or
+    provider calls. An uncertain connection outcome is deliberately not retried.
+    """
+    from psycopg.errors import DeadlockDetected, SerializationFailure
+    import time
+    for attempt in range(3):
+        try:
+            return _ingest_once(raw, signature, event)
+        except (DeadlockDetected, SerializationFailure):
+            if attempt == 2:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
+def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
     event_id, data = str(event.get('id') or ''), event.get('data') or {}
     event_type = str(event.get('type') or '')
     if event_type not in CONNECT_WEBHOOK_EVENTS or not event_id or not isinstance(data, dict):
@@ -657,7 +674,13 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
         from tenant_knowledge_live_queue import create_schema as create_live_queue_schema
         create_live_queue_schema(conn)
         _schema(conn)
-        conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('saas_crm_notice_events') IS NOT NULL AND to_regclass('saas_crm_notice_deliveries') IS NOT NULL AS ready")
+            notices_ready = (cur.fetchone() or {}).get('ready')
+        if not notices_ready:
+            from tenant_crm_notice_schema import ensure_schema as ensure_notice_schema
+            ensure_notice_schema(conn)
+        conn.commit()  # Release all DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
             cur.execute("SELECT tenant_id,secrets FROM saas_tenant_integrations WHERE provider='connect' AND status='connected' AND secrets IS NOT NULL")
             matches = []
@@ -683,6 +706,12 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
             ai_origin = coordinated and known_ai_origin(cur,tenant,data)
             uncertain_origin = coordinated and data.get('authorshipUncertain') is True and not ai_origin
             employee = verified_employee(cur,tenant,data) if coordinated and not ai_origin and not uncertain_origin else None
+            if not coordinated and not outbound and re.fullmatch(r'[0-9]{5,22}@(s\.whatsapp\.net|lid)', conversation):
+                employee = verified_employee(cur,tenant,{**data,'participantJid':conversation})
+            data = {key: value for key, value in data.items() if key != 'verified_employee_id'}
+            if employee is not None:
+                data['verified_employee_id'] = employee
+
             if coordinated and (ai_origin or employee is not None or uncertain_origin):
                 # A repeated employee event must not undo a later explicit Resume.
                 cur.execute('SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND channel=%s',
@@ -729,7 +758,7 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                 if data.get('fromMe') is not False and data.get('source') != 'unknown' and not _outbound_is_ai(data, stored) and not ai_origin and (not coordinated or employee is not None):
                     from tenant_ai_agent_connect import mark_operator_reply
                     mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn, actor=employee)
-                    if stored and stored.get('id'):
+                    if stored and stored.get('id') and data.get('conversationIdentityConflict') is not True:
                         from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
                         enqueue_case_extraction(cur,tenant,channel_id,conversation,lead_id,
                             str(stored['id']),actor_id=employee)
@@ -803,15 +832,16 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
             if (not outbound and message_inserted and not ai_origin and employee is None
                     and not uncertain_origin and not control_replayed):
                 # Reuse the existing SaaS CRM notice outbox, push subscriptions and worker.
-                # Only initialize its additive schema if the normal notification worker has
-                # not done so yet; webhook delivery remains idempotent by persisted message ID.
-                from tenant_crm_notice_schema import ensure_schema as ensure_notice_schema
-                cur.execute("SELECT to_regclass('saas_crm_notice_events') AS existing")
-                if not (cur.fetchone() or {}).get('existing'):
-                    ensure_notice_schema(conn)
+                # Its schema was prepared before the dialogue transaction;
+                # webhook delivery remains idempotent by persisted message ID.
                 from tenant_crm_notice_store import plan_connect_message
                 plan_connect_message(cur,tenant,channel_id,conversation,queued_payload[3],
                                      'connect:'+queued_payload[4],data)
+            if not coordinated and employee is not None:
+                from tenant_ai_agent_connect import mark_operator_reply
+                mark_operator_reply(tenant, queued_payload[3], channel_id, conversation, connection=conn, actor=employee)
+                conn.commit()
+                return accepted
             if coordinated and (ai_origin or employee is not None or uncertain_origin or control_replayed):
                 if employee is not None:
                     stop_group(cur,tenant,conversation,reason='verified_employee_reply',actor=employee)
@@ -820,8 +850,15 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
                         str(source_message['id']),actor_id=employee)
                 conn.commit()
                 return True
+            from tenant_connect_identity import conflicted
+            if conflicted(cur, tenant, channel_id, conversation):
+                # Preserve the signed event and CRM message, but do not feed a
+                # split/contradictory history into any paid AI path.
+                conn.commit()
+                return accepted
             from tenant_knowledge_live_queue import enqueue as enqueue_case_extraction
-            enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],str(source_message['id']))
+            if message_inserted:
+                enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],str(source_message['id']))
             from tenant_ai_agent_connect import enqueue
             enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
                     lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],

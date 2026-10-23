@@ -40,6 +40,9 @@ def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message
     used = 0
     for row in reversed(rows[-max_messages:]):
         role = 'CLIENT' if row.get('direction') == 'incoming' else 'EMPLOYEE'
+        raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}
+        if str(row.get('channel') or '').startswith('connect:') and raw.get('verified_employee_id') is not None:
+            role = 'EMPLOYEE'
         body = str(row.get('_copilot_context_body', row.get('body') or '') or '')[:max_message_chars]
         kind = str(row.get('message_type') or 'text')
         if kind not in {'', 'text'}:
@@ -257,6 +260,9 @@ def run(profile, data):
                 cur.execute('DELETE FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s', thread_key)
                 conn.commit()
                 return {'cleared': True, 'text': ''}
+            from tenant_connect_identity import conflicted
+            if conflicted(cur, tenant, command['channel_id'], command['conversation_id']):
+                raise TenantLinearError('История разделена между WhatsApp JID/LID. Требуется проверка идентификаторов диалога.', 409)
             if not policy.can_use_chat_ai():
                 raise TenantLinearError('У сотрудника нет доступа к функциям Chat AI.', 403)
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('tenant-chat-ai:' + tenant,))
@@ -298,7 +304,7 @@ def run(profile, data):
                     raise ValueError()
             except Exception:
                 raise TenantLinearError('Проверьте настройки Chat AI компании.', 503) from None
-            cur.execute('''SELECT external_id,direction,body,message_type,happened_at,
+            cur.execute('''SELECT external_id,direction,body,message_type,happened_at,channel,raw,
                                   raw->'voice_transcription' AS voice_transcription FROM saas_crm_messages
               WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
               ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 20''',

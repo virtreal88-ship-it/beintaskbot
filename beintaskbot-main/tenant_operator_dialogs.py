@@ -96,6 +96,8 @@ def _message(item, *, group=False, participant_names=None, employee_participants
         author_type = 'participant' if group else 'customer'
     else:
         author_type = 'system'
+    if direction == 'incoming' and isinstance(raw,dict) and raw.get('verified_employee_id') is not None:
+        author_type='employee'
     if group and isinstance(raw,dict) and raw.get('ai_authored') is True:
         author_type='ai'
     participant_jid, participant_alt, whatsapp_name = _participant_fields(raw)
@@ -133,6 +135,9 @@ def _message(item, *, group=False, participant_names=None, employee_participants
             filename=_media_filename(raw)
             if filename:value['media_filename']=filename
         transcript = raw.get('voice_transcription', {}) if isinstance(raw, dict) else {}
+        if value.get('message_type') in {'image','audio','voice','video','document'}:
+            state=transcript.get('status') if isinstance(transcript,dict) else None
+            value['analysis_state']=state if state in {'completed','pending','processing','failed','disabled','not_required'} else 'not_requested'
         if (value.get('message_type') in {'audio','voice'} and isinstance(transcript, dict)
                 and transcript.get('status') == 'completed' and value.get('body')):
             value['has_transcription'] = True
@@ -620,6 +625,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                         AND participant_jid=ANY(%s::text[])''',(tenant,list({m.get('source_channel_id',channel) for m in messages}),conversation,participant_ids))
                     participant_names={(str(item['channel_id']),str(item['participant_jid'])):str(item['display_name']) for item in cur.fetchall()
                                        if str(item.get('display_name') or '')}
+                if provider == 'connect':
+                    from tenant_connect_identity import conflicted
+                    dialog['identity_conflict'] = conflicted(cur, tenant, channel, conversation)
     anchor_target=next((str(m['id']) for m in messages[:50] if anchor_row and (str(m['id'])==str(anchor_row['id']) or any(s.get('external_id')==anchor_row['external_id'] for s in m.get('sources',[])))),None)
     return {'dialog':dialog,'anchor_message_id':anchor_target,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
                                          contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '')

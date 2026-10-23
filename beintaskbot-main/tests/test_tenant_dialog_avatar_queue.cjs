@@ -1,0 +1,22 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const read=name=>fs.readFileSync(path.join(__dirname,'..',name),'utf8');
+const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://fixture.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window;
+const profile={member:{tenant_id:'00000000-0000-0000-0000-000000000101',telegram_id:33,role:'worker',permissions:['dialogs']},capabilities:{modules:{dialogs:true}}};
+const rows=[1,2,3,4].map(n=>({provider:'connect',lead_id:n,channel_id:'00000000-0000-0000-0000-000000000201',conversation_id:`99450123456${n}@s.whatsapp.net`,customer_kind:'contact',customer_name:'Synthetic '+n,avatar_status:'',last_message_id:'m'+n,last_message_direction:'incoming',last_message_at:'2026-10-23T10:00:00Z',agent_status:'manual'}));
+const requests=[];w.Image=class{set src(value){this.url=value;requests.push(this);}};
+w.IntersectionObserver=class{constructor(callback){this.callback=callback;}observe(target){this.callback([{target,isIntersecting:true}]);}unobserve(){}disconnect(){}};
+w.tenantProfileSnapshot=profile;
+w.fetch=async target=>({ok:true,json:async()=>String(target).includes('/dialogs?')?{success:true,result:{dialogs:rows,channels:[],agents:[],unread_count:0,total_count:4,next_offset:null}}:{success:true,...profile}});
+const settle=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediate(resolve));};
+(async()=>{
+ w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await settle();
+ assert.equal(requests.length,2,'only two missing avatars may load concurrently');
+ requests[0].onload();assert.equal(requests.length,3);requests[1].onload();assert.equal(requests.length,4);
+ requests[2].onload();requests[3].onload();
+ await w.tenantOperator.refresh();await settle();
+ assert.equal(requests.length,4,'refresh must reuse successful avatar results');
+ assert.equal(w.document.querySelectorAll('#operatorRows img[src]').length,4,'list images survive re-render without opening conversations');
+ console.log('PASS: visible-list avatar hydration is bounded to two, deduplicated, and retained across refresh.');
+ dom.window.close();
+})().catch(error=>{console.error(error);dom.window.close();process.exitCode=1;});
