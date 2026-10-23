@@ -54,7 +54,7 @@ def claim_next():
               WHERE e.state='processing' AND EXISTS (SELECT 1 FROM saas_ai_agent_jobs j
                 WHERE j.tenant_id=e.tenant_id AND j.event_fingerprint=e.fingerprint AND j.state='unknown')''')
             cur.execute('''SELECT j.* FROM saas_ai_agent_jobs j
-              JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id AND a.enabled=TRUE AND a.role='primary' AND a.mode='automatic'
+              JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id AND a.archived_at IS NULL AND a.enabled=TRUE AND a.role='primary' AND a.mode='automatic'
               JOIN saas_ai_agent_settings cfg ON cfg.tenant_id=j.tenant_id AND cfg.enabled=TRUE AND cfg.auto_send_enabled=TRUE AND cfg.emergency_stop=FALSE
               JOIN saas_tenants t ON t.id=j.tenant_id
               WHERE j.state='queued' AND j.due_at<=now()
