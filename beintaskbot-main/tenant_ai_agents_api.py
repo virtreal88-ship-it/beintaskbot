@@ -225,7 +225,10 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 elif resource == 'agent' and method == 'PATCH':
                     result = await asyncio.to_thread(save_agent, profile, payload, agent_id=request.match_info['agent_id'])
                 elif resource == 'agent' and method == 'DELETE':
-                    result = await asyncio.to_thread(delete_agent, profile, request.match_info['agent_id'])
+                    result = await asyncio.to_thread(
+                        delete_agent, profile, request.match_info['agent_id'],
+                        replacement_agent_id=payload.get('replacement_agent_id'),
+                        expected_version=payload.get('expected_version'))
                 elif resource == 'triggers' and method == 'POST':
                     result = await asyncio.to_thread(save_trigger,profile,request.match_info['agent_id'],payload)
                 elif resource == 'trigger' and method == 'PATCH':

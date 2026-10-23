@@ -302,9 +302,11 @@ def list_agents(profile):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, _ = _authorize(cur, profile)
-            cur.execute('''SELECT id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,
-              schedule,scopes,model,safety,response_policy,role,expert_policy,version,created_at,updated_at FROM saas_ai_agents
-              WHERE tenant_id=%s::uuid ORDER BY created_at,id''', (tenant,))
+            cur.execute('''SELECT a.id,a.tenant_id,a.name,a.instructions,a.enabled,a.mode,a.language,a.style,a.delay_seconds,
+              a.schedule,a.scopes,a.model,a.safety,a.response_policy,a.role,a.expert_policy,a.version,a.created_at,a.updated_at,
+              (SELECT count(*) FROM saas_ai_conversation_state cs WHERE cs.tenant_id=a.tenant_id AND cs.agent_id=a.id) AS assigned_dialog_count
+              FROM saas_ai_agents a
+              WHERE a.tenant_id=%s::uuid AND a.archived_at IS NULL ORDER BY a.created_at,a.id''', (tenant,))
             rows = [_row(row) for row in cur.fetchall()]
     return rows
 
@@ -509,7 +511,8 @@ def save_agent(profile, data, *, agent_id=None):
                 _audit(cur, tenant, actor, 'ai_agent_created', 'ai_agent', agent_uuid, {'name': patch['name']})
             else:
                 agent_uuid = identifier(agent_id)
-                cur.execute('''SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE''', (tenant, agent_uuid))
+                cur.execute('''SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid
+                  AND archived_at IS NULL FOR UPDATE''', (tenant, agent_uuid))
                 previous = cur.fetchone()
                 if not previous:
                     raise TenantLinearError('Agent tapılmadı.', 404)
@@ -552,31 +555,131 @@ def save_agent(profile, data, *, agent_id=None):
     return result
 
 
-def delete_agent(profile, agent_id):
+def _require_owner(cur, tenant, actor):
+    """Archiving changes dialogue ownership, so delegated AI management is insufficient."""
+    cur.execute('''SELECT role FROM saas_tenant_members
+      WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE''', (tenant, actor))
+    if (cur.fetchone() or {}).get('role') != 'owner':
+        raise TenantLinearError('Yalnız şirkət sahibi agenti arxivləşdirə bilər.', 403)
+
+
+def _recipient_covers_dialog(scopes, provider, channel_id, conversation_id):
+    if provider == 'connect':
+        from tenant_ai_agent_connect import scope_matches
+        from tenant_ai_group_coordination import group_jid
+        return scope_matches(scopes, str(channel_id or ''), is_group=bool(group_jid(conversation_id)))
+    # Legacy Kommo rows retain a channel id.  An empty scoped channel means
+    # the existing Kommo scope covers every channel in that pipeline binding.
+    return any(isinstance(scope, dict) and str(scope.get('provider') or 'kommo') == 'kommo'
+               and (not str(scope.get('channel_id') or '')
+                    or str(scope.get('channel_id') or '') == str(channel_id or ''))
+               for scope in (scopes or []))
+
+
+def delete_agent(profile, agent_id, *, replacement_agent_id=None, expected_version=None):
+    """Archive an agent and atomically move its dialogue bindings.
+
+    Historical runs, drafts, knowledge and test sessions deliberately keep the
+    original agent id.  Moved dialogues are paused, never implicitly resumed.
+    """
     agent_uuid = identifier(agent_id)
+    replacement_uuid = identifier(replacement_agent_id) if replacement_agent_id else None
+    if not replacement_uuid:
+        raise TenantLinearError('Dialoqların ötürüləcəyi agenti seçin.', 400)
+    if replacement_uuid == agent_uuid:
+        raise TenantLinearError('Qəbul edən agent silinən agentdən fərqli olmalıdır.', 409)
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
-            # Serialize with explicit assignment's shared agent lock. Cascading
-            # deletion must not erase its Human Mode and allow another agent in.
-            cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE', (tenant,agent_uuid))
-            if not cur.fetchone():
+            _require_owner(cur, tenant, actor)
+            cur.execute('''SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid
+              FOR UPDATE''', (tenant,agent_uuid))
+            source = cur.fetchone()
+            if not source or source.get('archived_at'):
                 raise TenantLinearError('Agent tapılmadı.', 404)
-            cur.execute('''SELECT 1 FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid
-              AND provider='connect' AND agent_id=%s::uuid AND agent_assignment_id IS NOT NULL LIMIT 1''', (tenant,agent_uuid))
-            if cur.fetchone():
-                raise TenantLinearError('Агент явно назначен диалогам. Выключите его вместо удаления, чтобы сохранить их состояние.',409)
-            cur.execute('SELECT 1 FROM saas_ai_test_sessions WHERE tenant_id=%s::uuid AND agent_id=%s::uuid LIMIT 1', (tenant,agent_uuid))
-            if cur.fetchone():
-                raise TenantLinearError('У агента есть история виртуальных тестов. Выключите агента вместо удаления, чтобы сохранить историю и учёт лимитов.',409)
-            cur.execute('DELETE FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING id', (tenant, agent_uuid))
-            row = cur.fetchone()
-            if not row:
-                raise TenantLinearError('Agent tapılmadı.', 404)
-            _audit(cur, tenant, actor, 'ai_agent_deleted', 'ai_agent', agent_uuid)
+            if expected_version is not None and int(source['version']) != int(expected_version):
+                raise TenantLinearError('Agent dəyişib. Səhifəni yeniləyin.', 409)
+            cur.execute('''SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid
+              AND archived_at IS NULL FOR UPDATE''', (tenant,replacement_uuid))
+            replacement = cur.fetchone()
+            if not replacement or replacement.get('role', 'primary') != 'primary':
+                raise TenantLinearError('Qəbul edən aktiv əsas agent olmalıdır.', 409)
+            cur.execute('''SELECT tenant_id,provider,channel_id,conversation_id,state,agent_assignment_id
+              FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND agent_id=%s::uuid
+              FOR UPDATE''', (tenant,agent_uuid))
+            dialogs = cur.fetchall()
+            uncovered = [row for row in dialogs if not _recipient_covers_dialog(
+                replacement.get('scopes') or [], row['provider'], row.get('channel_id'), row['conversation_id'])]
+            if uncovered:
+                raise TenantLinearError('Qəbul edən agent bütün təyin edilmiş dialoq kanallarına icazəli deyil.', 409)
+            # Fence pending source work before changing bindings. A terminal
+            # result stays historical; no replacement job is created.
+            cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,
+              lease_token=NULL,lease_until=NULL,error_code='agent_archived',updated_at=now()
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state IN ('queued','processing')''', (tenant,agent_uuid))
+            cur.execute('''UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='agent_archived'
+              WHERE tenant_id=%s::uuid AND state IN ('queued','processing') AND fingerprint IN
+              (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND error_code='agent_archived')''',
+              (tenant,tenant,agent_uuid))
+            cur.execute("UPDATE saas_ai_agent_drafts SET state='rejected' WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state='pending'", (tenant,agent_uuid))
+            cur.execute('''UPDATE saas_ai_conversation_state SET agent_id=%s::uuid,
+              state=CASE WHEN state='human' THEN 'human' ELSE 'paused' END,
+              reason='agent_archived_transfer',assigned_to=NULL,revision=revision+1,updated_at=now()
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid''', (replacement_uuid,tenant,agent_uuid))
+            # Group assignments are a separate authority registry. Preserve
+            # its stopped state while moving only compatible source slots.
+            cur.execute('''SELECT group_jid,assignments FROM saas_ai_group_coordination
+              WHERE tenant_id=%s::uuid AND provider='connect' FOR UPDATE''', (tenant,))
+            for group in cur.fetchall():
+                slots = group.get('assignments') or []
+                changed = False
+                updated = []
+                for slot in slots:
+                    slot = dict(slot)
+                    if str(slot.get('agent_id')) == str(agent_uuid):
+                        if not _recipient_covers_dialog(replacement.get('scopes') or [], 'connect', slot.get('channel_id'), group['group_jid']):
+                            raise TenantLinearError('Qəbul edən agent qrup kanalına icazəli deyil.', 409)
+                        slot['agent_id'] = str(replacement_uuid); changed = True
+                    updated.append(slot)
+                if changed:
+                    cur.execute("UPDATE saas_ai_group_coordination SET assignments=%s::jsonb,state=CASE WHEN state='human' THEN 'human' ELSE 'paused' END,reason='agent_archived_transfer',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect' AND group_jid=%s", (_json(updated),tenant,group['group_jid']))
+            # Archived agents cannot remain executable through triggers or simulation.
+            cur.execute("UPDATE saas_ai_agent_triggers SET enabled=FALSE,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND enabled=TRUE", (tenant,agent_uuid))
+            cur.execute("SELECT to_regclass('saas_ai_simulation_configs') IS NOT NULL AS available")
+            if (cur.fetchone() or {}).get('available'):
+                cur.execute("UPDATE saas_ai_simulation_configs SET enabled=FALSE,state='stopped',agent_id=NULL,version=version+1,updated_by=%s,updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid", (actor,tenant,agent_uuid))
+            # Unlink an archived Expert from current Team policies and trigger
+            # targets. Historical runs retain their original relationship.
+            cur.execute('''SELECT id,expert_policy FROM saas_ai_agents WHERE tenant_id=%s::uuid
+              AND id<>%s::uuid AND archived_at IS NULL FOR UPDATE''', (tenant,agent_uuid))
+            for team in cur.fetchall():
+                policy = dict(team.get('expert_policy') or {})
+                ids = [str(value) for value in policy.get('expert_agent_ids') or [] if str(value) != str(agent_uuid)]
+                if str(policy.get('expert_agent_id') or '') == str(agent_uuid):
+                    policy.pop('expert_agent_id', None)
+                if ids != [str(value) for value in policy.get('expert_agent_ids') or []]:
+                    policy['expert_agent_ids'] = ids
+                    cur.execute('''UPDATE saas_ai_agents SET expert_policy=%s::jsonb,version=version+1,updated_at=now()
+                      WHERE tenant_id=%s::uuid AND id=%s::uuid''', (_json(policy),tenant,team['id']))
+            cur.execute('''SELECT id,condition,actions FROM saas_ai_agent_triggers WHERE tenant_id=%s::uuid
+              AND agent_id<>%s::uuid FOR UPDATE''', (tenant,agent_uuid))
+            for trigger in cur.fetchall():
+                condition = dict(trigger.get('condition') or {})
+                ids = [str(value) for value in condition.get('expert_agent_ids') or [] if str(value) != str(agent_uuid)]
+                if ids == [str(value) for value in condition.get('expert_agent_ids') or []]:
+                    continue
+                condition['expert_agent_ids'] = ids
+                cur.execute('''UPDATE saas_ai_agent_triggers SET condition=%s::jsonb,
+                  enabled=CASE WHEN %s THEN FALSE ELSE enabled END,version=version+1,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid''', (_json(condition),'call_expert' in (trigger.get('actions') or []),tenant,trigger['id']))
+            cur.execute('''UPDATE saas_ai_agents SET enabled=FALSE,archived_at=now(),archived_by=%s,
+              archived_replaced_by=%s::uuid,version=version+1,updated_at=now()
+              WHERE tenant_id=%s::uuid AND id=%s::uuid''', (actor,replacement_uuid,tenant,agent_uuid))
+            _audit(cur, tenant, actor, 'ai_agent_archived', 'ai_agent', agent_uuid,
+                   {'replacement_agent_id': str(replacement_uuid), 'transferred_dialogs': len(dialogs)})
         conn.commit()
-    return {'deleted': True}
+    return {'archived': True, 'replacement_agent_id': str(replacement_uuid), 'transferred_dialogs': len(dialogs)}
 
 
 def list_knowledge(profile, source_id=None):

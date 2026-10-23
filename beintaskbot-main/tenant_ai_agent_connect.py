@@ -140,7 +140,7 @@ def _auto_assign_group_from_inbound(cur, tenant, channel_id, conversation_id):
             or not tenant_status_allows_ai(gate.get('status'), 'connect')):
         return None, 'connect_admission_blocked'
     cur.execute('''SELECT a.id,a.name,a.role,a.scopes,a.enabled,a.mode,a.schedule
-      FROM saas_ai_agents a WHERE a.tenant_id=%s::uuid ORDER BY a.created_at,a.id''',
+      FROM saas_ai_agents a WHERE a.tenant_id=%s::uuid AND a.archived_at IS NULL ORDER BY a.created_at,a.id''',
       (tenant,))
     rows = [dict(row) for row in cur.fetchall()]
     agent, reason = unique_connect_candidate(rows, channel_id, is_group=True)
@@ -277,7 +277,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
               WHERE tenant_id=%s::uuid AND provider='connect' AND state IN ('queued','processing')
                 AND payload->>'conversation_id'=%s AND payload->>'channel_id'=%s AND fingerprint<>%s''', (tenant, conversation_id, channel_id, fingerprint))
             cur.execute('''SELECT a.id,a.scopes,a.delay_seconds,a.enabled,a.schedule,a.mode FROM saas_ai_agents a
-              WHERE a.role='primary' AND a.tenant_id=%s::uuid ORDER BY a.created_at,a.id''', (tenant,))
+              WHERE a.role='primary' AND a.tenant_id=%s::uuid AND a.archived_at IS NULL ORDER BY a.created_at,a.id''', (tenant,))
             tenant_agents = cur.fetchall()
             # Existing bindings always win. If this is an unassigned personal
             # dialogue, persist a unique scoped agent before considering the

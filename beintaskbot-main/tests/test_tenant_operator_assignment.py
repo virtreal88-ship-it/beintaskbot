@@ -178,8 +178,33 @@ def test_primary_assignment_can_be_changed_or_removed_without_resuming(old_dialo
     assert db.execute('SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s',(A,CA))[0]=={'state':'human','reason':'manager_replied'}
     detail=dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']
     assert detail.get('agent_id') is None and detail['agent_status']=='needs_assignment'
-    agents.delete_agent(PROFILE,AGENT)
+    agents.delete_agent(PROFILE,AGENT,replacement_agent_id=AGENT2)
     f['send'].assert_not_called();f['generate'].assert_not_called()
+
+
+def test_archive_transfers_dialog_atomically_and_preserves_history(old_dialog):
+    f=old_dialog;db=f['db'];data=payload(f)
+    assignment.assign(PROFILE,data)
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT2))
+    before=db.execute("SELECT id,direction,body FROM saas_crm_messages WHERE tenant_id=%s::uuid ORDER BY id",(A,));db.commit()
+    result=agents.delete_agent(PROFILE,AGENT,replacement_agent_id=AGENT2)
+    assert result['archived'] and result['transferred_dialogs'] >= 1
+    source=db.execute("SELECT enabled,archived_at,archived_replaced_by FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]
+    assert source['enabled'] is False and source['archived_at'] and str(source['archived_replaced_by'])==AGENT2
+    state=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert str(state['agent_id'])==AGENT2 and state['state']=='human' and state['reason']=='agent_archived_transfer'
+    assert db.execute("SELECT id,direction,body FROM saas_crm_messages WHERE tenant_id=%s::uuid ORDER BY id",(A,))==before
+    assert AGENT not in [row['id'] for row in agents.list_agents(PROFILE)]
+    assert f['process']() is None;f['send'].assert_not_called();f['generate'].assert_not_called()
+
+
+def test_archive_rejects_recipient_without_channel_scope(old_dialog):
+    f=old_dialog;db=f['db'];assignment.assign(PROFILE,payload(f))
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CB}]),A,AGENT2));db.commit()
+    with pytest.raises(TenantLinearError) as error:
+        agents.delete_agent(PROFILE,AGENT,replacement_agent_id=AGENT2)
+    assert error.value.status==409
+    assert db.execute("SELECT archived_at FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]['archived_at'] is None
 
 
 def test_additive_migration_preserves_legacy_and_other_provider_states(old_dialog):

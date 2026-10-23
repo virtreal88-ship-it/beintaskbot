@@ -87,6 +87,13 @@ def ensure_schema(conn):
             # server-enforced default policy on their next read.
             cur.execute("ALTER TABLE saas_ai_agents ADD COLUMN IF NOT EXISTS safety JSONB NOT NULL DEFAULT '{}'::jsonb")
             cur.execute("ALTER TABLE saas_ai_agents ADD COLUMN IF NOT EXISTS response_policy JSONB NOT NULL DEFAULT '{}'::jsonb")
+            # Agents are retained for audit, conversation history and spend
+            # accounting.  Archiving is the only supported removal path.
+            cur.execute("ALTER TABLE saas_ai_agents ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NULL")
+            cur.execute("ALTER TABLE saas_ai_agents ADD COLUMN IF NOT EXISTS archived_by BIGINT NULL")
+            cur.execute("ALTER TABLE saas_ai_agents ADD COLUMN IF NOT EXISTS archived_replaced_by UUID NULL")
+            cur.execute('''CREATE INDEX IF NOT EXISTS saas_ai_agents_active_idx
+              ON saas_ai_agents(tenant_id,created_at,id) WHERE archived_at IS NULL''')
             # A wizard may survive a browser refresh after its first request.
             # The opaque setup key makes that retry return the same record
             # instead of creating another agent for the same employee.
