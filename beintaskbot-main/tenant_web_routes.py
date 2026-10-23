@@ -33,6 +33,7 @@ from tenant_operator_api import handler as operator_handler
 from tenant_instruction_library_api import handler as instruction_handler
 from tenant_night_report_api import handler as night_report_handler
 from tenant_ai_instructor_api import handler as ai_instructor_handler
+from tenant_ai_learning_mcp import routes as learning_mcp_routes
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 MemberReader = Callable[[web.Request], dict | None]
@@ -82,6 +83,7 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
     ]
     routes = [(method, path, handle) for path, handle, methods in bindings for method in methods]
     routes.extend(ai_agent_routes(context))
+    routes.extend(learning_mcp_routes(context.member))
     return routes
 
 
