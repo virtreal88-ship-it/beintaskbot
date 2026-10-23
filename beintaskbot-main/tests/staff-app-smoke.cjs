@@ -39,6 +39,7 @@ for(const lang of ['ru','az','en'])for(const theme of ['light','dark'])for(const
  assert.ok(profileCalls>=2);assert.ok(staffAssets.length>=4&&staffAssets.every(s=>s===200||s===304));assert.deepEqual(writes,[]);assert.deepEqual(errors,[]);
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'horizontal overflow');
  assert.equal(await page.locator('html').getAttribute('data-app-theme'),theme);
+ assert.equal(await staff.locator('#staffAdd').innerText(),labels[lang][1]);
  const out=path.join(root,'.support-test-deps/staff-smoke');fs.mkdirSync(out,{recursive:true});await page.screenshot({path:path.join(out,`${lang}-${theme}-${width}.png`),fullPage:true});cases++;await page.close();
 }console.log(`${cases} full /app Chromium cases passed`);
 }finally{await browser?.close();server.kill()}})().catch(e=>{console.error(e);process.exitCode=1;server.kill()});
