@@ -13,8 +13,6 @@ import os
 import re
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse
 
 from aiohttp import web
 
@@ -25,7 +23,10 @@ from tenant_ai_simulation_schema import ensure_schema
 from tenant_linear_policy import TenantLinearError
 
 TOOL_SCOPE = 'ai_learning.read'
+OFFLINE_SCOPE = 'offline_access'
 MAX_PAGE = 25
+CHATGPT_CLIENT_ID = 'https://chatgpt.com/oauth/client.json'
+CHATGPT_REDIRECT_URI = 'https://chatgpt.com/connector_platform_oauth_redirect'
 
 
 def _cfg():
@@ -56,14 +57,23 @@ def ensure_mcp_schema(conn):
           id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
           token_hash TEXT NOT NULL UNIQUE, agent_id UUID NOT NULL, channel_id UUID NOT NULL,
           client_id TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL, revoked_at TIMESTAMPTZ NULL,
+          refresh_token_hash TEXT NULL UNIQUE, refresh_expires_at TIMESTAMPTZ NULL,
+          scope TEXT NOT NULL DEFAULT 'ai_learning.read',
           requests_in_window INTEGER NOT NULL DEFAULT 0, window_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           created_by BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_learning_mcp_codes(
           code_hash TEXT PRIMARY KEY, tenant_id UUID NOT NULL, agent_id UUID NOT NULL, channel_id UUID NOT NULL,
           client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL, code_challenge TEXT NOT NULL,
+          scope TEXT NOT NULL DEFAULT 'ai_learning.read',
           actor_id BIGINT NOT NULL, expires_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
         cur.execute('CREATE INDEX IF NOT EXISTS saas_ai_learning_mcp_active_idx ON saas_ai_learning_mcp_tokens(tenant_id,expires_at) WHERE revoked_at IS NULL')
+        # Existing installations created the two tables before refresh support.
+        # These additive columns preserve all opaque access tokens and codes.
+        cur.execute('ALTER TABLE saas_ai_learning_mcp_tokens ADD COLUMN IF NOT EXISTS refresh_token_hash TEXT NULL UNIQUE')
+        cur.execute('ALTER TABLE saas_ai_learning_mcp_tokens ADD COLUMN IF NOT EXISTS refresh_expires_at TIMESTAMPTZ NULL')
+        cur.execute("ALTER TABLE saas_ai_learning_mcp_tokens ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'ai_learning.read'")
+        cur.execute("ALTER TABLE saas_ai_learning_mcp_codes ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'ai_learning.read'")
 
 
 def _hash(value): return hashlib.sha256(str(value).encode()).hexdigest()
@@ -202,27 +212,38 @@ async def mcp(request):
 
 
 def _chatgpt_client(client_id, redirect_uri):
-    client, redirect = urlparse(str(client_id or '')), urlparse(str(redirect_uri or ''))
-    # ChatGPT publishes a client metadata URL.  Never accept arbitrary OAuth
-    # clients or redirect targets for a production tenant.
-    if client.scheme != 'https' or client.hostname != 'chatgpt.com' or not client.path.startswith('/oauth/'):
+    # ChatGPT's public Client ID Metadata Document (CIMD) is deliberately
+    # pinned.  Treating any HTTPS URL as a client ID would turn OAuth into an
+    # SSRF/client-impersonation surface.  The document itself currently names
+    # this connector redirect, so both values must match exactly.
+    if not hmac.compare_digest(str(client_id or ''), CHATGPT_CLIENT_ID):
         raise TenantLinearError('Untrusted OAuth client.',400)
-    if redirect.scheme != 'https' or redirect.hostname != 'chatgpt.com' or not redirect.path.startswith('/connector/'):
+    if not hmac.compare_digest(str(redirect_uri or ''), CHATGPT_REDIRECT_URI):
         raise TenantLinearError('Untrusted OAuth redirect.',400)
+
+
+def _requested_scopes(value):
+    requested={part for part in str(value or TOOL_SCOPE).split() if part}
+    if not requested or TOOL_SCOPE not in requested or requested-{TOOL_SCOPE,OFFLINE_SCOPE}:
+        raise TenantLinearError('Unsupported OAuth scope.',400)
+    return requested
 
 
 async def authorize(request, member_from_request):
     try:
         cfg=_require_cfg(); profile=member_from_request(request)
         if not profile: return web.Response(text='Sign in to Beintaskbot, then retry this ChatGPT connection.',status=401,content_type='text/plain')
-        client_id=request.query.get('client_id',''); redirect_uri=request.query.get('redirect_uri','')
-        _chatgpt_client(client_id,redirect_uri)
         if request.method=='GET':
+            client_id=request.query.get('client_id',''); redirect_uri=request.query.get('redirect_uri','')
+            _chatgpt_client(client_id,redirect_uri)
+            if request.query.get('response_type') != 'code': raise TenantLinearError('Only authorization code flow is supported.',400)
+            scopes=_requested_scopes(request.query.get('scope',TOOL_SCOPE))
             state=html.escape(request.query.get('state',''),quote=True); challenge=html.escape(request.query.get('code_challenge',''),quote=True)
             if request.query.get('code_challenge_method')!='S256' or not challenge: raise TenantLinearError('PKCE S256 is required.',400)
-            form=''.join(f'<input type="hidden" name="{key}" value="{value}">' for key,value in [('client_id',html.escape(client_id,quote=True)),('redirect_uri',html.escape(redirect_uri,quote=True)),('state',state),('code_challenge',challenge)])
+            form=''.join(f'<input type="hidden" name="{key}" value="{value}">' for key,value in [('client_id',html.escape(client_id,quote=True)),('redirect_uri',html.escape(redirect_uri,quote=True)),('state',state),('code_challenge',challenge),('scope',html.escape(' '.join(sorted(scopes)),quote=True))])
             return web.Response(text='<html><body><h1>Connect ChatGPT</h1><p>Read-only access: one configured AI agent and WhatsApp channel. No message sending or settings changes.</p><form method="post">'+form+'<button type="submit">Allow read-only access</button></form></body></html>',content_type='text/html')
         data=await request.post(); client_id=str(data.get('client_id','')); redirect_uri=str(data.get('redirect_uri','')); _chatgpt_client(client_id,redirect_uri)
+        scopes=_requested_scopes(data.get('scope',TOOL_SCOPE))
         challenge=str(data.get('code_challenge',''))
         if not re.fullmatch(r'[A-Za-z0-9_-]{43,128}',challenge): raise TenantLinearError('PKCE S256 is required.',400)
         with _connect() as conn:
@@ -231,8 +252,8 @@ async def authorize(request, member_from_request):
                 tenant,actor=_authorize(cur,profile)
                 if tenant!=cfg['AI_LEARNING_MCP_TENANT_ID'] or profile.get('role')!='owner': raise TenantLinearError('Only the configured company owner can authorize this connection.',403)
                 code=secrets.token_urlsafe(40)
-                cur.execute('''INSERT INTO saas_ai_learning_mcp_codes(code_hash,tenant_id,agent_id,channel_id,client_id,redirect_uri,code_challenge,actor_id,expires_at)
-                  VALUES(%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,now()+interval '10 minutes')''',(_hash(code),tenant,cfg['AI_LEARNING_MCP_AGENT_ID'],cfg['AI_LEARNING_MCP_CHANNEL_ID'],client_id,redirect_uri,challenge,actor))
+                cur.execute('''INSERT INTO saas_ai_learning_mcp_codes(code_hash,tenant_id,agent_id,channel_id,client_id,redirect_uri,code_challenge,scope,actor_id,expires_at)
+                  VALUES(%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,now()+interval '10 minutes')''',(_hash(code),tenant,cfg['AI_LEARNING_MCP_AGENT_ID'],cfg['AI_LEARNING_MCP_CHANNEL_ID'],client_id,redirect_uri,challenge,' '.join(sorted(scopes)),actor))
                 _audit(cur,tenant,actor,'ai_learning_mcp_authorized','mcp_oauth_client',client_id,{'agent_id':cfg['AI_LEARNING_MCP_AGENT_ID'],'channel_id':cfg['AI_LEARNING_MCP_CHANNEL_ID']})
             conn.commit()
         separator='&' if '?' in redirect_uri else '?'
@@ -244,23 +265,43 @@ async def authorize(request, member_from_request):
 async def token(request):
     try:
         cfg=_require_cfg(); data=await request.post()
-        if data.get('grant_type')!='authorization_code': raise TenantLinearError('Unsupported grant.',400)
-        code=str(data.get('code','')); verifier=str(data.get('code_verifier','')); client_id=str(data.get('client_id','')); redirect_uri=str(data.get('redirect_uri',''))
-        _chatgpt_client(client_id,redirect_uri)
-        if not re.fullmatch(r'[A-Za-z0-9._~-]{43,128}',verifier): raise TenantLinearError('Invalid PKCE verifier.',400)
-        digest=_b64(hashlib.sha256(verifier.encode()).digest())
+        grant=str(data.get('grant_type','')); client_id=str(data.get('client_id',''))
+        if grant not in {'authorization_code','refresh_token'}: raise TenantLinearError('Unsupported grant.',400)
+        if grant=='authorization_code':
+            redirect_uri=str(data.get('redirect_uri','')); _chatgpt_client(client_id,redirect_uri)
+            verifier=str(data.get('code_verifier',''))
+            if not re.fullmatch(r'[A-Za-z0-9._~-]{43,128}',verifier): raise TenantLinearError('Invalid PKCE verifier.',400)
+            digest=_b64(hashlib.sha256(verifier.encode()).digest())
+        else:
+            _chatgpt_client(client_id,CHATGPT_REDIRECT_URI)
         with _connect() as conn:
             ensure_mcp_schema(conn)
             with conn.cursor() as cur:
-                cur.execute('SELECT * FROM saas_ai_learning_mcp_codes WHERE code_hash=%s FOR UPDATE',(_hash(code),)); row=cur.fetchone()
-                if not row or row.get('used_at') or row.get('expires_at')<=datetime.now(timezone.utc) or row['client_id']!=client_id or row['redirect_uri']!=redirect_uri or not hmac.compare_digest(row['code_challenge'],digest): raise TenantLinearError('Invalid authorization code.',400)
-                cur.execute('UPDATE saas_ai_learning_mcp_codes SET used_at=now() WHERE code_hash=%s',(_hash(code),))
-                access=secrets.token_urlsafe(48); token_id=uuid.uuid4()
-                cur.execute('''INSERT INTO saas_ai_learning_mcp_tokens(id,tenant_id,token_hash,agent_id,channel_id,client_id,expires_at,created_by)
-                  VALUES(%s,%s::uuid,%s,%s::uuid,%s::uuid,%s,now()+interval '8 hours',%s)''',(token_id,row['tenant_id'],_hash(access),row['agent_id'],row['channel_id'],client_id,row['actor_id']))
-                _audit(cur,row['tenant_id'],row['actor_id'],'ai_learning_mcp_token_issued','mcp_token',token_id,{'client_id':client_id[:120]})
+                if grant=='authorization_code':
+                    code=str(data.get('code',''))
+                    cur.execute('SELECT * FROM saas_ai_learning_mcp_codes WHERE code_hash=%s AND expires_at>now() FOR UPDATE',(_hash(code),)); row=cur.fetchone()
+                    if not row or row.get('used_at') or row['client_id']!=client_id or row['redirect_uri']!=redirect_uri or not hmac.compare_digest(row['code_challenge'],digest): raise TenantLinearError('Invalid authorization code.',400)
+                    cur.execute('UPDATE saas_ai_learning_mcp_codes SET used_at=now() WHERE code_hash=%s',(_hash(code),))
+                    token_id=uuid.uuid4()
+                    refresh=secrets.token_urlsafe(48) if OFFLINE_SCOPE in str(row['scope']).split() else None
+                    cur.execute('''INSERT INTO saas_ai_learning_mcp_tokens(id,tenant_id,token_hash,agent_id,channel_id,client_id,expires_at,refresh_token_hash,refresh_expires_at,scope,created_by)
+                      VALUES(%s,%s::uuid,%s,%s::uuid,%s::uuid,%s,now()+interval '8 hours',%s,CASE WHEN %s::text IS NULL THEN NULL ELSE now()+interval '30 days' END,%s,%s)''',(token_id,row['tenant_id'],_hash(secrets.token_urlsafe(48)),row['agent_id'],row['channel_id'],client_id,_hash(refresh) if refresh else None,refresh,row['scope'],row['actor_id']))
+                else:
+                    refresh=str(data.get('refresh_token',''))
+                    cur.execute('''SELECT * FROM saas_ai_learning_mcp_tokens WHERE refresh_token_hash=%s AND client_id=%s
+                      AND revoked_at IS NULL AND refresh_expires_at>now() FOR UPDATE''',(_hash(refresh),client_id)); row=cur.fetchone()
+                    if not row: raise TenantLinearError('Invalid refresh token.',400)
+                    token_id=row['id']
+                    refresh=secrets.token_urlsafe(48)
+                    cur.execute('''UPDATE saas_ai_learning_mcp_tokens SET token_hash=%s,expires_at=now()+interval '8 hours',
+                      refresh_token_hash=%s,refresh_expires_at=now()+interval '30 days' WHERE id=%s''',(_hash(secrets.token_urlsafe(48)),_hash(refresh),token_id))
+                access=secrets.token_urlsafe(48)
+                cur.execute('UPDATE saas_ai_learning_mcp_tokens SET token_hash=%s WHERE id=%s',(_hash(access),token_id))
+                _audit(cur,row['tenant_id'],row.get('actor_id',row.get('created_by')),'ai_learning_mcp_token_issued','mcp_token',token_id,{'client_id':client_id[:120],'grant':grant})
             conn.commit()
-        return web.json_response({'access_token':access,'token_type':'Bearer','expires_in':28800,'scope':TOOL_SCOPE},headers={'Cache-Control':'no-store'})
+        response={'access_token':access,'token_type':'Bearer','expires_in':28800,'scope':str(row.get('scope') or TOOL_SCOPE)}
+        if refresh: response['refresh_token']=refresh
+        return web.json_response(response,headers={'Cache-Control':'no-store'})
     except TenantLinearError as exc: return web.json_response({'error':'invalid_grant','error_description':str(exc)},status=exc.status,headers={'Cache-Control':'no-store'})
 
 
@@ -268,12 +309,12 @@ def routes(member_from_request):
     async def protected(request):
         try:
             cfg=_require_cfg()
-            return web.json_response({'resource':cfg['issuer']+'/mcp','authorization_servers':[cfg['issuer']], 'scopes_supported':[TOOL_SCOPE]})
+            return web.json_response({'resource':cfg['issuer']+'/mcp/ai-learning','authorization_servers':[cfg['issuer']], 'scopes_supported':[TOOL_SCOPE,OFFLINE_SCOPE]})
         except TenantLinearError as exc: return web.json_response({'error':str(exc)},status=exc.status)
     async def metadata(request):
         try:
             cfg=_require_cfg(); base=cfg['issuer']
-            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code']})
+            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE,OFFLINE_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code','refresh_token'],'token_endpoint_auth_methods_supported':['none'],'client_id_metadata_document_supported':True})
         except TenantLinearError as exc: return web.json_response({'error':str(exc)},status=exc.status)
     return [('POST','/mcp/ai-learning',mcp),('GET','/mcp/ai-learning',mcp),('GET','/.well-known/oauth-protected-resource/mcp/ai-learning',protected),('GET','/.well-known/oauth-authorization-server',metadata),('GET','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/token',token)]
 

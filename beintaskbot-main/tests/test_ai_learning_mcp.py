@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import uuid
+from urllib.parse import parse_qs, urlparse
 
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
@@ -13,6 +14,8 @@ import tenant_ai_learning_mcp as mcp
 
 
 AGENT='67da1058-2ffb-48fa-bfd9-d3d01c1990d1'
+CHATGPT_CLIENT='https://chatgpt.com/oauth/client.json'
+CHATGPT_REDIRECT='https://chatgpt.com/connector_platform_oauth_redirect'
 
 
 def test_mcp_is_fail_closed_without_explicit_railway_configuration(monkeypatch):
@@ -74,3 +77,61 @@ def test_cursor_is_signed_and_rate_limit_is_enforced(db, monkeypatch):
     db.execute('UPDATE saas_ai_learning_mcp_tokens SET requests_in_window=60 WHERE token_hash=%s',(hashlib.sha256(token.encode()).hexdigest(),)); db.commit()
     request=type('Request',(),{'headers':{'Authorization':'Bearer '+token}})()
     with __import__('pytest').raises(Exception): mcp._authorize_token(request)
+
+
+def test_chatgpt_cimd_identity_is_pinned_to_its_published_client_and_redirect():
+    mcp._chatgpt_client(CHATGPT_CLIENT, CHATGPT_REDIRECT)
+    import pytest
+    with pytest.raises(Exception):
+        mcp._chatgpt_client('https://chatgpt.com/oauth/other.json', CHATGPT_REDIRECT)
+    with pytest.raises(Exception):
+        mcp._chatgpt_client(CHATGPT_CLIENT, 'https://chatgpt.com/connector/other')
+
+
+def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, monkeypatch):
+    _setup(monkeypatch,db)
+    async def check():
+        app=web.Application()
+        for method,path,handler in mcp.routes(lambda request: None):
+            getattr(app.router, 'add_'+method.lower())(path,handler)
+        async with TestClient(TestServer(app)) as client:
+            response=await client.get('/.well-known/oauth-authorization-server')
+            data=await response.json()
+            assert data['client_id_metadata_document_supported'] is True
+            assert data['code_challenge_methods_supported']==['S256']
+            assert data['token_endpoint_auth_methods_supported']==['none']
+            assert data['grant_types_supported']==['authorization_code','refresh_token']
+            assert mcp.OFFLINE_SCOPE in data['scopes_supported']
+            protected=await client.get('/.well-known/oauth-protected-resource/mcp/ai-learning')
+            assert (await protected.json())['resource']=='https://crm.test/mcp/ai-learning'
+    asyncio.run(check())
+
+
+def test_chatgpt_cimd_authorization_code_pkce_and_refresh_rotation(db, monkeypatch):
+    _setup(monkeypatch,db)
+    monkeypatch.setattr(mcp, '_authorize', lambda cur, profile: (A, 11))
+    verifier='v'*43
+    challenge=mcp._b64(hashlib.sha256(verifier.encode()).digest())
+    async def check():
+        app=web.Application()
+        for method,path,handler in mcp.routes(lambda request: {'role':'owner'}):
+            getattr(app.router, 'add_'+method.lower())(path,handler)
+        async with TestClient(TestServer(app)) as client:
+            query={'response_type':'code','client_id':CHATGPT_CLIENT,'redirect_uri':CHATGPT_REDIRECT,
+                   'scope':mcp.TOOL_SCOPE+' '+mcp.OFFLINE_SCOPE,'state':'state','code_challenge':challenge,
+                   'code_challenge_method':'S256'}
+            consent=await client.get('/oauth/authorize',params=query)
+            assert consent.status==200 and 'Allow read-only access' in await consent.text()
+            allowed=await client.post('/oauth/authorize',data={key:value for key,value in query.items() if key != 'response_type'},allow_redirects=False)
+            assert allowed.status==302, await allowed.text()
+            code=parse_qs(urlparse(allowed.headers['Location']).query)['code'][0]
+            issued=await client.post('/oauth/token',data={'grant_type':'authorization_code','code':code,
+                'code_verifier':verifier,'client_id':CHATGPT_CLIENT,'redirect_uri':CHATGPT_REDIRECT})
+            token=await issued.json()
+            assert issued.status==200 and token['scope']==mcp.TOOL_SCOPE+' '+mcp.OFFLINE_SCOPE and token.get('refresh_token')
+            refreshed=await client.post('/oauth/token',data={'grant_type':'refresh_token','refresh_token':token['refresh_token'],'client_id':CHATGPT_CLIENT})
+            rotated=await refreshed.json()
+            assert refreshed.status==200 and rotated['access_token'] != token['access_token'] and rotated['refresh_token'] != token['refresh_token']
+            reused=await client.post('/oauth/token',data={'grant_type':'refresh_token','refresh_token':token['refresh_token'],'client_id':CHATGPT_CLIENT})
+            assert reused.status==400
+    asyncio.run(check())
