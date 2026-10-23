@@ -779,6 +779,9 @@ def test_simulation_respects_legacy_channel_quarantine(db,monkeypatch):
 def test_simulation_marks_unavailable_media_unsupported_without_provider_call(db,monkeypatch):
     source=seed_simulation(db)
     db.execute("UPDATE saas_crm_messages SET body='',message_type='audio' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,source));db.commit()
+    db.execute('''INSERT INTO saas_ai_conversation_state
+        (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason,revision)
+        VALUES(%s::uuid,'connect',%s,'client',%s::uuid,'human','manager_replied',1)''',(A,CA,AGENT));db.commit()
     monkeypatch.setattr(simulation,'runtime_flag',lambda name: name in {'AI_SIMULATION_ENABLED','AI_AGENTS_ENABLED'})
     assert queue_simulation(db,source=source)
     monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: pytest.fail('Unavailable media reached provider'))
@@ -787,6 +790,47 @@ def test_simulation_marks_unavailable_media_unsupported_without_provider_call(db
     run=simulation.list_runs(PROFILE)[0]
     assert run['outcome']=='unsupported'
     assert run['virtual_stop_reason']=='simulation_media_context_unavailable'
+    assert {'type':'active_mode_stop_observed','reason':'conversation_human_or_paused',
+            'live_state':'human','executed':False} in run['events']
+
+
+@pytest.mark.parametrize('message_type,body',[
+    ('text','Müştəri yenidən yazıb: vəziyyəti yoxlayın.'),
+    ('image','Müştərinin şəkil üçün əlavə etdiyi izah.'),
+    ('audio','Müştəri səs yazısında vəziyyətin yoxlanmasını istəyir.'),
+])
+def test_simulation_observes_human_pause_and_keeps_virtual_processing(db,monkeypatch,message_type,body):
+    """A prior staff reply stops Active, but never prevents virtual observation."""
+    source=seed_simulation(db)
+    db.execute('''INSERT INTO saas_crm_messages
+        (id,tenant_id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type,happened_at)
+        VALUES(%s::uuid,%s::uuid,41,'connect:staff-reply',%s,'outgoing','Operator','Baxıram.', 'text',now()-interval '1 minute')''',
+        (str(uuid.uuid4()),A,'connect:'+CA))
+    db.execute("UPDATE saas_crm_messages SET body=%s,message_type=%s WHERE tenant_id=%s::uuid AND id=%s::uuid",
+               (body,message_type,A,source))
+    db.execute('''INSERT INTO saas_ai_conversation_state
+        (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason,revision)
+        VALUES(%s::uuid,'connect',%s,'client',%s::uuid,'human','manager_replied',7)''',(A,CA,AGENT))
+    db.commit()
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    assert queue_simulation(db,source=source,event='customer-follow-up-'+message_type)
+    monkeypatch.setattr(actions,'enabled_triggers',lambda *_: [])
+    monkeypatch.setattr(run_store,'knowledge_context',lambda *_args,**_kwargs: [])
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: ('mock-key','test-model','company',{}))
+    provider_calls=[]
+    monkeypatch.setattr('tenant_chat_ai_provider.generate',
+        lambda *_args,**_kwargs: (provider_calls.append(message_type) or 'Virtual follow-up',
+                                   {'input_tokens':11,'output_tokens':7,'total_tokens':18}))
+    before=db.execute("SELECT state,reason,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert simulation.process(simulation.claim_next())
+    run=simulation.list_runs(PROFILE)[0]
+    assert provider_calls==[message_type]
+    assert run['outcome']=='virtual_reply' and run['sent'] is False
+    assert {'type':'active_mode_stop_observed','reason':'conversation_human_or_paused',
+            'live_state':'human','executed':False} in run['events']
+    after=db.execute("SELECT state,reason,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert after==before
+    assert db.execute("SELECT count(*) AS n FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid",(A,))[0]['n']==0
 
 
 def test_simulation_group_requires_live_group_authority_without_mutating_it(db,monkeypatch):
