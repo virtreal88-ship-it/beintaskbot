@@ -260,4 +260,3 @@ def _sync_provider(provider,prompt,kwargs,reserve,settle):
         settle(reservation,None,uncertain=True);raise ContractError('instructor_usage_unknown')
     settle(reservation,total,uncertain=False)
     return raw,usage
-

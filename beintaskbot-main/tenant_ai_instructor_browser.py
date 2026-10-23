@@ -422,4 +422,3 @@ class PlaywrightDemoExecutor:
             finally: await session.playwright.stop()
         return {'recording_dir':str(session.recording_dir),'recording_path':str(recording) if recording else None,
                 'timeline_events':list(session.timeline_events)}
-

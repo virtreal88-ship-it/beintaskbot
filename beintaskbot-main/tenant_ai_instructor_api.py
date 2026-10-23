@@ -58,4 +58,3 @@ def handler(member, origin, logger, resource='collection'):
             logger.error('AI Instructor request unavailable')
             return web.json_response({'success':False,'error':'AI Instructor request unavailable'},status=503,headers=headers)
     return handle
-
