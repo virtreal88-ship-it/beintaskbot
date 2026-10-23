@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import uuid
+import pytest
 from urllib.parse import parse_qs, urlparse
 
 from aiohttp import web
@@ -14,8 +15,8 @@ import tenant_ai_learning_mcp as mcp
 
 
 AGENT='67da1058-2ffb-48fa-bfd9-d3d01c1990d1'
-CHATGPT_CLIENT='https://chatgpt.com/oauth/client.json'
-CHATGPT_REDIRECT='https://chatgpt.com/connector_platform_oauth_redirect'
+CHATGPT_CLIENT='https://chatgpt.com/oauth/JOSnsTD-M4Nm/client.json'
+CHATGPT_REDIRECT='https://chatgpt.com/connector/oauth/JOSnsTD-M4Nm'
 
 
 def test_mcp_is_fail_closed_without_explicit_railway_configuration(monkeypatch):
@@ -107,7 +108,8 @@ def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, 
     asyncio.run(check())
 
 
-def test_chatgpt_cimd_authorization_code_pkce_and_refresh_rotation(db, monkeypatch):
+@pytest.mark.parametrize('client_id,redirect_uri',[(CHATGPT_CLIENT,CHATGPT_REDIRECT),(mcp.CHATGPT_CLIENT_ID,mcp.CHATGPT_REDIRECT_URI)])
+def test_chatgpt_cimd_authorization_code_pkce_and_refresh_rotation(db, monkeypatch, client_id, redirect_uri):
     _setup(monkeypatch,db)
     monkeypatch.setattr(mcp, '_authorize', lambda cur, profile: (A, 11))
     verifier='v'*43
@@ -117,7 +119,7 @@ def test_chatgpt_cimd_authorization_code_pkce_and_refresh_rotation(db, monkeypat
         for method,path,handler in mcp.routes(lambda request: {'role':'owner'}):
             getattr(app.router, 'add_'+method.lower())(path,handler)
         async with TestClient(TestServer(app)) as client:
-            query={'response_type':'code','client_id':CHATGPT_CLIENT,'redirect_uri':CHATGPT_REDIRECT,
+            query={'response_type':'code','client_id':client_id,'redirect_uri':redirect_uri,
                    'scope':mcp.TOOL_SCOPE+' '+mcp.OFFLINE_SCOPE,'state':'state','code_challenge':challenge,
                    'code_challenge_method':'S256'}
             consent=await client.get('/oauth/authorize',params=query)
@@ -126,12 +128,90 @@ def test_chatgpt_cimd_authorization_code_pkce_and_refresh_rotation(db, monkeypat
             assert allowed.status==302, await allowed.text()
             code=parse_qs(urlparse(allowed.headers['Location']).query)['code'][0]
             issued=await client.post('/oauth/token',data={'grant_type':'authorization_code','code':code,
-                'code_verifier':verifier,'client_id':CHATGPT_CLIENT,'redirect_uri':CHATGPT_REDIRECT})
+                'code_verifier':verifier,'client_id':client_id,'redirect_uri':redirect_uri})
             token=await issued.json()
             assert issued.status==200 and token['scope']==mcp.TOOL_SCOPE+' '+mcp.OFFLINE_SCOPE and token.get('refresh_token')
-            refreshed=await client.post('/oauth/token',data={'grant_type':'refresh_token','refresh_token':token['refresh_token'],'client_id':CHATGPT_CLIENT})
+            monkeypatch.setenv('AI_LEARNING_MCP_TENANT_ID',str(uuid.UUID(int=102)))
+            denied=await client.post('/oauth/token',data={'grant_type':'refresh_token','refresh_token':token['refresh_token'],'client_id':client_id})
+            assert denied.status==400
+            monkeypatch.setenv('AI_LEARNING_MCP_TENANT_ID',A)
+            refreshed=await client.post('/oauth/token',data={'grant_type':'refresh_token','refresh_token':token['refresh_token'],'client_id':client_id})
             rotated=await refreshed.json()
             assert refreshed.status==200 and rotated['access_token'] != token['access_token'] and rotated['refresh_token'] != token['refresh_token']
-            reused=await client.post('/oauth/token',data={'grant_type':'refresh_token','refresh_token':token['refresh_token'],'client_id':CHATGPT_CLIENT})
+            reused=await client.post('/oauth/token',data={'grant_type':'refresh_token','refresh_token':token['refresh_token'],'client_id':client_id})
             assert reused.status==400
+    asyncio.run(check())
+
+
+def test_both_official_cimd_forms_and_exact_callback_binding():
+    import pytest
+    mcp._chatgpt_client(mcp.CHATGPT_CLIENT_ID,mcp.CHATGPT_REDIRECT_URI)
+    assert mcp._chatgpt_client(CHATGPT_CLIENT)==CHATGPT_REDIRECT
+    for client,redirect in [
+        (CHATGPT_CLIENT,mcp.CHATGPT_REDIRECT_URI),(mcp.CHATGPT_CLIENT_ID,CHATGPT_REDIRECT),
+        (CHATGPT_CLIENT,CHATGPT_REDIRECT+'?next=https://evil.test'),(CHATGPT_CLIENT,CHATGPT_REDIRECT+'/'),
+        (CHATGPT_CLIENT,CHATGPT_REDIRECT+'#fragment'),(CHATGPT_CLIENT,CHATGPT_REDIRECT.replace('JOSnsTD-M4Nm','other')),
+        (CHATGPT_CLIENT.replace('chatgpt.com','chatgpt.com.evil.test'),CHATGPT_REDIRECT),
+        (CHATGPT_CLIENT.replace('chatgpt.com','user@chatgpt.com'),CHATGPT_REDIRECT),
+        (CHATGPT_CLIENT.replace('chatgpt.com','chatgpt.com:443'),CHATGPT_REDIRECT),
+        (CHATGPT_CLIENT+'?x=1',CHATGPT_REDIRECT),(CHATGPT_CLIENT+'#x',CHATGPT_REDIRECT),
+        (CHATGPT_CLIENT.replace('https:','http:'),CHATGPT_REDIRECT),
+        (CHATGPT_CLIENT.replace('JOSnsTD-M4Nm','%2e%2e'),CHATGPT_REDIRECT),
+        ('https://chatgpt.com/oauth/../client.json',CHATGPT_REDIRECT),
+        ('https://chatgpt.com/oauth/é/client.json',CHATGPT_REDIRECT)]:
+        with pytest.raises(Exception):mcp._chatgpt_client(client,redirect)
+
+
+def test_observed_authorize_request_reaches_consent_and_rejects_bad_pkce_resource(db,monkeypatch):
+    _setup(monkeypatch,db)
+    async def check():
+        app=web.Application()
+        for method,path,handler in mcp.routes(lambda request:{'role':'owner'}):
+            getattr(app.router,'add_'+method.lower())(path,handler)
+        async with TestClient(TestServer(app)) as client:
+            query={'response_type':'code','client_id':CHATGPT_CLIENT,'redirect_uri':CHATGPT_REDIRECT,
+                   'scope':'ai_learning.read offline_access','code_challenge':'a'*43,
+                   'code_challenge_method':'S256','resource':'https://crm.test/mcp/ai-learning','state':'synthetic'}
+            response=await client.get('/oauth/authorize',params=query)
+            assert response.status==200
+            assert CHATGPT_CLIENT in await response.text() and CHATGPT_REDIRECT in await response.text()
+            for changes in [{'redirect_uri':mcp.CHATGPT_REDIRECT_URI},{'code_challenge_method':'plain'},
+                            {'code_challenge':'a'},{'code_challenge':'a'*44},{'resource':'https://evil.test/mcp'},
+                            {'scope':'ai_learning.write'},{'response_type':'token'}]:
+                response=await client.get('/oauth/authorize',params={**query,**changes});assert response.status==400,changes
+    asyncio.run(check())
+
+
+def test_authorize_still_rejects_non_owner_and_other_tenant(db,monkeypatch):
+    _setup(monkeypatch,db)
+    async def check():
+        for role,tenant in [('member',A),('owner',str(uuid.UUID(int=102)))]:
+            monkeypatch.setattr(mcp,'_authorize',lambda cur,profile:(tenant,11))
+            app=web.Application()
+            app.router.add_post('/oauth/authorize',lambda request:mcp.authorize(request,lambda request:{'role':role}))
+            async with TestClient(TestServer(app)) as client:
+                response=await client.post('/oauth/authorize',data={'client_id':CHATGPT_CLIENT,
+                    'redirect_uri':CHATGPT_REDIRECT,'code_challenge':'a'*43});assert response.status==403
+    asyncio.run(check())
+
+
+def test_code_exchange_still_rejects_wrong_verifier_and_replay(db,monkeypatch):
+    _setup(monkeypatch,db);monkeypatch.setattr(mcp,'_authorize',lambda cur,profile:(A,11))
+    verifier='v'*43;challenge=mcp._b64(hashlib.sha256(verifier.encode()).digest())
+    async def check():
+        app=web.Application()
+        for method,path,handler in mcp.routes(lambda request:{'role':'owner'}):
+            getattr(app.router,'add_'+method.lower())(path,handler)
+        async with TestClient(TestServer(app)) as client:
+            response=await client.post('/oauth/authorize',data={'client_id':CHATGPT_CLIENT,
+                'redirect_uri':CHATGPT_REDIRECT,'code_challenge':challenge},allow_redirects=False)
+            code=parse_qs(urlparse(response.headers['Location']).query)['code'][0]
+            payload={'grant_type':'authorization_code','client_id':CHATGPT_CLIENT,
+                     'redirect_uri':CHATGPT_REDIRECT,'code':code,'code_verifier':verifier}
+            bad=await client.post('/oauth/token',data={**payload,'code_verifier':'x'*43});assert bad.status==400
+            monkeypatch.setenv('AI_LEARNING_MCP_CHANNEL_ID',str(uuid.UUID(int=202)))
+            bad=await client.post('/oauth/token',data=payload);assert bad.status==400
+            monkeypatch.setenv('AI_LEARNING_MCP_CHANNEL_ID',CA)
+            good=await client.post('/oauth/token',data=payload);assert good.status==200
+            replay=await client.post('/oauth/token',data=payload);assert replay.status==400
     asyncio.run(check())

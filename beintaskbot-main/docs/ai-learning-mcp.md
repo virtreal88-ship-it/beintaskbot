@@ -29,9 +29,14 @@ Learning Loop records are modified.
    select OAuth authentication.
 3. ChatGPT discovers the protected-resource metadata and the OAuth server's
    CIMD capability. It uses its published client metadata document
-   `https://chatgpt.com/oauth/client.json`; no client ID or secret is entered
-   manually. Beintaskbot accepts only that document and ChatGPT's exact current
-   redirect URI, then opens the consent page. Sign in as the owner of the
+   `https://chatgpt.com/oauth/client.json` or the callback-specific
+   `https://chatgpt.com/oauth/{callback_id}/client.json`; no client ID or secret
+   is entered manually. The former is pinned to
+   `https://chatgpt.com/connector_platform_oauth_redirect`, the latter to
+   `https://chatgpt.com/connector/oauth/{callback_id}` with the same callback ID.
+   This is an OpenAI-only pinned-client policy, not a general-purpose remote
+   metadata resolver. Extra ports, credentials, query strings, fragments,
+   path suffixes and cross-client redirects are rejected. Beintaskbot then opens the consent page. Sign in as the owner of the
    configured tenant and explicitly choose **Allow read-only access**.
 4. Install the plugin and ask for `simulation_runs` with no context first.
    The tool result must contain only the configured agent and channel IDs.
@@ -65,3 +70,11 @@ restart the Railway service.  Token rows are opaque hashes and expire after
 eight hours.  A future owner-facing revocation screen may mark individual token
 rows revoked; until that UI is shipped, use the global disable switch rather
 than editing production data directly.
+
+After PR #149 Railway recorded callback-specific CIMD IDs rejected by the
+single CHATGPT_CLIENT_ID check. Both official forms now work through consent,
+PKCE exchange and refresh rotation. Optional resource indicators must match
+the configured MCP URL. Code/refresh exchange also checks the configured
+tenant, agent and channel before issuing tokens.
+
+Reference: https://developers.openai.com/plugins/build/auth
