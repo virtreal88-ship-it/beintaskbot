@@ -39,7 +39,9 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
             if is_connect:
                 from tenant_connect_transport import connect_route
                 reference = str(uuid.UUID(message_id.removeprefix('connect:')))
-                route = connect_route(cur, tenant, lead)
+                # Read a retained attachment from an inactive channel. Sending,
+                # Copilot and AI media execution still require an active route.
+                route = connect_route(cur, tenant, lead, historical_read=True)
                 if (not route or not route.get('api_key') or bool(channel_id) != bool(conversation_id)
                         or (channel_id and str(channel_id) != str(route['channel_id']))
                         or (conversation_id and str(conversation_id) != str(route['conversation_id']))

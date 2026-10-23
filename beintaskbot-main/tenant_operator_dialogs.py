@@ -138,6 +138,14 @@ def _message(item, *, group=False, participant_names=None, employee_participants
         if value.get('message_type') in {'image','audio','voice','video','document'}:
             state=transcript.get('status') if isinstance(transcript,dict) else None
             value['analysis_state']=state if state in {'completed','pending','processing','failed','disabled','not_required'} else 'not_requested'
+            code=transcript.get('error_code') if isinstance(transcript,dict) else None
+            if state=='failed':
+                if code in {'voice_media_unavailable','voice_download_timeout'}:
+                    value['analysis_state']='file_unavailable'
+                elif code in {'voice_unsupported','voice_invalid_audio'}:
+                    value['analysis_state']='unsupported'
+                elif code in {'voice_transcription_failed','voice_model_unavailable'}:
+                    value['analysis_state']='transcription_unavailable'
         if (value.get('message_type') in {'audio','voice'} and isinstance(transcript, dict)
                 and transcript.get('status') == 'completed' and value.get('body')):
             value['has_transcription'] = True
@@ -159,7 +167,10 @@ def projection(policy):
     kommo_scope='TRUE' if policy.profile.get('role')=='owner' else '('+' OR '.join(scope)+')' if scope else 'FALSE'
     sql='''WITH routes AS (
       SELECT 'connect'::text AS provider,c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
-        COALESCE(NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,c.avatar_status,
+        COALESCE(NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
+        CASE WHEN (c.avatar_checked_at IS NULL AND c.avatar_status IN ('unavailable','loading'))
+          OR c.avatar_checked_at<now()-interval '7 days'
+          OR (c.avatar_status='loading' AND c.avatar_checked_at<now()-interval '3 minutes') THEN '' ELSE c.avatar_status END AS avatar_status,
         ch.name AS channel_name,ch.active AS channel_active,'connect:'||c.connect_channel_id::text AS history_channel,
         CASE WHEN cs.agent_assignment_id IS NOT NULL THEN cs.agent_id ELSE COALESCE(cs.agent_id,j.agent_id) END AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,a.mode AS agent_mode,a.scopes AS agent_scopes,a.schedule AS agent_schedule,
         COALESCE(gc.state,cs.state,'active') AS state,COALESCE(gc.reason,cs.reason,'') AS reason,COALESCE(gc.updated_at,cs.updated_at) AS updated_at,
@@ -625,9 +636,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                         AND participant_jid=ANY(%s::text[])''',(tenant,list({m.get('source_channel_id',channel) for m in messages}),conversation,participant_ids))
                     participant_names={(str(item['channel_id']),str(item['participant_jid'])):str(item['display_name']) for item in cur.fetchall()
                                        if str(item.get('display_name') or '')}
-                if provider == 'connect':
-                    from tenant_connect_identity import conflicted
-                    dialog['identity_conflict'] = conflicted(cur, tenant, channel, conversation)
+            if provider == 'connect':
+                from tenant_connect_identity import conflicted
+                dialog['identity_conflict'] = conflicted(cur, tenant, channel, conversation)
     anchor_target=next((str(m['id']) for m in messages[:50] if anchor_row and (str(m['id'])==str(anchor_row['id']) or any(s.get('external_id')==anchor_row['external_id'] for s in m.get('sources',[])))),None)
     return {'dialog':dialog,'anchor_message_id':anchor_target,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
                                          contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '')

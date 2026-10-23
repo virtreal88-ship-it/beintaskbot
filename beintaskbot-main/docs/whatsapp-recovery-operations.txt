@@ -1,0 +1,78 @@
+WhatsApp recovery / historical replay — operator runbook
+
+No script is imported by an HTTP handler or a production worker loop. No
+feature flag, agent setting, live queue or CRM mutation is enabled by this PR.
+
+Identity inventory (read-only, existing worker environment only)
+  python scripts/audit_whatsapp_recovery.py --actor OWNER_TELEGRAM_ID --output /private/inventory.json
+
+Keep the output private: it contains customer message text. The script refuses
+an existing output file and uses mode 0600 on POSIX. Never export production
+database credentials or provider keys into a local test database or laptop.
+
+The inventory counts direct routes and signed Connect directIdentity receipts.
+Names, avatars, numeric LIDs and direction counts are NOT identity evidence.
+Contradictory pairs and groups are excluded. It does not merge records.
+
+Before a historical merge, obtain a consistent snapshot of BOTH stores,
+including CRM, AI, case, contact and attachment references; restore that snapshot
+to an isolated database and verify message IDs/counts. If provider proof or a
+tested restoration is unavailable, stop this operation only. Never move the
+removed channel's history to the surviving channel to hide duplicate routes.
+
+Replay preparation (exactly five distinct recent direct customer messages)
+  python scripts/whatsapp_replay.py --actor OWNER_TELEGRAM_ID --messages UUID1 UUID2 UUID3 UUID4 UUID5 --output /private/preflight.json
+Review source questions, identity, scope, price and remaining budget. Execution:
+  python scripts/whatsapp_replay.py --actor OWNER_TELEGRAM_ID --messages UUID1 UUID2 UUID3 UUID4 UUID5 --output /private/replay.json --execute
+
+The five source IDs must belong to different conversations in the approved
+tenant/channel. Current agent instructions and approved knowledge are used.
+Only history through the selected message is model input. Employee comparison
+replies are read AFTER generation and saved separately, never sent to the model.
+The runner permits text-only gpt-4.1-2025-04-14 at input $2/output $8 per million,
+max 800 output tokens, at most one Expert and one Primary call per source.
+No image, ASR, external tool, fallback model or automatic provider retry exists.
+Explicit Expert delegation and effective read-only permissions remain required.
+
+All calls reserve in the existing tenant monetary ledger under the shared
+tenant lock. Conservative UTF-8 input plus framing/output bounds use the higher
+tariff. The existing ledger may conservatively account total tokens at that
+tariff; this is not an invoice. The existing cap must be positive and <= $5.
+Unknown outcomes or failed settlement retain their reservation and stop the
+batch. A repeated source/call key is rejected, including after restart. Check
+the ledger before any manual recovery; never clear a receipt to force a retry.
+The private output distinguishes replies, virtual stops and errors. Zero
+answers is never a successful replay. Cancellation is checked between calls;
+an already transmitted provider request cannot be recalled.
+
+Operational dependency: execution needs an authorized shell in the existing
+worker with its credentials in situ. OAuth read-only APIs cannot execute this
+command. Do not build a public database endpoint or a second worker to bypass
+that missing access. No five real responses are claimed by the tests.
+
+Channel retirement requires the compatible Connect release. That DELETE archives
+an already disconnected channel rather than cascade-deleting its history or
+deleting its provider instance. It is not safe to invoke DELETE on older code.
+Existing inactive-channel attachment reads remain tenant/member/route-scoped;
+normal sends and AI media still require an active channel. Historical provider
+media may nevertheless be unavailable after provider expiry; no fake success.
+
+Avatar refresh is on demand for visible routes, not a historical backfill. The
+existing browser queue remains bounded to two, with stable URLs/object cache.
+Connect atomically refreshes a seven-day-old attempt; recent negative results
+do not cause 30-second polling loops. Interrupted local loading leases expire
+after three minutes. Provider privacy restrictions remain authoritative.
+
+Limited Active plan — PREPARATION ONLY
+Do not activate until the five replies are evaluated, approved knowledge is
+adequate, an Expert explicitly allows this Primary, schedule/stop/handoff guards
+are reviewed and an owner separately approves sending. Retain one approved
+channel, max_parallel=1 and the existing shared $5 cap. Nizam Ai and all unrelated
+agents remain unchanged. Case candidates require employee approval.
+
+Rollback: revert application commits if required. The main schema change only
+adds avatar_checked_at; leave that column and every historical row intact.
+Connect uses the existing disabled status and performs no destructive migration.
+Old Connect code contains destructive DELETE: do NOT use that route after a
+rollback. Restoring an archived channel must be a separate owner-reviewed action;
+never reconnect a session automatically.

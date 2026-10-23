@@ -165,6 +165,7 @@ def _schema(conn) -> None:
         # WhatsApp group subject or an Evolution contact record.
         cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS manual_display_name TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS avatar_status TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS avatar_checked_at TIMESTAMPTZ")
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_participant_display_names (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
           connect_channel_id UUID NOT NULL,
@@ -880,10 +881,12 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
     return accepted
 
 
-def connect_route(cur, tenant: str, lead_id: int) -> dict | None:
+def connect_route(cur, tenant: str, lead_id: int, *, historical_read: bool = False) -> dict | None:
+    active_gate=(" AND (ch.active=TRUE OR ch.status IN ('disconnected','disabled'))"
+                 if historical_read else ' AND ch.active=TRUE')
     cur.execute('''SELECT c.connect_channel_id,c.conversation_id,i.secrets FROM saas_connect_conversations c
       JOIN saas_tenant_integrations i ON i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected'
-      JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
+      JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id'''+active_gate+'''
       WHERE c.tenant_id=%s::uuid AND c.lead_id=%s FOR SHARE''', (tenant,lead_id))
     row = cur.fetchone()
     if not row: return None

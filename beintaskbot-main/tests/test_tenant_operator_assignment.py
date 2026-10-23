@@ -110,8 +110,11 @@ def test_group_assignment_does_not_require_company_auto_send(old_dialog):
     db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE id=%s::uuid", (json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}]), AGENT)); db.commit()
     assert assignment.options(PROFILE, data)['allowed']
     db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=FALSE WHERE tenant_id=%s::uuid", (A,)); db.commit()
-    assert not assignment.options(PROFILE, data)['allowed']
     assert assignment.options(PROFILE, data)['allowed']
+    assert db.execute('SELECT auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid',(A,))[0]['auto_send_enabled'] is False
+    assert db.execute('SELECT mode FROM saas_ai_agents WHERE id=%s::uuid',(AGENT,))[0]['mode']=='manual'
+    assert not db.execute('SELECT * FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND channel_id=%s',(A,CA))
+    f['send'].assert_not_called();db.commit()
     db.execute('UPDATE saas_ai_agents SET enabled=FALSE WHERE id=%s::uuid', (AGENT,)); db.commit()
     assert not assignment.options(PROFILE, data)['allowed']
     db.execute('UPDATE saas_ai_agent_settings SET emergency_stop=TRUE WHERE tenant_id=%s::uuid', (A,)); db.commit()
