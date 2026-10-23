@@ -252,11 +252,14 @@ def knowledge_context(tenant_id, query, *, limit=6, agent_id=None):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_knowledge_search import tsquery, patterns
+            semantic_query=tsquery(query)
+            semantic_patterns=patterns(query)
             cur.execute("SELECT to_regclass('saas_instruction_lessons') IS NOT NULL AS available")
             instruction_library_available=bool((cur.fetchone() or {}).get('available'))
             instruction_guard=(" AND (NOT (s.provenance ? 'instruction_id') OR EXISTS(SELECT 1 FROM saas_instruction_lessons l WHERE l.tenant_id=s.tenant_id AND l.id::text=s.provenance->>'instruction_id' AND l.state='published' AND l.published_doc->>'review_status'='approved' AND s.provenance->>'review_status'='approved' AND s.provenance->>'approved_by' IS NOT NULL))" if instruction_library_available else " AND NOT (s.provenance ? 'instruction_id')")
             cur.execute('''SELECT s.id AS source_id,s.title,c.content,
-              ts_rank(c.search_vector,plainto_tsquery('simple',%s)) AS rank
+              ts_rank(c.search_vector,to_tsquery('simple',%s)) AS rank
               FROM saas_ai_knowledge_chunks c JOIN saas_ai_knowledge_sources s
                 ON s.tenant_id=c.tenant_id AND s.id=c.source_id
                WHERE c.tenant_id=%s::uuid AND s.active=TRUE AND (s.agent_id IS NULL OR s.agent_id=%s::uuid)
@@ -267,9 +270,9 @@ def knowledge_context(tenant_id, query, *, limit=6, agent_id=None):
                     AND k.status='approved' AND k.reviewed_by IS NOT NULL
                     AND k.reviewed_by::text=s.provenance->>'approved_by'))
               ''' + instruction_guard + '''
-              AND (c.search_vector @@ plainto_tsquery('simple',%s) OR c.content ILIKE %s)
+              AND (c.search_vector @@ to_tsquery('simple',%s) OR c.content ILIKE ANY(%s))
               ORDER BY rank DESC,s.updated_at DESC,c.chunk_no LIMIT %s''',
-              (query,str(tenant_id),agent_id,query,'%'+query[:120]+'%',max(1,min(int(limit),8))))
+              (semantic_query,str(tenant_id),agent_id,semantic_query,semantic_patterns,max(1,min(int(limit),8))))
             return [{'source_id':str(row['source_id']),'title':str(row['title']),
                      'content':str(row['content'])[:1800]} for row in cur.fetchall()]
 
