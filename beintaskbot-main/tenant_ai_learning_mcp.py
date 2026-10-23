@@ -21,6 +21,7 @@ from tenant_ai_dashboard import _connect, _iso, _json_value
 from tenant_ai_learning import findings
 from tenant_ai_simulation_schema import ensure_schema
 from tenant_linear_policy import TenantLinearError
+import tenant_ai_administrator_read as administrator_read
 
 TOOL_SCOPE = 'ai_learning.read'
 OFFLINE_SCOPE = 'offline_access'
@@ -160,6 +161,16 @@ def _authorize_token(request):
               (_hash(token),cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['AI_LEARNING_MCP_AGENT_ID'],cfg['AI_LEARNING_MCP_CHANNEL_ID']))
             row=cur.fetchone()
             if not row: raise TenantLinearError('Authorization required.',401)
+            cfg['granted_scopes']=str(row.get('scope') or TOOL_SCOPE).split()
+            cfg['actor_id']=row['created_by']
+            if TOOL_SCOPE in cfg['granted_scopes'] or administrator_read.READ_SCOPE in cfg['granted_scopes']:
+                _authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':row['created_by']})
+                cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',
+                            (cfg['AI_LEARNING_MCP_TENANT_ID'],row['created_by']))
+                if (cur.fetchone() or {}).get('role')!='owner': raise TenantLinearError('Company owner access required.',403)
+                # The owner explicitly approved company-wide read access for
+                # the existing connection. No write permission is implied.
+                cfg['granted_scopes']=list(set(cfg['granted_scopes'])|{administrator_read.READ_SCOPE,administrator_read.CONTENT_SCOPE})
             cur.execute("UPDATE saas_ai_learning_mcp_tokens SET requests_in_window=CASE WHEN window_started_at<now()-interval '1 hour' THEN 1 ELSE requests_in_window+1 END, window_started_at=CASE WHEN window_started_at<now()-interval '1 hour' THEN now() ELSE window_started_at END WHERE id=%s",(row['id'],))
             cur.execute('SELECT requests_in_window FROM saas_ai_learning_mcp_tokens WHERE id=%s',(row['id'],))
             if cur.fetchone()['requests_in_window']>60: raise TenantLinearError('Rate limit exceeded.',429)
@@ -169,6 +180,10 @@ def _authorize_token(request):
 
 
 def _tools(cur,cfg,name,args):
+    if name in administrator_read.SPECS:
+        result=administrator_read.read(cur,cfg,name,args)
+        _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_administrator_read','mcp_tool',name)
+        return result
     if name=='simulation_runs': return _runs(cur,cfg,args.get('cursor',''),args.get('limit',10),bool(args.get('include_context')))
     if name=='learning_issues':
         result=_runs(cur,cfg,args.get('cursor',''),MAX_PAGE,False); groups={}
@@ -196,7 +211,7 @@ async def mcp(request):
         if method=='initialize': return _jsonrpc({'protocolVersion':'2025-06-18','serverInfo':{'name':'beintaskbot-learning-loop','version':'1.0'},'capabilities':{'tools':{}}},request_id=request_id)
         if method=='tools/list':
             auth=[{'type':'oauth2','scopes':[TOOL_SCOPE]}]
-            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]},request_id=request_id)
+            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+administrator_read.definitions()},request_id=request_id)
         if method=='tools/call':
             cfg=_authorize_token(request)
             with _connect() as conn:
