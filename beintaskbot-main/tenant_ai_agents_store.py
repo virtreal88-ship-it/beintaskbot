@@ -136,7 +136,10 @@ def read_settings(profile):
         ensure_connect_schema(conn)
         with conn.cursor() as cur:
             tenant, _ = _authorize(cur, profile)
-            cur.execute('''INSERT INTO saas_ai_agent_settings(tenant_id) VALUES(%s::uuid)
+            # Older production schemas may still require operating_mode.
+            # A newly materialized settings row must start in the safe Manual
+            # mode; ON CONFLICT keeps every existing company setting intact.
+            cur.execute('''INSERT INTO saas_ai_agent_settings(tenant_id,operating_mode) VALUES(%s::uuid,'manual')
               ON CONFLICT(tenant_id) DO NOTHING''', (tenant,))
             cur.execute('''SELECT company_instructions,enabled,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,
                 operating_mode,support_case_extraction_enabled,support_case_extraction_started_at,max_replies_per_chat,updated_at
@@ -206,7 +209,10 @@ def save_settings(profile, data):
                 metadata = integration.get('metadata') or {}
                 if not integration.get('secrets') or metadata.get('enabled') is not True or metadata.get('consent') is not True:
                     raise TenantLinearError('Əvvəlcə mövcud Chat AI ayarlarını və razılığı tamamlayın.', 409)
-            cur.execute('''INSERT INTO saas_ai_agent_settings(tenant_id) VALUES(%s::uuid)
+            # Keep the compatibility insert safe for NOT NULL legacy schemas.
+            # This only supplies a default for a missing row; existing mode and
+            # auto-send state are protected by ON CONFLICT DO NOTHING.
+            cur.execute('''INSERT INTO saas_ai_agent_settings(tenant_id,operating_mode) VALUES(%s::uuid,'manual')
               ON CONFLICT(tenant_id) DO NOTHING''', (tenant,))
             cur.execute('''SELECT company_instructions,enabled,emergency_stop,auto_send_enabled,crm_actions_enabled,native_crm_actions_enabled,
                 operating_mode,support_case_extraction_enabled,support_case_extraction_started_at,max_replies_per_chat FROM saas_ai_agent_settings
