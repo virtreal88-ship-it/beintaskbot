@@ -274,8 +274,9 @@ def test_observation_worker_creates_only_one_nonpublic_draft_and_bounds_recovery
     db.commit()
     item=observations.claim_next(); assert item and item['tenant_id']==A
     observations.process(item)
-    draft=db.execute("SELECT kind,title,state FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 1",(A,))[0]
-    assert draft=={'kind':'testing_scenario','title':'Safe diagnostic','state':'draft'}
+    draft=db.execute("SELECT id,kind,title,state FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 1",(A,))[0]
+    assert {key:value for key,value in draft.items() if key!='id'}=={'kind':'testing_scenario','title':'Safe diagnostic','state':'draft'}
+    assert db.execute('SELECT version,title FROM saas_ai_administrator_draft_versions WHERE tenant_id=%s::uuid AND draft_id=%s::uuid',(A,draft['id']))[0]=={'version':1,'title':'Safe diagnostic'}
     audit=db.execute("SELECT action,payload FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 1",(A,))[0]
     assert audit['action']=='ai_administrator_observation_draft_created' and audit['payload']['source']=='safe-test'
     db.execute("UPDATE saas_ai_administrator_observations SET state='processing',attempts=%s,lease_until=now()-interval '1 minute' WHERE tenant_id=%s::uuid",(observations.MAX_ATTEMPTS,A));db.commit()
@@ -295,4 +296,35 @@ def test_owner_approved_prompt_application_has_versioned_rollback(db,monkeypatch
         assert result['rollback_available'] is True
         restored=apply.rollback_agent_prompt(cur,PROFILE,receipt['id'])
         assert restored['rolled_back'] is True
+    db.commit()
+
+
+def test_synthetic_observation_to_tested_owner_approval_apply_and_rollback(db,monkeypatch):
+    """The durable learning loop remains a draft-only flow until an owner acts."""
+    seed_simulation(db); _setup(monkeypatch,db)
+    monkeypatch.setenv('AI_AUTONOMOUS_IMPROVEMENT_ENABLED','true')
+    monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
+    monkeypatch.setattr(observations,'_connect',lambda:db)
+    with db.cursor() as cur:
+        observations.ensure_schema(db)
+        cur.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))
+        version=cur.fetchone()['version']
+        observations.enqueue(cur,A,'synthetic_e2e',{
+            'kind':'agent_improvement','title':'Improve ERP escalation',
+            'body':prompt_body_with_completed_test(cur,version,'Escalate only with verified evidence.'),
+            'target':{'agent_id':AGENT},
+        },'e2e-1')
+    db.commit()
+    observations.process(observations.claim_next())
+    with db.cursor() as cur:
+        cur.execute('SELECT * FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND title=%s',(A,'Improve ERP escalation'))
+        draft=cur.fetchone()
+        assert draft['state']=='draft'
+        cur.execute('SELECT version FROM saas_ai_administrator_draft_versions WHERE tenant_id=%s::uuid AND draft_id=%s::uuid',(A,draft['id']))
+        assert cur.fetchone()['version']==1
+        receipt=approvals.request(cur,PROFILE,draft['id'],draft['version'])
+        approvals.approve(cur,PROFILE,receipt['id'],'approve')
+        applied=apply.apply_agent_prompt(cur,PROFILE,receipt['id'],draft['id'])
+        assert applied['rollback_available'] is True
+        assert apply.rollback_agent_prompt(cur,PROFILE,receipt['id'])['rolled_back'] is True
     db.commit()

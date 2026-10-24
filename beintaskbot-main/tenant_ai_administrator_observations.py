@@ -5,6 +5,7 @@ import os
 import uuid
 from tenant_ai_dashboard import _connect
 from tenant_ai_agents_store import _audit
+from tenant_ai_administrator_drafts import snapshot
 
 MAX_ATTEMPTS = 5
 
@@ -83,6 +84,9 @@ def process(item):
                 conn.commit(); return
             draft_id=uuid.uuid4(); cur.execute('''INSERT INTO saas_ai_administrator_drafts(id,tenant_id,kind,title,body,target,created_by)
               VALUES(%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s)''',(draft_id,row['tenant_id'],kind,title[:240],json.dumps(body),json.dumps(target),owner['telegram_id']))
+            # Observation-created drafts have the same immutable audit history
+            # as drafts created through MCP or the owner UI.
+            snapshot(cur,row['tenant_id'],{'id':draft_id,'version':1,'title':title[:240],'body':body,'target':target},owner['telegram_id'])
             cur.execute('INSERT INTO saas_ai_administrator_observation_drafts(observation_id,tenant_id,draft_id) VALUES(%s,%s::uuid,%s)',(row['id'],row['tenant_id'],draft_id))
             cur.execute("UPDATE saas_ai_administrator_observations SET state='completed',lease_until=NULL,updated_at=now() WHERE id=%s",(row['id'],))
             _audit(cur,row['tenant_id'],owner['telegram_id'],'ai_administrator_observation_draft_created','ai_administrator_observation',row['id'],{'source':row['source'],'draft_id':str(draft_id),'kind':kind})
