@@ -71,6 +71,11 @@ def findings(run):
             add('infrastructure', stop, 'technical', 'budget' if 'budget' in stop or 'spend' in stop else 'executor')
         elif stop in {'legacy_channel_ambiguous','route_or_tenant_unavailable','simulation_source_message_unavailable','simulation_source_not_inbound'}:
             add('context', stop, 'technical', 'routing')
+        elif stop.startswith('group_binding_') or stop.startswith('group_primary_'):
+            # The Simulation journal already exposes the exact group policy
+            # stop.  An explicit inactive/mismatched binding is not evidence
+            # of a defective answer and must not create a false Learning issue.
+            pass
         elif stop.startswith('no_answer_') and found:
             pass  # More specific recorded evidence already explains the stop.
         elif stop:

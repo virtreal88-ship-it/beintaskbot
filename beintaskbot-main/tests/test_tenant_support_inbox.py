@@ -21,6 +21,7 @@ import tenant_support_inbox_store as store
 import tenant_support_inbox_summary as summary
 import tenant_ai_simulation_schema as simulation_schema
 import tenant_ai_simulation_engine as simulation
+import tenant_ai_group_coordination as group_coordination
 import tenant_ai_dashboard as ai_dashboard
 import tenant_ai_spend_budget as spend_budget
 from tenant_linear_policy import TenantLinearError
@@ -873,8 +874,49 @@ def test_simulation_group_requires_live_group_authority_without_mutating_it(db,m
     job=simulation.claim_next()
     assert simulation.process(job)
     run=simulation.list_runs(PROFILE)[0]
-    assert run['outcome']=='virtual_stop' and run['virtual_stop_reason']=='group_not_active_or_primary_not_bound'
+    assert run['outcome']=='virtual_stop' and run['virtual_stop_reason']=='group_binding_paused'
+    assert run['events'][-1]=={'type':'virtual_stop','reason':'group_binding_paused',
+                                'policy':'group_binding_required','executed':False}
     assert db.execute("SELECT state,assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s",(A,group))[0]['state']=='paused'
+
+
+def test_simulation_group_jid_classification_does_not_treat_lid_as_a_group():
+    assert group_coordination.group_jid('12345-67890@g.us')=='12345-67890@g.us'
+    assert group_coordination.group_jid('12345@lid') is None
+
+
+def test_simulation_group_active_binding_is_tenant_channel_and_primary_specific(db,monkeypatch):
+    group='12345-67890@g.us'; source=seed_simulation(db,conversation=group,lead_id=43,group=True)
+    # A valid Primary binding in another channel is never an implicit route.
+    db.execute("""INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,state,assignments,reason)
+      VALUES(%s::uuid,%s,'active',%s::jsonb,'operator_agent_assigned')""",
+      (A,group,json.dumps([{'agent_id':AGENT,'channel_id':CB}])))
+    db.commit()
+    monkeypatch.setattr(simulation,'runtime_flag',lambda name: name in {'AI_SIMULATION_ENABLED','AI_AGENTS_ENABLED'})
+    assert queue_simulation(db,source=source,conversation=group,lead_id=43)
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: pytest.fail('Mismatched group route reached provider'))
+    assert simulation.process(simulation.claim_next())
+    run=simulation.list_runs(PROFILE)[0]
+    assert run['virtual_stop_reason']=='group_primary_channel_mismatch'
+    assert db.execute("SELECT assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s",(A,group))[0]['assignments'][0]['channel_id']==CB
+
+
+def test_simulation_group_active_explicit_primary_can_run_without_mutating_binding(db,monkeypatch):
+    group='12345-67891@g.us'; source=seed_simulation(db,conversation=group,lead_id=43,group=True)
+    assignment=[{'agent_id':AGENT,'channel_id':CA,'priority':0}]
+    db.execute("""INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,state,assignments,reason)
+      VALUES(%s::uuid,%s,'active',%s::jsonb,'operator_agent_assigned')""",(A,group,json.dumps(assignment)))
+    db.commit()
+    monkeypatch.setattr(simulation,'runtime_flag',lambda name: name in {'AI_SIMULATION_ENABLED','AI_AGENTS_ENABLED'})
+    assert queue_simulation(db,source=source,conversation=group,lead_id=43)
+    monkeypatch.setattr(actions,'enabled_triggers',lambda *_: [])
+    monkeypatch.setattr(run_store,'knowledge_context',lambda *_args,**_kwargs: [])
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: ('mock-key','test-model','company',{}))
+    monkeypatch.setattr('tenant_chat_ai_provider.generate',lambda *_args,**_kwargs: ('Virtual group draft',{'input_tokens':11,'output_tokens':7,'total_tokens':18}))
+    assert simulation.process(simulation.claim_next())
+    run=simulation.list_runs(PROFILE)[0]
+    assert run['outcome']=='virtual_reply' and run['sent'] is False
+    assert db.execute("SELECT state,assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s",(A,group))[0]=={'state':'active','assignments':assignment}
 
 
 def test_simulation_token_budget_blocks_provider_call(db,monkeypatch):
