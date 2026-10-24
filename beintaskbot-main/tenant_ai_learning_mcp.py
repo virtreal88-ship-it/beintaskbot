@@ -22,8 +22,10 @@ from tenant_ai_learning import findings
 from tenant_ai_simulation_schema import ensure_schema
 from tenant_linear_policy import TenantLinearError
 import tenant_ai_administrator_read as administrator_read
+import tenant_ai_administrator_drafts as administrator_drafts
 
 TOOL_SCOPE = 'ai_learning.read'
+DRAFT_SCOPE = administrator_drafts.DRAFT_SCOPE
 OFFLINE_SCOPE = 'offline_access'
 MAX_PAGE = 25
 CHATGPT_CLIENT_ID = 'https://chatgpt.com/oauth/client.json'
@@ -53,6 +55,7 @@ def _require_cfg():
 
 def ensure_mcp_schema(conn):
     ensure_schema(conn)
+    administrator_drafts.ensure_schema(conn)
     with conn.cursor() as cur:
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_learning_mcp_tokens(
           id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -163,7 +166,7 @@ def _authorize_token(request):
             if not row: raise TenantLinearError('Authorization required.',401)
             cfg['granted_scopes']=str(row.get('scope') or TOOL_SCOPE).split()
             cfg['actor_id']=row['created_by']
-            if TOOL_SCOPE in cfg['granted_scopes'] or administrator_read.READ_SCOPE in cfg['granted_scopes']:
+            if TOOL_SCOPE in cfg['granted_scopes'] or DRAFT_SCOPE in cfg['granted_scopes'] or administrator_read.READ_SCOPE in cfg['granted_scopes']:
                 _authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':row['created_by']})
                 cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',
                             (cfg['AI_LEARNING_MCP_TENANT_ID'],row['created_by']))
@@ -184,6 +187,9 @@ def _tools(cur,cfg,name,args):
         result=administrator_read.read(cur,cfg,name,args)
         _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_administrator_read','mcp_tool',name)
         return result
+    if name == 'administrator_draft_create': return administrator_drafts.create(cur,cfg,args)
+    if name == 'administrator_draft_list': return administrator_drafts.listing(cur,cfg,args)
+    if name == 'administrator_draft_update': return administrator_drafts.update(cur,cfg,args)
     if name=='simulation_runs': return _runs(cur,cfg,args.get('cursor',''),args.get('limit',10),bool(args.get('include_context')))
     if name=='learning_issues':
         result=_runs(cur,cfg,args.get('cursor',''),MAX_PAGE,False); groups={}
@@ -211,12 +217,14 @@ async def mcp(request):
         if method=='initialize': return _jsonrpc({'protocolVersion':'2025-06-18','serverInfo':{'name':'beintaskbot-learning-loop','version':'1.0'},'capabilities':{'tools':{}}},request_id=request_id)
         if method=='tools/list':
             auth=[{'type':'oauth2','scopes':[TOOL_SCOPE]}]
-            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+administrator_read.definitions()},request_id=request_id)
+            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+administrator_read.definitions()+administrator_drafts.definitions()},request_id=request_id)
         if method=='tools/call':
             cfg=_authorize_token(request)
             with _connect() as conn:
                 ensure_mcp_schema(conn)
                 with conn.cursor() as cur: output=_tools(cur,cfg,data.get('params',{}).get('name',''),data.get('params',{}).get('arguments') or {})
+                if data.get('params',{}).get('name','').startswith('administrator_draft_'):
+                    conn.commit()
             return _jsonrpc({'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False)}]},request_id=request_id)
         return _jsonrpc(error={'code':-32601,'message':'Method not found'},request_id=request_id)
     except TenantLinearError as exc:
@@ -250,7 +258,7 @@ def _oauth_resource(value, cfg):
 
 def _requested_scopes(value):
     requested={part for part in str(value or TOOL_SCOPE).split() if part}
-    if not requested or TOOL_SCOPE not in requested or requested-{TOOL_SCOPE,OFFLINE_SCOPE}:
+    if not requested or TOOL_SCOPE not in requested or requested-{TOOL_SCOPE,DRAFT_SCOPE,OFFLINE_SCOPE}:
         raise TenantLinearError('Unsupported OAuth scope.',400)
     return requested
 
@@ -339,12 +347,12 @@ def routes(member_from_request):
     async def protected(request):
         try:
             cfg=_require_cfg()
-            return web.json_response({'resource':cfg['issuer']+'/mcp/ai-learning','authorization_servers':[cfg['issuer']], 'scopes_supported':[TOOL_SCOPE,OFFLINE_SCOPE]})
+            return web.json_response({'resource':cfg['issuer']+'/mcp/ai-learning','authorization_servers':[cfg['issuer']], 'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,OFFLINE_SCOPE]})
         except TenantLinearError as exc: return web.json_response({'error':str(exc)},status=exc.status)
     async def metadata(request):
         try:
             cfg=_require_cfg(); base=cfg['issuer']
-            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE,OFFLINE_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code','refresh_token'],'token_endpoint_auth_methods_supported':['none'],'client_id_metadata_document_supported':True})
+            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,OFFLINE_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code','refresh_token'],'token_endpoint_auth_methods_supported':['none'],'client_id_metadata_document_supported':True})
         except TenantLinearError as exc: return web.json_response({'error':str(exc)},status=exc.status)
     return [('POST','/mcp/ai-learning',mcp),('GET','/mcp/ai-learning',mcp),('GET','/.well-known/oauth-protected-resource/mcp/ai-learning',protected),('GET','/.well-known/oauth-authorization-server',metadata),('GET','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/token',token)]
 

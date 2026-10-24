@@ -12,6 +12,7 @@ from test_tenant_support_inbox import A,B,CA,PROFILE,database,db,seed_simulation
 from test_ai_learning_mcp import _setup
 import tenant_ai_learning_mcp as mcp
 import tenant_ai_administrator_read as admin
+import tenant_ai_administrator_drafts as drafts
 
 
 def test_existing_connection_company_reads_and_immediate_owner_revocation(db,monkeypatch):
@@ -102,3 +103,21 @@ def test_simulation_queue_diagnostic_is_tenant_bound_read_only(db,monkeypatch):
     assert stopped['admission_eligible_now'] is False and 'simulation_disabled' in stopped['blockers']
     with db.cursor() as cur:
         with pytest.raises(Exception): admin.read(cur,{**cfg,'AI_LEARNING_MCP_TENANT_ID':B},'simulation_queue_diagnostic_read',{'id':queue_id})
+
+
+def test_administrator_drafts_are_flagged_scoped_versioned_and_never_applied(db,monkeypatch):
+    _setup(monkeypatch,db)
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
+    with db.cursor() as cur:
+        with pytest.raises(Exception): drafts.create(cur,cfg,{'kind':'knowledge','title':'Blocked','body':{}})
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
+    with db.cursor() as cur:
+        value=drafts.create(cur,cfg,{'kind':'knowledge','title':'Draft knowledge','body':{'claim':'needs review'},'target':{}})
+    db.commit()
+    assert value['state']=='draft' and value['version']==1
+    with db.cursor() as cur:
+        changed=drafts.update(cur,cfg,{'id':value['id'],'expected_version':1,'body':{'claim':'edited'}})
+        assert drafts.listing(cur,cfg,{})['items'][0]['id']==value['id']
+        with pytest.raises(Exception): drafts.update(cur,cfg,{'id':value['id'],'expected_version':1,'body':{}})
+    db.commit()
+    assert changed['version']==2
