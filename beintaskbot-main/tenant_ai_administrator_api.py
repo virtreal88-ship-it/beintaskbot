@@ -42,6 +42,8 @@ def handler(member_from_request, canonical_origin, logger):
                 value=await asyncio.to_thread(_with_connection,review_context,profile,request.query['review_run_id'])
             elif request.method=='GET' and set(request.query)=={'publication_draft_id'}:
                 value=await asyncio.to_thread(_with_connection,approvals.publication_options,profile,request.query['publication_draft_id'])
+            elif request.method=='GET' and set(request.query)=={'training_policies'}:
+                value=await asyncio.to_thread(_with_connection,approvals.training_policy_list,profile)
             elif request.method=='GET' and set(request.query)=={'publication_grants'}:
                 value=await asyncio.to_thread(_with_connection,approvals.publication_list,profile)
             elif request.method=='GET':
@@ -54,7 +56,12 @@ def handler(member_from_request, canonical_origin, logger):
                 data=await request.json()
                 if not isinstance(data,dict): raise TenantLinearError('Invalid approval request.',400)
                 action=data.get('action')
-                if action=='publication_grant':
+                if action=='training_policy_create':
+                    value=await asyncio.to_thread(_with_connection,approvals.training_policy_create,profile,{k:v for k,v in data.items() if k!='action'})
+                elif action=='training_policy_revoke':
+                    if set(data)!={'action','policy_id'}: raise TenantLinearError('Invalid policy revocation.',400)
+                    value=await asyncio.to_thread(_with_connection,approvals.training_policy_revoke,profile,data['policy_id'])
+                elif action=='publication_grant':
                     value=await asyncio.to_thread(_with_connection,approvals.publication_grant,profile,{k:v for k,v in data.items() if k!='action'})
                 elif action=='publication_revoke':
                     if set(data)!={'action','grant_id'}: raise TenantLinearError('Invalid revocation request.',400)
