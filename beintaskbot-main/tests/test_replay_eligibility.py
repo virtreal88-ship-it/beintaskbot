@@ -44,7 +44,7 @@ def test_rejection_guidance_preserves_scope_and_identity_guards(ready,fault,reas
     elif fault=='conflict': d.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',(json.dumps({'conversationIdentityConflict':True,'conversationId':'994501234560@s.whatsapp.net'}),key))
     d.commit()
     result=replay.eligible_examples(PROFILE,[key])
-    assert result['items']==[{'id':key,'eligible':False,'reason':reason}]
+    assert [{k:item[k] for k in ('id','eligible','reason')} for item in result['items']]==[{'id':key,'eligible':False,'reason':reason}]
     assert not result['selected_message_ids']
 
 
