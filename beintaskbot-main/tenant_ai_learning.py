@@ -78,6 +78,46 @@ def findings(run):
     return list(found.values())
 
 
+def reply_quality(run):
+    """Evidence-only quality projection for one virtual reply.
+
+    A deterministic service cannot honestly declare a natural-language answer
+    correct.  It therefore reports only durable execution evidence and uses an
+    employee-recorded verdict when present.  This function never calls a model
+    and never treats later operator messages as model input.
+    """
+    events=_json_value(run.get('events'),[])
+    snapshot=run.get('context_snapshot')
+    if isinstance(snapshot,str):
+        try: snapshot=json.loads(snapshot)
+        except (TypeError,ValueError): snapshot=None
+    review=next((item for item in reversed(events) if isinstance(item,dict)
+                 and item.get('type')=='employee_quality_review'
+                 and item.get('verdict') in {'correct','partial','incorrect','insufficient_data'}),None)
+    evidence=[]
+    if isinstance(snapshot,list): evidence.append('captured_model_input')
+    else: evidence.append('legacy_context_snapshot_unavailable')
+    refs=[item for item in _json_value(run.get('knowledge_refs'),[]) if isinstance(item,dict) and item.get('source_id')]
+    experts=[item for item in _json_value(run.get('expert_results'),[]) if isinstance(item,dict) and item.get('agent_id')]
+    if refs: evidence.append('knowledge_retrieved')
+    if experts: evidence.append('expert_completed')
+    no_answer=[item for item in events if isinstance(item,dict) and item.get('type')=='virtual_no_answer_action']
+    unavailable=[item for item in events if isinstance(item,dict) and item.get('type')=='expert_unavailable']
+    if review:
+        return {'verdict':review['verdict'],'basis':'employee_review','evidence':evidence,
+                'note':str(review.get('note') or '')[:300]}
+    if not isinstance(snapshot,list) or run.get('outcome')!='virtual_reply' or not str(run.get('virtual_reply') or '').strip():
+        return {'verdict':'insufficient_data','basis':'execution_evidence','evidence':evidence}
+    if no_answer or unavailable or not refs:
+        reasons=[]
+        if not refs: reasons.append('no_confirmed_knowledge_used')
+        if unavailable: reasons.append('expert_unavailable')
+        if no_answer: reasons.append(str(no_answer[-1].get('reason') or 'no_answer_policy'))
+        return {'verdict':'partial','basis':'execution_evidence','evidence':evidence,'limitations':reasons}
+    return {'verdict':'insufficient_data','basis':'execution_evidence','evidence':evidence,
+            'limitations':['employee_review_required_for_semantic_correctness']}
+
+
 def _projection(cur, tenant):
     # Use the Dashboard's explicit 30-day window; group before pagination.
     # No message bodies, provider errors, credentials or customer names selected.

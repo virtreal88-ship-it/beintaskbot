@@ -18,7 +18,7 @@ from aiohttp import web
 
 from tenant_ai_agents_store import _audit, _authorize, knowledge_deduplication
 from tenant_ai_dashboard import _connect, _iso, _json_value
-from tenant_ai_learning import findings
+from tenant_ai_learning import findings, reply_quality
 from tenant_ai_simulation_schema import ensure_schema
 from tenant_ai_simulation_engine import context_author_type
 from tenant_linear_policy import TenantLinearError
@@ -155,7 +155,19 @@ def _runs(cur, cfg, cursor='', limit=10, include_context=False):
               'expert_calls':_json_value(row.get('expert_results'),[]),
               'events':[{'type':str(x.get('type') or '')[:80],'reason':_safe_reason(x.get('reason'))}
                         for x in _json_value(row.get('events'),[]) if isinstance(x,dict)],
-              'total_tokens':int(row.get('total_tokens') or 0)}
+              'total_tokens':int(row.get('total_tokens') or 0),
+              'quality':reply_quality(row)}
+        # Later operator activity is comparison evidence only. It is kept out
+        # of ``context`` and never presented as input used by the model.
+        cur.execute('''SELECT count(*) AS n FROM saas_crm_messages later
+          WHERE later.tenant_id=%s::uuid AND later.kommo_lead_id=%s AND later.channel=%s
+            AND (later.direction='outgoing' OR later.raw ? 'verified_employee_id')
+            AND (COALESCE(later.happened_at,later.created_at),later.created_at) > (
+              SELECT COALESCE(source.happened_at,source.created_at),source.created_at FROM saas_crm_messages source
+              WHERE source.tenant_id=%s::uuid AND source.id=%s::uuid)''',
+          (cfg['AI_LEARNING_MCP_TENANT_ID'],row['lead_id'],'connect:'+cfg['AI_LEARNING_MCP_CHANNEL_ID'],
+           cfg['AI_LEARNING_MCP_TENANT_ID'],row['source_message_id']))
+        item['subsequent_employee_actions']={'count':int((cur.fetchone() or {}).get('n') or 0),'comparison_only':True}
         if include_context:
             snapshot=row.get('context_snapshot')
             if isinstance(snapshot,str):

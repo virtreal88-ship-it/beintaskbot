@@ -6,7 +6,7 @@ import uuid
 import pytest
 from test_tenant_support_inbox import database, db, seed_simulation_run, A, B, CA, PROFILE
 import tenant_ai_dashboard as dashboard
-from tenant_ai_learning import findings, improvements
+from tenant_ai_learning import findings, improvements, reply_quality
 from tenant_linear_policy import TenantLinearError
 
 
@@ -42,6 +42,19 @@ def test_no_inferred_failure_from_absent_expert_or_human_observation():
         {'type':'active_mode_stop_observed','reason':'conversation_human_or_paused'},
         {'type':'trigger_checked','matched':False,'possible_topic':'price'}]})==[]
     assert findings({'outcome':'virtual_reply','knowledge_refs':[]})==[]
+
+
+@pytest.mark.parametrize('text',[
+    'Routerin statusunu yoxlayın.', 'Проверьте статус роутера.', 'Check the router status.'
+])
+def test_reply_quality_requires_evidence_or_employee_review(text):
+    base={'outcome':'virtual_reply','virtual_reply':text,
+          'context_snapshot':[{'role':'client','author_type':'customer','text':'Question'}],
+          'knowledge_refs':[{'source_id':'source-1'}],'expert_results':[],'events':[]}
+    assert reply_quality(base)['verdict']=='insufficient_data'
+    assert reply_quality({**base,'knowledge_refs':[]})['verdict']=='partial'
+    assert reply_quality({**base,'events':[{'type':'employee_quality_review','verdict':'correct','note':'Verified'}]})['verdict']=='correct'
+    assert reply_quality({**base,'events':[{'type':'employee_quality_review','verdict':'incorrect'}]})['verdict']=='incorrect'
 
 
 def test_grouping_pagination_reviews_and_read_only(db,monkeypatch):
