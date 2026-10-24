@@ -18849,6 +18849,12 @@ async def start_webhook_server():
                 app_web['tenant_ai_instructor_worker'] = asyncio.create_task(
                     tenant_ai_instructor_worker(logger), name='tenant-ai-instructor-worker')
                 logger.info('AI Instructor worker started in opt-in mode')
+            from tenant_ai_administrator_observations import enabled as administrator_worker_enabled
+            from tenant_ai_administrator_worker import run_worker as administrator_worker
+            if administrator_worker_enabled():
+                app_web['tenant_ai_administrator_worker'] = asyncio.create_task(
+                    administrator_worker(logger), name='tenant-ai-administrator-worker')
+                logger.info('Autonomous administrator worker started in opt-in mode')
             logger.info("Tenant AI queue worker started")
         except Exception:
             logger.exception("Tenant AI queue worker could not start; HTTP service remains available")
