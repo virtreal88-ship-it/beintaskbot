@@ -132,6 +132,15 @@ def test_standalone_knowledge_archives_and_restores_without_erasing_chunks(creat
     assert creation.execute('SELECT active FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,source['id']))[0]['active'] is True
 
 
+def test_archived_knowledge_exposes_only_the_safe_trash_marker(creation):
+    agent=agents.save_agent(PROFILE,draft())
+    source=agents.save_knowledge(PROFILE,{'title':'Deleted guidance','kind':'txt','content':'Historical evidence stays private.','active':True,'agent_id':agent['id'],'setup_key':'trash-marker'})
+    agents.delete_knowledge(PROFILE,source['id'])
+    row=next(item for item in agents.list_knowledge(PROFILE) if item['id']==source['id'])
+    assert row['active'] is False and row['provenance']['archive']['kind']=='manual'
+    assert set(row['provenance'])=={'archive'}
+
+
 def test_knowledge_deduplication_fails_closed_for_content_or_owner_mismatch(creation):
     agent=agents.save_agent(PROFILE,draft())
     first=agents.save_knowledge(PROFILE,{'title':'Canonical','kind':'txt','content':'One','active':True,'agent_id':agent['id'],'setup_key':'dedup-source-one'})

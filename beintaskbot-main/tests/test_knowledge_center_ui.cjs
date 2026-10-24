@@ -7,6 +7,7 @@ const data={
  '/api/platform/ai/knowledge':[
   {id:'source-i',tenant_id:A,agent_id:AGENT,agent_name:'AI продавец',title:'Продажа',kind:'text',active:true,origin_type:'instruction',origin_id:INSTRUCTION,updated_at:'2026-10-22T10:00:00Z'},
   {id:'source-general',tenant_id:A,agent_id:null,agent_name:null,title:'Продажа',kind:'pdf',active:true,origin_type:'knowledge_source',origin_id:null,updated_at:'2026-10-22T09:00:00Z'},
+  {id:'source-trash',tenant_id:A,agent_id:null,agent_name:null,title:'Removed duplicate',kind:'text',active:false,provenance:{archive:{kind:'manual'}},origin_type:'knowledge_source',origin_id:null,updated_at:'2026-10-22T08:30:00Z'},
   {id:'source-other-agent',tenant_id:A,agent_id:'agent-2',agent_name:'Other agent',title:'Private agent note',kind:'text',active:true,origin_type:'knowledge_source',origin_id:null,updated_at:'2026-10-22T07:00:00Z'}
  ],
  '/api/platform/instructions':{items:[{id:INSTRUCTION,title:'Продажа',state:'published',language:'az',updated_at:'2026-10-22T10:00:00Z'}],next_offset:null},
@@ -18,6 +19,8 @@ w.eval(fs.readFileSync(path.join(__dirname,'../docs/tenant-knowledge-center.js')
 const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
 (async()=>{for(let i=0;i<20&&!w.document.querySelectorAll('.kc-card').length;i++)await tick();
  let cards=[...w.document.querySelectorAll('.kc-card')];assert.equal(cards.length,1);assert.ok(!w.document.querySelector('#kcList').textContent.includes('Private agent note'),'agent filter excludes other agents while retaining shared knowledge');assert.match(cards[0].textContent,/Вся компания/);assert.match(w.document.querySelector('#kcList').textContent,/Возможно, дубликат/);
+ assert.ok(!w.document.querySelector('#kcList').textContent.includes('Removed duplicate'),'trash is excluded from ordinary lists');
+ const sourceStatus=w.document.getElementById('kcStatus');sourceStatus.value='trash';sourceStatus.dispatchEvent(new w.Event('change'));assert.match(w.document.querySelector('#kcList').textContent,/Removed duplicate/);assert.match(w.document.querySelector('#kcList').textContent,/Корзина/);sourceStatus.value='';sourceStatus.dispatchEvent(new w.Event('change'));
  const instruction=w.document.querySelector('[data-kc-tab="instruction"]');instruction.click();cards=[...w.document.querySelectorAll('.kc-card')];assert.equal(cards.length,1);assert.ok(w.document.querySelector('a[href="/app/instructions?lesson=lesson-1"]'));assert.match(w.document.querySelector('#kcList').textContent,/AI продавец/);
  const cases=w.document.querySelector('[data-kc-tab="support_case"]');cases.click();const status=w.document.getElementById('kcStatus');status.value='pending_review';status.dispatchEvent(new w.Event('change'));assert.equal(w.document.querySelectorAll('.kc-card').length,1);assert.match(w.document.querySelector('.kc-card').textContent,/Неправильный размер/);
  w.tenantI18n.language='az';w.document.dispatchEvent(new w.CustomEvent('tenant-language'));assert.equal(w.document.querySelector('[data-knowledge-center-label]').textContent,'Bilik Mərkəzi');
