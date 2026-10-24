@@ -14,6 +14,7 @@ import tenant_ai_learning_mcp as mcp
 import tenant_ai_administrator_read as admin
 import tenant_ai_administrator_drafts as drafts
 import tenant_ai_administrator_approvals as approvals
+import tenant_ai_administrator_observations as observations
 
 
 def test_existing_connection_company_reads_and_immediate_owner_revocation(db,monkeypatch):
@@ -133,4 +134,15 @@ def test_approval_binds_exact_draft_version_and_is_single_use(db,monkeypatch):
         assert approvals.approve(cur,{'tenant_id':A,'telegram_id':11},receipt['id'],'approve')['state']=='approved'
         approvals.consume(cur,A,receipt['id'],value['id'],1,'test')
         with pytest.raises(Exception): approvals.consume(cur,A,receipt['id'],value['id'],1,'test')
+    db.commit()
+
+
+def test_observations_are_deduplicated_and_disabled_by_default(db,monkeypatch):
+    _setup(monkeypatch,db)
+    assert observations.enabled() is False
+    with db.cursor() as cur:
+        first=observations.enqueue(cur,A,'simulation',{'run_id':'safe'})
+        second=observations.enqueue(cur,A,'simulation',{'run_id':'safe'})
+        cur.execute('SELECT count(*) AS n FROM saas_ai_administrator_observations WHERE tenant_id=%s::uuid',(A,))
+        assert first==second and cur.fetchone()['n']==1
     db.commit()
