@@ -244,6 +244,7 @@ def _tools(cur,cfg,name,args):
     if name == 'administrator_draft_restore': return administrator_drafts.restore(cur,cfg,args)
     if name == 'administrator_draft_agent_prompt_create': return administrator_drafts.typed_create(cur,cfg,'agent_prompt',args)
     if name == 'administrator_draft_knowledge_create': return administrator_drafts.typed_create(cur,cfg,'knowledge',args)
+    if name == 'administrator_draft_knowledge_separation_create': return administrator_drafts.typed_create(cur,cfg,'knowledge_separation',args)
     if name == 'administrator_draft_support_case_create': return administrator_drafts.typed_create(cur,cfg,'support_case',args)
     if name == 'administrator_draft_testing_scenario_create': return administrator_drafts.typed_create(cur,cfg,'testing_scenario',args)
     profile={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']}
