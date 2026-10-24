@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import html
 import json
+import logging
 import os
 import re
 import secrets
@@ -37,6 +38,7 @@ OFFLINE_SCOPE = 'offline_access'
 MAX_PAGE = 25
 CHATGPT_CLIENT_ID = 'https://chatgpt.com/oauth/client.json'
 CHATGPT_REDIRECT_URI = 'https://chatgpt.com/connector_platform_oauth_redirect'
+log = logging.getLogger(__name__)
 
 
 def _cfg():
@@ -361,6 +363,24 @@ def _jsonrpc(result=None, error=None, request_id=None):
     return web.json_response({'jsonrpc':'2.0','id':request_id, **({'result':result} if error is None else {'error':error})},headers={'Cache-Control':'no-store'})
 
 
+def _tool_response(value, request_id):
+    """Serialize before commit so a response encoding failure cannot hide a write."""
+    return _jsonrpc({'content':[{'type':'text','text':json.dumps(value,ensure_ascii=False)}]},request_id=request_id)
+
+
+def _tool_error(message, *, status, request_id, retry_safety='not_committed', incident_id=None):
+    """MCP tool failures are results, not a transport/session failure.
+
+    OAuth authentication remains an HTTP challenge.  Once a bearer token was
+    accepted, validation and business errors must keep the MCP session alive so
+    the client can inspect an idempotency receipt instead of blindly retrying.
+    """
+    error={'message':str(message)[:500],'status':int(status),'retry_safety':retry_safety}
+    if incident_id: error['incident_id']=incident_id
+    return _jsonrpc({'content':[{'type':'text','text':json.dumps({'error':error},ensure_ascii=False)}],
+                     'isError':True},request_id=request_id)
+
+
 def _knowledge_dedup_definitions():
     schema={'type':'object','properties':{'canonical_id':{'type':'string'},
       'duplicate_ids':{'type':'array','minItems':1,'maxItems':50,'items':{'type':'string'}},
@@ -403,6 +423,7 @@ def _administrator_apply_definitions():
 
 
 async def mcp(request):
+    method=None; request_id=None; tool_name=''; commit_attempted=False
     try:
         data=await request.json(); method=data.get('method'); request_id=data.get('id')
         if method=='initialize': return _jsonrpc({'protocolVersion':'2025-06-18','serverInfo':{'name':'beintaskbot-learning-loop','version':'1.0'},'capabilities':{'tools':{}}},request_id=request_id)
@@ -411,17 +432,36 @@ async def mcp(request):
             return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
         if method=='tools/call':
             cfg=_authorize_token(request)
+            tool_name=str(data.get('params',{}).get('name',''))
             with _connect() as conn:
                 ensure_mcp_schema(conn)
-                with conn.cursor() as cur: output=_tools(cur,cfg,data.get('params',{}).get('name',''),data.get('params',{}).get('arguments') or {})
+                with conn.cursor() as cur: output=_tools(cur,cfg,tool_name,data.get('params',{}).get('arguments') or {})
+                # Serialize the whole response before any write is committed.
+                # An encoder exception therefore remains rollback-safe.
+                response=_tool_response(output,request_id)
                 if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_'):
+                    commit_attempted=True
                     conn.commit()
-            return _jsonrpc({'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False)}]},request_id=request_id)
+            return response
         return _jsonrpc(error={'code':-32601,'message':'Method not found'},request_id=request_id)
     except TenantLinearError as exc:
         headers={'WWW-Authenticate':'Bearer'} if exc.status==401 else {}
+        # A missing OAuth scope remains a real authorization response so a
+        # client can request the additional scope. Every other authenticated
+        # tool error is encoded as a normal MCP result and never tears down the
+        # session. Its transaction was not committed by this handler.
+        if method=='tools/call' and tool_name.startswith('administrator_training_') and exc.status!=401 and not (exc.status==403 and 'OAuth scope required' in str(exc)):
+            return _tool_error(exc,status=exc.status,request_id=request_id)
         return web.json_response({'error':str(exc),**({'details':exc.details} if hasattr(exc,'details') else {})},status=exc.status,headers=headers)
     except Exception:
+        incident_id=secrets.token_hex(8)
+        log.exception('AI Learning MCP tool failure incident=%s method=%s',incident_id,method)
+        if method=='tools/call' and tool_name.startswith('administrator_training_'):
+            # A failed commit can have an unknown network outcome. Make that
+            # explicit and require the caller to inspect the policy/request
+            # receipt before retrying the same idempotency key.
+            safety='outcome_unknown' if commit_attempted else 'not_committed'
+            return _tool_error('AI Learning MCP tool failed.',status=500,request_id=request_id,retry_safety=safety,incident_id=incident_id)
         return web.json_response({'error':'AI Learning MCP unavailable.'},status=503)
 
 

@@ -7,6 +7,7 @@ from test_knowledge_candidates import ready,candidate,confirmed_case
 from test_ai_learning_mcp import _setup
 import tenant_ai_administrator_approvals as approval
 import tenant_ai_administrator_apply as application
+import tenant_ai_administrator_drafts as drafts
 import tenant_ai_learning_mcp as mcp
 import tenant_ai_administrator_api as api
 import tenant_instruction_library as lib
@@ -142,6 +143,19 @@ def test_foreign_source_and_unverified_source_are_blocked(setup):
     db.commit()
 
 
+def test_administrator_draft_is_not_mistaken_for_a_verified_training_source(setup):
+    db,cfg=setup
+    with db.cursor() as cur:
+        p=policy(cur)
+        draft=drafts.create(cur,cfg,{'kind':'knowledge','title':'Private proposal',
+          'body':{'content':'Unreviewed text','evidence_ids':[]},'target':{'agent_ids':[]}})
+        with pytest.raises(TenantLinearError,match='reviewed material, not an administrator draft'):
+            op(cur,cfg,p,'create',kind='knowledge',source_id=draft['id'])
+        cur.execute('SELECT count(*) AS n FROM saas_ai_training_operations WHERE policy_id=%s::uuid',(p,))
+        assert cur.fetchone()['n']==0
+    db.commit()
+
+
 def test_policy_revoke_blocks_existing_unconsumed_grant(setup):
     db,cfg=setup;d,key=material(setup)
     with db.cursor() as cur:
@@ -214,14 +228,34 @@ def test_http_single_owner_consent_then_multiple_mcp_publications(setup,monkeypa
                 response=await client.post('/mcp',headers={'Authorization':'Bearer read-only-test-token'},json={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':name,'arguments':args}})
                 payload=await response.json();assert response.status==200,payload
                 return json.loads(payload['result']['content'][0]['text'])
+            # A draft/object identifier is not an authoritative source. It
+            # must be reported as a normal MCP tool error, never a 404 that
+            # makes ChatGPT terminate the session or blindly retry a write.
+            invalid=await client.post('/mcp',headers={'Authorization':'Bearer read-only-test-token'},json={'jsonrpc':'2.0','id':7,'method':'tools/call','params':{'name':'administrator_training_create','arguments':{'policy_id':p,'request_id':str(uuid.uuid4()),'kind':'knowledge','source_id':str(uuid.uuid4())}}})
+            invalid_body=await invalid.json();assert invalid.status==200 and invalid_body['result']['isError'] is True
+            assert json.loads(invalid_body['result']['content'][0]['text'])['error']['retry_safety']=='not_committed'
+            assert not db.execute('SELECT * FROM saas_ai_training_operations')
+            # A disconnect/crash after business validation but before commit
+            # rolls the same request back. The caller may safely retry its
+            # idempotency key and receives exactly one stored result.
+            request_id=str(uuid.uuid4());args={'policy_id':p,'request_id':request_id,'kind':'knowledge','source_id':source}
+            original=mcp._tool_response
+            monkeypatch.setattr(mcp,'_tool_response',lambda *_: (_ for _ in ()).throw(RuntimeError('synthetic disconnect')))
+            crashed=await client.post('/mcp',headers={'Authorization':'Bearer read-only-test-token'},json={'jsonrpc':'2.0','id':8,'method':'tools/call','params':{'name':'administrator_training_create','arguments':args}})
+            crash_body=await crashed.json();assert crashed.status==200 and crash_body['result']['isError'] is True
+            assert json.loads(crash_body['result']['content'][0]['text'])['error']['retry_safety']=='not_committed'
+            assert not db.execute('SELECT * FROM saas_ai_training_operations')
+            monkeypatch.setattr(mcp,'_tool_response',original)
+            prepared=await call('administrator_training_create',args)
+            assert await call('administrator_training_create',args)==prepared
             for _ in range(2):
                 prepared=await call('administrator_training_create',{'policy_id':p,'request_id':str(uuid.uuid4()),'kind':'knowledge','source_id':source})
                 published=await call('administrator_training_publish',{'policy_id':p,'request_id':str(uuid.uuid4()),**target(prepared)})
                 readback=await call('knowledge_read',{'id':published['source_ids'][0],'include_content':True})
                 assert readback['items'][0]['active'] and readback['items'][0]['content']=='Verified ERP instructions'
-            policies=await call('administrator_training_policies',{});assert len(policies['items'])==1 and len(policies['items'][0]['recent_operations'])==4
+            policies=await call('administrator_training_policies',{});assert len(policies['items'])==1 and len(policies['items'][0]['recent_operations'])==5
             response=await client.post('/owner',json={'action':'training_policy_revoke','policy_id':p},headers={'Origin':'https://crm.test'});assert response.status==200
-            blocked=await client.post('/mcp',headers={'Authorization':'Bearer read-only-test-token'},json={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'administrator_training_create','arguments':{'policy_id':p,'request_id':str(uuid.uuid4()),'kind':'knowledge','source_id':source}}});assert blocked.status==403
+            blocked=await client.post('/mcp',headers={'Authorization':'Bearer read-only-test-token'},json={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'administrator_training_create','arguments':{'policy_id':p,'request_id':str(uuid.uuid4()),'kind':'knowledge','source_id':source}}});assert blocked.status==200 and (await blocked.json())['result']['isError'] is True
             await call('administrator_training_rollback',{'policy_id':p,'request_id':str(uuid.uuid4()),'grant_id':published['grant_id']})
             db.execute('UPDATE saas_ai_learning_mcp_tokens SET revoked_at=now()');db.commit()
             revoked=await client.post('/mcp',headers={'Authorization':'Bearer read-only-test-token'},json={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'administrator_training_policies','arguments':{}}});assert revoked.status==401
