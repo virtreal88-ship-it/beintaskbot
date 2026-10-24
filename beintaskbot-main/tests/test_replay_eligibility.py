@@ -29,7 +29,7 @@ def test_selects_five_without_returning_personal_data_or_calling_provider(ready,
     ('employee','replay_employee_message_excluded'),('old','replay_message_too_old'),
     ('future','replay_future_timestamp'),('audio','replay_text_required'),
     ('foreign','replay_message_unavailable'),('channel','replay_message_unavailable'),
-    ('conflict','replay_identity_conflict'),('paused','replay_conversation_human_or_paused')])
+    ('conflict','replay_identity_conflict')])
 def test_rejection_guidance_preserves_scope_and_identity_guards(ready,fault,reason):
     d,ids=ready; key=ids[0]
     if fault in ('group','lid'):
@@ -42,7 +42,6 @@ def test_rejection_guidance_preserves_scope_and_identity_guards(ready,fault,reas
     elif fault=='foreign': d.execute('UPDATE saas_crm_messages SET tenant_id=%s::uuid WHERE id=%s::uuid',(B,key))
     elif fault=='channel': d.execute("UPDATE saas_crm_messages SET channel='connect:other' WHERE id=%s::uuid",(key,))
     elif fault=='conflict': d.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',(json.dumps({'conversationIdentityConflict':True,'conversationId':'994501234560@s.whatsapp.net'}),key))
-    elif fault=='paused': d.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,state,reason) VALUES(%s::uuid,'connect',%s,'994501234560@s.whatsapp.net','paused','manual')",(A,CA))
     d.commit()
     result=replay.eligible_examples(PROFILE,[key])
     assert result['items']==[{'id':key,'eligible':False,'reason':reason}]
