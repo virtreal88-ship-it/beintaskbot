@@ -122,6 +122,9 @@ def test_administrator_drafts_are_flagged_scoped_versioned_and_never_applied(db,
     with db.cursor() as cur:
         changed=drafts.update(cur,cfg,{'id':value['id'],'expected_version':1,'body':{'claim':'edited'}})
         assert drafts.listing(cur,cfg,{})['items'][0]['id']==value['id']
+        history=drafts.versions(cur,cfg,{'id':value['id']})['items']
+        assert [item['version'] for item in history]==[1,2]
+        assert history[0]['body']=={'claim':'needs review'} and history[1]['body']=={'claim':'edited'}
         with pytest.raises(Exception): drafts.update(cur,cfg,{'id':value['id'],'expected_version':1,'body':{}})
     db.commit()
     assert changed['version']==2
