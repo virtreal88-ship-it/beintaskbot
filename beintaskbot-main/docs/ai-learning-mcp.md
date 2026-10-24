@@ -306,3 +306,93 @@ Tests use an authorized synthetic owner/tenant and isolated PostgreSQL WASM
 (PGlite), real SQL transactions, HTTP OAuth/MCP handlers and Chromium `/app`
 assets. They do not exercise the owner's live ChatGPT connection or write real
 production knowledge. No paid calls, messages, or production settings changes.
+
+## Bounded persistent training delegation (Issue #231)
+
+The same owner panel now offers **AI training delegation**. One explicit owner
+consent creates a revocable policy for one tenant, one agent and one Connect
+channel. Select material types, rights (`create`, `update`, `publish`, `rollback`),
+lifetime (1–720 hours), total operation limit (1–1000), and hourly limit (1–100).
+No policy is created by deployment. Policy creation/revocation is owner-session
+only, same-origin protected; MCP cannot grant or expand its own permissions.
+The owner panel shows the policy and its recent operation receipts. Existing
+company audit reads provide the longer audit trail.
+
+MCP uses the existing `ai_learning.publish` OAuth permission; creation/update also
+requires `ai_learning.drafts`. Existing OAuth revocation and tenant/owner checks
+remain authoritative. New tools:
+
+- `administrator_training_policies`: list policies/audit for the OAuth scope.
+- `administrator_training_create`: prepare material from a verified source.
+- `administrator_training_update`: refresh an unpublished policy material from
+  verified evidence, with the current draft version and material hash.
+- `administrator_training_publish`: publish the prepared exact material under the
+  policy, automatically minting/consuming the existing bounded publication receipt
+  in the same transaction. No additional per-material owner click is required. Internal approval receipts
+  explicitly record the delegation policy; copied knowledge is labeled
+  `policy_verified_knowledge`, not an individual manual owner review.
+- `administrator_training_rollback`: guarded withdrawal of a policy publication.
+
+Each mutation carries an explicit UUID `request_id`. A locked policy row
+serializes admission, quota checks, evidence validation, business mutations,
+internal approval/grant receipts, audit and result persistence across workers.
+The `(policy_id, request_id)` key replays the stored result; different parameters
+under that key are rejected. Failed transactions consume no quota and leave no
+partial material/approval/publication. Expiry uses database wall-clock time.
+Revocation serializes with in-flight operations; subsequent new work is blocked.
+Safe withdrawal with the explicit rollback right remains available after expiry
+or revocation and after quota exhaustion. Repeated withdrawal creates no new
+receipts. It preserves objects/history and never deletes permanently.
+
+### Verification boundaries
+
+This is deliberately a verified-material permission, not autonomous factual
+approval of arbitrary generated text:
+
+- Knowledge is copied/refreshed from active, agent-bound, reviewed knowledge with
+  server-checked provenance. Instruction/case origins and delegated lineage are
+  revalidated. An inactive source or arbitrary `approved_by` in a draft is not
+  sufficient. Knowledge preparation records source evidence in its immutable
+  operation receipt, rather than fabricating message evidence for an instruction.
+- Instructions copy an existing employee-approved instruction document, including
+  tenant-authorized images/video. New factual/UI steps still require verification;
+  this policy does not pretend that an unreviewed generated instruction is proven.
+- Cases refer to existing tenant/channel-authorized historical candidates and
+  real message evidence. Existing outcome/work-status guards remain in force.
+  Unattended operational steps/actions must be supported literally in source
+  text. Unsupported paraphrases require clarification rather than automatic
+  publication. Preparation labels those cases `needs_clarification`; it does not
+  invent an outcome or overwrite real support tickets. Archived cases are not
+  restored automatically. Case update refreshes its verified proposal only,
+  never copies another conversation's outcome.
+- Prompt/trigger/agent edits, Active, CRM actions, client sends, budget changes,
+  paid inference, public share links and permanent deletion are not policy rights.
+- Version/hash checks and immutable operation provenance prevent generic draft
+  tools from injecting unrelated facts into a delegated publication. Existing
+  publication rollback checks exact object/source/dependency snapshots.
+
+No new scheduler or AI provider call is added. An assistant invokes the tools;
+existing observation/learning workers are unchanged. Policies are permissions,
+not authorization to perform paid model processing.
+
+### Production setup / retained kill switch
+
+After deployment, the **owner's permission setup is one policy submission** in
+the existing AI Administrator panel for the intended agent/channel, selected
+rights/materials and limits; it replaces per-case grant clicks. A connection that
+lacks the existing publish/draft OAuth scopes must also be reauthorized normally.
+The existing server kill switch `AI_AUTONOMOUS_APPLY_ENABLED` is preserved and
+still blocks all application, including policy application. Policy consent does
+not silently override it or change environment variables. If it is off, the
+server operator must separately authorize enabling it before any material
+application can run. Deployment itself changes neither policies nor feature flags.
+
+Tests include disposable native PostgreSQL 17.6 with actual multi-process
+publication/idempotency/quota/revocation races, PGlite parity, HTTP owner-consent →
+multiple MCP publications → readback → revocation/rollback, and Chromium owner UI
+checks in RU/AZ/EN, both themes and desktop/mobile. Three actual historical case
+status summaries were read through the authorized MCP and irreversibly redacted
+into status-only fixtures. They verify rejection of unknown outcomes; no customer
+messages, names, IDs or attachments are copied into tests. These are not full
+historical conversation replays. Positive lifecycle tests use synthetic evidence
+and a synthetic authorized owner. No production materials are modified.

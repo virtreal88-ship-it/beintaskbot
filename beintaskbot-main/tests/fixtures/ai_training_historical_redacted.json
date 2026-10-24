@@ -1,0 +1,41 @@
+{
+  "provenance": "Authorized read-only Beinbot MCP cases_read, 2026-10-24. Status-only redaction; no customer text, IDs, names, phones or attachments. Not a full conversation replay.",
+  "cases": [
+    {
+      "fixture_id": "historical-1",
+      "status": "needs_clarification",
+      "cause_status": "unknown",
+      "outcome_status": "unknown",
+      "work_status": "in_progress",
+      "resolution_method": "chat",
+      "resolution_step_count": 0,
+      "operator_action_count": 1,
+      "action_evidence_count": 1,
+      "source_message_count": 2
+    },
+    {
+      "fixture_id": "historical-2",
+      "status": "needs_clarification",
+      "cause_status": "unknown",
+      "outcome_status": "unknown",
+      "work_status": "awaiting_information",
+      "resolution_method": "chat",
+      "resolution_step_count": 0,
+      "operator_action_count": 1,
+      "action_evidence_count": 1,
+      "source_message_count": 1
+    },
+    {
+      "fixture_id": "historical-3",
+      "status": "archived",
+      "cause_status": "unknown",
+      "outcome_status": "unknown",
+      "work_status": "in_progress",
+      "resolution_method": "chat",
+      "resolution_step_count": 0,
+      "operator_action_count": 1,
+      "action_evidence_count": 1,
+      "source_message_count": 10
+    }
+  ]
+}

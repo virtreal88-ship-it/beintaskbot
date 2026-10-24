@@ -231,6 +231,11 @@ def _authorize_token(request):
 
 
 def _tools(cur,cfg,name,args):
+    if name in {'administrator_training_create','administrator_training_update','administrator_training_publish','administrator_training_rollback'}:
+        return administrator_approvals.training_operation(cur,cfg,name.removeprefix('administrator_training_'),args)
+    if name=='administrator_training_policies':
+        if args or PUBLISH_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required or invalid arguments.',403)
+        return administrator_approvals.training_policy_list(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']},cfg)
     if name in {'administrator_publish_reviewed','administrator_rollback_publication'}:
         if not isinstance(args,dict) or set(args)!={'grant_id'}: raise TenantLinearError('Invalid publication request.',400)
         return administrator_approvals.publication_execute(cur,cfg,args['grant_id'],rollback=name=='administrator_rollback_publication')
@@ -403,13 +408,13 @@ async def mcp(request):
         if method=='initialize': return _jsonrpc({'protocolVersion':'2025-06-18','serverInfo':{'name':'beintaskbot-learning-loop','version':'1.0'},'capabilities':{'tools':{}}},request_id=request_id)
         if method=='tools/list':
             auth=[{'type':'oauth2','scopes':[TOOL_SCOPE]}]
-            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+_administrator_apply_definitions()+administrator_approvals.publication_definitions()},request_id=request_id)
+            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
         if method=='tools/call':
             cfg=_authorize_token(request)
             with _connect() as conn:
                 ensure_mcp_schema(conn)
                 with conn.cursor() as cur: output=_tools(cur,cfg,data.get('params',{}).get('name',''),data.get('params',{}).get('arguments') or {})
-                if data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_'):
+                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_'):
                     conn.commit()
             return _jsonrpc({'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False)}]},request_id=request_id)
         return _jsonrpc(error={'code':-32601,'message':'Method not found'},request_id=request_id)
@@ -457,7 +462,7 @@ def _consent_text(scopes):
     an existing read token is not mistaken for a token that can manage drafts.
     """
     if PUBLISH_SCOPE in scopes:
-        text='Publication access for the configured company, agent and channel. An explicit owner-session grant is still required for each exact reviewed material and version. Grants expire, are revocable and single-use. No self-approval, public links, messages or mode changes.'
+        text='Publication access for the configured company, agent and channel. An explicit owner-session grant for the exact reviewed material OR an owner-created time-bounded verified-training policy is required. Policies bind material types, rights, agent/channel and operation quotas; they are revocable. Per-material grants remain single-use. No self-approval, public links, messages or mode changes.'
         if APPLY_SCOPE in scopes: text+=' Also allow existing owner-approved applications: tested prompts, restricted agent settings, disabled triggers, inactive knowledge and library drafts.'
         if DRAFT_SCOPE in scopes: text+=' Also allow creating and editing non-public administrator proposals.'
         if KNOWLEDGE_DEDUP_SCOPE in scopes: text+=' Also allow existing reversible knowledge duplicate maintenance.'
