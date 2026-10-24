@@ -14,7 +14,7 @@ from tenant_ai_agent_runtime_flags import enabled
 from tenant_ai_agent_schedule import is_open
 from tenant_ai_agent_connect import scope_matches
 from tenant_ai_agent_actions import matching_triggers, handoff_reason
-from tenant_ai_agent_safety import sanitize_draft, server_instructions
+from tenant_ai_agent_safety import sanitize_virtual_reply, server_instructions
 from tenant_ai_agent_run_store import knowledge_context
 from tenant_ai_simulation_engine import _load_context, _provider_credentials
 from tenant_ai_expert_policy import policy, effective, helper_ids, result as expert_result
@@ -296,10 +296,10 @@ def one(profile,message_id):
                 if rules.get('action')=='call_expert' else rules,'unsupported_evidence')
             output.update(outcome='virtual_stop',reason='no_answer_'+decision['action'])
             if decision['action']=='clarify' and assessment.get('clarification_question'):
-                output.update(outcome='virtual_reply',virtual_reply=sanitize_draft(assessment['clarification_question'],agent['language']))
+                output.update(outcome='virtual_reply',virtual_reply=sanitize_virtual_reply(assessment['clarification_question'],agent['language']))
             output['quality_assessment']=_quality_status(output)
             return output
         raw=assessment['reply']
-    output.update(outcome='virtual_reply',virtual_reply=sanitize_draft(raw,agent.get('language') or 'auto'))
+    output.update(outcome='virtual_reply',virtual_reply=sanitize_virtual_reply(raw,agent.get('language') or 'auto'))
     output['quality_assessment']=_quality_status(output)
     return output
