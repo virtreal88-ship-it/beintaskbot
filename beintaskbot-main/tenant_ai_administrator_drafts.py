@@ -53,6 +53,7 @@ def definitions():
       {'name':'administrator_draft_restore','description':'Restore one earlier immutable version as a new non-public draft version. It cannot apply or publish changes.','inputSchema':{'type':'object','properties':{'id':{'type':'string'},'version':{'type':'integer','minimum':1},'expected_version':{'type':'integer','minimum':1}},'required':['id','version','expected_version'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_agent_prompt_create','description':'Prepare a tested non-public prompt patch for one existing agent. It cannot apply the patch.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'agent_id':{'type':'string'},'expected_version':{'type':'integer','minimum':1},'instructions':{'type':'string','maxLength':24000},'testing_turn_id':{'type':'string'}},'required':['title','agent_id','expected_version','instructions','testing_turn_id'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_knowledge_create','description':'Prepare non-public knowledge with explicit evidence references. It cannot publish or bind knowledge.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'content':{'type':'string','maxLength':24000},'evidence_ids':{'type':'array','items':{'type':'string'},'maxItems':50},'agent_ids':{'type':'array','items':{'type':'string'},'maxItems':50}},'required':['title','content','evidence_ids'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
+      {'name':'administrator_draft_knowledge_separation_create','description':'Prepare an owner-reviewed, non-public proposal to separate agent behaviour rules from verified product knowledge in one currently active source. It verifies a cited Simulation Run retrieved that source, records the source hash, and never edits, archives, publishes, or binds the source.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'source_id':{'type':'string'},'source_content_hash':{'type':'string','minLength':1,'maxLength':128},'simulation_run_id':{'type':'string'},'behavior_rules':{'type':'string','minLength':1,'maxLength':12000},'product_knowledge':{'type':'string','minLength':1,'maxLength':12000},'rationale':{'type':'string','maxLength':4000}},'required':['title','source_id','source_content_hash','simulation_run_id','behavior_rules','product_knowledge'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_support_case_create','description':'Prepare a non-public support-case proposal with evidence IDs. It cannot publish a case.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'problem':{'type':'string','maxLength':12000},'evidence_message_ids':{'type':'array','items':{'type':'string'},'maxItems':50}},'required':['title','problem','evidence_message_ids'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_testing_scenario_create','description':'Prepare a synthetic AI Testing scenario. It cannot run a model or send a message.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'synthetic_input':{'type':'string','maxLength':8000},'expected':{'type':'string','maxLength':8000}},'required':['title','synthetic_input','expected'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
     ]
@@ -108,6 +109,52 @@ def _tested_prompt(cur, tenant, agent_id, expected_version, test_id):
         raise TenantLinearError('A completed isolated test for this exact agent version is required.',409)
 
 
+def _references_source(value, source_id):
+    """Match an immutable simulation citation without trusting arbitrary text."""
+    if isinstance(value, str):
+        return value == source_id
+    if isinstance(value, list):
+        return any(_references_source(item, source_id) for item in value)
+    if isinstance(value, dict):
+        return any(key == 'source_id' and str(item) == source_id
+                   or _references_source(item, source_id)
+                   for key,item in value.items())
+    return False
+
+
+def _knowledge_separation(cur, tenant, data):
+    required={'title','source_id','source_content_hash','simulation_run_id','behavior_rules','product_knowledge'}
+    if not isinstance(data,dict) or set(data)-required-{'rationale'} or not required<=set(data):
+        raise TenantLinearError('Invalid knowledge separation proposal.',400)
+    try:
+        source_id=str(uuid.UUID(str(data['source_id'])))
+        run_id=str(uuid.UUID(str(data['simulation_run_id'])))
+    except (TypeError,ValueError):
+        raise TenantLinearError('Invalid knowledge separation proposal.',400) from None
+    if (not isinstance(data['title'],str) or not data['title'].strip() or len(data['title'])>240
+            or not isinstance(data['source_content_hash'],str) or not data['source_content_hash'].strip() or len(data['source_content_hash'])>128):
+        raise TenantLinearError('Invalid knowledge separation proposal.',400)
+    for key,limit in (('behavior_rules',12000),('product_knowledge',12000),('rationale',4000)):
+        value=data.get(key,'')
+        if not isinstance(value,str) or (key != 'rationale' and not value.strip()) or len(value)>limit:
+            raise TenantLinearError('Invalid knowledge separation proposal.',400)
+    cur.execute('''SELECT id,title,content_hash FROM saas_ai_knowledge_sources
+      WHERE tenant_id=%s::uuid AND id=%s::uuid AND active=TRUE FOR SHARE''',(tenant,source_id))
+    source=cur.fetchone()
+    if not source:
+        raise TenantLinearError('Active knowledge source is unavailable for this company.',404)
+    if str(source['content_hash']) != data['source_content_hash']:
+        raise TenantLinearError('Knowledge source changed; reload and review it again.',409)
+    cur.execute('''SELECT knowledge_refs FROM saas_ai_simulation_runs
+      WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE''',(tenant,run_id))
+    run=cur.fetchone()
+    if not run or not _references_source(run.get('knowledge_refs'),source_id):
+        raise TenantLinearError('Simulation evidence does not cite this knowledge source.',409)
+    return {'source_id':source_id,'source_title':source['title'],'source_content_hash':str(source['content_hash']),
+            'simulation_run_id':run_id,'behavior_rules':data['behavior_rules'].strip(),
+            'product_knowledge':data['product_knowledge'].strip(),'rationale':data.get('rationale','').strip()}
+
+
 def typed_create(cur,cfg,name,data):
     """Narrow proposal contracts layered on the common immutable draft store."""
     _guard(cfg)
@@ -128,6 +175,11 @@ def typed_create(cur,cfg,name,data):
             cur.execute('SELECT count(*) AS n FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) AND archived_at IS NULL',(tenant,agents))
             if int(cur.fetchone()['n'])!=len(agents): raise TenantLinearError('Knowledge target is unavailable for this company.',404)
         return create(cur,cfg,{'kind':'knowledge','title':data.get('title'),'body':{'content':data['content'].strip(),'evidence_ids':evidence},'target':{'agent_ids':agents}})
+    if name=='knowledge_separation':
+        proposal=_knowledge_separation(cur,tenant,data)
+        return create(cur,cfg,{'kind':'knowledge','title':data['title'],'body':proposal,
+                               'target':{'source_id':proposal['source_id'],'simulation_run_id':proposal['simulation_run_id'],
+                                         'source_content_hash':proposal['source_content_hash'],'requires_owner_review':True}})
     if name=='support_case':
         if set(data)!={'title','problem','evidence_message_ids'} or not isinstance(data.get('problem'),str) or not data.get('problem').strip(): raise TenantLinearError('Invalid support case proposal.',400)
         return create(cur,cfg,{'kind':'support_case','title':data['title'],'body':{'problem':data['problem'].strip(),'evidence_message_ids':_message_evidence(cur,tenant,data['evidence_message_ids'])},'target':{}})

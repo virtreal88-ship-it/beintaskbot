@@ -8,7 +8,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient,TestServer
 
-from test_tenant_support_inbox import A,B,CA,AGENT,PROFILE,database,db,seed_simulation
+from test_tenant_support_inbox import A,B,CA,AGENT,PROFILE,database,db,seed_simulation,seed_simulation_run
 from test_ai_learning_mcp import _setup
 import tenant_ai_learning_mcp as mcp
 import tenant_ai_administrator_read as admin
@@ -166,6 +166,31 @@ def test_typed_draft_tools_enforce_evidence_and_remain_nonpublic(db,monkeypatch)
         with pytest.raises(Exception):mcp._tools(cur,cfg,'administrator_draft_support_case_create',{'title':'Bad evidence','problem':'x','evidence_message_ids':[str(uuid.uuid4())]})
         with pytest.raises(Exception):mcp._tools(cur,cfg,'administrator_draft_agent_prompt_create',{'title':'Foreign','agent_id':str(uuid.uuid4()),'expected_version':1,'instructions':'x','testing_turn_id':str(uuid.uuid4())})
         with pytest.raises(Exception):mcp._tools(cur,cfg,'administrator_draft_agent_prompt_create',{'title':'Untested','agent_id':AGENT,'expected_version':prompt_body['expected_version'],'instructions':'x','testing_turn_id':str(uuid.uuid4())})
+    db.commit()
+
+
+def test_knowledge_separation_proposal_is_run_cited_version_bound_and_non_mutating(db,monkeypatch):
+    run_id,_,_=seed_simulation_run(db)
+    source_id=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_ai_knowledge_sources(id,tenant_id,agent_id,title,kind,content,active,content_hash,created_by)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,'Mixed guidance','text','Keep verified ERP facts with behaviour rules.',TRUE,'source-hash',11)''',(source_id,A,AGENT))
+    db.execute('UPDATE saas_ai_simulation_runs SET knowledge_refs=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+               (json.dumps([{'source_id':source_id,'chunk_no':0}]),A,run_id))
+    db.commit(); _setup(monkeypatch,db); monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
+    request={'title':'Separate behaviour guidance from ERP facts','source_id':source_id,'source_content_hash':'source-hash',
+             'simulation_run_id':run_id,'behavior_rules':'Ask clarifying questions before answering.','product_knowledge':'Warehouse moves require verified stock selection.',
+             'rationale':'The cited historical Simulation Run retrieved a mixed source.'}
+    with db.cursor() as cur:
+        proposal=mcp._tools(cur,cfg,'administrator_draft_knowledge_separation_create',request)
+        assert proposal['state']=='draft' and proposal['kind']=='knowledge'
+        assert proposal['body']['source_id']==source_id and proposal['target']['requires_owner_review'] is True
+        cur.execute('SELECT active,content,content_hash FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,source_id))
+        assert dict(cur.fetchone())=={'active':True,'content':'Keep verified ERP facts with behaviour rules.','content_hash':'source-hash'}
+        with pytest.raises(Exception):
+            mcp._tools(cur,cfg,'administrator_draft_knowledge_separation_create',{**request,'source_content_hash':'stale'})
+        db.execute('UPDATE saas_ai_simulation_runs SET knowledge_refs=\'[]\'::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,run_id))
+        with pytest.raises(Exception): mcp._tools(cur,cfg,'administrator_draft_knowledge_separation_create',request)
     db.commit()
 
 
