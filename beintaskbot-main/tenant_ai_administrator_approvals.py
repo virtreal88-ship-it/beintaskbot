@@ -72,6 +72,28 @@ def approve(cur, profile, approval_id, decision):
     return {'id':approval_id,'state':state}
 
 
+def approve_many(cur, profile, approval_ids):
+    """Atomically approve a bounded review batch owned by one tenant."""
+    if not isinstance(approval_ids,list) or not 1 <= len(approval_ids) <= 25:
+        raise TenantLinearError('Invalid approval batch.',400)
+    try:
+        ids=sorted({str(uuid.UUID(str(value))) for value in approval_ids})
+    except (ValueError,TypeError):
+        raise TenantLinearError('Invalid approval batch.',400) from None
+    if len(ids)!=len(approval_ids): raise TenantLinearError('Invalid approval batch.',400)
+    tenant,actor=_owner(cur,profile)
+    cur.execute('''SELECT id,state FROM saas_ai_administrator_approvals
+      WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) AND expires_at>now()
+      ORDER BY id FOR UPDATE''',(tenant,ids))
+    rows=cur.fetchall()
+    if len(rows)!=len(ids) or any(row['state']!='pending' for row in rows):
+        raise TenantLinearError('Every approval in the batch must still be pending.',409)
+    cur.execute('''UPDATE saas_ai_administrator_approvals SET state='approved',approved_by=%s,approved_at=now()
+      WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[])''',(actor,tenant,ids))
+    _audit(cur,tenant,actor,'ai_administrator_approval_batch_approved','ai_administrator_approval_batch',','.join(ids),{'count':len(ids)})
+    return {'ids':ids,'state':'approved','count':len(ids)}
+
+
 def listing(cur, profile, *, limit=50):
     """Owner-only approval queue; draft bodies stay tenant-local."""
     if type(limit) is not int or not 1 <= limit <= 100:

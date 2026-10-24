@@ -53,6 +53,9 @@ def handler(member_from_request, canonical_origin, logger):
                 elif action in {'approve','reject'}:
                     if set(data)!={'action','approval_id'}: raise TenantLinearError('Invalid approval request.',400)
                     value=await asyncio.to_thread(_with_connection,approvals.approve,profile,data['approval_id'],action)
+                elif action=='approve_batch':
+                    if set(data)!={'action','approval_ids'}: raise TenantLinearError('Invalid approval batch.',400)
+                    value=await asyncio.to_thread(_with_connection,approvals.approve_many,profile,data['approval_ids'])
                 elif action=='apply_agent_prompt':
                     if set(data)!={'action','approval_id','draft_id'}: raise TenantLinearError('Invalid approval request.',400)
                     value=await asyncio.to_thread(_with_connection,application.apply_agent_prompt,profile,data['approval_id'],data['draft_id'])
