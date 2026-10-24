@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 from test_tenant_support_inbox import database,db,A,B,CA,CB,AGENT,PROFILE,seed_job
 import tenant_ai_testing_store as store
+import tenant_ai_administrator_observations as observations
 import tenant_ai_testing_service as service
 import tenant_ai_agent_connect as connect
 import tenant_ai_agent_queue as kommo_queue
@@ -18,7 +19,7 @@ def uid():return str(uuid.uuid4())
 
 @pytest.fixture
 def sandbox(db,monkeypatch):
-    for module in (store,kommo_queue):monkeypatch.setattr(module,'_connect',lambda:db)
+    for module in (store,kommo_queue,observations):monkeypatch.setattr(module,'_connect',lambda:db)
     monkeypatch.setattr(store,'runtime_flag',lambda _:True)
     monkeypatch.setattr(connect,'runtime_flag',lambda _:True)
     monkeypatch.setattr(store,'choose_api_credential',lambda *args:('test-key','platform'))
@@ -76,6 +77,9 @@ def test_provider_failure_retains_quota_and_is_never_replayed(sandbox,monkeypatc
     assert 'provider secret' not in json.dumps(result)
     run(id,data);assert generate.call_count==1
     assert sandbox.execute('SELECT reserved_calls,status FROM saas_chat_ai_runs')[0]=={'reserved_calls':1,'status':'unknown'}
+    event=sandbox.execute("SELECT source,payload FROM saas_ai_administrator_observations WHERE tenant_id=%s::uuid",(A,))[0]
+    assert event['source']=='ai_testing_diagnostic'
+    assert event['payload']['body']['outcome']=='unknown' and 'client_text' not in json.dumps(event['payload'])
 
 
 def add_trigger(db,kind,actions,condition=None,name='Trigger'):

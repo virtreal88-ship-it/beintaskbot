@@ -201,7 +201,7 @@ def finish(item,response=None,usage=None):
         setup(conn)
         with conn.cursor() as cur:
             tenant=item['tenant_id'];request=item['request_id'];usage=usage or {};actual=max(0,int(usage.get('total_tokens') or 0))
-            cur.execute('SELECT id FROM saas_ai_test_sessions WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,item['session_id']));cur.fetchone()
+            cur.execute('SELECT id,agent_id FROM saas_ai_test_sessions WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,item['session_id']));session_row=cur.fetchone()
             cur.execute('SELECT state,snapshot,total_tokens FROM saas_ai_test_turns WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,request));turn=cur.fetchone()
             if not turn or turn['state']=='completed':return
             actual=max(actual,int(turn['total_tokens']))
@@ -217,4 +217,8 @@ def finish(item,response=None,usage=None):
             cur.execute('UPDATE saas_ai_test_turns SET state=%s,response=%s,total_tokens=%s,reserved_tokens=CASE WHEN %s THEN 0 ELSE reserved_tokens END,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(state,sanitize_draft(response,item['language']) if valid else '',actual,actual>0,tenant,request))
             cur.execute('UPDATE saas_chat_ai_runs SET status=%s,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid',('completed' if valid else 'unknown' if state=='unknown' else 'skipped',tenant,request))
             cur.execute("UPDATE saas_ai_test_sessions SET pending_turn=NULL,reply_count=reply_count+%s,state=CASE WHEN %s THEN 'human' ELSE state END,reason=CASE WHEN %s THEN 'trigger_reply_then_handoff' ELSE reason END,revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND pending_turn=%s::uuid",(int(valid),bool(valid and item['handoff_after_reply']),bool(valid and item['handoff_after_reply']),tenant,item['session_id'],request))
+            if session_row and state in {'unknown','superseded'}:
+                from tenant_ai_administrator_observations import ensure_schema as ensure_observation_schema, record_ai_testing_diagnostic
+                ensure_observation_schema(conn)
+                record_ai_testing_diagnostic(cur,tenant,item['session_id'],request,session_row['agent_id'],state)
         conn.commit()

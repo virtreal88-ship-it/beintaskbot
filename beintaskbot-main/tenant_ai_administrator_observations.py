@@ -35,6 +35,18 @@ def enqueue(cur, tenant_id, source, payload, checkpoint=''):
     return key
 
 
+def record_ai_testing_diagnostic(cur, tenant_id, session_id, request_id, agent_id, outcome):
+    """Record opaque AI Testing lifecycle evidence; never copy test text/output."""
+    if outcome not in {'unknown','superseded'}:
+        return ''
+    return enqueue(cur,tenant_id,'ai_testing_diagnostic',{
+        'kind':'testing_scenario',
+        'title':'Review virtual AI test outcome',
+        'body':{'outcome':outcome,'session_id':str(session_id),'request_id':str(request_id)},
+        'target':{'agent_id':str(agent_id)},
+    },checkpoint='ai_testing:'+str(request_id))
+
+
 def claim_next():
     if not enabled(): return None
     with _connect() as conn:
