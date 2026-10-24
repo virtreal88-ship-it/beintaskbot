@@ -1,6 +1,7 @@
 """Native isolated PostgreSQL + mocked provider; never uses production credentials."""
 import json
 import uuid
+from pathlib import Path
 from unittest.mock import Mock
 import pytest
 from test_connect_channel_multiprocess import database
@@ -56,6 +57,10 @@ def test_five_replays_share_ledger_and_leave_business_and_queue_unchanged(ready,
     assert replay.preflight(PROFILE,ids)['remaining_microusd']==5_000_000
     results=[replay.one(PROFILE,mid) for mid in ids]
     assert len(calls)==5 and all(row['outcome']=='virtual_reply' and not row['sent'] for row in results)
+    assert all(row['source_author_role']=='customer' for row in results)
+    assert all(row['expected_policy']=='evaluate_configured_primary_policy' for row in results)
+    assert all(row['quality_assessment']=={'verdict':'not_reviewed',
+        'reason':'requires_employee_quality_review','model_call_success_is_not_quality_proof':True} for row in results)
     assert replay.preflight(PROFILE,ids)['remaining_microusd']==5_000_000-5*960
     for table in tables:assert db.execute('SELECT row_to_json(t) AS row FROM '+table+' t')==before[table]
     assert db.execute('SELECT mode FROM saas_ai_agents WHERE id=%s::uuid',(AGENT,))[0]['mode']=='manual'
@@ -146,6 +151,28 @@ def test_unverified_or_employee_or_old_sources_are_never_submitted(ready,monkeyp
     db.commit()
     with pytest.raises(TenantLinearError):replay.one(PROFILE,ids[0])
     provider.assert_not_called()
+
+
+def test_historical_media_stop_is_precise_and_never_calls_provider(ready,monkeypatch):
+    db,ids=ready;provider=Mock();monkeypatch.setattr(replay,'generate',provider)
+    db.execute("UPDATE saas_crm_messages SET body='',message_type='audio',raw=%s::jsonb WHERE id=%s::uuid",
+               (json.dumps({'voice_transcription':{'status':'failed'},'media_url':'https://private.example/audio'}),ids[0]))
+    db.commit()
+    result=replay.one(PROFILE,ids[0])
+    assert result['outcome']=='unsupported'
+    assert result['reason']=='simulation_audio_transcription_failed'
+    assert result['events']==[{'type':'simulation_unsupported','reason':'media_context_unavailable',
+        'detail':'simulation_audio_transcription_failed','message_type':'audio','executed':False}]
+    assert result['quality_assessment']=={'verdict':'not_applicable','reason':'no_virtual_reply'}
+    provider.assert_not_called()
+
+
+def test_fixed_historical_regression_fixture_has_required_safety_categories():
+    path=Path(__file__).parent/'fixtures'/'historical_ai_regression'/'sample.json'
+    fixture=json.loads(path.read_text(encoding='utf-8'))
+    assert fixture['sample_size']==5
+    assert [item['id'] for item in fixture['categories']]==[
+        'technical','operator_follow_up','expert_or_knowledge','media','policy_stop']
 
 
 def test_concurrent_same_source_cannot_cross_provider_boundary_twice(ready,monkeypatch):
