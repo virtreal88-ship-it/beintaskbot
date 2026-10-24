@@ -401,19 +401,42 @@ def _source_media_context(source):
                'detail':reason,'message_type':kind,'executed':False}
 
 
-def _group_active_binding(cur,tenant,channel,conversation,agent_id):
-    """Mirror the live group coordinator's single-primary speaking authority."""
+def _group_binding_stop_reason(cur,tenant,channel,conversation,agent_id):
+    """Return a precise, fail-closed reason for a group Simulation admission stop.
+
+    Simulation deliberately shares the live coordinator's explicit group
+    binding policy.  It must not infer a group assignment from a channel scope:
+    that would silently expand the Primary's authority.  The old boolean
+    result obscured whether an operator needs to activate a group, bind a
+    Primary, or fix an accidental channel/agent mismatch.
+    """
     cur.execute("SELECT state,assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND provider='connect' AND group_jid=%s",
                 (tenant,conversation))
     row=cur.fetchone()
-    if not row or row.get('state')!='active': return False
+    if not row:
+        return 'group_binding_missing'
+    state=str(row.get('state') or '')
+    if state!='active':
+        return 'group_binding_' + (state if state in {'paused','human'} else 'not_active')
     assignments=row.get('assignments') or []
     if isinstance(assignments,str):
         try: assignments=json.loads(assignments)
-        except ValueError: return False
-    if not isinstance(assignments,list) or len(assignments)!=1: return False
+        except (TypeError,ValueError): return 'group_primary_binding_invalid'
+    if not isinstance(assignments,list) or not assignments:
+        return 'group_primary_not_bound'
+    if len(assignments)!=1:
+        return 'group_primary_binding_ambiguous'
     binding=assignments[0] if isinstance(assignments[0],dict) else {}
-    return str(binding.get('agent_id') or '')==str(agent_id) and str(binding.get('channel_id') or '')==str(channel)
+    if str(binding.get('channel_id') or '')!=str(channel):
+        return 'group_primary_channel_mismatch'
+    if str(binding.get('agent_id') or '')!=str(agent_id):
+        return 'group_primary_mismatch'
+    return ''
+
+
+def _group_active_binding(cur,tenant,channel,conversation,agent_id):
+    """Mirror the live group coordinator's single-primary speaking authority."""
+    return not _group_binding_stop_reason(cur,tenant,channel,conversation,agent_id)
 
 
 def _reserve_call(cur, job, agent_id, call_no, call_kind, reserve_tokens):
@@ -808,9 +831,13 @@ def process(job):
                     elif (row.get('role')!='primary' or row.get('agent_enabled') is not True
                           or row.get('mode') not in {'automatic','manual'}):
                         result=('blocked','primary_not_simulation_eligible',None,[],[],[],[],0)
-                    elif is_group and not _group_active_binding(cur,tenant,channel,conversation,str(chosen['id'])):
-                        result=('virtual_stop','group_not_active_or_primary_not_bound',str(chosen['id']),[],[],[],
-                                events+[{'type':'virtual_stop','reason':'group_not_active_or_primary_not_bound'}],0)
+                    elif is_group and (group_stop:=_group_binding_stop_reason(cur,tenant,channel,conversation,str(chosen['id']))):
+                        # This is an expected policy stop, not a Simulation
+                        # failure.  Keep the exact coordinator reason visible
+                        # without changing its state, assignment, or scope.
+                        result=('virtual_stop',group_stop,str(chosen['id']),[],[],[],
+                                events+[{'type':'virtual_stop','reason':group_stop,
+                                         'policy':'group_binding_required','executed':False}],0)
                     elif not is_open(row.get('schedule') or {}):
                         result=('skipped','outside_schedule',str(chosen['id']),[],[],[],[],0)
                     else:
