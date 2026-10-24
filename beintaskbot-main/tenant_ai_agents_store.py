@@ -849,13 +849,21 @@ def save_knowledge(profile, data, *, source_id=None, connection=None):
     return result
 
 
+def _knowledge_archive_role(cur, tenant, actor):
+    cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE',(tenant,actor))
+    if (cur.fetchone() or {}).get('role') not in {'owner','admin'}:
+        raise TenantLinearError('Yalnız şirkət sahibi və ya administrator arxivləşdirə bilər.',403)
+
+
 def delete_knowledge(profile, source_id):
+    """Archive a standalone source, preserving chunks and historical citations."""
     source = identifier(source_id)
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
-            cur.execute('SELECT provenance FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE', (tenant, source))
+            _knowledge_archive_role(cur,tenant,actor)
+            cur.execute('SELECT active,provenance FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE', (tenant, source))
             row = cur.fetchone()
             if not row:
                 raise TenantLinearError('Bilik mənbəyi tapılmadı.', 404)
@@ -863,13 +871,32 @@ def delete_knowledge(profile, source_id):
             if isinstance(provenance, str):
                 try: provenance = json.loads(provenance)
                 except (TypeError, ValueError): provenance = {}
-            if isinstance(provenance, dict) and provenance.get('instruction_id'):
-                raise TenantLinearError('Dərc edilmiş təlimat kitabxanasından idarə olunur. Təlimatlar bölməsindən nəşri ləğv edin.', 409)
-            cur.execute('DELETE FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING id', (tenant, source))
-            cur.fetchone()
-            _audit(cur, tenant, actor, 'ai_knowledge_deleted', 'knowledge_source', source)
+            if isinstance(provenance, dict) and (provenance.get('instruction_id') or provenance.get('candidate_id')):
+                raise TenantLinearError('Bu material öz mənbəsindən arxivləşdirilir.',409)
+            if row.get('active') is not True:
+                return {'archived':True,'idempotent_replay':True}
+            marker={'archived_by':actor,'kind':'manual'}
+            cur.execute('''UPDATE saas_ai_knowledge_sources SET active=FALSE,
+              provenance=COALESCE(provenance,'{}'::jsonb)||jsonb_build_object('archive',%s::jsonb),updated_at=now()
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND active=TRUE RETURNING id''',(_json(marker),tenant,source))
+            if not cur.fetchone(): raise TenantLinearError('Bilik mənbəyi dəyişib. Yenidən yoxlayın.',409)
+            _audit(cur, tenant, actor, 'ai_knowledge_archived', 'knowledge_source', source)
         conn.commit()
-    return {'deleted': True}
+    return {'archived': True}
+
+
+def restore_knowledge(profile, source_id):
+    source=identifier(source_id)
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant,actor=_authorize(cur,profile);_knowledge_archive_role(cur,tenant,actor)
+            cur.execute('''UPDATE saas_ai_knowledge_sources SET active=TRUE,provenance=provenance-'archive',updated_at=now()
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND active=FALSE AND provenance->'archive'->>'kind'='manual' RETURNING id''',(tenant,source))
+            if not cur.fetchone(): raise TenantLinearError('Bərpa ediləcək arxiv mənbəsi tapılmadı.',404)
+            _audit(cur,tenant,actor,'ai_knowledge_restored','knowledge_source',source)
+        conn.commit()
+    return {'restored':True}
 
 
 def _knowledge_dedup_owner(cur, profile):
@@ -939,8 +966,13 @@ def _knowledge_dedup_check(cur, tenant, canonical_id, duplicate_ids, *, lock=Fal
     precondition=hashlib.sha256(json.dumps(snapshot,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     return {'canonical_id':canonical,'duplicate_ids':duplicates,'checks':checks,'dependencies':dependencies,
             'precondition':precondition,
+            # Simulation and Agent Runs cite immutable historical source ids.
+            # Those citations do not make an exact duplicate active, and
+            # archiving must preserve rather than rewrite them. Candidate and
+            # quality tables remain a conservative guard until their own
+            # lifecycle explicitly supports archival references.
             'eligible':all(item['byte_equivalent'] and item['agent_binding_matches'] and item['chunks_match'] for item in checks)
-                       and not any(any(value for key,value in item.items() if key!='source_id') for item in dependencies)}
+                       and not any(item['candidate_bindings'] or item['quality_checks'] for item in dependencies)}
 
 
 def knowledge_deduplication(profile, data):

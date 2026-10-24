@@ -71,6 +71,9 @@ def schema(conn):
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,id UUID NOT NULL,version INT NOT NULL DEFAULT 1,
           state TEXT NOT NULL DEFAULT 'draft',doc JSONB NOT NULL,published_doc JSONB,
           public_hash TEXT,updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(tenant_id,id))''')
+        c.execute("ALTER TABLE saas_instruction_lessons ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ")
+        c.execute("ALTER TABLE saas_instruction_lessons ADD COLUMN IF NOT EXISTS archived_by BIGINT")
+        c.execute("ALTER TABLE saas_instruction_lessons ADD COLUMN IF NOT EXISTS archived_from_state TEXT")
         c.execute('CREATE UNIQUE INDEX IF NOT EXISTS saas_instruction_share_idx ON saas_instruction_lessons(public_hash) WHERE public_hash IS NOT NULL')
 
 def _assets(c,tenant,doc):
@@ -99,8 +102,8 @@ def operation(profile,action,data=None,lesson_id=None):
             if action=='list':
                 q=str(data.get('q',''))[:180];state=data.get('state','');offset=min(max(int(data.get('offset',0)),0),100000)
                 c.execute('''SELECT id,version,state,doc->>'title' AS title,doc->>'language' AS language,updated_at
-                  FROM saas_instruction_lessons WHERE tenant_id=%s::uuid AND (%s='' OR state=%s)
-                  AND doc->>'title' ILIKE %s ORDER BY updated_at DESC,id LIMIT 51 OFFSET %s''',(tenant,state,state,'%'+q+'%',offset))
+                  FROM saas_instruction_lessons WHERE tenant_id=%s::uuid AND (%s='archived' OR state<>'archived')
+                  AND (%s='' OR state=%s) AND doc->>'title' ILIKE %s ORDER BY updated_at DESC,id LIMIT 51 OFFSET %s''',(tenant,state,state,state,'%'+q+'%',offset))
                 rows=[_row(r) for r in c.fetchall()];return {'items':rows[:50],'next_offset':offset+50 if len(rows)>50 else None}
             if action=='upload':
                 # Pillow re-encodes pixels only: EXIF, comments and metadata are discarded.
@@ -145,6 +148,18 @@ def operation(profile,action,data=None,lesson_id=None):
                     if row['state']!='published': raise TenantLinearError('Only a published instruction can be unpublished',409)
                     c.execute("UPDATE saas_ai_knowledge_sources SET active=FALSE WHERE tenant_id=%s::uuid AND provenance->>'instruction_id'=%s",(tenant,key))
                     c.execute("UPDATE saas_instruction_lessons SET state='approved',published_doc=NULL,public_hash=NULL,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,key))
+                elif action=='archive':
+                    if row['state']=='archived': return _row(row)
+                    c.execute("UPDATE saas_ai_knowledge_sources SET active=FALSE WHERE tenant_id=%s::uuid AND provenance->>'instruction_id'=%s",(tenant,key))
+                    c.execute("""UPDATE saas_instruction_lessons SET state='archived',archived_at=now(),archived_by=%s,
+                      archived_from_state=state,public_hash=NULL,version=version+1,updated_at=now()
+                      WHERE tenant_id=%s::uuid AND id=%s::uuid""",(actor,tenant,key))
+                elif action=='restore':
+                    if row['state']!='archived': raise TenantLinearError('Only an archived instruction can be restored',409)
+                    restored=row.get('archived_from_state') if row.get('archived_from_state') in STATES else 'draft'
+                    c.execute("""UPDATE saas_instruction_lessons SET state=%s,archived_at=NULL,archived_by=NULL,archived_from_state=NULL,
+                      version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid""",(restored,tenant,key))
+                    if restored=='published': c.execute("UPDATE saas_ai_knowledge_sources SET active=TRUE WHERE tenant_id=%s::uuid AND provenance->>'instruction_id'=%s",(tenant,key))
                 elif action=='share':
                     if row['state']!='published': raise TenantLinearError('Publish first',409)
                     token=secrets.token_urlsafe(32);digest=hashlib.sha256(token.encode()).hexdigest()
