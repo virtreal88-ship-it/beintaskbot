@@ -672,6 +672,18 @@ def _complete(job, outcome, *, reply='', stop_reason='', agent_id=None, triggers
                      'stop_reason':str(stop_reason or '')[:200],'sent':False,'source_message_id':str(job['source_message_id'])})))
             cur.execute("UPDATE saas_ai_simulation_queue SET state=%s,error_code=%s,lease_token=NULL,lease_until=NULL,completed_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND lease_token=%s::uuid",
               ('unknown' if outcome=='unknown' else ('failed' if outcome=='error' else ('skipped' if outcome in {'skipped','unsupported','blocked'} else 'completed')),str(error or '')[:80],job['tenant_id'],job['id'],job['lease_token']))
+            # The learning loop receives diagnostics only.  It never gets the
+            # message body and can only create a non-public draft when its own
+            # independent runtime flag is enabled.
+            if outcome in {'error','blocked','unsupported','unknown'}:
+                from tenant_ai_administrator_observations import enqueue, ensure_schema as ensure_observation_schema
+                ensure_observation_schema(conn)
+                enqueue(cur,job['tenant_id'],'simulation_run',{
+                    'kind':'testing_scenario','title':'Simulation diagnostic requires review',
+                    'body':{'queue_id':str(job['id']),'outcome':str(outcome)[:40],
+                            'stop_reason':str(stop_reason)[:200],'error_code':str(error)[:80],
+                            'tokens':max(0,int(total_tokens))},
+                    'target':{'agent_id':str(agent_id or ''),'channel_id':str(job['channel_id'])}},checkpoint=str(job['id']))
         conn.commit()
     return True
 
