@@ -189,6 +189,10 @@ def _authorize_token(request):
 
 
 def _tools(cur,cfg,name,args):
+    if name == 'administrator_testing_compare':
+        result=administrator_read.testing_compare(cur,cfg,args)
+        _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_administrator_read','mcp_tool',name)
+        return result
     if name in administrator_read.SPECS:
         result=administrator_read.read(cur,cfg,name,args)
         _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_administrator_read','mcp_tool',name)
