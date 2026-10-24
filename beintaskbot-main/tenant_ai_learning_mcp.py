@@ -16,7 +16,7 @@ import uuid
 
 from aiohttp import web
 
-from tenant_ai_agents_store import _audit, _authorize
+from tenant_ai_agents_store import _audit, _authorize, knowledge_deduplication
 from tenant_ai_dashboard import _connect, _iso, _json_value
 from tenant_ai_learning import findings
 from tenant_ai_simulation_schema import ensure_schema
@@ -29,6 +29,7 @@ import tenant_ai_administrator_apply as administrator_apply
 
 TOOL_SCOPE = 'ai_learning.read'
 DRAFT_SCOPE = administrator_drafts.DRAFT_SCOPE
+KNOWLEDGE_DEDUP_SCOPE = 'ai_learning.knowledge_dedup'
 OFFLINE_SCOPE = 'offline_access'
 MAX_PAGE = 25
 CHATGPT_CLIENT_ID = 'https://chatgpt.com/oauth/client.json'
@@ -172,7 +173,7 @@ def _authorize_token(request):
             if not row: raise TenantLinearError('Authorization required.',401)
             cfg['granted_scopes']=str(row.get('scope') or TOOL_SCOPE).split()
             cfg['actor_id']=row['created_by']
-            if TOOL_SCOPE in cfg['granted_scopes'] or DRAFT_SCOPE in cfg['granted_scopes'] or administrator_read.READ_SCOPE in cfg['granted_scopes']:
+            if TOOL_SCOPE in cfg['granted_scopes'] or DRAFT_SCOPE in cfg['granted_scopes'] or KNOWLEDGE_DEDUP_SCOPE in cfg['granted_scopes'] or administrator_read.READ_SCOPE in cfg['granted_scopes']:
                 _authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':row['created_by']})
                 cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',
                             (cfg['AI_LEARNING_MCP_TENANT_ID'],row['created_by']))
@@ -207,6 +208,26 @@ def _tools(cur,cfg,name,args):
     if name == 'administrator_draft_support_case_create': return administrator_drafts.typed_create(cur,cfg,'support_case',args)
     if name == 'administrator_draft_testing_scenario_create': return administrator_drafts.typed_create(cur,cfg,'testing_scenario',args)
     profile={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']}
+    if name in {'knowledge_duplicate_preview','knowledge_duplicate_archive','knowledge_duplicate_rollback'}:
+        if KNOWLEDGE_DEDUP_SCOPE not in set(cfg.get('granted_scopes') or []):
+            raise TenantLinearError('Additional OAuth scope required.',403)
+        actions={'knowledge_duplicate_preview':'preview','knowledge_duplicate_archive':'archive','knowledge_duplicate_rollback':'rollback'}
+        if not isinstance(args,dict) or set(args)-{'canonical_id','duplicate_ids','precondition','request_key'}:
+            raise TenantLinearError('Invalid knowledge duplicate request.',400)
+        required={'canonical_id','duplicate_ids'} if name=='knowledge_duplicate_preview' else {'canonical_id','duplicate_ids','precondition','request_key'}
+        if set(args) != required or not isinstance(args.get('duplicate_ids'),list) or not 1<=len(args['duplicate_ids'])<=50:
+            raise TenantLinearError('Invalid knowledge duplicate request.',400)
+        payload={'action':actions[name],'canonical_id':args['canonical_id'],'duplicate_ids':args['duplicate_ids']}
+        if name!='knowledge_duplicate_preview':
+            precondition=str(args.get('precondition') or '')
+            if not re.fullmatch(r'[0-9a-f]{64}',precondition): raise TenantLinearError('Invalid knowledge duplicate precondition.',400)
+            try: payload['request_key']=str(uuid.UUID(str(args.get('request_key'))))
+            except (TypeError,ValueError): raise TenantLinearError('Invalid knowledge duplicate request.',400) from None
+            payload['expected_precondition']=precondition
+        result=knowledge_deduplication(profile,payload)
+        _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_knowledge_duplicate_'+actions[name],
+               'knowledge_source',result.get('canonical_id'),{'duplicate_ids':result.get('duplicate_ids',[])})
+        return result
     if name == 'administrator_approval_request':
         if DRAFT_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
         if set(args)!={'draft_id','version'}: raise TenantLinearError('Invalid approval request.',400)
@@ -236,19 +257,36 @@ def _jsonrpc(result=None, error=None, request_id=None):
     return web.json_response({'jsonrpc':'2.0','id':request_id, **({'result':result} if error is None else {'error':error})},headers={'Cache-Control':'no-store'})
 
 
+def _knowledge_dedup_definitions():
+    schema={'type':'object','properties':{'canonical_id':{'type':'string'},
+      'duplicate_ids':{'type':'array','minItems':1,'maxItems':50,'items':{'type':'string'}},
+      'precondition':{'type':'string','pattern':'^[0-9a-f]{64}$'},'request_key':{'type':'string'}},
+      'additionalProperties':False}
+    security=[{'type':'oauth2','scopes':[KNOWLEDGE_DEDUP_SCOPE]}]
+    safe={'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False}
+    return [
+      {'name':'knowledge_duplicate_preview','description':'Owner-only preview of exact same-agent TXT duplicates. It exposes no source text and changes nothing.',
+       'inputSchema':{**schema,'required':['canonical_id','duplicate_ids']},'annotations':{**safe,'readOnlyHint':True},'securitySchemes':security},
+      {'name':'knowledge_duplicate_archive','description':'Owner-only non-destructive archive after a matching preview. It preserves duplicate rows and chunks and requires an idempotency key.',
+       'inputSchema':{**schema,'required':['canonical_id','duplicate_ids','precondition','request_key']},'annotations':safe,'securitySchemes':security},
+      {'name':'knowledge_duplicate_rollback','description':'Owner-only rollback of a prior duplicate archive after a matching preview. It requires an idempotency key.',
+       'inputSchema':{**schema,'required':['canonical_id','duplicate_ids','precondition','request_key']},'annotations':safe,'securitySchemes':security},
+    ]
+
+
 async def mcp(request):
     try:
         data=await request.json(); method=data.get('method'); request_id=data.get('id')
         if method=='initialize': return _jsonrpc({'protocolVersion':'2025-06-18','serverInfo':{'name':'beintaskbot-learning-loop','version':'1.0'},'capabilities':{'tools':{}}},request_id=request_id)
         if method=='tools/list':
             auth=[{'type':'oauth2','scopes':[TOOL_SCOPE]}]
-            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()},request_id=request_id)
+            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()},request_id=request_id)
         if method=='tools/call':
             cfg=_authorize_token(request)
             with _connect() as conn:
                 ensure_mcp_schema(conn)
                 with conn.cursor() as cur: output=_tools(cur,cfg,data.get('params',{}).get('name',''),data.get('params',{}).get('arguments') or {})
-                if data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_'):
+                if data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_'):
                     conn.commit()
             return _jsonrpc({'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False)}]},request_id=request_id)
         return _jsonrpc(error={'code':-32601,'message':'Method not found'},request_id=request_id)
@@ -283,7 +321,7 @@ def _oauth_resource(value, cfg):
 
 def _requested_scopes(value):
     requested={part for part in str(value or TOOL_SCOPE).split() if part}
-    if not requested or TOOL_SCOPE not in requested or requested-{TOOL_SCOPE,DRAFT_SCOPE,OFFLINE_SCOPE}:
+    if not requested or TOOL_SCOPE not in requested or requested-{TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,OFFLINE_SCOPE}:
         raise TenantLinearError('Unsupported OAuth scope.',400)
     return requested
 
@@ -295,6 +333,13 @@ def _consent_text(scopes):
     is still a write operation.  The consent page must make that distinction so
     an existing read token is not mistaken for a token that can manage drafts.
     """
+    if KNOWLEDGE_DEDUP_SCOPE in scopes:
+        return (
+            'Knowledge duplicate maintenance for the configured company only. '
+            'ChatGPT may preview exact duplicate sources and non-destructively '
+            'archive or roll back only sources that pass server-side checks. '
+            'It cannot publish knowledge, send messages, or change agent settings.'
+        ), 'Allow knowledge duplicate maintenance'
     if DRAFT_SCOPE in scopes:
         return (
             'Draft proposal access for one configured AI agent and WhatsApp '
@@ -393,12 +438,12 @@ def routes(member_from_request):
     async def protected(request):
         try:
             cfg=_require_cfg()
-            return web.json_response({'resource':cfg['issuer']+'/mcp/ai-learning','authorization_servers':[cfg['issuer']], 'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,OFFLINE_SCOPE]})
+            return web.json_response({'resource':cfg['issuer']+'/mcp/ai-learning','authorization_servers':[cfg['issuer']], 'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,OFFLINE_SCOPE]})
         except TenantLinearError as exc: return web.json_response({'error':str(exc)},status=exc.status)
     async def metadata(request):
         try:
             cfg=_require_cfg(); base=cfg['issuer']
-            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,OFFLINE_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code','refresh_token'],'token_endpoint_auth_methods_supported':['none'],'client_id_metadata_document_supported':True})
+            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,OFFLINE_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code','refresh_token'],'token_endpoint_auth_methods_supported':['none'],'client_id_metadata_document_supported':True})
         except TenantLinearError as exc: return web.json_response({'error':str(exc)},status=exc.status)
     return [('POST','/mcp/ai-learning',mcp),('GET','/mcp/ai-learning',mcp),('GET','/.well-known/oauth-protected-resource/mcp/ai-learning',protected),('GET','/.well-known/oauth-authorization-server',metadata),('GET','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/token',token)]
 

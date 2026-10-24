@@ -926,7 +926,19 @@ def _knowledge_dedup_check(cur, tenant, canonical_id, duplicate_ids, *, lock=Fal
         if _relation_exists(cur,'saas_ai_agent_runs'):
             cur.execute("SELECT count(*) AS n FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND COALESCE(result::text,'') LIKE %s",(tenant,'%'+source+'%'));refs['agent_run_citations']=int(cur.fetchone()['n'])
         dependencies.append(refs)
+    # The opaque precondition binds a subsequent archive/rollback to this
+    # exact inspected source state.  It deliberately contains no source text
+    # or private URLs, but includes every value whose change could make a
+    # previous preview stale.
+    snapshot=[{'id':source,'active':bool(found[source].get('active')),
+               'agent_id':found[source].get('agent_id'),'kind':found[source].get('kind'),
+               'content_hash':found[source].get('content_hash'),
+               'updated_at':str(found[source].get('updated_at') or ''),
+               'chunks':hashlib.sha256(json.dumps(chunks[source],ensure_ascii=False,separators=(',',':')).encode()).hexdigest()}
+              for source in ids]
+    precondition=hashlib.sha256(json.dumps(snapshot,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     return {'canonical_id':canonical,'duplicate_ids':duplicates,'checks':checks,'dependencies':dependencies,
+            'precondition':precondition,
             'eligible':all(item['byte_equivalent'] and item['agent_binding_matches'] and item['chunks_match'] for item in checks)
                        and not any(any(value for key,value in item.items() if key!='source_id') for item in dependencies)}
 
@@ -938,18 +950,47 @@ def knowledge_deduplication(profile, data):
     sources from active retrieval; rollback restores exactly those rows after
     rechecking the canonical content and chunk structure.
     """
-    if not isinstance(data,dict) or set(data)-{'action','canonical_id','duplicate_ids'}:
+    if not isinstance(data,dict) or set(data)-{'action','canonical_id','duplicate_ids','expected_precondition','request_key'}:
         raise TenantLinearError('Bilik birləşdirmə sorğusu düzgün deyil.')
     action=str(data.get('action') or 'preview')
     if action not in {'preview','archive','rollback'} or not isinstance(data.get('duplicate_ids'),list):
         raise TenantLinearError('Bilik birləşdirmə sorğusu düzgün deyil.')
+    request_key=data.get('request_key')
+    if request_key is not None:
+        try: request_key=str(uuid.UUID(str(request_key)))
+        except (TypeError,ValueError): raise TenantLinearError('Bilik birləşdirmə sorğusu düzgün deyil.') from None
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,actor=_knowledge_dedup_owner(cur,profile)
+            if request_key:
+                cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_knowledge_dedup_requests(
+                  tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+                  request_key UUID NOT NULL, action TEXT NOT NULL, canonical_id UUID NOT NULL,
+                  duplicate_ids JSONB NOT NULL, expected_precondition TEXT NULL, result JSONB NOT NULL,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                  PRIMARY KEY(tenant_id,request_key))''')
+                cur.execute('''SELECT action,canonical_id::text AS canonical_id,duplicate_ids,expected_precondition,result
+                  FROM saas_ai_knowledge_dedup_requests WHERE tenant_id=%s::uuid AND request_key=%s::uuid FOR UPDATE''',(tenant,request_key))
+                prior=cur.fetchone()
+                if prior:
+                    prior_duplicates=prior['duplicate_ids']
+                    prior_result=prior['result']
+                    if isinstance(prior_duplicates,str): prior_duplicates=json.loads(prior_duplicates)
+                    if isinstance(prior_result,str): prior_result=json.loads(prior_result)
+                    same=(prior['action']==action and str(prior['canonical_id'])==str(data.get('canonical_id'))
+                          and sorted(prior_duplicates or [])==sorted(str(value) for value in data['duplicate_ids'])
+                          and prior.get('expected_precondition')==data.get('expected_precondition'))
+                    if not same: raise TenantLinearError('Bilik birləşdirmə sorğusu təkrar istifadə edilə bilməz.',409)
+                    result=prior_result or {}
+                    result['idempotent_replay']=True
+                    return result
             check=_knowledge_dedup_check(cur,tenant,data.get('canonical_id'),data['duplicate_ids'],lock=action!='preview')
             if action=='preview':
                 return {**check,'action':'preview'}
+            expected=data.get('expected_precondition')
+            if expected is not None and (not isinstance(expected,str) or expected != check['precondition']):
+                raise TenantLinearError('Bilik mənbələri dəyişib. Yenidən yoxlayın.',409)
             if not check['eligible']:
                 raise TenantLinearError('Təkrarlanan mənbələr təhlükəsiz arxivləşdirmə üçün uyğun deyil.',409)
             if action=='archive':
@@ -969,8 +1010,13 @@ def knowledge_deduplication(profile, data):
                     raise TenantLinearError('Arxiv qeydi geri qaytarmaq üçün uyğun deyil.',409)
                 audit_action='ai_knowledge_duplicates_restored'
             _audit(cur,tenant,actor,audit_action,'knowledge_source',check['canonical_id'],{'duplicate_ids':check['duplicate_ids']})
+            result={**check,'action':action,'changed_ids':check['duplicate_ids']}
+            if request_key:
+                cur.execute('''INSERT INTO saas_ai_knowledge_dedup_requests(tenant_id,request_key,action,canonical_id,duplicate_ids,expected_precondition,result)
+                  VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::jsonb,%s,%s::jsonb)''',
+                  (tenant,request_key,action,check['canonical_id'],_json(check['duplicate_ids']),data.get('expected_precondition'),_json(result)))
         conn.commit()
-    return {**check,'action':action,'changed_ids':check['duplicate_ids']}
+    return result
 
 
 def search_knowledge(profile, query, *, limit=6):

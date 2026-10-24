@@ -10,8 +10,9 @@ from urllib.parse import parse_qs, urlparse
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from test_tenant_support_inbox import A, CA, PROFILE, database, db, seed_simulation_run
+from test_tenant_support_inbox import A, CA, PROFILE, database, db, seed_job, seed_simulation_run
 import tenant_ai_learning_mcp as mcp
+import tenant_ai_agents_store as agents
 
 
 AGENT='67da1058-2ffb-48fa-bfd9-d3d01c1990d1'
@@ -103,9 +104,42 @@ def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, 
             assert data['token_endpoint_auth_methods_supported']==['none']
             assert data['grant_types_supported']==['authorization_code','refresh_token']
             assert mcp.OFFLINE_SCOPE in data['scopes_supported']
+            assert mcp.KNOWLEDGE_DEDUP_SCOPE in data['scopes_supported']
             protected=await client.get('/.well-known/oauth-protected-resource/mcp/ai-learning')
             assert (await protected.json())['resource']=='https://crm.test/mcp/ai-learning'
     asyncio.run(check())
+
+
+def test_owner_mcp_knowledge_duplicate_preview_archive_rollback_is_scoped_and_idempotent(db, monkeypatch):
+    _setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+mcp.KNOWLEDGE_DEDUP_SCOPE)
+    seed_job(db)
+    canonical,duplicate=str(uuid.uuid4()),str(uuid.uuid4())
+    content='Exact confirmed ERP warehouse instruction.'
+    digest=hashlib.sha256(content.encode()).hexdigest()
+    for source,title in ((canonical,'Canonical'),(duplicate,'Duplicate')):
+        db.execute('''INSERT INTO saas_ai_knowledge_sources(id,tenant_id,agent_id,title,kind,content,content_hash,active,created_by)
+          VALUES(%s::uuid,%s::uuid,%s::uuid,%s,'txt',%s,%s,TRUE,11)''',(source,A,AGENT,title,content,digest))
+        db.execute('''INSERT INTO saas_ai_knowledge_chunks(tenant_id,source_id,chunk_no,content)
+          VALUES(%s::uuid,%s::uuid,0,%s)''',(A,source,content))
+    db.commit()
+    cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.TOOL_SCOPE,mcp.KNOWLEDGE_DEDUP_SCOPE]}
+    with db.cursor() as cur:
+        preview=mcp._tools(cur,cfg,'knowledge_duplicate_preview',{'canonical_id':canonical,'duplicate_ids':[duplicate]})
+        assert preview['eligible'] is True and len(preview['precondition'])==64
+        request_key=str(uuid.uuid4())
+        archived=mcp._tools(cur,cfg,'knowledge_duplicate_archive',{'canonical_id':canonical,'duplicate_ids':[duplicate],
+            'precondition':preview['precondition'],'request_key':request_key})
+        replay=mcp._tools(cur,cfg,'knowledge_duplicate_archive',{'canonical_id':canonical,'duplicate_ids':[duplicate],
+            'precondition':preview['precondition'],'request_key':request_key})
+        assert archived['changed_ids']==[duplicate] and replay['idempotent_replay'] is True
+        current=mcp._tools(cur,cfg,'knowledge_duplicate_preview',{'canonical_id':canonical,'duplicate_ids':[duplicate]})
+        restored=mcp._tools(cur,cfg,'knowledge_duplicate_rollback',{'canonical_id':canonical,'duplicate_ids':[duplicate],
+            'precondition':current['precondition'],'request_key':str(uuid.uuid4())})
+        assert restored['changed_ids']==[duplicate]
+    assert db.execute('SELECT active FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(duplicate,))[0]['active'] is True
+    with db.cursor() as cur:
+        with pytest.raises(Exception):
+            mcp._tools(cur,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'knowledge_duplicate_preview',{'canonical_id':canonical,'duplicate_ids':[duplicate]})
 
 
 def test_draft_scope_requires_reauthorization_and_has_accurate_consent(db, monkeypatch):

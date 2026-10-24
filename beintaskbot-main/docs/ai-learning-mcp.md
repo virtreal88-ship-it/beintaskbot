@@ -93,7 +93,8 @@ and transcript access must reuse verified application authorization before being
 exposed. These reads do not enqueue analysis, inference, simulation or extraction.
 ## Draft proposal scope and reauthorization
 
-`ai_learning.read` and `ai_learning.drafts` are separate OAuth scopes.
+`ai_learning.read`, `ai_learning.drafts`, and `ai_learning.knowledge_dedup`
+are separate OAuth scopes.
 `ai_learning.read` is sufficient for all read tools. `ai_learning.drafts` is
 needed by `administrator_draft_list` and the other non-public draft tools. This
 is intentional: a read-only access token cannot create or edit a proposal.
@@ -110,6 +111,22 @@ reconnect the MCP server so it can request `ai_learning.drafts` again.
 `ai_learning.drafts`; it is resolved by the scoped reauthorization above. The
 separate error `Administrator drafts are disabled` means the Railway feature
 flag is off. Neither error indicates that a draft was applied to production.
+
+## Knowledge duplicate maintenance scope
+
+`ai_learning.knowledge_dedup` exposes three owner-only MCP tools:
+`knowledge_duplicate_preview`, `knowledge_duplicate_archive`, and
+`knowledge_duplicate_rollback`. Request it alongside `ai_learning.read` in
+the same consent flow. Existing tokens keep their original scopes, so reconnect
+ChatGPT after deployment to request this scope.
+
+Preview returns eligibility, reference checks, and an opaque precondition; it
+never returns source text. Archive and rollback require that exact
+precondition and a new UUID request key. Archive only sets `active=false` on
+byte-identical same-agent TXT duplicates with matching chunks and no known
+candidate, quality, Simulation, or agent-run references. It preserves source
+rows and chunks. Retrying the same key returns the stored result; a changed
+source or reused key with different parameters fails closed.
 
 Drafts are the durable proposal boundary: they preserve evidence, immutable
 versions and audit history before an owner chooses whether to approve anything.
