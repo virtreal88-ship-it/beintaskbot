@@ -29,6 +29,10 @@ def ensure_schema(conn):
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id), approval_id UUID PRIMARY KEY, draft_id UUID NOT NULL,
           agent_id UUID NOT NULL, trigger_id UUID NOT NULL, applied_version INTEGER NOT NULL, rolled_back_at TIMESTAMPTZ)''')
 
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_administrator_config_rollbacks(
+          tenant_id UUID NOT NULL REFERENCES saas_tenants(id), approval_id UUID PRIMARY KEY, draft_id UUID NOT NULL,
+          agent_id UUID NOT NULL, channel_id UUID NOT NULL, before_patch JSONB NOT NULL, applied_version INTEGER NOT NULL, rolled_back_at TIMESTAMPTZ)''')
+
 
 def _guard(cur, profile):
     if not enabled(): raise TenantLinearError('Autonomous application is disabled.',403)
@@ -185,3 +189,53 @@ def rollback_trigger_draft(cur,profile,approval_id,cfg):
     cur.execute("UPDATE saas_ai_administrator_drafts SET state='rolled_back',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,row['draft_id']))
     _audit(cur,tenant,actor,'ai_administrator_trigger_rolled_back','ai_agent_trigger',row['trigger_id'],{'approval_id':approval_id})
     return {'trigger_id':str(row['trigger_id']),'rolled_back':True,'enabled':False}
+
+CONFIG_FIELDS={'language','style','response_policy','expert_policy'}
+
+
+def validate_config_proposal(cur,cfg,data):
+    from tenant_ai_expert_policy import helper_ids
+    required={'agent_id','channel_id','expected_agent_version','patch'}
+    if not isinstance(data,dict) or set(data)!=required or type(data.get('expected_agent_version')) is not int or not isinstance(data.get('patch'),dict) or not data['patch'] or set(data['patch'])-CONFIG_FIELDS:
+        raise TenantLinearError('Invalid agent configuration proposal.',400)
+    agent_id=str(uuid.UUID(str(data['agent_id']))); channel_id=str(uuid.UUID(str(data['channel_id'])))
+    if agent_id!=cfg['AI_LEARNING_MCP_AGENT_ID'] or channel_id!=cfg['AI_LEARNING_MCP_CHANNEL_ID']: raise TenantLinearError('Configuration outside OAuth scope.',403)
+    cur.execute('SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE',(cfg['AI_LEARNING_MCP_TENANT_ID'],agent_id)); previous=cur.fetchone()
+    if not previous or previous['version']!=data['expected_agent_version']: raise TenantLinearError('Agent changed; review again.',409)
+    from tenant_ai_agent_connect import scope_matches
+    if not scope_matches(previous['scopes'],channel_id,is_group=False): raise TenantLinearError('Channel outside agent scope.',403)
+    patch=validate_agent(data['patch'],creating=False)
+    if 'expert_policy' in patch:
+        old=previous.get('expert_policy') or {}; new=patch['expert_policy']
+        if not set(helper_ids(new))<=set(helper_ids(old)) or not set(new.get('tools',[]))<=set(old.get('tools',[])):
+            raise TenantLinearError('Expert permissions cannot be expanded.',403)
+        for key in ('max_calls','timeout_seconds','max_context_chars','max_tokens'):
+            if new.get(key,0)>old.get(key,0): raise TenantLinearError('Expert limits cannot be expanded.',403)
+    return {**data,'patch':patch},previous
+
+
+def apply_agent_config(cur,profile,approval_id,draft_id,cfg):
+    from tenant_ai_agents_store import save_agent
+    tenant,actor=_guard(cur,profile); approval_id,draft_id=_ids(approval_id,draft_id)
+    cur.execute('SELECT * FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,draft_id)); draft=cur.fetchone()
+    if not draft or draft['kind']!='agent_config' or draft['state']!='draft': raise TenantLinearError('Configuration draft unavailable.',409)
+    body,previous=validate_config_proposal(cur,cfg,draft['body'])
+    consume(cur,tenant,approval_id,draft_id,draft['version'],'agent_config_apply')
+    before={key:previous[key] for key in body['patch']}
+    result=save_agent(profile,{**body['patch'],'expected_version':previous['version']},agent_id=body['agent_id'],connection=cur.connection)
+    cur.execute('INSERT INTO saas_ai_administrator_config_rollbacks(tenant_id,approval_id,draft_id,agent_id,channel_id,before_patch,applied_version) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::jsonb,%s)',(tenant,approval_id,draft_id,body['agent_id'],body['channel_id'],json.dumps(before),result['version']))
+    cur.execute("UPDATE saas_ai_administrator_drafts SET state='applied',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,draft_id))
+    _audit(cur,tenant,actor,'ai_administrator_config_applied','ai_agent',body['agent_id'],{'approval_id':approval_id,'version':result['version']})
+    return {'agent_id':result['id'],'version':result['version'],'rollback_available':True}
+
+
+def rollback_agent_config(cur,profile,approval_id,cfg):
+    from tenant_ai_agents_store import save_agent
+    tenant,actor=_guard(cur,profile); approval_id,_=_ids(approval_id,uuid.uuid4())
+    cur.execute('SELECT * FROM saas_ai_administrator_config_rollbacks WHERE tenant_id=%s::uuid AND approval_id=%s::uuid FOR UPDATE',(tenant,approval_id)); row=cur.fetchone()
+    if not row or row['rolled_back_at'] is not None or str(row['agent_id'])!=cfg['AI_LEARNING_MCP_AGENT_ID'] or str(row['channel_id'])!=cfg['AI_LEARNING_MCP_CHANNEL_ID']: raise TenantLinearError('Rollback unavailable.',409)
+    result=save_agent(profile,{**row['before_patch'],'expected_version':row['applied_version']},agent_id=row['agent_id'],connection=cur.connection)
+    cur.execute('UPDATE saas_ai_administrator_config_rollbacks SET rolled_back_at=now() WHERE tenant_id=%s::uuid AND approval_id=%s::uuid',(tenant,approval_id))
+    cur.execute("UPDATE saas_ai_administrator_drafts SET state='rolled_back',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,row['draft_id']))
+    _audit(cur,tenant,actor,'ai_administrator_config_rolled_back','ai_agent',row['agent_id'],{'approval_id':approval_id})
+    return {'agent_id':result['id'],'version':result['version'],'rolled_back':True}
