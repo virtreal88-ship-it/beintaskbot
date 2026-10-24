@@ -50,6 +50,10 @@ def definitions():
       {'name':'administrator_draft_list','description':'List non-public proposals for this company.','inputSchema':{'type':'object','properties':{'limit':schema['properties']['limit']},'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_update','description':'Edit a non-public proposal with optimistic versioning. It cannot apply or publish changes.','inputSchema':schema,'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_versions','description':'Read immutable snapshots of one non-public proposal. It cannot apply or publish changes.','inputSchema':{'type':'object','properties':{'id':{'type':'string'}},'required':['id'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
+      {'name':'administrator_draft_agent_prompt_create','description':'Prepare a tested non-public prompt patch for one existing agent. It cannot apply the patch.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'agent_id':{'type':'string'},'expected_version':{'type':'integer','minimum':1},'instructions':{'type':'string','maxLength':24000},'testing_turn_id':{'type':'string'}},'required':['title','agent_id','expected_version','instructions','testing_turn_id'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
+      {'name':'administrator_draft_knowledge_create','description':'Prepare non-public knowledge with explicit evidence references. It cannot publish or bind knowledge.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'content':{'type':'string','maxLength':24000},'evidence_ids':{'type':'array','items':{'type':'string'},'maxItems':50},'agent_ids':{'type':'array','items':{'type':'string'},'maxItems':50}},'required':['title','content','evidence_ids'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
+      {'name':'administrator_draft_support_case_create','description':'Prepare a non-public support-case proposal with evidence IDs. It cannot publish a case.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'problem':{'type':'string','maxLength':12000},'evidence_message_ids':{'type':'array','items':{'type':'string'},'maxItems':50}},'required':['title','problem','evidence_message_ids'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
+      {'name':'administrator_draft_testing_scenario_create','description':'Prepare a synthetic AI Testing scenario. It cannot run a model or send a message.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'synthetic_input':{'type':'string','maxLength':8000},'expected':{'type':'string','maxLength':8000}},'required':['title','synthetic_input','expected'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
     ]
 
 
@@ -69,6 +73,43 @@ def _valid(data, creating):
     if 'title' in data and (not isinstance(data['title'],str) or not data['title'].strip() or len(data['title'])>240): raise TenantLinearError('Invalid draft title.',400)
     for key in ('body','target'):
         if key in data and (not isinstance(data[key],dict) or len(json.dumps(data[key],ensure_ascii=False))>24000): raise TenantLinearError('Invalid draft body.',400)
+
+
+def _uuid_list(value, *, limit=50):
+    if not isinstance(value,list) or len(value)>limit: raise TenantLinearError('Invalid evidence references.',400)
+    try: result=[str(uuid.UUID(str(item))) for item in value]
+    except (TypeError,ValueError): raise TenantLinearError('Invalid evidence references.',400) from None
+    if len(result)!=len(set(result)): raise TenantLinearError('Duplicate evidence reference.',400)
+    return result
+
+
+def typed_create(cur,cfg,name,data):
+    """Narrow proposal contracts layered on the common immutable draft store."""
+    _guard(cfg)
+    tenant,_=_authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']})
+    if name=='agent_prompt':
+        if set(data)!={'title','agent_id','expected_version','instructions','testing_turn_id'} or type(data.get('expected_version')) is not int or not isinstance(data.get('instructions'),str): raise TenantLinearError('Invalid agent prompt proposal.',400)
+        try: agent_id=str(uuid.UUID(str(data['agent_id']))); test_id=str(uuid.UUID(str(data['testing_turn_id'])))
+        except (TypeError,ValueError): raise TenantLinearError('Invalid agent prompt proposal.',400) from None
+        cur.execute('SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL',(tenant,agent_id))
+        if not cur.fetchone(): raise TenantLinearError('Agent is unavailable for this company.',404)
+        body={'agent_id':agent_id,'expected_version':data['expected_version'],'instructions':data['instructions'],'testing_turn_id':test_id}
+        return create(cur,cfg,{'kind':'agent_improvement','title':data['title'],'body':body,'target':{'agent_id':agent_id}})
+    if name=='knowledge':
+        if set(data)-{'title','content','evidence_ids','agent_ids'} or not isinstance(data.get('content'),str) or not data.get('content').strip(): raise TenantLinearError('Invalid knowledge proposal.',400)
+        evidence=_uuid_list(data.get('evidence_ids')); agents=_uuid_list(data.get('agent_ids',[]))
+        if agents:
+            cur.execute('SELECT count(*) AS n FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) AND archived_at IS NULL',(tenant,agents))
+            if int(cur.fetchone()['n'])!=len(agents): raise TenantLinearError('Knowledge target is unavailable for this company.',404)
+        return create(cur,cfg,{'kind':'knowledge','title':data.get('title'),'body':{'content':data['content'].strip(),'evidence_ids':evidence},'target':{'agent_ids':agents}})
+    if name=='support_case':
+        if set(data)!={'title','problem','evidence_message_ids'} or not isinstance(data.get('problem'),str) or not data.get('problem').strip(): raise TenantLinearError('Invalid support case proposal.',400)
+        return create(cur,cfg,{'kind':'support_case','title':data['title'],'body':{'problem':data['problem'].strip(),'evidence_message_ids':_uuid_list(data['evidence_message_ids'])},'target':{}})
+    if name=='testing_scenario':
+        if set(data)!={'title','synthetic_input','expected'} or any(not isinstance(data.get(key),str) or not data[key].strip() for key in ('title','synthetic_input','expected')): raise TenantLinearError('Invalid testing scenario proposal.',400)
+        if len(data['synthetic_input'])>8000 or len(data['expected'])>8000: raise TenantLinearError('Invalid testing scenario proposal.',400)
+        return create(cur,cfg,{'kind':'testing_scenario','title':data['title'],'body':{'synthetic_input':data['synthetic_input'].strip(),'expected':data['expected'].strip()},'target':{'synthetic':True}})
+    raise TenantLinearError('Invalid draft kind.',400)
 
 
 def create(cur,cfg,data):

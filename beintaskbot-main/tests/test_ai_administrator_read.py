@@ -142,6 +142,20 @@ def test_administrator_drafts_are_flagged_scoped_versioned_and_never_applied(db,
     assert changed['version']==2
 
 
+def test_typed_draft_tools_enforce_evidence_and_remain_nonpublic(db,monkeypatch):
+    seed_simulation(db); _setup(monkeypatch,db); monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
+    evidence=str(uuid.uuid4())
+    with db.cursor() as cur:
+        knowledge=mcp._tools(cur,cfg,'administrator_draft_knowledge_create',{'title':'Evidence note','content':'Confirmed only.','evidence_ids':[evidence],'agent_ids':[AGENT]})
+        case=mcp._tools(cur,cfg,'administrator_draft_support_case_create',{'title':'Case','problem':'Observed failure.','evidence_message_ids':[evidence]})
+        scenario=mcp._tools(cur,cfg,'administrator_draft_testing_scenario_create',{'title':'Synthetic check','synthetic_input':'Synthetic request','expected':'Safe answer'})
+        assert (knowledge['state'],case['state'],scenario['state'])==('draft','draft','draft')
+        with pytest.raises(Exception):mcp._tools(cur,cfg,'administrator_draft_knowledge_create',{'title':'Bad','content':'x','evidence_ids':['not-a-uuid']})
+        with pytest.raises(Exception):mcp._tools(cur,cfg,'administrator_draft_agent_prompt_create',{'title':'Foreign','agent_id':str(uuid.uuid4()),'expected_version':1,'instructions':'x','testing_turn_id':str(uuid.uuid4())})
+    db.commit()
+
+
 def test_approval_binds_exact_draft_version_and_is_single_use(db,monkeypatch):
     _setup(monkeypatch,db); monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
     cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
