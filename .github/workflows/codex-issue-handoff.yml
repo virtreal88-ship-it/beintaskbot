@@ -50,8 +50,10 @@ jobs:
       issues: write
     outputs:
       credential_available: ${{ steps.credential.outputs.available }}
+      execution_enabled: ${{ steps.credential.outputs.execution_enabled }}
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      CODEX_HANDOFF_EXECUTION_ENABLED: ${{ vars.CODEX_HANDOFF_EXECUTION_ENABLED }}
       ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
     steps:
       - name: Fail closed when the protected Codex credential is absent
@@ -62,8 +64,13 @@ jobs:
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
+          if test "$CODEX_HANDOFF_EXECUTION_ENABLED" = "true"; then
+            echo "execution_enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "execution_enabled=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Report a blocked Codex runner
-        if: steps.credential.outputs.available != 'true'
+        if: steps.credential.outputs.available != 'true' || steps.credential.outputs.execution_enabled != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -71,14 +78,14 @@ jobs:
           ## Codex handoff status
 
           - Phase: \`runner_blocked\`
-          - Reason: the repository has no \`OPENAI_API_KEY\` Actions secret.
+          - Reason: a protected credential or the explicit \`CODEX_HANDOFF_EXECUTION_ENABLED=true\` repository variable is unavailable.
           - Production writes, merge, and deployment: blocked."
 
   codex:
     needs: [validate, preflight]
     # An environment approval and a repository secret are both required. This
     # job never merges or deploys; its maximum side effect is an ordinary PR.
-    if: needs.preflight.outputs.credential_available == 'true'
+    if: needs.preflight.outputs.credential_available == 'true' && needs.preflight.outputs.execution_enabled == 'true'
     runs-on: ubuntu-latest
     environment: codex-readonly-approved
     permissions:
@@ -101,7 +108,9 @@ jobs:
       - name: Run Codex on the validated task contract
         uses: openai/codex-action@main
         with:
-          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          working-directory: beintaskbot-main
+          sandbox: workspace-write
           prompt: >-
             Read ${{ github.workspace }}/beintaskbot-main/.codex-handoff-contract.json,
             then inspect GitHub issue #${{ needs.validate.outputs.issue }}. The
@@ -110,7 +119,6 @@ jobs:
             deploy, merge, change Railway, call paid models, or handle client
             data. Run targeted tests. If code is needed, make a minimal patch
             and stop so the next step can open a reviewable PR.
-          codex_args: '["--config","sandbox_mode=\"workspace-write\""]'
       - name: Remove the task artifact before creating a PR
         run: rm -f beintaskbot-main/.codex-handoff-contract.json
       - name: Open a reviewable PR only
