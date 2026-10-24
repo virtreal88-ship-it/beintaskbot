@@ -83,6 +83,30 @@ def _uuid_list(value, *, limit=50):
     return result
 
 
+def _message_evidence(cur, tenant, value):
+    """Accept only existing tenant-owned message evidence, never opaque IDs."""
+    evidence=_uuid_list(value)
+    if not evidence:
+        raise TenantLinearError('At least one evidence message is required.',400)
+    cur.execute('''SELECT id FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[])''',(tenant,evidence))
+    found={str(row['id']) for row in cur.fetchall()}
+    if found != set(evidence):
+        raise TenantLinearError('Evidence message is unavailable for this company.',404)
+    return evidence
+
+
+def _tested_prompt(cur, tenant, agent_id, expected_version, test_id):
+    """A proposal must already be backed by a matching isolated test."""
+    cur.execute('''SELECT t.id FROM saas_ai_test_turns t
+      JOIN saas_ai_test_sessions s ON s.tenant_id=t.tenant_id AND s.id=t.session_id
+      WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.state='completed'
+        AND s.agent_id=%s::uuid AND COALESCE(t.snapshot->>'agent_version','')=%s
+      FOR SHARE''',(tenant,test_id,agent_id,str(expected_version)))
+    if not cur.fetchone():
+        raise TenantLinearError('A completed isolated test for this exact agent version is required.',409)
+
+
 def typed_create(cur,cfg,name,data):
     """Narrow proposal contracts layered on the common immutable draft store."""
     _guard(cfg)
@@ -93,18 +117,19 @@ def typed_create(cur,cfg,name,data):
         except (TypeError,ValueError): raise TenantLinearError('Invalid agent prompt proposal.',400) from None
         cur.execute('SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL',(tenant,agent_id))
         if not cur.fetchone(): raise TenantLinearError('Agent is unavailable for this company.',404)
+        _tested_prompt(cur,tenant,agent_id,data['expected_version'],test_id)
         body={'agent_id':agent_id,'expected_version':data['expected_version'],'instructions':data['instructions'],'testing_turn_id':test_id}
         return create(cur,cfg,{'kind':'agent_improvement','title':data['title'],'body':body,'target':{'agent_id':agent_id}})
     if name=='knowledge':
         if set(data)-{'title','content','evidence_ids','agent_ids'} or not isinstance(data.get('content'),str) or not data.get('content').strip(): raise TenantLinearError('Invalid knowledge proposal.',400)
-        evidence=_uuid_list(data.get('evidence_ids')); agents=_uuid_list(data.get('agent_ids',[]))
+        evidence=_message_evidence(cur,tenant,data.get('evidence_ids')); agents=_uuid_list(data.get('agent_ids',[]))
         if agents:
             cur.execute('SELECT count(*) AS n FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) AND archived_at IS NULL',(tenant,agents))
             if int(cur.fetchone()['n'])!=len(agents): raise TenantLinearError('Knowledge target is unavailable for this company.',404)
         return create(cur,cfg,{'kind':'knowledge','title':data.get('title'),'body':{'content':data['content'].strip(),'evidence_ids':evidence},'target':{'agent_ids':agents}})
     if name=='support_case':
         if set(data)!={'title','problem','evidence_message_ids'} or not isinstance(data.get('problem'),str) or not data.get('problem').strip(): raise TenantLinearError('Invalid support case proposal.',400)
-        return create(cur,cfg,{'kind':'support_case','title':data['title'],'body':{'problem':data['problem'].strip(),'evidence_message_ids':_uuid_list(data['evidence_message_ids'])},'target':{}})
+        return create(cur,cfg,{'kind':'support_case','title':data['title'],'body':{'problem':data['problem'].strip(),'evidence_message_ids':_message_evidence(cur,tenant,data['evidence_message_ids'])},'target':{}})
     if name=='testing_scenario':
         if set(data)!={'title','synthetic_input','expected'} or any(not isinstance(data.get(key),str) or not data[key].strip() for key in ('title','synthetic_input','expected')): raise TenantLinearError('Invalid testing scenario proposal.',400)
         if len(data['synthetic_input'])>8000 or len(data['expected'])>8000: raise TenantLinearError('Invalid testing scenario proposal.',400)

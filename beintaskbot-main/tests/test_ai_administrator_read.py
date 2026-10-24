@@ -145,14 +145,20 @@ def test_administrator_drafts_are_flagged_scoped_versioned_and_never_applied(db,
 def test_typed_draft_tools_enforce_evidence_and_remain_nonpublic(db,monkeypatch):
     seed_simulation(db); _setup(monkeypatch,db); monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
     cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
-    evidence=str(uuid.uuid4())
     with db.cursor() as cur:
+        cur.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid LIMIT 1',(A,))
+        evidence=str(cur.fetchone()['id'])
+        cur.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))
+        prompt_body=prompt_body_with_completed_test(cur,cur.fetchone()['version'])
+        prompt=mcp._tools(cur,cfg,'administrator_draft_agent_prompt_create',{'title':'Tested prompt',**prompt_body})
         knowledge=mcp._tools(cur,cfg,'administrator_draft_knowledge_create',{'title':'Evidence note','content':'Confirmed only.','evidence_ids':[evidence],'agent_ids':[AGENT]})
         case=mcp._tools(cur,cfg,'administrator_draft_support_case_create',{'title':'Case','problem':'Observed failure.','evidence_message_ids':[evidence]})
         scenario=mcp._tools(cur,cfg,'administrator_draft_testing_scenario_create',{'title':'Synthetic check','synthetic_input':'Synthetic request','expected':'Safe answer'})
-        assert (knowledge['state'],case['state'],scenario['state'])==('draft','draft','draft')
+        assert (prompt['state'],knowledge['state'],case['state'],scenario['state'])==('draft','draft','draft','draft')
         with pytest.raises(Exception):mcp._tools(cur,cfg,'administrator_draft_knowledge_create',{'title':'Bad','content':'x','evidence_ids':['not-a-uuid']})
+        with pytest.raises(Exception):mcp._tools(cur,cfg,'administrator_draft_support_case_create',{'title':'Bad evidence','problem':'x','evidence_message_ids':[str(uuid.uuid4())]})
         with pytest.raises(Exception):mcp._tools(cur,cfg,'administrator_draft_agent_prompt_create',{'title':'Foreign','agent_id':str(uuid.uuid4()),'expected_version':1,'instructions':'x','testing_turn_id':str(uuid.uuid4())})
+        with pytest.raises(Exception):mcp._tools(cur,cfg,'administrator_draft_agent_prompt_create',{'title':'Untested','agent_id':AGENT,'expected_version':prompt_body['expected_version'],'instructions':'x','testing_turn_id':str(uuid.uuid4())})
     db.commit()
 
 
