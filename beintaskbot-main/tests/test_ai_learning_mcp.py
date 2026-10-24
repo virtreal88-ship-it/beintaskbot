@@ -131,6 +131,7 @@ def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, 
             assert data['revocation_endpoint']=='https://crm.test/oauth/revoke'
             assert mcp.OFFLINE_SCOPE in data['scopes_supported']
             assert mcp.KNOWLEDGE_DEDUP_SCOPE in data['scopes_supported']
+            assert mcp.APPLY_SCOPE in data['scopes_supported']
             protected=await client.get('/.well-known/oauth-protected-resource/mcp/ai-learning')
             assert (await protected.json())['resource']=='https://crm.test/mcp/ai-learning'
     asyncio.run(check())
@@ -201,6 +202,28 @@ def test_draft_scope_requires_reauthorization_and_has_accurate_consent(db, monke
                 'jsonrpc':'2.0','id':2,'method':'tools/call',
                 'params':{'name':'administrator_draft_list','arguments':{}}})
             assert listed.status==200
+    asyncio.run(check())
+
+
+def test_apply_scope_requires_reauthorization_and_advertises_only_approved_prompt_application(db, monkeypatch):
+    token=_setup(monkeypatch,db)
+    monkeypatch.setattr(mcp, '_authorize', lambda cur, profile: (A, 11))
+    verifier='v'*43;challenge=mcp._b64(hashlib.sha256(verifier.encode()).digest())
+    async def check():
+        app=web.Application()
+        for method,path,handler in mcp.routes(lambda request: {'role':'owner'}):
+            getattr(app.router, 'add_'+method.lower())(path,handler)
+        async with TestClient(TestServer(app)) as client:
+            denied=await client.post('/mcp/ai-learning',headers={'Authorization':'Bearer '+token},json={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'administrator_apply_agent_prompt','arguments':{'approval_id':str(uuid.uuid4()),'draft_id':str(uuid.uuid4())}}})
+            assert denied.status==403 and (await denied.json())['error']=='Additional OAuth scope required.'
+            query={'response_type':'code','client_id':CHATGPT_CLIENT,'redirect_uri':CHATGPT_REDIRECT,
+                   'scope':mcp.TOOL_SCOPE+' '+mcp.APPLY_SCOPE,'state':'apply','code_challenge':challenge,
+                   'code_challenge_method':'S256','resource':'https://crm.test/mcp/ai-learning'}
+            consent=await client.get('/oauth/authorize',params=query)
+            assert consent.status==200 and 'Allow approved prompt application' in await consent.text()
+            listed=await client.post('/mcp/ai-learning',json={'jsonrpc':'2.0','id':2,'method':'tools/list'})
+            names={item['name'] for item in (await listed.json())['result']['tools']}
+            assert {'administrator_apply_agent_prompt','administrator_rollback_agent_prompt'}<=names
     asyncio.run(check())
 
 

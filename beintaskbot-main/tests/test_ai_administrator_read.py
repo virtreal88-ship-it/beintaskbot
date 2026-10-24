@@ -355,6 +355,29 @@ def test_owner_approved_prompt_application_has_versioned_rollback(db,monkeypatch
     db.commit()
 
 
+def test_mcp_apply_and_rollback_require_a_separate_scope_and_one_time_receipt(db,monkeypatch):
+    seed_simulation(db); _setup(monkeypatch,db)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE,mcp.APPLY_SCOPE]
+    with db.cursor() as cur:
+        cur.execute('SELECT version,instructions FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT)); agent=cur.fetchone()
+        draft=drafts.create(cur,cfg,{'kind':'agent_improvement','title':'MCP prompt','body':prompt_body_with_completed_test(cur,agent['version'],'MCP verified instruction.')})
+        receipt=approvals.request(cur,PROFILE,draft['id'],draft['version']); approvals.approve(cur,PROFILE,receipt['id'],'approve')
+        with pytest.raises(Exception):
+            mcp._tools(cur,{**cfg,'granted_scopes':[drafts.DRAFT_SCOPE]},'administrator_apply_agent_prompt',{'approval_id':receipt['id'],'draft_id':draft['id']})
+        applied=mcp._tools(cur,cfg,'administrator_apply_agent_prompt',{'approval_id':receipt['id'],'draft_id':draft['id']})
+        assert applied['rollback_available'] is True
+        cur.execute('SELECT instructions FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))
+        assert cur.fetchone()['instructions']=='MCP verified instruction.'
+        with pytest.raises(Exception):
+            mcp._tools(cur,cfg,'administrator_apply_agent_prompt',{'approval_id':receipt['id'],'draft_id':draft['id']})
+        rolled=mcp._tools(cur,cfg,'administrator_rollback_agent_prompt',{'approval_id':receipt['id']})
+        assert rolled['rolled_back'] is True
+        cur.execute('SELECT instructions FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))
+        assert cur.fetchone()['instructions']==agent['instructions']
+    db.commit()
+
+
 def test_synthetic_observation_to_tested_owner_approval_apply_and_rollback(db,monkeypatch):
     """The durable learning loop remains a draft-only flow until an owner acts."""
     seed_simulation(db); _setup(monkeypatch,db)
