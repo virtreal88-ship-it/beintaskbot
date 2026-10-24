@@ -116,7 +116,7 @@ def create(cur,cfg,data):
     _guard(cfg);_valid(data,True); tenant,actor=_authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']})
     ident=uuid.uuid4(); cur.execute('''INSERT INTO saas_ai_administrator_drafts(id,tenant_id,kind,title,body,target,created_by)
       VALUES(%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s) RETURNING *''',(ident,tenant,data['kind'],data['title'].strip(),json.dumps(data.get('body') or {}),json.dumps(data.get('target') or {}),actor))
-    row=dict(cur.fetchone()); _snapshot(cur,tenant,row,actor); _audit(cur,tenant,actor,'ai_administrator_draft_created','ai_administrator_draft',ident,{'kind':row['kind']}); return public(row)
+    row=dict(cur.fetchone()); snapshot(cur,tenant,row,actor); _audit(cur,tenant,actor,'ai_administrator_draft_created','ai_administrator_draft',ident,{'kind':row['kind']}); return public(row)
 
 
 def listing(cur,cfg,data):
@@ -135,7 +135,7 @@ def update(cur,cfg,data):
     title=data.get('title',row['title']).strip() if isinstance(data.get('title',row['title']),str) else row['title']; body=data.get('body',row['body']); target=data.get('target',row['target'])
     cur.execute('''UPDATE saas_ai_administrator_drafts SET title=%s,body=%s::jsonb,target=%s::jsonb,version=version+1,updated_at=now()
       WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING *''',(title,json.dumps(body),json.dumps(target),tenant,data['id']))
-    current=dict(cur.fetchone()); _snapshot(cur,tenant,current,actor); result=public(current); _audit(cur,tenant,actor,'ai_administrator_draft_updated','ai_administrator_draft',data['id'],{}); return result
+    current=dict(cur.fetchone()); snapshot(cur,tenant,current,actor); result=public(current); _audit(cur,tenant,actor,'ai_administrator_draft_updated','ai_administrator_draft',data['id'],{}); return result
 
 
 def versions(cur,cfg,data):
@@ -149,7 +149,7 @@ def versions(cur,cfg,data):
     return {'items':[public(dict(row)) for row in cur.fetchall()]}
 
 
-def _snapshot(cur,tenant,row,actor):
+def snapshot(cur,tenant,row,actor):
     cur.execute('''INSERT INTO saas_ai_administrator_draft_versions(tenant_id,draft_id,version,title,body,target,created_by)
       VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s) ON CONFLICT(tenant_id,draft_id,version) DO NOTHING''',
       (tenant,row['id'],row['version'],row['title'],json.dumps(row['body']),json.dumps(row['target']),actor))
