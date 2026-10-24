@@ -165,6 +165,24 @@ def test_typed_draft_tools_enforce_evidence_and_remain_nonpublic(db,monkeypatch)
     db.commit()
 
 
+def test_isolated_testing_comparison_is_aggregated_and_tenant_scoped(db,monkeypatch):
+    seed_simulation(db); _setup(monkeypatch,db)
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[admin.READ_SCOPE]
+    baseline,candidate=uuid.uuid4(),uuid.uuid4()
+    create_testing_schema(db)
+    with db.cursor() as cur:
+        for ident in (baseline,candidate):
+            cur.execute('INSERT INTO saas_ai_test_sessions(tenant_id,id,agent_id,created_by,scope) VALUES(%s::uuid,%s,%s::uuid,11,\'{}\'::jsonb)',(A,ident,AGENT))
+        for session,state,tokens in ((baseline,'completed',12),(candidate,'completed',20),(candidate,'unknown',7)):
+            ident=uuid.uuid4()
+            cur.execute('''INSERT INTO saas_ai_test_turns(tenant_id,id,session_id,input_hash,client_text,response,state,total_tokens)
+              VALUES(%s::uuid,%s,%s,%s,\'synthetic\',\'\',%s,%s)''',(A,ident,session,'test:'+str(ident),state,tokens))
+        result=mcp._tools(cur,cfg,'administrator_testing_compare',{'baseline_session_id':str(baseline),'candidate_session_id':str(candidate)})
+        assert result['delta']=={'turns':1,'completed':0,'unknown':1,'blocked_or_superseded':0,'total_tokens':15}
+        with pytest.raises(Exception):mcp._tools(cur,{**cfg,'AI_LEARNING_MCP_TENANT_ID':B},'administrator_testing_compare',{'baseline_session_id':str(baseline),'candidate_session_id':str(candidate)})
+    db.commit()
+
+
 def test_approval_binds_exact_draft_version_and_is_single_use(db,monkeypatch):
     _setup(monkeypatch,db); monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
     cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
