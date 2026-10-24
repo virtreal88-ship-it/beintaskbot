@@ -38,7 +38,8 @@ def findings(run):
         elif kind == 'simulation_unsupported':
             media = event.get('message_type') if event.get('message_type') in {'audio','image','video','document','sticker'} else ''
             if reason == 'media_context_unavailable':
-                add('context', 'simulation_media_context_unavailable', 'technical', 'media', media=media)
+                detail=str(event.get('detail') or 'simulation_media_context_unavailable')
+                add('context', detail, 'technical', 'media', media=media)
             else:
                 actions = event.get('actions') or ['unsupported_operation']
                 for action in actions:
@@ -59,8 +60,9 @@ def findings(run):
         # A terminal state is evidence, not proof of a bug. Configuration and
         # intentional safety stops are review prompts and must not suggest bypass.
         if (stop == 'simulation_media_context_unavailable'
-                or (stop.startswith('simulation_') and stop.endswith('_context_unavailable'))
-                or stop in {'simulation_audio_transcript_unavailable','simulation_media_type_unsupported'}):
+                or (stop.startswith('simulation_') and (stop.endswith('_context_unavailable')
+                    or '_attachment_' in stop or '_transcription_' in stop or '_analysis_' in stop))
+                or stop in {'simulation_audio_transcript_unavailable','simulation_media_type_unsupported','simulation_media_url_expired'}):
             if not any(x['reason'] == stop for x in found.values()):
                 add('context', stop, 'technical', 'media')
         elif stop == 'provider_result_unknown':
