@@ -17,6 +17,18 @@ import tenant_ai_administrator_approvals as approvals
 import tenant_ai_administrator_observations as observations
 import tenant_ai_administrator_apply as apply
 import tenant_ai_administrator_api as administrator_api
+from tenant_ai_testing_schema import create_schema as create_testing_schema
+
+
+def prompt_body_with_completed_test(cur, version, instructions='Use verified evidence only.'):
+    session_id,turn_id=uuid.uuid4(),uuid.uuid4()
+    create_testing_schema(cur.connection)
+    cur.execute('''INSERT INTO saas_ai_test_sessions(tenant_id,id,agent_id,created_by,scope)
+      VALUES(%s::uuid,%s,%s::uuid,11,'{}'::jsonb)''',(A,session_id,AGENT))
+    cur.execute('''INSERT INTO saas_ai_test_turns(tenant_id,id,session_id,input_hash,client_text,response,state,snapshot)
+      VALUES(%s::uuid,%s,%s,%s,'synthetic input','synthetic response','completed',%s::jsonb)''',
+      (A,turn_id,session_id,'test:'+str(turn_id),json.dumps({'agent_version':version})))
+    return {'agent_id':AGENT,'expected_version':version,'instructions':instructions,'testing_turn_id':str(turn_id)}
 
 
 def test_existing_connection_company_reads_and_immediate_owner_revocation(db,monkeypatch):
@@ -171,7 +183,7 @@ def test_administrator_approval_and_live_apply_are_owner_only(db,monkeypatch):
     cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
     with db.cursor() as cur:
         cur.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT)); version=cur.fetchone()['version']
-        draft=drafts.create(cur,cfg,{'kind':'agent_improvement','title':'Prompt','body':{'agent_id':AGENT,'expected_version':version,'instructions':'Use verified evidence only.'}})
+        draft=drafts.create(cur,cfg,{'kind':'agent_improvement','title':'Prompt','body':prompt_body_with_completed_test(cur,version)})
         cur.execute("UPDATE saas_tenant_members SET role='admin' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,))
         with pytest.raises(Exception): approvals.request(cur,PROFILE,draft['id'],draft['version'])
         cur.execute("UPDATE saas_tenant_members SET role='owner' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,))
@@ -180,6 +192,21 @@ def test_administrator_approval_and_live_apply_are_owner_only(db,monkeypatch):
         with pytest.raises(Exception): apply.apply_agent_prompt(cur,PROFILE,receipt['id'],draft['id'])
         cur.execute("UPDATE saas_tenant_members SET role='owner' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,))
         assert apply.apply_agent_prompt(cur,PROFILE,receipt['id'],draft['id'])['rollback_available'] is True
+    db.commit()
+
+
+def test_live_prompt_apply_rejects_missing_or_stale_isolated_test_without_consuming_approval(db,monkeypatch):
+    seed_simulation(db); _setup(monkeypatch,db)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
+    with db.cursor() as cur:
+        cur.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT)); version=cur.fetchone()['version']
+        body={'agent_id':AGENT,'expected_version':version,'instructions':'Verified only.','testing_turn_id':str(uuid.uuid4())}
+        draft=drafts.create(cur,cfg,{'kind':'agent_improvement','title':'Needs test','body':body})
+        receipt=approvals.request(cur,PROFILE,draft['id'],draft['version']); approvals.approve(cur,PROFILE,receipt['id'],'approve')
+        with pytest.raises(Exception): apply.apply_agent_prompt(cur,PROFILE,receipt['id'],draft['id'])
+        cur.execute('SELECT state FROM saas_ai_administrator_approvals WHERE id=%s::uuid',(receipt['id'],))
+        assert cur.fetchone()['state']=='approved'
     db.commit()
 
 
@@ -246,7 +273,7 @@ def test_owner_approved_prompt_application_has_versioned_rollback(db,monkeypatch
     cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
     with db.cursor() as cur:
         cur.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT)); version=cur.fetchone()['version']
-        draft=drafts.create(cur,cfg,{'kind':'agent_improvement','title':'Prompt','body':{'agent_id':AGENT,'expected_version':version,'instructions':'Use verified evidence only.'}})
+        draft=drafts.create(cur,cfg,{'kind':'agent_improvement','title':'Prompt','body':prompt_body_with_completed_test(cur,version)})
         receipt=approvals.request(cur,PROFILE,draft['id'],draft['version']); approvals.approve(cur,PROFILE,receipt['id'],'approve')
         result=apply.apply_agent_prompt(cur,PROFILE,receipt['id'],draft['id'])
         assert result['rollback_available'] is True
