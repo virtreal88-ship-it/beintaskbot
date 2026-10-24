@@ -207,6 +207,22 @@ def test_observations_are_deduplicated_and_disabled_by_default(db,monkeypatch):
     db.commit()
 
 
+def test_observation_worker_creates_only_one_nonpublic_draft_and_bounds_recovery(db,monkeypatch):
+    _setup(monkeypatch,db); monkeypatch.setenv('AI_AUTONOMOUS_IMPROVEMENT_ENABLED','true')
+    monkeypatch.setattr(observations,'_connect',lambda:db)
+    with db.cursor() as cur:
+        observations.ensure_schema(db)
+        observations.enqueue(cur,A,'safe-test',{'kind':'testing_scenario','title':'Safe diagnostic','body':{'reason':'unknown'},'target':{'agent_id':AGENT}},'test-1')
+    db.commit()
+    item=observations.claim_next(); assert item and item['tenant_id']==A
+    observations.process(item)
+    draft=db.execute("SELECT kind,title,state FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 1",(A,))[0]
+    assert draft=={'kind':'testing_scenario','title':'Safe diagnostic','state':'draft'}
+    db.execute("UPDATE saas_ai_administrator_observations SET state='processing',attempts=%s,lease_until=now()-interval '1 minute' WHERE tenant_id=%s::uuid",(observations.MAX_ATTEMPTS,A));db.commit()
+    assert observations.claim_next() is None
+    assert db.execute("SELECT state FROM saas_ai_administrator_observations WHERE tenant_id=%s::uuid",(A,))[0]['state']=='blocked'
+
+
 def test_owner_approved_prompt_application_has_versioned_rollback(db,monkeypatch):
     seed_simulation(db); _setup(monkeypatch,db)
     monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
