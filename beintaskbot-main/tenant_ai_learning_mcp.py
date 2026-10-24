@@ -196,6 +196,15 @@ def _tools(cur,cfg,name,args):
     if name == 'administrator_draft_create': return administrator_drafts.create(cur,cfg,args)
     if name == 'administrator_draft_list': return administrator_drafts.listing(cur,cfg,args)
     if name == 'administrator_draft_update': return administrator_drafts.update(cur,cfg,args)
+    profile={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']}
+    if name == 'administrator_approval_request':
+        if DRAFT_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
+        if set(args)!={'draft_id','version'}: raise TenantLinearError('Invalid approval request.',400)
+        return administrator_approvals.request(cur,profile,args['draft_id'],args['version'])
+    if name == 'administrator_approval_list':
+        if DRAFT_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
+        if set(args)-{'limit'}: raise TenantLinearError('Invalid approval list.',400)
+        return administrator_approvals.listing(cur,profile,limit=args.get('limit',50))
     if name=='simulation_runs': return _runs(cur,cfg,args.get('cursor',''),args.get('limit',10),bool(args.get('include_context')))
     if name=='learning_issues':
         result=_runs(cur,cfg,args.get('cursor',''),MAX_PAGE,False); groups={}
@@ -223,13 +232,13 @@ async def mcp(request):
         if method=='initialize': return _jsonrpc({'protocolVersion':'2025-06-18','serverInfo':{'name':'beintaskbot-learning-loop','version':'1.0'},'capabilities':{'tools':{}}},request_id=request_id)
         if method=='tools/list':
             auth=[{'type':'oauth2','scopes':[TOOL_SCOPE]}]
-            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+administrator_read.definitions()+administrator_drafts.definitions()},request_id=request_id)
+            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()},request_id=request_id)
         if method=='tools/call':
             cfg=_authorize_token(request)
             with _connect() as conn:
                 ensure_mcp_schema(conn)
                 with conn.cursor() as cur: output=_tools(cur,cfg,data.get('params',{}).get('name',''),data.get('params',{}).get('arguments') or {})
-                if data.get('params',{}).get('name','').startswith('administrator_draft_'):
+                if data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_'):
                     conn.commit()
             return _jsonrpc({'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False)}]},request_id=request_id)
         return _jsonrpc(error={'code':-32601,'message':'Method not found'},request_id=request_id)

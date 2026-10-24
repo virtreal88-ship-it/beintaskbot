@@ -6,6 +6,7 @@ the same transaction before it can change a business object.
 """
 import uuid
 from tenant_ai_agents_store import _audit, _authorize
+from tenant_ai_administrator_drafts import DRAFT_SCOPE
 from tenant_linear_policy import TenantLinearError
 
 
@@ -30,6 +31,17 @@ def ensure_schema(conn):
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           CHECK(action='apply_draft'), CHECK(state IN ('pending','approved','rejected','consumed')),
           UNIQUE(tenant_id,draft_id,draft_version,action))''')
+
+
+def definitions():
+    return [
+      {'name':'administrator_approval_request','description':'Request a one-time owner review for one exact non-public draft version. This never approves or applies a change.',
+       'inputSchema':{'type':'object','properties':{'draft_id':{'type':'string'},'version':{'type':'integer','minimum':1}},'required':['draft_id','version'],'additionalProperties':False},
+       'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
+      {'name':'administrator_approval_list','description':'List owner-review receipts for this company. It never applies a change.',
+       'inputSchema':{'type':'object','properties':{'limit':{'type':'integer','minimum':1,'maximum':100}},'additionalProperties':False},
+       'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
+    ]
 
 
 def request(cur, profile, draft_id, version, *, ttl_minutes=30):

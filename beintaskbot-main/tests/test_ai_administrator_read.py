@@ -139,6 +139,18 @@ def test_approval_binds_exact_draft_version_and_is_single_use(db,monkeypatch):
     db.commit()
 
 
+def test_mcp_can_request_and_read_but_never_decide_or_apply_an_approval(db,monkeypatch):
+    _setup(monkeypatch,db); monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
+    with db.cursor() as cur:
+        draft=drafts.create(cur,cfg,{'kind':'knowledge','title':'Draft','body':{'claim':'review'},'target':{}})
+        receipt=mcp._tools(cur,cfg,'administrator_approval_request',{'draft_id':draft['id'],'version':draft['version']})
+        listed=mcp._tools(cur,cfg,'administrator_approval_list',{})
+        assert listed['items'][0]['id']==receipt['id'] and listed['items'][0]['state']=='pending'
+        with pytest.raises(Exception): mcp._tools(cur,cfg,'administrator_approval_approve',{'approval_id':receipt['id']})
+    db.commit()
+
+
 def test_administrator_approval_and_live_apply_are_owner_only(db,monkeypatch):
     seed_simulation(db); _setup(monkeypatch,db)
     monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
