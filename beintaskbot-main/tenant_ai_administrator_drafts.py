@@ -50,6 +50,7 @@ def definitions():
       {'name':'administrator_draft_list','description':'List non-public proposals for this company.','inputSchema':{'type':'object','properties':{'limit':schema['properties']['limit']},'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_update','description':'Edit a non-public proposal with optimistic versioning. It cannot apply or publish changes.','inputSchema':schema,'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_versions','description':'Read immutable snapshots of one non-public proposal. It cannot apply or publish changes.','inputSchema':{'type':'object','properties':{'id':{'type':'string'}},'required':['id'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
+      {'name':'administrator_draft_restore','description':'Restore one earlier immutable version as a new non-public draft version. It cannot apply or publish changes.','inputSchema':{'type':'object','properties':{'id':{'type':'string'},'version':{'type':'integer','minimum':1},'expected_version':{'type':'integer','minimum':1}},'required':['id','version','expected_version'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_agent_prompt_create','description':'Prepare a tested non-public prompt patch for one existing agent. It cannot apply the patch.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'agent_id':{'type':'string'},'expected_version':{'type':'integer','minimum':1},'instructions':{'type':'string','maxLength':24000},'testing_turn_id':{'type':'string'}},'required':['title','agent_id','expected_version','instructions','testing_turn_id'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_knowledge_create','description':'Prepare non-public knowledge with explicit evidence references. It cannot publish or bind knowledge.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'content':{'type':'string','maxLength':24000},'evidence_ids':{'type':'array','items':{'type':'string'},'maxItems':50},'agent_ids':{'type':'array','items':{'type':'string'},'maxItems':50}},'required':['title','content','evidence_ids'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_support_case_create','description':'Prepare a non-public support-case proposal with evidence IDs. It cannot publish a case.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'problem':{'type':'string','maxLength':12000},'evidence_message_ids':{'type':'array','items':{'type':'string'},'maxItems':50}},'required':['title','problem','evidence_message_ids'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
@@ -172,6 +173,31 @@ def versions(cur,cfg,data):
     cur.execute('''SELECT draft_id AS id,version,title,body,target,created_at FROM saas_ai_administrator_draft_versions
       WHERE tenant_id=%s::uuid AND draft_id=%s::uuid ORDER BY version''',(cfg['AI_LEARNING_MCP_TENANT_ID'],draft_id))
     return {'items':[public(dict(row)) for row in cur.fetchall()]}
+
+
+def restore(cur,cfg,data):
+    """Revert draft content without mutating an applied business object."""
+    _guard(cfg)
+    if (not isinstance(data,dict) or set(data)!={'id','version','expected_version'}
+            or type(data.get('version')) is not int or type(data.get('expected_version')) is not int):
+        raise TenantLinearError('Invalid draft restore.',400)
+    try: draft_id=str(uuid.UUID(str(data['id'])))
+    except (TypeError,ValueError): raise TenantLinearError('Invalid draft restore.',400) from None
+    tenant,actor=_authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']})
+    cur.execute('SELECT id,state,version FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,draft_id))
+    draft=cur.fetchone()
+    if not draft or draft['state']!='draft' or draft['version']!=data['expected_version']:
+        raise TenantLinearError('Draft changed; reload before restoring.',409)
+    cur.execute('''SELECT title,body,target FROM saas_ai_administrator_draft_versions
+      WHERE tenant_id=%s::uuid AND draft_id=%s::uuid AND version=%s FOR SHARE''',(tenant,draft_id,data['version']))
+    source=cur.fetchone()
+    if not source: raise TenantLinearError('Draft version is unavailable.',404)
+    cur.execute('''UPDATE saas_ai_administrator_drafts SET title=%s,body=%s::jsonb,target=%s::jsonb,
+      version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING *''',
+      (source['title'],json.dumps(source['body']),json.dumps(source['target']),tenant,draft_id))
+    restored=dict(cur.fetchone()); snapshot(cur,tenant,restored,actor)
+    _audit(cur,tenant,actor,'ai_administrator_draft_restored','ai_administrator_draft',draft_id,{'from_version':data['version'],'to_version':restored['version']})
+    return public(restored)
 
 
 def snapshot(cur,tenant,row,actor):

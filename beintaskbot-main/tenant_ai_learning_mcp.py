@@ -197,6 +197,7 @@ def _tools(cur,cfg,name,args):
     if name == 'administrator_draft_list': return administrator_drafts.listing(cur,cfg,args)
     if name == 'administrator_draft_update': return administrator_drafts.update(cur,cfg,args)
     if name == 'administrator_draft_versions': return administrator_drafts.versions(cur,cfg,args)
+    if name == 'administrator_draft_restore': return administrator_drafts.restore(cur,cfg,args)
     if name == 'administrator_draft_agent_prompt_create': return administrator_drafts.typed_create(cur,cfg,'agent_prompt',args)
     if name == 'administrator_draft_knowledge_create': return administrator_drafts.typed_create(cur,cfg,'knowledge',args)
     if name == 'administrator_draft_support_case_create': return administrator_drafts.typed_create(cur,cfg,'support_case',args)
