@@ -328,7 +328,9 @@ remain authoritative. New tools:
   verified evidence, with the current draft version and material hash.
 - `administrator_training_publish`: publish the prepared exact material under the
   policy, automatically minting/consuming the existing bounded publication receipt
-  in the same transaction. No additional per-material owner click is required.
+  in the same transaction. No additional per-material owner click is required. Internal approval receipts
+  explicitly record the delegation policy; copied knowledge is labeled
+  `policy_verified_knowledge`, not an individual manual owner review.
 - `administrator_training_rollback`: guarded withdrawal of a policy publication.
 
 Each mutation carries an explicit UUID `request_id`. A locked policy row

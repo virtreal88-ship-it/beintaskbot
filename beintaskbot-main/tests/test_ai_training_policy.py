@@ -51,6 +51,9 @@ def test_one_owner_policy_multiple_materials_update_publish_readback_rollback(se
         assert result['published'] and len(result['source_ids'])==1
         cur.execute('SELECT active,agent_id FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(result['source_ids'][0],));row=cur.fetchone()
         assert row['active'] and str(row['agent_id'])==AGENT
+        cur.execute('SELECT delegation_policy_id FROM saas_ai_administrator_approvals WHERE tenant_id=%s::uuid AND draft_id=%s::uuid',(A,first['draft_id']));assert str(cur.fetchone()['delegation_policy_id'])==p
+        if kind=='knowledge':
+            assert op(cur,cfg,p,'create',kind='knowledge',source_id=result['source_ids'][0])['eligible']
         # Safe withdrawal is permitted even after delegation revocation.
         approval.training_policy_revoke(cur,PROFILE,p)
         with pytest.raises(TenantLinearError):op(cur,cfg,p,'publish',**target(second))

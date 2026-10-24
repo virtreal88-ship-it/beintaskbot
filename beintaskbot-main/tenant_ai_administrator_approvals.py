@@ -31,6 +31,7 @@ def ensure_schema(conn):
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           CHECK(action='apply_draft'), CHECK(state IN ('pending','approved','rejected','consumed')),
           UNIQUE(tenant_id,draft_id,draft_version,action))''')
+        cur.execute("ALTER TABLE saas_ai_administrator_approvals ADD COLUMN IF NOT EXISTS delegation_policy_id UUID NULL")
         _publication_schema(cur)
 
 
@@ -293,7 +294,7 @@ def publication_execute(cur,cfg,grant_id,*,rollback=False):
         predicate="provenance->>'candidate_id'=%s"
     else:
         source=save_knowledge(profile,{'title':row['title'],'kind':row['kind'],'content':row['content'],'active':True,'agent_id':agent_id},connection=cur.connection)
-        provenance={**row['provenance'],'review_only':False,'review_status':'owner_verified_knowledge','publication_grant_id':grant_id,'approved_by':actor}
+        provenance={**row['provenance'],'review_only':False,'review_status':('policy_verified_knowledge' if g.get('policy_id') is not None else 'owner_verified_knowledge'),'publication_grant_id':grant_id,'approved_by':actor}
         # This attests to reviewed knowledge, never a confirmed historical outcome.
         cur.execute('UPDATE saas_ai_knowledge_sources SET provenance=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(provenance),tenant,source['id']))
         predicate="provenance->>'publication_grant_id'=%s";key=grant_id
@@ -484,7 +485,7 @@ def _training_basis(cur,profile,kind,key,policy,seen=None):
                 raise TenantLinearError('Verified agent-bound knowledge required.',409)
             if provenance.get('candidate_id'):_training_basis(cur,profile,'support_case',provenance['candidate_id'],policy,seen)
             elif provenance.get('instruction_id'):_training_basis(cur,profile,'instruction',provenance['instruction_id'],policy,seen)
-            elif provenance.get('review_status')!='owner_verified_knowledge':raise TenantLinearError('Verified provenance required.',409)
+            elif provenance.get('review_status')!='owner_verified_knowledge' and not (provenance.get('review_status')=='policy_verified_knowledge' and provenance.get('training_basis') and provenance.get('delegation_policy_id')):raise TenantLinearError('Verified provenance required.',409)
     lineage=(row.get('provenance') or {}).get('training_basis')
     if kind=='instruction':
         cur.execute("""SELECT o.result FROM saas_ai_training_operations o JOIN saas_ai_training_policies p ON p.id=o.policy_id
@@ -543,6 +544,8 @@ def training_operation(cur,cfg,action,data):
             proposal={'title':row['title'],'content':row['content'],'evidence_ids':[],'agent_ids':[]} if kind=='knowledge' else {'title':row['doc']['title'],'doc':row['doc']}
             d=(drafts.create(cur,cfg,{'kind':'knowledge','title':row['title'],'body':{'content':row['content'],'evidence_ids':[]},'target':{'agent_ids':[]}}) if kind=='knowledge' else drafts.typed_create(cur,cfg,kind,proposal))
             receipt=request(cur,profile,d['id'],d['version']);approve(cur,profile,receipt['id'],'approve')
+            cur.execute('UPDATE saas_ai_administrator_approvals SET delegation_policy_id=%s::uuid WHERE tenant_id=%s::uuid AND id=%s::uuid',(p['id'],tenant,receipt['id']))
+            _audit(cur,tenant,actor,'ai_training_verified_copy_authorized','ai_administrator_approval',receipt['id'],{'policy_id':str(p['id']),'basis':basis,'individual_owner_click':False})
             applied=(application.apply_knowledge_draft if kind=='knowledge' else application.apply_instruction_draft)(cur,profile,receipt['id'],d['id'])
             object_id=applied.get('source_id') or applied['lesson_id']
         material=_publication_object(cur,tenant,kind,object_id)
