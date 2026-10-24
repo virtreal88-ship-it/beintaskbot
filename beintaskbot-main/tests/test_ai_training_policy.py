@@ -6,6 +6,7 @@ from test_administrator_publication import setup,material,grant_data,run
 from test_knowledge_candidates import ready,candidate,confirmed_case
 from test_ai_learning_mcp import _setup
 import tenant_ai_administrator_approvals as approval
+import tenant_ai_administrator_apply as application
 import tenant_ai_learning_mcp as mcp
 import tenant_ai_administrator_api as api
 import tenant_instruction_library as lib
@@ -62,7 +63,7 @@ def test_one_owner_policy_multiple_materials_update_publish_readback_rollback(se
     db.commit()
 
 
-@pytest.mark.parametrize('block',['scope','tenant','agent','channel','expired','revoked','owner','kind','rights','disabled','limit','hourly'])
+@pytest.mark.parametrize('block',['scope','tenant','agent','channel','expired','revoked','owner','kind','rights','limit','hourly'])
 def test_policy_fail_closed(setup,monkeypatch,block):
     db,cfg=setup;source=trusted(setup)
     with db.cursor() as cur:
@@ -77,8 +78,34 @@ def test_policy_fail_closed(setup,monkeypatch,block):
         elif block=='owner':cur.execute("UPDATE saas_tenant_members SET role='admin' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,))
         elif block=='kind':cur.execute("UPDATE saas_ai_training_policies SET kinds='[\"instruction\"]'::jsonb")
         elif block=='rights':cur.execute("UPDATE saas_ai_training_policies SET rights='[\"rollback\"]'::jsonb")
-        elif block=='disabled':monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','false')
         with pytest.raises(TenantLinearError):op(cur,cfg,p,'create',kind='knowledge',source_id=source)
+    db.commit()
+
+
+@pytest.mark.parametrize('apply_flag',['true','false'])
+def test_owner_policy_is_ready_independently_of_legacy_global_apply_switch(setup,monkeypatch,apply_flag):
+    """A policy is exact tenant consent, never a request to enable broad apply."""
+    db,cfg=setup;source=trusted(setup)
+    # Create the legacy material while its normal broad apply gate is on; the
+    # assertion below then proves turning it off does not disable a policy.
+    d,key=material((db,cfg))
+    monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED',apply_flag)
+    with db.cursor() as cur:
+        p=policy(cur)
+        listed=approval.training_policy_list(cur,PROFILE,cfg)
+        assert listed['training_ready'] is True and listed['training_status']=='ready'
+        assert listed['legacy_application_enabled']==(apply_flag=='true')
+        prepared=op(cur,cfg,p,'create',kind='knowledge',source_id=source)
+        published=op(cur,cfg,p,'publish',**target(prepared))
+        assert published['published'] is True
+        # The older per-material grant is still protected by its global gate.
+        grant=approval.publication_grant(cur,PROFILE,grant_data(d,key))
+        if apply_flag=='false':
+            with pytest.raises(TenantLinearError):run(cur,cfg,grant)
+            # The narrow bypass cannot be invoked with an ordinary receipt.
+            cur.execute('SELECT id FROM saas_ai_administrator_approvals WHERE draft_id=%s::uuid',(d['id'],))
+            with pytest.raises(TenantLinearError):
+                application.apply_knowledge_draft(cur,PROFILE,cur.fetchone()['id'],d['id'],scoped_training_policy_id=p)
     db.commit()
 
 

@@ -375,17 +375,19 @@ No new scheduler or AI provider call is added. An assistant invokes the tools;
 existing observation/learning workers are unchanged. Policies are permissions,
 not authorization to perform paid model processing.
 
-### Production setup / retained kill switch
+### Production setup / scoped authorization
 
-After deployment, the **owner's permission setup is one policy submission** in
-the existing AI Administrator panel for the intended agent/channel, selected
-rights/materials and limits; it replaces per-case grant clicks. A connection that
-lacks the existing publish/draft OAuth scopes must also be reauthorized normally.
-The existing server kill switch `AI_AUTONOMOUS_APPLY_ENABLED` is preserved and
-still blocks all application, including policy application. Policy consent does
-not silently override it or change environment variables. If it is off, the
-server operator must separately authorize enabling it before any material
-application can run. Deployment itself changes neither policies nor feature flags.
+The **owner's permission setup is one policy submission** in the existing AI
+Administrator panel for the intended agent/channel, selected rights/materials
+and limits; it replaces per-case grant clicks. An active policy is the exact
+tenant-scoped authorization for training publication. It is independent of the
+legacy `AI_AUTONOMOUS_APPLY_ENABLED` switch, which remains a kill switch for the
+older general application flow (such as agent/prompt changes). Therefore an
+operator never has to enable broad application for every tenant in order to use
+one owner policy. The panel reports both states explicitly. A connection that
+lacks the existing publish/draft OAuth scopes must be reauthorized normally;
+the policy itself does not alter OAuth, environment variables, AI modes or any
+other tenant. Deployment creates no policy and changes no feature flag.
 
 Tests include disposable native PostgreSQL 17.6 with actual multi-process
 publication/idempotency/quota/revocation races, PGlite parity, HTTP owner-consent →

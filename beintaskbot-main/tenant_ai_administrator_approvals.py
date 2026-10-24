@@ -237,7 +237,6 @@ def publication_execute(cur,cfg,grant_id,*,rollback=False):
     import os
     from tenant_ai_agents_store import _json,save_knowledge
     if PUBLISH_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
-    if str(os.environ.get('AI_AUTONOMOUS_APPLY_ENABLED','')).lower()!='true': raise TenantLinearError('Autonomous application is disabled.',403)
     profile={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']}
     tenant,actor=_owner(cur,profile)
     try: grant_id=str(uuid.UUID(str(grant_id)))
@@ -245,6 +244,12 @@ def publication_execute(cur,cfg,grant_id,*,rollback=False):
     cur.execute('SELECT policy_id FROM saas_ai_administrator_publication_grants WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,grant_id));policy_ref=cur.fetchone()
     if policy_ref and policy_ref.get('policy_id') is not None:
         training_policy_guard(cur,cfg,str(policy_ref['policy_id']),'rollback' if rollback else 'publish')
+    # A bounded training policy is a separate, tenant-scoped owner consent.
+    # Keep the global switch as a kill switch for the older general apply flow,
+    # but never require an operator to enable that broad flow to execute an
+    # exact policy-linked publication.
+    elif str(os.environ.get('AI_AUTONOMOUS_APPLY_ENABLED','')).lower()!='true':
+        raise TenantLinearError('Autonomous application is disabled.',403)
     cur.execute('SELECT *,(expires_at>now()) AS live FROM saas_ai_administrator_publication_grants WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,grant_id));g=cur.fetchone()
     if not g or g['owner_id']!=actor or str(g['agent_id'])!=cfg['AI_LEARNING_MCP_AGENT_ID'] or str(g['channel_id'])!=cfg['AI_LEARNING_MCP_CHANNEL_ID']:
         raise TenantLinearError('Publication outside delegated OAuth scope.',403)
@@ -426,8 +431,17 @@ def training_policy_list(cur,profile,cfg=None):
     if cfg:policies=[v for v in policies if str(v['agent_id'])==cfg['AI_LEARNING_MCP_AGENT_ID'] and str(v['channel_id'])==cfg['AI_LEARNING_MCP_CHANNEL_ID']]
     for p in policies:
         cur.execute('SELECT action,result,created_at FROM saas_ai_training_operations WHERE policy_id=%s::uuid ORDER BY created_at DESC LIMIT 100',(p['id'],));p['recent_operations']=[_snapshot(dict(v)) for v in cur.fetchall()]
+    # `AI_AUTONOMOUS_APPLY_ENABLED` governs the legacy general application
+    # workflow. It is intentionally not a prerequisite for an exact, owner
+    # scoped training policy. Keeping both values makes the distinction clear
+    # to the owner and avoids accidentally presenting the global kill switch
+    # as a tenant-level readiness error.
     from tenant_ai_administrator_apply import enabled
-    result={'items':[_snapshot(v) for v in policies],'application_enabled':enabled()}
+    active=any(v['active'] for v in policies)
+    result={'items':[_snapshot(v) for v in policies],
+      'training_ready':active,
+      'training_status':'ready' if active else 'owner_consent_required',
+      'legacy_application_enabled':enabled()}
     if cfg is None:
         cur.execute('SELECT id,name FROM saas_ai_agents WHERE tenant_id=%s::uuid AND archived_at IS NULL ORDER BY name LIMIT 100',(tenant,));result['agents']=[_snapshot(dict(v)) for v in cur.fetchall()]
         cur.execute('SELECT connect_channel_id AS id,name FROM saas_connect_channels WHERE tenant_id=%s::uuid ORDER BY name LIMIT 100',(tenant,));result['channels']=[_snapshot(dict(v)) for v in cur.fetchall()]
@@ -435,9 +449,7 @@ def training_policy_list(cur,profile,cfg=None):
 
 
 def training_policy_guard(cur,cfg,policy_id,action):
-    import os
     if PUBLISH_SCOPE not in set(cfg.get('granted_scopes') or []):raise TenantLinearError('Additional OAuth scope required.',403)
-    if str(os.environ.get('AI_AUTONOMOUS_APPLY_ENABLED','')).lower()!='true':raise TenantLinearError('Autonomous application is disabled.',403)
     profile={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']};tenant,actor=_owner(cur,profile)
     # All policy mutations serialize here, including revoke and quota checks.
     cur.execute('SELECT *,(expires_at>clock_timestamp()) AS live FROM saas_ai_training_policies WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,_training_uuid(policy_id)));p=cur.fetchone()
@@ -546,7 +558,8 @@ def training_operation(cur,cfg,action,data):
             receipt=request(cur,profile,d['id'],d['version']);approve(cur,profile,receipt['id'],'approve')
             cur.execute('UPDATE saas_ai_administrator_approvals SET delegation_policy_id=%s::uuid WHERE tenant_id=%s::uuid AND id=%s::uuid',(p['id'],tenant,receipt['id']))
             _audit(cur,tenant,actor,'ai_training_verified_copy_authorized','ai_administrator_approval',receipt['id'],{'policy_id':str(p['id']),'basis':basis,'individual_owner_click':False})
-            applied=(application.apply_knowledge_draft if kind=='knowledge' else application.apply_instruction_draft)(cur,profile,receipt['id'],d['id'])
+            applied=(application.apply_knowledge_draft if kind=='knowledge' else application.apply_instruction_draft)(
+              cur,profile,receipt['id'],d['id'],scoped_training_policy_id=p['id'])
             object_id=applied.get('source_id') or applied['lesson_id']
         material=_publication_object(cur,tenant,kind,object_id)
         result={'draft_id':d['id'],'version':d['version'],'object_id':object_id,'material_hash':_publication_hash(material),'kind':kind,'basis':basis,'eligible':not bool(reason),'clarification_reason':reason}

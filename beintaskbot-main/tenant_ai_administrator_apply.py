@@ -34,8 +34,13 @@ def ensure_schema(conn):
           agent_id UUID NOT NULL, channel_id UUID NOT NULL, before_patch JSONB NOT NULL, applied_version INTEGER NOT NULL, rolled_back_at TIMESTAMPTZ)''')
 
 
-def _guard(cur, profile):
-    if not enabled(): raise TenantLinearError('Autonomous application is disabled.',403)
+def _guard(cur, profile, *, scoped_training_policy_id=None):
+    # A scoped policy is checked and row-locked by training_operation before
+    # entering this helper.  It may only bypass the broad legacy apply switch
+    # for the two private material preparation paths below; it never covers
+    # prompts, triggers, agent configuration, messages, CRM or a public API.
+    if scoped_training_policy_id is None and not enabled():
+        raise TenantLinearError('Autonomous application is disabled.',403)
     tenant, actor = _authorize(cur,profile)
     # Application changes a live agent.  A receipt is not sufficient unless
     # the same authenticated company owner is performing the action.
@@ -45,6 +50,21 @@ def _guard(cur, profile):
     if not member or member['role'] != 'owner' or member.get('active') is False:
         raise TenantLinearError('Only the company owner can apply or roll back administrator changes.',403)
     return tenant,actor
+
+
+def _scoped_training_receipt(cur, tenant, approval_id, policy_id):
+    """Bind the narrow switch bypass to the exact internal policy receipt."""
+    if policy_id is None:
+        return
+    try:
+        policy_id=str(uuid.UUID(str(policy_id)))
+    except (ValueError,TypeError):
+        raise TenantLinearError('Invalid training policy.',400) from None
+    cur.execute('''SELECT id FROM saas_ai_administrator_approvals
+      WHERE tenant_id=%s::uuid AND id=%s::uuid AND delegation_policy_id=%s::uuid
+      FOR SHARE''',(tenant,approval_id,policy_id))
+    if not cur.fetchone():
+        raise TenantLinearError('Training policy receipt is unavailable.',403)
 
 
 def apply_agent_prompt(cur, profile, approval_id, draft_id):
@@ -97,8 +117,9 @@ def _ids(approval_id,draft_id):
     try: return str(uuid.UUID(str(approval_id))),str(uuid.UUID(str(draft_id)))
     except (ValueError,TypeError): raise TenantLinearError('Invalid approval request.',400) from None
 
-def apply_knowledge_draft(cur,profile,approval_id,draft_id):
-    tenant,actor=_guard(cur,profile); approval_id,draft_id=_ids(approval_id,draft_id)
+def apply_knowledge_draft(cur,profile,approval_id,draft_id,*,scoped_training_policy_id=None):
+    tenant,actor=_guard(cur,profile,scoped_training_policy_id=scoped_training_policy_id); approval_id,draft_id=_ids(approval_id,draft_id)
+    _scoped_training_receipt(cur,tenant,approval_id,scoped_training_policy_id)
     cur.execute('SELECT * FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,draft_id)); draft=cur.fetchone()
     if not draft or draft['kind']!='knowledge' or draft['state']!='draft': raise TenantLinearError('Knowledge draft is unavailable.',409)
     body=draft['body'] or {}; target=draft['target'] or {}
@@ -125,8 +146,9 @@ def rollback_knowledge_draft(cur,profile,approval_id):
     _audit(cur,tenant,actor,'ai_administrator_knowledge_rolled_back','knowledge_source',row['object_id'],{'approval_id':approval_id}); return {'source_id':str(row['object_id']),'rolled_back':True,'active':False}
 
 
-def apply_instruction_draft(cur,profile,approval_id,draft_id):
-    tenant,actor=_guard(cur,profile); approval_id,draft_id=_ids(approval_id,draft_id)
+def apply_instruction_draft(cur,profile,approval_id,draft_id,*,scoped_training_policy_id=None):
+    tenant,actor=_guard(cur,profile,scoped_training_policy_id=scoped_training_policy_id); approval_id,draft_id=_ids(approval_id,draft_id)
+    _scoped_training_receipt(cur,tenant,approval_id,scoped_training_policy_id)
     cur.execute('SELECT * FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,draft_id)); draft=cur.fetchone()
     if not draft or draft['kind']!='instruction' or draft['state']!='draft': raise TenantLinearError('Instruction draft is unavailable.',409)
     body=draft['body'] or {}; target=draft['target'] or {}
