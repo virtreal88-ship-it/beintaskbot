@@ -137,6 +137,9 @@ def test_administrator_drafts_are_flagged_scoped_versioned_and_never_applied(db,
         history=drafts.versions(cur,cfg,{'id':value['id']})['items']
         assert [item['version'] for item in history]==[1,2]
         assert history[0]['body']=={'claim':'needs review'} and history[1]['body']=={'claim':'edited'}
+        restored=mcp._tools(cur,cfg,'administrator_draft_restore',{'id':value['id'],'version':1,'expected_version':2})
+        assert restored['version']==3 and restored['body']=={'claim':'needs review'}
+        assert [item['version'] for item in drafts.versions(cur,cfg,{'id':value['id']})['items']]==[1,2,3]
         with pytest.raises(Exception): drafts.update(cur,cfg,{'id':value['id'],'expected_version':1,'body':{}})
     db.commit()
     assert changed['version']==2
