@@ -748,7 +748,11 @@ def _enrich_knowledge_rows(cur,rows,tenant):
         else:
             review='available' if row.get('active') is True else 'revoked'
             published=row.get('active') is True;ai_available=row.get('active') is True
-        clean={key:provenance[key] for key in ('review_status','approved_by','instruction_id','candidate_id') if key in provenance}
+        # The UI needs an explicit, non-sensitive marker to distinguish a
+        # reversible user deletion from an ordinary disabled source.  Do not
+        # expose the full provenance payload, which can contain workflow
+        # implementation details.
+        clean={key:provenance[key] for key in ('review_status','approved_by','instruction_id','candidate_id','archive') if key in provenance}
         row['provenance']=clean;row['review_status']=review;row['approved_by']=approved_by
         row['material_status']='revoked' if row.get('active') is not True else ('published' if published else review)
         row['ai_available']=bool(ai_available);row['access_scope']='agent' if row.get('agent_id') else 'company'
