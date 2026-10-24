@@ -323,8 +323,8 @@ def _source_rejection(cur,tenant,row):
 def eligible_examples(profile,message_ids=None):
     """Bounded owner-only read: UUIDs/reason codes, never text, JIDs or names.
 
-    This selector is deliberately stricter than virtual observation: paused or
-    human-owned conversations are excluded from suggested paid examples.
+    Human/Pause state controls live sending, not historical virtual analysis.
+    Selection never resumes a conversation or grants a transport permission.
     """
     if message_ids is not None:
         if not isinstance(message_ids,list) or not 1<=len(message_ids)<=25: raise TenantLinearError('replay_selection_invalid',400)
@@ -334,12 +334,9 @@ def eligible_examples(profile,message_ids=None):
     with _connect() as conn:
         with conn.cursor() as cur:
             tenant,_,_,_,model=config(cur,profile)
-            cur.execute('''SELECT m.id,m.body,m.raw,m.direction,m.message_type,m.happened_at,m.created_at,d.conversation_id,
-                st.state AS conversation_state FROM saas_crm_messages m
+            cur.execute('''SELECT m.id,m.body,m.raw,m.direction,m.message_type,m.happened_at,m.created_at,d.conversation_id FROM saas_crm_messages m
               JOIN saas_connect_conversations d ON d.tenant_id=m.tenant_id AND d.lead_id=m.kommo_lead_id
                 AND m.channel='connect:'||d.connect_channel_id::text
-              LEFT JOIN saas_ai_conversation_state st ON st.tenant_id=m.tenant_id AND st.provider='connect'
-                AND st.channel_id=d.connect_channel_id::text AND st.conversation_id=d.conversation_id
               WHERE m.tenant_id=%s::uuid AND d.connect_channel_id=%s::uuid
                 AND (%s::uuid[] IS NULL OR m.id=ANY(%s::uuid[]))
               ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 200''',(tenant,PILOT_CHANNEL,message_ids,message_ids))
@@ -355,7 +352,6 @@ def eligible_examples(profile,message_ids=None):
                 row=by_id.get(key); reason=_source_rejection(cur,tenant,row)
                 if key in duplicate: reason='replay_identity_ambiguous'
                 if not reason and row.get('message_type') not in (None,'','text'): reason='replay_text_required'
-                if not reason and row.get('conversation_state') in ('human','paused'): reason='replay_conversation_human_or_paused'
                 if not reason and key in attempted: reason='replay_already_attempted'
                 if not reason and len(attempted)+len(selected)>=5: reason='replay_five_source_limit_reached'
                 conversation=row.get('conversation_id') if row else None

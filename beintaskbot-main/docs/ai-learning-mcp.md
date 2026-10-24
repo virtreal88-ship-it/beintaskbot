@@ -217,7 +217,7 @@ read-only action: `{"action":"eligible_examples","message_ids":[...]}` at
 The response contains UUIDs, eligibility and rejection codes, never message
 text, customer names, phones or JIDs. `selected_message_ids` proposes up to five
 distinct verified direct customer text dialogues. Groups, LIDs, identity
-conflicts, staff messages, old/future timestamps, media, human/paused chats and
+conflicts, staff messages, old/future timestamps, media and
 previously attempted examples are excluded from suggestions. This does not
 change Simulation observation policy for human-owned conversations.
 
@@ -227,3 +227,11 @@ obtain explicit owner consent before paid execution. Missing prices, disabled
 scope and the existing shared maximum $5 budget still fail closed. A rejected
 preflight now includes the failing message UUID and a precise reason code plus
 the diagnostic tool name; no customer content is included in error details.
+
+
+Human/Paused dialogue state is eligible for this isolated historical Replay.
+It continues to block real Active sending. Discovery and Replay do not resume
+conversations, change handoff, alter agent modes or populate the live Simulation
+queue. Context is capped at the triggering customer's message; later staff
+answers remain comparison-only evidence. Paid execution still requires a fresh
+exact-five preflight, explicit owner approval and the existing shared $5 ledger.
