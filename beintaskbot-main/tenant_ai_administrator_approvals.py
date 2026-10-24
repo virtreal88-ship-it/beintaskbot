@@ -9,6 +9,17 @@ from tenant_ai_agents_store import _audit, _authorize
 from tenant_linear_policy import TenantLinearError
 
 
+def _owner(cur, profile):
+    """Approval is a company-owner decision, never an MCP or admin decision."""
+    tenant, actor = _authorize(cur, profile)
+    cur.execute('''SELECT role,active FROM saas_tenant_members
+      WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE''', (tenant, actor))
+    member = cur.fetchone()
+    if not member or member['role'] != 'owner' or member.get('active') is False:
+        raise TenantLinearError('Only the company owner can approve administrator changes.', 403)
+    return tenant, actor
+
+
 def ensure_schema(conn):
     with conn.cursor() as cur:
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_administrator_approvals(
@@ -23,7 +34,7 @@ def ensure_schema(conn):
 
 def request(cur, profile, draft_id, version, *, ttl_minutes=30):
     if type(version) is not int or not 1 <= ttl_minutes <= 1440: raise TenantLinearError('Invalid approval request.',400)
-    tenant,actor=_authorize(cur,profile)
+    tenant,actor=_owner(cur,profile)
     try: draft_id=str(uuid.UUID(str(draft_id)))
     except (ValueError,TypeError): raise TenantLinearError('Invalid approval request.',400) from None
     cur.execute('''SELECT version,state FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE''',(tenant,draft_id)); draft=cur.fetchone()
@@ -38,7 +49,7 @@ def request(cur, profile, draft_id, version, *, ttl_minutes=30):
 
 def approve(cur, profile, approval_id, decision):
     if decision not in {'approve','reject'}: raise TenantLinearError('Invalid approval decision.',400)
-    tenant,actor=_authorize(cur,profile)
+    tenant,actor=_owner(cur,profile)
     try: approval_id=str(uuid.UUID(str(approval_id)))
     except (ValueError,TypeError): raise TenantLinearError('Invalid approval.',400) from None
     cur.execute('SELECT * FROM saas_ai_administrator_approvals WHERE tenant_id=%s::uuid AND id=%s::uuid AND expires_at>now() FOR UPDATE',(tenant,approval_id)); row=cur.fetchone()
@@ -47,6 +58,27 @@ def approve(cur, profile, approval_id, decision):
     cur.execute('UPDATE saas_ai_administrator_approvals SET state=%s,approved_by=%s,approved_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(state,actor,tenant,approval_id))
     _audit(cur,tenant,actor,'ai_administrator_approval_'+state,'ai_administrator_approval',approval_id,{})
     return {'id':approval_id,'state':state}
+
+
+def listing(cur, profile, *, limit=50):
+    """Owner-only approval queue; draft bodies stay tenant-local."""
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise TenantLinearError('Invalid approval list.',400)
+    tenant,_ = _owner(cur,profile)
+    cur.execute('''SELECT a.id,a.draft_id,a.draft_version,a.state,a.expires_at,a.created_at,
+                         d.kind,d.title,d.body,d.target,d.version,d.state AS draft_state
+      FROM saas_ai_administrator_approvals a
+      JOIN saas_ai_administrator_drafts d ON d.id=a.draft_id AND d.tenant_id=a.tenant_id
+      WHERE a.tenant_id=%s::uuid ORDER BY a.created_at DESC,a.id DESC LIMIT %s''',(tenant,limit))
+    rows=[]
+    for row in cur.fetchall():
+        value=dict(row)
+        for key in ('id','draft_id'):
+            value[key]=str(value[key])
+        for key in ('expires_at','created_at'):
+            value[key]=value[key].isoformat()
+        rows.append(value)
+    return {'items':rows}
 
 
 def consume(cur, tenant_id, approval_id, draft_id, version, consumer):

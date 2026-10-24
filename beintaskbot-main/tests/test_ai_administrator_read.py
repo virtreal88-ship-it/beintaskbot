@@ -16,6 +16,7 @@ import tenant_ai_administrator_drafts as drafts
 import tenant_ai_administrator_approvals as approvals
 import tenant_ai_administrator_observations as observations
 import tenant_ai_administrator_apply as apply
+import tenant_ai_administrator_api as administrator_api
 
 
 def test_existing_connection_company_reads_and_immediate_owner_revocation(db,monkeypatch):
@@ -136,6 +137,40 @@ def test_approval_binds_exact_draft_version_and_is_single_use(db,monkeypatch):
         approvals.consume(cur,A,receipt['id'],value['id'],1,'test')
         with pytest.raises(Exception): approvals.consume(cur,A,receipt['id'],value['id'],1,'test')
     db.commit()
+
+
+def test_administrator_approval_and_live_apply_are_owner_only(db,monkeypatch):
+    seed_simulation(db); _setup(monkeypatch,db)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
+    with db.cursor() as cur:
+        cur.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT)); version=cur.fetchone()['version']
+        draft=drafts.create(cur,cfg,{'kind':'agent_improvement','title':'Prompt','body':{'agent_id':AGENT,'expected_version':version,'instructions':'Use verified evidence only.'}})
+        cur.execute("UPDATE saas_tenant_members SET role='admin' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,))
+        with pytest.raises(Exception): approvals.request(cur,PROFILE,draft['id'],draft['version'])
+        cur.execute("UPDATE saas_tenant_members SET role='owner' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,))
+        receipt=approvals.request(cur,PROFILE,draft['id'],draft['version']); approvals.approve(cur,PROFILE,receipt['id'],'approve')
+        cur.execute("UPDATE saas_tenant_members SET role='admin' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,))
+        with pytest.raises(Exception): apply.apply_agent_prompt(cur,PROFILE,receipt['id'],draft['id'])
+        cur.execute("UPDATE saas_tenant_members SET role='owner' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,))
+        assert apply.apply_agent_prompt(cur,PROFILE,receipt['id'],draft['id'])['rollback_available'] is True
+    db.commit()
+
+
+def test_owner_approval_http_surface_requires_same_origin_and_strict_actions(monkeypatch):
+    seen=[]
+    monkeypatch.setattr(administrator_api,'_with_connection',lambda fn,*args,**kwargs: seen.append((fn,args,kwargs)) or {'items':[]})
+    profile={'tenant_id':A,'telegram_id':11,'role':'owner'}
+    async def check():
+        app=web.Application(); app.router.add_get('/approvals',administrator_api.handler(lambda _:profile,'https://crm.pro.az',__import__('logging').getLogger(__name__)))
+        app.router.add_post('/approvals',administrator_api.handler(lambda _:profile,'https://crm.pro.az',__import__('logging').getLogger(__name__)))
+        async with TestClient(TestServer(app)) as client:
+            assert (await client.get('/approvals')).status==200
+            assert (await client.post('/approvals',json={'action':'approve','approval_id':str(uuid.uuid4())})).status==403
+            response=await client.post('/approvals',headers={'Origin':'https://crm.pro.az'},json={'action':'approve','approval_id':str(uuid.uuid4()),'extra':True})
+            assert response.status==400
+    asyncio.run(check())
+    assert seen and seen[0][0] is approvals.listing
 
 
 def test_observations_are_deduplicated_and_disabled_by_default(db,monkeypatch):
