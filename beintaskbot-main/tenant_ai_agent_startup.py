@@ -29,12 +29,20 @@ def prepare_database() -> None:
     from tenant_ai_agents_schema import ensure_schema as ensure_agents_schema
     from tenant_chat_ai_schema import ensure_schema as ensure_chat_ai_schema
     from tenant_ai_simulation_schema import ensure_schema as ensure_simulation_schema
+    from tenant_ai_administrator_drafts import ensure_schema as ensure_drafts_schema
+    from tenant_ai_administrator_approvals import ensure_schema as ensure_approvals_schema
+    from tenant_ai_administrator_observations import ensure_schema as ensure_observations_schema
+    from tenant_ai_administrator_apply import ensure_schema as ensure_apply_schema
 
     _fernet()
     with _connect() as conn:
         ensure_agents_schema(conn)
         ensure_chat_ai_schema(conn)
         ensure_simulation_schema(conn)
+        ensure_drafts_schema(conn)
+        ensure_approvals_schema(conn)
+        ensure_observations_schema(conn)
+        ensure_apply_schema(conn)
 
 
 async def start_worker(app, worker, kommo_request, logger, wait_slot,
