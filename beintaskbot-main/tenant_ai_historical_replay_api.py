@@ -39,6 +39,8 @@ def read_report(request_id):
 def operate(profile,data):
     authorize(profile)
     action=data.get('action')
+    if action=='eligible_examples' and set(data)<={'action','message_ids'}:
+        return replay.eligible_examples(profile,data.get('message_ids'))
     if action=='preflight' and set(data)=={'action','message_ids'}:
         return replay.preflight(profile,data['message_ids'])
     if action!='execute' or set(data)!={'action','message_ids','request_id'}:
@@ -84,7 +86,7 @@ def handler(member_from_request,origin,logger):
                 result=await asyncio.to_thread(operate,profile,data)
             return web.json_response({'success':True,'result':result},headers=headers,dumps=lambda value:json.dumps(value,default=str))
         except TenantLinearError as exc:
-            return web.json_response({'success':False,'error':str(exc)},status=exc.status,headers=headers)
+            return web.json_response({'success':False,'error':str(exc),**({'details':exc.details} if hasattr(exc,'details') else {})},status=exc.status,headers=headers)
         except (ValueError,TypeError,KeyError):
             return web.json_response({'success':False,'error':'replay_request_invalid'},status=400,headers=headers)
         except Exception as exc:
