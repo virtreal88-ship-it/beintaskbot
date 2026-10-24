@@ -4,6 +4,7 @@ import json
 import os
 import uuid
 from tenant_ai_dashboard import _connect
+from tenant_ai_agents_store import _audit
 
 MAX_ATTEMPTS = 5
 
@@ -72,14 +73,17 @@ def process(item):
         with conn.cursor() as cur:
             cur.execute('SELECT * FROM saas_ai_administrator_observations WHERE id=%s::uuid AND state=%s FOR UPDATE',(item['id'],'processing')); row=cur.fetchone()
             if not row: conn.commit(); return
-            payload=row['payload'] or {}; kind=payload.get('kind'); title=payload.get('title'); body=payload.get('body'); target=payload.get('target') or {}
-            if kind not in {'agent_improvement','knowledge','support_case','testing_scenario'} or not isinstance(title,str) or not isinstance(body,dict) or not isinstance(target,dict):
-                cur.execute("UPDATE saas_ai_administrator_observations SET state='blocked',lease_until=NULL,updated_at=now() WHERE id=%s",(row['id'],)); conn.commit(); return
             cur.execute("SELECT telegram_id FROM saas_tenant_members WHERE tenant_id=%s::uuid AND role='owner' AND active IS DISTINCT FROM FALSE ORDER BY telegram_id LIMIT 1",(row['tenant_id'],)); owner=cur.fetchone()
             if not owner:
                 cur.execute("UPDATE saas_ai_administrator_observations SET state='blocked',lease_until=NULL,updated_at=now() WHERE id=%s",(row['id'],)); conn.commit(); return
+            payload=row['payload'] or {}; kind=payload.get('kind'); title=payload.get('title'); body=payload.get('body'); target=payload.get('target') or {}
+            if kind not in {'agent_improvement','knowledge','support_case','testing_scenario'} or not isinstance(title,str) or not isinstance(body,dict) or not isinstance(target,dict):
+                cur.execute("UPDATE saas_ai_administrator_observations SET state='blocked',lease_until=NULL,updated_at=now() WHERE id=%s",(row['id'],))
+                _audit(cur,row['tenant_id'],owner['telegram_id'],'ai_administrator_observation_blocked','ai_administrator_observation',row['id'],{'source':row['source'],'reason':'invalid_payload'})
+                conn.commit(); return
             draft_id=uuid.uuid4(); cur.execute('''INSERT INTO saas_ai_administrator_drafts(id,tenant_id,kind,title,body,target,created_by)
               VALUES(%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s)''',(draft_id,row['tenant_id'],kind,title[:240],json.dumps(body),json.dumps(target),owner['telegram_id']))
             cur.execute('INSERT INTO saas_ai_administrator_observation_drafts(observation_id,tenant_id,draft_id) VALUES(%s,%s::uuid,%s)',(row['id'],row['tenant_id'],draft_id))
             cur.execute("UPDATE saas_ai_administrator_observations SET state='completed',lease_until=NULL,updated_at=now() WHERE id=%s",(row['id'],))
+            _audit(cur,row['tenant_id'],owner['telegram_id'],'ai_administrator_observation_draft_created','ai_administrator_observation',row['id'],{'source':row['source'],'draft_id':str(draft_id),'kind':kind})
         conn.commit()
