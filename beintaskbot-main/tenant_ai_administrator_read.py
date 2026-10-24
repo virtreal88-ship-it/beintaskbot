@@ -41,6 +41,7 @@ SPECS = {
     'simulation_queue_diagnostic_read': (None, '', '', ''),
     'spend_read': ('saas_ai_spend_reservations', 'id', 'id model kind reserved_microusd actual_microusd state created_at completed_at', ''),
     'audit_read': ('saas_tenant_audit_events', 'id', 'id action entity_type entity_id created_at', ''),
+    'administrator_observations_read': ('saas_ai_administrator_observations', 'id', 'id source state attempts checkpoint created_at updated_at', 'payload'),
 }
 
 
