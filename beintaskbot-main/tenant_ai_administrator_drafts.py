@@ -11,7 +11,7 @@ from tenant_ai_agents_store import _audit, _authorize
 from tenant_linear_policy import TenantLinearError
 
 DRAFT_SCOPE = 'ai_learning.drafts'
-KINDS = {'agent_improvement', 'knowledge', 'instruction', 'trigger', 'support_case', 'testing_scenario'}
+KINDS = {'agent_improvement', 'knowledge', 'instruction', 'trigger', 'agent_config', 'support_case', 'testing_scenario'}
 
 
 def enabled():
@@ -25,10 +25,10 @@ def ensure_schema(conn):
           kind TEXT NOT NULL, title TEXT NOT NULL, body JSONB NOT NULL, target JSONB NOT NULL DEFAULT '{}'::jsonb,
           state TEXT NOT NULL DEFAULT 'draft', version INTEGER NOT NULL DEFAULT 1,
           created_by BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-          CHECK(kind IN ('agent_improvement','knowledge','instruction','trigger','support_case','testing_scenario')),
+          CHECK(kind IN ('agent_improvement','knowledge','instruction','trigger','agent_config','support_case','testing_scenario')),
           CHECK(state IN ('draft','applied','rolled_back')))''')
         cur.execute('ALTER TABLE saas_ai_administrator_drafts DROP CONSTRAINT IF EXISTS saas_ai_administrator_drafts_kind_check')
-        cur.execute("ALTER TABLE saas_ai_administrator_drafts ADD CONSTRAINT saas_ai_administrator_drafts_kind_check CHECK(kind IN ('agent_improvement','knowledge','instruction','trigger','support_case','testing_scenario'))")
+        cur.execute("ALTER TABLE saas_ai_administrator_drafts ADD CONSTRAINT saas_ai_administrator_drafts_kind_check CHECK(kind IN ('agent_improvement','knowledge','instruction','trigger','agent_config','support_case','testing_scenario'))")
         cur.execute('ALTER TABLE saas_ai_administrator_drafts DROP CONSTRAINT IF EXISTS saas_ai_administrator_drafts_state_check')
         cur.execute("ALTER TABLE saas_ai_administrator_drafts ADD CONSTRAINT saas_ai_administrator_drafts_state_check CHECK(state IN ('draft','applied','rolled_back'))")
         cur.execute('CREATE INDEX IF NOT EXISTS saas_ai_administrator_drafts_tenant_idx ON saas_ai_administrator_drafts(tenant_id,updated_at DESC)')
@@ -178,6 +178,10 @@ def typed_create(cur,cfg,name,data):
             cur.execute('SELECT count(*) AS n FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) AND archived_at IS NULL',(tenant,agents))
             if int(cur.fetchone()['n'])!=len(agents): raise TenantLinearError('Knowledge target is unavailable for this company.',404)
         return create(cur,cfg,{'kind':'knowledge','title':data.get('title'),'body':{'content':data['content'].strip(),'evidence_ids':evidence},'target':{'agent_ids':agents}})
+    if name=='agent_config':
+        from tenant_ai_administrator_apply import validate_config_proposal
+        body,_=validate_config_proposal(cur,cfg,data)
+        return create(cur,cfg,{'kind':'agent_config','title':'Agent configuration','body':body,'target':{'agent_id':body['agent_id'],'channel_id':body['channel_id']}})
     if name=='trigger':
         from tenant_ai_administrator_apply import validate_trigger_proposal
         body=validate_trigger_proposal(cur,cfg,data)

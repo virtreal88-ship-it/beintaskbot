@@ -399,7 +399,7 @@ def refresh_configuration_catalog(profile, remote_pipelines):
     return configuration_options(profile)
 
 
-def save_agent(profile, data, *, agent_id=None):
+def save_agent(profile, data, *, agent_id=None, connection=None):
     creating = agent_id is None
     clean_data = {key: value for key, value in data.items() if key != 'expected_version'} if isinstance(data, dict) else data
     patch = validate_agent(clean_data, creating=creating)
@@ -407,7 +407,8 @@ def save_agent(profile, data, *, agent_id=None):
         raise TenantLinearError('Dəyişdiriləcək agent ayarı yoxdur.')
     if not creating and type(data.get('expected_version')) is not int:
         raise TenantLinearError('Agent versiyası yoxdur.', 409)
-    with _connect() as conn:
+    from contextlib import nullcontext
+    with (nullcontext(connection) if connection is not None else _connect()) as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
@@ -449,7 +450,7 @@ def save_agent(profile, data, *, agent_id=None):
                     recovered = _row(cur.fetchone())
                     if recovered:
                         _audit(cur, tenant, actor, 'ai_agent_setup_recovered', 'ai_agent', recovered['id'])
-                        conn.commit()
+                        if connection is None: conn.commit()
                         return recovered
             if 'model' in patch:
                 cur.execute("SELECT metadata,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
@@ -551,7 +552,7 @@ def save_agent(profile, data, *, agent_id=None):
                   _json(merged['schedule']), _json(merged['scopes']), merged['model'], _json(merged['safety']), _json(merged['response_policy']), merged['role'],_json(merged['expert_policy']),tenant, agent_uuid))
                 result = _row(cur.fetchone())
                 _audit(cur, tenant, actor, 'ai_agent_updated', 'ai_agent', agent_uuid, {'version': result['version']})
-        conn.commit()
+        if connection is None: conn.commit()
     return result
 
 

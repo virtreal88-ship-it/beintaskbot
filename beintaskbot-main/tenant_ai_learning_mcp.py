@@ -245,6 +245,14 @@ def _tools(cur,cfg,name,args):
         if set(args)!=expected: raise TenantLinearError('Invalid trigger request.',400)
         if 'draft_id' in args: return administrator_apply.apply_trigger_draft(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']},args['approval_id'],args['draft_id'],cfg)
         return administrator_apply.rollback_trigger_draft(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']},args['approval_id'],cfg)
+    if name == 'administrator_draft_agent_config_create': return administrator_drafts.typed_create(cur,cfg,'agent_config',args)
+    if name in {'administrator_apply_agent_config','administrator_rollback_agent_config'}:
+        if APPLY_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
+        expected={'approval_id','draft_id'} if name=='administrator_apply_agent_config' else {'approval_id'}
+        if set(args)!=expected: raise TenantLinearError('Invalid configuration request.',400)
+        principal={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']}
+        if 'draft_id' in args: return administrator_apply.apply_agent_config(cur,principal,args['approval_id'],args['draft_id'],cfg)
+        return administrator_apply.rollback_agent_config(cur,principal,args['approval_id'],cfg)
     if name == 'administrator_draft_create': return administrator_drafts.create(cur,cfg,args)
     if name == 'administrator_draft_list': return administrator_drafts.listing(cur,cfg,args)
     if name == 'administrator_draft_update': return administrator_drafts.update(cur,cfg,args)
@@ -348,7 +356,7 @@ def _knowledge_dedup_definitions():
 
 def _administrator_apply_definitions():
     security=[{'type':'oauth2','scopes':[APPLY_SCOPE]}]
-    return _trigger_definitions()+[
+    return _config_definitions()+_trigger_definitions()+[
       {'name':'administrator_apply_agent_prompt','description':'Apply one exact owner-approved and isolated-test-verified prompt draft. The server requires a live owner grant, enabled application feature flag, matching agent version, and a one-time approval receipt.',
        'inputSchema':{'type':'object','properties':{'approval_id':{'type':'string'},'draft_id':{'type':'string'}},'required':['approval_id','draft_id'],'additionalProperties':False},
        'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
@@ -596,3 +604,10 @@ def _trigger_definitions():
     rows=[('administrator_draft_trigger_create',props,DRAFT_SCOPE)]
     rows += [(name,{'approval_id':{'type':'string'},**({'draft_id':{'type':'string'}} if 'apply_' in name else {})},APPLY_SCOPE) for name in ('administrator_apply_trigger_draft','administrator_rollback_trigger_draft')]
     return [{'name':name,'description':'Owner-scoped disabled trigger proposal/application. No activation or CRM actions. Rollback preserves a disabled historical trigger.','inputSchema':{'type':'object','properties':properties,'required':list(properties),'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[scope]}]} for name,properties,scope in rows]
+
+
+def _config_definitions():
+    props={'agent_id':{'type':'string'},'channel_id':{'type':'string'},'expected_agent_version':{'type':'integer','minimum':1},'patch':{'type':'object','properties':{'language':{'type':'string'},'style':{'type':'string'},'response_policy':{'type':'object'},'expert_policy':{'type':'object'}},'additionalProperties':False}}
+    rows=[('administrator_draft_agent_config_create',props,DRAFT_SCOPE)]
+    rows += [(name,{'approval_id':{'type':'string'},**({'draft_id':{'type':'string'}} if 'apply_' in name else {})},APPLY_SCOPE) for name in ('administrator_apply_agent_config','administrator_rollback_agent_config')]
+    return [{'name':name,'description':'Owner-approved allowlisted agent configuration. Cannot change modes, scope, budgets, CRM permissions or expand Expert permissions.','inputSchema':{'type':'object','properties':properties,'required':list(properties),'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[scope]}]} for name,properties,scope in rows]

@@ -478,3 +478,40 @@ def test_trigger_proposal_rejects_unsafe_or_stale_scope(db,monkeypatch,fault):
     with db.cursor() as cur:
         with pytest.raises(Exception): mcp._tools(cur,cfg,'administrator_draft_trigger_create',args)
     assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_triggers')[0]['n']==0
+
+@pytest.mark.parametrize('language',['ru','az','en'])
+def test_approved_agent_config_apply_rollback_preserves_mode_scope(db,monkeypatch,language):
+    seed_simulation(db); _setup(monkeypatch,db)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE,mcp.APPLY_SCOPE],AI_LEARNING_MCP_AGENT_ID=AGENT)
+    with db.cursor() as cur:
+        cur.execute('SELECT version,language,mode,scopes,enabled FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT)); before=cur.fetchone()
+        draft=mcp._tools(cur,cfg,'administrator_draft_agent_config_create',{'agent_id':AGENT,'channel_id':CA,'expected_agent_version':before['version'],'patch':{'language':language}})
+        receipt=approvals.request(cur,PROFILE,draft['id'],draft['version']); approvals.approve(cur,PROFILE,receipt['id'],'approve')
+        result=mcp._tools(cur,cfg,'administrator_apply_agent_config',{'approval_id':receipt['id'],'draft_id':draft['id']})
+        assert result['version']==before['version']+1
+        cur.execute('SELECT language,mode,scopes,enabled FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT)); after=cur.fetchone()
+        assert after=={**{k:before[k] for k in ('mode','scopes','enabled')},'language':language}
+        assert mcp._tools(cur,cfg,'administrator_rollback_agent_config',{'approval_id':receipt['id']})['rolled_back']
+    db.commit()
+
+@pytest.mark.parametrize('patch',[{'mode':'automatic'},{'enabled':True},{'scopes':[]},{'model':'other'},{'safety':{}},{'expert_policy':{'expert_agent_ids':[str(uuid.uuid4())]}}])
+def test_agent_config_rejects_capability_expansion(db,monkeypatch,patch):
+    seed_simulation(db); _setup(monkeypatch,db); monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE],AI_LEARNING_MCP_AGENT_ID=AGENT)
+    with db.cursor() as cur:
+        with pytest.raises(Exception): mcp._tools(cur,cfg,'administrator_draft_agent_config_create',{'agent_id':AGENT,'channel_id':CA,'expected_agent_version':1,'patch':patch})
+
+
+def test_agent_config_stale_rollback_and_cross_tenant_are_blocked(db,monkeypatch):
+    seed_simulation(db); _setup(monkeypatch,db)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE,mcp.APPLY_SCOPE],AI_LEARNING_MCP_AGENT_ID=AGENT)
+    with db.cursor() as cur:
+        draft=mcp._tools(cur,cfg,'administrator_draft_agent_config_create',{'agent_id':AGENT,'channel_id':CA,'expected_agent_version':1,'patch':{'language':'ru'}})
+        receipt=approvals.request(cur,PROFILE,draft['id'],draft['version']); approvals.approve(cur,PROFILE,receipt['id'],'approve')
+        with pytest.raises(Exception): mcp._tools(cur,{**cfg,'AI_LEARNING_MCP_TENANT_ID':B,'actor_id':22},'administrator_apply_agent_config',{'approval_id':receipt['id'],'draft_id':draft['id']})
+        mcp._tools(cur,cfg,'administrator_apply_agent_config',{'approval_id':receipt['id'],'draft_id':draft['id']})
+        cur.execute('UPDATE saas_ai_agents SET version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))
+        with pytest.raises(Exception): mcp._tools(cur,cfg,'administrator_rollback_agent_config',{'approval_id':receipt['id']})
+    db.commit()
