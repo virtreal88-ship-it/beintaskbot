@@ -872,6 +872,107 @@ def delete_knowledge(profile, source_id):
     return {'deleted': True}
 
 
+def _knowledge_dedup_owner(cur, profile):
+    tenant, actor = _authorize(cur, profile)
+    cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE',
+                (tenant, actor))
+    if (cur.fetchone() or {}).get('role') != 'owner':
+        raise TenantLinearError('Yalnız şirkət sahibi bilik mənbələrini birləşdirə bilər.', 403)
+    return tenant, actor
+
+
+def _relation_exists(cur, name):
+    cur.execute('SELECT to_regclass(%s) AS relation', (name,))
+    return bool((cur.fetchone() or {}).get('relation'))
+
+
+def _knowledge_dedup_check(cur, tenant, canonical_id, duplicate_ids, *, lock=False):
+    """Compare exact sources and their durable references without exposing text."""
+    canonical=identifier(canonical_id)
+    duplicates=[identifier(value) for value in duplicate_ids]
+    if not duplicates or canonical in duplicates or len(set(duplicates)) != len(duplicates):
+        raise TenantLinearError('Təkrarlanan mənbələr düzgün deyil.')
+    ids=[canonical,*duplicates]
+    suffix=' FOR UPDATE' if lock else ''
+    cur.execute('''SELECT id::text AS id,agent_id::text AS agent_id,kind,active,content_hash,content,provenance,created_at,updated_at
+      FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) ORDER BY created_at,id''' + suffix,
+                (tenant,ids))
+    rows=[dict(row) for row in cur.fetchall()]
+    found={str(row['id']):row for row in rows}
+    if set(found) != set(ids):
+        raise TenantLinearError('Bilik mənbəyi tapılmadı.',404)
+    base=found[canonical]
+    checks=[];dependencies=[]
+    for source in duplicates:
+        row=found[source]
+        equal=(row['kind']=='txt' and base['kind']=='txt' and base['active'] is True
+               and row.get('agent_id')==base.get('agent_id') and row.get('content_hash')==base.get('content_hash')
+               and str(row.get('content') or '').encode('utf-8')==str(base.get('content') or '').encode('utf-8'))
+        checks.append({'source_id':source,'byte_equivalent':equal,'agent_binding_matches':row.get('agent_id')==base.get('agent_id')})
+    cur.execute('''SELECT source_id::text AS source_id,chunk_no,content FROM saas_ai_knowledge_chunks
+      WHERE tenant_id=%s::uuid AND source_id=ANY(%s::uuid[]) ORDER BY source_id,chunk_no''',(tenant,ids))
+    chunks={value:[] for value in ids}
+    for row in cur.fetchall(): chunks[str(row['source_id'])].append((int(row['chunk_no']),str(row['content'])))
+    for item in checks:
+        item['chunks_match']=chunks[item['source_id']]==chunks[canonical]
+    for source in duplicates:
+        refs={'source_id':source,'candidate_bindings':0,'quality_checks':0,'simulation_citations':0,'agent_run_citations':0}
+        if _relation_exists(cur,'saas_knowledge_candidate_sources'):
+            cur.execute('SELECT count(*) AS n FROM saas_knowledge_candidate_sources WHERE tenant_id=%s::uuid AND source_id=%s::uuid',(tenant,source));refs['candidate_bindings']=int(cur.fetchone()['n'])
+        if _relation_exists(cur,'saas_knowledge_quality_checks'):
+            cur.execute('SELECT count(*) AS n FROM saas_knowledge_quality_checks WHERE tenant_id=%s::uuid AND source_id=%s::uuid',(tenant,source));refs['quality_checks']=int(cur.fetchone()['n'])
+        if _relation_exists(cur,'saas_ai_simulation_runs'):
+            cur.execute("SELECT count(*) AS n FROM saas_ai_simulation_runs WHERE tenant_id=%s::uuid AND knowledge_refs @> %s::jsonb",(tenant,_json([{'source_id':source}])));refs['simulation_citations']=int(cur.fetchone()['n'])
+        if _relation_exists(cur,'saas_ai_agent_runs'):
+            cur.execute("SELECT count(*) AS n FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND COALESCE(result::text,'') LIKE %s",(tenant,'%'+source+'%'));refs['agent_run_citations']=int(cur.fetchone()['n'])
+        dependencies.append(refs)
+    return {'canonical_id':canonical,'duplicate_ids':duplicates,'checks':checks,'dependencies':dependencies,
+            'eligible':all(item['byte_equivalent'] and item['agent_binding_matches'] and item['chunks_match'] for item in checks)
+                       and not any(any(value for key,value in item.items() if key!='source_id') for item in dependencies)}
+
+
+def knowledge_deduplication(profile, data):
+    """Preview, reversibly archive, or restore exact same-agent TXT duplicates.
+
+    The source rows and chunks remain intact.  Archiving only removes duplicate
+    sources from active retrieval; rollback restores exactly those rows after
+    rechecking the canonical content and chunk structure.
+    """
+    if not isinstance(data,dict) or set(data)-{'action','canonical_id','duplicate_ids'}:
+        raise TenantLinearError('Bilik birləşdirmə sorğusu düzgün deyil.')
+    action=str(data.get('action') or 'preview')
+    if action not in {'preview','archive','rollback'} or not isinstance(data.get('duplicate_ids'),list):
+        raise TenantLinearError('Bilik birləşdirmə sorğusu düzgün deyil.')
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant,actor=_knowledge_dedup_owner(cur,profile)
+            check=_knowledge_dedup_check(cur,tenant,data.get('canonical_id'),data['duplicate_ids'],lock=action!='preview')
+            if action=='preview':
+                return {**check,'action':'preview'}
+            if not check['eligible']:
+                raise TenantLinearError('Təkrarlanan mənbələr təhlükəsiz arxivləşdirmə üçün uyğun deyil.',409)
+            if action=='archive':
+                marker={'canonical_id':check['canonical_id'],'archived_by':actor}
+                cur.execute('''UPDATE saas_ai_knowledge_sources SET active=FALSE,
+                  provenance=COALESCE(provenance,'{}'::jsonb)||jsonb_build_object('deduplication',%s::jsonb),updated_at=now()
+                  WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) AND active=TRUE RETURNING id''',(_json(marker),tenant,check['duplicate_ids']))
+                if len(cur.fetchall())!=len(check['duplicate_ids']):
+                    raise TenantLinearError('Bilik mənbələri dəyişib. Yenidən yoxlayın.',409)
+                audit_action='ai_knowledge_duplicates_archived'
+            else:
+                cur.execute('''UPDATE saas_ai_knowledge_sources SET active=TRUE,
+                  provenance=provenance-'deduplication',updated_at=now()
+                  WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) AND active=FALSE
+                    AND provenance->'deduplication'->>'canonical_id'=%s RETURNING id''',(tenant,check['duplicate_ids'],check['canonical_id']))
+                if len(cur.fetchall())!=len(check['duplicate_ids']):
+                    raise TenantLinearError('Arxiv qeydi geri qaytarmaq üçün uyğun deyil.',409)
+                audit_action='ai_knowledge_duplicates_restored'
+            _audit(cur,tenant,actor,audit_action,'knowledge_source',check['canonical_id'],{'duplicate_ids':check['duplicate_ids']})
+        conn.commit()
+    return {**check,'action':action,'changed_ids':check['duplicate_ids']}
+
+
 def search_knowledge(profile, query, *, limit=6):
     """Bounded tenant-only retrieval for the later manual draft workflow."""
     query = str(query or '').strip()[:1000]

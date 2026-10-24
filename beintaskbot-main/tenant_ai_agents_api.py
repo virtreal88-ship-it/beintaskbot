@@ -4,7 +4,8 @@ import os
 from aiohttp import web
 from tenant_ai_agents_store import (delete_agent, delete_knowledge, list_agents,
     list_knowledge, read_settings, save_agent, save_knowledge, save_settings, configuration_options, refresh_configuration_catalog,
-    list_triggers, save_trigger, delete_trigger, set_conversation_state, read_conversation_state, read_conversation_for_lead, list_handoffs, list_connect_diagnostics)
+    list_triggers, save_trigger, delete_trigger, set_conversation_state, read_conversation_state, read_conversation_for_lead, list_handoffs, list_connect_diagnostics,
+    knowledge_deduplication)
 from tenant_ai_knowledge_files import extract
 from tenant_linear_policy import TenantLinearError
 from tenant_ai_agent_runtime_flags import (configured as runtime_configured,
@@ -153,6 +154,11 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                         request.query.get('channel_id', ''))
                 elif resource == 'conversation_for_lead':
                     result = await asyncio.to_thread(read_conversation_for_lead,profile,request.match_info['lead_id'])
+                elif resource == 'knowledge_deduplication':
+                    raw=request.query.get('duplicate_ids','')
+                    result=await asyncio.to_thread(knowledge_deduplication,profile,{
+                        'action':'preview','canonical_id':request.query.get('canonical_id',''),
+                        'duplicate_ids':[item for item in raw.split(',') if item]})
                 else:
                     result = await asyncio.to_thread(list_knowledge, profile, request.query.get('id'))
                 return web.json_response({'success': True, 'result': result}, headers=headers)
@@ -248,6 +254,8 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     result = await asyncio.to_thread(save_knowledge, profile, payload, source_id=request.match_info['source_id'])
                 elif resource == 'knowledge_item' and method == 'DELETE':
                     result = await asyncio.to_thread(delete_knowledge, profile, request.match_info['source_id'])
+                elif resource == 'knowledge_deduplication' and method == 'POST':
+                    result = await asyncio.to_thread(knowledge_deduplication, profile, payload)
                 else:
                     raise TenantLinearError('Əməliyyat dəstəklənmir.', 405)
             if resource == 'settings':

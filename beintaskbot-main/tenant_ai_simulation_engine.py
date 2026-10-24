@@ -348,6 +348,34 @@ def _load_context(cur, job):
     return rows,list(reversed(out))
 
 
+def _source_media_context(source):
+    """Return persisted, tenant-owned media text or an explicit safe stop.
+
+    Simulation never downloads an attachment, invokes transcription, extracts a
+    document, or asks a vision model merely to fill a missing context gap.  It
+    can safely use text that Connect already persisted with the same message
+    (a caption, existing transcript, or prior approved extraction).  This
+    keeps unavailable media observable without inventing its contents.
+    """
+    kind=str(source.get('message_type') or 'text').casefold()
+    text=str(source.get('body') or '').strip()
+    if kind in {'text','chat','conversation'}:
+        return text,None
+    if text:
+        return text,{'type':'media_context_available','message_type':kind,
+                     'source':'persisted_message_text','executed':False}
+    reason={
+        'audio':'simulation_audio_transcript_unavailable',
+        'voice':'simulation_audio_transcript_unavailable',
+        'voice_message':'simulation_audio_transcript_unavailable',
+        'image':'simulation_image_context_unavailable',
+        'document':'simulation_document_context_unavailable',
+        'video':'simulation_video_context_unavailable',
+    }.get(kind,'simulation_media_type_unsupported')
+    return '',{'type':'simulation_unsupported','reason':'media_context_unavailable',
+               'detail':reason,'message_type':kind,'executed':False}
+
+
 def _group_active_binding(cur,tenant,channel,conversation,agent_id):
     """Mirror the live group coordinator's single-primary speaking authority."""
     cur.execute("SELECT state,assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND provider='connect' AND group_jid=%s",
@@ -767,11 +795,11 @@ def process(job):
                                 'live_state':row['live_state'],'executed':False})
                         from tenant_ai_agent_connect import _whatsapp_phone
                         source_rows,lines=_load_context(cur,job)
-                        source=source_rows[-1];text=str(source.get('body') or '')
-                        media_type=str(source.get('message_type') or 'text').casefold()
-                        if media_type not in {'text','chat','conversation'} and not text.strip():
-                            result=('unsupported','simulation_media_context_unavailable',str(chosen['id']),[],[],[],
-                                    events+[{'type':'simulation_unsupported','reason':'media_context_unavailable','message_type':media_type}],0)
+                        source=source_rows[-1];text,media_event=_source_media_context(source)
+                        if media_event:
+                            events.append(media_event)
+                        if media_event and media_event['type']=='simulation_unsupported':
+                            result=('unsupported',media_event['detail'],str(chosen['id']),[],[],[],events,0)
                         else:
                             if not row.get('recheck_of_run_id'):
                                 fingerprint=_event_fingerprint(job['source_event_id'])
@@ -780,11 +808,9 @@ def process(job):
                                 active_conflict=bool(cur.fetchone())
                             else:
                                 active_conflict=False
-                        if media_type not in {'text','chat','conversation'} and not text.strip():
-                            pass
-                        elif active_conflict:
+                        if not (media_event and media_event['type']=='simulation_unsupported') and active_conflict:
                             result=('skipped','active_mode_already_processed',str(chosen['id']),[],[],[],[],0)
-                        else:
+                        elif not (media_event and media_event['type']=='simulation_unsupported'):
                             triggers=enabled_triggers(tenant,str(chosen['id']))
                             first=sum(1 for x in source_rows if x.get('direction')=='incoming')==1
                             matched=matching_triggers(triggers,text,first_inquiry=first,phone=_whatsapp_phone(conversation))

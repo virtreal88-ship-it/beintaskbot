@@ -167,6 +167,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('knowledge-candidates/{candidate_id}/approve', knowledge_candidates_handler(member, origin, logger, 'approve'), ('POST',)),
         ('knowledge-candidates/{candidate_id}/reject', knowledge_candidates_handler(member, origin, logger, 'reject'), ('POST',)),
         ('knowledge', ai_agents_handler(member, origin, logger, 'knowledge'), ('GET', 'POST')),
+        ('knowledge/deduplication', ai_agents_handler(member, origin, logger, 'knowledge_deduplication'), ('GET', 'POST')),
         ('knowledge/upload', ai_agents_handler(member, origin, logger, 'knowledge_upload'), ('POST',)),
         ('knowledge/{source_id}', ai_agents_handler(member, origin, logger, 'knowledge_item'), ('PATCH', 'DELETE')),
     ]
