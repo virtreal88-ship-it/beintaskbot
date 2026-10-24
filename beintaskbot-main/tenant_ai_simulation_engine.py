@@ -314,6 +314,20 @@ def claim_next():
         return claimed
 
 
+def context_author_type(row, conversation_id):
+    """Classify a persisted message without trusting a display name.
+
+    The model still receives a participant as a client message, while the
+    stored snapshot preserves the more useful participant attribution.
+    """
+    raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
+    if raw.get('verified_employee_id') is not None:
+        return 'operator'
+    if row.get('direction') == 'incoming':
+        return 'participant' if str(conversation_id or '').endswith('@g.us') else 'customer'
+    return 'operator'
+
+
 def _load_context(cur, job):
     cur.execute('''SELECT id,external_id,direction,author_name,body,message_type,happened_at,raw
       FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
@@ -335,9 +349,9 @@ def _load_context(cur, job):
     # truncation could exhaust the budget before reaching that very message.
     for row in reversed(rows):
         body=str(row.get('body') or '')[:3000]
-        raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
-        employee=raw.get('verified_employee_id') is not None
-        line={'role':'client' if row['direction']=='incoming' and not employee else 'sales_manager',
+        author_type=context_author_type(row,job.get('conversation_id'))
+        line={'role':'client' if author_type in {'customer','participant'} else 'sales_manager',
+              'author_type':author_type,
               'author':str(row.get('author_name') or '')[:100],
               'text':body,'at':_iso(row.get('happened_at'))}
         length=len(json.dumps(line,ensure_ascii=False).encode('utf-8'))
@@ -668,7 +682,7 @@ def _finish_call(job,call_no,*,state,actual=0):
         conn.commit()
 
 
-def _complete(job, outcome, *, reply='', stop_reason='', agent_id=None, triggers=(), knowledge=(), experts=(), events=(), total_tokens=0, error=''):
+def _complete(job, outcome, *, reply='', stop_reason='', agent_id=None, triggers=(), knowledge=(), experts=(), events=(), context_snapshot=(), total_tokens=0, error=''):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -680,12 +694,12 @@ def _complete(job, outcome, *, reply='', stop_reason='', agent_id=None, triggers
             cur.execute("UPDATE saas_ai_simulation_usage SET state='released',actual_tokens=0,completed_at=now() WHERE tenant_id=%s::uuid AND queue_id=%s::uuid AND state='reserved'",(job['tenant_id'],job['id']))
             cur.execute('''INSERT INTO saas_ai_simulation_runs(id,tenant_id,queue_id,channel_id,conversation_id,
               source_message_id,primary_agent_id,outcome,virtual_reply,virtual_stop_reason,virtual_triggers,
-              knowledge_refs,expert_results,events,total_tokens)
-              VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s)
+              knowledge_refs,expert_results,events,context_snapshot,total_tokens)
+              VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s)
               ON CONFLICT(queue_id) DO NOTHING''',
               (str(uuid.uuid4()),job['tenant_id'],job['id'],job['channel_id'],job['conversation_id'],job['source_message_id'],
                agent_id,outcome,str(reply or '')[:8000],str(stop_reason or '')[:200],_json(list(triggers)),_json(list(knowledge)),
-               _json(list(experts)),_json(list(events)),max(0,int(total_tokens))))
+               _json(list(experts)),_json(list(events)),_json(list(context_snapshot or [])),max(0,int(total_tokens))))
             if not job.get('recheck_of_run_id'):
                 cur.execute('''INSERT INTO saas_ai_simulation_dialog_state
                   (tenant_id,channel_id,conversation_id,session_started_at,last_queue_id,virtual_state)
@@ -726,6 +740,9 @@ def process(job):
     events=[{'type':'inbound_received','source_message_id':str(job['source_message_id'])},
             {'type':'scope_checked','channel_id':channel,'conversation_id':conversation}]
     total_tokens=0;call_no=0;precomputed_no_answer=None
+    model_context=[]
+    def complete(outcome, **kwargs):
+        return _complete(job,outcome,context_snapshot=model_context,**kwargs)
     try:
         with _connect() as conn:
             ensure_schema(conn)
@@ -794,7 +811,7 @@ def process(job):
                                 'reason':'conversation_human_or_paused',
                                 'live_state':row['live_state'],'executed':False})
                         from tenant_ai_agent_connect import _whatsapp_phone
-                        source_rows,lines=_load_context(cur,job)
+                        source_rows,lines=_load_context(cur,job);model_context=lines
                         source=source_rows[-1];text,media_event=_source_media_context(source)
                         if media_event:
                             events.append(media_event)
@@ -833,7 +850,7 @@ def process(job):
                 conn.commit()
         outcome,reason,primary_id,triggers,knowledge,experts,event_rows,total_tokens=result
         if outcome!='ready':
-            _complete(job,outcome,stop_reason=reason,agent_id=primary_id,triggers=triggers,knowledge=knowledge,
+            complete(outcome,stop_reason=reason,agent_id=primary_id,triggers=triggers,knowledge=knowledge,
                       experts=experts,events=event_rows or events,total_tokens=total_tokens,error=reason)
             return True
 
@@ -856,9 +873,9 @@ def process(job):
                     or config.get('company_mode') not in (None,'simulation')
                     or not config.get('company_enabled') or not tenant_status_allows_ai(config.get('tenant_status'),'connect')
                     or not is_open(config.get('schedule') or {})):
-                    _complete(job,'blocked',stop_reason='simulation_revoked_or_schedule_closed',agent_id=primary_id,events=events)
+                    complete('blocked',stop_reason='simulation_revoked_or_schedule_closed',agent_id=primary_id,events=events)
                     return True
-                source_rows,lines=_load_context(cur,job);source=source_rows[-1];text=str(source.get('body') or '')
+                source_rows,lines=_load_context(cur,job);model_context=lines;source=source_rows[-1];text=str(source.get('body') or '')
                 problem='\n'.join(str(x.get('text') or '') for x in lines if x.get('role')=='client')[-6000:]
                 # Existing tenant-scoped retrieval; only source IDs/titles are
                 # logged, never model reasoning or secrets.
@@ -880,7 +897,7 @@ def process(job):
                     reserve=max(1,min(int(config['max_output_tokens']),1800))+512
                     call_no=1
                     if not _reserve_call(cur,job,primary_id,call_no,'primary',reserve):
-                        conn.commit();_complete(job,'blocked',stop_reason='simulation_budget_exhausted',agent_id=primary_id,events=events);return True
+                        conn.commit();complete('blocked',stop_reason='simulation_budget_exhausted',agent_id=primary_id,events=events);return True
                     bound_primary=dict(config)
                 conn.commit()
         if precomputed_no_answer:
@@ -896,7 +913,7 @@ def process(job):
                     'az':'Zəhmət olmasa, hansı məhsul və ya sifariş barədə olduğunu və nəyi dəqiqləşdirməli olduğumuzu yazın.'}.get(str(config.get('language') or 'auto'),
                     'Zəhmət olmasa, hansı məhsul və ya sifariş barədə olduğunu və nəyi dəqiqləşdirməli olduğumuzu yazın.')
             elif action=='stop':reply=str(response_policy.get('stop_reply') or '')
-            _complete(job,'virtual_reply' if reply else 'virtual_stop',reply=reply,
+            complete('virtual_reply' if reply else 'virtual_stop',reply=reply,
                 stop_reason='no_answer_'+action,agent_id=primary_id,triggers=matched_payload,knowledge=knowledge,
                 experts=[],events=events,total_tokens=total_tokens)
             return True
@@ -951,7 +968,7 @@ def process(job):
                     'az':'Zəhmət olmasa, hansı məhsul və ya sifariş barədə olduğunu və nəyi dəqiqləşdirməli olduğumuzu yazın.'}.get(str(bound_primary.get('language') or 'auto'),
                     'Zəhmət olmasa, hansı məhsul və ya sifariş barədə olduğunu və nəyi dəqiqləşdirməli olduğumuzu yazın.')
             elif action=='stop': reply=str(response_policy.get('stop_reply') or '')
-            _complete(job,'virtual_reply' if reply else 'virtual_stop',reply=reply,
+            complete('virtual_reply' if reply else 'virtual_stop',reply=reply,
                 stop_reason='no_answer_'+action,agent_id=primary_id,triggers=triggers,knowledge=knowledge,
                 experts=expert_results,events=events,total_tokens=total_tokens)
             return True
@@ -989,7 +1006,7 @@ def process(job):
                     min(int(bound_primary['max_output_tokens']),1800))
                 if not _adjust_reservation(cur,job,primary_call,reservation_tokens):
                     conn.commit()
-                    _complete(job,'blocked',stop_reason='simulation_budget_exhausted',agent_id=primary_id,
+                    complete('blocked',stop_reason='simulation_budget_exhausted',agent_id=primary_id,
                               triggers=triggers,knowledge=knowledge,experts=expert_results,events=events)
                     return True
                 from tenant_ai_spend_budget import reserve as reserve_spend, release as release_spend, settle as settle_spend
@@ -998,7 +1015,7 @@ def process(job):
                 if not _mark_provider_started(cur,job,primary_call):
                     cur.connection.commit()
                     release_spend(tenant,primary_spend_key)
-                    _complete(job,'blocked',stop_reason='simulation_stopped_before_provider',agent_id=primary_id,
+                    complete('blocked',stop_reason='simulation_stopped_before_provider',agent_id=primary_id,
                               triggers=triggers,knowledge=knowledge,experts=expert_results,events=events)
                     return True
                 cur.connection.commit()
@@ -1032,7 +1049,7 @@ def process(job):
                         _finish_call(job,primary_call,state='succeeded',actual=max(0,int(usage.get('total_tokens') or 0)))
                         settle_spend(tenant,primary_spend_key,usage or {},unknown=usage is None)
                         total_tokens+=max(0,int(usage.get('total_tokens') or 0))
-                        _complete(job,'virtual_stop',stop_reason='no_answer_'+action,agent_id=primary_id,
+                        complete('virtual_stop',stop_reason='no_answer_'+action,agent_id=primary_id,
                             triggers=triggers,knowledge=knowledge,experts=expert_results,events=events,total_tokens=total_tokens)
                         return True
             from tenant_ai_agent_safety import sanitize_draft
@@ -1043,21 +1060,21 @@ def process(job):
             events.append({'type':'primary_reply_prepared','agent_id':primary_id,'tokens':used,'sent':False})
             if any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matching):
                 events.append({'type':'virtual_handoff_after_reply','reason':'configured_trigger','executed':False})
-            _complete(job,'virtual_reply',reply=draft,agent_id=primary_id,triggers=triggers,knowledge=knowledge,
+            complete('virtual_reply',reply=draft,agent_id=primary_id,triggers=triggers,knowledge=knowledge,
                       experts=expert_results,events=events,total_tokens=total_tokens)
         except Exception:
             _finish_call(job,primary_call,state='unknown')
             settle_spend(tenant,primary_spend_key,{},unknown=True)
-            _complete(job,'unknown',stop_reason='provider_result_unknown',agent_id=primary_id,triggers=triggers,
+            complete('unknown',stop_reason='provider_result_unknown',agent_id=primary_id,triggers=triggers,
                       knowledge=knowledge,experts=expert_results,events=events+[{'type':'provider_result_unknown'}],
                       total_tokens=total_tokens,error='provider_result_unknown')
         return True
     except TenantLinearError as exc:
         code=str(exc).split(':',1)[0][:80] or 'simulation_blocked'
-        _complete(job,'blocked',stop_reason=code,agent_id=job.get('agent_id'),events=events+[{'type':'blocked','reason':code}],error=code)
+        complete('blocked',stop_reason=code,agent_id=job.get('agent_id'),events=events+[{'type':'blocked','reason':code}],error=code)
         return True
     except Exception as exc:
-        _complete(job,'error',stop_reason='simulation_processing_failed',agent_id=job.get('agent_id'),
+        complete('error',stop_reason='simulation_processing_failed',agent_id=job.get('agent_id'),
                   events=events+[{'type':'processing_failed','error_type':type(exc).__name__}],error='simulation_processing_failed')
         return True
 

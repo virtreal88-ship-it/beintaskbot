@@ -83,11 +83,16 @@ def ensure_schema(conn):
               knowledge_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
               expert_results JSONB NOT NULL DEFAULT '[]'::jsonb,
               events JSONB NOT NULL DEFAULT '[]'::jsonb,
+              context_snapshot JSONB NULL,
               total_tokens INTEGER NOT NULL DEFAULT 0,
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               FOREIGN KEY(tenant_id,queue_id) REFERENCES saas_ai_simulation_queue(tenant_id,id) ON DELETE CASCADE,
               FOREIGN KEY(tenant_id,source_message_id) REFERENCES saas_crm_messages(tenant_id,id) ON DELETE CASCADE
             )''')
+            # A new run persists the exact bounded context submitted to the
+            # virtual model.  NULL is intentionally retained for historical
+            # runs, where no immutable model-input snapshot exists.
+            cur.execute("ALTER TABLE saas_ai_simulation_runs ADD COLUMN IF NOT EXISTS context_snapshot JSONB NULL")
             cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS saas_ai_simulation_runs_tenant_id_idx ON saas_ai_simulation_runs(tenant_id,id)')
             # Rechecks are new queue executions tied to an immutable earlier run.
             # Preserve existing rows while replacing the old all-rows unique

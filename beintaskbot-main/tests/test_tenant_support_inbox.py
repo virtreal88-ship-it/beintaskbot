@@ -589,6 +589,8 @@ def test_simulation_executor_records_virtual_reply_and_has_no_live_effects(db,mo
     assert len(calls)==1,json.dumps(run,default=str)
     assert run['outcome']=='virtual_reply' and run['sent'] is False
     assert run['virtual_reply'].startswith('Please share')
+    snapshot=db.execute('SELECT context_snapshot FROM saas_ai_simulation_runs WHERE id=%s::uuid',(run['id'],))[0]['context_snapshot']
+    assert snapshot[-1]['role']=='client' and snapshot[-1]['author_type']=='customer'
     state=db.execute("SELECT session_started_at,virtual_state FROM saas_ai_simulation_dialog_state WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id='client'",(A,CA))[0]
     assert state['virtual_state']['sent'] is False and state['virtual_state']['last_reply']==run['virtual_reply']
     assert db.execute("SELECT count(*) AS n FROM saas_ai_simulation_dialog_state WHERE tenant_id=%s::uuid",(B,))[0]['n']==0

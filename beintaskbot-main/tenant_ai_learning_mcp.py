@@ -20,6 +20,7 @@ from tenant_ai_agents_store import _audit, _authorize, knowledge_deduplication
 from tenant_ai_dashboard import _connect, _iso, _json_value
 from tenant_ai_learning import findings
 from tenant_ai_simulation_schema import ensure_schema
+from tenant_ai_simulation_engine import context_author_type
 from tenant_linear_policy import TenantLinearError
 import tenant_ai_administrator_read as administrator_read
 import tenant_ai_administrator_drafts as administrator_drafts
@@ -120,6 +121,16 @@ def _redact(value):
     return value
 
 
+def _public_context_line(value, *, conversation_id=''):
+    """Return redacted context while preserving its model-time attribution."""
+    author_type=str(value.get('author_type') or '')
+    if author_type not in {'customer','participant','operator'}:
+        author_type=context_author_type(value,conversation_id)
+    return {'role':author_type,'at':_iso(value.get('at') or value.get('happened_at') or value.get('created_at')),
+            'text':_redact(value.get('text') if 'text' in value else value.get('body')),
+            'attachment':value.get('message_type') not in {'','text',None}}
+
+
 def _runs(cur, cfg, cursor='', limit=10, include_context=False):
     marker = _parse_cursor(cfg, cursor)
     safe = max(1, min(MAX_PAGE, int(limit or 10)))
@@ -129,7 +140,7 @@ def _runs(cur, cfg, cursor='', limit=10, include_context=False):
         where += " AND (r.created_at,r.id) < (%s::timestamptz,%s::uuid)"
         params += [marker[0], marker[1]]
     cur.execute('''SELECT r.id,r.created_at,r.outcome,r.virtual_stop_reason,r.virtual_reply,r.virtual_triggers,
-        r.knowledge_refs,r.expert_results,r.events,r.total_tokens,q.lead_id
+        r.knowledge_refs,r.expert_results,r.events,r.context_snapshot,r.total_tokens,q.lead_id,q.conversation_id,r.source_message_id
       FROM saas_ai_simulation_runs r JOIN saas_ai_simulation_queue q ON q.tenant_id=r.tenant_id AND q.id=r.queue_id
       WHERE ''' + where + ' ORDER BY r.created_at DESC,r.id DESC LIMIT %s', (*params, safe + 1))
     rows = list(cur.fetchall()); page = rows[:safe]
@@ -146,13 +157,29 @@ def _runs(cur, cfg, cursor='', limit=10, include_context=False):
                         for x in _json_value(row.get('events'),[]) if isinstance(x,dict)],
               'total_tokens':int(row.get('total_tokens') or 0)}
         if include_context:
-            cur.execute('''SELECT direction,author_name,body,message_type,happened_at,created_at FROM saas_crm_messages
-              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s ORDER BY COALESCE(happened_at,created_at) DESC LIMIT 4''',
-              (cfg['AI_LEARNING_MCP_TENANT_ID'],row['lead_id'],'connect:'+cfg['AI_LEARNING_MCP_CHANNEL_ID']))
-            item['context']=[{'role':'customer' if x.get('direction')=='inbound' else 'operator',
-                              'at':_iso(x.get('happened_at') or x.get('created_at')),
-                              'text':_redact(x.get('body')),'attachment':x.get('message_type') not in {'','text',None}}
-                             for x in reversed(cur.fetchall())]
+            snapshot=row.get('context_snapshot')
+            if isinstance(snapshot,str):
+                try: snapshot=json.loads(snapshot)
+                except (TypeError,ValueError): snapshot=None
+            if isinstance(snapshot,list):
+                item['context']=[_public_context_line(value,conversation_id=row['conversation_id'])
+                                 for value in snapshot if isinstance(value,dict)]
+                item['context_provenance']='captured_model_input'
+            else:
+                # Historical runs have no immutable model-input snapshot. A
+                # bounded reconstruction is useful for diagnosis, but is never
+                # presented as the context used by the model.
+                cur.execute('''SELECT direction,author_name,body,message_type,happened_at,created_at,raw FROM saas_crm_messages
+                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
+                    AND ((COALESCE(happened_at,created_at),created_at) < (
+                      SELECT COALESCE(happened_at,created_at),created_at FROM saas_crm_messages
+                      WHERE tenant_id=%s::uuid AND id=%s::uuid) OR id=%s::uuid)
+                  ORDER BY COALESCE(happened_at,created_at) DESC,created_at DESC,id DESC LIMIT 4''',
+                  (cfg['AI_LEARNING_MCP_TENANT_ID'],row['lead_id'],'connect:'+cfg['AI_LEARNING_MCP_CHANNEL_ID'],
+                   cfg['AI_LEARNING_MCP_TENANT_ID'],row['source_message_id'],row['source_message_id']))
+                item['context']=[_public_context_line(value,conversation_id=row['conversation_id'])
+                                 for value in reversed(cur.fetchall())]
+                item['context_provenance']='legacy_cutoff_reconstruction'
         items.append(item)
     return {'items':items,'next_cursor':_cursor(cfg,page[-1]['created_at'],page[-1]['id']) if len(rows)>safe else None}
 
