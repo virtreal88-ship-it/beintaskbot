@@ -517,6 +517,20 @@ def _training_prepared(cur,policy,draft_id,object_id):
     return row['result']
 
 
+def _training_source(cur,profile,kind,key,policy):
+    """Give a safe, actionable error for a same-tenant draft/source mix-up."""
+    try:
+        return _training_basis(cur,profile,kind,key,policy)
+    except TenantLinearError as exc:
+        if exc.status != 404:
+            raise
+        cur.execute('''SELECT kind FROM saas_ai_administrator_drafts
+          WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE''',(policy['tenant_id'],key))
+        if cur.fetchone():
+            raise TenantLinearError('Training source must be a reviewed material, not an administrator draft.',409) from None
+        raise
+
+
 def training_operation(cur,cfg,action,data):
     import hashlib,json
     from tenant_ai_agents_store import _json,save_knowledge
@@ -543,7 +557,16 @@ def training_operation(cur,cfg,action,data):
         kind=data['kind'];key=_training_uuid(data['source_id'])
         if kind not in p['kinds']:raise TenantLinearError('Material type outside delegation.',403)
         if kind=='support_case':
-            row,reason=_training_case(cur,profile,key,str(p['channel_id']))
+            try:
+                row,reason=_training_case(cur,profile,key,str(p['channel_id']))
+            except TenantLinearError as exc:
+                if exc.status != 404:
+                    raise
+                cur.execute('''SELECT kind FROM saas_ai_administrator_drafts
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE''',(tenant,key))
+                if cur.fetchone():
+                    raise TenantLinearError('Training source must be a reviewed material, not an administrator draft.',409) from None
+                raise
             if row['status'] not in {'pending_review','needs_clarification'}:raise TenantLinearError('Case is already reviewed.',409)
             d=drafts.typed_create(cur,cfg,'support_case',{'title':row['content']['title'],'problem':row['content']['title'],'evidence_message_ids':row['content']['source_message_ids']})
             if reason:
@@ -552,7 +575,7 @@ def training_operation(cur,cfg,action,data):
             _,basis=_training_basis(cur,profile,kind,key,p) if not reason else (row,{'kind':kind,'id':key,'hash':_publication_hash(_publication_object(cur,tenant,kind,key))})
             object_id=key
         else:
-            row,basis=_training_basis(cur,profile,kind,key,p);reason=None
+            row,basis=_training_source(cur,profile,kind,key,p);reason=None
             proposal={'title':row['title'],'content':row['content'],'evidence_ids':[],'agent_ids':[]} if kind=='knowledge' else {'title':row['doc']['title'],'doc':row['doc']}
             d=(drafts.create(cur,cfg,{'kind':'knowledge','title':row['title'],'body':{'content':row['content'],'evidence_ids':[]},'target':{'agent_ids':[]}}) if kind=='knowledge' else drafts.typed_create(cur,cfg,kind,proposal))
             receipt=request(cur,profile,d['id'],d['version']);approve(cur,profile,receipt['id'],'approve')
@@ -571,7 +594,7 @@ def training_operation(cur,cfg,action,data):
         material=_publication_object(cur,tenant,kind,object_id)
         if not d or type(data['version']) is not int or d['version']!=data['version'] or d['state']=='rolled_back' or _publication_hash(material)!=data['material_hash']:raise TenantLinearError('Version conflict; reload material.',409)
         if action=='update':
-            source,basis=_training_basis(cur,profile,kind,_training_uuid(data['source_id']),p)
+            source,basis=_training_source(cur,profile,kind,_training_uuid(data['source_id']),p)
             if kind=='support_case':
                 if str(source['id'])!=object_id:raise TenantLinearError('Cannot replace historical case evidence.',403)
                 reason=None
@@ -608,7 +631,7 @@ def training_definitions():
     base={'policy_id':{'type':'string','format':'uuid'},'request_id':{'type':'string','format':'uuid'}}
     target={'draft_id':{'type':'string','format':'uuid'},'object_id':{'type':'string','format':'uuid'},'version':{'type':'integer','minimum':1},'material_hash':{'type':'string','minLength':64,'maxLength':64}}
     specs={
-      'create':({'kind':{'type':'string','enum':['knowledge','instruction','support_case']},'source_id':{'type':'string','format':'uuid'}},'Prepare a private material from existing verified evidence under an owner policy. Knowledge/instructions copy approved material; case proposals keep real evidence. Uncertain cases are labeled for clarification, never published.'),
+      'create':({'kind':{'type':'string','enum':['knowledge','instruction','support_case']},'source_id':{'type':'string','format':'uuid'}},'Prepare a private material from an existing reviewed source under an owner policy. source_id is a verified Knowledge Source, approved Instruction Library lesson, or support-case candidate — never an Administrator draft ID. Knowledge/instructions copy approved material; case proposals keep real evidence. Uncertain cases are labeled for clarification, never published.'),
       'update':({**target,'source_id':{'type':'string','format':'uuid'}},'Update an unpublished policy material from verified evidence, with exact versions/hashes. No arbitrary facts or cross-case outcomes.'),
       'publish':(target,'Publish an eligible verified policy material without per-case owner clicks. Rechecks evidence, scope, versions, quotas and revocation. No messages or public links.'),
       'rollback':({'grant_id':{'type':'string','format':'uuid'}},'Withdraw an unchanged policy publication, preserving history. Safe withdrawal remains possible after policy expiry/revocation.')}
