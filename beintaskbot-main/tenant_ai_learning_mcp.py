@@ -238,6 +238,13 @@ def _tools(cur,cfg,name,args):
         result=administrator_read.read(cur,cfg,name,args)
         _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_administrator_read','mcp_tool',name)
         return result
+    if name == 'administrator_draft_trigger_create': return administrator_drafts.typed_create(cur,cfg,'trigger',args)
+    if name in {'administrator_apply_trigger_draft','administrator_rollback_trigger_draft'}:
+        if APPLY_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
+        expected={'approval_id','draft_id'} if name=='administrator_apply_trigger_draft' else {'approval_id'}
+        if set(args)!=expected: raise TenantLinearError('Invalid trigger request.',400)
+        if 'draft_id' in args: return administrator_apply.apply_trigger_draft(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']},args['approval_id'],args['draft_id'],cfg)
+        return administrator_apply.rollback_trigger_draft(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']},args['approval_id'],cfg)
     if name == 'administrator_draft_create': return administrator_drafts.create(cur,cfg,args)
     if name == 'administrator_draft_list': return administrator_drafts.listing(cur,cfg,args)
     if name == 'administrator_draft_update': return administrator_drafts.update(cur,cfg,args)
@@ -341,7 +348,7 @@ def _knowledge_dedup_definitions():
 
 def _administrator_apply_definitions():
     security=[{'type':'oauth2','scopes':[APPLY_SCOPE]}]
-    return [
+    return _trigger_definitions()+[
       {'name':'administrator_apply_agent_prompt','description':'Apply one exact owner-approved and isolated-test-verified prompt draft. The server requires a live owner grant, enabled application feature flag, matching agent version, and a one-time approval receipt.',
        'inputSchema':{'type':'object','properties':{'approval_id':{'type':'string'},'draft_id':{'type':'string'}},'required':['approval_id','draft_id'],'additionalProperties':False},
        'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
@@ -582,3 +589,10 @@ def handler(member_from_request):
             cfg=_require_cfg(); return web.json_response({'resource':cfg['issuer']+'/mcp','authorization_servers':[cfg['issuer']]})
         return web.json_response({'error':'Not implemented'},status=404)
     return route
+
+
+def _trigger_definitions():
+    props={'agent_id':{'type':'string'},'channel_id':{'type':'string'},'expected_agent_version':{'type':'integer','minimum':1},'trigger':{'type':'object'}}
+    rows=[('administrator_draft_trigger_create',props,DRAFT_SCOPE)]
+    rows += [(name,{'approval_id':{'type':'string'},**({'draft_id':{'type':'string'}} if 'apply_' in name else {})},APPLY_SCOPE) for name in ('administrator_apply_trigger_draft','administrator_rollback_trigger_draft')]
+    return [{'name':name,'description':'Owner-scoped disabled trigger proposal/application. No activation or CRM actions. Rollback preserves a disabled historical trigger.','inputSchema':{'type':'object','properties':properties,'required':list(properties),'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[scope]}]} for name,properties,scope in rows]
