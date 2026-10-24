@@ -262,6 +262,8 @@ def test_observation_worker_creates_only_one_nonpublic_draft_and_bounds_recovery
     observations.process(item)
     draft=db.execute("SELECT kind,title,state FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 1",(A,))[0]
     assert draft=={'kind':'testing_scenario','title':'Safe diagnostic','state':'draft'}
+    audit=db.execute("SELECT action,payload FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 1",(A,))[0]
+    assert audit['action']=='ai_administrator_observation_draft_created' and audit['payload']['source']=='safe-test'
     db.execute("UPDATE saas_ai_administrator_observations SET state='processing',attempts=%s,lease_until=now()-interval '1 minute' WHERE tenant_id=%s::uuid",(observations.MAX_ATTEMPTS,A));db.commit()
     assert observations.claim_next() is None
     assert db.execute("SELECT state FROM saas_ai_administrator_observations WHERE tenant_id=%s::uuid",(A,))[0]['state']=='blocked'
