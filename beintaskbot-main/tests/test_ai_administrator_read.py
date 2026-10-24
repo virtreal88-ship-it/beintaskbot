@@ -54,7 +54,11 @@ def test_all_read_projections_are_valid_bounded_and_tenant_scoped(db,monkeypatch
     for name in admin.SPECS:
         with db.cursor() as cur:
             if name=='system_status_read':
-                assert admin.read(cur,cfg,name,{})['writes_enabled'] is False
+                status=admin.read(cur,cfg,name,{})
+                assert status['writes_enabled'] is False
+                assert status['flags']['AI_LEARNING_MCP_DRAFTS_ENABLED'] is False
+                assert status['flags']['AI_AUTONOMOUS_APPLY_ENABLED'] is False
+                assert status['flags']['AI_AUTONOMOUS_IMPROVEMENT_ENABLED'] is False
                 continue
             if name=='simulation_queue_diagnostic_read':
                 continue

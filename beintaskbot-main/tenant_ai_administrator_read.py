@@ -232,7 +232,8 @@ def read(cur,cfg,name,args):
         return {'database_reachable':True,'module_tables':available,
                 'flags':{key:os.environ.get(key,'').lower()=='true' for key in (
                     'AI_SIMULATION_ENABLED','AI_INSTRUCTOR_ENABLED','AI_INSTRUCTOR_WORKER_ENABLED',
-                    'SUPPORT_CASES_LIVE_EXTRACTION_ENABLED')},
+                    'SUPPORT_CASES_LIVE_EXTRACTION_ENABLED','AI_LEARNING_MCP_DRAFTS_ENABLED',
+                    'AI_AUTONOMOUS_APPLY_ENABLED','AI_AUTONOMOUS_IMPROVEMENT_ENABLED')},
                 'tenant_limit_microusd':limit_microusd(cfg['AI_LEARNING_MCP_TENANT_ID']),
                 'writes_enabled':False,'schema_compatibility':'table_presence_only_not_full_migration_validation'}
     if name == 'simulation_queue_diagnostic_read':

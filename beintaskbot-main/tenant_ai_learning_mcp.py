@@ -288,6 +288,26 @@ def _requested_scopes(value):
     return requested
 
 
+def _consent_text(scopes):
+    """Describe the exact OAuth grant without treating draft access as read-only.
+
+    A draft is deliberately a non-public proposal, but creating or editing one
+    is still a write operation.  The consent page must make that distinction so
+    an existing read token is not mistaken for a token that can manage drafts.
+    """
+    if DRAFT_SCOPE in scopes:
+        return (
+            'Draft proposal access for one configured AI agent and WhatsApp '
+            'channel. ChatGPT may create and edit non-public proposals only. '
+            'It cannot send messages, publish knowledge, change settings, or '
+            'apply a prompt without a separate owner approval.'
+        ), 'Allow draft proposal access'
+    return (
+        'Read-only access for one configured AI agent and WhatsApp channel. '
+        'No message sending or settings changes.'
+    ), 'Allow read-only access'
+
+
 async def authorize(request, member_from_request):
     try:
         cfg=_require_cfg(); profile=member_from_request(request)
@@ -301,7 +321,8 @@ async def authorize(request, member_from_request):
             state=html.escape(request.query.get('state',''),quote=True); challenge=html.escape(request.query.get('code_challenge',''),quote=True)
             if request.query.get('code_challenge_method')!='S256' or not re.fullmatch(r'[A-Za-z0-9_-]{43}',challenge): raise TenantLinearError('PKCE S256 is required.',400)
             form=''.join(f'<input type="hidden" name="{key}" value="{value}">' for key,value in [('client_id',html.escape(client_id,quote=True)),('redirect_uri',html.escape(redirect_uri,quote=True)),('state',state),('code_challenge',challenge),('scope',html.escape(' '.join(sorted(scopes)),quote=True)),('resource',html.escape(request.query.get('resource',''),quote=True))])
-            return web.Response(text='<html><body><h1>Connect ChatGPT</h1><p>Read-only access: one configured AI agent and WhatsApp channel. No message sending or settings changes.</p><form method="post">'+form+'<button type="submit">Allow read-only access</button></form></body></html>',content_type='text/html')
+            description, button=_consent_text(scopes)
+            return web.Response(text='<html><body><h1>Connect ChatGPT</h1><p>'+html.escape(description)+'</p><form method="post">'+form+'<button type="submit">'+html.escape(button)+'</button></form></body></html>',content_type='text/html')
         data=await request.post(); client_id=str(data.get('client_id','')); redirect_uri=str(data.get('redirect_uri','')); _chatgpt_client(client_id,redirect_uri)
         _oauth_resource(str(data.get('resource','')),cfg)
         scopes=_requested_scopes(data.get('scope',TOOL_SCOPE))
