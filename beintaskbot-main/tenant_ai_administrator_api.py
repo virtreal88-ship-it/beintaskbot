@@ -2,7 +2,7 @@
 
 This API deliberately exposes approvals, not a generic write proxy.  Applying
 is still fail-closed behind AI_AUTONOMOUS_APPLY_ENABLED and only supports the
-versioned prompt patch allowlisted by tenant_ai_administrator_apply.
+allowlisted versioned changes and exact owner-delegated material publication.
 """
 import asyncio
 
@@ -22,6 +22,7 @@ def _origin(request, canonical_origin):
 def _with_connection(fn, *args, **kwargs):
     with _connect() as conn:
         try:
+            approvals.ensure_schema(conn)
             with conn.cursor() as cur:
                 result=fn(cur,*args,**kwargs)
             conn.commit()
@@ -39,6 +40,10 @@ def handler(member_from_request, canonical_origin, logger):
             _origin(request,canonical_origin)
             if request.method=='GET' and set(request.query)=={'review_run_id'}:
                 value=await asyncio.to_thread(_with_connection,review_context,profile,request.query['review_run_id'])
+            elif request.method=='GET' and set(request.query)=={'publication_draft_id'}:
+                value=await asyncio.to_thread(_with_connection,approvals.publication_options,profile,request.query['publication_draft_id'])
+            elif request.method=='GET' and set(request.query)=={'publication_grants'}:
+                value=await asyncio.to_thread(_with_connection,approvals.publication_list,profile)
             elif request.method=='GET':
                 raw=request.query.get('limit','50')
                 try: limit=int(raw)
@@ -49,7 +54,12 @@ def handler(member_from_request, canonical_origin, logger):
                 data=await request.json()
                 if not isinstance(data,dict): raise TenantLinearError('Invalid approval request.',400)
                 action=data.get('action')
-                if action=='prepare_review_solution':
+                if action=='publication_grant':
+                    value=await asyncio.to_thread(_with_connection,approvals.publication_grant,profile,{k:v for k,v in data.items() if k!='action'})
+                elif action=='publication_revoke':
+                    if set(data)!={'action','grant_id'}: raise TenantLinearError('Invalid revocation request.',400)
+                    value=await asyncio.to_thread(_with_connection,approvals.publication_revoke,profile,data['grant_id'])
+                elif action=='prepare_review_solution':
                     value=await asyncio.to_thread(_with_connection,prepare_review_solution,profile,data)
                 elif action=='request':
                     if set(data)!={'action','draft_id','version'}: raise TenantLinearError('Invalid approval request.',400)
