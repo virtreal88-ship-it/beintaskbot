@@ -6,7 +6,7 @@ import json
 from tenant_ai_agents_store import _audit, _authorize, save_knowledge
 from tenant_ai_agents_policy import agent as validate_agent
 from tenant_linear_policy import TenantLinearError
-from tenant_ai_administrator_approvals import consume
+from tenant_ai_administrator_approvals import consume, publication_assert_detached
 from tenant_instruction_library import document as instruction_document, schema as instruction_schema, _assets as instruction_assets, _video as instruction_video
 
 
@@ -115,6 +115,7 @@ def rollback_knowledge_draft(cur,profile,approval_id):
     tenant,actor=_guard(cur,profile); approval_id,_=_ids(approval_id,uuid.uuid4())
     cur.execute("SELECT * FROM saas_ai_administrator_material_rollbacks WHERE tenant_id=%s::uuid AND approval_id=%s::uuid AND kind='knowledge' FOR UPDATE",(tenant,approval_id)); row=cur.fetchone()
     if not row or row.get('rolled_back_at') is not None: raise TenantLinearError('Rollback is unavailable.',409)
+    publication_assert_detached(cur,tenant,row['draft_id'])
     cur.execute('''SELECT s.id FROM saas_ai_knowledge_sources s JOIN saas_ai_administrator_drafts d ON d.tenant_id=s.tenant_id AND d.id=%s::uuid
       WHERE s.tenant_id=%s::uuid AND s.id=%s::uuid AND s.active=FALSE AND s.agent_id IS NULL
         AND s.title=d.title AND s.content=d.body->>'content' AND s.provenance->>'approval_id'=%s FOR UPDATE OF s''',(row['draft_id'],tenant,row['object_id'],approval_id))
@@ -144,6 +145,7 @@ def rollback_instruction_draft(cur,profile,approval_id):
     tenant,actor=_guard(cur,profile); approval_id,_=_ids(approval_id,uuid.uuid4())
     cur.execute("SELECT * FROM saas_ai_administrator_material_rollbacks WHERE tenant_id=%s::uuid AND approval_id=%s::uuid AND kind='instruction' FOR UPDATE",(tenant,approval_id)); row=cur.fetchone()
     if not row or row.get('rolled_back_at') is not None: raise TenantLinearError('Rollback is unavailable.',409)
+    publication_assert_detached(cur,tenant,row['draft_id'])
     cur.execute("UPDATE saas_instruction_lessons SET state='archived',archived_at=now(),archived_by=%s,archived_from_state=state,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='draft' AND version=%s RETURNING version",(actor,tenant,row['object_id'],row['applied_version']))
     if not cur.fetchone(): raise TenantLinearError('Instruction changed after application; rollback requires a new review.',409)
     cur.execute('UPDATE saas_ai_administrator_material_rollbacks SET rolled_back_at=now() WHERE id=%s',(row['id'],)); cur.execute("UPDATE saas_ai_administrator_drafts SET state='rolled_back',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,row['draft_id']))

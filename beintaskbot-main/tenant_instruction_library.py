@@ -1,4 +1,5 @@
 """Instruction authoring only. Published knowledge uses existing Knowledge Sources."""
+from contextlib import nullcontext
 import base64,hashlib,json,re,secrets,uuid,math
 from tenant_platform import _connect,_json
 from tenant_ai_agents_store import _authorize,_audit,_row,save_knowledge
@@ -93,9 +94,9 @@ def _video(c,tenant,doc):
     if not row or row['kind']!='recording' or row['mime']!='video/mp4':
         raise TenantLinearError('Video unavailable',403)
 
-def operation(profile,action,data=None,lesson_id=None):
+def operation(profile,action,data=None,lesson_id=None,*,connection=None):
     data=data or {}
-    with _connect() as conn:
+    with (nullcontext(connection) if connection is not None else _connect()) as conn:
         schema(conn)
         with conn.cursor() as c:
             tenant,actor=_authorize(c,profile)
@@ -122,7 +123,9 @@ def operation(profile,action,data=None,lesson_id=None):
                 if c.fetchone()['n']>=256: raise TenantLinearError('Image limit',409)
                 c.execute('''INSERT INTO saas_instruction_assets(tenant_id,id,body,width,height,sha256) VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s)
                   ON CONFLICT(tenant_id,sha256) DO UPDATE SET sha256=EXCLUDED.sha256 RETURNING id,width,height,sha256''',(tenant,asset,body,w,h,digest))
-                a=dict(c.fetchone());a['asset_id']=str(a.pop('id'))+'.jpg';conn.commit();return a
+                a=dict(c.fetchone());a['asset_id']=str(a.pop('id'))+'.jpg'
+                if connection is None: conn.commit()
+                return a
             key=identifier(lesson_id or data.get('id'))
             c.execute('SELECT * FROM saas_instruction_lessons WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,key));row=c.fetchone()
             if action=='read':
@@ -164,7 +167,9 @@ def operation(profile,action,data=None,lesson_id=None):
                     if row['state']!='published': raise TenantLinearError('Publish first',409)
                     token=secrets.token_urlsafe(32);digest=hashlib.sha256(token.encode()).hexdigest()
                     c.execute('UPDATE saas_instruction_lessons SET public_hash=%s,version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid',(digest,tenant,key))
-                    _audit(c,tenant,actor,'instruction_public_share','instruction',key);conn.commit();return {'token':token}
+                    _audit(c,tenant,actor,'instruction_public_share','instruction',key)
+                    if connection is None: conn.commit()
+                    return {'token':token}
                 elif action!='unpublish':
                     state=transition(row['state'],action)
                     if action=='approve' and data.get('review_confirmed') is not True: raise TenantLinearError('Explicit employee review required',400)
@@ -186,7 +191,8 @@ def operation(profile,action,data=None,lesson_id=None):
                     c.execute('UPDATE saas_instruction_lessons SET state=%s,doc=%s::jsonb,published_doc=%s::jsonb,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(state,_json(v),_json(v) if state=='published' else None,tenant,key))
             _audit(c,tenant,actor,'instruction_'+action,'instruction',key)
             c.execute('SELECT * FROM saas_instruction_lessons WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,key));result=_row(c.fetchone())
-        conn.commit();return result
+        if connection is None: conn.commit()
+        return result
 
 def shared(token,asset_id=None):
     if not re.fullmatch(r'[A-Za-z0-9_-]{43}',token or ''): raise TenantLinearError('Not found',404)

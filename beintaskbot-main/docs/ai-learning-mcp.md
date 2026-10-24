@@ -258,3 +258,51 @@ messages can be chosen even when lexical triage is inconclusive, and the
 response retains the technical-signal warning and `selection_mode=manual`.
 Identity, media, tenant/channel, date, duplicate and financial guards still
 apply. Manual selection and preflight do not grant permission for paid calls.
+
+## Owner-delegated publication (Issue #228)
+
+`ai_learning.publish` is a separate, revocable OAuth consent. Existing read,
+draft and apply tokens are not upgraded. Reconnect with this scope when needed.
+It exposes `administrator_publication_grants`, `administrator_publish_reviewed`
+and `administrator_rollback_publication`. There is deliberately no MCP grant or
+self-approval tool.
+
+The existing owner-only AI Administrator panel can delegate one publication:
+
+1. Prepare the existing draft. For knowledge/instructions use the existing owner
+   approval and apply flow to materialize the inactive source/library draft.
+   For cases, select the existing evidence-linked pending Support Case.
+2. Open **Delegate reviewed publication**, inspect the material, choose the agent
+   and channel, then explicitly confirm review. The server binds the permission
+   to the displayed material hash, exact draft version, tenant, owner, agent and
+   channel. The UI grants 30 minutes; the backend permits 1–1440 minutes.
+3. MCP lists only grants matching its configured agent/channel and consumes the
+   exact permission once. Retries return the stored result without republishing.
+   A revoked/expired grant, revoked OAuth token, changed material, changed draft,
+   lost owner role or changed agent scope blocks publication.
+4. Withdraw an unchanged publication with `administrator_rollback_publication`.
+   Instruction rollback uses existing unpublish; case rollback archives and
+   disables its sources; knowledge rollback deactivates the published copy.
+   No historical material is deleted. Changed/new dependencies require review.
+   Rollback remains available after grant expiry; it needs the publish OAuth
+   scope and owner access. Revocation blocks unused grants; consumed grants must
+   be rolled back instead.
+
+Publication uses existing library transitions and Support Case evidence guards
+in the same transaction as permission consumption, result receipt and audit.
+Owner review of knowledge is **not** confirmation of a historical case outcome.
+Uncertain outcomes cannot bypass the existing case publication checks. No public
+share link is created. All publication remains fail-closed behind the existing
+`AI_AUTONOMOUS_APPLY_ENABLED`; this change does not enable it or any AI mode.
+
+Knowledge Sources are agent-bound in the existing architecture. Consequently a
+delegated publication requires the selected agent to be confined to that Connect
+channel (no wildcard/other channel/provider); the server checks this both at grant
+and execution. A later deliberate owner expansion of the agent's scope follows
+the existing agent configuration rules and expands its existing knowledge access.
+This patch does not change those rules or create a parallel knowledge store.
+
+Tests use an authorized synthetic owner/tenant and isolated PostgreSQL WASM
+(PGlite), real SQL transactions, HTTP OAuth/MCP handlers and Chromium `/app`
+assets. They do not exercise the owner's live ChatGPT connection or write real
+production knowledge. No paid calls, messages, or production settings changes.

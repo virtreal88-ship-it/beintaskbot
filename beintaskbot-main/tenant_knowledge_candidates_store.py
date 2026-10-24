@@ -1,4 +1,5 @@
 """Tenant/route-authorized candidates; publication uses existing Knowledge Sources."""
+from contextlib import nullcontext
 import hashlib
 import json
 import re
@@ -499,8 +500,8 @@ def publication_text(value):
        'Продукт и версия из карточки (не являются отдельным доказательством): '+value['product']+'; '+value['product_version']])
 
 
-def mutate(profile,candidate_id,data,action='edit'):
-    with _connect() as conn:
+def mutate(profile,candidate_id,data,action='edit',*,connection=None):
+    with (nullcontext(connection) if connection is not None else _connect()) as conn:
         schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy=authorize(cur,profile)
@@ -513,7 +514,7 @@ def mutate(profile,candidate_id,data,action='edit'):
                 if type(data.get('expected_version')) is not int or data['expected_version']!=row['version']:
                     raise TenantLinearError('Карточка изменилась. Обновите страницу.',409)
                 if action=='archive':
-                    if row['status']=='archived': return detail(profile,candidate_id)
+                    if row['status']=='archived': return {'candidate':public_card(cur,row)} if connection is not None else detail(profile,candidate_id)
                     cur.execute("UPDATE saas_ai_knowledge_sources SET active=FALSE WHERE tenant_id=%s::uuid AND provenance->>'candidate_id'=%s",(tenant,str(row['id'])))
                     cur.execute("""UPDATE saas_knowledge_candidates SET status='archived',archived_at=now(),archived_by=%s,
                       archived_from_status=status,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid""",(actor,tenant,row['id']))
@@ -524,7 +525,10 @@ def mutate(profile,candidate_id,data,action='edit'):
                       version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid""",(restored,tenant,row['id']))
                     if restored=='approved': cur.execute("UPDATE saas_ai_knowledge_sources SET active=TRUE WHERE tenant_id=%s::uuid AND provenance->>'candidate_id'=%s",(tenant,str(row['id'])))
                 _audit(cur,tenant,actor,'knowledge_candidate_'+action,'knowledge_candidate',row['id'])
-                conn.commit()
+                if connection is None: conn.commit()
+                else:
+                    cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,candidate_id))
+                    return {'candidate':public_card(cur,cur.fetchone())}
                 return detail(profile,candidate_id)
             run=extraction_row(cur,tenant,row['extraction_id']);items=evidence(cur,profile,run)
             if action=='approve':
@@ -606,5 +610,8 @@ def mutate(profile,candidate_id,data,action='edit'):
                 cur.execute("UPDATE saas_knowledge_candidates SET status='approved',version=version+1,reviewed_by=%s,reviewed_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(actor,tenant,row['id']))
             else: raise TenantLinearError('Некорректное действие.')
             _audit(cur,tenant,actor,'knowledge_candidate_'+action,'knowledge_candidate',row['id'],{'message_count':message_count} if action=='boundaries' else {})
+            if connection is not None:
+                cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,candidate_id))
+                return {'candidate':public_card(cur,cur.fetchone())}
         conn.commit()
     return detail(profile,candidate_id)
