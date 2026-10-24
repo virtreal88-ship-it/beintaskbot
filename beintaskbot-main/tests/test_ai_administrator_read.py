@@ -13,6 +13,7 @@ from test_ai_learning_mcp import _setup
 import tenant_ai_learning_mcp as mcp
 import tenant_ai_administrator_read as admin
 import tenant_ai_administrator_drafts as drafts
+import tenant_ai_administrator_approvals as approvals
 
 
 def test_existing_connection_company_reads_and_immediate_owner_revocation(db,monkeypatch):
@@ -121,3 +122,15 @@ def test_administrator_drafts_are_flagged_scoped_versioned_and_never_applied(db,
         with pytest.raises(Exception): drafts.update(cur,cfg,{'id':value['id'],'expected_version':1,'body':{}})
     db.commit()
     assert changed['version']==2
+
+
+def test_approval_binds_exact_draft_version_and_is_single_use(db,monkeypatch):
+    _setup(monkeypatch,db); monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
+    with db.cursor() as cur:
+        value=drafts.create(cur,cfg,{'kind':'agent_improvement','title':'Draft','body':{}})
+        receipt=approvals.request(cur,{'tenant_id':A,'telegram_id':11},value['id'],1)
+        assert approvals.approve(cur,{'tenant_id':A,'telegram_id':11},receipt['id'],'approve')['state']=='approved'
+        approvals.consume(cur,A,receipt['id'],value['id'],1,'test')
+        with pytest.raises(Exception): approvals.consume(cur,A,receipt['id'],value['id'],1,'test')
+    db.commit()

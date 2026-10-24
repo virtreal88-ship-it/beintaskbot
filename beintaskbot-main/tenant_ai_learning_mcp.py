@@ -23,6 +23,7 @@ from tenant_ai_simulation_schema import ensure_schema
 from tenant_linear_policy import TenantLinearError
 import tenant_ai_administrator_read as administrator_read
 import tenant_ai_administrator_drafts as administrator_drafts
+import tenant_ai_administrator_approvals as administrator_approvals
 
 TOOL_SCOPE = 'ai_learning.read'
 DRAFT_SCOPE = administrator_drafts.DRAFT_SCOPE
@@ -56,6 +57,7 @@ def _require_cfg():
 def ensure_mcp_schema(conn):
     ensure_schema(conn)
     administrator_drafts.ensure_schema(conn)
+    administrator_approvals.ensure_schema(conn)
     with conn.cursor() as cur:
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_learning_mcp_tokens(
           id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
