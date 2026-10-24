@@ -26,7 +26,9 @@ def ensure_schema(conn):
           state TEXT NOT NULL DEFAULT 'draft', version INTEGER NOT NULL DEFAULT 1,
           created_by BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           CHECK(kind IN ('agent_improvement','knowledge','support_case','testing_scenario')),
-          CHECK(state='draft'))''')
+          CHECK(state IN ('draft','applied','rolled_back')))''')
+        cur.execute('ALTER TABLE saas_ai_administrator_drafts DROP CONSTRAINT IF EXISTS saas_ai_administrator_drafts_state_check')
+        cur.execute("ALTER TABLE saas_ai_administrator_drafts ADD CONSTRAINT saas_ai_administrator_drafts_state_check CHECK(state IN ('draft','applied','rolled_back'))")
         cur.execute('CREATE INDEX IF NOT EXISTS saas_ai_administrator_drafts_tenant_idx ON saas_ai_administrator_drafts(tenant_id,updated_at DESC)')
 
 

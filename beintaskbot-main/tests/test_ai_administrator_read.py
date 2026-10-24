@@ -8,13 +8,14 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient,TestServer
 
-from test_tenant_support_inbox import A,B,CA,PROFILE,database,db,seed_simulation
+from test_tenant_support_inbox import A,B,CA,AGENT,PROFILE,database,db,seed_simulation
 from test_ai_learning_mcp import _setup
 import tenant_ai_learning_mcp as mcp
 import tenant_ai_administrator_read as admin
 import tenant_ai_administrator_drafts as drafts
 import tenant_ai_administrator_approvals as approvals
 import tenant_ai_administrator_observations as observations
+import tenant_ai_administrator_apply as apply
 
 
 def test_existing_connection_company_reads_and_immediate_owner_revocation(db,monkeypatch):
@@ -145,4 +146,19 @@ def test_observations_are_deduplicated_and_disabled_by_default(db,monkeypatch):
         second=observations.enqueue(cur,A,'simulation',{'run_id':'safe'})
         cur.execute('SELECT count(*) AS n FROM saas_ai_administrator_observations WHERE tenant_id=%s::uuid',(A,))
         assert first==second and cur.fetchone()['n']==1
+    db.commit()
+
+
+def test_owner_approved_prompt_application_has_versioned_rollback(db,monkeypatch):
+    seed_simulation(db); _setup(monkeypatch,db)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
+    with db.cursor() as cur:
+        cur.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT)); version=cur.fetchone()['version']
+        draft=drafts.create(cur,cfg,{'kind':'agent_improvement','title':'Prompt','body':{'agent_id':AGENT,'expected_version':version,'instructions':'Use verified evidence only.'}})
+        receipt=approvals.request(cur,PROFILE,draft['id'],draft['version']); approvals.approve(cur,PROFILE,receipt['id'],'approve')
+        result=apply.apply_agent_prompt(cur,PROFILE,receipt['id'],draft['id'])
+        assert result['rollback_available'] is True
+        restored=apply.rollback_agent_prompt(cur,PROFILE,receipt['id'])
+        assert restored['rolled_back'] is True
     db.commit()
