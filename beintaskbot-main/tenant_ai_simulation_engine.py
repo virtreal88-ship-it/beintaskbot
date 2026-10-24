@@ -378,14 +378,25 @@ def _source_media_context(source):
     if text:
         return text,{'type':'media_context_available','message_type':kind,
                      'source':'persisted_message_text','executed':False}
-    reason={
-        'audio':'simulation_audio_transcript_unavailable',
-        'voice':'simulation_audio_transcript_unavailable',
-        'voice_message':'simulation_audio_transcript_unavailable',
-        'image':'simulation_image_context_unavailable',
-        'document':'simulation_document_context_unavailable',
-        'video':'simulation_video_context_unavailable',
-    }.get(kind,'simulation_media_type_unsupported')
+    raw=source.get('raw') if isinstance(source.get('raw'),dict) else {}
+    transcript=raw.get('voice_transcription') if isinstance(raw.get('voice_transcription'),dict) else {}
+    status=str(transcript.get('status') or '').casefold()
+    media_status=str(raw.get('media_status') or raw.get('mediaStatus') or '').casefold()
+    attachment=any(bool(raw.get(key)) for key in ('media_url','mediaUrl','file_uuid','fileUuid','media_id','mediaId'))
+    if kind in {'audio','voice','voice_message'}:
+        if status in {'completed','success'}: reason='simulation_audio_transcript_empty'
+        elif status in {'failed','error'}: reason='simulation_audio_transcription_failed'
+        elif status in {'pending','processing','queued'}: reason='simulation_audio_transcription_pending'
+        elif media_status in {'expired','url_expired'}: reason='simulation_media_url_expired'
+        elif not attachment: reason='simulation_audio_attachment_missing'
+        else: reason='simulation_audio_transcription_not_requested'
+    elif kind=='image':
+        reason='simulation_media_url_expired' if media_status in {'expired','url_expired'} else ('simulation_image_attachment_missing' if not attachment else 'simulation_image_analysis_not_requested')
+    elif kind=='document':
+        reason='simulation_media_url_expired' if media_status in {'expired','url_expired'} else ('simulation_document_attachment_missing' if not attachment else 'simulation_document_analysis_not_requested')
+    elif kind=='video':
+        reason='simulation_media_url_expired' if media_status in {'expired','url_expired'} else ('simulation_video_attachment_missing' if not attachment else 'simulation_video_analysis_not_requested')
+    else: reason='simulation_media_type_unsupported'
     return '',{'type':'simulation_unsupported','reason':'media_context_unavailable',
                'detail':reason,'message_type':kind,'executed':False}
 
