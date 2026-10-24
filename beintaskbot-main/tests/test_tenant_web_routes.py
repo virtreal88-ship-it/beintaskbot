@@ -44,6 +44,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('agents/settings', ('GET','PATCH')),
     ('agents/pilot-preflight', ('GET',)), ('agents/pilot/kwid-confirmation', ('POST',)),
     ('agents/pilot/owner-approval', ('POST',)),
+    ('knowledge/deduplication', ('GET','POST')),
     ('administrator/approvals', ('GET','POST')),
     ('agents', ('GET','POST')), ('agents/options', ('GET',)),
     ('dialogs', ('GET',)), ('dialogs/avatar', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('POST',)), ('dialogs/display-name', ('POST',)),

@@ -102,6 +102,35 @@ def test_knowledge_center_metadata_is_tenant_scoped_and_human_readable(creation)
     assert all(row['tenant_id']==A for row in rows)
 
 
+def test_exact_knowledge_duplicates_can_be_previewed_archived_and_rolled_back(creation):
+    agent=agents.save_agent(PROFILE,draft())
+    payload={'kind':'txt','content':'Exact verified warehouse guidance.','active':True,'agent_id':agent['id']}
+    first=agents.save_knowledge(PROFILE,{**payload,'title':'Canonical','setup_key':'dedup-canonical-key'})
+    second=agents.save_knowledge(PROFILE,{**payload,'title':'Duplicate','setup_key':'dedup-duplicate-key'})
+    preview=agents.knowledge_deduplication(PROFILE,{'action':'preview','canonical_id':first['id'],'duplicate_ids':[second['id']]})
+    assert preview['eligible'] is True and preview['checks'][0]['chunks_match'] is True
+    archived=agents.knowledge_deduplication(PROFILE,{'action':'archive','canonical_id':first['id'],'duplicate_ids':[second['id']]})
+    assert archived['changed_ids']==[second['id']]
+    row=creation.execute('SELECT active,content FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(second['id'],))[0]
+    assert row=={'active':False,'content':'Exact verified warehouse guidance.'}
+    restored=agents.knowledge_deduplication(PROFILE,{'action':'rollback','canonical_id':first['id'],'duplicate_ids':[second['id']]})
+    assert restored['action']=='rollback'
+    assert creation.execute('SELECT active FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(second['id'],))[0]['active'] is True
+
+
+def test_knowledge_deduplication_fails_closed_for_content_or_owner_mismatch(creation):
+    agent=agents.save_agent(PROFILE,draft())
+    first=agents.save_knowledge(PROFILE,{'title':'Canonical','kind':'txt','content':'One','active':True,'agent_id':agent['id'],'setup_key':'dedup-source-one'})
+    second=agents.save_knowledge(PROFILE,{'title':'Different','kind':'txt','content':'Two','active':True,'agent_id':agent['id'],'setup_key':'dedup-source-two'})
+    result=agents.knowledge_deduplication(PROFILE,{'action':'preview','canonical_id':first['id'],'duplicate_ids':[second['id']]})
+    assert result['eligible'] is False
+    with pytest.raises(TenantLinearError):
+        agents.knowledge_deduplication(PROFILE,{'action':'archive','canonical_id':first['id'],'duplicate_ids':[second['id']]})
+    creation.execute("UPDATE saas_tenant_members SET role='admin' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));creation.commit()
+    with pytest.raises(TenantLinearError):
+        agents.knowledge_deduplication(PROFILE,{'action':'preview','canonical_id':first['id'],'duplicate_ids':[second['id']]})
+
+
 @pytest.mark.parametrize('case',['foreign_channel','foreign_actor','inactive','archived','worker','admin_without_permission'])
 def test_current_tenant_and_manage_permissions_are_required(creation,case):
     profile=PROFILE;payload=draft()

@@ -776,7 +776,7 @@ def test_simulation_respects_legacy_channel_quarantine(db,monkeypatch):
     assert run['outcome']=='blocked' and run['virtual_stop_reason']=='legacy_channel_ambiguous'
 
 
-def test_simulation_marks_unavailable_media_unsupported_without_provider_call(db,monkeypatch):
+def test_simulation_marks_unavailable_audio_with_specific_reason_without_provider_call(db,monkeypatch):
     source=seed_simulation(db)
     db.execute("UPDATE saas_crm_messages SET body='',message_type='audio' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,source));db.commit()
     db.execute('''INSERT INTO saas_ai_conversation_state
@@ -789,9 +789,26 @@ def test_simulation_marks_unavailable_media_unsupported_without_provider_call(db
     assert simulation.process(job)
     run=simulation.list_runs(PROFILE)[0]
     assert run['outcome']=='unsupported'
-    assert run['virtual_stop_reason']=='simulation_media_context_unavailable'
+    assert run['virtual_stop_reason']=='simulation_audio_transcript_unavailable'
+    assert {'type':'simulation_unsupported','reason':'media_context_unavailable',
+            'detail':'simulation_audio_transcript_unavailable','message_type':'audio','executed':False} in run['events']
     assert {'type':'active_mode_stop_observed','reason':'conversation_human_or_paused',
             'live_state':'human','executed':False} in run['events']
+
+
+@pytest.mark.parametrize('message_type,body,reason',[
+    ('audio','','simulation_audio_transcript_unavailable'),
+    ('image','','simulation_image_context_unavailable'),
+    ('document','','simulation_document_context_unavailable'),
+    ('sticker','','simulation_media_type_unsupported'),
+])
+def test_simulation_media_context_is_persisted_or_explicitly_unavailable(message_type,body,reason):
+    text,event=simulation._source_media_context({'message_type':message_type,'body':body})
+    assert text=='' and event['detail']==reason and event['executed'] is False
+    text,event=simulation._source_media_context({'message_type':message_type,'body':'Saved safe context'})
+    assert text=='Saved safe context'
+    assert event=={'type':'media_context_available','message_type':message_type,
+                   'source':'persisted_message_text','executed':False}
 
 
 @pytest.mark.parametrize('message_type,body',[

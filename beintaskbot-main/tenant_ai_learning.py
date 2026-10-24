@@ -58,7 +58,9 @@ def findings(run):
     if run.get('outcome') in {'error','unknown','blocked','unsupported','virtual_stop','skipped'}:
         # A terminal state is evidence, not proof of a bug. Configuration and
         # intentional safety stops are review prompts and must not suggest bypass.
-        if stop == 'simulation_media_context_unavailable':
+        if (stop == 'simulation_media_context_unavailable'
+                or (stop.startswith('simulation_') and stop.endswith('_context_unavailable'))
+                or stop in {'simulation_audio_transcript_unavailable','simulation_media_type_unsupported'}):
             if not any(x['reason'] == stop for x in found.values()):
                 add('context', stop, 'technical', 'media')
         elif stop == 'provider_result_unknown':
