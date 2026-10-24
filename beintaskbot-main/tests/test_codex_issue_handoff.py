@@ -47,4 +47,8 @@ def test_workflow_has_explicit_labels_environment_and_no_merge_or_deploy():
     assert "python beintaskbot-main/scripts/codex_issue_handoff.py" in workflow
     assert "beintaskbot-main/.codex-handoff-contract.json" in workflow
     assert "open(sys.argv[1])" in workflow and "eligible=$eligible" in workflow
+    assert "openai-api-key:" in workflow and "openai_api_key:" not in workflow
+    assert "codex_args:" not in workflow
+    assert "CODEX_HANDOFF_EXECUTION_ENABLED" in workflow
+    assert "needs.preflight.outputs.execution_enabled == 'true'" in workflow
     assert "gh pr merge" not in workflow and "railway up" not in workflow.casefold()

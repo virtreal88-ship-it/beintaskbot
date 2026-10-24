@@ -4,14 +4,17 @@ GitHub Issues are the durable queue for evidence-based engineering work. The
 workflow deliberately does not treat opening an issue as a command to run an
 agent. A task must have a machine-readable contract and the `codex:ready`
 label. The optional Codex job additionally needs `codex:approved`, a protected
-GitHub Environment named `codex-readonly-approved`, and a repository
-`OPENAI_API_KEY` Actions secret.
+GitHub Environment named `codex-readonly-approved`, a repository
+`OPENAI_API_KEY` Actions secret, and the repository Actions variable
+`CODEX_HANDOFF_EXECUTION_ENABLED` set to exactly `true`.
 
 The repository cannot configure that OpenAI credential itself. An owner adds it
 in GitHub **Settings → Secrets and variables → Actions**, then protects the
 `codex-readonly-approved` environment with the owner as a required reviewer.
+The execution variable is an explicit spend gate: leave it unset, or set it to
+anything other than `true`, to validate handoffs without invoking a model.
 This is intentionally a one-time repository setup, not a Beintaskbot or
-customer credential. Until both controls exist, the workflow validates and
+customer credential. Until all controls exist, the workflow validates and
 reports a task but cannot start Codex.
 
 ## Contract
@@ -39,8 +42,9 @@ and rollback record.
 2. `codex:ready` invokes validation and posts a status comment. It cannot
    execute application writes.
 3. The owner may apply `codex:approved` to a **read-only/dry-run** task. The
-   protected environment is the independent GitHub approval gate. Codex gets
-   no Railway, production database, WhatsApp, or OpenAI application secrets.
+   protected environment and execution variable are independent GitHub gates.
+   Codex gets no Railway, production database, WhatsApp, or OpenAI application
+   secrets.
 4. Codex posts its outcome, test result, PR link, and rollback note to the
    same issue. It never merges or deploys from this workflow.
 5. ChatGPT reviews the issue and the tenant-scoped MCP evidence. A sensitive
