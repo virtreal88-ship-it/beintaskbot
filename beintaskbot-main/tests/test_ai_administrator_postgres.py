@@ -7,4 +7,11 @@ from test_ai_administrator_read import (
     test_message_content_redacts_secrets_and_preserves_ids,
     test_cursor_is_bound_to_tenant_tool_and_content_policy,
     test_simulation_queue_diagnostic_is_tenant_bound_read_only,
+    test_administrator_drafts_are_flagged_scoped_versioned_and_never_applied,
+    test_typed_draft_tools_enforce_evidence_and_remain_nonpublic,
+    test_owner_batch_approval_is_atomic_and_tenant_scoped,
+    test_administrator_approval_and_live_apply_are_owner_only,
+    test_live_prompt_apply_rejects_missing_or_stale_isolated_test_without_consuming_approval,
+    test_observation_worker_creates_only_one_nonpublic_draft_and_bounds_recovery,
+    test_synthetic_observation_to_tested_owner_approval_apply_and_rollback,
 )
