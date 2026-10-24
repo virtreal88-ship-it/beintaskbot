@@ -1,6 +1,7 @@
 """Regression coverage for the externally consumable, read-only Learning MCP."""
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import uuid
@@ -70,6 +71,30 @@ def test_mcp_requires_token_and_returns_only_scoped_runs(db, monkeypatch):
             assert response.status==200 and run in text and A not in text
             assert db.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE action='ai_learning_mcp_read'")[0]['n']==1
     asyncio.run(check())
+
+
+def test_mcp_context_uses_snapshot_or_honest_cutoff_reconstruction(db, monkeypatch):
+    _setup(monkeypatch,db)
+    run,source,queue=seed_simulation_run(db)
+    db.execute("UPDATE saas_crm_messages SET happened_at='2026-10-24T12:00:00Z',created_at='2026-10-24T12:00:00Z' WHERE id=%s::uuid",(source,))
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type,happened_at,created_at)
+      VALUES(%s::uuid,%s::uuid,41,'after-run',%s,'outgoing','Operator','FUTURE REPLY','text','2026-10-24T12:01:00Z','2026-10-24T12:01:00Z')''',
+      (str(uuid.uuid4()),A,'connect:'+CA))
+    db.execute('UPDATE saas_ai_simulation_runs SET primary_agent_id=%s::uuid WHERE id=%s::uuid',(AGENT,run)); db.commit()
+    cfg=mcp._require_cfg()
+    with db.cursor() as cur:
+        legacy=mcp._runs(cur,cfg,limit=10,include_context=True)['items']
+    item=next(value for value in legacy if value['run_id']==run)
+    assert item['context_provenance']=='legacy_cutoff_reconstruction'
+    assert all('FUTURE REPLY' not in value['text'] for value in item['context'])
+    assert item['context'][-1]['role']=='customer'
+    snapshot=[{'role':'client','author_type':'participant','author':'Group member','text':'Actual model input','at':'2026-10-24T12:00:00Z'}]
+    db.execute('UPDATE saas_ai_simulation_runs SET context_snapshot=%s::jsonb WHERE id=%s::uuid',(json.dumps(snapshot),run)); db.commit()
+    with db.cursor() as cur:
+        captured=mcp._runs(cur,cfg,limit=10,include_context=True)['items']
+    item=next(value for value in captured if value['run_id']==run)
+    assert item['context_provenance']=='captured_model_input'
+    assert item['context']==[{'role':'participant','at':'2026-10-24T12:00:00Z','text':'Actual model input','attachment':False}]
 
 
 def test_cursor_is_signed_and_rate_limit_is_enforced(db, monkeypatch):
