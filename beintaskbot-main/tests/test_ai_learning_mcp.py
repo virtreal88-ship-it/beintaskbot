@@ -205,7 +205,7 @@ def test_draft_scope_requires_reauthorization_and_has_accurate_consent(db, monke
     asyncio.run(check())
 
 
-def test_apply_scope_requires_reauthorization_and_advertises_only_approved_prompt_application(db, monkeypatch):
+def test_apply_scope_requires_reauthorization_and_advertises_approved_application(db, monkeypatch):
     token=_setup(monkeypatch,db)
     monkeypatch.setattr(mcp, '_authorize', lambda cur, profile: (A, 11))
     verifier='v'*43;challenge=mcp._b64(hashlib.sha256(verifier.encode()).digest())
@@ -220,7 +220,7 @@ def test_apply_scope_requires_reauthorization_and_advertises_only_approved_promp
                    'scope':mcp.TOOL_SCOPE+' '+mcp.APPLY_SCOPE,'state':'apply','code_challenge':challenge,
                    'code_challenge_method':'S256','resource':'https://crm.test/mcp/ai-learning'}
             consent=await client.get('/oauth/authorize',params=query)
-            assert consent.status==200 and 'Allow approved prompt application' in await consent.text()
+            assert consent.status==200 and 'Allow approved administrator application' in await consent.text()
             listed=await client.post('/mcp/ai-learning',json={'jsonrpc':'2.0','id':2,'method':'tools/list'})
             names={item['name'] for item in (await listed.json())['result']['tools']}
             assert {'administrator_apply_agent_prompt','administrator_rollback_agent_prompt'}<=names

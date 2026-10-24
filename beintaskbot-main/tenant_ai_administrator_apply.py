@@ -7,7 +7,7 @@ from tenant_ai_agents_store import _audit, _authorize, save_knowledge
 from tenant_ai_agents_policy import agent as validate_agent
 from tenant_linear_policy import TenantLinearError
 from tenant_ai_administrator_approvals import consume
-from tenant_instruction_library import document as instruction_document, schema as instruction_schema, _assets as instruction_assets
+from tenant_instruction_library import document as instruction_document, schema as instruction_schema, _assets as instruction_assets, _video as instruction_video
 
 
 def enabled(): return str(os.environ.get('AI_AUTONOMOUS_APPLY_ENABLED') or '').lower() == 'true'
@@ -115,6 +115,10 @@ def rollback_knowledge_draft(cur,profile,approval_id):
     tenant,actor=_guard(cur,profile); approval_id,_=_ids(approval_id,uuid.uuid4())
     cur.execute("SELECT * FROM saas_ai_administrator_material_rollbacks WHERE tenant_id=%s::uuid AND approval_id=%s::uuid AND kind='knowledge' FOR UPDATE",(tenant,approval_id)); row=cur.fetchone()
     if not row or row.get('rolled_back_at') is not None: raise TenantLinearError('Rollback is unavailable.',409)
+    cur.execute('''SELECT s.id FROM saas_ai_knowledge_sources s JOIN saas_ai_administrator_drafts d ON d.tenant_id=s.tenant_id AND d.id=%s::uuid
+      WHERE s.tenant_id=%s::uuid AND s.id=%s::uuid AND s.active=FALSE AND s.agent_id IS NULL
+        AND s.title=d.title AND s.content=d.body->>'content' AND s.provenance->>'approval_id'=%s FOR UPDATE OF s''',(row['draft_id'],tenant,row['object_id'],approval_id))
+    if not cur.fetchone(): raise TenantLinearError('Knowledge changed after application; rollback requires a new review.',409)
     cur.execute("UPDATE saas_ai_knowledge_sources SET active=FALSE,provenance=COALESCE(provenance,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps({'administrator_rollback':{'approval_id':approval_id}}),tenant,row['object_id']))
     cur.execute('UPDATE saas_ai_administrator_material_rollbacks SET rolled_back_at=now() WHERE id=%s',(row['id'],)); cur.execute("UPDATE saas_ai_administrator_drafts SET state='rolled_back',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,row['draft_id']))
     _audit(cur,tenant,actor,'ai_administrator_knowledge_rolled_back','knowledge_source',row['object_id'],{'approval_id':approval_id}); return {'source_id':str(row['object_id']),'rolled_back':True,'active':False}
@@ -126,7 +130,7 @@ def apply_instruction_draft(cur,profile,approval_id,draft_id):
     if not draft or draft['kind']!='instruction' or draft['state']!='draft': raise TenantLinearError('Instruction draft is unavailable.',409)
     body=draft['body'] or {}; target=draft['target'] or {}
     if set(body)!={'doc'} or set(target)!={'expected_version'} or target['expected_version']!=0: raise TenantLinearError('Invalid instruction draft.',400)
-    doc=instruction_document(body['doc']); instruction_schema(cur.connection); instruction_assets(cur,tenant,doc)
+    doc=instruction_document(body['doc']); instruction_schema(cur.connection); instruction_assets(cur,tenant,doc); instruction_video(cur,tenant,doc)
     consume(cur,tenant,approval_id,draft_id,draft['version'],'instruction_draft_apply')
     lesson_id=uuid.uuid4()
     cur.execute('SELECT count(*) AS n FROM saas_instruction_lessons WHERE tenant_id=%s::uuid',(tenant,))

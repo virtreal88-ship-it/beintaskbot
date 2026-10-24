@@ -515,3 +515,36 @@ def test_agent_config_stale_rollback_and_cross_tenant_are_blocked(db,monkeypatch
         cur.execute('UPDATE saas_ai_agents SET version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))
         with pytest.raises(Exception): mcp._tools(cur,cfg,'administrator_rollback_agent_config',{'approval_id':receipt['id']})
     db.commit()
+
+
+def test_mcp_http_discovery_and_instruction_dispatch(db,monkeypatch):
+    _setup(monkeypatch,db)
+    async def check():
+        app=web.Application(); app.router.add_post('/mcp',mcp.mcp)
+        async with TestClient(TestServer(app)) as client:
+            response=await client.post('/mcp',json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
+            tools=(await response.json())['result']['tools']; by_name={item['name']:item for item in tools}
+            for kind in ('knowledge_draft','instruction_draft','trigger_draft','agent_config'):
+                for verb in ('apply','rollback'):
+                    tool=by_name['administrator_'+verb+'_'+kind]
+                    assert tool['inputSchema']['additionalProperties'] is False
+                    assert tool['securitySchemes'][0]['scopes']==[mcp.APPLY_SCOPE]
+            assert by_name['administrator_historical_replay_preflight']['annotations']['readOnlyHint']
+    asyncio.run(check())
+    marker=[]
+    monkeypatch.setattr(drafts,'typed_create',lambda *args:marker.append(args[2]) or {})
+    with db.cursor() as cur: mcp._tools(cur,{},'administrator_draft_instruction_create',{})
+    assert marker==['instruction']
+
+
+def test_knowledge_rollback_rejects_changed_source(db,monkeypatch):
+    seed_simulation(db); _setup(monkeypatch,db)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE,mcp.APPLY_SCOPE])
+    with db.cursor() as cur:
+        draft=drafts.create(cur,cfg,{'kind':'knowledge','title':'Review','body':{'content':'Evidence only','evidence_ids':[]},'target':{'agent_ids':[]}})
+        receipt=approvals.request(cur,PROFILE,draft['id'],1); approvals.approve(cur,PROFILE,receipt['id'],'approve')
+        applied=apply.apply_knowledge_draft(cur,PROFILE,receipt['id'],draft['id'])
+        cur.execute('UPDATE saas_ai_knowledge_sources SET active=TRUE WHERE id=%s::uuid',(applied['source_id'],))
+        with pytest.raises(Exception): apply.rollback_knowledge_draft(cur,PROFILE,receipt['id'])
+    db.commit()

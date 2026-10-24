@@ -253,6 +253,13 @@ def _tools(cur,cfg,name,args):
         principal={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']}
         if 'draft_id' in args: return administrator_apply.apply_agent_config(cur,principal,args['approval_id'],args['draft_id'],cfg)
         return administrator_apply.rollback_agent_config(cur,principal,args['approval_id'],cfg)
+    if name == 'administrator_draft_instruction_create': return administrator_drafts.typed_create(cur,cfg,'instruction',args)
+    if name == 'administrator_historical_replay_preflight':
+        if TOOL_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
+        if not isinstance(args,dict) or set(args)!={'message_ids'}: raise TenantLinearError('Invalid replay preflight.',400)
+        import tenant_ai_historical_replay as replay
+        if (cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['AI_LEARNING_MCP_AGENT_ID'],cfg['AI_LEARNING_MCP_CHANNEL_ID'])!=(replay.PILOT_TENANT,replay.PILOT_AGENT,replay.PILOT_CHANNEL): raise TenantLinearError('Replay outside OAuth scope.',403)
+        return replay.preflight({'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']},args['message_ids'])
     if name == 'administrator_draft_create': return administrator_drafts.create(cur,cfg,args)
     if name == 'administrator_draft_list': return administrator_drafts.listing(cur,cfg,args)
     if name == 'administrator_draft_update': return administrator_drafts.update(cur,cfg,args)
@@ -356,7 +363,7 @@ def _knowledge_dedup_definitions():
 
 def _administrator_apply_definitions():
     security=[{'type':'oauth2','scopes':[APPLY_SCOPE]}]
-    return _config_definitions()+_trigger_definitions()+[
+    return _replay_preflight_definitions()+_config_definitions()+_trigger_definitions()+[
       {'name':'administrator_apply_agent_prompt','description':'Apply one exact owner-approved and isolated-test-verified prompt draft. The server requires a live owner grant, enabled application feature flag, matching agent version, and a one-time approval receipt.',
        'inputSchema':{'type':'object','properties':{'approval_id':{'type':'string'},'draft_id':{'type':'string'}},'required':['approval_id','draft_id'],'additionalProperties':False},
        'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
@@ -440,9 +447,9 @@ def _consent_text(scopes):
     if APPLY_SCOPE in scopes:
         return (
             'Apply access for one configured company agent and channel. ChatGPT may use only an exact, '
-            'already owner-approved prompt draft after its isolated test passes. It cannot send messages, '
+            'owner-approved changes: tested prompts, restricted agent settings, disabled triggers, inactive knowledge and Instruction Library drafts. It cannot send messages, '
             'enable Active mode, change budgets, publish knowledge, or modify CRM data.'
-        ), 'Allow approved prompt application'
+        ), 'Allow approved administrator application'
     if KNOWLEDGE_DEDUP_SCOPE in scopes:
         return (
             'Knowledge duplicate maintenance for the configured company only. '
@@ -611,3 +618,9 @@ def _config_definitions():
     rows=[('administrator_draft_agent_config_create',props,DRAFT_SCOPE)]
     rows += [(name,{'approval_id':{'type':'string'},**({'draft_id':{'type':'string'}} if 'apply_' in name else {})},APPLY_SCOPE) for name in ('administrator_apply_agent_config','administrator_rollback_agent_config')]
     return [{'name':name,'description':'Owner-approved allowlisted agent configuration. Cannot change modes, scope, budgets, CRM permissions or expand Expert permissions.','inputSchema':{'type':'object','properties':properties,'required':list(properties),'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[scope]}]} for name,properties,scope in rows]
+
+
+def _replay_preflight_definitions():
+    return [{'name':'administrator_historical_replay_preflight','description':'Owner-only read-only preflight for exactly five existing pilot message IDs. Checks model, scope and the shared $5 ledger; never calls a model or executes replay. Request separate owner confirmation before paid execution through the existing replay endpoint.',
+      'inputSchema':{'type':'object','properties':{'message_ids':{'type':'array','minItems':5,'maxItems':5,'uniqueItems':True,'items':{'type':'string','format':'uuid'}}},'required':['message_ids'],'additionalProperties':False},
+      'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[TOOL_SCOPE]}]}]

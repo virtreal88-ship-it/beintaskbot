@@ -162,3 +162,47 @@ the configured MCP URL. Code/refresh exchange also checks the configured
 tenant, agent and channel before issuing tokens.
 
 Reference: https://developers.openai.com/plugins/build/auth
+
+## Approved Administrator applications and discovery
+
+The existing `ai_learning.apply` grant allows only an exact owner-approved
+proposal while `AI_AUTONOMOUS_APPLY_ENABLED` is enabled. Prompt changes require
+an isolated completed test; configuration patches cannot change mode, enabled,
+channels, budget, CRM permissions or expand Expert permissions. New triggers
+remain disabled. Knowledge sources remain inactive and unbound. Instructions
+remain library drafts; they follow the existing employee review lifecycle.
+Each operation has a one-time approval receipt, transactional audit and guarded
+rollback. Tools do not approve their own receipts.
+
+Discovery is separate from OAuth authorization. POST `tools/list` to
+`https://crm.pro.az/mcp/ai-learning` to inspect what the deployed server exposes.
+If the server lists tools but the ChatGPT connection exposes only the old three,
+refresh its tool schema or reconnect the existing connector. Reauthorization is
+also required if its token lacks `ai_learning.drafts` or `ai_learning.apply`;
+refreshing a token never upgrades its scopes. A connector-side `Unknown tool`
+before an HTTP request is different from the server's `Additional OAuth scope
+required` response. Never paste tokens into chat.
+
+## Five-dialogue Replay preflight without browser automation
+
+An authenticated company owner may call
+`administrator_historical_replay_preflight` with exactly five existing message
+UUIDs. It uses the existing pilot configuration and shared ledger; it does not
+call a model, reserve money, enqueue work, or execute replay. The fixed tenant,
+agent and channel must match the OAuth grant. Existing owner API access also
+supports GET `/api/platform/ai/testing/historical-replay?inventory=1` to select
+five distinct recent verified customer conversations, followed by POST to the
+same endpoint with `{"action":"preflight","message_ids":[...]}`. These are
+session-authenticated same-origin API calls, with no Chrome CDP dependency.
+
+After obtaining a successful fresh preflight, ask the owner: “Allow one replay
+of these five selected messages using the shown model and prices, within the
+remaining shared $5 cap, without sending messages or changing CRM?” Include the
+five message IDs, exact model, remaining amount and output/call limits. Execute
+only after explicit consent through the existing endpoint with a new request
+UUID. Do not infer consent from a successful preflight, discovery, or deployment.
+Unknown outcomes retain their reservation and must never be retried blindly.
+
+Readiness validation uses isolated PostgreSQL PGlite plus mock providers; it
+proves lifecycle and financial contracts, not the quality of real model answers.
+Native multi-connection tests remain a separate optional localhost suite.
