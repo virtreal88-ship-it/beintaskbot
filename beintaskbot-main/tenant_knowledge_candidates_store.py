@@ -432,10 +432,10 @@ def listing(profile,data):
                 clauses.append("e.route->>'conversation_id'=%s");args.append(data['conversation_id'])
             status=data.get('status')
             if status:
-                if status not in {'pending_review','needs_clarification','approved','rejected','all'}: raise TenantLinearError('Некорректный статус.')
+                if status not in {'pending_review','needs_clarification','approved','rejected','archived','all'}: raise TenantLinearError('Некорректный статус.')
                 if status!='all': clauses.append('c.status=%s');args.append(status)
             else:
-                clauses.append("c.status<>'rejected'")
+                clauses.append("c.status NOT IN ('rejected','archived')")
             if data.get('batch_id'):
                 clauses.append('EXISTS(SELECT 1 FROM saas_knowledge_batch_items bi WHERE bi.tenant_id=c.tenant_id AND bi.extraction_id=c.extraction_id AND bi.batch_id=%s::uuid)')
                 args.append(identifier(data['batch_id']))
@@ -507,6 +507,25 @@ def mutate(profile,candidate_id,data,action='edit'):
             cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,identifier(candidate_id)))
             row=cur.fetchone()
             if not row: raise TenantLinearError('Карточка не найдена.',404)
+            if action in {'archive','restore'}:
+                if policy.profile.get('role') not in {'owner','admin'}:
+                    raise TenantLinearError('Архивировать и восстанавливать кейсы может только владелец или администратор.',403)
+                if type(data.get('expected_version')) is not int or data['expected_version']!=row['version']:
+                    raise TenantLinearError('Карточка изменилась. Обновите страницу.',409)
+                if action=='archive':
+                    if row['status']=='archived': return detail(profile,candidate_id)
+                    cur.execute("UPDATE saas_ai_knowledge_sources SET active=FALSE WHERE tenant_id=%s::uuid AND provenance->>'candidate_id'=%s",(tenant,str(row['id'])))
+                    cur.execute("""UPDATE saas_knowledge_candidates SET status='archived',archived_at=now(),archived_by=%s,
+                      archived_from_status=status,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid""",(actor,tenant,row['id']))
+                else:
+                    if row['status']!='archived': raise TenantLinearError('Восстановить можно только архивный кейс.',409)
+                    restored=row.get('archived_from_status') if row.get('archived_from_status') in {'pending_review','needs_clarification','approved','rejected'} else 'pending_review'
+                    cur.execute("""UPDATE saas_knowledge_candidates SET status=%s,archived_at=NULL,archived_by=NULL,archived_from_status=NULL,
+                      version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid""",(restored,tenant,row['id']))
+                    if restored=='approved': cur.execute("UPDATE saas_ai_knowledge_sources SET active=TRUE WHERE tenant_id=%s::uuid AND provenance->>'candidate_id'=%s",(tenant,str(row['id'])))
+                _audit(cur,tenant,actor,'knowledge_candidate_'+action,'knowledge_candidate',row['id'])
+                conn.commit()
+                return detail(profile,candidate_id)
             run=extraction_row(cur,tenant,row['extraction_id']);items=evidence(cur,profile,run)
             if action=='approve':
                 ids=data.get('agent_ids')

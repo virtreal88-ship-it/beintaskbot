@@ -2,7 +2,7 @@
 import asyncio
 import os
 from aiohttp import web
-from tenant_ai_agents_store import (delete_agent, delete_knowledge, list_agents,
+from tenant_ai_agents_store import (delete_agent, delete_knowledge, restore_knowledge, list_agents,
     list_knowledge, read_settings, save_agent, save_knowledge, save_settings, configuration_options, refresh_configuration_catalog,
     list_triggers, save_trigger, delete_trigger, set_conversation_state, read_conversation_state, read_conversation_for_lead, list_handoffs, list_connect_diagnostics,
     knowledge_deduplication)
@@ -254,6 +254,8 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     result = await asyncio.to_thread(save_knowledge, profile, payload, source_id=request.match_info['source_id'])
                 elif resource == 'knowledge_item' and method == 'DELETE':
                     result = await asyncio.to_thread(delete_knowledge, profile, request.match_info['source_id'])
+                elif resource == 'knowledge_restore' and method == 'POST':
+                    result = await asyncio.to_thread(restore_knowledge, profile, request.match_info['source_id'])
                 elif resource == 'knowledge_deduplication' and method == 'POST':
                     result = await asyncio.to_thread(knowledge_deduplication, profile, payload)
                 else:

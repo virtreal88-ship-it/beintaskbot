@@ -63,6 +63,14 @@ def test_unpublish_is_distinct_from_public_link_revoke_and_disables_sources(read
  with pytest.raises(TenantLinearError):agents.delete_knowledge(PROFILE,source)
  assert db.execute('SELECT count(*) AS n FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(source,))[0]['n']==1;db.commit()
 
+def test_archive_restore_preserves_lesson_and_historical_knowledge(ready):
+ db,_=ready;r=save(ready);r=mutate(mutate(r,'submit'),'approve',review_confirmed=True);r=mutate(r,'publish',agent_ids=[AGENT]);source=db.execute('SELECT id FROM saas_ai_knowledge_sources')[0]['id'];db.commit()
+ archived=mutate(r,'archive');assert archived['state']=='archived'
+ assert lib.operation(PROFILE,'list')['items']==[]
+ assert db.execute('SELECT active FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(source,))[0]['active'] is False;db.commit()
+ restored=mutate(archived,'restore');assert restored['state']=='published'
+ assert db.execute('SELECT active FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(source,))[0]['active'] is True;db.commit()
+
 @pytest.mark.parametrize('fault',['path','bounds','duration','cue','language','order'])
 def test_document_bounds(fault):
  v=doc(uid());s=v['slides'][0]

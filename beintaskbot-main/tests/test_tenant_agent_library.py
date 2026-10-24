@@ -121,6 +121,17 @@ def test_exact_knowledge_duplicates_can_be_previewed_archived_and_rolled_back(cr
     assert creation.execute('SELECT active FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(second['id'],))[0]['active'] is True
 
 
+def test_standalone_knowledge_archives_and_restores_without_erasing_chunks(creation):
+    agent=agents.save_agent(PROFILE,draft())
+    source=agents.save_knowledge(PROFILE,{'title':'Temporary guidance','kind':'txt','content':'Keep historical evidence.','active':True,'agent_id':agent['id'],'setup_key':'archive-source'})
+    assert agents.delete_knowledge(PROFILE,source['id'])=={'archived':True}
+    stored=creation.execute('SELECT active,content FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,source['id']))[0]
+    assert stored=={'active':False,'content':'Keep historical evidence.'}
+    assert creation.execute('SELECT count(*) AS n FROM saas_ai_knowledge_chunks WHERE tenant_id=%s::uuid AND source_id=%s::uuid',(A,source['id']))[0]['n']>0
+    assert agents.restore_knowledge(PROFILE,source['id'])=={'restored':True}
+    assert creation.execute('SELECT active FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,source['id']))[0]['active'] is True
+
+
 def test_knowledge_deduplication_fails_closed_for_content_or_owner_mismatch(creation):
     agent=agents.save_agent(PROFILE,draft())
     first=agents.save_knowledge(PROFILE,{'title':'Canonical','kind':'txt','content':'One','active':True,'agent_id':agent['id'],'setup_key':'dedup-source-one'})

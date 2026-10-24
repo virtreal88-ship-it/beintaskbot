@@ -124,8 +124,9 @@ Preview returns eligibility, reference checks, and an opaque precondition; it
 never returns source text. Archive and rollback require that exact
 precondition and a new UUID request key. Archive only sets `active=false` on
 byte-identical same-agent TXT duplicates with matching chunks and no known
-candidate, quality, Simulation, or agent-run references. It preserves source
-rows and chunks. Retrying the same key returns the stored result; a changed
+candidate or quality binding. Historical Simulation and agent-run citations
+remain immutable evidence: they do not block archival and are never rewritten
+to the canonical source. It preserves source rows and chunks. Retrying the same key returns the stored result; a changed
 source or reused key with different parameters fails closed.
 
 Drafts are the durable proposal boundary: they preserve evidence, immutable
