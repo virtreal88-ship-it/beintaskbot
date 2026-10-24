@@ -233,6 +233,8 @@ def _authorize_token(request):
 
 
 def _tools(cur,cfg,name,args):
+    if name=='administrator_training_sources':
+        return administrator_approvals.training_sources(cur,cfg,args)
     if name in {'administrator_training_create','administrator_training_update','administrator_training_publish','administrator_training_rollback'}:
         return administrator_approvals.training_operation(cur,cfg,name.removeprefix('administrator_training_'),args)
     if name=='administrator_training_policies':

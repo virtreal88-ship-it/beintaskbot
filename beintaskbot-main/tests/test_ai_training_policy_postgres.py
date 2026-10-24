@@ -15,6 +15,7 @@ from test_ai_training_policy import (
     test_no_self_policy_or_extra_rights_and_owner_rbac,
     test_foreign_source_and_unverified_source_are_blocked,
     test_administrator_draft_is_not_mistaken_for_a_verified_training_source,
+    test_training_source_catalog_excludes_drafts_and_feeds_verified_create,
     test_policy_revoke_blocks_existing_unconsumed_grant,
     test_historical_case_evidence_and_clarification,
     test_transaction_failure_rolls_back_internal_approvals_and_materials,

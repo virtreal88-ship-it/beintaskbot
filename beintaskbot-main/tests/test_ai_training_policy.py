@@ -156,6 +156,24 @@ def test_administrator_draft_is_not_mistaken_for_a_verified_training_source(setu
     db.commit()
 
 
+def test_training_source_catalog_excludes_drafts_and_feeds_verified_create(setup):
+    db,cfg=setup;source=trusted(setup)
+    with db.cursor() as cur:
+        p=policy(cur)
+        draft=drafts.create(cur,cfg,{'kind':'knowledge','title':'Private proposal',
+          'body':{'content':'Unreviewed text','evidence_ids':[]},'target':{'agent_ids':[]}})
+        catalog=mcp._tools(cur,cfg,'administrator_training_sources',{'policy_id':p,'kind':'knowledge','limit':10})
+        ids={item['source_id'] for item in catalog['items']}
+        assert source in ids and draft['id'] not in ids
+        selected=next(item for item in catalog['items'] if item['source_id']==source)
+        assert selected['basis']['id']==source and len(selected['material_hash'])==64
+        prepared=op(cur,cfg,p,'create',kind='knowledge',source_id=selected['source_id'])
+        assert prepared['eligible'] and prepared['basis']==selected['basis']
+        with pytest.raises(TenantLinearError):
+            mcp._tools(cur,cfg,'administrator_training_sources',{'policy_id':p,'kind':'knowledge','limit':0})
+    db.commit()
+
+
 def test_policy_revoke_blocks_existing_unconsumed_grant(setup):
     db,cfg=setup;d,key=material(setup)
     with db.cursor() as cur:
