@@ -440,3 +440,41 @@ def test_owner_approved_instruction_apply_stays_draft_and_rolls_back(db,monkeypa
         cur.execute('SELECT state,version FROM saas_instruction_lessons WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,applied['lesson_id'])); assert cur.fetchone()['state']=='draft'
         assert mcp._tools(cur,cfg,'administrator_rollback_instruction_draft',{'approval_id':receipt['id']})['state']=='archived'
     db.commit()
+
+
+def test_trigger_approval_apply_rollback_is_atomic(db,monkeypatch):
+    seed_simulation(db); _setup(monkeypatch,db)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['AI_LEARNING_MCP_AGENT_ID']=AGENT; cfg['granted_scopes']=[drafts.DRAFT_SCOPE,mcp.APPLY_SCOPE]
+    with db.cursor() as cur:
+        cur.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT)); version=cur.fetchone()['version']
+        args={'agent_id':AGENT,'channel_id':CA,'expected_agent_version':version,'trigger':{'name':'Safe handoff','trigger_type':'phrase','condition':{'phrase':'help'},'actions':['handoff'],'enabled':False}}
+        draft=mcp._tools(cur,cfg,'administrator_draft_trigger_create',args)
+        receipt=approvals.request(cur,PROFILE,draft['id'],draft['version']); approvals.approve(cur,PROFILE,receipt['id'],'approve')
+    db.commit()
+    with db.cursor() as cur:
+        applied=mcp._tools(cur,cfg,'administrator_apply_trigger_draft',{'approval_id':receipt['id'],'draft_id':draft['id']})
+        assert applied['enabled'] is False
+    db.rollback()
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_triggers')[0]['n']==0
+    assert db.execute('SELECT state FROM saas_ai_administrator_approvals WHERE id=%s::uuid',(receipt['id'],))[0]['state']=='approved'
+    with db.cursor() as cur:
+        result=mcp._tools(cur,cfg,'administrator_apply_trigger_draft',{'approval_id':receipt['id'],'draft_id':draft['id']})
+        assert result['enabled'] is False
+        assert mcp._tools(cur,cfg,'administrator_rollback_trigger_draft',{'approval_id':receipt['id']})['rolled_back']
+        with pytest.raises(Exception): mcp._tools(cur,cfg,'administrator_apply_trigger_draft',{'approval_id':receipt['id'],'draft_id':draft['id']})
+    db.commit()
+
+@pytest.mark.parametrize('fault',['enabled','crm','channel','version','role'])
+def test_trigger_proposal_rejects_unsafe_or_stale_scope(db,monkeypatch,fault):
+    seed_simulation(db); _setup(monkeypatch,db); monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE],AI_LEARNING_MCP_AGENT_ID=AGENT)
+    args={'agent_id':AGENT,'channel_id':CA,'expected_agent_version':1,'trigger':{'name':'Safe','trigger_type':'phrase','condition':{'phrase':'help'},'actions':['handoff'],'enabled':False}}
+    if fault=='enabled': args['trigger']['enabled']=True
+    if fault=='crm': args['trigger']['actions']=['update_phone']
+    if fault=='channel': args['channel_id']=str(uuid.uuid4())
+    if fault=='version': args['expected_agent_version']=999
+    if fault=='role': db.execute("UPDATE saas_tenant_members SET role='worker' WHERE tenant_id=%s::uuid",(A,))
+    with db.cursor() as cur:
+        with pytest.raises(Exception): mcp._tools(cur,cfg,'administrator_draft_trigger_create',args)
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_triggers')[0]['n']==0

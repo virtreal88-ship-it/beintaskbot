@@ -25,6 +25,10 @@ def ensure_schema(conn):
           kind TEXT NOT NULL CHECK(kind IN ('knowledge','instruction')), draft_id UUID NOT NULL, approval_id UUID NOT NULL UNIQUE,
           object_id UUID NOT NULL, applied_version INTEGER NULL, rolled_back_at TIMESTAMPTZ NULL, created_by BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
 
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_administrator_trigger_rollbacks(
+          tenant_id UUID NOT NULL REFERENCES saas_tenants(id), approval_id UUID PRIMARY KEY, draft_id UUID NOT NULL,
+          agent_id UUID NOT NULL, trigger_id UUID NOT NULL, applied_version INTEGER NOT NULL, rolled_back_at TIMESTAMPTZ)''')
+
 
 def _guard(cur, profile):
     if not enabled(): raise TenantLinearError('Autonomous application is disabled.',403)
@@ -136,3 +140,48 @@ def rollback_instruction_draft(cur,profile,approval_id):
     if not cur.fetchone(): raise TenantLinearError('Instruction changed after application; rollback requires a new review.',409)
     cur.execute('UPDATE saas_ai_administrator_material_rollbacks SET rolled_back_at=now() WHERE id=%s',(row['id'],)); cur.execute("UPDATE saas_ai_administrator_drafts SET state='rolled_back',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,row['draft_id']))
     _audit(cur,tenant,actor,'ai_administrator_instruction_rolled_back','instruction',row['object_id'],{'approval_id':approval_id}); return {'lesson_id':str(row['object_id']),'rolled_back':True,'state':'archived'}
+
+# Trigger applications share the caller's transaction with the approval receipt.
+def validate_trigger_proposal(cur,cfg,data):
+    from tenant_ai_agents_policy import trigger as policy
+    required={'agent_id','channel_id','expected_agent_version','trigger'}
+    if not isinstance(data,dict) or set(data)!=required or type(data.get('expected_agent_version')) is not int:
+        raise TenantLinearError('Invalid trigger proposal.',400)
+    agent_id=str(uuid.UUID(str(data['agent_id']))); channel_id=str(uuid.UUID(str(data['channel_id'])))
+    if agent_id!=cfg['AI_LEARNING_MCP_AGENT_ID'] or channel_id!=cfg['AI_LEARNING_MCP_CHANNEL_ID']:
+        raise TenantLinearError('Trigger outside OAuth scope.',403)
+    trigger=policy(data['trigger'],creating=True)
+    if trigger['enabled'] or set(trigger['actions'])-{'handoff','handoff_after_reply','call_expert'} or 'setup_key' in trigger:
+        raise TenantLinearError('Only disabled, non-CRM trigger proposals are permitted.',403)
+    cur.execute('SELECT version,scopes,role FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE',(cfg['AI_LEARNING_MCP_TENANT_ID'],agent_id)); row=cur.fetchone()
+    if not row or row['version']!=data['expected_agent_version'] or row['role']!='primary':
+        raise TenantLinearError('Primary changed; review again.',409)
+    from tenant_ai_agent_connect import scope_matches
+    if not scope_matches(row['scopes'],channel_id,is_group=False): raise TenantLinearError('Channel outside agent scope.',403)
+    return {**data,'agent_id':agent_id,'channel_id':channel_id,'trigger':trigger}
+
+
+def apply_trigger_draft(cur,profile,approval_id,draft_id,cfg):
+    from tenant_ai_agents_store import save_trigger
+    tenant,actor=_guard(cur,profile); approval_id,draft_id=_ids(approval_id,draft_id)
+    cur.execute('SELECT * FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,draft_id)); draft=cur.fetchone()
+    if not draft or draft['kind']!='trigger' or draft['state']!='draft': raise TenantLinearError('Trigger draft unavailable.',409)
+    body=validate_trigger_proposal(cur,cfg,draft['body'])
+    consume(cur,tenant,approval_id,draft_id,draft['version'],'trigger_apply')
+    result=save_trigger(profile,body['agent_id'],body['trigger'],connection=cur.connection)
+    cur.execute('INSERT INTO saas_ai_administrator_trigger_rollbacks(tenant_id,approval_id,draft_id,agent_id,trigger_id,applied_version) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s)',(tenant,approval_id,draft_id,body['agent_id'],result['id'],result['version']))
+    cur.execute("UPDATE saas_ai_administrator_drafts SET state='applied',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,draft_id))
+    _audit(cur,tenant,actor,'ai_administrator_trigger_applied','ai_agent_trigger',result['id'],{'approval_id':approval_id})
+    return result
+
+
+def rollback_trigger_draft(cur,profile,approval_id,cfg):
+    tenant,actor=_guard(cur,profile); approval_id,_=_ids(approval_id,uuid.uuid4())
+    cur.execute('SELECT * FROM saas_ai_administrator_trigger_rollbacks WHERE tenant_id=%s::uuid AND approval_id=%s::uuid FOR UPDATE',(tenant,approval_id)); row=cur.fetchone()
+    if not row or row['rolled_back_at'] is not None or str(row['agent_id'])!=cfg['AI_LEARNING_MCP_AGENT_ID']: raise TenantLinearError('Rollback unavailable.',409)
+    cur.execute('UPDATE saas_ai_agent_triggers SET enabled=FALSE,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND version=%s AND enabled=FALSE RETURNING id',(tenant,row['trigger_id'],row['applied_version']))
+    if not cur.fetchone(): raise TenantLinearError('Trigger changed; review again.',409)
+    cur.execute('UPDATE saas_ai_administrator_trigger_rollbacks SET rolled_back_at=now() WHERE tenant_id=%s::uuid AND approval_id=%s::uuid',(tenant,approval_id))
+    cur.execute("UPDATE saas_ai_administrator_drafts SET state='rolled_back',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,row['draft_id']))
+    _audit(cur,tenant,actor,'ai_administrator_trigger_rolled_back','ai_agent_trigger',row['trigger_id'],{'approval_id':approval_id})
+    return {'trigger_id':str(row['trigger_id']),'rolled_back':True,'enabled':False}

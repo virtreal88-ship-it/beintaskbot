@@ -1098,11 +1098,12 @@ def list_triggers(profile,agent_id):
     return result
 
 
-def save_trigger(profile,agent_id,data,*,trigger_id=None):
+def save_trigger(profile,agent_id,data,*,trigger_id=None,connection=None):
     agent=identifier(agent_id);creating=trigger_id is None
     patch=validate_trigger({key:value for key,value in data.items() if key!='expected_version'} if isinstance(data,dict) else data,creating=creating)
     native_actions={'native_find_create_contact','native_find_create_company','native_find_create_deal','native_move_stage','native_assign_responsible','native_create_task','native_get_deal_status','native_get_task_status'}
-    with _connect() as conn:
+    from contextlib import nullcontext
+    with (nullcontext(connection) if connection is not None else _connect()) as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
@@ -1177,7 +1178,7 @@ def save_trigger(profile,agent_id,data,*,trigger_id=None):
                   (merged['name'],merged['trigger_type'],_json(merged['condition']),_json(merged['actions']),merged['enabled'],tenant,agent,trigger_uuid))
                 result=dict(cur.fetchone())
                 _audit(cur,tenant,actor,'ai_agent_trigger_updated','ai_agent_trigger',trigger_uuid,{'version':previous['version']+1})
-        conn.commit()
+        if connection is None: conn.commit()
     result['id']=str(result['id']);result['agent_id']=str(result['agent_id'])
     for key in ('created_at','updated_at'):
         if result.get(key):result[key]=result[key].isoformat()
