@@ -210,6 +210,20 @@ def test_observations_are_deduplicated_and_disabled_by_default(db,monkeypatch):
     db.commit()
 
 
+def test_observation_projection_is_tenant_scoped_and_payload_requires_content_scope(db,monkeypatch):
+    _setup(monkeypatch,db)
+    with db.cursor() as cur:
+        observations.enqueue(cur,A,'diagnostic',{'kind':'testing_scenario','title':'safe','body':{'secret':'omit-me'},'target':{}})
+    db.commit(); cfg=mcp._require_cfg();cfg['granted_scopes']=[admin.READ_SCOPE]
+    with db.cursor() as cur:
+        public=admin.read(cur,cfg,'administrator_observations_read',{})
+        assert public['items'] and 'payload' not in public['items'][0]
+        with pytest.raises(Exception):admin.read(cur,cfg,'administrator_observations_read',{'include_content':True})
+        detailed=admin.read(cur,{**cfg,'granted_scopes':[admin.READ_SCOPE,admin.CONTENT_SCOPE]},'administrator_observations_read',{'include_content':True})
+    assert detailed['items'][0]['payload']['title']=='safe'
+    assert 'secret' not in detailed['items'][0]['payload']['body']
+
+
 def test_observation_worker_creates_only_one_nonpublic_draft_and_bounds_recovery(db,monkeypatch):
     _setup(monkeypatch,db); monkeypatch.setenv('AI_AUTONOMOUS_IMPROVEMENT_ENABLED','true')
     monkeypatch.setattr(observations,'_connect',lambda:db)
