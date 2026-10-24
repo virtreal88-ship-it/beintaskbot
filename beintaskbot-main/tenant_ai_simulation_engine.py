@@ -1090,8 +1090,8 @@ def process(job):
                         complete('virtual_stop',stop_reason='no_answer_'+action,agent_id=primary_id,
                             triggers=triggers,knowledge=knowledge,experts=expert_results,events=events,total_tokens=total_tokens)
                         return True
-            from tenant_ai_agent_safety import sanitize_draft
-            draft=sanitize_draft(draft,bound_primary.get('language') or 'auto')
+            from tenant_ai_agent_safety import sanitize_virtual_reply
+            draft=sanitize_virtual_reply(draft,bound_primary.get('language') or 'auto')
             used=max(0,int(usage.get('total_tokens') or 0));total_tokens+=used
             _finish_call(job,primary_call,state='succeeded',actual=used)
             settle_spend(tenant,primary_spend_key,usage or {},unknown=usage is None)
