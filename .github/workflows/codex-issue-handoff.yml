@@ -38,7 +38,8 @@ jobs:
           python beintaskbot-main/scripts/codex_issue_handoff.py validate --input "$RUNNER_TEMP/issue.json" --output "$RUNNER_TEMP/contract.json"
           python beintaskbot-main/scripts/codex_issue_handoff.py status --input "$RUNNER_TEMP/issue.json" --output "$RUNNER_TEMP/status.md" --phase validated --details "Contract accepted. A GitHub Issue is a queue item; it does not authorize a Beintaskbot production write."
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/status.md"
-          echo "eligible=$(python -c \"import json; print(str(json.load(open('$RUNNER_TEMP/contract.json'))['eligible_for_codex']).lower())\")" >> "$GITHUB_OUTPUT"
+          eligible=$(python -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["eligible_for_codex"]).lower())' "$RUNNER_TEMP/contract.json")
+          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
           echo "issue=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
 
   preflight:
