@@ -5,6 +5,8 @@ The existing provider, knowledge, trigger, expert and monetary policies remain
 authoritative. A reserved/unknown call key is never submitted again.
 """
 import json
+import re
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -347,21 +349,66 @@ def eligible_examples(profile,message_ids=None):
                 by_id[key]=row
             cur.execute("SELECT DISTINCT split_part(call_key,':',2) AS source FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key LIKE %s",(tenant,'historical-replay:%'))
             attempted={row['source'] for row in cur.fetchall()}
-            selected=[]; seen=set(); results=[]
+            selected=[]; seen=set(); results=[]; ranked=[]
             for key in (message_ids if message_ids is not None else by_id):
                 row=by_id.get(key); reason=_source_rejection(cur,tenant,row)
                 if key in duplicate: reason='replay_identity_ambiguous'
                 if not reason and row.get('message_type') not in (None,'','text'): reason='replay_text_required'
                 if not reason and key in attempted: reason='replay_already_attempted'
-                if not reason and len(attempted)+len(selected)>=5: reason='replay_five_source_limit_reached'
-                conversation=row.get('conversation_id') if row else None
-                if not reason and conversation in seen: reason='replay_duplicate_dialogue'
-                if not reason:
-                    seen.add(conversation)
-                    if len(selected)<5: selected.append(key)
-                results.append({'id':key,'eligible':reason is None,'reason':reason})
+                content_reason=substantive_support_reason((row or {}).get('body',''))
+                resolution_case=None
+                if not reason: resolution_case=_confirmed_resolution(cur,tenant,row)
+                if not reason and message_ids is None and content_reason: reason=content_reason
+                item={'id':key,'eligible':reason is None,'reason':reason,
+                      'technical_signal':'substantive_rule_match' if content_reason is None else content_reason,
+                      'resolution_status':'confirmed_case' if resolution_case else 'unknown',
+                      'resolution_case_id':resolution_case,'selection_mode':'manual' if message_ids is not None else 'ranked'}
+                results.append(item)
+                if not reason: ranked.append((key,row['conversation_id'],bool(resolution_case),item))
+            # Stable sort preserves newest-first SQL order within equal ranks.
+            if message_ids is None: ranked.sort(key=lambda item:not item[2])
+            for key,conversation,_,item in ranked:
+                if conversation in seen:
+                    item.update(eligible=False,reason='replay_duplicate_dialogue');continue
+                seen.add(conversation)
+                if len(selected)<max(0,5-len(attempted)): selected.append(key)
+                elif len(attempted): item.update(eligible=False,reason='replay_five_source_limit_reached')
             cur.execute('''SELECT COALESCE(sum(CASE WHEN state IN ('reserved','unknown') THEN reserved_microusd ELSE COALESCE(actual_microusd,reserved_microusd) END),0) AS used FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid''',(tenant,))
             remaining=max(0,limit_microusd(tenant)-int(cur.fetchone()['used']))
     return {'items':results,'selected_message_ids':selected,'exact_five_available':len(selected)==5,
             'model':model,'remaining_microusd':remaining,'cap_microusd':limit_microusd(tenant),
-            'read_only':True,'scan_limit':200,'requires_fresh_preflight':True,'paid_execution_authorized':False}
+            'read_only':True,'scan_limit':200,'requires_fresh_preflight':True,'paid_execution_authorized':False,
+            'selection_status':'ready' if len(selected)==5 else 'insufficient_technical_examples',
+            'automatic_padding':False,'ranking_uses_later_resolution_for_selection_only':True}
+
+
+def substantive_support_reason(text):
+    """Conservative lexical triage, not a model or a claim about customer intent."""
+    text=str(text or '').strip()
+    without_urls=re.sub(r'(?:https?://|www\.)\S+','',text,flags=re.I).strip()
+    if text and not without_urls: return 'replay_bare_url'
+    text=without_urls
+    normalized=unicodedata.normalize('NFKD',text.casefold().translate(str.maketrans('əı','ei')))
+    normalized=''.join(c for c in normalized if not unicodedata.combining(c))
+    words=re.findall(r'[^\W_]+',normalized,flags=re.UNICODE); flat=' '.join(words)
+    greetings={'salam','salamlar','salam aleykum','hello','hi','hey','thanks','thank you','thank you very much','cox sagolun','coxsagolun','sagol','sag olun','tesekkur edirem','tesekkurler','спасибо','привет','здравствуйте','благодарю','добрый день','ok','tamam','oldu','aydindir'}
+    if flat in greetings: return 'replay_greeting_or_thanks'
+    product=re.search(r'\b(erp|bein|anbar\w*|qaliq\w*|mehsul\w*|mal\w*|hesab\w*|qaim\w*|sifaris\w*|proqram\w*|sistem\w*|kassa\w*|printer\w*|warehouse\w*|stock\w*|inventory|invoice\w*|order\w*|program\w*|settings|настрой\w*|склад\w*|остат\w*|товар\w*|касс\w*|принтер\w*|программ\w*|заказ\w*|наклад\w*)\b',flat)
+    problem=re.search(r'\b(error\w*|fail\w*|cannot|problem\w*|question\w*|how|why|xeta\w*|islemir|acilmir|gorunmur|silin\w*|nece|niye|ошиб\w*|проблем\w*|как|почему|работает|открывается)\b',flat)
+    if product and (problem or '?' in text or len(words)>=5): return None
+    return 'replay_no_substantive_support_signal'
+
+
+def _confirmed_resolution(cur,tenant,row):
+    # Only the existing reviewed publication lifecycle supplies confirmation.
+    # Later answers are ranking/comparison evidence and never model input.
+    cur.execute("SELECT to_regclass('saas_knowledge_candidates') AS relation")
+    if not cur.fetchone()['relation']: return None
+    cur.execute('''SELECT c.id FROM saas_knowledge_candidates c JOIN saas_knowledge_extractions e
+      ON e.tenant_id=c.tenant_id AND e.id=c.extraction_id
+      WHERE c.tenant_id=%s::uuid AND c.status='approved' AND c.reviewed_by IS NOT NULL
+        AND c.content->'outcome'->>'status'='confirmed'
+        AND c.content->'source_message_ids' ? %s
+        AND e.route->>'channel_id'=%s AND e.route->>'conversation_id'=%s
+      ORDER BY c.reviewed_at DESC,c.id LIMIT 1''',(tenant,str(row['id']),PILOT_CHANNEL,row['conversation_id']))
+    found=cur.fetchone();return str(found['id']) if found else None

@@ -235,3 +235,26 @@ conversations, change handoff, alter agent modes or populate the live Simulation
 queue. Context is capped at the triggering customer's message; later staff
 answers remain comparison-only evidence. Paid execution still requires a fresh
 exact-five preflight, explicit owner approval and the existing shared $5 ledger.
+
+## Substantive historical examples
+
+Automatic candidate discovery now applies conservative, deterministic text
+triage after all eligibility guards. Greetings, thanks, bare URLs and text
+without an explicit product/support signal do not fill a five-message sample.
+`selection_status=insufficient_technical_examples` means the bounded 200-message
+scan found fewer than five suitable distinct dialogues; it never pads them.
+This is lexical triage, not AI intent classification or a correctness verdict.
+
+Within the suitable set, a source cited by an approved Support Case with a
+confirmed outcome and matching exact tenant/channel/conversation ranks first.
+The response gives `resolution_case_id` and `resolution_status=confirmed_case`.
+Everything else remains `unknown`; an employee reply or thank-you is not proof
+of resolution. Later reviewed outcomes influence selection only and are never
+included in historical model input. Use the existing Support Case/AI Learning
+review workspace to inspect the original evidence before approving a paid run.
+
+Passing `message_ids` explicitly is owner manual selection. Policy-eligible
+messages can be chosen even when lexical triage is inconclusive, and the
+response retains the technical-signal warning and `selection_mode=manual`.
+Identity, media, tenant/channel, date, duplicate and financial guards still
+apply. Manual selection and preflight do not grant permission for paid calls.
