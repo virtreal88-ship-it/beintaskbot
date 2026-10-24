@@ -40,20 +40,29 @@ def apply_agent_prompt(cur, profile, approval_id, draft_id):
     except (ValueError,TypeError): raise TenantLinearError('Invalid approval request.',400) from None
     cur.execute('SELECT * FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,draft_id)); draft=cur.fetchone()
     if not draft or draft['kind']!='agent_improvement' or draft['state']!='draft': raise TenantLinearError('Agent improvement draft is unavailable.',409)
-    body=draft['body'] or {}; allowed={'agent_id','expected_version','instructions'}
+    body=draft['body'] or {}; allowed={'agent_id','expected_version','instructions','testing_turn_id'}
     if not isinstance(body,dict) or set(body)!=allowed or type(body.get('expected_version')) is not int or not isinstance(body.get('instructions'),str): raise TenantLinearError('Invalid agent improvement draft.',400)
     patch=validate_agent({'instructions':body['instructions']},creating=False)
-    try: agent_id=str(uuid.UUID(str(body['agent_id'])))
+    try: agent_id=str(uuid.UUID(str(body['agent_id']))); testing_turn_id=str(uuid.UUID(str(body['testing_turn_id'])))
     except (ValueError,TypeError): raise TenantLinearError('Invalid agent improvement draft.',400) from None
     cur.execute('SELECT id,instructions,version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE',(tenant,agent_id)); agent=cur.fetchone()
     if not agent or agent['version']!=body['expected_version']: raise TenantLinearError('Agent changed; review the draft again.',409)
+    # A production prompt patch requires a completed, private AI Testing turn
+    # against this exact agent version. This excludes real dialogues and any
+    # caller-supplied claim that a test passed.
+    cur.execute('''SELECT t.id FROM saas_ai_test_turns t
+      JOIN saas_ai_test_sessions s ON s.tenant_id=t.tenant_id AND s.id=t.session_id
+      WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.state='completed'
+        AND s.agent_id=%s::uuid AND COALESCE(t.snapshot->>'agent_version','')=%s
+      FOR SHARE''',(tenant,testing_turn_id,agent_id,str(body['expected_version'])))
+    if not cur.fetchone(): raise TenantLinearError('A completed isolated test for this exact agent version is required.',409)
     consume(cur,tenant,approval_id,draft_id,draft['version'],'agent_prompt_apply')
     cur.execute('''UPDATE saas_ai_agents SET instructions=%s,version=version+1,updated_at=now()
       WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING version''',(patch['instructions'],tenant,agent_id)); version=cur.fetchone()['version']
     cur.execute('''INSERT INTO saas_ai_administrator_rollbacks(id,tenant_id,draft_id,approval_id,agent_id,before_instructions,before_version,applied_version,created_by)
       VALUES(%s,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s)''',(uuid.uuid4(),tenant,draft_id,approval_id,agent_id,agent['instructions'],agent['version'],version,actor))
     cur.execute("UPDATE saas_ai_administrator_drafts SET state='applied',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,draft_id))
-    _audit(cur,tenant,actor,'ai_administrator_agent_prompt_applied','ai_agent',agent_id,{'draft_id':draft_id,'approval_id':approval_id,'version':version})
+    _audit(cur,tenant,actor,'ai_administrator_agent_prompt_applied','ai_agent',agent_id,{'draft_id':draft_id,'approval_id':approval_id,'version':version,'testing_turn_id':testing_turn_id})
     return {'agent_id':agent_id,'version':version,'rollback_available':True}
 
 
