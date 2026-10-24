@@ -254,12 +254,14 @@ def _tools(cur,cfg,name,args):
         if 'draft_id' in args: return administrator_apply.apply_agent_config(cur,principal,args['approval_id'],args['draft_id'],cfg)
         return administrator_apply.rollback_agent_config(cur,principal,args['approval_id'],cfg)
     if name == 'administrator_draft_instruction_create': return administrator_drafts.typed_create(cur,cfg,'instruction',args)
-    if name == 'administrator_historical_replay_preflight':
+    if name in {'administrator_historical_replay_preflight','administrator_historical_replay_candidates'}:
         if TOOL_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
-        if not isinstance(args,dict) or set(args)!={'message_ids'}: raise TenantLinearError('Invalid replay preflight.',400)
+        if not isinstance(args,dict) or (set(args)!={'message_ids'} if name=='administrator_historical_replay_preflight' else bool(set(args)-{'message_ids'})): raise TenantLinearError('Invalid replay preflight.',400)
         import tenant_ai_historical_replay as replay
         if (cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['AI_LEARNING_MCP_AGENT_ID'],cfg['AI_LEARNING_MCP_CHANNEL_ID'])!=(replay.PILOT_TENANT,replay.PILOT_AGENT,replay.PILOT_CHANNEL): raise TenantLinearError('Replay outside OAuth scope.',403)
-        return replay.preflight({'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']},args['message_ids'])
+        owner={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']}
+        if name=='administrator_historical_replay_candidates': return replay.eligible_examples(owner,args.get('message_ids'))
+        return replay.preflight(owner,args['message_ids'])
     if name == 'administrator_draft_create': return administrator_drafts.create(cur,cfg,args)
     if name == 'administrator_draft_list': return administrator_drafts.listing(cur,cfg,args)
     if name == 'administrator_draft_update': return administrator_drafts.update(cur,cfg,args)
@@ -403,7 +405,7 @@ async def mcp(request):
         return _jsonrpc(error={'code':-32601,'message':'Method not found'},request_id=request_id)
     except TenantLinearError as exc:
         headers={'WWW-Authenticate':'Bearer'} if exc.status==401 else {}
-        return web.json_response({'error':str(exc)},status=exc.status,headers=headers)
+        return web.json_response({'error':str(exc),**({'details':exc.details} if hasattr(exc,'details') else {})},status=exc.status,headers=headers)
     except Exception:
         return web.json_response({'error':'AI Learning MCP unavailable.'},status=503)
 
@@ -621,6 +623,8 @@ def _config_definitions():
 
 
 def _replay_preflight_definitions():
-    return [{'name':'administrator_historical_replay_preflight','description':'Owner-only read-only preflight for exactly five existing pilot message IDs. Checks model, scope and the shared $5 ledger; never calls a model or executes replay. Request separate owner confirmation before paid execution through the existing replay endpoint.',
+    return [{'name':'administrator_historical_replay_candidates','description':'Owner-only bounded eligible direct customer text selection, or per-message rejection diagnosis. Returns message UUIDs and reason codes only; no texts, phone numbers, names or paid calls. Suggested five IDs still require fresh preflight and separate owner approval.',
+      'inputSchema':{'type':'object','properties':{'message_ids':{'type':'array','minItems':1,'maxItems':25,'uniqueItems':True,'items':{'type':'string','format':'uuid'}}},'additionalProperties':False},
+      'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[TOOL_SCOPE]}]},{'name':'administrator_historical_replay_preflight','description':'Owner-only read-only preflight for exactly five existing pilot message IDs. Checks model, scope and the shared $5 ledger; never calls a model or executes replay. Request separate owner confirmation before paid execution through the existing replay endpoint.',
       'inputSchema':{'type':'object','properties':{'message_ids':{'type':'array','minItems':5,'maxItems':5,'uniqueItems':True,'items':{'type':'string','format':'uuid'}}},'required':['message_ids'],'additionalProperties':False},
       'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[TOOL_SCOPE]}]}]

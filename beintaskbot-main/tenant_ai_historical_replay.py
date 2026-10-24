@@ -95,26 +95,15 @@ def config(cur, profile):
 
 
 def source(cur, tenant, message_id):
-    from tenant_connect_identity import conflicted
     cur.execute('''SELECT m.*,d.conversation_id,d.connect_channel_id FROM saas_crm_messages m
       JOIN saas_connect_conversations d ON d.tenant_id=m.tenant_id AND d.lead_id=m.kommo_lead_id
         AND m.channel='connect:'||d.connect_channel_id::text
       WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid AND d.connect_channel_id=%s::uuid''',
       (tenant,str(message_id),PILOT_CHANNEL))
     row = dict(cur.fetchone() or {})
-    conversation = str(row.get('conversation_id') or '')
-    raw = row.get('raw') or {}
-    when = row.get('happened_at') or row.get('created_at')
-    if isinstance(when,str): when=datetime.fromisoformat(when.replace('Z','+00:00'))
-    media_event = _media_context_event(row)
-    if (row.get('direction') != 'incoming' or not conversation.endswith('@s.whatsapp.net')
-            or not conversation.split('@')[0].isdigit() or raw.get('verified_employee_id') is not None
-            or not when or when < datetime.now(timezone.utc)-timedelta(days=7)
-            or when > datetime.now(timezone.utc)
-            or (not str(row.get('body') or '').strip() and media_event is None)):
-        raise TenantLinearError('replay_requires_recent_verified_direct_customer_text',409)
-    if conflicted(cur,tenant,PILOT_CHANNEL,conversation):
-        raise TenantLinearError('replay_identity_conflict',409)
+    reason=_source_rejection(cur,tenant,row)
+    if reason: raise TenantLinearError(reason,409)
+    conversation=str(row['conversation_id'])
     job={'tenant_id':tenant,'channel_id':PILOT_CHANNEL,'conversation_id':conversation,
          'lead_id':row['kommo_lead_id'],'source_message_id':str(message_id)}
     _, lines = _load_context(cur,job)
@@ -128,7 +117,12 @@ def preflight(profile, message_ids):
     with _connect() as conn:
         with conn.cursor() as cur:
             tenant,_,agent,_,model=config(cur,profile)
-            rows=[source(cur,tenant,message_id)[0] for message_id in message_ids]
+            rows=[]
+            for message_id in message_ids:
+                try: rows.append(source(cur,tenant,message_id)[0])
+                except TenantLinearError as exc:
+                    exc.details={'message_id':message_id,'reason':str(exc),'diagnostic_tool':'administrator_historical_replay_candidates'}
+                    raise
             if len({row['conversation_id'] for row in rows})!=5:
                 raise TenantLinearError('replay_requires_five_distinct_dialogues',409)
             cur.execute('''SELECT COALESCE(sum(CASE WHEN state IN ('reserved','unknown') THEN reserved_microusd
@@ -303,3 +297,75 @@ def one(profile,message_id):
     output.update(outcome='virtual_reply',virtual_reply=sanitize_virtual_reply(raw,agent.get('language') or 'auto'))
     output['quality_assessment']=_quality_status(output)
     return output
+
+
+def _source_rejection(cur,tenant,row):
+    from tenant_connect_identity import conflicted
+    if not row: return 'replay_message_unavailable'
+    conversation=str(row.get('conversation_id') or '')
+    if conversation.endswith('@g.us'): return 'replay_group_not_allowed'
+    if not conversation.endswith('@s.whatsapp.net') or not conversation.split('@')[0].isdigit(): return 'replay_direct_identity_unverified'
+    if row.get('direction')!='incoming': return 'replay_customer_incoming_required'
+    raw=row.get('raw') or {}
+    if not isinstance(raw,dict) or raw.get('verified_employee_id') is not None: return 'replay_employee_message_excluded'
+    when=row.get('happened_at') or row.get('created_at')
+    try:
+        if isinstance(when,str): when=datetime.fromisoformat(when.replace('Z','+00:00'))
+        if when is None or when.tzinfo is None: return 'replay_timestamp_unverified'
+        if when < datetime.now(timezone.utc)-timedelta(days=7): return 'replay_message_too_old'
+        if when > datetime.now(timezone.utc): return 'replay_future_timestamp'
+    except (ValueError,TypeError): return 'replay_timestamp_unverified'
+    if not str(row.get('body') or '').strip() and _media_context_event(row) is None: return 'replay_empty_customer_message'
+    if conflicted(cur,tenant,PILOT_CHANNEL,conversation): return 'replay_identity_conflict'
+    return None
+
+
+def eligible_examples(profile,message_ids=None):
+    """Bounded owner-only read: UUIDs/reason codes, never text, JIDs or names.
+
+    This selector is deliberately stricter than virtual observation: paused or
+    human-owned conversations are excluded from suggested paid examples.
+    """
+    if message_ids is not None:
+        if not isinstance(message_ids,list) or not 1<=len(message_ids)<=25: raise TenantLinearError('replay_selection_invalid',400)
+        try: message_ids=[str(uuid.UUID(str(value))) for value in message_ids]
+        except (ValueError,TypeError): raise TenantLinearError('replay_selection_invalid',400) from None
+        if len(set(message_ids))!=len(message_ids): raise TenantLinearError('replay_selection_invalid',400)
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            tenant,_,_,_,model=config(cur,profile)
+            cur.execute('''SELECT m.id,m.body,m.raw,m.direction,m.message_type,m.happened_at,m.created_at,d.conversation_id,
+                st.state AS conversation_state FROM saas_crm_messages m
+              JOIN saas_connect_conversations d ON d.tenant_id=m.tenant_id AND d.lead_id=m.kommo_lead_id
+                AND m.channel='connect:'||d.connect_channel_id::text
+              LEFT JOIN saas_ai_conversation_state st ON st.tenant_id=m.tenant_id AND st.provider='connect'
+                AND st.channel_id=d.connect_channel_id::text AND st.conversation_id=d.conversation_id
+              WHERE m.tenant_id=%s::uuid AND d.connect_channel_id=%s::uuid
+                AND (%s::uuid[] IS NULL OR m.id=ANY(%s::uuid[]))
+              ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 200''',(tenant,PILOT_CHANNEL,message_ids,message_ids))
+            rows=cur.fetchall(); by_id={}; duplicate=set()
+            for row in rows:
+                key=str(row['id'])
+                if key in by_id: duplicate.add(key)
+                by_id[key]=row
+            cur.execute("SELECT DISTINCT split_part(call_key,':',2) AS source FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key LIKE %s",(tenant,'historical-replay:%'))
+            attempted={row['source'] for row in cur.fetchall()}
+            selected=[]; seen=set(); results=[]
+            for key in (message_ids if message_ids is not None else by_id):
+                row=by_id.get(key); reason=_source_rejection(cur,tenant,row)
+                if key in duplicate: reason='replay_identity_ambiguous'
+                if not reason and row.get('message_type') not in (None,'','text'): reason='replay_text_required'
+                if not reason and row.get('conversation_state') in ('human','paused'): reason='replay_conversation_human_or_paused'
+                if not reason and key in attempted: reason='replay_already_attempted'
+                if not reason and len(attempted)+len(selected)>=5: reason='replay_five_source_limit_reached'
+                conversation=row.get('conversation_id') if row else None
+                if not reason and conversation in seen: reason='replay_duplicate_dialogue'
+                if not reason:
+                    seen.add(conversation)
+                    if len(selected)<5: selected.append(key)
+                results.append({'id':key,'eligible':reason is None,'reason':reason})
+            cur.execute('''SELECT COALESCE(sum(CASE WHEN state IN ('reserved','unknown') THEN reserved_microusd ELSE COALESCE(actual_microusd,reserved_microusd) END),0) AS used FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid''',(tenant,))
+            remaining=max(0,limit_microusd(tenant)-int(cur.fetchone()['used']))
+    return {'items':results,'selected_message_ids':selected,'exact_five_available':len(selected)==5,
+            'model':model,'remaining_microusd':remaining,'cap_microusd':limit_microusd(tenant),
+            'read_only':True,'scan_limit':200,'requires_fresh_preflight':True,'paid_execution_authorized':False}

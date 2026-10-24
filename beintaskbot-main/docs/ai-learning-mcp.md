@@ -206,3 +206,24 @@ Unknown outcomes retain their reservation and must never be retried blindly.
 Readiness validation uses isolated PostgreSQL PGlite plus mock providers; it
 proves lifecycle and financial contracts, not the quality of real model answers.
 Native multi-connection tests remain a separate optional localhost suite.
+
+## Historical Replay eligibility guidance
+
+Call `administrator_historical_replay_candidates` with no arguments for a
+bounded scan of the latest 200 pilot-channel messages, or with `message_ids`
+(1–25 UUIDs) to diagnose a selection. The existing owner API supports the same
+read-only action: `{"action":"eligible_examples","message_ids":[...]}` at
+`/api/platform/ai/testing/historical-replay` (omit `message_ids` to scan).
+The response contains UUIDs, eligibility and rejection codes, never message
+text, customer names, phones or JIDs. `selected_message_ids` proposes up to five
+distinct verified direct customer text dialogues. Groups, LIDs, identity
+conflicts, staff messages, old/future timestamps, media, human/paused chats and
+previously attempted examples are excluded from suggestions. This does not
+change Simulation observation policy for human-owned conversations.
+
+A scan may find fewer than five eligible examples. It does not authorize or
+execute replay. Pass exactly five selected UUIDs to the existing preflight and
+obtain explicit owner consent before paid execution. Missing prices, disabled
+scope and the existing shared maximum $5 budget still fail closed. A rejected
+preflight now includes the failing message UUID and a precise reason code plus
+the diagnostic tool name; no customer content is included in error details.
