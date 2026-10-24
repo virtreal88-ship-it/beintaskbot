@@ -1,11 +1,13 @@
 """Transactional, deliberately narrow application of owner-approved drafts."""
 import os
 import uuid
+import json
 
-from tenant_ai_agents_store import _audit, _authorize
+from tenant_ai_agents_store import _audit, _authorize, save_knowledge
 from tenant_ai_agents_policy import agent as validate_agent
 from tenant_linear_policy import TenantLinearError
 from tenant_ai_administrator_approvals import consume
+from tenant_instruction_library import document as instruction_document, schema as instruction_schema, _assets as instruction_assets
 
 
 def enabled(): return str(os.environ.get('AI_AUTONOMOUS_APPLY_ENABLED') or '').lower() == 'true'
@@ -18,6 +20,10 @@ def ensure_schema(conn):
           draft_id UUID NOT NULL, approval_id UUID NOT NULL UNIQUE, agent_id UUID NOT NULL,
           before_instructions TEXT NOT NULL, before_version INTEGER NOT NULL, applied_version INTEGER NOT NULL,
           rolled_back_at TIMESTAMPTZ NULL, created_by BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_administrator_material_rollbacks(
+          id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('knowledge','instruction')), draft_id UUID NOT NULL, approval_id UUID NOT NULL UNIQUE,
+          object_id UUID NOT NULL, applied_version INTEGER NULL, rolled_back_at TIMESTAMPTZ NULL, created_by BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
 
 
 def _guard(cur, profile):
@@ -77,3 +83,56 @@ def rollback_agent_prompt(cur, profile, approval_id):
     cur.execute('UPDATE saas_ai_administrator_rollbacks SET rolled_back_at=now() WHERE tenant_id=%s::uuid AND approval_id=%s::uuid',(tenant,approval_id))
     _audit(cur,tenant,actor,'ai_administrator_agent_prompt_rolled_back','ai_agent',row['agent_id'],{'approval_id':str(approval_id)})
     return {'agent_id':str(row['agent_id']),'version':value['version'],'rolled_back':True}
+
+
+def _ids(approval_id,draft_id):
+    try: return str(uuid.UUID(str(approval_id))),str(uuid.UUID(str(draft_id)))
+    except (ValueError,TypeError): raise TenantLinearError('Invalid approval request.',400) from None
+
+def apply_knowledge_draft(cur,profile,approval_id,draft_id):
+    tenant,actor=_guard(cur,profile); approval_id,draft_id=_ids(approval_id,draft_id)
+    cur.execute('SELECT * FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,draft_id)); draft=cur.fetchone()
+    if not draft or draft['kind']!='knowledge' or draft['state']!='draft': raise TenantLinearError('Knowledge draft is unavailable.',409)
+    body=draft['body'] or {}; target=draft['target'] or {}
+    if set(body)!={'content','evidence_ids'} or not isinstance(body.get('content'),str) or not body['content'].strip() or set(target)!={'agent_ids'} or not isinstance(target['agent_ids'],list): raise TenantLinearError('Invalid knowledge draft.',400)
+    consume(cur,tenant,approval_id,draft_id,draft['version'],'knowledge_draft_apply')
+    source=save_knowledge({'tenant_id':tenant,'telegram_id':actor},{'title':draft['title'],'kind':'text','content':body['content'].strip(),'active':False},connection=cur.connection)
+    sid=str(source['id']); provenance={'administrator_draft_id':draft_id,'approval_id':approval_id,'evidence_ids':body['evidence_ids'],'review_only':True}
+    cur.execute("UPDATE saas_ai_knowledge_sources SET provenance=COALESCE(provenance,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps(provenance),tenant,sid))
+    cur.execute("INSERT INTO saas_ai_administrator_material_rollbacks(id,tenant_id,kind,draft_id,approval_id,object_id,created_by) VALUES(%s,%s::uuid,'knowledge',%s::uuid,%s::uuid,%s::uuid,%s)",(uuid.uuid4(),tenant,draft_id,approval_id,sid,actor))
+    cur.execute("UPDATE saas_ai_administrator_drafts SET state='applied',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,draft_id)); _audit(cur,tenant,actor,'ai_administrator_knowledge_applied','knowledge_source',sid,{'draft_id':draft_id,'approval_id':approval_id,'review_only':True})
+    return {'source_id':sid,'active':False,'published':False,'agent_bound':False,'rollback_available':True}
+
+def rollback_knowledge_draft(cur,profile,approval_id):
+    tenant,actor=_guard(cur,profile); approval_id,_=_ids(approval_id,uuid.uuid4())
+    cur.execute("SELECT * FROM saas_ai_administrator_material_rollbacks WHERE tenant_id=%s::uuid AND approval_id=%s::uuid AND kind='knowledge' FOR UPDATE",(tenant,approval_id)); row=cur.fetchone()
+    if not row or row.get('rolled_back_at') is not None: raise TenantLinearError('Rollback is unavailable.',409)
+    cur.execute("UPDATE saas_ai_knowledge_sources SET active=FALSE,provenance=COALESCE(provenance,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps({'administrator_rollback':{'approval_id':approval_id}}),tenant,row['object_id']))
+    cur.execute('UPDATE saas_ai_administrator_material_rollbacks SET rolled_back_at=now() WHERE id=%s',(row['id'],)); cur.execute("UPDATE saas_ai_administrator_drafts SET state='rolled_back',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,row['draft_id']))
+    _audit(cur,tenant,actor,'ai_administrator_knowledge_rolled_back','knowledge_source',row['object_id'],{'approval_id':approval_id}); return {'source_id':str(row['object_id']),'rolled_back':True,'active':False}
+
+
+def apply_instruction_draft(cur,profile,approval_id,draft_id):
+    tenant,actor=_guard(cur,profile); approval_id,draft_id=_ids(approval_id,draft_id)
+    cur.execute('SELECT * FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,draft_id)); draft=cur.fetchone()
+    if not draft or draft['kind']!='instruction' or draft['state']!='draft': raise TenantLinearError('Instruction draft is unavailable.',409)
+    body=draft['body'] or {}; target=draft['target'] or {}
+    if set(body)!={'doc'} or set(target)!={'expected_version'} or target['expected_version']!=0: raise TenantLinearError('Invalid instruction draft.',400)
+    doc=instruction_document(body['doc']); instruction_schema(cur.connection); instruction_assets(cur,tenant,doc)
+    consume(cur,tenant,approval_id,draft_id,draft['version'],'instruction_draft_apply')
+    lesson_id=uuid.uuid4()
+    cur.execute('SELECT count(*) AS n FROM saas_instruction_lessons WHERE tenant_id=%s::uuid',(tenant,))
+    if cur.fetchone()['n']>=200: raise TenantLinearError('Lesson limit',409)
+    cur.execute("INSERT INTO saas_instruction_lessons(tenant_id,id,doc) VALUES(%s::uuid,%s::uuid,%s::jsonb)",(tenant,lesson_id,json.dumps(doc)))
+    cur.execute("INSERT INTO saas_ai_administrator_material_rollbacks(id,tenant_id,kind,draft_id,approval_id,object_id,applied_version,created_by) VALUES(%s,%s::uuid,'instruction',%s::uuid,%s::uuid,%s::uuid,1,%s)",(uuid.uuid4(),tenant,draft_id,approval_id,lesson_id,actor))
+    cur.execute("UPDATE saas_ai_administrator_drafts SET state='applied',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,draft_id)); _audit(cur,tenant,actor,'ai_administrator_instruction_applied','instruction',lesson_id,{'draft_id':draft_id,'approval_id':approval_id,'state':'draft'})
+    return {'lesson_id':str(lesson_id),'state':'draft','published':False,'rollback_available':True}
+
+def rollback_instruction_draft(cur,profile,approval_id):
+    tenant,actor=_guard(cur,profile); approval_id,_=_ids(approval_id,uuid.uuid4())
+    cur.execute("SELECT * FROM saas_ai_administrator_material_rollbacks WHERE tenant_id=%s::uuid AND approval_id=%s::uuid AND kind='instruction' FOR UPDATE",(tenant,approval_id)); row=cur.fetchone()
+    if not row or row.get('rolled_back_at') is not None: raise TenantLinearError('Rollback is unavailable.',409)
+    cur.execute("UPDATE saas_instruction_lessons SET state='archived',archived_at=now(),archived_by=%s,archived_from_state=state,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='draft' AND version=%s RETURNING version",(actor,tenant,row['object_id'],row['applied_version']))
+    if not cur.fetchone(): raise TenantLinearError('Instruction changed after application; rollback requires a new review.',409)
+    cur.execute('UPDATE saas_ai_administrator_material_rollbacks SET rolled_back_at=now() WHERE id=%s',(row['id'],)); cur.execute("UPDATE saas_ai_administrator_drafts SET state='rolled_back',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,row['draft_id']))
+    _audit(cur,tenant,actor,'ai_administrator_instruction_rolled_back','instruction',row['object_id'],{'approval_id':approval_id}); return {'lesson_id':str(row['object_id']),'rolled_back':True,'state':'archived'}
