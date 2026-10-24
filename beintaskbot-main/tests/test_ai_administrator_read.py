@@ -17,6 +17,7 @@ import tenant_ai_administrator_approvals as approvals
 import tenant_ai_administrator_observations as observations
 import tenant_ai_administrator_apply as apply
 import tenant_ai_administrator_api as administrator_api
+import tenant_instruction_library as instruction_library
 from tenant_ai_testing_schema import create_schema as create_testing_schema
 
 
@@ -406,4 +407,36 @@ def test_synthetic_observation_to_tested_owner_approval_apply_and_rollback(db,mo
         applied=apply.apply_agent_prompt(cur,PROFILE,receipt['id'],draft['id'])
         assert applied['rollback_available'] is True
         assert apply.rollback_agent_prompt(cur,PROFILE,receipt['id'])['rolled_back'] is True
+    db.commit()
+
+
+def test_owner_approved_knowledge_apply_is_inactive_and_can_be_rolled_back(db,monkeypatch):
+    seed_simulation(db); _setup(monkeypatch,db)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE,mcp.APPLY_SCOPE]
+    with db.cursor() as cur:
+        draft=drafts.create(cur,cfg,{'kind':'knowledge','title':'Verified draft','body':{'content':'Verified ERP guidance.','evidence_ids':[]},'target':{'agent_ids':[]}})
+        receipt=approvals.request(cur,PROFILE,draft['id'],draft['version']); approvals.approve(cur,PROFILE,receipt['id'],'approve')
+        applied=mcp._tools(cur,cfg,'administrator_apply_knowledge_draft',{'approval_id':receipt['id'],'draft_id':draft['id']})
+        assert applied['active'] is False and applied['published'] is False and applied['agent_bound'] is False
+        cur.execute('SELECT active,agent_id,provenance FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,applied['source_id']))
+        source=cur.fetchone(); assert source['active'] is False and source['agent_id'] is None and source['provenance']['review_only'] is True
+        assert mcp._tools(cur,cfg,'administrator_rollback_knowledge_draft',{'approval_id':receipt['id']})['rolled_back'] is True
+        with pytest.raises(Exception): mcp._tools(cur,cfg,'administrator_rollback_knowledge_draft',{'approval_id':receipt['id']})
+    db.commit()
+
+
+def test_owner_approved_instruction_apply_stays_draft_and_rolls_back(db,monkeypatch):
+    seed_simulation(db); _setup(monkeypatch,db)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
+    instruction_library.schema(db); asset=str(uuid.uuid4()); db.execute('INSERT INTO saas_instruction_assets VALUES(%s::uuid,%s::uuid,%s,100,100,%s)',(A,asset,b'jpeg','a'*64)); db.commit()
+    doc={'schema_version':1,'title':'Safe lesson','operation':'erp.safe','language':'az','slides':[{'id':'s1','order':1,'title':'Step','explanation':'Read only','note':'No save','image':{'asset_id':asset+'.jpg','width':100,'height':100,'sha256':'a'*64},'areas':[],'playback':{'duration_ms':5000,'transition_ms':0,'focus':[],'return_to_overview':True}}],'subtitles':{'slides':[[{'at_ms':0,'text':'Read only'}]]}}
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE,mcp.APPLY_SCOPE]
+    with db.cursor() as cur:
+        draft=drafts.typed_create(cur,cfg,'instruction',{'title':'Safe lesson','doc':doc})
+        receipt=approvals.request(cur,PROFILE,draft['id'],draft['version']); approvals.approve(cur,PROFILE,receipt['id'],'approve')
+        applied=mcp._tools(cur,cfg,'administrator_apply_instruction_draft',{'approval_id':receipt['id'],'draft_id':draft['id']})
+        assert applied['state']=='draft' and applied['published'] is False
+        cur.execute('SELECT state,version FROM saas_instruction_lessons WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,applied['lesson_id'])); assert cur.fetchone()['state']=='draft'
+        assert mcp._tools(cur,cfg,'administrator_rollback_instruction_draft',{'approval_id':receipt['id']})['state']=='archived'
     db.commit()

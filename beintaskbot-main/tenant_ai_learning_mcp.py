@@ -285,6 +285,22 @@ def _tools(cur,cfg,name,args):
         if APPLY_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
         if set(args)!={'approval_id'}: raise TenantLinearError('Invalid administrator rollback request.',400)
         return administrator_apply.rollback_agent_prompt(cur,profile,args['approval_id'])
+    if name == 'administrator_apply_knowledge_draft':
+        if APPLY_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
+        if set(args)!={'approval_id','draft_id'}: raise TenantLinearError('Invalid administrator apply request.',400)
+        return administrator_apply.apply_knowledge_draft(cur,profile,args['approval_id'],args['draft_id'])
+    if name == 'administrator_rollback_knowledge_draft':
+        if APPLY_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
+        if set(args)!={'approval_id'}: raise TenantLinearError('Invalid administrator rollback request.',400)
+        return administrator_apply.rollback_knowledge_draft(cur,profile,args['approval_id'])
+    if name == 'administrator_apply_instruction_draft':
+        if APPLY_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
+        if set(args)!={'approval_id','draft_id'}: raise TenantLinearError('Invalid administrator apply request.',400)
+        return administrator_apply.apply_instruction_draft(cur,profile,args['approval_id'],args['draft_id'])
+    if name == 'administrator_rollback_instruction_draft':
+        if APPLY_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
+        if set(args)!={'approval_id'}: raise TenantLinearError('Invalid administrator rollback request.',400)
+        return administrator_apply.rollback_instruction_draft(cur,profile,args['approval_id'])
     if name=='simulation_runs': return _runs(cur,cfg,args.get('cursor',''),args.get('limit',10),bool(args.get('include_context')))
     if name=='learning_issues':
         result=_runs(cur,cfg,args.get('cursor',''),MAX_PAGE,False); groups={}
@@ -330,6 +346,18 @@ def _administrator_apply_definitions():
        'inputSchema':{'type':'object','properties':{'approval_id':{'type':'string'},'draft_id':{'type':'string'}},'required':['approval_id','draft_id'],'additionalProperties':False},
        'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'administrator_rollback_agent_prompt','description':'Restore the exact prompt snapshot created by a prior approved application. It fails if the agent changed after application and can only be used once.',
+       'inputSchema':{'type':'object','properties':{'approval_id':{'type':'string'}},'required':['approval_id'],'additionalProperties':False},
+       'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'administrator_apply_knowledge_draft','description':'Store one owner-approved knowledge draft only as inactive review material. It cannot publish or bind it to an agent.',
+       'inputSchema':{'type':'object','properties':{'approval_id':{'type':'string'},'draft_id':{'type':'string'}},'required':['approval_id','draft_id'],'additionalProperties':False},
+       'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'administrator_rollback_knowledge_draft','description':'Withdraw an applied inactive knowledge review source without deleting evidence.',
+       'inputSchema':{'type':'object','properties':{'approval_id':{'type':'string'}},'required':['approval_id'],'additionalProperties':False},
+       'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'administrator_apply_instruction_draft','description':'Create one owner-approved Instruction Library draft. It cannot submit, approve, publish, share, or bind knowledge.',
+       'inputSchema':{'type':'object','properties':{'approval_id':{'type':'string'},'draft_id':{'type':'string'}},'required':['approval_id','draft_id'],'additionalProperties':False},
+       'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'administrator_rollback_instruction_draft','description':'Archive one untouched applied Instruction Library draft. It fails closed after any review or edit.',
        'inputSchema':{'type':'object','properties':{'approval_id':{'type':'string'}},'required':['approval_id'],'additionalProperties':False},
        'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
     ]

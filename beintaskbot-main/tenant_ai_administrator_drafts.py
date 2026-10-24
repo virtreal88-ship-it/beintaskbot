@@ -11,7 +11,7 @@ from tenant_ai_agents_store import _audit, _authorize
 from tenant_linear_policy import TenantLinearError
 
 DRAFT_SCOPE = 'ai_learning.drafts'
-KINDS = {'agent_improvement', 'knowledge', 'support_case', 'testing_scenario'}
+KINDS = {'agent_improvement', 'knowledge', 'instruction', 'support_case', 'testing_scenario'}
 
 
 def enabled():
@@ -25,8 +25,10 @@ def ensure_schema(conn):
           kind TEXT NOT NULL, title TEXT NOT NULL, body JSONB NOT NULL, target JSONB NOT NULL DEFAULT '{}'::jsonb,
           state TEXT NOT NULL DEFAULT 'draft', version INTEGER NOT NULL DEFAULT 1,
           created_by BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-          CHECK(kind IN ('agent_improvement','knowledge','support_case','testing_scenario')),
+          CHECK(kind IN ('agent_improvement','knowledge','instruction','support_case','testing_scenario')),
           CHECK(state IN ('draft','applied','rolled_back')))''')
+        cur.execute('ALTER TABLE saas_ai_administrator_drafts DROP CONSTRAINT IF EXISTS saas_ai_administrator_drafts_kind_check')
+        cur.execute("ALTER TABLE saas_ai_administrator_drafts ADD CONSTRAINT saas_ai_administrator_drafts_kind_check CHECK(kind IN ('agent_improvement','knowledge','instruction','support_case','testing_scenario'))")
         cur.execute('ALTER TABLE saas_ai_administrator_drafts DROP CONSTRAINT IF EXISTS saas_ai_administrator_drafts_state_check')
         cur.execute("ALTER TABLE saas_ai_administrator_drafts ADD CONSTRAINT saas_ai_administrator_drafts_state_check CHECK(state IN ('draft','applied','rolled_back'))")
         cur.execute('CREATE INDEX IF NOT EXISTS saas_ai_administrator_drafts_tenant_idx ON saas_ai_administrator_drafts(tenant_id,updated_at DESC)')
@@ -53,6 +55,7 @@ def definitions():
       {'name':'administrator_draft_restore','description':'Restore one earlier immutable version as a new non-public draft version. It cannot apply or publish changes.','inputSchema':{'type':'object','properties':{'id':{'type':'string'},'version':{'type':'integer','minimum':1},'expected_version':{'type':'integer','minimum':1}},'required':['id','version','expected_version'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_agent_prompt_create','description':'Prepare a tested non-public prompt patch for one existing agent. It cannot apply the patch.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'agent_id':{'type':'string'},'expected_version':{'type':'integer','minimum':1},'instructions':{'type':'string','maxLength':24000},'testing_turn_id':{'type':'string'}},'required':['title','agent_id','expected_version','instructions','testing_turn_id'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_knowledge_create','description':'Prepare non-public knowledge with explicit evidence references. It cannot publish or bind knowledge.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'content':{'type':'string','maxLength':24000},'evidence_ids':{'type':'array','items':{'type':'string'},'maxItems':50},'agent_ids':{'type':'array','items':{'type':'string'},'maxItems':50}},'required':['title','content','evidence_ids'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
+      {'name':'administrator_draft_instruction_create','description':'Prepare an immutable Instruction Library draft document. Applying it can only create a library draft; it cannot submit, approve, publish, or bind knowledge.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'doc':{'type':'object'}},'required':['title','doc'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_knowledge_separation_create','description':'Prepare an owner-reviewed, non-public proposal to separate agent behaviour rules from verified product knowledge in one currently active source. It verifies a cited Simulation Run retrieved that source, records the source hash, and never edits, archives, publishes, or binds the source.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'source_id':{'type':'string'},'source_content_hash':{'type':'string','minLength':1,'maxLength':128},'simulation_run_id':{'type':'string'},'behavior_rules':{'type':'string','minLength':1,'maxLength':12000},'product_knowledge':{'type':'string','minLength':1,'maxLength':12000},'rationale':{'type':'string','maxLength':4000}},'required':['title','source_id','source_content_hash','simulation_run_id','behavior_rules','product_knowledge'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_support_case_create','description':'Prepare a non-public support-case proposal with evidence IDs. It cannot publish a case.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'problem':{'type':'string','maxLength':12000},'evidence_message_ids':{'type':'array','items':{'type':'string'},'maxItems':50}},'required':['title','problem','evidence_message_ids'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_testing_scenario_create','description':'Prepare a synthetic AI Testing scenario. It cannot run a model or send a message.','inputSchema':{'type':'object','properties':{'title':{'type':'string','maxLength':240},'synthetic_input':{'type':'string','maxLength':8000},'expected':{'type':'string','maxLength':8000}},'required':['title','synthetic_input','expected'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
@@ -175,6 +178,12 @@ def typed_create(cur,cfg,name,data):
             cur.execute('SELECT count(*) AS n FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) AND archived_at IS NULL',(tenant,agents))
             if int(cur.fetchone()['n'])!=len(agents): raise TenantLinearError('Knowledge target is unavailable for this company.',404)
         return create(cur,cfg,{'kind':'knowledge','title':data.get('title'),'body':{'content':data['content'].strip(),'evidence_ids':evidence},'target':{'agent_ids':agents}})
+    if name=='instruction':
+        if set(data)!={'title','doc'} or not isinstance(data.get('doc'),dict): raise TenantLinearError('Invalid instruction proposal.',400)
+        from tenant_instruction_library import document
+        doc=document(data['doc'])
+        if doc['title']!=data['title'].strip(): raise TenantLinearError('Instruction title must match its document.',400)
+        return create(cur,cfg,{'kind':'instruction','title':data['title'],'body':{'doc':doc},'target':{'expected_version':0}})
     if name=='knowledge_separation':
         proposal=_knowledge_separation(cur,tenant,data)
         return create(cur,cfg,{'kind':'knowledge','title':data['title'],'body':proposal,
