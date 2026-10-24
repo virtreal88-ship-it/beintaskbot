@@ -102,10 +102,10 @@ def apply_knowledge_draft(cur,profile,approval_id,draft_id):
     cur.execute('SELECT * FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,draft_id)); draft=cur.fetchone()
     if not draft or draft['kind']!='knowledge' or draft['state']!='draft': raise TenantLinearError('Knowledge draft is unavailable.',409)
     body=draft['body'] or {}; target=draft['target'] or {}
-    if set(body)!={'content','evidence_ids'} or not isinstance(body.get('content'),str) or not body['content'].strip() or set(target)!={'agent_ids'} or not isinstance(target['agent_ids'],list): raise TenantLinearError('Invalid knowledge draft.',400)
+    if set(body)!={'content','evidence_ids'} or not isinstance(body.get('content'),str) or not body['content'].strip() or not {'agent_ids'}<=set(target) or bool(set(target)-{'agent_ids','review_run_id','review_request_key'}) or not isinstance(target['agent_ids'],list): raise TenantLinearError('Invalid knowledge draft.',400)
     consume(cur,tenant,approval_id,draft_id,draft['version'],'knowledge_draft_apply')
     source=save_knowledge({'tenant_id':tenant,'telegram_id':actor},{'title':draft['title'],'kind':'text','content':body['content'].strip(),'active':False},connection=cur.connection)
-    sid=str(source['id']); provenance={'administrator_draft_id':draft_id,'approval_id':approval_id,'evidence_ids':body['evidence_ids'],'review_only':True}
+    sid=str(source['id']); provenance={'administrator_draft_id':draft_id,'approval_id':approval_id,'evidence_ids':body['evidence_ids'],'review_only':True,**{k:target[k] for k in ('review_run_id','review_request_key') if k in target}}
     cur.execute("UPDATE saas_ai_knowledge_sources SET provenance=COALESCE(provenance,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps(provenance),tenant,sid))
     cur.execute("INSERT INTO saas_ai_administrator_material_rollbacks(id,tenant_id,kind,draft_id,approval_id,object_id,created_by) VALUES(%s,%s::uuid,'knowledge',%s::uuid,%s::uuid,%s::uuid,%s)",(uuid.uuid4(),tenant,draft_id,approval_id,sid,actor))
     cur.execute("UPDATE saas_ai_administrator_drafts SET state='applied',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,draft_id)); _audit(cur,tenant,actor,'ai_administrator_knowledge_applied','knowledge_source',sid,{'draft_id':draft_id,'approval_id':approval_id,'review_only':True})
