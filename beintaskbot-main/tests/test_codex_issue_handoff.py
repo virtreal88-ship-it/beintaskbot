@@ -38,7 +38,12 @@ def test_contract_rejects_missing_or_unsafe_structure():
 
 
 def test_workflow_has_explicit_labels_environment_and_no_merge_or_deploy():
-    workflow = Path(".github/workflows/codex-issue-handoff.yml").read_text(encoding="utf-8")
+    repository_root = Path(__file__).resolve().parents[2]
+    workflow_path = repository_root / ".github/workflows/codex-issue-handoff.yml"
+    assert workflow_path.is_file()
+    workflow = workflow_path.read_text(encoding="utf-8")
     assert "codex:ready" in workflow and "codex:approved" in workflow
     assert "codex-readonly-approved" in workflow and "openai/codex-action" in workflow
+    assert "python beintaskbot-main/scripts/codex_issue_handoff.py" in workflow
+    assert "beintaskbot-main/.codex-handoff-contract.json" in workflow
     assert "gh pr merge" not in workflow and "railway up" not in workflow.casefold()
