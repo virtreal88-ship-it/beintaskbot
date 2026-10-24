@@ -30,6 +30,17 @@ def ensure_schema(conn):
         cur.execute('ALTER TABLE saas_ai_administrator_drafts DROP CONSTRAINT IF EXISTS saas_ai_administrator_drafts_state_check')
         cur.execute("ALTER TABLE saas_ai_administrator_drafts ADD CONSTRAINT saas_ai_administrator_drafts_state_check CHECK(state IN ('draft','applied','rolled_back'))")
         cur.execute('CREATE INDEX IF NOT EXISTS saas_ai_administrator_drafts_tenant_idx ON saas_ai_administrator_drafts(tenant_id,updated_at DESC)')
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_administrator_draft_versions(
+          tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+          draft_id UUID NOT NULL REFERENCES saas_ai_administrator_drafts(id) ON DELETE CASCADE,
+          version INTEGER NOT NULL, title TEXT NOT NULL, body JSONB NOT NULL, target JSONB NOT NULL,
+          created_by BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,draft_id,version))''')
+        # Additive backfill preserves the current version of records created
+        # before immutable snapshots existed. It never overwrites history.
+        cur.execute('''INSERT INTO saas_ai_administrator_draft_versions(tenant_id,draft_id,version,title,body,target,created_by,created_at)
+          SELECT tenant_id,id,version,title,body,target,created_by,updated_at FROM saas_ai_administrator_drafts
+          ON CONFLICT(tenant_id,draft_id,version) DO NOTHING''')
 
 
 def definitions():
@@ -38,6 +49,7 @@ def definitions():
       {'name':'administrator_draft_create','description':'Create a non-public proposal. It cannot apply or publish changes.','inputSchema':schema,'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_list','description':'List non-public proposals for this company.','inputSchema':{'type':'object','properties':{'limit':schema['properties']['limit']},'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
       {'name':'administrator_draft_update','description':'Edit a non-public proposal with optimistic versioning. It cannot apply or publish changes.','inputSchema':schema,'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
+      {'name':'administrator_draft_versions','description':'Read immutable snapshots of one non-public proposal. It cannot apply or publish changes.','inputSchema':{'type':'object','properties':{'id':{'type':'string'}},'required':['id'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}]},
     ]
 
 
@@ -63,7 +75,7 @@ def create(cur,cfg,data):
     _guard(cfg);_valid(data,True); tenant,actor=_authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']})
     ident=uuid.uuid4(); cur.execute('''INSERT INTO saas_ai_administrator_drafts(id,tenant_id,kind,title,body,target,created_by)
       VALUES(%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s) RETURNING *''',(ident,tenant,data['kind'],data['title'].strip(),json.dumps(data.get('body') or {}),json.dumps(data.get('target') or {}),actor))
-    row=dict(cur.fetchone()); _audit(cur,tenant,actor,'ai_administrator_draft_created','ai_administrator_draft',ident,{'kind':row['kind']}); return public(row)
+    row=dict(cur.fetchone()); _snapshot(cur,tenant,row,actor); _audit(cur,tenant,actor,'ai_administrator_draft_created','ai_administrator_draft',ident,{'kind':row['kind']}); return public(row)
 
 
 def listing(cur,cfg,data):
@@ -82,7 +94,24 @@ def update(cur,cfg,data):
     title=data.get('title',row['title']).strip() if isinstance(data.get('title',row['title']),str) else row['title']; body=data.get('body',row['body']); target=data.get('target',row['target'])
     cur.execute('''UPDATE saas_ai_administrator_drafts SET title=%s,body=%s::jsonb,target=%s::jsonb,version=version+1,updated_at=now()
       WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING *''',(title,json.dumps(body),json.dumps(target),tenant,data['id']))
-    result=public(dict(cur.fetchone())); _audit(cur,tenant,actor,'ai_administrator_draft_updated','ai_administrator_draft',data['id'],{}); return result
+    current=dict(cur.fetchone()); _snapshot(cur,tenant,current,actor); result=public(current); _audit(cur,tenant,actor,'ai_administrator_draft_updated','ai_administrator_draft',data['id'],{}); return result
+
+
+def versions(cur,cfg,data):
+    _guard(cfg)
+    if not isinstance(data,dict) or set(data)!={'id'}:
+        raise TenantLinearError('Invalid draft history.',400)
+    try: draft_id=str(uuid.UUID(str(data['id'])))
+    except (TypeError,ValueError): raise TenantLinearError('Invalid draft history.',400) from None
+    cur.execute('''SELECT draft_id AS id,version,title,body,target,created_at FROM saas_ai_administrator_draft_versions
+      WHERE tenant_id=%s::uuid AND draft_id=%s::uuid ORDER BY version''',(cfg['AI_LEARNING_MCP_TENANT_ID'],draft_id))
+    return {'items':[public(dict(row)) for row in cur.fetchall()]}
+
+
+def _snapshot(cur,tenant,row,actor):
+    cur.execute('''INSERT INTO saas_ai_administrator_draft_versions(tenant_id,draft_id,version,title,body,target,created_by)
+      VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s) ON CONFLICT(tenant_id,draft_id,version) DO NOTHING''',
+      (tenant,row['id'],row['version'],row['title'],json.dumps(row['body']),json.dumps(row['target']),actor))
 
 
 def public(row):

@@ -196,6 +196,7 @@ def _tools(cur,cfg,name,args):
     if name == 'administrator_draft_create': return administrator_drafts.create(cur,cfg,args)
     if name == 'administrator_draft_list': return administrator_drafts.listing(cur,cfg,args)
     if name == 'administrator_draft_update': return administrator_drafts.update(cur,cfg,args)
+    if name == 'administrator_draft_versions': return administrator_drafts.versions(cur,cfg,args)
     profile={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']}
     if name == 'administrator_approval_request':
         if DRAFT_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
