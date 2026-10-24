@@ -50,6 +50,8 @@ def test_owner_http_preflight_execute_and_duplicate_use_existing_shared_ledger(b
             assert result.status==200
             report=(await result.json())['result']
             assert len(report['results'])==5 and all(not item['sent'] and not item['crm_mutations'] for item in report['results'])
+            assert all(item['quality_assessment']['verdict']=='not_reviewed' for item in report['results'])
+            assert all(item['quality_assessment']['model_call_success_is_not_quality_proof'] for item in report['results'])
             assert [row['author_type'] for row in report['results'][0]['comparison_only_employee_replies']]==['operator','employee']
             assert (await client.post('/replay',json=data,headers=headers)).status==200
             assert (await client.get('/replay',params={'request_id':request_id})).status==200

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "sample_size": 5,
+  "categories": [
+    {"id": "technical", "expected_policy": "evaluate_configured_primary_policy"},
+    {"id": "operator_follow_up", "expected_policy": "observe_active_stop_without_mutating_live_state"},
+    {"id": "expert_or_knowledge", "expected_policy": "use_only_bound_expert_and_approved_knowledge"},
+    {"id": "media", "expected_policy": "persisted_context_or_explicit_non_paid_media_stop"},
+    {"id": "policy_stop", "expected_policy": "preserve_scope_pause_handoff_or_group_binding_stop"}
+  ],
+  "privacy": "Production message ids and text belong only in the private owner report."
+}
