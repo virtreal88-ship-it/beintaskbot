@@ -109,11 +109,14 @@ def test_exact_knowledge_duplicates_can_be_previewed_archived_and_rolled_back(cr
     second=agents.save_knowledge(PROFILE,{**payload,'title':'Duplicate','setup_key':'dedup-duplicate-key'})
     preview=agents.knowledge_deduplication(PROFILE,{'action':'preview','canonical_id':first['id'],'duplicate_ids':[second['id']]})
     assert preview['eligible'] is True and preview['checks'][0]['chunks_match'] is True
-    archived=agents.knowledge_deduplication(PROFILE,{'action':'archive','canonical_id':first['id'],'duplicate_ids':[second['id']]})
+    archived=agents.knowledge_deduplication(PROFILE,{'action':'archive','canonical_id':first['id'],'duplicate_ids':[second['id']],
+        'expected_precondition':preview['precondition'],'request_key':str(uuid.uuid4())})
     assert archived['changed_ids']==[second['id']]
     row=creation.execute('SELECT active,content FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(second['id'],))[0]
     assert row=={'active':False,'content':'Exact verified warehouse guidance.'}
-    restored=agents.knowledge_deduplication(PROFILE,{'action':'rollback','canonical_id':first['id'],'duplicate_ids':[second['id']]})
+    rollback_preview=agents.knowledge_deduplication(PROFILE,{'action':'preview','canonical_id':first['id'],'duplicate_ids':[second['id']]})
+    restored=agents.knowledge_deduplication(PROFILE,{'action':'rollback','canonical_id':first['id'],'duplicate_ids':[second['id']],
+        'expected_precondition':rollback_preview['precondition'],'request_key':str(uuid.uuid4())})
     assert restored['action']=='rollback'
     assert creation.execute('SELECT active FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(second['id'],))[0]['active'] is True
 
@@ -129,6 +132,19 @@ def test_knowledge_deduplication_fails_closed_for_content_or_owner_mismatch(crea
     creation.execute("UPDATE saas_tenant_members SET role='admin' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));creation.commit()
     with pytest.raises(TenantLinearError):
         agents.knowledge_deduplication(PROFILE,{'action':'preview','canonical_id':first['id'],'duplicate_ids':[second['id']]})
+
+
+def test_knowledge_deduplication_rejects_stale_preview_precondition(creation):
+    agent=agents.save_agent(PROFILE,draft())
+    payload={'kind':'txt','content':'Verified same content','active':True,'agent_id':agent['id']}
+    first=agents.save_knowledge(PROFILE,{**payload,'title':'Canonical','setup_key':'dedup-precondition-canonical'})
+    second=agents.save_knowledge(PROFILE,{**payload,'title':'Duplicate','setup_key':'dedup-precondition-duplicate'})
+    preview=agents.knowledge_deduplication(PROFILE,{'action':'preview','canonical_id':first['id'],'duplicate_ids':[second['id']]})
+    creation.execute('UPDATE saas_ai_knowledge_sources SET title=%s,updated_at=now() WHERE id=%s::uuid',('Changed after preview',second['id']))
+    creation.commit()
+    with pytest.raises(TenantLinearError):
+        agents.knowledge_deduplication(PROFILE,{'action':'archive','canonical_id':first['id'],'duplicate_ids':[second['id']],
+            'expected_precondition':preview['precondition'],'request_key':str(uuid.uuid4())})
 
 
 @pytest.mark.parametrize('case',['foreign_channel','foreign_actor','inactive','archived','worker','admin_without_permission'])
