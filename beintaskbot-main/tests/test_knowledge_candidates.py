@@ -672,3 +672,29 @@ def test_listing_hides_rejected_by_default_and_supports_explicit_filters(ready):
     included=store.listing(PROFILE,{'limit':25,'status':'all'})['candidates']
     assert [item['id'] for item in rejected]==[value['id']]
     assert [item['id'] for item in included]==[value['id']]
+
+
+def test_owner_can_archive_and_restore_case_without_losing_knowledge(ready):
+    ready=confirmed_case(ready)
+    db,_,_=ready
+    value=candidate(ready)
+    approved=store.mutate(PROFILE,value['id'],{'expected_version':1,'agent_ids':[AGENT]},'approve')['candidate']
+    assert db.execute("SELECT active FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid",(A,))[0]['active']
+    archived=store.mutate(PROFILE,value['id'],{'expected_version':approved['version']},'archive')['candidate']
+    assert archived['status']=='archived'
+    assert store.listing(PROFILE,{'limit':25})['candidates']==[]
+    assert store.listing(PROFILE,{'limit':25,'status':'archived'})['candidates'][0]['id']==value['id']
+    assert not db.execute("SELECT active FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid",(A,))[0]['active']
+    restored=store.mutate(PROFILE,value['id'],{'expected_version':archived['version']},'restore')['candidate']
+    assert restored['status']=='approved'
+    assert db.execute("SELECT active FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid",(A,))[0]['active']
+
+
+def test_case_archive_is_owner_admin_only_and_uses_version(ready):
+    db,_,_=ready;value=candidate(ready)
+    db.execute("UPDATE saas_tenant_members SET role='manager' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));db.commit()
+    with pytest.raises(TenantLinearError):
+        store.mutate(PROFILE,value['id'],{'expected_version':1},'archive')
+    db.execute("UPDATE saas_tenant_members SET role='owner' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));db.commit()
+    with pytest.raises(TenantLinearError,match='изменилась'):
+        store.mutate(PROFILE,value['id'],{'expected_version':0},'archive')
