@@ -37,7 +37,7 @@ def test_cursor_is_opaque_signed_and_context_redaction(monkeypatch):
     assert '[phone]' in mcp._redact('call +994501234567') and '[redacted]' in mcp._redact('api_key=private')
 
 
-def _setup(monkeypatch, database):
+def _setup(monkeypatch, database, scope=None):
     monkeypatch.setattr(mcp, '_connect', lambda: database)
     monkeypatch.setenv('AI_LEARNING_MCP_ENABLED','true')
     monkeypatch.setenv('AI_LEARNING_MCP_ISSUER','https://crm.test')
@@ -47,9 +47,9 @@ def _setup(monkeypatch, database):
     monkeypatch.setenv('AI_LEARNING_MCP_CURSOR_SECRET','test-only-cursor-secret')
     mcp.ensure_mcp_schema(database)
     token='read-only-test-token'
-    database.execute('''INSERT INTO saas_ai_learning_mcp_tokens(id,tenant_id,token_hash,agent_id,channel_id,client_id,expires_at,created_by)
-      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,'https://chatgpt.com/oauth/client.json',now()+interval '1 hour',11)''',
-      (str(uuid.uuid4()),A,hashlib.sha256(token.encode()).hexdigest(),AGENT,CA))
+    database.execute('''INSERT INTO saas_ai_learning_mcp_tokens(id,tenant_id,token_hash,agent_id,channel_id,client_id,scope,expires_at,created_by)
+      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,'https://chatgpt.com/oauth/client.json',%s,now()+interval '1 hour',11)''',
+      (str(uuid.uuid4()),A,hashlib.sha256(token.encode()).hexdigest(),AGENT,CA,scope or mcp.TOOL_SCOPE))
     database.commit()
     return token
 
@@ -105,6 +105,42 @@ def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, 
             assert mcp.OFFLINE_SCOPE in data['scopes_supported']
             protected=await client.get('/.well-known/oauth-protected-resource/mcp/ai-learning')
             assert (await protected.json())['resource']=='https://crm.test/mcp/ai-learning'
+    asyncio.run(check())
+
+
+def test_draft_scope_requires_reauthorization_and_has_accurate_consent(db, monkeypatch):
+    token=_setup(monkeypatch,db)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
+    monkeypatch.setattr(mcp, '_authorize', lambda cur, profile: (A, 11))
+    verifier='v'*43
+    challenge=mcp._b64(hashlib.sha256(verifier.encode()).digest())
+    async def check():
+        app=web.Application()
+        for method,path,handler in mcp.routes(lambda request: {'role':'owner'}):
+            getattr(app.router, 'add_'+method.lower())(path,handler)
+        async with TestClient(TestServer(app)) as client:
+            denied=await client.post('/mcp/ai-learning',headers={'Authorization':'Bearer '+token},json={
+                'jsonrpc':'2.0','id':1,'method':'tools/call',
+                'params':{'name':'administrator_draft_list','arguments':{}}})
+            assert denied.status==403 and (await denied.json())['error']=='Additional OAuth scope required.'
+            query={'response_type':'code','client_id':CHATGPT_CLIENT,'redirect_uri':CHATGPT_REDIRECT,
+                   'scope':mcp.TOOL_SCOPE+' '+mcp.DRAFT_SCOPE,'state':'drafts','code_challenge':challenge,
+                   'code_challenge_method':'S256','resource':'https://crm.test/mcp/ai-learning'}
+            consent=await client.get('/oauth/authorize',params=query)
+            body=await consent.text()
+            assert consent.status==200
+            assert 'Allow draft proposal access' in body
+            assert 'cannot send messages, publish knowledge, change settings, or apply a prompt' in body
+            allowed=await client.post('/oauth/authorize',data={key:value for key,value in query.items() if key != 'response_type'},allow_redirects=False)
+            code=parse_qs(urlparse(allowed.headers['Location']).query)['code'][0]
+            issued=await client.post('/oauth/token',data={'grant_type':'authorization_code','code':code,
+                'code_verifier':verifier,'client_id':CHATGPT_CLIENT,'redirect_uri':CHATGPT_REDIRECT})
+            granted=await issued.json()
+            assert issued.status==200 and set(granted['scope'].split())=={mcp.TOOL_SCOPE,mcp.DRAFT_SCOPE}
+            listed=await client.post('/mcp/ai-learning',headers={'Authorization':'Bearer '+granted['access_token']},json={
+                'jsonrpc':'2.0','id':2,'method':'tools/call',
+                'params':{'name':'administrator_draft_list','arguments':{}}})
+            assert listed.status==200
     asyncio.run(check())
 
 

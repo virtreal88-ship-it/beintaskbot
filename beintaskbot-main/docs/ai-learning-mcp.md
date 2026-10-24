@@ -1,9 +1,11 @@
-# ChatGPT read-only access to AI Learning Loop
+# ChatGPT access to AI Learning Loop and AI Administrator drafts
 
-`/mcp/ai-learning` is a remote MCP server.  It is disabled by default and has
-no write tools. The three original tools read only Simulation records whose
-tenant, primary agent and Connect channel exactly equal its Railway configuration.
-The owner-authorized administrator read tools read the configured company.
+`/mcp/ai-learning` is a remote MCP server. It is disabled by default. The
+original Learning Loop and administrator read tools only return data whose
+tenant, primary agent and Connect channel match the Railway configuration.
+The optional draft scope can create and edit non-public AI Administrator
+proposals; it cannot publish content, change a live agent, send a message or
+apply a change.
 
 ## Railway configuration
 
@@ -53,10 +55,12 @@ existing tenant audit log as `ai_learning_mcp_read`.
 ## Available tools and privacy
 
 The owner has authorized expansion of the existing `ai_learning.read`
-connection to company-wide reading. Existing access and refresh tokens work;
-no new consent or client credentials are required. Each request rechecks active
-membership and the current owner role in PostgreSQL. Revoking membership or
-removing the owner role immediately prevents further reads.
+connection to company-wide reading. Existing read access and refresh tokens
+work for these read tools; no new consent or client credentials are required.
+Draft access is different and requires the separate reauthorization described
+below. Each request rechecks active membership and the current owner role in
+PostgreSQL. Revoking membership or removing the owner role immediately prevents
+further reads or draft access.
 
 Administrator tools use explicit column projections, tenant predicates,
 bounded pages (maximum 25), signed tenant/tool/filter-bound cursors, strict
@@ -87,8 +91,31 @@ Stage 1 does not expose private media downloads, unscoped transcript JSON files,
 raw provider payloads, global runtime logs or schema-wide SQL. Tenant-safe media
 and transcript access must reuse verified application authorization before being
 exposed. These reads do not enqueue analysis, inference, simulation or extraction.
-Write/apply/approval/continuous-processing capabilities are later stages and
-remain unavailable in this release.
+## Draft proposal scope and reauthorization
+
+`ai_learning.read` and `ai_learning.drafts` are separate OAuth scopes.
+`ai_learning.read` is sufficient for all read tools. `ai_learning.drafts` is
+needed by `administrator_draft_list` and the other non-public draft tools. This
+is intentional: a read-only access token cannot create or edit a proposal.
+
+To enable draft-only work, set `AI_LEARNING_MCP_DRAFTS_ENABLED=true` and repeat
+the normal OAuth consent flow with both scopes. The consent page then says
+**Allow draft proposal access** and explicitly states that the grant does not
+send messages, publish knowledge, change settings or apply a prompt. Existing
+access and refresh tokens keep their original scopes; refreshing a read token
+does not upgrade it. If ChatGPT retains an older connection, disconnect and
+reconnect the MCP server so it can request `ai_learning.drafts` again.
+
+`Additional OAuth scope required` means the presented token is missing
+`ai_learning.drafts`; it is resolved by the scoped reauthorization above. The
+separate error `Administrator drafts are disabled` means the Railway feature
+flag is off. Neither error indicates that a draft was applied to production.
+
+Drafts are the durable proposal boundary: they preserve evidence, immutable
+versions and audit history before an owner chooses whether to approve anything.
+Only the existing owner-controlled approval flow can authorize a live prompt
+application; autonomous apply and autonomous observation processing remain
+separately disabled by default.
 
 - `simulation_runs`: cursor-paginated runs; context is off by default.  When
   requested, it is limited to four messages and phone numbers, email addresses
