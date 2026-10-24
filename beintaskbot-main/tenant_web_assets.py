@@ -20,6 +20,7 @@ ASSETS = (
 
     ('/assets/tenant-ai-testing.js', 'tenant-ai-testing.js', 'no-store'),
     ('/assets/tenant-ai-testing.css', 'tenant-ai-testing.css', 'no-store'),
+    ('/assets/tenant-ai-administrator-approvals.js', 'tenant-ai-administrator-approvals.js', 'no-store'),
     ('/app/night-report', 'tenant-night-report.html', 'no-store'),
     ('/assets/tenant-night-report.js', 'tenant-night-report.js', 'no-store'),
     ('/assets/tenant-night-report.css', 'tenant-night-report.css', 'no-store'),

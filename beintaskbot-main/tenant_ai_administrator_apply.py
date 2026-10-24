@@ -22,7 +22,15 @@ def ensure_schema(conn):
 
 def _guard(cur, profile):
     if not enabled(): raise TenantLinearError('Autonomous application is disabled.',403)
-    return _authorize(cur,profile)
+    tenant, actor = _authorize(cur,profile)
+    # Application changes a live agent.  A receipt is not sufficient unless
+    # the same authenticated company owner is performing the action.
+    cur.execute('''SELECT role,active FROM saas_tenant_members
+      WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE''', (tenant, actor))
+    member = cur.fetchone()
+    if not member or member['role'] != 'owner' or member.get('active') is False:
+        raise TenantLinearError('Only the company owner can apply or roll back administrator changes.',403)
+    return tenant,actor
 
 
 def apply_agent_prompt(cur, profile, approval_id, draft_id):

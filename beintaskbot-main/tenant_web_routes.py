@@ -34,6 +34,7 @@ from tenant_operator_api import handler as operator_handler
 from tenant_instruction_library_api import handler as instruction_handler
 from tenant_night_report_api import handler as night_report_handler
 from tenant_ai_instructor_api import handler as ai_instructor_handler
+from tenant_ai_administrator_api import handler as administrator_handler
 from tenant_ai_learning_mcp import routes as learning_mcp_routes
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
@@ -109,6 +110,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('agents/pilot-preflight', ai_agents_handler(member, origin, logger, 'pilot_preflight'), ('GET',)),
         ('agents/pilot/kwid-confirmation', ai_agents_handler(member, origin, logger, 'pilot_kwid_confirmation'), ('POST',)),
         ('agents/pilot/owner-approval', ai_agents_handler(member, origin, logger, 'pilot_owner_approval'), ('POST',)),
+        ('administrator/approvals', administrator_handler(member, origin, logger), ('GET','POST')),
         ('agents', ai_agents_handler(member, origin, logger, 'agents'), ('GET', 'POST')),
         ('instructor', ai_instructor_handler(member, origin, logger), ('GET',)),
         ('instructor/connections', ai_instructor_handler(member, origin, logger, 'connections'), ('GET','POST')),
