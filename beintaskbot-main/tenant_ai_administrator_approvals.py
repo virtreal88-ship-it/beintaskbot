@@ -531,6 +531,56 @@ def _training_source(cur,profile,kind,key,policy):
         raise
 
 
+def training_sources(cur,cfg,data):
+    """List only reviewed source records eligible for one scoped policy.
+
+    Administrator drafts are proposals, so they intentionally never appear
+    here.  The returned identifiers can be passed to ``training_create``;
+    that operation revalidates the evidence under the same policy lock.
+    """
+    if (not isinstance(data,dict) or set(data)-{'policy_id','kind','limit'}
+            or not {'policy_id','kind'} <= set(data)):
+        raise TenantLinearError('Invalid training source request.',400)
+    if data['kind'] not in {'knowledge','instruction','support_case'}:
+        raise TenantLinearError('Invalid training source kind.',400)
+    limit=data.get('limit',25)
+    if type(limit) is not int or not 1 <= limit <= 50:
+        raise TenantLinearError('Invalid training source limit.',400)
+    policy,profile=training_policy_guard(cur,cfg,data['policy_id'],'create')
+    kind=data['kind']
+    if kind not in policy['kinds']:
+        raise TenantLinearError('Material type outside delegation.',403)
+    tenant=str(policy['tenant_id'])
+    # Scan a bounded set because provenance can make a superficially matching
+    # row ineligible. Nothing from drafts is queried or exposed here.
+    if kind=='knowledge':
+        cur.execute('''SELECT id FROM saas_ai_knowledge_sources
+          WHERE tenant_id=%s::uuid AND active=TRUE AND agent_id=%s::uuid
+          ORDER BY id LIMIT %s''',(tenant,policy['agent_id'],min(limit*4,200)))
+    elif kind=='instruction':
+        cur.execute("""SELECT id FROM saas_instruction_lessons
+          WHERE tenant_id=%s::uuid AND state IN ('approved','published')
+          ORDER BY id LIMIT %s""",(tenant,min(limit*4,200)))
+    else:
+        cur.execute("""SELECT id FROM saas_knowledge_candidates
+          WHERE tenant_id=%s::uuid AND status IN ('pending_review','needs_clarification')
+          ORDER BY id LIMIT %s""",(tenant,min(limit*4,200)))
+    items=[]
+    for value in cur.fetchall():
+        if len(items)>=limit:
+            break
+        key=str(value['id'])
+        try:
+            row,basis=_training_basis(cur,profile,kind,key,policy)
+        except TenantLinearError:
+            continue
+        if kind=='support_case' and row['status'] not in {'pending_review','needs_clarification'}:
+            continue
+        title=(row.get('title') if kind=='knowledge' else row.get('doc',{}).get('title') if kind=='instruction' else row.get('content',{}).get('title'))
+        items.append({'source_id':key,'kind':kind,'title':title,'material_hash':_publication_hash(row),'basis':basis})
+    return {'policy_id':str(policy['id']),'kind':kind,'items':items}
+
+
 def training_operation(cur,cfg,action,data):
     import hashlib,json
     from tenant_ai_agents_store import _json,save_knowledge
@@ -637,6 +687,9 @@ def training_definitions():
       'rollback':({'grant_id':{'type':'string','format':'uuid'}},'Withdraw an unchanged policy publication, preserving history. Safe withdrawal remains possible after policy expiry/revocation.')}
     result=[{'name':'administrator_training_policies','description':'Read owner-created training delegation policies and their audit receipts for this OAuth agent/channel. Cannot grant policies.',
       'inputSchema':{'type':'object','properties':{},'additionalProperties':False},'annotations':{'readOnlyHint':True},'securitySchemes':[{'type':'oauth2','scopes':[PUBLISH_SCOPE]}]}]
+    result.append({'name':'administrator_training_sources','description':'List reviewed, policy-eligible source materials for one kind. Administrator drafts are deliberately excluded; use one returned source_id with administrator_training_create.',
+      'inputSchema':{'type':'object','properties':{'policy_id':{'type':'string','format':'uuid'},'kind':{'type':'string','enum':['knowledge','instruction','support_case']},'limit':{'type':'integer','minimum':1,'maximum':50}},'required':['policy_id','kind'],'additionalProperties':False},
+      'annotations':{'readOnlyHint':True},'securitySchemes':[{'type':'oauth2','scopes':[PUBLISH_SCOPE]}]})
     for action,(extra,description) in specs.items():
         fields={**base,**extra}
         result.append({'name':'administrator_training_'+action,'description':description,
