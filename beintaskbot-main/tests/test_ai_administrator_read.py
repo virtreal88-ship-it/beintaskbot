@@ -139,6 +139,17 @@ def test_approval_binds_exact_draft_version_and_is_single_use(db,monkeypatch):
     db.commit()
 
 
+def test_owner_batch_approval_is_atomic_and_tenant_scoped(db,monkeypatch):
+    _setup(monkeypatch,db); monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
+    cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
+    with db.cursor() as cur:
+        first=drafts.create(cur,cfg,{'kind':'knowledge','title':'One','body':{}}); second=drafts.create(cur,cfg,{'kind':'support_case','title':'Two','body':{}})
+        a=approvals.request(cur,PROFILE,first['id'],first['version']); b=approvals.request(cur,PROFILE,second['id'],second['version'])
+        assert approvals.approve_many(cur,PROFILE,[a['id'],b['id']])['count']==2
+        with pytest.raises(Exception): approvals.approve_many(cur,PROFILE,[a['id'],b['id']])
+    db.commit()
+
+
 def test_mcp_can_request_and_read_but_never_decide_or_apply_an_approval(db,monkeypatch):
     _setup(monkeypatch,db); monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
     cfg=mcp._require_cfg(); cfg['actor_id']=11; cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
