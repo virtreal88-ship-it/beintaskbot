@@ -128,6 +128,7 @@ def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, 
             assert data['code_challenge_methods_supported']==['S256']
             assert data['token_endpoint_auth_methods_supported']==['none']
             assert data['grant_types_supported']==['authorization_code','refresh_token']
+            assert data['revocation_endpoint']=='https://crm.test/oauth/revoke'
             assert mcp.OFFLINE_SCOPE in data['scopes_supported']
             assert mcp.KNOWLEDGE_DEDUP_SCOPE in data['scopes_supported']
             protected=await client.get('/.well-known/oauth-protected-resource/mcp/ai-learning')
@@ -235,6 +236,31 @@ def test_chatgpt_cimd_authorization_code_pkce_and_refresh_rotation(db, monkeypat
             assert refreshed.status==200 and rotated['access_token'] != token['access_token'] and rotated['refresh_token'] != token['refresh_token']
             reused=await client.post('/oauth/token',data={'grant_type':'refresh_token','refresh_token':token['refresh_token'],'client_id':client_id})
             assert reused.status==400
+    asyncio.run(check())
+
+
+def test_oauth_revocation_invalidates_access_and_refresh_without_disclosure(db, monkeypatch):
+    _setup(monkeypatch,db);monkeypatch.setattr(mcp, '_authorize', lambda cur, profile: (A, 11))
+    verifier='v'*43;challenge=mcp._b64(hashlib.sha256(verifier.encode()).digest())
+    async def check():
+        app=web.Application()
+        for method,path,handler in mcp.routes(lambda request: {'role':'owner'}):
+            getattr(app.router,'add_'+method.lower())(path,handler)
+        async with TestClient(TestServer(app)) as client:
+            query={'response_type':'code','client_id':CHATGPT_CLIENT,'redirect_uri':CHATGPT_REDIRECT,
+                   'scope':mcp.TOOL_SCOPE+' '+mcp.OFFLINE_SCOPE,'state':'revoke','code_challenge':challenge,'code_challenge_method':'S256'}
+            allowed=await client.post('/oauth/authorize',data={key:value for key,value in query.items() if key != 'response_type'},allow_redirects=False)
+            code=parse_qs(urlparse(allowed.headers['Location']).query)['code'][0]
+            issued=await client.post('/oauth/token',data={'grant_type':'authorization_code','code':code,'code_verifier':verifier,'client_id':CHATGPT_CLIENT,'redirect_uri':CHATGPT_REDIRECT})
+            grant=await issued.json();assert grant['refresh_token']
+            revoked=await client.post('/oauth/revoke',data={'client_id':CHATGPT_CLIENT,'token':grant['refresh_token'],'token_type_hint':'refresh_token'})
+            assert revoked.status==200 and not await revoked.text()
+            denied=await client.post('/mcp/ai-learning',headers={'Authorization':'Bearer '+grant['access_token']},json={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'simulation_runs','arguments':{}}})
+            assert denied.status==401
+            refreshed=await client.post('/oauth/token',data={'grant_type':'refresh_token','refresh_token':grant['refresh_token'],'client_id':CHATGPT_CLIENT})
+            assert refreshed.status==400
+            unknown=await client.post('/oauth/revoke',data={'client_id':CHATGPT_CLIENT,'token':'unknown'})
+            assert unknown.status==200
     asyncio.run(check())
 
 

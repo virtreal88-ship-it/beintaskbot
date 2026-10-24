@@ -474,6 +474,38 @@ async def token(request):
     except TenantLinearError as exc: return web.json_response({'error':'invalid_grant','error_description':str(exc)},status=exc.status,headers={'Cache-Control':'no-store'})
 
 
+async def revoke(request):
+    """RFC 7009-style revocation for a delegated ChatGPT connection.
+
+    The caller proves control of the token; the response deliberately does not
+    reveal whether it existed.  Matching access *or* refresh token revokes the
+    whole grant, so a previously issued refresh credential cannot recreate it.
+    """
+    try:
+        cfg=_require_cfg(); data=await request.post()
+        client_id=str(data.get('client_id','')); _chatgpt_client(client_id)
+        value=str(data.get('token',''))
+        if not value or len(value)>500: raise TenantLinearError('Invalid token.',400)
+        hint=str(data.get('token_type_hint',''))
+        if hint not in {'','access_token','refresh_token'}: raise TenantLinearError('Invalid token type.',400)
+        digest=_hash(value)
+        with _connect() as conn:
+            ensure_mcp_schema(conn)
+            with conn.cursor() as cur:
+                where="tenant_id=%s::uuid AND agent_id=%s::uuid AND channel_id=%s::uuid AND client_id=%s AND revoked_at IS NULL"
+                params=[cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['AI_LEARNING_MCP_AGENT_ID'],cfg['AI_LEARNING_MCP_CHANNEL_ID'],client_id]
+                if hint=='access_token': where+=' AND token_hash=%s';params.append(digest)
+                elif hint=='refresh_token': where+=' AND refresh_token_hash=%s';params.append(digest)
+                else: where+=' AND (token_hash=%s OR refresh_token_hash=%s)';params.extend([digest,digest])
+                cur.execute('UPDATE saas_ai_learning_mcp_tokens SET revoked_at=now() WHERE '+where+' RETURNING id,tenant_id,created_by',tuple(params))
+                row=cur.fetchone()
+                if row: _audit(cur,row['tenant_id'],row['created_by'],'ai_learning_mcp_token_revoked','mcp_token',row['id'],{'client_id':client_id[:120]})
+            conn.commit()
+        return web.Response(status=200,headers={'Cache-Control':'no-store'})
+    except TenantLinearError as exc:
+        return web.json_response({'error':'invalid_request','error_description':str(exc)},status=exc.status,headers={'Cache-Control':'no-store'})
+
+
 def routes(member_from_request):
     async def protected(request):
         try:
@@ -483,9 +515,9 @@ def routes(member_from_request):
     async def metadata(request):
         try:
             cfg=_require_cfg(); base=cfg['issuer']
-            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,OFFLINE_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code','refresh_token'],'token_endpoint_auth_methods_supported':['none'],'client_id_metadata_document_supported':True})
+            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','revocation_endpoint':base+'/oauth/revoke','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,OFFLINE_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code','refresh_token'],'token_endpoint_auth_methods_supported':['none'],'client_id_metadata_document_supported':True})
         except TenantLinearError as exc: return web.json_response({'error':str(exc)},status=exc.status)
-    return [('POST','/mcp/ai-learning',mcp),('GET','/mcp/ai-learning',mcp),('GET','/.well-known/oauth-protected-resource/mcp/ai-learning',protected),('GET','/.well-known/oauth-authorization-server',metadata),('GET','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/token',token)]
+    return [('POST','/mcp/ai-learning',mcp),('GET','/mcp/ai-learning',mcp),('GET','/.well-known/oauth-protected-resource/mcp/ai-learning',protected),('GET','/.well-known/oauth-authorization-server',metadata),('GET','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/token',token),('POST','/oauth/revoke',revoke)]
 
 
 def handler(member_from_request):
