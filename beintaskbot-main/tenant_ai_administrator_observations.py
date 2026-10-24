@@ -5,6 +5,8 @@ import os
 import uuid
 from tenant_ai_dashboard import _connect
 
+MAX_ATTEMPTS = 5
+
 
 def enabled(): return str(os.environ.get('AI_AUTONOMOUS_IMPROVEMENT_ENABLED') or '').lower() == 'true'
 
@@ -52,7 +54,10 @@ def claim_next():
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("UPDATE saas_ai_administrator_observations SET state='queued',lease_until=NULL WHERE state='processing' AND lease_until<now()")
+            # A crashed worker may release a lease, but a bad payload must not
+            # create an infinite retry loop. The terminal state is reviewable.
+            cur.execute("UPDATE saas_ai_administrator_observations SET state='blocked',lease_until=NULL,updated_at=now() WHERE state='processing' AND lease_until<now() AND attempts>=%s",(MAX_ATTEMPTS,))
+            cur.execute("UPDATE saas_ai_administrator_observations SET state='queued',lease_until=NULL,available_at=now(),updated_at=now() WHERE state='processing' AND lease_until<now() AND attempts<%s",(MAX_ATTEMPTS,))
             cur.execute('''SELECT * FROM saas_ai_administrator_observations WHERE state='queued' AND available_at<=now()
               ORDER BY created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED'''); row=cur.fetchone()
             if not row: conn.commit(); return None
