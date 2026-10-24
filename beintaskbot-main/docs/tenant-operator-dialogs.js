@@ -472,6 +472,6 @@
   window.addEventListener('beforeunload',stopAutoRefresh);
   document.addEventListener('tenant-language',()=>{updateSoundButton();if($('operatorRows')){setStates();refresh();}if($('operatorBulkAssignment'))$('operatorBulkAssignment').textContent=bulkText('preview');if(currentDialog&&currentPage){const diagnosticsOpen=$('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden,settingsOpen=$('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden;renderDialog(currentPage);if(diagnosticsOpen)openDialogDiagnostics(currentDialog);if(settingsOpen)openGroupSettings(currentDialog);}});
   document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;if($('operatorCopilot')&&!$('operatorCopilot').hidden){$('operatorCopilotClose')?.click();return;}if($('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden){closeGroupSettings();return;}if($('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden){closeDialogDiagnostics();return;}if(currentDialog)closeDialog();});
-  window.tenantOperator={openDialog,closeDialog,changeState,refresh,hasRight,get member(){return member}};
+  window.tenantOperator={messageMarkup,openDialog,closeDialog,changeState,refresh,hasRight,get member(){return member}};
   if(window.tenantProfileSnapshot)profileChanged(window.tenantProfileSnapshot);else fetch(window.TENANT_AI_AGENTS_CONFIG?.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(!member&&data?.member)profileChanged(data);}).catch(()=>{});
 })();

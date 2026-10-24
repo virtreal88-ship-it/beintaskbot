@@ -32,11 +32,11 @@
     });
   }
   function bind(){
-    document.querySelectorAll('#chatRows [data-chat-attachment]').forEach(host=>{
+    document.querySelectorAll('#chatRows [data-chat-attachment], [data-learning-chat] [data-chat-attachment]').forEach(host=>{
       const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button'),status=host.querySelector('[role="status"]');
       if(!button)return;
       const load=async(auto=false)=>{
-        if(button.disabled||!member||!lead)return;
+        if(button.disabled||!member||!(lead||host.dataset.attachmentLeadId))return;
         const retryAt=Number(host.dataset.mediaRetryAt||0);
         if(retryAt>Date.now()){
           const seconds=Math.ceil((retryAt-Date.now())/1000);
@@ -44,9 +44,9 @@
           return;
         }
         if(active.size>=3){status.textContent=text('mediaBusy','Bir az sonra yoxlayın.');if(auto)button.hidden=false;return;}
-        const current=epoch,who=identity(member),selected=lead,controller=new AbortController();
+        const current=epoch,who=identity(member),selected=lead||host.dataset.attachmentLeadId,controller=new AbortController();
         active.add(controller);button.disabled=true;button.setAttribute('aria-busy','true');status.textContent=' '+text('loading','Yüklənir…');
-        const valid=()=>current===epoch&&who===identity(member)&&selected===lead&&host.isConnected;
+        const valid=()=>current===epoch&&who===identity(member)&&selected===(lead||host.dataset.attachmentLeadId)&&host.isConnected;
         const timer=setTimeout(()=>controller.abort(),70000);
         let blobUrl;
         try{
