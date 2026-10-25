@@ -15,6 +15,7 @@ EVENTS = {
     'hot_order_completion_decided': {'label': 'İsti sifariş təsdiqinin nəticəsi', 'module': 'hot_orders', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker', 'master')},
     'linear_done': {'label': 'Linear tapşırığı tamamlandı', 'module': 'linear', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker')},
     'linear_status_changed': {'label': 'Linear seçilmiş statusa keçdi', 'module': 'linear', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker')},
+    'ai_developer_consultation': {'label': 'AI tərtibatçı məsləhəti', 'module': 'support', 'roles': ('owner', 'admin', 'manager', 'operator', 'worker')},
 }
 
 

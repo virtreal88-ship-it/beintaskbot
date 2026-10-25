@@ -93,11 +93,13 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         tree=ast.parse((Path(__file__).resolve().parents[1]/'bot.py').read_text(encoding='utf-8-sig'))
         job=next(node for node in tree.body if isinstance(node,ast.AsyncFunctionDef) and node.name=='check_tenant_approval_notifications')
         ns={'ContextTypes':SimpleNamespace(DEFAULT_TYPE=object),'deliver_approval_notifications':AsyncMock(),
+            'deliver_consultation_notifications':AsyncMock(),
             'deliver_push_notifications':AsyncMock(),'VAPID_PRIVATE_KEY':'key','VAPID_CLAIMS':{},'logger':Mock()}
         exec(compile(ast.Module(body=[job],type_ignores=[]),'<job>','exec'),ns)
         context=SimpleNamespace(bot=self.bot)
         asyncio.run(ns[job.name](context))
         ns['deliver_approval_notifications'].assert_awaited_once_with(self.bot,ns['logger'])
+        ns['deliver_consultation_notifications'].assert_awaited_once_with(self.bot,ns['logger'])
         ns['deliver_push_notifications'].assert_awaited_once_with('key',{},ns['logger'])
 
 

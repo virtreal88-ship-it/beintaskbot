@@ -124,6 +124,26 @@ class TenantAuthTests(unittest.IsolatedAsyncioTestCase):
         accept_invite.assert_called_once_with(token="once", actor_id=123, email="person@example.com", display_name="Person")
         record_login.assert_called_once_with(tenant_id="company-b", actor_id=123)
 
+    async def test_direct_employee_login_requires_password_rotation_then_can_change_it(self):
+        email_auth = SimpleNamespace(login=Mock(return_value={"actor_id": 123, "tenant_id": "company-a", "force_password_change": True}),
+                                     change_password=Mock(return_value={"changed": True}))
+        api = handlers(replace(self.context, email_auth=email_auth))
+        response = await api['email_login'](Request({'email':'developer','password':'temporary-password'}))
+        self.assertEqual(payload(response)['redirect'], '/auth/password/change')
+        self.assertTrue(payload(response)['password_change_required'])
+        self.assertIn('company-a:123', response.cookies['tenant_session'].value)
+        response = await api['password_change'](Request({'password':'a-safe-replacement-password'}))
+        self.assertEqual(response.status, 200)
+        email_auth.change_password.assert_called_once_with(tenant_id='company-a',actor_id=7,password='a-safe-replacement-password')
+
+    async def test_password_change_requires_same_origin_and_session(self):
+        email_auth = SimpleNamespace(change_password=Mock())
+        api = handlers(replace(self.context, email_auth=email_auth))
+        self.assertEqual((await api['password_change'](Request({'password':'a-safe-replacement-password'},origin='https://elsewhere'))).status,403)
+        self.member.return_value=None
+        self.assertEqual((await api['password_change'](Request({'password':'a-safe-replacement-password'}))).status,401)
+        email_auth.change_password.assert_not_called()
+
     async def test_login_denies_unknown_user_and_reports_platform_outage(self):
         self.tenants.return_value = []
         response = await self.api["login"](Request({"telegram": {}}))

@@ -19,6 +19,7 @@ class MemberApiContext:
     list_invite_requests: Callable[..., list]
     decide_invite_request: Callable[..., dict]
     platform_error: type[Exception]
+    provision_employee_account: Callable[..., dict] | None = None
     can_manage: Callable[[dict], bool] | None = None
     set_member_whatsapp_numbers: Callable[..., object] | None = None
     add_member_whatsapp_number: Callable[..., object] | None = None
@@ -50,8 +51,8 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
         data = data if isinstance(data, dict) else {}
         action = str(data.get("action") or "upsert").strip().casefold()
         try:
-            telegram_id = int(data.get("telegram_id") or 0)
             if action == "whatsapp_numbers":
+                telegram_id = int(data.get("telegram_id") or 0)
                 if request.headers.get('Origin','').rstrip('/') != context.origin.rstrip('/'):
                     return web.json_response({'success':False,'error':'Sorğunun mənbəyi düzgün deyil.'},status=403)
                 if (str(data.get('expected_tenant_id') or '')!=str(tenant_id)
@@ -63,6 +64,7 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
                     owner_id=owner_id,telegram_id=telegram_id,
                     numbers=data.get('numbers') if isinstance(data.get('numbers'),list) else None)
             elif action == "add_whatsapp_number":
+                telegram_id = int(data.get("telegram_id") or 0)
                 if request.headers.get('Origin','').rstrip('/') != context.origin.rstrip('/'):
                     return web.json_response({'success':False,'error':'Sorğunun mənbəyi düzgün deyil.'},status=403)
                 if (str(data.get('expected_tenant_id') or '')!=str(tenant_id)
@@ -73,14 +75,26 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
                 await asyncio.to_thread(context.add_member_whatsapp_number,tenant_id=tenant_id,
                     owner_id=owner_id,telegram_id=telegram_id,phone=str(data.get('phone') or ''))
             elif action == "deactivate":
+                telegram_id = int(data.get("telegram_id") or 0)
                 await asyncio.to_thread(context.deactivate_member, tenant_id=tenant_id, owner_id=owner_id,
                                         telegram_id=telegram_id)
             elif action == "upsert":
+                telegram_id = int(data.get("telegram_id") or 0)
                 await asyncio.to_thread(
                     context.upsert_member, tenant_id=tenant_id, owner_id=owner_id, telegram_id=telegram_id,
                     display_name=str(data.get("display_name") or ""), role=str(data.get("role") or "worker"),
                     permissions=data.get("permissions") if isinstance(data.get("permissions"), list) else [],
                 )
+            elif action == 'provision_account':
+                if request.headers.get('Origin','').rstrip('/') != context.origin.rstrip('/'):
+                    return web.json_response({'success':False,'error':'Sorğunun mənbəyi düzgün deyil.'},status=403)
+                if not context.provision_employee_account:
+                    return web.json_response({'success':False,'error':'Bu funksiya əlçatan deyil.'},status=503)
+                await asyncio.to_thread(context.provision_employee_account,tenant_id=tenant_id,owner_id=owner_id,
+                    first_name=str(data.get('first_name') or ''),last_name=str(data.get('last_name') or ''),login=str(data.get('login') or ''),
+                    password=str(data.get('password') or ''),role=str(data.get('role') or 'worker'),
+                    permissions=data.get('permissions') if isinstance(data.get('permissions'),list) else [],password_confirm=str(data.get('confirm_password') or ''),
+                    email=str(data.get('email') or ''),phone=str(data.get('phone') or ''))
             else:
                 raise context.platform_error("Naməlum əməliyyat.")
             rows = await asyncio.to_thread(context.list_members, tenant_id=tenant_id, owner_id=owner_id)

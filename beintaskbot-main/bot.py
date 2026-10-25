@@ -81,6 +81,7 @@ from tenant_task_commands import task_executor_profiles, TaskCommandPending, pen
 from tenant_task_completion import complete_task as complete_tenant_task
 from tenant_task_approvals import decide_task_approval
 from tenant_notification_worker import deliver_approval_notifications
+from tenant_consultation_notification_worker import deliver_consultation_notifications
 from tenant_push_worker import deliver_push_notifications
 from tenant_hot_order_notification_worker import deliver_hot_order_notifications
 from tenant_linear_observer_worker import observe_and_notify as observe_tenant_linear
@@ -248,6 +249,7 @@ from tenant_platform import (
     replace_kommo_tokens, request_invite_acceptance as request_tenant_invite_acceptance, save_kommo_oauth_tokens, tenants_for_user,
     set_member_whatsapp_numbers as set_tenant_member_whatsapp_numbers,
     add_member_whatsapp_number as add_tenant_member_whatsapp_number,
+    provision_employee_account as provision_tenant_employee_account,
     update_onboarding, upsert_member as upsert_tenant_member,
     append_audit_event as append_tenant_audit_event, get_crm_deal as get_tenant_crm_deal,
     list_crm_deals as list_tenant_crm_deals, list_crm_tasks as list_tenant_crm_tasks,
@@ -3501,6 +3503,16 @@ async def ai_task_deadline_callback(update: Update, context: ContextTypes.DEFAUL
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     start_arg = str((context.args or [""])[0] or "")
+    if start_arg.startswith('bind_'):
+        try:
+            from tenant_telegram_binding import complete_binding
+            await asyncio.to_thread(complete_binding, chat_id=int(chat_id), token=start_arg[5:])
+            await update.message.reply_text('Telegram bildirişləri bu iş hesabı üçün qoşuldu.')
+        except Exception:
+            # A one-time binding token must not disclose its existence or the
+            # tenant it belongs to through Telegram.
+            await update.message.reply_text('Bağlantı linki etibarsızdır və ya müddəti bitib.')
+        return
     if start_arg.startswith("web_"):
         nonce = start_arg[4:]
         if not employee_access_profile(chat_id).get("active"):
@@ -16824,6 +16836,7 @@ async def check_tenant_approval_notifications(context: ContextTypes.DEFAULT_TYPE
     await run_jobs([
         ('crm_notices', partial(deliver_from, 'tenant_crm_notice_worker', context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
         ('task_approvals', partial(deliver_approval_notifications, context.bot, logger)),
+        ('ai_consultations', partial(deliver_consultation_notifications, context.bot, logger)),
         ('push_approvals', partial(deliver_push_notifications, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
         ('task_decisions', partial(deliver_from, 'tenant_task_decision_worker', context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
         ('deal_approvals', partial(deliver_from, 'tenant_deal_notice_worker', context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
@@ -18568,6 +18581,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_post('/api/platform/auth/email/confirm', auth_api['email_confirm'])
     app_web.router.add_post('/api/platform/auth/password/reset', auth_api['password_reset'])
     app_web.router.add_post('/api/platform/auth/password/reset/confirm', auth_api['password_reset_confirm'])
+    app_web.router.add_post('/api/platform/auth/password/change', auth_api['password_change'])
     app_web.router.add_post('/api/platform/auth/email/link/request', auth_api['email_link_request'])
     app_web.router.add_post('/api/legacy-auth/email/link/request', auth_api['legacy_email_link_request'])
     app_web.router.add_post('/api/platform/auth/email/link/confirm', auth_api['email_link_confirm'])
@@ -18579,6 +18593,12 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         tenant_notification_settings_handler(NotificationSettingsContext(
             member=_tenant_member_from_request,preferences=tenant_notification_preferences,
             origin=CANONICAL_WEB_ORIGIN,platform_error=TenantPlatformError)))
+    from tenant_telegram_binding import request_binding as tenant_request_telegram_binding, binding_status as tenant_telegram_binding_status
+    from tenant_telegram_binding_api import TelegramBindingContext, handler as tenant_telegram_binding_handler
+    app_web.router.add_route('*','/api/platform/telegram/binding', tenant_telegram_binding_handler(TelegramBindingContext(
+        member=_tenant_member_from_request, request_binding=tenant_request_telegram_binding,
+        binding_status=tenant_telegram_binding_status, origin=CANONICAL_WEB_ORIGIN,
+        bot_username=lambda: _telegram_bot_username, platform_error=TenantPlatformError)))
     app_web.router.add_get('/api/platform/sso/authorize', auth_api['sso_authorize'])
     app_web.router.add_post('/api/platform/sso/token', auth_api['sso_token'])
     app_web.router.add_post("/api/platform/logout", auth_api["logout"])
@@ -18654,6 +18674,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         telegram_name=telegram_display_name, send_telegram=_send_telegram_text,
         origin=CANONICAL_WEB_ORIGIN,
         list_members=list_tenant_members, upsert_member=upsert_tenant_member,
+        provision_employee_account=provision_tenant_employee_account,
         deactivate_member=deactivate_tenant_member, create_invite=create_tenant_invite,
         request_invite_acceptance=request_tenant_invite_acceptance,
         list_invite_requests=list_tenant_invite_requests,
@@ -18777,6 +18798,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_get('/auth/confirm', auth_api['confirm_page'])
     app_web.router.add_get('/auth/reset', auth_api['confirm_page'])
     app_web.router.add_get('/auth/link', auth_api['confirm_page'])
+    app_web.router.add_get('/auth/password/change', auth_api['password_change_page'])
     app_web.router.add_get('/auth/link-legacy', auth_api['legacy_link_page'])
     app_web.router.add_get('/login/telegram', auth_api['onboarding_page'])
     app_web.router.add_get("/setup", auth_api["onboarding_page"])
