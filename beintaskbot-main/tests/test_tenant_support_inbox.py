@@ -24,6 +24,7 @@ import tenant_ai_simulation_engine as simulation
 import tenant_ai_group_coordination as group_coordination
 import tenant_ai_dashboard as ai_dashboard
 import tenant_ai_spend_budget as spend_budget
+import tenant_internal_consultations as consultations
 from tenant_linear_policy import TenantLinearError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1052,3 +1053,21 @@ def test_shared_spend_budget_rejects_provider_usage_above_preflight_upper_bound(
     spend_budget.settle(A, 'expert:bounded', {'input_tokens': 100, 'output_tokens': 100, 'total_tokens': 200})
     row = db.execute("SELECT state FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key='expert:bounded'", (A,))[0]
     assert row['state'] == 'unknown'
+
+
+def test_internal_consultation_is_tenant_scoped_idempotent_and_never_sends_customer_message(db, monkeypatch):
+    monkeypatch.setattr(consultations, '_connect', lambda: db)
+    monkeypatch.setattr(consultations, '_hours', lambda: False)
+    ticket=manual()['ticket']['id']
+    payload={'case_id':ticket,'recipient_id':11,'reason':'Проверить кассу','evidence':{'message_id':'m1'},'request_key':'consultation-once'}
+    first=consultations.create(PROFILE,payload)
+    second=consultations.create(PROFILE,payload)
+    assert first['created'] and not second['created']
+    assert first['status']=='queued_after_hours' and first['customer_message_sent'] is False
+    rows=consultations.listing(PROFILE,ticket)['consultations']
+    assert len(rows)==1 and rows[0]['recipient_id']==11
+    answer=consultations.reply(PROFILE,first['id'],{'response':'Нужны логи кассы','kind':'diagnosis'})
+    assert answer['safe_customer_draft'] and answer['publication_requires_approval']
+    foreign={'tenant_id':B,'telegram_id':22}
+    assert consultations.listing(foreign,ticket)['consultations']==[]
+    with pytest.raises(TenantLinearError): consultations.reply(foreign,first['id'],{'response':'x','kind':'diagnosis'})

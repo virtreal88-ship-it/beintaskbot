@@ -34,6 +34,10 @@ function setup(fetch){
  assert.equal(calls.filter(x=>x.init.method&&x.init.method!=='GET').length,0,'viewing must be read-only');
  let opened=null;doc.addEventListener('tenant-support-open',e=>opened=e.detail.lead_id);
  doc.querySelector('#supportOpenChat').click();assert.equal(opened,41);
+ assert.ok(doc.querySelector('#consultCreate'),'ticket detail has the internal developer consultation action');
+ doc.querySelector('#consultReason').value='Проверить логи';doc.querySelector('#consultCreate').click();await settle();
+ const consultation=calls.find(x=>x.url==='/api/platform/ai/internal-consultations'&&x.init.method==='POST');
+ assert.equal(JSON.parse(consultation.init.body).case_id,'ticket-1');assert.equal(JSON.parse(consultation.init.body).expected_tenant_id,'company-a');
  doc.querySelector('#supportTake').click();await settle();
  const take=calls.find(x=>x.init.method==='PATCH');const data=JSON.parse(take.init.body);
  assert.equal(data.assigned_to,11);assert.equal(data.status,'in_progress');assert.equal(data.expected_tenant_id,'company-a');
@@ -41,7 +45,7 @@ function setup(fetch){
  assert.ok(calls.some(x=>x.url.includes('status=waiting')));
  doc.dispatchEvent(new dom.window.CustomEvent('tenant-chat-open',{detail:{lead_id:41}}));
  doc.querySelector('#supportCreateFromChat').click();await settle();
- const creation=calls.find(x=>x.init.method==='POST');assert.equal(JSON.parse(creation.init.body).lead_id,41);assert.ok(JSON.parse(creation.init.body).request_id);
+ const creation=calls.find(x=>x.url==='/api/platform/ai/support-tickets'&&x.init.method==='POST');assert.equal(JSON.parse(creation.init.body).lead_id,41);assert.ok(JSON.parse(creation.init.body).request_id);
  assert.ok(!calls.some(x=>/handoff|resume|pause/.test(x.url)),'queue must not change AI state');
  dom.window.close();
  // A delayed response for company A must never be rendered after switching to company B.
