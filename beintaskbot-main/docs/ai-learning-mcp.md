@@ -259,6 +259,33 @@ response retains the technical-signal warning and `selection_mode=manual`.
 Identity, media, tenant/channel, date, duplicate and financial guards still
 apply. Manual selection and preflight do not grant permission for paid calls.
 
+## Provider-proven direct-dialogue recovery
+
+`whatsapp_dialogue_duplicate_candidates` is a tenant/channel-scoped read-only
+inventory of possible split direct WhatsApp histories. It returns opaque pair
+IDs, aggregate incoming/outgoing message counts, provider receipt counts and
+conflict codes. It never returns a phone number, JID, LID, name, message text
+or media URL. A duplicate is eligible only when Connect stored the same-event
+`directIdentity` LID/JID pair, both direct routes still exist in the configured
+channel, and neither side has conflicting provider evidence. Names, avatars,
+phone-like values, groups and ambiguous LID/JID graphs are never identity proof.
+
+`whatsapp_dialogue_merge` requires a fresh preview precondition, UUID request
+ID, company-owner OAuth token and the separate `ai_learning.dialogue_merge`
+scope. Reconnect ChatGPT and explicitly approve this scope before it is
+available; existing read tokens cannot merge anything. The operation creates a
+locked, audited, idempotent **logical** mapping and can be rolled back using a
+new fresh preview. It does not rewrite or delete CRM messages, IDs, media,
+timestamps, employee attribution, case links, Connect rows, AI state or
+WhatsApp data. This preserves historical evidence while allowing a future
+authorized reader to recognize a verified split. If the original customer
+conversation is not provider-proven, the result remains unknown rather than
+being merged.
+
+Support Case review also now marks evidence made solely from outgoing/internal
+messages as `original_customer_unproven`; such a card cannot be approved or
+published until an actual customer-origin source message is included.
+
 ## Owner-delegated publication (Issue #228)
 
 `ai_learning.publish` is a separate, revocable OAuth consent. Existing read,

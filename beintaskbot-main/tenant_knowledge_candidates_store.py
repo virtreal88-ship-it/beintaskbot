@@ -320,6 +320,14 @@ def public_card(cur,row,content_language='az',source_route=None,tenant=None,dial
     value.setdefault('resolution_method','unknown');value.setdefault('operator_actions',[]);value.setdefault('operator_action_evidence',[]);value.setdefault('cause_evidence',[]);value.setdefault('case_kind','technical')
     value.setdefault('clarification_note','');value.setdefault('work_status','unknown')
     sources=value.get('source_message_ids') or []
+    # A forwarded/internal operator thread is useful evidence for review, but
+    # it is not proof of an original customer support request.  Do not let it
+    # become reusable support knowledge until a customer-origin message is
+    # actually present in the case evidence.
+    cur.execute('''SELECT count(*) FILTER(WHERE direction='incoming' AND NOT (raw ? 'verified_employee_id')) AS customer_messages
+      FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[])''',(row['tenant_id'],sources))
+    value['source_customer_proven']=int((cur.fetchone() or {}).get('customer_messages') or 0)>0
+    value['source_provenance']='customer_message_present' if value['source_customer_proven'] else 'original_customer_unproven'
     value.setdefault('start_message_id',sources[0] if sources else '')
     value.setdefault('end_message_id',sources[-1] if sources else '')
     value.setdefault('case_relation','unknown')
@@ -335,8 +343,8 @@ def public_card(cur,row,content_language='az',source_route=None,tenant=None,dial
     reason=approval_reason(value)
     value['result_confirmed']=value['outcome']['status']=='confirmed'
     value['clarification_status']='required' if reason else 'not_required'
-    value['can_approve']=value['status'] in {'pending_review','needs_clarification'} and not reason
-    value['approval_block_reason']=None if value['can_approve'] else (reason if value['status'] in {'pending_review','needs_clarification'} else 'already_reviewed')
+    value['can_approve']=value['status'] in {'pending_review','needs_clarification'} and not reason and value['source_customer_proven']
+    value['approval_block_reason']=None if value['can_approve'] else ('original_customer_unproven' if not value['source_customer_proven'] and value['status'] in {'pending_review','needs_clarification'} else (reason if value['status'] in {'pending_review','needs_clarification'} else 'already_reviewed'))
     return value
 
 
@@ -654,6 +662,8 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                 cur.execute("UPDATE saas_knowledge_candidates SET status='rejected',version=version+1,reviewed_by=%s,reviewed_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(actor,tenant,row['id']))
             elif action=='approve':
                 if set(data)-{'expected_version','agent_ids'}: raise TenantLinearError('Неизвестное поле.')
+                if not any(item.get('role')=='customer' for item in items if item.get('id') in row['content'].get('source_message_ids',[])):
+                    raise TenantLinearError('original_customer_unproven',409)
                 value=enforce_confirmation(card(row['content'],[i['id'] for i in items],allow_boundary_outside_sources=True),items)
                 reason=approval_reason(value)
                 if reason: raise TenantLinearError(reason,409)
