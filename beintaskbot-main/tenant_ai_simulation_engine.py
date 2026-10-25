@@ -332,7 +332,7 @@ def context_author_type(row, conversation_id):
 
 
 def _load_context(cur, job):
-    cur.execute('''SELECT id,external_id,direction,author_name,body,message_type,happened_at,raw
+    cur.execute('''SELECT id,external_id,direction,author_name,body,message_type,happened_at,channel,raw
       FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
         AND channel=%s AND ((COALESCE(happened_at,created_at),created_at) < (
           SELECT COALESCE(happened_at,created_at),created_at FROM saas_crm_messages
@@ -353,7 +353,7 @@ def _load_context(cur, job):
     # Allocate from the selected customer message backwards. The old forward
     # truncation could exhaust the budget before reaching that very message.
     for row in reversed(rows):
-        body=str(row.get('body') or '')[:3000]
+        body=(str(row.get('body') or '')+'\n'+str(row.get('media_evidence_context') or '')).strip()[:3000]
         author_type=context_author_type(row,job.get('conversation_id'))
         line={'role':'client' if author_type in {'customer','participant'} else 'sales_manager',
               'author_type':author_type,

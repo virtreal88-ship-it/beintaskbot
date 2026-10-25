@@ -44,12 +44,19 @@ def reusable(profile, ref):
     channel = str(ref.get('channel_id') or '')
     if not (external and channel and ref.get('media_kind')):
         return None
-    with _connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""SELECT status,code,coverage,result,provenance FROM saas_media_evidence_receipts
-              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s AND source_hash=%s
-                AND media_kind=%s""", (tenant, channel, external, source_hash(ref), str(ref['media_kind'])))
-            row = cur.fetchone()
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT status,code,coverage,result,provenance FROM saas_media_evidence_receipts
+                  WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s AND source_hash=%s
+                    AND media_kind=%s""", (tenant, channel, external, source_hash(ref), str(ref['media_kind'])))
+                row = cur.fetchone()
+    except Exception:
+        # Receipt reuse is an optional, conservative optimization during an
+        # additive rollout.  If its table/connection is not ready, callers
+        # must continue their existing authorization path, not mark media as
+        # analysed or leave the surrounding request transaction poisoned.
+        return None
     return dict(row) if row and row.get('status') in _TERMINAL else None
 
 
@@ -81,10 +88,10 @@ def persist(cur, tenant, refs, receipts):
         result = {key: receipt[key] for key in ('transcript', 'observation') if isinstance(receipt.get(key), str)}
         if isinstance(receipt.get('observations'), list):
             result['observations'] = [x for x in receipt['observations'] if isinstance(x,dict)][:MAX_OBSERVATIONS]
-        # A processed flag with no reusable content is not evidence.  This
-        # covers model-supplied image inputs and pre-existing voice text whose
-        # durable owner is another receipt table.
-        if status == 'processed' and not result:
+        # An empty terminal result is not reusable evidence.  In particular,
+        # a visual budget/consent stop or a model-supplied image must not
+        # permanently prevent a later separately-authorized analysis.
+        if status in {'processed', 'partial'} and not result:
             continue
         provenance = {'processor': 'knowledge_extraction', 'source_version': source_hash(ref),
                       'untrusted': True}
@@ -144,7 +151,16 @@ def annotate_rows(cur, tenant, rows):
         external = str(row.get('external_id') or '')
         if kind in {'', 'text'} or not channel.startswith('connect:') or not external:
             continue
+        savepoint = 'media_evidence_optional_lookup'
         try:
+            # A missing additive table aborts a PostgreSQL transaction unless
+            # it is fenced.  The lookup is optional, so recover locally and
+            # leave the caller's existing history query usable.
+            cur.execute("SELECT to_regclass('public.saas_media_evidence_receipts') AS relation")
+            relation = cur.fetchone()
+            if not relation or not relation.get('relation'):
+                continue
+            cur.execute('SAVEPOINT ' + savepoint)
             channel_id = channel.removeprefix('connect:')
             raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}
             media_version = hashlib.sha256(json.dumps({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')}, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
@@ -155,9 +171,16 @@ def annotate_rows(cur, tenant, rows):
                 AND media_kind=%s""", (tenant, channel_id, external, source_hash(ref), kind))
             saved = cur.fetchone()
         except Exception:
+            try:
+                cur.execute('ROLLBACK TO SAVEPOINT ' + savepoint)
+                cur.execute('RELEASE SAVEPOINT ' + savepoint)
+            except Exception:
+                pass
             # Tables may not yet exist during a rolling additive migration.  A
             # caller must retain the conservative existing media placeholder.
             continue
+        else:
+            cur.execute('RELEASE SAVEPOINT ' + savepoint)
         if not saved or str(saved.get('status') or '') not in _TERMINAL:
             continue
         saved = dict(saved); coverage = saved.get('coverage') if isinstance(saved.get('coverage'),dict) else {}

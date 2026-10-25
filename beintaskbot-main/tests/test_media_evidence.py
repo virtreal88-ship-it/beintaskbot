@@ -63,3 +63,12 @@ def test_policy_denial_is_not_terminal_cached_forever():
     evidence.persist(cursor,'00000000-0000-0000-0000-000000000010',[ref],[{
         'id':'message-row','status':'unavailable','code':'external_media_permission_required','kind':'video'}])
     assert cursor.calls==[]
+
+
+def test_empty_partial_is_not_cached_as_reusable_evidence():
+    cursor=Cursor(); ref=_ref()
+    evidence.persist(cursor,'00000000-0000-0000-0000-000000000010',[ref],[{
+        'id':'message-row','status':'partial','code':'visual_budget','kind':'video',
+        'visuals':[],
+    }])
+    assert cursor.calls==[]

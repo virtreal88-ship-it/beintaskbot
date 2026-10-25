@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -231,6 +232,27 @@ def test_media_only_source_is_retained_status_persisted_and_replay_idempotent(re
     assert any('Attachment status: unavailable' in m['text'] for m in generation.call_args.args[3])
     assert service.analyze(PROFILE,data)['request']['id']==response['request']['id']
     generation.assert_called_once()
+
+
+def test_finish_revalidation_rejects_replaced_media_identity(ready):
+    """The source fence covers the durable media identity, not only text."""
+    import uuid
+    database,_,data=ready
+    source=str(uuid.uuid4()); external='connect:'+str(uuid.uuid4())
+    database.execute("""INSERT INTO saas_crm_messages
+      (tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,raw,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','same caption','image',%s::jsonb,now()+interval '4 seconds')""",
+      (A,source,external,'connect:'+CA,json.dumps({'mediaId':'before','fileLength':10})))
+    database.commit()
+    item=service.prepare(PROFILE,data)
+    assert any(ref.get('id')==source and ref.get('media_version') for ref in item['refs'])
+    database.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      (json.dumps({'mediaId':'after','fileLength':10}),A,source))
+    database.commit()
+    import tenant_knowledge_candidates_store as candidate_store
+    with database.cursor() as cur:
+        with pytest.raises(TenantLinearError,match='Вложение исходного сообщения изменилось'):
+            candidate_store.evidence(cur,PROFILE,{**item,'source_refs':item['refs']})
 
 def test_media_consent_changes_fingerprint_without_replaying_original(ready,monkeypatch):
     import uuid

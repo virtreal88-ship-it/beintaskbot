@@ -199,7 +199,7 @@ def _runs(cur, cfg, cursor='', limit=10, include_context=False):
                 # Historical runs have no immutable model-input snapshot. A
                 # bounded reconstruction is useful for diagnosis, but is never
                 # presented as the context used by the model.
-                cur.execute('''SELECT direction,author_name,body,message_type,happened_at,created_at,raw FROM saas_crm_messages
+                cur.execute('''SELECT external_id,channel,direction,author_name,body,message_type,happened_at,created_at,raw FROM saas_crm_messages
                   WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
                     AND ((COALESCE(happened_at,created_at),created_at) < (
                       SELECT COALESCE(happened_at,created_at),created_at FROM saas_crm_messages

@@ -148,7 +148,13 @@ def evidence(cur,profile,extraction,names_out=None):
         cur.execute('SELECT id,body,direction,author_name,raw,message_type,happened_at FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s',
             (tenant,ref['id'],source['lead_id'],'connect:'+ref['channel_id']))
         row=cur.fetchone()
-        if not row or digest(str(row.get('body') or ''))!=ref['body_hash']: raise TenantLinearError('Исходное сообщение изменилось или больше недоступно.',409)
+        if not row or digest(str(row.get('body') or ''))!=ref['body_hash']:
+            raise TenantLinearError('Исходное сообщение изменилось или больше недоступно.',409)
+        if ref.get('media_kind'):
+            raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
+            version=digest({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')})
+            if row.get('message_type')!=ref.get('media_kind') or version!=ref.get('media_version'):
+                raise TenantLinearError('Вложение исходного сообщения изменилось или больше недоступно.',409)
         names.extend([source.get('contact_name'),source.get('phone'),row.get('author_name')])
         raw=row.get('raw') or {};names.extend(raw.get(k) for k in ('participantName','pushName','senderName','contactName'))
         items.append((ref,row,source))
