@@ -25,7 +25,7 @@ VIDEO_TYPES={'video/mp4','video/webm'}
 DOCUMENT_TYPES={'application/pdf','text/plain','application/vnd.openxmlformats-officedocument.wordprocessingml.document'}
 IMAGE_MAX_BYTES=20*1024*1024
 AUDIO_MAX_BYTES=10*1024*1024
-VIDEO_MAX_BYTES=50*1024*1024
+VIDEO_MAX_BYTES=100*1024*1024
 DOCUMENT_MAX_BYTES=5*1024*1024
 # The interactive attachment viewer may safely deliver these original formats;
 # AI document extraction intentionally remains limited to DOCUMENT_TYPES above.
@@ -91,7 +91,11 @@ async def download_media(item, *, max_bytes=None, preview_documents=False):
                 if response.status in {404, 410}:
                     raise TenantLinearError('Fayl artıq mövcud deyil və ya WhatsApp-dan alına bilmir.', 404)
                 if response.status == 413:
-                    raise TenantLinearError('Fayl çox böyükdür: şəkil 20 MB, audio 10 MB, video 50 MB.', 413)
+                    if response.headers.get('X-Connect-Media-Error') == 'media_duration_limit':
+                        error = TenantLinearError('Video 120 saniyədən uzun ola bilməz.', 413)
+                        error.code = 'media_duration_limit'
+                        raise error
+                    raise TenantLinearError('Fayl çox böyükdür: şəkil 20 MB, audio 10 MB, video 100 MB.', 413)
                 if response.status == 415:
                     raise TenantLinearError('Fayl formatı dəstəklənmir və ya fayl zədələnib.', 415)
                 if response.status == 429:
@@ -109,12 +113,12 @@ async def download_media(item, *, max_bytes=None, preview_documents=False):
                     raise TenantLinearError('Fayl formatı dəstəklənmir.', 415)
                 length = response.headers.get('Content-Length')
                 if length and not 0 < int(length) <= cap:
-                    raise TenantLinearError('Fayl çox böyükdür: şəkil 20 MB, audio 10 MB, video 50 MB.', 413)
+                    raise TenantLinearError('Fayl çox böyükdür: şəkil 20 MB, audio 10 MB, video 100 MB.', 413)
                 chunks, size = [], 0
                 async for chunk in response.content.iter_chunked(65536):
                     size += len(chunk)
                     if size > cap:
-                        raise TenantLinearError('Fayl çox böyükdür: şəkil 20 MB, audio 10 MB, video 50 MB.', 413)
+                        raise TenantLinearError('Fayl çox böyükdür: şəkil 20 MB, audio 10 MB, video 100 MB.', 413)
                     chunks.append(chunk)
                 if not size or length and size != int(length):
                     raise ValueError('Incomplete media')

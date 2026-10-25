@@ -3,7 +3,7 @@
   let member, lead, epoch=0;
   const active=new Set(), urls=new Set(), previews=new Map(), mediaCache=new Map();
   let cacheBytes=0;
-  const MAX_PREVIEW_BYTES=50*1024*1024,MAX_CACHE_BYTES=32*1024*1024;
+  const MAX_PREVIEW_BYTES=100*1024*1024,MAX_CACHE_BYTES=32*1024*1024;
   const text=(key,fallback)=>globalThis.window?.tenantI18n?.t(key)||fallback;
   const identity=m=>m?.tenant_id+':'+m?.telegram_id;
   const formatSize=value=>{const bytes=Number(value);if(!Number.isFinite(bytes)||bytes<0)return '';if(bytes<1024)return `${bytes} B`;if(bytes<1024*1024)return `${Math.round(bytes/1024)} KB`;return `${(bytes/(1024*1024)).toFixed(1)} MB`;};
@@ -58,7 +58,7 @@
           else{
             const response=await fetch('/api/platform/crm/chat/attachment?'+query,
               {credentials:'same-origin',cache:'no-store',signal:controller.signal});
-            if(!response.ok){const data=await response.json().catch(()=>({}));const key={404:'mediaUnavailable',410:'mediaUnavailable',413:'mediaLarge',415:'mediaInvalid',429:'mediaBusy'}[response.status]||'mediaFailed';if(response.status===429){const retry=Math.max(1,Math.min(3600,parseInt(response.headers.get('Retry-After')||'60',10)||60));host.dataset.mediaRetryAt=String(Date.now()+retry*1000);throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(retry)));}throw Error(host.dataset.connectMedia?text(key,data.error||'Fayl yüklənmədi.'):data.error||'Fayl yüklənmədi.');}
+            if(!response.ok){const data=await response.json().catch(()=>({}));const key=data.code==='media_duration_limit'?'mediaDuration':({404:'mediaUnavailable',410:'mediaUnavailable',413:'mediaLarge',415:'mediaInvalid',429:'mediaBusy'}[response.status]||'mediaFailed');if(response.status===429){const retry=Math.max(1,Math.min(3600,parseInt(response.headers.get('Retry-After')||'60',10)||60));host.dataset.mediaRetryAt=String(Date.now()+retry*1000);throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(retry)));}throw Error(host.dataset.connectMedia?text(key,data.error||'Fayl yüklənmədi.'):data.error||'Fayl yüklənmədi.');}
             servedFilename=dispositionName(response.headers.get('Content-Disposition'))||servedFilename;const declaredSize=Number(response.headers.get('Content-Length'));contentLength=response.headers.get('Content-Length')||'';if(auto&&declaredSize>5*1024*1024)throw Error(text('mediaLarge','Fayl çox böyükdür.'));
             const chunks=[],reader=response.body.getReader(),total=declaredSize;
             let size=0;

@@ -131,8 +131,14 @@ def test_scoped_url_timeout_and_no_redirects(monkeypatch):
 def test_final_preview_limits_are_exact_and_keep_audio_unchanged():
     assert media.media_limit('image') == 20*1024*1024
     assert media.media_limit('audio') == media.media_limit('voice') == 10*1024*1024
-    assert media.media_limit('video') == 50*1024*1024
+    assert media.media_limit('video') == 100*1024*1024
     assert media.media_limit('document') == 5*1024*1024
+
+
+def test_connect_duration_limit_remains_distinct_from_size_limit(monkeypatch):
+    transport(monkeypatch,status=413,headers={'X-Connect-Media-Error':'media_duration_limit'})
+    with pytest.raises(TenantLinearError) as error:run(media.download_media(item()))
+    assert error.value.status == 413 and error.value.code == 'media_duration_limit'
 
 
 @pytest.mark.parametrize('status',[404,410,413,415,429,500,302])
@@ -158,6 +164,17 @@ def test_audio_preview(monkeypatch,kind):
     transport(monkeypatch,headers={'Content-Type':'audio/ogg'},chunks=[b'OggSopus'])
     audio=item();audio['row']['message_type']=kind
     assert run(media.download_media(audio))==(b'OggSopus','audio/ogg')
+
+
+@pytest.mark.parametrize('mime',['video/mp4','video/webm'])
+def test_video_preview_accepts_100mib_and_rejects_one_byte_above(monkeypatch,mime):
+    video=item();video['row']['message_type']='video'
+    at_limit=b'\0'*(100*1024*1024)
+    transport(monkeypatch,headers={'Content-Type':mime,'Content-Length':str(len(at_limit))},chunks=[at_limit])
+    assert run(media.download_media(video))==(at_limit,mime)
+    transport(monkeypatch,headers={'Content-Type':mime,'Content-Length':str(len(at_limit)+1)},chunks=[])
+    with pytest.raises(TenantLinearError) as error:run(media.download_media(video))
+    assert error.value.status==413
 
 
 @pytest.mark.parametrize('mime',[

@@ -190,7 +190,10 @@ def handler(member_from_request, request_provider, logger):
         except TenantLinearError as error:
             if error.status == 429:
                 headers['Retry-After'] = str(getattr(error, 'retry_after', 60))
-            return web.json_response({'success': False, 'error': str(error)}, status=error.status, headers=headers)
+            payload = {'success': False, 'error': str(error)}
+            if getattr(error, 'code', None):
+                payload['code'] = error.code
+            return web.json_response(payload, status=error.status, headers=headers)
         except (ValueError, TypeError, KeyError):
             return web.json_response({'success': False, 'error': 'Fayl yüklənmədi. Fayl icazəsini və faylın mövcudluğunu yoxlayın.'}, status=400, headers=headers)
         except Exception:
