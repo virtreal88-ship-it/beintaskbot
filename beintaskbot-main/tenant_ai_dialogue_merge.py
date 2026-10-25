@@ -96,6 +96,13 @@ def _pairs(cur,cfg):
         mapping=cur.fetchone() or {}
         identity_digest=_token(cfg,'provider-evidence',tenant,channel,jid,lid,receipts,proof['sources'],reasons)
         state=str(mapping.get('state') or 'candidate')
+        cur.execute("SELECT to_regclass('saas_connect_direct_merge_backups') AS present")
+        if (cur.fetchone() or {}).get('present'):
+            from tenant_connect_direct_reconcile import _id
+            cur.execute("SELECT state FROM saas_connect_direct_merge_backups WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND pair_id=%s",(tenant,channel,_id(tenant,channel,jid,lid)))
+            if (cur.fetchone() or {}).get('state')=='merged':
+                state='merged'
+                reasons=[]
         item={'pair_id':pair_id,'state':state,'eligible':not reasons and state!='merged','provider_receipts':receipts,
               'canonical':{key:int(canonical.get(key) or 0) for key in ('n','incoming','outgoing')},
               'split':{key:int(split.get(key) or 0) for key in ('n','incoming','outgoing')},

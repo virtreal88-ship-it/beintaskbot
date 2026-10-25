@@ -29,6 +29,7 @@ import tenant_ai_administrator_approvals as administrator_approvals
 import tenant_ai_administrator_observations as administrator_observations
 import tenant_ai_administrator_apply as administrator_apply
 import tenant_ai_dialogue_merge as dialogue_merge
+import tenant_ai_direct_reconcile_mcp as direct_reconcile
 
 TOOL_SCOPE = 'ai_learning.read'
 DRAFT_SCOPE = administrator_drafts.DRAFT_SCOPE
@@ -71,6 +72,7 @@ def ensure_mcp_schema(conn):
     administrator_observations.ensure_schema(conn)
     administrator_apply.ensure_schema(conn)
     dialogue_merge.ensure_schema(conn)
+    direct_reconcile.reconcile.ensure_schema(conn)
     with conn.cursor() as cur:
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_learning_mcp_tokens(
           id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -236,6 +238,10 @@ def _authorize_token(request):
 
 
 def _tools(cur,cfg,name,args):
+    if name.startswith(direct_reconcile.PREFIX):
+        scope=TOOL_SCOPE if name in {direct_reconcile.PREFIX+'preview',direct_reconcile.PREFIX+'rollback_preflight'} else direct_reconcile.WRITE_SCOPE
+        if scope not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
+        return direct_reconcile.execute(cur,cfg,name,args)
     if name=='whatsapp_dialogue_duplicate_candidates':
         if TOOL_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
         result=dialogue_merge.preview(cur,cfg,args)
@@ -439,10 +445,10 @@ async def mcp(request):
     method=None; request_id=None; tool_name=''; commit_attempted=False
     try:
         data=await request.json(); method=data.get('method'); request_id=data.get('id')
-        if method=='initialize': return _jsonrpc({'protocolVersion':'2025-06-18','serverInfo':{'name':'beintaskbot-learning-loop','version':'1.0'},'capabilities':{'tools':{}}},request_id=request_id)
+        if method=='initialize': return _jsonrpc({'protocolVersion':'2025-06-18','serverInfo':{'name':'beintaskbot-learning-loop','version':direct_reconcile.SCHEMA_VERSION},'capabilities':{'tools':{}}},request_id=request_id)
         if method=='tools/list':
             auth=[{'type':'oauth2','scopes':[TOOL_SCOPE]}]
-            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+dialogue_merge.definitions()+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
+            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+direct_reconcile.definitions()+dialogue_merge.definitions()+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
         if method=='tools/call':
             cfg=_authorize_token(request)
             tool_name=str(data.get('params',{}).get('name',''))
@@ -452,6 +458,9 @@ async def mcp(request):
                 # Serialize the whole response before any write is committed.
                 # An encoder exception therefore remains rollback-safe.
                 response=_tool_response(output,request_id)
+                if tool_name.startswith(direct_reconcile.PREFIX):
+                    commit_attempted=True
+                    conn.commit()
                 if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge':
                     commit_attempted=True
                     conn.commit()
@@ -502,7 +511,7 @@ def _oauth_resource(value, cfg):
 
 def _requested_scopes(value):
     requested={part for part in str(value or TOOL_SCOPE).split() if part}
-    if not requested or TOOL_SCOPE not in requested or requested-{TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,OFFLINE_SCOPE}:
+    if not requested or TOOL_SCOPE not in requested or requested-{TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE}:
         raise TenantLinearError('Unsupported OAuth scope.',400)
     return requested
 
@@ -514,6 +523,8 @@ def _consent_text(scopes):
     is still a write operation.  The consent page must make that distinction so
     an existing read token is not mistaken for a token that can manage drafts.
     """
+    if direct_reconcile.WRITE_SCOPE in scopes:
+        return ('Owner-delegated PHYSICAL reconciliation of provider-proven direct WhatsApp duplicates in the configured company/channel. Moves CRM messages and supported dependencies with a backup, preserves media/history and stopped AI states. Each exact pair requires fresh preview, explicit confirmation and an idempotent request. Includes guarded rollback. No customer sends or WhatsApp session changes.'), 'Allow physical dialogue reconciliation'
     if DIALOGUE_MERGE_SCOPE in scopes:
         return (
             'Explicit owner-delegated dialogue merge access for one configured company and WhatsApp channel. '
@@ -670,12 +681,12 @@ def routes(member_from_request):
     async def protected(request):
         try:
             cfg=_require_cfg()
-            return web.json_response({'resource':cfg['issuer']+'/mcp/ai-learning','authorization_servers':[cfg['issuer']], 'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,OFFLINE_SCOPE]})
+            return web.json_response({'resource':cfg['issuer']+'/mcp/ai-learning','authorization_servers':[cfg['issuer']], 'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE]})
         except TenantLinearError as exc: return web.json_response({'error':str(exc)},status=exc.status)
     async def metadata(request):
         try:
             cfg=_require_cfg(); base=cfg['issuer']
-            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','revocation_endpoint':base+'/oauth/revoke','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,OFFLINE_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code','refresh_token'],'token_endpoint_auth_methods_supported':['none'],'client_id_metadata_document_supported':True})
+            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','revocation_endpoint':base+'/oauth/revoke','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code','refresh_token'],'token_endpoint_auth_methods_supported':['none'],'client_id_metadata_document_supported':True})
         except TenantLinearError as exc: return web.json_response({'error':str(exc)},status=exc.status)
     return [('POST','/mcp/ai-learning',mcp),('GET','/mcp/ai-learning',mcp),('GET','/.well-known/oauth-protected-resource/mcp/ai-learning',protected),('GET','/.well-known/oauth-authorization-server',metadata),('GET','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/token',token),('POST','/oauth/revoke',revoke)]
 
