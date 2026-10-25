@@ -17,6 +17,9 @@ def handler(member_from_request, origin, logger, resource):
             if request.method=='GET':
                 if resource=='tickets':
                     result = await asyncio.to_thread(listing,profile,request.query.get('status','unresolved'),request.query.get('assignee',''),request.query.get('offset',0),request.query.get('search',''),request.query.get('channel_id',''))
+                elif resource=='consultation':
+                    from tenant_internal_consultations import listing as consultation_listing
+                    result=await asyncio.to_thread(consultation_listing,profile,request.query.get('case_id',''))
                 else:
                     result = await asyncio.to_thread(detail,profile,request.match_info['ticket_id'],request.query.get('before'))
             else:
@@ -37,6 +40,12 @@ def handler(member_from_request, origin, logger, resource):
                     result = await asyncio.to_thread(update,profile,request.match_info['ticket_id'],payload)
                 elif resource=='summary' and request.method=='POST':
                     result = await asyncio.to_thread(regenerate,profile,request.match_info['ticket_id'])
+                elif resource=='consultation' and request.method=='POST':
+                    from tenant_internal_consultations import create as create_consultation
+                    result=await asyncio.to_thread(create_consultation,profile,payload)
+                elif resource=='consultation_reply' and request.method=='POST':
+                    from tenant_internal_consultations import reply
+                    result=await asyncio.to_thread(reply,profile,request.match_info['consultation_id'],payload)
                 else: raise TenantLinearError('Метод не поддерживается.',405)
             return web.json_response({'success':True,'result':result},headers=headers)
         except TenantLinearError as error:

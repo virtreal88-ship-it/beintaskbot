@@ -4,6 +4,7 @@
   const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const statuses=['new','waiting','in_progress','resolved'];
   const endpoint=(window.TENANT_AI_AGENTS_CONFIG?.endpoint||'/api/platform/ai/')+'support-tickets';
+  const consultationEndpoint=endpoint.replace(/support-tickets$/,'internal-consultations');
   let member=null,epoch=0,listRevision=0,detailRevision=0,members=[],channels=[],selected=null,nextOffset=null,nextBefore=null,rows=[],timer;
   const identity=person=>person?String(person.tenant_id)+':'+String(person.telegram_id):'';
   const allowed=()=>window.tenantOperator?.hasRight('support')||false;
@@ -14,6 +15,14 @@
     const payload=await response.json();
     if(!document?.body||version!==epoch||identity(current)!==identity(member))throw new Error(t('companyChanged'));
     if(!response.ok||!payload.success)throw new Error(payload.error||t('error'));
+    return payload.result;
+  }
+  async function consultationApi(path='',method='GET',data){
+    const current=member,version=epoch;
+    const response=await fetch(consultationEndpoint+path,{method,credentials:'same-origin',cache:'no-store',headers:data?{'Content-Type':'application/json'}:{},...(data?{body:JSON.stringify({...data,expected_tenant_id:current?.tenant_id,expected_user_id:current?.telegram_id})}:{})});
+    const payload=await response.json();
+    if(!document?.body||version!==epoch||identity(current)!==identity(member))throw new Error(t('companyChanged'));
+    if(!response.ok||!payload.success)throw new Error(payload.error||t('consultCreateError'));
     return payload.result;
   }
   function install(){
@@ -64,6 +73,14 @@
     $('supportTakeover').onclick=async()=>{const button=$('supportTakeover'),version=epoch;button.disabled=true;try{await window.tenantOperator.changeState(route,'handoff');if(version===epoch&&selected===ticket.id)await open(ticket.id);}catch(error){if(version===epoch){notice(error.message);button.disabled=false;}}};
     if($('supportSummary'))$('supportSummary').onclick=()=>action(ticket.id,'/summary','POST',{});
     $('supportEarlier').onclick=async()=>{const revision=detailRevision,version=epoch,button=$('supportEarlier');button.disabled=true;try{const page=await api('/'+encodeURIComponent(ticket.id)+'?before='+encodeURIComponent(nextBefore));if(selected!==ticket.id||revision!==detailRevision)return;$('supportHistory').insertAdjacentHTML('afterbegin',messages(page.messages));nextBefore=page.next_before;button.hidden=!nextBefore;}catch(error){if(version===epoch)notice(error.message);}finally{if(button.isConnected)button.disabled=false;}};
+    renderConsultations(ticket);
+  }
+  async function renderConsultations(ticket){
+    const host=$('supportDetail'),revision=detailRevision;if(!host)return;
+    $('supportConsultations')?.remove();
+    const section=document.createElement('section');section.id='supportConsultations';section.innerHTML=`<h3>${t('consultations')}</h3><p class="sub">${t('consultDeveloperHint')}</p><div class="support-edit"><label>${t('consultRecipient')}<select id="consultRecipient">${members.map(m=>`<option value="${esc(m.telegram_id)}">${esc(m.display_name||m.telegram_id)}</option>`).join('')}</select></label><label>${t('consultReason')}<textarea id="consultReason" maxlength="1000" rows="2"></textarea></label><button type="button" class="outline" id="consultCreate">${t('consultDeveloper')}</button></div><div id="consultRows"></div>`;host.append(section);
+    const show=items=>{const rows=$('consultRows');if(!rows)return;rows.innerHTML=(items||[]).map(item=>`<article class="support-message"><small>${esc(item.recipient_name)} · ${esc(i18n.date(item.created_at))}</small><div data-user-content>${esc(item.reason)}</div><small>${item.status==='queued_after_hours'?t('consultQueued'):t('consultWaiting')}</small>${item.response?`<hr><b>${t('consultAnswer')}</b><div data-user-content>${esc(item.response)}</div><small>${t('consultNoCustomerSend')}</small>`:`<small>${t('consultNoAnswer')}</small><label>${t('consultAnswer')}<textarea data-consult-answer="${esc(item.id)}" maxlength="4000" rows="2"></textarea></label><button type="button" class="outline" data-consult-reply="${esc(item.id)}">${t('save')}</button>`}</article>`).join('');rows.querySelectorAll('[data-consult-reply]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{const field=Array.from(rows.querySelectorAll('[data-consult-answer]')).find(node=>node.dataset.consultAnswer===button.dataset.consultReply);const response=field?.value||'';await consultationApi('/'+encodeURIComponent(button.dataset.consultReply)+'/reply','POST',{response,kind:'diagnosis'});await renderConsultations(ticket);}catch(error){notice(error.message);button.disabled=false;}});};
+    try{const result=await consultationApi('?case_id='+encodeURIComponent(ticket.id));if(revision!==detailRevision||selected!==ticket.id)return;show(result.consultations);$('consultCreate').onclick=async()=>{const button=$('consultCreate');button.disabled=true;try{await consultationApi('','POST',{case_id:ticket.id,recipient_id:$('consultRecipient').value,reason:$('consultReason').value,evidence:{ticket_id:ticket.id,conversation_id:ticket.conversation_id},request_key:crypto.randomUUID()});await renderConsultations(ticket);}catch(error){notice(error.message);button.disabled=false;}};}catch(error){section.querySelector('#consultRows').textContent=error.message;section.querySelector('#consultCreate').disabled=true;}
   }
   async function open(id){const revision=++detailRevision,version=epoch;try{const result=await api('/'+encodeURIComponent(id));if(revision!==detailRevision)return;renderDetail(result);$('supportDetail').scrollIntoView({behavior:'smooth',block:'start'});}catch(error){if(version===epoch)notice(error.message);}}
   async function action(id,path,method,data){const revision=++detailRevision,version=epoch,host=$('supportDetail');host?.querySelectorAll('button').forEach(button=>button.disabled=true);try{const result=await api('/'+encodeURIComponent(id)+path,method,data);if(revision!==detailRevision)return;renderDetail(result);await load();}catch(error){if(version===epoch){notice(error.message);await open(id);}}}

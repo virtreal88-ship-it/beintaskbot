@@ -13,7 +13,7 @@ from tenant_ai_learning_mcp import routes as learning_routes
 MCP_API=(('POST','/mcp/ai-learning'),('GET','/mcp/ai-learning'),
  ('GET','/.well-known/oauth-protected-resource/mcp/ai-learning'),
  ('GET','/.well-known/oauth-authorization-server'),('GET','/oauth/authorize'),
- ('POST','/oauth/authorize'),('POST','/oauth/token'))
+ ('POST','/oauth/authorize'),('POST','/oauth/token'),('POST','/oauth/revoke'))
 
 EXPECTED_API = (("POST","/api/platform/crm/deals/complete"),("GET","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/chat/send"),("POST","/api/platform/crm/chat/send-file"),("GET","/api/platform/diagnostics"),("GET","/api/platform/crm/chat/history"),("GET","/api/platform/crm/chat/attachment"),("GET","/api/platform/crm/chat/receipts"),("POST","/api/platform/crm/chat/receipts"),("GET","/api/platform/finance"),("POST","/api/platform/finance"),("GET","/api/platform/linear/settings"),("POST","/api/platform/linear/settings"),("GET","/api/platform/linear/tasks"),("POST","/api/platform/linear/tasks"),("GET","/api/platform/news"),("POST","/api/platform/news"),("GET","/api/platform/news/ai"),("POST","/api/platform/news/ai"),("GET","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai/settings"),("GET","/api/platform/chat/ai/models"),("POST","/api/platform/chat/ai/model-probe"),("POST","/api/platform/chat/ai"),("GET","/api/platform/news/telegram/settings"),("POST","/api/platform/news/telegram/settings"),("GET","/api/platform/news/telegram"),("POST","/api/platform/news/telegram"),("GET","/api/platform/news/public/{company}"))
 EXPECTED_API += tuple((method,path) for path,methods in [
@@ -57,6 +57,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('night-report/tickets/{ticket_id}', ('GET',)),
     ('support-tickets', ('GET','POST')), ('support-tickets/complete', ('POST',)), ('support-tickets/{ticket_id}', ('GET','PATCH')),
     ('support-tickets/{ticket_id}/summary', ('POST',)),
+    ('internal-consultations', ('GET','POST')), ('internal-consultations/{consultation_id}/reply', ('POST',)),
     ('channels', ('GET',)), ('state', ('GET',)), ('state/technical', ('GET',)),
     ('reliability', ('GET',)), ('handoffs', ('GET',)), ('diagnostics', ('GET',)), ('agents/{agent_id}', ('PATCH','DELETE')),
     ('agents/{agent_id}/triggers', ('GET','POST')),
