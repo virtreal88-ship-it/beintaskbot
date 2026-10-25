@@ -120,6 +120,7 @@ async def get_avatar(profile, params):
                     any(latest.get(key) != route.get(key) for key in ('channel_id','conversation_id','api_key'))):
                 raise TenantLinearError('WhatsApp-kanal artıq əlçatan deyil.', 404)
             cur.execute('''UPDATE saas_connect_conversations SET avatar_status='available',updated_at=now()
-              WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s ''',
+              WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s
+                AND avatar_status IS DISTINCT FROM 'available' ''',
               (tenant, route['channel_id'], route['conversation_id']))
     return body, mime

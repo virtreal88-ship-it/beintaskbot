@@ -4,6 +4,9 @@ Only called inside the owner reconciliation transaction; never invokes a worker,
 provider or send function. Historical run/webhook evidence is immutable.
 """
 import json
+import hashlib
+from copy import deepcopy
+from datetime import datetime
 from tenant_linear_policy import TenantLinearError
 
 
@@ -151,9 +154,71 @@ def migrate(cur, tenant, channel, ids, leads, before):
     cur.execute('DELETE FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s', (tenant,channel,lid))
 
 
+def _digest(row):
+    return hashlib.sha256(json.dumps(row,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
+
+def _timestamp_only(old,new):
+    if set(old)!=set(new) or old.get('avatar_status')!='available': return False
+    if {k:v for k,v in old.items() if k!='updated_at'}!={k:v for k,v in new.items() if k!='updated_at'}: return False
+    try:
+        return datetime.fromisoformat(new['updated_at'])>datetime.fromisoformat(old['updated_at'])
+    except (ValueError,TypeError,KeyError): return False
+
+
+def certify_avatar_timestamp_touch(cur,tenant,actor,old,new,evidence):
+    """Trusted administrative recovery, NOT exposed to request/MCP parameters.
+
+    Operator must independently verify original authenticated Railway HTTP logs.
+    Neither a dry-run nor rollback can generate this evidence for itself.
+    """
+    from tenant_ai_agents_store import _audit
+    from tenant_connect_direct_reconcile import _owner
+    _owner(cur,{'tenant_id':tenant,'telegram_id':actor})
+    if not _timestamp_only(old,new) or old.get('tenant_id')!=tenant:
+        raise TenantLinearError('direct_merge_timestamp_evidence_invalid',409)
+    required={'source','deployment_id','request_time','http_status','http_method','request_path','channel_id','lead_id'}
+    if set(evidence)!=required or evidence['source']!='authenticated_railway_avatar_http' or evidence['http_status']!=200 or evidence['http_method']!='GET' or evidence['request_path']!='/api/platform/ai/dialogs/avatar' or evidence['channel_id']!=old['connect_channel_id'] or evidence['lead_id']!=old['lead_id']:
+        raise TenantLinearError('direct_merge_timestamp_evidence_invalid',409)
+    import uuid
+    try:
+        uuid.UUID(evidence['deployment_id'])
+        at=datetime.fromisoformat(evidence['request_time'].replace('Z','+00:00'))
+        changed=datetime.fromisoformat(new['updated_at'])
+        if abs((at-changed).total_seconds())>5: raise ValueError()
+    except (ValueError,TypeError,KeyError):
+        raise TenantLinearError('direct_merge_timestamp_evidence_invalid',409) from None
+    cur.execute('SELECT row_to_json(c) AS row FROM saas_connect_conversations c WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s FOR UPDATE',(tenant,old['connect_channel_id'],old['conversation_id']))
+    current=cur.fetchone()
+    if not current or current['row']!=new: raise TenantLinearError('direct_merge_timestamp_evidence_stale',409)
+    payload={'before_digest':_digest(old),'after_digest':_digest(new),'old_updated_at':old['updated_at'],'new_updated_at':new['updated_at'],'evidence':evidence}
+    cur.execute("SELECT 1 FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='connect_route_avatar_timestamp_verified' AND entity_id=%s AND payload->>'before_digest'=%s AND payload->>'after_digest'=%s",(tenant,str(old['lead_id']),payload['before_digest'],payload['after_digest']))
+    if not cur.fetchone(): _audit(cur,tenant,actor,'connect_route_avatar_timestamp_verified','connect_conversation',str(old['lead_id']),payload)
+
+
+def rollback_expected(cur,tenant,before,after,current):
+    """Full comparison; only a proven exact timestamp transition is admissible."""
+    expected=deepcopy(before)
+    if set(current)!=set(after): raise TenantLinearError('direct_merge_rollback_state_changed',409)
+    for kind in after:
+        if kind!='routes' and current[kind]!=after[kind]:
+            raise TenantLinearError('direct_merge_rollback_state_changed',409)
+    if len(current['routes'])!=len(after['routes']): raise TenantLinearError('direct_merge_rollback_state_changed',409)
+    touches=[]
+    for old,new in zip(after['routes'],current['routes']):
+        if old==new:continue
+        if not _timestamp_only(old,new): raise TenantLinearError('direct_merge_rollback_state_changed',409)
+        cur.execute("SELECT id FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='connect_route_avatar_timestamp_verified' AND entity_type='connect_conversation' AND entity_id=%s AND payload->>'before_digest'=%s AND payload->>'after_digest'=%s",(tenant,str(old['lead_id']),_digest(old),_digest(new)))
+        receipt=cur.fetchone()
+        if not receipt: raise TenantLinearError('direct_merge_rollback_timestamp_unproven',409)
+        for row in expected['routes']:
+            if row['conversation_id']==new['conversation_id']: row['updated_at']=new['updated_at']
+        touches.append({'audit_id':str(receipt['id']),'old_updated_at':old['updated_at'],'new_updated_at':new['updated_at']})
+    return expected,touches
+
+
 def restore(cur, tenant, channel, ids, leads, before, after):
-    if capture(cur,tenant,channel,ids,leads) != after:
-        raise TenantLinearError('direct_merge_rollback_state_changed',409)
+    expected,touches=rollback_expected(cur,tenant,before,after,capture(cur,tenant,channel,ids,leads))
     # Recreate the exact source route first, never overwrite an existing route.
     for row in before['routes']:
         if row['conversation_id']==ids[1]: insert_row(cur,TABLES['routes'],row)
@@ -168,8 +233,9 @@ def restore(cur, tenant, channel, ids, leads, before, after):
         cur.execute('UPDATE saas_ai_agent_drafts SET lead_id=%s,chat_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid', (row['lead_id'],row['chat_id'],tenant,row['id']))
     condition,args=clause('aliases',channel,ids,leads)
     replace_rows(cur,TABLES['aliases'],tenant,condition,args,before['aliases'])
-    if capture(cur,tenant,channel,ids,leads) != before:
+    if capture(cur,tenant,channel,ids,leads) != expected:
         raise TenantLinearError('direct_merge_rollback_verification_failed',409)
+    return touches
 
 
 def verify_transfer(before, after, ids, leads):

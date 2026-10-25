@@ -125,10 +125,29 @@ def apply(profile, payload):
                 ids=snapshot['ids'];leads=snapshot['leads'];channel=str(backup['channel_id'])
                 reasons=dependencies.conflicts(cur,tenant,channel,ids,leads,snapshot['after'])
                 if reasons: raise TenantLinearError('direct_merge_rollback_dependency_conflict',409)
-                dependencies.restore(cur,tenant,channel,ids,leads,snapshot['before'],snapshot['after'])
+                touches=dependencies.restore(cur,tenant,channel,ids,leads,snapshot['before'],snapshot['after'])
                 cur.execute("UPDATE saas_connect_direct_merge_backups SET state='rolled_back',rolled_back_at=now() WHERE tenant_id=%s::uuid AND pair_id=%s",(tenant,pair_id))
-                result={'state':'rolled_back','pair_id':pair_id,'restored_messages':sum(r['kommo_lead_id']==leads[1] for r in snapshot['before']['messages']),'preserved_message_ids':True}
+                result={'state':'rolled_back','pair_id':pair_id,'restored_messages':sum(r['kommo_lead_id']==leads[1] for r in snapshot['before']['messages']),'preserved_message_ids':True,'preserved_timestamp_touches':touches}
             result['request_digest']=request_digest
             cur.execute('INSERT INTO saas_connect_direct_merge_requests(tenant_id,request_id,operation,pair_id,result) VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)',(tenant,request_id,operation,pair_id,_json(result)))
-            _audit(cur,tenant,actor,'connect_direct_merge_'+operation,'connect_conversation',pair_id,{'channel_id':(item or backup)['channel_id'],'physical':True,'snapshot_version':2,'before_digest':_precondition(snapshot['before']),'after_digest':_precondition(snapshot['after']),'dependency_counts':result.get('dependency_counts',{})})
+            _audit(cur,tenant,actor,'connect_direct_merge_'+operation,'connect_conversation',pair_id,{'channel_id':(item or backup)['channel_id'],'physical':True,'snapshot_version':2,'before_digest':_precondition(snapshot['before']),'after_digest':_precondition(snapshot['after']),'dependency_counts':result.get('dependency_counts',{}),'preserved_timestamp_touches':result.get('preserved_timestamp_touches',[])})
         conn.commit();return result
+
+
+def rollback_preflight(profile,pair_id):
+    """Deterministic owner-only dry run under the same locks; never restores data."""
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant,_=_owner(cur,profile);dependencies.lock(cur)
+            cur.execute("SELECT * FROM saas_connect_direct_merge_backups WHERE tenant_id=%s::uuid AND pair_id=%s AND state='merged' FOR UPDATE",(tenant,pair_id))
+            backup=cur.fetchone()
+            if not backup or backup['snapshot'].get('version')!=2: raise TenantLinearError('direct_merge_rollback_unavailable',409)
+            s=backup['snapshot'];channel=str(backup['channel_id'])
+            current=dependencies.capture(cur,tenant,channel,s['ids'],s['leads'])
+            reasons=dependencies.conflicts(cur,tenant,channel,s['ids'],s['leads'],current)
+            if reasons: raise TenantLinearError('direct_merge_rollback_dependency_conflict',409)
+            _,touches=dependencies.rollback_expected(cur,tenant,s['before'],s['after'],current)
+            result={'eligible':True,'pair_id':pair_id,'backup_id':str(backup['id']),'current_digest':_precondition(current),'preserved_timestamp_touches':touches}
+        conn.rollback()
+        return result
