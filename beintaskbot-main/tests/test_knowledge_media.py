@@ -269,3 +269,57 @@ def test_asr_permission_reserves_extra_call_and_tokens(ready):
     assert database.execute('SELECT reserved_tokens FROM saas_ai_agent_token_usage WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(A,item['id']))[0]['reserved_tokens']==service.MAX_TOKENS+8000
 
 
+def test_inline_visual_without_explicit_vision_fails_closed_under_money_cap(ready,monkeypatch):
+    """Inline image inputs are not an unpriced escape hatch when capped."""
+    import tenant_ai_spend_budget as budget
+    import uuid
+    database,generation,data=ready
+    source=str(uuid.uuid4())
+    database.execute("""INSERT INTO saas_crm_messages
+      (tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','photo attached','image',now()+interval '4 seconds')""",
+      (A,source,'media-inline','connect:'+CA))
+    database.commit()
+    monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD',json.dumps({A:1_000_000}))
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'fixture':{'input':1,'output':1}}))
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'fixture':{'vision_low':100}}))
+    monkeypatch.setattr(budget,'_connect',lambda:database)
+    monkeypatch.setattr(service,'platform_model',lambda:'fixture')
+    # No campaign grants Vision for this source: the extraction must stop
+    # before any provider call instead of accepting an unpriced inline image.
+    with pytest.raises(TenantLinearError,match='Vision'):
+        service.prepare(PROFILE,{**data,'allow_external_media':True})
+    generation.assert_not_called()
+
+
+def test_finish_separates_text_media_unknown_and_media_only_cancel(ready,monkeypatch):
+    """Text and fixed media settlements have independent lifecycle receipts."""
+    import tenant_ai_spend_budget as budget
+    import uuid
+    database,_,data=ready
+    settled=[];media=[];released=[]
+    monkeypatch.setattr(budget,'settle',lambda *args,**kwargs:settled.append((args,kwargs)))
+    monkeypatch.setattr(budget,'settle_media',lambda *args,**kwargs:media.append((args,kwargs)))
+    monkeypatch.setattr(budget,'release',lambda *args,**kwargs:released.append((args,kwargs)))
+
+    item=service.prepare(PROFILE,data)
+    item.update(generation_attempted=True,asr_attempted=True,vision_attempts=1,vision_usage=[],
+      media_spend={
+        'asr':{'key':'asr-key','operation':'asr','units':1},
+        'vision':{'key':'vision-key','operation':'vision_low','units':2},
+      })
+    service.finish(PROFILE,item,[],{'input_tokens':7,'output_tokens':3,'total_tokens':10},'',True)
+    assert settled and settled[0][0][2]=={'input_tokens':7,'output_tokens':3,'total_tokens':10}
+    assert released==[]
+    assert [(call[0][1],call[1]['unknown']) for call in media]==[('asr-key',True),('vision-key',True)]
+
+    # If only a cached/cancelled media branch ran, no text generation occurred:
+    # release its reservation instead of settling it as a zero-token model call.
+    item=service.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4()),'allow_external_media':True})
+    item.update(generation_attempted=False,asr_attempted=False,vision_attempts=0,
+                media_spend={'asr':{'key':'cached-asr','operation':'asr','units':1}})
+    service.finish(PROFILE,item,None,None,'',False)
+    assert released and released[-1][0][1]=='extraction:'+item['id']
+    assert media[-1][0][1]=='cached-asr' and media[-1][1]['attempted_units']==0
+
+

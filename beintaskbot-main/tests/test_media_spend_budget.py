@@ -67,3 +67,17 @@ def test_media_settlement_releases_unused_and_retains_unknown(priced):
     rows={r['call_key']:(r['state'],r['actual_microusd']) for r in priced.execute('SELECT call_key,state,actual_microusd FROM saas_ai_spend_reservations')}
     assert rows['media:unused']==('released',0)
     assert rows['media:unknown']==('unknown',None)
+
+
+def test_media_settlement_uses_tariff_pinned_at_reservation(priced,monkeypatch):
+    with priced.cursor() as cur:
+        budget.reserve_media(cur,A,'media:pinned','knowledge_asr','asr-model','asr',1)
+    priced.commit()
+    # A later config refresh must not re-price a call that was admitted under
+    # the original tariff.
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD', json.dumps({
+        'asr-model': {'asr': 999}, 'vision-model': {'vision_low': 999},
+    }))
+    budget.settle_media(A,'media:pinned',operation='asr',attempted_units=1,reserved_units=1)
+    row=priced.execute("SELECT state,actual_microusd FROM saas_ai_spend_reservations WHERE call_key='media:pinned'")[0]
+    assert row=={'state':'settled','actual_microusd':300}

@@ -128,23 +128,36 @@ def prepare(profile,data,review=None):
             if int(cur.fetchone()['n'])>=MAX_DAILY_EXTRACTIONS: raise TenantLinearError(f'Лимит анализов: {MAX_DAILY_EXTRACTIONS} в сутки.',429)
             cur.execute("SELECT 1 FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND status='running' LIMIT 1",(tenant,))
             if cur.fetchone(): raise TenantLinearError('Дождитесь завершения текущего анализа.',429)
+            extra_calls=1 if data.get('allow_paid_asr') else 0
+            # ``allow_vision`` omitted means bounded visuals are supplied to
+            # the extraction model inline.  That is still a visual provider
+            # path, so it cannot be left unreserved under a tenant money cap.
+            # Two is the existing MAX_VISUALS worst-case (including sampled
+            # video frames), not a prediction that both calls will occur.
+            visual_kinds={'image','video','document'}
+            visual_possible=(data.get('allow_external_media') is True
+                             and data.get('allow_vision') is not False
+                             and any(ref.get('media_kind') in visual_kinds for ref in item['refs']))
+            # Existing explicit Vision policy still controls call-count and
+            # campaign admission.  Under a monetary cap, omitted inline
+            # visual inputs are additionally treated as a paid worst case.
+            vision_calls=2 if data.get('allow_vision') is True else 0
+            from tenant_ai_spend_budget import limit_microusd, reserve_media
+            monetary_vision_calls=max(vision_calls,2 if limit_microusd(tenant) and visual_possible else 0)
             cur.execute("""SELECT COALESCE((SELECT sum(reserved_calls) FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date),0)
               +COALESCE((SELECT sum(reserved_calls) FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'
               AND (state IN ('generating','completed','unknown') OR reserved_calls>1 OR generated_at IS NOT NULL)),0) AS n""",(tenant,tenant))
-            if int(cur.fetchone()['n'])+(1 if data.get('allow_paid_asr') else 0)+(2 if data.get('allow_vision') is True else 0)>=int(meta.get('daily_limit') or 50): raise TenantLinearError('Дневной лимит AI компании исчерпан.',429)
+            if int(cur.fetchone()['n'])+extra_calls+vision_calls>=int(meta.get('daily_limit') or 50): raise TenantLinearError('Дневной лимит AI компании исчерпан.',429)
             cur.execute(TOKEN_USAGE_SQL,(tenant,tenant));used=int(cur.fetchone()['tokens'])
             cap=platform_token_limit(tenant) if source=='platform' else 0
-            if cap and used+MAX_TOKENS+(8000 if data.get('allow_paid_asr') else 0)+(8000 if data.get('allow_vision') is True else 0)>cap: raise TenantLinearError('Недостаточно бюджета токенов компании.',429)
-            extra_calls=1 if data.get('allow_paid_asr') else 0
-            vision_calls=2 if data.get('allow_vision') is True else 0
-            if vision_calls and not campaign_source:raise TenantLinearError('Vision-кеш доступен только утверждённой кампании.',403)
+            if cap and used+MAX_TOKENS+(8000 if extra_calls else 0)+(8000 if vision_calls else 0)>cap: raise TenantLinearError('Недостаточно бюджета токенов компании.',429)
+            if monetary_vision_calls and not campaign_source:raise TenantLinearError('Vision-кеш доступен только утверждённой кампании.',403)
 
             if extra_calls and int(meta.get('daily_limit') or 50)<=int(0): raise TenantLinearError('Недостаточно бюджета.',429)
             # Each possible paid media branch has its own configured fixed
             # tariff.  Missing/unsupported prices fail closed before any bytes
             # leave the service; the text-token reservation alone is not a
             # monetary authorization for ASR or vision.
-            from tenant_ai_spend_budget import limit_microusd, reserve_media
             event='knowledge_extraction:'+request_id
             from tenant_ai_spend_budget import reserve as reserve_spend
             reserve_spend(cur,tenant,'extraction:'+request_id,'live_case_extraction',model,MAX_TOKENS,1800)
@@ -156,10 +169,10 @@ def prepare(profile,data,review=None):
                 key_name='extraction:'+request_id+':asr'
                 reserve_media(cur,tenant,key_name,'knowledge_asr',asr_model,'asr',1)
                 media_spend['asr']={'key':key_name,'model':asr_model,'operation':'asr','units':1}
-            if limit_microusd(tenant) and vision_calls:
+            if limit_microusd(tenant) and monetary_vision_calls:
                 key_name='extraction:'+request_id+':vision'
-                reserve_media(cur,tenant,key_name,'knowledge_vision',model,'vision_low',vision_calls)
-                media_spend['vision']={'key':key_name,'model':model,'operation':'vision_low','units':vision_calls}
+                reserve_media(cur,tenant,key_name,'knowledge_vision',model,'vision_low',monetary_vision_calls)
+                media_spend['vision']={'key':key_name,'model':model,'operation':'vision_low','units':monetary_vision_calls}
             cur.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,state) VALUES(%s::uuid,%s,'connect','knowledge_extraction','completed')",(tenant,event))
             cur.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,reserved_calls) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,%s,'generating',1)",(tenant,request_id,agent['id'],event,model))
             cur.execute("INSERT INTO saas_ai_agent_token_usage(tenant_id,id,run_id,agent_id,model,reserved_tokens) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s)",(tenant,str(uuid.uuid4()),request_id,agent['id'],model,MAX_TOKENS))
@@ -309,7 +322,9 @@ def finish(profile,item,values,usage,error,attempted,proposal=None):
                 ('completed' if status=='completed' else ('unknown' if attempted else 'skipped'),error,bool(usage),tenant,request_id))
         conn.commit()
     from tenant_ai_spend_budget import settle as settle_spend, release as release_spend, settle_media
-    if not attempted:
+    # Media-only work is prepaid and settled separately.  A text-model
+    # reservation is releasable until the extraction generation itself begins.
+    if not item.get('generation_attempted'):
         release_spend(item['tenant'],'extraction:'+str(item['id']))
     else:
         settle_spend(item['tenant'],'extraction:'+str(item['id']),usage or {},unknown=(status=='unknown'))
@@ -392,9 +407,8 @@ def analyze(profile,data,*,before_provider=None):
             except LiveExtractionDisabled:
                 values=None
                 error='live_extraction_disabled_after_provider'
-        audio_usage=item.get('asr_usage')
-        if audio_usage: usage={k:int((usage or {}).get(k) or 0)+int(audio_usage.get(k) or 0) for k in ('input_tokens','output_tokens','total_tokens')}
-        for visual_usage in item.get('vision_usage',[]):
-            usage={k:int((usage or {}).get(k) or 0)+int(visual_usage.get(k) or 0) for k in ('input_tokens','output_tokens','total_tokens')}
+        # ASR and visual providers settle against their own fixed media
+        # reservations.  Do not mix their usage into the text-model token
+        # settlement, which would charge the same branch twice.
         finish(profile,item,values,usage,error,attempted or item.get('asr_attempted',False) or bool(item.get('vision_attempts')))
     return store.request_detail(profile,item['id'])

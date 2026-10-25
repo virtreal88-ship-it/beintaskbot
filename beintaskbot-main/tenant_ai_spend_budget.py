@@ -62,9 +62,15 @@ def ensure_schema(conn):
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_spend_reservations(
           tenant_id UUID NOT NULL, id UUID NOT NULL, call_key TEXT NOT NULL, model TEXT NOT NULL,
           kind TEXT NOT NULL, reserved_microusd BIGINT NOT NULL CHECK(reserved_microusd >= 0),
+          media_operation TEXT, media_unit_microusd BIGINT, media_units INTEGER,
           actual_microusd BIGINT, state TEXT NOT NULL CHECK(state IN ('reserved','settled','unknown','released')),
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(), completed_at TIMESTAMPTZ,
           PRIMARY KEY(tenant_id,id), UNIQUE(tenant_id,call_key))''')
+        # These fields pin a media tariff at admission.  Settlement must never
+        # consult a later mutable runtime price configuration.
+        cur.execute('ALTER TABLE saas_ai_spend_reservations ADD COLUMN IF NOT EXISTS media_operation TEXT')
+        cur.execute('ALTER TABLE saas_ai_spend_reservations ADD COLUMN IF NOT EXISTS media_unit_microusd BIGINT')
+        cur.execute('ALTER TABLE saas_ai_spend_reservations ADD COLUMN IF NOT EXISTS media_units INTEGER')
         cur.execute('CREATE INDEX IF NOT EXISTS saas_ai_spend_reservations_tenant_idx ON saas_ai_spend_reservations(tenant_id,state)')
 
 
@@ -139,27 +145,38 @@ def reserve_media(cur, tenant_id, call_key, kind, model, operation, units):
         raise TenantLinearError('ai_spend_budget_exhausted', 429)
     reservation_id = str(uuid.uuid4())
     cur.execute('''INSERT INTO saas_ai_spend_reservations
-                  (tenant_id,id,call_key,model,kind,reserved_microusd,state)
-                  VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,'reserved')''',
-                (tenant_id, reservation_id, str(call_key)[:200], str(model)[:100], str(kind)[:40], amount))
+                  (tenant_id,id,call_key,model,kind,reserved_microusd,media_operation,media_unit_microusd,media_units,state)
+                  VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,'reserved')''',
+                (tenant_id, reservation_id, str(call_key)[:200], str(model)[:100], str(kind)[:40], amount,
+                 operation, unit, units))
     return reservation_id
 
 
 def settle_media(tenant_id, call_key, *, operation, attempted_units=0, reserved_units=0, unknown=False):
     """Settle only known completed media calls; ambiguity retains the reserve."""
-    if not limit_microusd(tenant_id):
-        return
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ('tenant-ai-spend:' + str(tenant_id),))
-            cur.execute('SELECT model,reserved_microusd,state FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key=%s FOR UPDATE',
+            cur.execute('''SELECT reserved_microusd,state,media_operation,media_unit_microusd,media_units
+                           FROM saas_ai_spend_reservations
+                           WHERE tenant_id=%s::uuid AND call_key=%s FOR UPDATE''',
                         (tenant_id, str(call_key)[:200]))
             row = cur.fetchone()
             if not row or row['state'] != 'reserved':
                 conn.commit(); return
-            unit = media_price(row['model'], operation)
-            actual = None if unknown or unit is None else unit * max(0, int(attempted_units or 0))
+            # A pre-existing reservation without immutable media metadata is
+            # deliberately quarantined as unknown rather than re-priced from
+            # the current environment.
+            try:
+                unit=int(row.get('media_unit_microusd'))
+                planned_units=int(row.get('media_units'))
+            except (TypeError, ValueError):
+                unit=planned_units=0
+            valid_plan=(row.get('media_operation')==operation and unit>0 and planned_units>0
+                        and (not reserved_units or int(reserved_units)==planned_units))
+            actual = (None if unknown or not valid_plan
+                      else unit * max(0, int(attempted_units or 0)))
             if actual is None or actual > int(row['reserved_microusd']):
                 cur.execute("UPDATE saas_ai_spend_reservations SET state='unknown',completed_at=now() WHERE tenant_id=%s::uuid AND call_key=%s",
                             (tenant_id, str(call_key)[:200]))
