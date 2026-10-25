@@ -66,6 +66,14 @@ def test_connect_media_filename_exposes_only_safe_basename():
     assert dialogs._media_filename({'filename':'unsafe\nname.pdf'})==''
 
 
+def test_connect_media_size_exposes_only_positive_bounded_provider_metadata():
+    assert dialogs._media_size({'fileLength':'16777217'})==16777217
+    assert dialogs._media_size({'file_size':1048576})==1048576
+    assert dialogs._media_size({'size_bytes':'42'})==42
+    for raw in ({},{'size_bytes':0},{'file_size':-1},{'fileLength':'bad'},{'size_bytes':str(1 << 63)}):
+        assert dialogs._media_size(raw) is None
+
+
 def test_dialogs_endpoint_lists_real_postgres_rows_and_detects_manual_handoff(operator_db,monkeypatch):
     seed_job(operator_db)
     executed=[]

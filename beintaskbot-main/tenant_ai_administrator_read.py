@@ -137,6 +137,31 @@ def _sanitize(value):
     return value
 
 
+_MEDIA_SIZE_FIELDS = ('size_bytes', 'file_size', 'fileLength')
+_MAX_MEDIA_SIZE_BYTES = (1 << 63) - 1
+
+
+def _media_size_metadata(raw):
+    """Return only a bounded numeric size already present in a Connect event.
+
+    This is deliberately a projection, not a media lookup: no URL, filename,
+    token, or nested event data leaves the stored ``raw`` envelope.
+    """
+    if not isinstance(raw, dict):
+        return None, 'unknown'
+    for field in _MEDIA_SIZE_FIELDS:
+        value = raw.get(field)
+        if type(value) is int:
+            size = value
+        elif isinstance(value, str) and re.fullmatch(r'\d{1,19}', value):
+            size = int(value)
+        else:
+            continue
+        if 0 < size <= _MAX_MEDIA_SIZE_BYTES:
+            return size, field
+    return None, 'unknown'
+
+
 def _page_key(cfg,name,args,offset):
     body=json.dumps([name,{k:v for k,v in args.items() if k not in {'cursor','limit'}},offset],separators=(',',':'),sort_keys=True)
     sig=hmac.new(cfg['AI_LEARNING_MCP_CURSOR_SECRET'].encode(), (cfg['AI_LEARNING_MCP_TENANT_ID']+body).encode(),hashlib.sha256).hexdigest()
@@ -315,6 +340,9 @@ def read(cur,cfg,name,args):
     cur.execute('SELECT to_regclass(%s) AS relation',(table,))
     if not cur.fetchone()['relation']: return {'available':False,'items':[],'next_cursor':None}
     columns=fields.split()+(content.split() if args.get('include_content') else [])
+    # `raw` is fetched only for the existing bounded messages projection and
+    # removed before sanitisation/return. It is never a caller-selectable field.
+    if name=='messages_read': columns.append('raw')
     projection=','.join("'%s',to_jsonb(r)->'%s'" % (field,field) for field in columns)
     # All SQL identifiers come exclusively from SPECS above, never from args.
     where='r.tenant_id=%s::uuid'; params=[cfg['AI_LEARNING_MCP_TENANT_ID']]
@@ -334,5 +362,12 @@ def read(cur,cfg,name,args):
         where+=" AND to_jsonb(r)->>%s=%s";params.extend([key,args['id']])
     limit=args.get('limit',10)
     cur.execute('SELECT jsonb_build_object('+projection+') AS item FROM '+table+' r WHERE '+where+" ORDER BY COALESCE(to_jsonb(r)->>'happened_at',to_jsonb(r)->>'created_at',to_jsonb(r)->>'updated_at','') DESC,to_jsonb(r)->>'"+key+"',to_jsonb(r)::text LIMIT %s OFFSET %s",(*params,limit+1,offset))
-    rows=[_sanitize(row['item']) for row in cur.fetchall()]
+    rows=[]
+    for row in cur.fetchall():
+        item=row['item']
+        if name=='messages_read':
+            size,source=_media_size_metadata(item.pop('raw',None))
+            item['media_size_bytes']=size
+            item['media_size_source']=source
+        rows.append(_sanitize(item))
     return {'available':True,'items':rows[:limit],'next_cursor':_page_key(cfg,name,args,offset+limit) if len(rows)>limit else None,'content_is_untrusted':True}

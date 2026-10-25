@@ -96,6 +96,49 @@ def test_message_content_redacts_secrets_and_preserves_ids(db,monkeypatch):
     assert 'raw' not in detailed['items'][0]
 
 
+@pytest.mark.parametrize(('raw','expected_size','expected_source'),[
+    ({'fileLength':'16777217'},16777217,'fileLength'),
+    ({'file_size':1048576},1048576,'file_size'),
+    ({'size_bytes':'42'},42,'size_bytes'),
+    ({},None,'unknown'),
+    ({'size_bytes':0},None,'unknown'),
+    ({'fileLength':'not-a-number'},None,'unknown'),
+    ({'file_size':-1},None,'unknown'),
+    ({'size_bytes':str(1 << 63)},None,'unknown'),
+])
+def test_messages_read_projects_only_safe_stored_media_size(db,monkeypatch,raw,expected_size,expected_source):
+    """The read tool uses stored event metadata, never a media URL or fetch."""
+    _setup(monkeypatch,db)
+    message_id=str(db.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid ORDER BY id LIMIT 1',(A,))[0]['id'])
+    db.execute('''UPDATE saas_crm_messages SET raw=%s::jsonb
+      WHERE tenant_id=%s::uuid AND id=%s::uuid''',(json.dumps({**raw,
+          'media_url':'https://private.invalid/media?token=secret','token':'secret','jid':'customer@chat'}),A,message_id))
+    db.commit()
+    cfg=mcp._require_cfg();cfg['granted_scopes']=[admin.READ_SCOPE]
+    with db.cursor() as cur:
+        result=admin.read(cur,cfg,'messages_read',{'id':message_id})
+    assert len(result['items'])==1
+    item=result['items'][0]
+    assert item['media_size_bytes']==expected_size
+    assert item['media_size_source']==expected_source
+    wire=json.dumps(item)
+    assert 'raw' not in item
+    assert all(value not in wire for value in ('private.invalid','secret','customer@chat','media_url'))
+
+
+def test_messages_read_media_size_stays_tenant_and_channel_bound(db,monkeypatch):
+    _setup(monkeypatch,db)
+    foreign=str(db.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid LIMIT 1',(B,))[0]['id'])
+    db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+               (json.dumps({'size_bytes':1234}),B,foreign));db.commit()
+    cfg=mcp._require_cfg();cfg['granted_scopes']=[admin.READ_SCOPE]
+    with db.cursor() as cur:
+        foreign_result=admin.read(cur,cfg,'messages_read',{'id':foreign})
+        wrong_channel=admin.read(cur,cfg,'messages_read',{'channel_id':CB})
+    assert foreign_result['items']==[]
+    assert wrong_channel['items']==[]
+
+
 def test_owner_bootstrap_knowledge_has_no_fabricated_crm_evidence(db,monkeypatch):
     _setup(monkeypatch,db)
     monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')

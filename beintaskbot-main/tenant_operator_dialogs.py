@@ -62,6 +62,23 @@ def _audio_duration(raw):
     return None
 
 
+def _media_size(raw):
+    """Return a positive bounded size already recorded in the provider event."""
+    if not isinstance(raw, dict):
+        return None
+    for key in ('size_bytes', 'file_size', 'fileLength'):
+        value = raw.get(key)
+        if type(value) is int:
+            size = value
+        elif isinstance(value, str) and value.isdecimal() and len(value) <= 19:
+            size = int(value)
+        else:
+            continue
+        if 0 < size <= (1 << 63) - 1:
+            return size
+    return None
+
+
 def _media_filename(raw):
     """Expose a short safe basename from provider metadata, never a URL/path."""
     if not isinstance(raw, dict):
@@ -134,6 +151,8 @@ def _message(item, *, group=False, participant_names=None, employee_participants
         if value.get('message_type') in {'image','audio','voice','video','document'}:
             filename=_media_filename(raw)
             if filename:value['media_filename']=filename
+            size=_media_size(raw)
+            if size is not None:value['media_size_bytes']=size
         transcript = raw.get('voice_transcription', {}) if isinstance(raw, dict) else {}
         if value.get('message_type') in {'image','audio','voice','video','document'}:
             state=transcript.get('status') if isinstance(transcript,dict) else None
