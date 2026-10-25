@@ -342,7 +342,11 @@ def read(cur,cfg,name,args):
     columns=fields.split()+(content.split() if args.get('include_content') else [])
     # `raw` is fetched only for the existing bounded messages projection and
     # removed before sanitisation/return. It is never a caller-selectable field.
-    if name=='messages_read': columns.append('raw')
+    if name=='messages_read':
+        # Body is needed locally for the exact version fence even when the
+        # caller has not requested content; it is removed before return.
+        if 'body' not in columns: columns.append('body')
+        columns.extend(('raw','external_id'))
     projection=','.join("'%s',to_jsonb(r)->'%s'" % (field,field) for field in columns)
     # All SQL identifiers come exclusively from SPECS above, never from args.
     where='r.tenant_id=%s::uuid'; params=[cfg['AI_LEARNING_MCP_TENANT_ID']]
@@ -366,8 +370,17 @@ def read(cur,cfg,name,args):
     for row in cur.fetchall():
         item=row['item']
         if name=='messages_read':
+            # The existing messages read scope may expose only a receipt's
+            # status.  Its redacted evidence text follows the same explicit
+            # include_content + content scope gate as message body itself.
+            from tenant_media_evidence import annotate_rows
+            annotate_rows(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],[item])
             size,source=_media_size_metadata(item.pop('raw',None))
             item['media_size_bytes']=size
             item['media_size_source']=source
+            item.pop('external_id',None)
+            if not args.get('include_content'):
+                item.pop('body',None)
+                item.pop('media_evidence_context',None)
         rows.append(_sanitize(item))
     return {'available':True,'items':rows[:limit],'next_cursor':_page_key(cfg,name,args,offset+limit) if len(rows)>limit else None,'content_is_untrusted':True}
