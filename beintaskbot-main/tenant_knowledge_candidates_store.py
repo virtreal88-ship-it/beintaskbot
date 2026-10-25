@@ -365,6 +365,51 @@ def detail(profile,candidate_id):
     return {'candidate':value,'evidence':items,'route':run['route']}
 
 
+def conversation_link(profile,candidate_id,message_id,review_run_id=None):
+    """Resolve one case evidence message to an authorized dialog route.
+
+    The browser never gets to turn a case ID into an arbitrary conversation.
+    Both the case and the exact message are tenant-bound and the saved Connect
+    route is checked against the caller's dialog permissions before it is
+    returned.
+    """
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            tenant,_,policy=authorize(cur,profile)
+            key=identifier(candidate_id); anchor=identifier(message_id)
+            cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,key))
+            row=cur.fetchone()
+            if not row:
+                raise TenantLinearError('Case is unavailable for this company.',404)
+            if row['status']=='archived':
+                raise TenantLinearError('Case is archived; its original conversation is unavailable from this link.',410)
+            source_ids={str(value) for value in (row.get('content') or {}).get('source_message_ids',[]) if value}
+            if anchor not in source_ids:
+                raise TenantLinearError('The requested message is not evidence for this case.',403)
+            run=extraction_row(cur,tenant,row['extraction_id']); saved=run.get('route') or {}
+            channel=identifier(saved.get('channel_id')); conversation=str(saved.get('conversation_id') or '')
+            if not conversation:
+                raise TenantLinearError('Case conversation route is unavailable.',404)
+            chosen=assert_route(cur,tenant,policy,'connect',conversation,channel)
+            cur.execute('''SELECT id::text AS id FROM saas_crm_messages
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s
+                AND channel='connect:'||%s::text FOR SHARE''',(tenant,anchor,chosen['lead_id'],channel))
+            if not cur.fetchone():
+                raise TenantLinearError('The requested message is unavailable, archived, or outside the permitted conversation.',404)
+            review=None
+            if review_run_id not in (None,''):
+                review=identifier(review_run_id)
+                cur.execute('''SELECT 1 FROM saas_ai_simulation_runs
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND source_message_id=%s::uuid
+                    AND channel_id=%s::uuid AND conversation_id=%s FOR SHARE''',(tenant,review,anchor,channel,conversation))
+                if not cur.fetchone():
+                    raise TenantLinearError('The requested AI Learning review is unavailable for this message.',404)
+            return {'case_id':key,'message_id':anchor,'review_run_id':review,
+                    'route':{'provider':'connect','lead_id':chosen['lead_id'],'channel_id':str(channel),
+                             'conversation_id':conversation}}
+
+
 def _boundary_context(cur,tenant,run,chosen,start_id,end_id,source_ids):
     channel=str(run.get('channel_id') or '')
     lead_id=int(chosen['lead_id'])
