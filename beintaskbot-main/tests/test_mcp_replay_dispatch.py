@@ -51,8 +51,8 @@ def test_replay_read_dispatch_has_no_outer_schema_lock_and_keeps_health_responsi
                 'params':{'name':'administrator_historical_replay_candidates','arguments':{}},
             }))
             await asyncio.sleep(.02)
-            assert not replay_task.done()
             health_response=await client.get('/health')
+            assert not replay_task.done()
             replay_response=await replay_task
             assert health_response.status==200 and replay_response.status==200
 
