@@ -26,6 +26,7 @@
     mediaSizeUnknown:['Размер неизвестен','Ölçü məlum deyil','Size unknown'],
     mediaFailed:['Не удалось загрузить файл. Повторите позже.','Fayl yüklənmədi. Sonra yenidən yoxlayın.','Could not load the file. Try again later.'],
     mediaLarge:['Файл слишком большой: фото до 20 МБ, аудио до 10 МБ, видео до 100 МБ.','Fayl çox böyükdür: şəkil 20 MB, audio 10 MB, video 100 MB.','File too large: photos up to 20 MB, audio up to 10 MB, videos up to 100 MB.'],
+    mediaDuration:['Видео не должно быть длиннее 120 секунд.','Video 120 saniyədən uzun ola bilməz.','Video must not be longer than 120 seconds.'],
     mediaInvalid:['Файл повреждён или формат не поддерживается.','Fayl zədələnib və ya format dəstəklənmir.','File damaged or format unsupported.'],
     mediaBusy:['Слишком много запросов. Повторите через минуту.','Çox sorğu göndərilib. Bir dəqiqə sonra yoxlayın.','Too many requests. Try again in a minute.'],
     mediaRetryAfter:['Повторите через {seconds} сек.','{seconds} saniyədən sonra yenidən yoxlayın.','Try again in {seconds} sec.'],

@@ -30,3 +30,5 @@ def test_attachment_preview_allows_final_video_limit_without_retaining_it_in_cac
     assert 'if(blob.size<=MAX_CACHE_BYTES)' in source
     i18n=(ROOT/'docs'/'tenant-operator-i18n.js').read_text(encoding='utf-8')
     assert "mediaLarge:['Файл слишком большой: фото до 20 МБ, аудио до 10 МБ, видео до 100 МБ.'" in i18n
+    assert "mediaDuration:['Видео не должно быть длиннее 120 секунд.'" in i18n
+    assert "data.code==='media_duration_limit'?'mediaDuration'" in source

@@ -91,6 +91,10 @@ async def download_media(item, *, max_bytes=None, preview_documents=False):
                 if response.status in {404, 410}:
                     raise TenantLinearError('Fayl artıq mövcud deyil və ya WhatsApp-dan alına bilmir.', 404)
                 if response.status == 413:
+                    if response.headers.get('X-Connect-Media-Error') == 'media_duration_limit':
+                        error = TenantLinearError('Video 120 saniyədən uzun ola bilməz.', 413)
+                        error.code = 'media_duration_limit'
+                        raise error
                     raise TenantLinearError('Fayl çox böyükdür: şəkil 20 MB, audio 10 MB, video 100 MB.', 413)
                 if response.status == 415:
                     raise TenantLinearError('Fayl formatı dəstəklənmir və ya fayl zədələnib.', 415)

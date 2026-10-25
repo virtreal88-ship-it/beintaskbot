@@ -135,6 +135,12 @@ def test_final_preview_limits_are_exact_and_keep_audio_unchanged():
     assert media.media_limit('document') == 5*1024*1024
 
 
+def test_connect_duration_limit_remains_distinct_from_size_limit(monkeypatch):
+    transport(monkeypatch,status=413,headers={'X-Connect-Media-Error':'media_duration_limit'})
+    with pytest.raises(TenantLinearError) as error:run(media.download_media(item()))
+    assert error.value.status == 413 and error.value.code == 'media_duration_limit'
+
+
 @pytest.mark.parametrize('status',[404,410,413,415,429,500,302])
 def test_safe_unavailable_and_provider_errors(monkeypatch,status):
     transport(monkeypatch,status=status)
