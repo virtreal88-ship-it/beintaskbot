@@ -41,6 +41,15 @@ def test_reused_partial_is_explicit_and_never_claimed_complete():
     assert 'partial sampled video' in message['text']
 
 
+def test_reused_multiframe_context_keeps_each_origin_and_redacts():
+    message={'text':''}
+    evidence.apply_reusable(message,{'status':'partial','coverage':{'complete':False},'result':{
+        'observations':[{'origin':{'second':0},'text':'first token: secret=bad'},
+                        {'origin':{'second':60},'text':'second frame'}]}})
+    assert 'frame 0' in message['text'] and 'frame 60' in message['text']
+    assert 'secret=bad' not in message['text'] and '[redacted]' in message['text']
+
+
 def test_reused_receipt_is_read_only_and_cannot_erase_original_payload():
     cursor=Cursor(); ref=_ref()
     evidence.persist(cursor,'00000000-0000-0000-0000-000000000010',[ref],[{

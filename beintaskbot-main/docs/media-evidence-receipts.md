@@ -10,12 +10,20 @@ sampled video frames are not complete video analysis and cannot establish a
 solution.  Failed, unavailable and unsupported results are retained to avoid a
 blind automatic retry.
 
-This first connection deliberately covers manual/live/campaign knowledge
-extraction, where external-media consent and route revalidation already exist.
-Primary Agent, Copilot, support summary, Simulation, replay, expert and MCP
-remain read-only/no-video-analysis consumers: they must continue to present
-their existing unavailable state until a separate owner-approved admission
-contract is added.  This avoids using a cache to expand their authority.
+## Consumer matrix
+
+| Consumer | Receipt use in this change | New analysis authority |
+| --- | --- | --- |
+| Knowledge extraction / live queue / campaign | Reads and persists exact scoped receipts | Existing explicit media consent only |
+| Primary direct and merged-group Connect history | Read-only labelled context; experts inherit bounded primary lines | None |
+| Operator Copilot and support summary | Read-only labelled context after their normal route checks | None |
+| Simulation, replay and Beinbot legacy context | Read-only status/context; replay still rejects non-text sources | None |
+| Legacy Chat AI | Read-only lookup only for rows that carry exact Connect channel identity | None |
+| Instructor | Not a WhatsApp-history consumer; no receipt path | None |
+
+No listed consumer may use a receipt to start a download, ASR, vision call, or
+spend.  Existing unavailable/partial markers remain when no exact receipt
+exists.  This prevents a cache from becoming an authority bypass.
 
 ## Separate limits decision
 

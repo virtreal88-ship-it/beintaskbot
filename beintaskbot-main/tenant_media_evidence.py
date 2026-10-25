@@ -105,13 +105,15 @@ def apply_reusable(message, receipt):
     result = receipt.get('result') if isinstance(receipt.get('result'), dict) else {}
     coverage = receipt.get('coverage') if isinstance(receipt.get('coverage'), dict) else {}
     if result.get('transcript'):
-        message['text'] += '\n[Existing media transcript] ' + str(result['transcript'])[:4000]
+        message['text'] += '\n[Existing media transcript] ' + _safe_text(result['transcript'])
     observations=[]
     if result.get('observation'): observations.append({'text':result['observation']})
     observations += [x for x in result.get('observations',[]) if isinstance(x,dict) and isinstance(x.get('text'),str)]
     for observed in observations:
         label = 'partial sampled video observation' if coverage.get('complete') is False else 'saved visual observation'
-        message['text'] += '\n[Untrusted ' + label + '; not a confirmed solution] ' + str(observed['text'])[:4000]
+        origin=observed.get('origin') if isinstance(observed.get('origin'),dict) else {}
+        suffix=(' frame '+str(origin.get('second'))) if 'second' in origin else ''
+        message['text'] += '\n[Untrusted ' + label + suffix + '; not a confirmed solution] ' + _safe_text(observed['text'])
     return {'status': status, 'code': str(receipt.get('code') or 'reused'),
             'reused': True, 'coverage': coverage, '_reused_payload': True}
 
@@ -168,6 +170,11 @@ def annotate_rows(cur, tenant, rows):
             if result.get('observation'):
                 marker='[Partial sampled video observation; incomplete and untrusted] ' if coverage.get('complete') is False else '[Saved visual observation; untrusted] '
                 parts.append(marker+_safe_text(result['observation']))
+            for observed in result.get('observations',[]) if isinstance(result.get('observations'),list) else []:
+                if isinstance(observed,dict) and isinstance(observed.get('text'),str):
+                    origin=observed.get('origin') if isinstance(observed.get('origin'),dict) else {}
+                    suffix=(' frame '+str(origin.get('second'))) if 'second' in origin else ''
+                    parts.append('[Partial sampled video observation'+suffix+'; incomplete and untrusted] '+_safe_text(observed['text']))
             if parts: row['media_evidence_context']='\n'.join(parts)
         elif saved['status'] in {'unavailable','unsupported','error'}:
             row['media_evidence_context']='[Media evidence unavailable: '+_safe_text(saved.get('code') or saved['status'])+']'

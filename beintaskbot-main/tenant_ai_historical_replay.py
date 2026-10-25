@@ -338,7 +338,7 @@ def eligible_examples(profile,message_ids=None):
     with _connect() as conn:
         with conn.cursor() as cur:
             tenant,_,_,_,model=config(cur,profile)
-            cur.execute('''SELECT m.id,m.body,m.raw,m.direction,m.message_type,m.happened_at,m.created_at,d.conversation_id FROM saas_crm_messages m
+            cur.execute('''SELECT m.id,m.external_id,m.channel,m.body,m.raw,m.direction,m.message_type,m.happened_at,m.created_at,d.conversation_id FROM saas_crm_messages m
               JOIN saas_connect_conversations d ON d.tenant_id=m.tenant_id AND d.lead_id=m.kommo_lead_id
                 AND m.channel='connect:'||d.connect_channel_id::text
               WHERE m.tenant_id=%s::uuid AND d.connect_channel_id=%s::uuid
@@ -367,7 +367,8 @@ def eligible_examples(profile,message_ids=None):
                 item={'id':key,'eligible':reason is None,'reason':reason,
                       'technical_signal':'substantive_rule_match' if content_reason is None else content_reason,
                       'resolution_status':'confirmed_case' if resolution_case else 'unknown',
-                      'resolution_case_id':resolution_case,'selection_mode':'manual' if message_ids is not None else 'ranked'}
+                      'resolution_case_id':resolution_case,'selection_mode':'manual' if message_ids is not None else 'ranked',
+                      'media_evidence':(row or {}).get('media_evidence')}
                 results.append(item)
                 if not reason: ranked.append((key,row['conversation_id'],bool(resolution_case),item))
             # Stable sort preserves newest-first SQL order within equal ranks.
