@@ -19,6 +19,7 @@ CONTENT_SCOPE = 'beintaskbot.content.read'
 # columns resolve to null, allowing rolling application/schema upgrades.
 SPECS = {
     'system_status_read': (None, '', '', ''),
+    'owner_management_eligibility_read': (None, '', '', ''),
     'company_ai_settings_read': ('saas_ai_agent_settings', 'tenant_id', 'enabled emergency_stop auto_send_enabled crm_actions_enabled operating_mode support_case_extraction_mode support_case_extraction_channels updated_at', 'company_instructions'),
     'agents_read': ('saas_ai_agents', 'id', 'id name enabled mode role model language schedule scopes safety response_policy expert_policy version archived_at updated_at', 'instructions'),
     'triggers_read': ('saas_ai_agent_triggers', 'id', 'id agent_id name enabled trigger_type condition actions version updated_at', ''),
@@ -236,6 +237,25 @@ def read(cur,cfg,name,args):
                     'AI_AUTONOMOUS_APPLY_ENABLED','AI_AUTONOMOUS_IMPROVEMENT_ENABLED')},
                 'tenant_limit_microusd':limit_microusd(cfg['AI_LEARNING_MCP_TENANT_ID']),
                 'writes_enabled':False,'schema_compatibility':'table_presence_only_not_full_migration_validation'}
+    if name=='owner_management_eligibility_read':
+        if args: raise TenantLinearError('Owner management eligibility takes no arguments.',400)
+        tenant=cfg['AI_LEARNING_MCP_TENANT_ID']
+        def count(sql, params=(tenant,)):
+            cur.execute(sql,params); return int((cur.fetchone() or {}).get('n') or 0)
+        drafts=count("SELECT count(*) AS n FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND state='draft'")
+        approvals=count("SELECT count(*) AS n FROM saas_ai_administrator_approvals WHERE tenant_id=%s::uuid AND state='pending' AND expires_at>now()")
+        grants=count("SELECT count(*) AS n FROM saas_ai_administrator_publication_grants WHERE tenant_id=%s::uuid AND state='granted' AND expires_at>now()")
+        ready=os.environ.get('AI_LEARNING_MCP_DRAFTS_ENABLED','').lower()=='true'
+        reasons=[]
+        if not ready: reasons.append({'operation':'draft','status':'denied','reason':'drafts_feature_disabled'})
+        if drafts: reasons.append({'operation':'owner_review','status':'pending','reason':'versioned_drafts_waiting_for_owner_session','count':drafts})
+        if approvals: reasons.append({'operation':'owner_approval','status':'pending','reason':'exact_receipts_waiting','count':approvals})
+        if not grants: reasons.append({'operation':'publish','status':'uncertain','reason':'no_live_exact_publication_grant'})
+        if os.environ.get('AI_AUTONOMOUS_APPLY_ENABLED','').lower()!='true': reasons.append({'operation':'legacy_apply','status':'denied','reason':'global_apply_kill_switch'})
+        return {'read_only':True,'drafts_enabled':ready,'draft_count':drafts,'pending_approval_count':approvals,
+                'live_publication_grant_count':grants,'reasons':reasons,
+                'approval_transport':'authenticated_owner_web_session_only','chat_text_can_approve':False,
+                'source_eligibility':'owner_provided drafts are unverified until existing review/publication guards pass'}
     if name == 'simulation_queue_diagnostic_read':
         return _simulation_queue_diagnostic(cur, cfg, args)
     table,key,fields,content=SPECS[name]

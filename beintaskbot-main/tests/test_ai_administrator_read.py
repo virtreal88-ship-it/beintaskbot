@@ -61,6 +61,11 @@ def test_all_read_projections_are_valid_bounded_and_tenant_scoped(db,monkeypatch
                 assert status['flags']['AI_AUTONOMOUS_APPLY_ENABLED'] is False
                 assert status['flags']['AI_AUTONOMOUS_IMPROVEMENT_ENABLED'] is False
                 continue
+            if name=='owner_management_eligibility_read':
+                status=admin.read(cur,cfg,name,{})
+                assert status['read_only'] is True
+                assert status['chat_text_can_approve'] is False
+                continue
             if name=='simulation_queue_diagnostic_read':
                 continue
             result=admin.read(cur,cfg,name,{'limit':1,'include_content':True})
@@ -85,7 +90,8 @@ def test_message_content_redacts_secrets_and_preserves_ids(db,monkeypatch):
 
 def test_owner_bootstrap_knowledge_has_no_fabricated_crm_evidence(db,monkeypatch):
     _setup(monkeypatch,db)
-    cfg=mcp._require_cfg();cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
+    cfg=mcp._require_cfg();cfg['granted_scopes']=[drafts.DRAFT_SCOPE];cfg['actor_id']=11
     with db.cursor() as cur:
         draft=drafts.typed_create(cur,cfg,'owner_knowledge',{
             'title':'Owner supplied setup note','content':'Use only the documented warehouse procedure.',
