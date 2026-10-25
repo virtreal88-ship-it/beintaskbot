@@ -72,7 +72,7 @@ def reserve(tenant, ticket_id, profile=None, retry=False):
             cur.execute("SELECT COALESCE(sum(reserved_calls),0) AS calls FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC' AND (state IN ('generating','completed','unknown') OR reserved_calls>1 OR generated_at IS NOT NULL)", (tenant,))
             used += int(cur.fetchone()['calls'])
             if used + 1 > int(config.get('daily_limit') or 50): raise TenantLinearError('AI daily limit.',429)
-            cur.execute('''SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,
+            cur.execute('''SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,m.channel,m.raw,
                 CASE WHEN v.state='completed' THEN m.body ELSE '' END AS transcript
               FROM saas_crm_messages m LEFT JOIN saas_connect_voice_receipts v
                 ON v.tenant_id=m.tenant_id AND 'connect:' || v.channel_id::text=m.channel
@@ -80,6 +80,8 @@ def reserve(tenant, ticket_id, profile=None, retry=False):
               WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s
               ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 30''', (tenant,selected['lead_id'],'connect:'+str(ticket['channel_id'])))
             rows = list(reversed(cur.fetchall()))
+            from tenant_media_evidence import annotate_rows
+            annotate_rows(cur, tenant, rows)
             run_id = str(uuid.uuid4())
             if agent:
                 fingerprint = 'support_summary:'+run_id

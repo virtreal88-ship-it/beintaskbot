@@ -46,19 +46,21 @@ def reserve(session, command):
             if command['mode'] == 'transcribe':
                 if config.get('audio_enabled') is not True:
                     raise TenantLinearError('Səs transkripsiyası aktiv deyil.', 409)
-                cur.execute('''SELECT external_id,direction,body,message_type,media_url,happened_at FROM saas_crm_messages
+                cur.execute('''SELECT external_id,direction,body,message_type,media_url,happened_at,channel,raw FROM saas_crm_messages
                   WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND external_id=%s''', (tenant, command['lead_id'], command['message_id']))
                 row = cur.fetchone()
                 if not row or not audio(row):
                     raise TenantLinearError('Səs mesajı tapılmadı.', 404)
                 rows = [row]
             else:
-                cur.execute('''SELECT external_id,direction,body,message_type,media_url,happened_at FROM saas_crm_messages
+                cur.execute('''SELECT external_id,direction,body,message_type,media_url,happened_at,channel,raw FROM saas_crm_messages
                   WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
                   ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 30''', (tenant, command['lead_id']))
                 rows = list(reversed(cur.fetchall()))
                 if not rows:
                     raise TenantLinearError('Çat tarixçəsi boşdur.', 409)
+            from tenant_media_evidence import annotate_rows
+            annotate_rows(cur,tenant,rows)
             transcripts, pending = {}, []
             for row in rows:
                 if not audio(row):

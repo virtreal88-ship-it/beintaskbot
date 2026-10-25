@@ -74,6 +74,8 @@ def config(cur, profile):
       WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid FOR SHARE OF a,s,t,ch,c''',
       (PILOT_CHANNEL,tenant,PILOT_AGENT))
     row = dict(cur.fetchone() or {})
+    from tenant_media_evidence import annotate_rows
+    annotate_rows(cur, tenant, [row])
     from tenant_ai_agent_access import tenant_status_allows_ai
     if (not enabled('AI_SIMULATION_ENABLED') or not enabled('AI_AGENTS_ENABLED')
             or not row.get('company_enabled') or row.get('emergency_stop')
@@ -336,13 +338,16 @@ def eligible_examples(profile,message_ids=None):
     with _connect() as conn:
         with conn.cursor() as cur:
             tenant,_,_,_,model=config(cur,profile)
-            cur.execute('''SELECT m.id,m.body,m.raw,m.direction,m.message_type,m.happened_at,m.created_at,d.conversation_id FROM saas_crm_messages m
+            cur.execute('''SELECT m.id,m.external_id,m.channel,m.body,m.raw,m.direction,m.message_type,m.happened_at,m.created_at,d.conversation_id FROM saas_crm_messages m
               JOIN saas_connect_conversations d ON d.tenant_id=m.tenant_id AND d.lead_id=m.kommo_lead_id
                 AND m.channel='connect:'||d.connect_channel_id::text
               WHERE m.tenant_id=%s::uuid AND d.connect_channel_id=%s::uuid
                 AND (%s::uuid[] IS NULL OR m.id=ANY(%s::uuid[]))
               ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 200''',(tenant,PILOT_CHANNEL,message_ids,message_ids))
-            rows=cur.fetchall(); by_id={}; duplicate=set()
+            rows=cur.fetchall()
+            from tenant_media_evidence import annotate_rows
+            annotate_rows(cur, tenant, rows)
+            by_id={}; duplicate=set()
             for row in rows:
                 key=str(row['id'])
                 if key in by_id: duplicate.add(key)
@@ -362,7 +367,8 @@ def eligible_examples(profile,message_ids=None):
                 item={'id':key,'eligible':reason is None,'reason':reason,
                       'technical_signal':'substantive_rule_match' if content_reason is None else content_reason,
                       'resolution_status':'confirmed_case' if resolution_case else 'unknown',
-                      'resolution_case_id':resolution_case,'selection_mode':'manual' if message_ids is not None else 'ranked'}
+                      'resolution_case_id':resolution_case,'selection_mode':'manual' if message_ids is not None else 'ranked',
+                      'media_evidence':(row or {}).get('media_evidence')}
                 results.append(item)
                 if not reason: ranked.append((key,row['conversation_id'],bool(resolution_case),item))
             # Stable sort preserves newest-first SQL order within equal ranks.

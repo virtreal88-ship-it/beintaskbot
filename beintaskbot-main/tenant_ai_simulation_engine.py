@@ -332,7 +332,7 @@ def context_author_type(row, conversation_id):
 
 
 def _load_context(cur, job):
-    cur.execute('''SELECT id,external_id,direction,author_name,body,message_type,happened_at,raw
+    cur.execute('''SELECT id,external_id,direction,author_name,body,message_type,happened_at,channel,raw
       FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
         AND channel=%s AND ((COALESCE(happened_at,created_at),created_at) < (
           SELECT COALESCE(happened_at,created_at),created_at FROM saas_crm_messages
@@ -341,6 +341,8 @@ def _load_context(cur, job):
       ORDER BY COALESCE(happened_at,created_at) DESC,created_at DESC,id DESC LIMIT %s''',
       (job['tenant_id'],job['lead_id'],'connect:'+str(job['channel_id']),job['tenant_id'],job['source_message_id'],job['source_message_id'],MAX_CONTEXT_MESSAGES))
     rows=list(reversed(cur.fetchall()))
+    from tenant_media_evidence import annotate_rows
+    annotate_rows(cur, job['tenant_id'], rows)
     if not rows or str(rows[-1]['id']) != str(job['source_message_id']):
         raise TenantLinearError('simulation_source_message_unavailable',409)
     if rows[-1].get('direction') != 'incoming':
@@ -351,7 +353,7 @@ def _load_context(cur, job):
     # Allocate from the selected customer message backwards. The old forward
     # truncation could exhaust the budget before reaching that very message.
     for row in reversed(rows):
-        body=str(row.get('body') or '')[:3000]
+        body=(str(row.get('body') or '')+'\n'+str(row.get('media_evidence_context') or '')).strip()[:3000]
         author_type=context_author_type(row,job.get('conversation_id'))
         line={'role':'client' if author_type in {'customer','participant'} else 'sales_manager',
               'author_type':author_type,
@@ -376,9 +378,11 @@ def _source_media_context(source):
     """
     kind=str(source.get('message_type') or 'text').casefold()
     text=str(source.get('body') or '').strip()
+    persisted=str(source.get('media_evidence_context') or '').strip()
     if kind in {'text','chat','conversation'}:
         return text,None
-    if text:
+    if text or persisted:
+        text=(text+'\n'+persisted).strip()
         return text,{'type':'media_context_available','message_type':kind,
                      'source':'persisted_message_text','executed':False}
     raw=source.get('raw') if isinstance(source.get('raw'),dict) else {}

@@ -1,6 +1,8 @@
 """Review workflow only; source messages stay in saas_crm_messages."""
 def create_schema(conn):
     with conn.cursor() as cur:
+        from tenant_media_evidence import create_schema as media_evidence_schema
+        media_evidence_schema(conn)
         cur.execute("ALTER TABLE saas_ai_knowledge_sources ADD COLUMN IF NOT EXISTS provenance JSONB NOT NULL DEFAULT '{}'::jsonb")
         cur.execute("""CREATE TABLE IF NOT EXISTS saas_knowledge_extractions(
           tenant_id UUID NOT NULL, id UUID NOT NULL, created_by BIGINT NOT NULL,

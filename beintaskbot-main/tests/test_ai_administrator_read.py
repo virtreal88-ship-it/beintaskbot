@@ -139,6 +139,34 @@ def test_messages_read_media_size_stays_tenant_and_channel_bound(db,monkeypatch)
     assert wrong_channel['items']==[]
 
 
+def test_messages_read_projects_scoped_receipt_only_with_explicit_content(db,monkeypatch):
+    """Beinbot reads stored evidence; it never starts media analysis."""
+    import tenant_media_evidence as media_evidence
+    _setup(monkeypatch,db)
+    media_evidence.create_schema(db)
+    message=dict(db.execute('''SELECT id,external_id,channel,body,direction,message_type,raw
+      FROM saas_crm_messages WHERE tenant_id=%s::uuid ORDER BY id LIMIT 1''',(A,))[0])
+    raw={'mediaId':'safe-media','fileLength':42}
+    db.execute("UPDATE saas_crm_messages SET body='caption',message_type='image',raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      (json.dumps(raw),A,message['id']))
+    ref={'id':str(message['id']),'channel_id':CA,'external_id':message['external_id'],
+         'body_hash':media_evidence._body_hash('caption'),'media_kind':'image',
+         'media_version':__import__('hashlib').sha256(json.dumps({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')},sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest(),
+         'role':'incoming'}
+    media_evidence.persist(db.cursor(),A,[ref],[{'id':str(message['id']),'kind':'image','status':'processed',
+      'code':'document_text','transcript':'Saved evidence contact@example.com'}])
+    db.commit()
+    cfg=mcp._require_cfg();cfg['granted_scopes']=[admin.READ_SCOPE,admin.CONTENT_SCOPE]
+    with db.cursor() as cur:
+        public=admin.read(cur,cfg,'messages_read',{'id':str(message['id'])})['items'][0]
+        detailed=admin.read(cur,cfg,'messages_read',{'id':str(message['id']),'include_content':True})['items'][0]
+    assert public['media_evidence']['status']=='processed'
+    assert 'media_evidence_context' not in public and 'external_id' not in public
+    assert '[Saved media transcript]' in detailed['media_evidence_context']
+    assert 'contact@example.com' not in detailed['media_evidence_context']
+    assert 'raw' not in detailed and 'external_id' not in detailed
+
+
 def test_owner_bootstrap_knowledge_has_no_fabricated_crm_evidence(db,monkeypatch):
     _setup(monkeypatch,db)
     monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')

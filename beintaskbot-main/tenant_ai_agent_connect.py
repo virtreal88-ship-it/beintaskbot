@@ -465,12 +465,16 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
                 AND m.channel=%s ORDER BY m.happened_at DESC,m.id DESC LIMIT 80
               ) recent ORDER BY happened_at,id''', (tenant, int(lead_id), 'connect:' + channel_id))
             rows = cur.fetchall()
+            from tenant_media_evidence import annotate_rows
+            annotate_rows(cur, tenant, rows)
     return [{'external_id': str(row.get('external_id') or '').removeprefix('connect:'),
              'direction': str(row.get('direction') or ''), 'body': str(row.get('body') or ''),
              'message_type': str(row.get('message_type') or 'text'), 'media_url': str(row.get('media_url') or ''),
              'has_attachment': bool(row.get('media_url')) or str(row.get('message_type') or 'text') != 'text',
              'happened_at': row['happened_at'].isoformat() if row.get('happened_at') else '',
              'transcript': str(row.get('transcript') or ''), 'voice_state': str(row.get('voice_state') or ''),
+             'media_evidence': row.get('media_evidence') if isinstance(row.get('media_evidence'),dict) else None,
+             'media_evidence_context': str(row.get('media_evidence_context') or '')[:4000],
              'voice_eligible': row.get('voice_eligible') is not False,
              'channel': channel_id} for row in rows]
 
@@ -510,6 +514,8 @@ def group_context(job, rows, through):
               (job['tenant_id'],job['channel_id'],job['conversation_id'],job['lead_id']))
             if not cur.fetchone(): return []
             merged=page(cur,job['tenant_id'],job['conversation_id'],limit=80,through=through)
+            from tenant_media_evidence import annotate_rows
+            annotate_rows(cur, job['tenant_id'], merged)
     local={r['external_id']:r for r in rows}
     result=[]
     for row in reversed(merged):
@@ -522,6 +528,8 @@ def group_context(job, rows, through):
           'message_type':row['message_type'],'media_url':row.get('media_url') or '',
           'happened_at':row['happened_at'].isoformat() if row.get('happened_at') else '',
           'transcript':own.get('transcript') or cached,
+          'media_evidence':row.get('media_evidence') if isinstance(row.get('media_evidence'),dict) else None,
+          'media_evidence_context':str(row.get('media_evidence_context') or '')[:4000],
           'author_name':str(row.get('author_name') or raw.get('participantName') or '')[:180],
           'channel': str(job['channel_id']) if any(str(s['channel_id'])==str(job['channel_id']) for s in row['sources']) else str(row['source_channel_id']),
           'photo_message_id': next((str(s['external_id']).removeprefix('connect:') for s in row['sources'] if str(s['channel_id'])==str(job['channel_id']) and s.get('external_id')),None),

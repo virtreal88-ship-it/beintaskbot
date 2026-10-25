@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -36,7 +37,7 @@ def context(monkeypatch):
 def test_photo_permission_exact_model_and_origin(context):
     item,add,download=context;add()
     images,results=media.collect({},item)
-    assert not images and results[0]['status']=='pending_processing'
+    assert not images and results[0]['status']=='unavailable'
     assert results[0]['code']=='external_media_permission_required'
     item['route']['allow_external_media']=True
     images,results=media.collect({},item)
@@ -106,7 +107,7 @@ def test_missing_asr_explicit_paid_call_uses_existing_provider(context,monkeypat
     images,results=media.collect({},item)
     assert len(calls)==1 and calls[0][1]=='gpt-4o-mini-transcribe'
     assert results[0]['transcript']==text and results[0]['status']=='processed'
-    assert results[1]['status']=='pending_processing' and item['asr_usage']['total_tokens']==20
+    assert results[1]['status']=='unavailable' and item['asr_usage']['total_tokens']==20
 
 def test_docx_extractor_uses_no_external_relationships(context):
     import zipfile
@@ -149,6 +150,37 @@ def test_video_frames_are_bounded(context,monkeypatch):
     download.return_value=(b'synthetic video','video/mp4')
     monkeypatch.setattr(media,'video_frames',lambda *a:[(PNG,'image/png',{'second':0}),(PNG,'image/png',{'second':2})])
     assert len(media.collect({},item)[0])==2
+
+
+def test_video_analysis_limit_is_100_mib_inclusive_and_separate_from_photo_audio():
+    assert media.media_byte_limit('video')==100*1024*1024
+    media.validate_media_size('video',100*1024*1024)
+    with pytest.raises(ValueError,match='video_size_limit'):
+        media.validate_media_size('video',100*1024*1024+1)
+    assert media.media_byte_limit('image')==20*1024*1024
+    assert media.media_byte_limit('audio')==10*1024*1024
+
+
+def test_video_analysis_duration_accepts_120_and_rejects_longer_or_missing():
+    media.validate_video_duration(120)
+    with pytest.raises(ValueError,match='video_duration_limit'):
+        media.validate_video_duration(120.001)
+    with pytest.raises(ValueError,match='video_duration_limit'):
+        media.validate_video_duration(None)
+
+
+def test_terminal_receipt_reuses_exact_scoped_evidence_without_download(context,monkeypatch):
+    item,add,download=context;add('video')
+    item['tenant_id']='tenant'
+    saved={'status':'partial','code':'vision_observation','coverage':{'complete':False,'sampled_frames':[{'second':0}]},
+           'result':{'transcript':'Synthetic saved narration','observation':'Synthetic sampled frame'}}
+    import tenant_media_evidence as evidence
+    monkeypatch.setattr(evidence,'reusable',lambda profile,ref:saved)
+    images,results=media.collect(item,item)
+    assert images==[] and results[0]['status']=='partial' and results[0]['reused'] is True
+    assert 'Synthetic saved narration' in item['messages'][0]['text']
+    assert 'partial sampled video observation' in item['messages'][0]['text']
+    download.assert_not_called()
 
 def test_video_audio_uses_single_authorized_asr_and_preserves_frames(context,monkeypatch):
     import tenant_connect_voice as voice
@@ -200,6 +232,27 @@ def test_media_only_source_is_retained_status_persisted_and_replay_idempotent(re
     assert any('Attachment status: unavailable' in m['text'] for m in generation.call_args.args[3])
     assert service.analyze(PROFILE,data)['request']['id']==response['request']['id']
     generation.assert_called_once()
+
+
+def test_finish_revalidation_rejects_replaced_media_identity(ready):
+    """The source fence covers the durable media identity, not only text."""
+    import uuid
+    database,_,data=ready
+    source=str(uuid.uuid4()); external='connect:'+str(uuid.uuid4())
+    database.execute("""INSERT INTO saas_crm_messages
+      (tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,raw,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','same caption','image',%s::jsonb,now()+interval '4 seconds')""",
+      (A,source,external,'connect:'+CA,json.dumps({'mediaId':'before','fileLength':10})))
+    database.commit()
+    item=service.prepare(PROFILE,data)
+    assert any(ref.get('id')==source and ref.get('media_version') for ref in item['refs'])
+    database.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      (json.dumps({'mediaId':'after','fileLength':10}),A,source))
+    database.commit()
+    import tenant_knowledge_candidates_store as candidate_store
+    with database.cursor() as cur:
+        with pytest.raises(TenantLinearError,match='Вложение исходного сообщения изменилось'):
+            candidate_store.evidence(cur,PROFILE,{**item,'source_refs':item['refs']})
 
 def test_media_consent_changes_fingerprint_without_replaying_original(ready,monkeypatch):
     import uuid

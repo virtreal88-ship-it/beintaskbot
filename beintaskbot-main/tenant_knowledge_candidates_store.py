@@ -119,7 +119,12 @@ def snapshot(cur,profile,data):
         raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
         role=author_role(row)
         ref={'id':str(row['id']),'channel_id':str(row.get('source_channel_id') or binding['channel_id']),'lead_id':int(row.get('source_lead_id') or row['kommo_lead_id']),'role':role,'body_hash':digest(str(row.get('body') or '')),'text_limit':len(body)}
-        if kind!='text': ref.update(media_kind=kind,external_id=row.get('external_id'),happened_at=str(row.get('happened_at') or row.get('created_at') or ''))
+        if kind!='text':
+            # Provider media can be replaced while retaining a message ID.  A
+            # hash of safe identity/size/version facts fences receipt reuse
+            # without storing a URL or raw provider payload.
+            media_version=digest({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')})
+            ref.update(media_kind=kind,external_id=row.get('external_id'),media_version=media_version,happened_at=str(row.get('happened_at') or row.get('created_at') or ''))
         refs.append(ref);messages.append({'ref':'m'+str(len(refs)),'role':role,'text':body});remaining-=len(body)
         if remaining<=0: break
     if not refs:
@@ -143,7 +148,13 @@ def evidence(cur,profile,extraction,names_out=None):
         cur.execute('SELECT id,body,direction,author_name,raw,message_type,happened_at FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s',
             (tenant,ref['id'],source['lead_id'],'connect:'+ref['channel_id']))
         row=cur.fetchone()
-        if not row or digest(str(row.get('body') or ''))!=ref['body_hash']: raise TenantLinearError('Исходное сообщение изменилось или больше недоступно.',409)
+        if not row or digest(str(row.get('body') or ''))!=ref['body_hash']:
+            raise TenantLinearError('Исходное сообщение изменилось или больше недоступно.',409)
+        if ref.get('media_kind'):
+            raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
+            version=digest({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')})
+            if row.get('message_type')!=ref.get('media_kind') or version!=ref.get('media_version'):
+                raise TenantLinearError('Вложение исходного сообщения изменилось или больше недоступно.',409)
         names.extend([source.get('contact_name'),source.get('phone'),row.get('author_name')])
         raw=row.get('raw') or {};names.extend(raw.get(k) for k in ('participantName','pushName','senderName','contactName'))
         items.append((ref,row,source))
