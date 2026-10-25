@@ -41,6 +41,13 @@ def settings_handler(member_from_request, origin: str, logger):
                         raise TenantLinearError('channel_retirement_request_invalid',400)
                     from tenant_connect_retirement import retire
                     result=await asyncio.to_thread(retire,profile,str(data.get('channel_id') or ''),confirmed=data['confirm'] is True)
+                elif data.get('action') == 'direct_identity_preview':
+                    if set(data)-{'action','channel_id'}: raise TenantLinearError('direct_merge_request_invalid',400)
+                    from tenant_connect_direct_reconcile import preview
+                    result=await asyncio.to_thread(preview,profile,str(data.get('channel_id') or ''))
+                elif data.get('action') == 'direct_identity_reconcile':
+                    from tenant_connect_direct_reconcile import apply
+                    result=await asyncio.to_thread(apply,profile,{key:value for key,value in data.items() if key!='action'})
                 elif data.get('action') in {'channel_status', 'reconnect_channel'}:
                     result = await asyncio.to_thread(
                         channel_status, profile, str(data.get('channel_id') or ''),

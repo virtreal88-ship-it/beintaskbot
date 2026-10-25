@@ -93,6 +93,45 @@ def _phone_from_jid(jid):
     return candidate if re.fullmatch(r'[1-9][0-9]{5,18}', candidate) else ''
 
 
+def _direct_identity(value):
+    """A direct WhatsApp identity, never a group or a display label."""
+    value = str(value or '').strip()
+    return value if re.fullmatch(r'[1-9][0-9]{5,22}@(s\.whatsapp\.net|c\.us|lid)', value) else ''
+
+
+def _canonical_direct_conversation(cur, tenant, channel_id, conversation, data, metadata):
+    """Resolve an explicitly provider-confirmed JID/LID pair within one channel.
+
+    A phone number alone is deliberately insufficient, as are groups and
+    unpaired LIDs.  The mapping is tenant + connected account scoped so the
+    same customer can safely have distinct chats on two company numbers.
+    """
+    if metadata.get('kind') == 'group':
+        return conversation, False
+    pair = data.get('directIdentity') if isinstance(data.get('directIdentity'), dict) else {}
+    jid, lid = _direct_identity(pair.get('jid')), _direct_identity(pair.get('lid'))
+    current = _direct_identity(conversation)
+    if not jid or not lid or jid == lid or not current:
+        return conversation, False
+    aliases = tuple(dict.fromkeys((jid, lid, current)))
+    cur.execute('''SELECT identity_key,canonical_conversation_id FROM saas_connect_direct_identities
+      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND identity_key=ANY(%s) FOR UPDATE''',
+                (tenant, channel_id, list(aliases)))
+    known = {str(row['canonical_conversation_id']) for row in cur.fetchall()}
+    if len(known) > 1:
+        return conversation, True
+    canonical = next(iter(known), jid)
+    # JID is preferred only for a new pair.  Once a canonical route has been
+    # committed, it is immutable: late or malformed receipts cannot rewrite
+    # message ownership.
+    for identity in aliases:
+        cur.execute('''INSERT INTO saas_connect_direct_identities
+          (tenant_id,connect_channel_id,identity_key,canonical_conversation_id,verified_at)
+          VALUES(%s::uuid,%s::uuid,%s,%s,now()) ON CONFLICT(tenant_id,connect_channel_id,identity_key)
+          DO NOTHING''', (tenant, channel_id, identity, canonical))
+    return canonical, False
+
+
 def _upsert_conversation(cur, tenant, channel_id, conversation, metadata):
     """Persist group metadata separately from an individual contact identity."""
     kind = metadata.get('kind') or ''
@@ -166,6 +205,16 @@ def _schema(conn) -> None:
         cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS manual_display_name TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS avatar_status TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_connect_conversations ADD COLUMN IF NOT EXISTS avatar_checked_at TIMESTAMPTZ")
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_direct_identities (
+          tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+          connect_channel_id UUID NOT NULL,
+          identity_key TEXT NOT NULL,
+          canonical_conversation_id TEXT NOT NULL,
+          verified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,connect_channel_id,identity_key),
+          FOREIGN KEY(tenant_id,connect_channel_id,canonical_conversation_id)
+            REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) DEFERRABLE INITIALLY DEFERRED
+        )''')
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_participant_display_names (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
           connect_channel_id UUID NOT NULL,
@@ -698,6 +747,18 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active=TRUE', (tenant, channel_id))
             if not cur.fetchone():
                 return False
+            original_conversation = conversation
+            conversation, identity_conflict = _canonical_direct_conversation(
+                cur, tenant, channel_id, conversation, data, metadata)
+            if identity_conflict:
+                # Keep the receipt readable, but never use an ambiguous pair
+                # to redirect history or admit AI work.
+                data = {**data, 'conversationIdentityConflict': True}
+            elif conversation != original_conversation:
+                # Preserve both signed provider facts for recovery/audit while
+                # routing all new inbound and outbound receipts to one route.
+                data = {**data, 'originalConversationId': original_conversation,
+                        'conversationId': conversation}
             lock_dialog(cur, tenant, 'connect', channel_id, conversation)
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
             inserted_event = bool(cur.fetchone())
