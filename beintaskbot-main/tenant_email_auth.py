@@ -288,7 +288,28 @@ def login(*, email: object, password: object, request_ip: str) -> dict | None:
         conn.commit()
     if not accepted or not user or not user.get('tenant_id'):
         return None
-    return {'tenant_id': str(user['tenant_id']), 'actor_id': int(user['actor_id'])}
+    return {'tenant_id': str(user['tenant_id']), 'actor_id': int(user['actor_id']),
+            'force_password_change': bool(user.get('force_password_change'))}
+
+
+def change_password(*, tenant_id: str, actor_id: int, password: object) -> dict:
+    """Complete the mandatory first-password rotation for a signed-in account."""
+    plain = _password(password)
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''SELECT id FROM saas_auth_users WHERE tenant_id=%s::uuid AND actor_id=%s
+              AND disabled_at IS NULL AND status='active' FOR UPDATE''', (tenant_id, int(actor_id)))
+            row = cur.fetchone()
+            if not row:
+                raise TenantPlatformError('Hesab əlçatan deyil.')
+            cur.execute('''UPDATE saas_auth_users SET password_hash=%s,force_password_change=FALSE,
+              updated_at=now() WHERE id=%s''', (_hash_password(plain), row['id']))
+            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,payload)
+              VALUES(%s,%s::uuid,%s,'account.password.changed','account','{}'::jsonb)''',
+                        (uuid.uuid4(), tenant_id, int(actor_id)))
+        conn.commit()
+    return {'changed': True}
 
 
 def request_password_reset(*, email: object, request_ip: str, destination_product: object = 'beintaskbot') -> dict:

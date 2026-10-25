@@ -191,5 +191,7 @@ def notification_preferences(*, tenant_id: str, actor_id: int, value: dict | Non
             conn.commit()
         existing=normalized
     catalog=[item for item in notification_catalog() if item['key'] in supported]
+    from tenant_telegram_binding import binding_status
+    bound = binding_status(tenant_id=tenant_id, actor_id=int(actor_id)).get('bound')
     return {'events':catalog,'preferences':{key:existing.get(key,{}) for key in supported},
-            'channels_available':['internal','push'] + (['telegram'] if int(actor_id)<1_000_000_000_000 else [])}
+            'channels_available':['internal','push'] + (['telegram'] if bound else [])}

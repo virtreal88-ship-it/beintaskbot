@@ -24,6 +24,10 @@ def schema(conn):
         cur.execute("ALTER TABLE saas_internal_consultations ADD COLUMN IF NOT EXISTS ai_run_id UUID NULL")
         cur.execute("ALTER TABLE saas_internal_consultations ADD COLUMN IF NOT EXISTS delivery_state TEXT NOT NULL DEFAULT 'internal_inbox'")
         cur.execute('CREATE INDEX IF NOT EXISTS saas_internal_consultations_case_idx ON saas_internal_consultations(tenant_id,case_id,created_at DESC)')
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_consultation_telegram_deliveries(
+          tenant_id UUID NOT NULL,consultation_id UUID NOT NULL,recipient_id BIGINT NOT NULL,chat_id BIGINT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',message_id BIGINT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,consultation_id),FOREIGN KEY(tenant_id,consultation_id) REFERENCES saas_internal_consultations(tenant_id,id) ON DELETE CASCADE)''')
 
 def _hours():
     now=datetime.now(ZoneInfo('Asia/Baku'));return 8<=now.hour<20
@@ -89,8 +93,27 @@ def create_from_ai(job, *, recipient_id, reason, evidence, run_id=None):
             cur.execute('''INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body,target_url)
               VALUES(%s,%s::uuid,%s,%s,'AI: требуется консультация разработчика',%s,'/app?view=support')
               ON CONFLICT DO NOTHING''',(uuid.uuid4(),tenant,recipient['telegram_id'],'ai_consultation:'+key,str(reason)[:500]))
+            # The member key is an application actor id for login accounts;
+            # only a separately verified chat binding may enter this queue.
+            from tenant_member_store import member
+            from tenant_policy import TenantPolicy
+            from tenant_notifications import notification_channels
+            from tenant_telegram_binding import bound_chat_id
+            try:
+                profile=member(tenant,int(recipient['telegram_id']))
+                chat_id=bound_chat_id(tenant_id=tenant,actor_id=int(recipient['telegram_id']))
+                enabled=bool(profile and chat_id and 'telegram' in notification_channels(TenantPolicy(profile),event='ai_developer_consultation',tenant_id=tenant))
+            except Exception:
+                # The in-app consultation is durable even if the optional
+                # Telegram preference/binding store is temporarily unavailable.
+                enabled=False;chat_id=None
+            if enabled:
+                cur.execute('''INSERT INTO saas_consultation_telegram_deliveries(tenant_id,consultation_id,recipient_id,chat_id)
+                  VALUES(%s::uuid,%s::uuid,%s,%s) ON CONFLICT DO NOTHING''',(tenant,ident,recipient['telegram_id'],chat_id))
+                cur.execute('UPDATE saas_internal_consultations SET delivery_state=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',('telegram_pending',tenant,ident))
             _audit(cur,tenant,None,'ai_internal_consultation_created','consultation',ident,{'case_id':str(case['id']),'recipient_id':recipient['telegram_id'],'status':status,'internal_only':True})
-        conn.commit();return {'id':str(ident),'status':status,'created':True,'customer_message_sent':False,'delivery':'internal_inbox'}
+        conn.commit();return {'id':str(ident),'status':status,'created':True,'customer_message_sent':False,
+                              'delivery':'telegram_pending' if enabled else 'internal_inbox'}
 
 def listing(profile,case_id):
     with _connect() as conn:

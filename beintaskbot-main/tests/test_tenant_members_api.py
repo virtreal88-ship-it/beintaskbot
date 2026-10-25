@@ -28,10 +28,12 @@ class MembersApiTests(unittest.IsolatedAsyncioTestCase):
         self.decide = Mock(return_value={"telegram_id": 22, "approved": True})
         self.accept_email = Mock(return_value={'tenant_id':'company-b','tenant_name':'Other company'})
         self.add_whatsapp = Mock(return_value={'phone':'+994501234567','recognition_enabled':True})
+        self.provision = Mock(return_value={'actor_id':1000000000001,'login':'developer','force_password_change':True})
         self.api = handlers(MemberApiContext(self.member, self.identity, self.name, self.send,
             "https://crm.pro.az", self.listing, self.upsert, self.deactivate, self.create,
             self.accept, self.requests, self.decide, StoreError,
             accept_email_invite=self.accept_email,add_member_whatsapp_number=self.add_whatsapp,
+            provision_employee_account=self.provision,
             issue_session=lambda tenant_id,actor_id:f'{tenant_id}:{actor_id}'))
 
     def request(self, method="POST", data=None):
@@ -82,6 +84,14 @@ class MembersApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["invite"]["url"], "https://crm.pro.az/invite/once")
         self.create.assert_called_once_with(tenant_id="company", owner_id=1, display_name="A",
                                             role="worker", permissions=[])
+
+    async def test_direct_account_provision_is_same_origin_and_never_uses_invites(self):
+        data={'action':'provision_account','first_name':'Dev','last_name':'One','login':'dev.one',
+              'password':'a-safe-initial-password','confirm_password':'a-safe-initial-password','role':'worker','permissions':['support'],'email':'','phone':''}
+        response=await self.api['members'](self.request(data=data))
+        self.assertEqual(response.status,200)
+        self.provision.assert_called_once_with(tenant_id='company',owner_id=1,first_name='Dev',last_name='One',login='dev.one',password='a-safe-initial-password',password_confirm='a-safe-initial-password',role='worker',permissions=['support'],email='',phone='')
+        self.create.assert_not_called()
 
     async def test_accept_requires_verified_telegram_and_notifies_owner(self):
         self.identity.return_value = None

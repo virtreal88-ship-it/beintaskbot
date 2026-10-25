@@ -187,7 +187,11 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
                     'companies': [{'id': item['id'], 'name': item['name']} for item in companies]})
             else:
                 tenant = companies[0] if companies else {'id': result['tenant_id']}
-            response = web.json_response({'success': True, 'redirect': '/app', 'invite_accepted': invite_accepted})
+            password_change_required = bool(result.get('force_password_change'))
+            response = web.json_response({'success': True,
+                'redirect': '/auth/password/change' if password_change_required else '/app',
+                'password_change_required': password_change_required,
+                'invite_accepted': invite_accepted})
             if context.record_login: await asyncio.to_thread(context.record_login, tenant_id=str(tenant['id']), actor_id=int(result['actor_id']))
             _set_session(response, context, str(tenant['id']), result['actor_id'])
             return response
@@ -212,6 +216,22 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         try:
             data = await request.json(); result = await asyncio.to_thread(context.email_auth.complete_password_reset, token=(data or {}).get('token'), password=(data or {}).get('password'))
             return web.json_response({'success': True, 'redirect': _product_destination(result.get('destination_product'))})
+        except context.platform_error as exc:
+            return web.json_response({'success': False, 'error': str(exc)}, status=400)
+
+    async def password_change(request: web.Request) -> web.Response:
+        if context.email_auth is None:
+            return web.json_response({'success': False}, status=503)
+        if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
+            return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
+        profile = context.member(request)
+        if not profile:
+            return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
+        try:
+            data = await request.json(); data = data if isinstance(data, dict) else {}
+            await asyncio.to_thread(context.email_auth.change_password,
+                tenant_id=str(profile['tenant_id']), actor_id=int(profile['telegram_id']), password=data.get('password'))
+            return web.json_response({'success': True, 'redirect': '/app'})
         except context.platform_error as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=400)
 
@@ -449,13 +469,14 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         'sso_authorize': sso_authorize, 'sso_token': sso_token,
         'email_register': email_register, 'email_confirm': email_confirm,
         'email_login': email_login, 'password_reset': password_reset,
-        'password_reset_confirm': password_reset_confirm,
+        'password_reset_confirm': password_reset_confirm, 'password_change': password_change,
         'email_link_request': email_link_request, 'email_link_confirm': email_link_confirm,
         'legacy_email_link_request': legacy_email_link_request,
         'account': account, 'sessions': sessions, 'switch_workspace': switch_workspace,
         "onboarding_page": lambda request: _page(context, "onboarding.html", "Platform onboarding page not found"),
         'auth_page': auth_page,
         'confirm_page': lambda request: _page(context, 'auth-confirm.html', 'Platform confirmation page not found'),
+        'password_change_page': lambda request: _page(context, 'auth-password-change.html', 'Password change page not found'),
         'legacy_link_page': lambda request: _page(context, 'legacy-email-link.html', 'Legacy email link page not found'),
         'connector_page': connector_page,
         'connector_access_page': connector_access_page,

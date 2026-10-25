@@ -1,4 +1,5 @@
 """Tenant, membership and onboarding persistence."""
+import hmac
 import re
 import uuid
 
@@ -299,6 +300,49 @@ def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_na
                          str(target_id),_json({'role':selected_role,'permission_count':len(selected_permissions)})))
         conn.commit()
     return _member_payload(row)
+
+
+def provision_employee_account(*, tenant_id: str, owner_id: int, first_name: str, last_name: str,
+                               login: str, password: str, role: str, permissions: list[str],
+                               password_confirm: str, email: str = '', phone: str = '') -> dict:
+    """Owner-created login account and membership, atomically and without invites."""
+    current=member(tenant_id,owner_id)
+    if not _can_manage_members(current): raise TenantPlatformError('İcazə yoxdur.')
+    from tenant_email_auth import _hash_password, _password
+    username=re.sub(r'[^a-zA-Z0-9_.-]','',str(login or '').strip()).casefold()
+    if not re.fullmatch(r'[a-z0-9_.-]{3,64}',username): raise TenantPlatformError('Login 3–64 hərfdən ibarət olmalıdır.')
+    plain=_password(password)
+    if not hmac.compare_digest(plain, str(password_confirm or '')):
+        raise TenantPlatformError('Parollar eyni deyil.')
+    first=' '.join(str(first_name or '').split())[:120];last=' '.join(str(last_name or '').split())[:120]
+    if len(first)<2 or len(last)<2: raise TenantPlatformError('Ad və soyad yazın.')
+    selected_role=_role(str(role or 'worker'));selected_permissions=_permissions(permissions,selected_role)
+    if current.get('role')!='owner' and (selected_role in {'owner','admin'} or set(selected_permissions)-set(current.get('permissions') or [])):
+        raise TenantPlatformError('Administrator yalnız öz hüquqları daxilində əməkdaş yarada bilər.')
+    address=str(email or '').strip().casefold() or None
+    if address:
+        from tenant_email_auth import _email
+        address=_email(address)
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            # Keep these checks lockable. PostgreSQL rejects FOR UPDATE on a
+            # UNION, and the unique indexes remain the final race protection.
+            cur.execute('''SELECT 1 FROM saas_auth_users WHERE lower(login)=lower(%s)
+              OR (%s::text IS NOT NULL AND lower(email)=lower(%s)) FOR UPDATE''',(username,address,address))
+            if cur.fetchone(): raise TenantPlatformError('Login və ya email artıq istifadə olunur.')
+            cur.execute('SELECT 1 FROM saas_user_profiles WHERE lower(login)=lower(%s) FOR UPDATE',(username,))
+            if cur.fetchone(): raise TenantPlatformError('Login və ya email artıq istifadə olunur.')
+            cur.execute("SELECT nextval('saas_auth_actor_seq') AS actor_id");actor=int(cur.fetchone()['actor_id']);uid=uuid.uuid4();display=(first+' '+last).strip()
+            cur.execute('''INSERT INTO saas_auth_users(id,actor_id,email,phone,display_name,first_name,last_name,login,password_hash,tenant_id,verified_at,force_password_change)
+              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::uuid,now(),TRUE)''',(uid,actor,address,str(phone or '')[:40],display,first,last,username,_hash_password(plain),tenant_id))
+            cur.execute('''INSERT INTO saas_user_profiles(actor_id,first_name,last_name,phone,login) VALUES(%s,%s,%s,%s,%s)''',(actor,first,last,str(phone or '')[:40],username))
+            cur.execute('''INSERT INTO saas_tenant_members(tenant_id,telegram_id,display_name,role,permissions,active,invited_by)
+              VALUES(%s::uuid,%s,%s,%s,%s::jsonb,TRUE,%s)''',(tenant_id,actor,display,selected_role,_json(selected_permissions),owner_id))
+            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+              VALUES(%s,%s::uuid,%s,'employee.provisioned','employee',%s,%s::jsonb)''',(uuid.uuid4(),tenant_id,owner_id,str(actor),_json({'role':selected_role,'login':username,'has_email':bool(address)})))
+        conn.commit()
+    return {'actor_id':actor,'display_name':display,'login':username,'role':selected_role,'permissions':selected_permissions,'force_password_change':True}
 
 
 def deactivate_member(*, tenant_id: str, owner_id: int, telegram_id: int) -> dict:

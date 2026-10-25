@@ -49,6 +49,10 @@ def migrate_identity_schema(cur) -> None:
     ):
         cur.execute(f"ALTER TABLE saas_auth_users ADD COLUMN IF NOT EXISTS {column} {definition}")
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS saas_auth_users_login_idx ON saas_auth_users(lower(login)) WHERE login <> ''")
+    # Directly provisioned login-only employees have no synthetic email. NULL
+    # keeps the existing unique-email semantics without inventing an address.
+    cur.execute("ALTER TABLE saas_auth_users ALTER COLUMN email DROP NOT NULL")
+    cur.execute("ALTER TABLE saas_auth_users ADD COLUMN IF NOT EXISTS force_password_change BOOLEAN NOT NULL DEFAULT FALSE")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS saas_user_profiles (
             actor_id BIGINT PRIMARY KEY,

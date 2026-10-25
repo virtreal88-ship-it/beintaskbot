@@ -25,6 +25,7 @@ import tenant_ai_group_coordination as group_coordination
 import tenant_ai_dashboard as ai_dashboard
 import tenant_ai_spend_budget as spend_budget
 import tenant_internal_consultations as consultations
+import tenant_member_store as member_store
 from tenant_linear_policy import TenantLinearError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,6 +114,27 @@ def db(database,monkeypatch):
 
 def manual(**values):
     return store.create(PROFILE,{'request_id':str(uuid.uuid4()),'lead_id':41,**values})
+
+
+def test_direct_login_employee_is_atomic_and_does_not_require_synthetic_email(db, monkeypatch):
+    monkeypatch.setattr(member_store, '_connect', lambda: db)
+    created=member_store.provision_employee_account(
+        tenant_id=A,owner_id=11,first_name='Developer',last_name='One',login='developer.one',
+        password='a-safe-initial-password',password_confirm='a-safe-initial-password',role='worker',
+        permissions=['support'],email='',phone='')
+    db.commit()
+    row=db.execute('''SELECT u.email,u.force_password_change,m.permissions FROM saas_auth_users u
+      JOIN saas_tenant_members m ON m.tenant_id=u.tenant_id AND m.telegram_id=u.actor_id
+      WHERE u.actor_id=%s''',(created['actor_id'],))[0]
+    assert row['email'] is None
+    assert row['force_password_change'] is True
+    assert row['permissions']==['support']
+    with pytest.raises(Exception):
+        member_store.provision_employee_account(
+            tenant_id=A,owner_id=11,first_name='Developer',last_name='Two',login='developer.one',
+            password='a-safe-initial-password',password_confirm='a-safe-initial-password',role='worker',
+            permissions=[],email='',phone='')
+    db.rollback()
 
 
 def test_manual_ticket_survives_unavailable_ai(db):
