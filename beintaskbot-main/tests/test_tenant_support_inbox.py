@@ -1071,3 +1071,19 @@ def test_internal_consultation_is_tenant_scoped_idempotent_and_never_sends_custo
     foreign={'tenant_id':B,'telegram_id':22}
     assert consultations.listing(foreign,ticket)['consultations']==[]
     with pytest.raises(TenantLinearError): consultations.reply(foreign,first['id'],{'response':'x','kind':'diagnosis'})
+
+
+def test_ai_consultation_uses_handoff_case_notifies_recipient_and_never_sends_customer_message(db, monkeypatch):
+    monkeypatch.setattr(consultations, '_connect', lambda: db)
+    monkeypatch.setattr(consultations, '_hours', lambda: False)
+    manual()
+    job={'tenant_id':A,'agent_id':AGENT,'provider':'connect','channel_id':CA,'conversation_id':'client','event_fingerprint':'webhook-consult-1'}
+    first=consultations.create_from_ai(job,recipient_id=11,reason='ai_developer_consultation:missing_knowledge',evidence={'source_external_id':'m1'})
+    second=consultations.create_from_ai(job,recipient_id=11,reason='ai_developer_consultation:missing_knowledge',evidence={'source_external_id':'m1'})
+    assert first['created'] and first['customer_message_sent'] is False
+    assert not second['created'] and second['id']==first['id']
+    assert db.execute("SELECT count(*) AS n FROM saas_tenant_notifications WHERE tenant_id=%s::uuid AND telegram_id=11",(A,))[0]['n']==1
+    row=db.execute("SELECT delivery_state,status,ai_run_id FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,first['id']))[0]
+    assert row['delivery_state']=='internal_inbox' and row['status']=='queued_after_hours' and row['ai_run_id'] is None
+    consultations.reply(PROFILE,first['id'],{'response':'Исправлено в версии 2.4','kind':'deployed_fix'})
+    assert db.execute('SELECT knowledge_candidate_requested FROM saas_support_tickets WHERE tenant_id=%s::uuid',(A,))[0]['knowledge_candidate_requested'] is True

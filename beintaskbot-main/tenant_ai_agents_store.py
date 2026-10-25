@@ -488,6 +488,10 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                         from tenant_ai_expert_policy import helper_ids
                         if not helper_ids(patch.get('expert_policy') or {}):
                             raise TenantLinearError('Bind an allowed internal Expert before choosing the Expert no-answer action.',409)
+                    if patch['response_policy']['action']=='consult_developer':
+                        if patch['mode']!='manual': raise TenantLinearError('Developer consultation is available only in Manual mode.',409)
+                        from tenant_internal_consultations import _recipient
+                        _recipient(cur,tenant,patch['response_policy']['developer_id'])
                 cur.execute('SELECT count(*) AS total FROM saas_ai_agents WHERE tenant_id=%s::uuid', (tenant,))
                 if int((cur.fetchone() or {}).get('total') or 0) >= MAX_AGENTS:
                     raise TenantLinearError('Agent sayı həddə çatıb.')
@@ -533,6 +537,10 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                         from tenant_ai_expert_policy import helper_ids
                         if not helper_ids(merged.get('expert_policy') or {}):
                             raise TenantLinearError('Bind an allowed internal Expert before choosing the Expert no-answer action.',409)
+                    if merged['response_policy']['action']=='consult_developer':
+                        if merged['mode']!='manual': raise TenantLinearError('Developer consultation is available only in Manual mode.',409)
+                        from tenant_internal_consultations import _recipient
+                        _recipient(cur,tenant,merged['response_policy']['developer_id'])
                 if merged['enabled']:
                     _ensure_no_active_scope_overlap(cur,tenant,merged['scopes'],exclude_agent=agent_uuid,schedule=merged['schedule'])
                 if merged['enabled'] and not previous['enabled']:

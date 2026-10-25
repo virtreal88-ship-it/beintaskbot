@@ -293,6 +293,20 @@ async def _apply_no_answer_policy(job,reservation,policy,signal,source,query,lin
         reason='ai_no_answer_handoff:'+str(decision.get('reason') or signal)
         await asyncio.to_thread(handoff,job,reason)
         return {'handled':True}
+    if action=='consult_developer':
+        # No customer reply is created here.  Handoff first produces the
+        # existing tenant/channel-scoped support case; the consultation is
+        # then linked to that case and the claimed webhook receipt.
+        if job.get('provider')!='connect':
+            action=str(policy.get('fallback_action') or 'stop')
+        else:
+            reason='ai_developer_consultation:'+str(decision.get('reason') or signal)
+            await asyncio.to_thread(handoff,job,reason)
+            from tenant_internal_consultations import create_from_ai
+            receipt=await asyncio.to_thread(create_from_ai,job,recipient_id=policy['developer_id'],reason=reason,
+                evidence={'query':str(query or '')[:1500],'signal':str(signal),'source_external_id':str(source.get('external_id') or '')},run_id=(reservation or {}).get('run_id'))
+            _ai_diag(logger,job,'developer_consultation',receipt.get('status') or receipt.get('reason','unknown'))
+            return {'handled':True,'consultation':receipt}
     if action=='create_task':
         reason='ai_no_answer_request:'+str(decision.get('reason') or signal)
         if job.get('provider')=='connect':
