@@ -119,7 +119,9 @@ def prepare(cur, cfg, data):
     target = {'draft_id': draft_id, 'draft_version': data['version'],
               'draft_hash': _draft_hash(draft), 'kind': draft['kind']}
     capabilities={}; capability_expiry=None
-    for action in ('approve','reject'):
+    # With the test bridge off, a launcher may create a pending web review but
+    # must not leak a capability that a host could later replay.
+    for action in (('approve','reject') if enabled_for_manual_bridge() else ()):
         secret=secrets.token_urlsafe(32)
         cur.execute('''INSERT INTO saas_ai_owner_review_capabilities
           (id,tenant_id,owner_id,oauth_connection_id,capability_hash,approval_id,draft_id,draft_version,draft_hash,action,target,expires_at)
@@ -138,7 +140,7 @@ def prepare(cur, cfg, data):
         'component_transport': 'test_only' if enabled_for_manual_bridge() else 'disabled_pending_trusted_host_validation',
         '_component_meta': {'ui': {'resourceUri': RESOURCE_URI},
                             'owner_review': {'capabilities': capabilities,
-                              'expires_at': capability_expiry.isoformat(),
+                              'expires_at': capability_expiry.isoformat() if capability_expiry else None,
                               # The component renders this with textContent,
                               # not HTML, so supplied instruction text is inert.
                               'approval_id': approval['id'],

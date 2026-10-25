@@ -137,6 +137,9 @@ def test_owner_component_is_app_only_metadata_and_manual_decision_is_exact_once(
     cfg=mcp._require_cfg(); cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE],oauth_connection_id=connection_id,oauth_token_id=token_id)
     with db.cursor() as cur:
         draft=drafts.typed_create(cur,cfg,'owner_knowledge',{'title':'Owner note','content':'Use verified procedure.','owner_note':'Owner supplied.'})
+        disabled=owner_component.prepare(cur,cfg,{'draft_id':draft['id'],'version':draft['version']})
+        assert disabled['_component_meta']['owner_review']['capabilities']=={}
+        monkeypatch.setenv('AI_OWNER_COMPONENT_APPROVAL_ENABLED','true')
         prepared=owner_component.prepare(cur,cfg,{'draft_id':draft['id'],'version':draft['version']})
         secret=prepared['_component_meta']['owner_review']['capabilities']['approve']
         assert prepared['_component_meta']['owner_review']['exact_diff']['after']['title']=='Owner note'
@@ -145,10 +148,6 @@ def test_owner_component_is_app_only_metadata_and_manual_decision_is_exact_once(
         assert secret not in json.dumps(wire['content'])
         assert secret not in json.dumps(wire['structuredContent'])
         assert wire['_meta']['owner_review']['capabilities']['approve']==secret
-        # Disabled by default even with a genuine owner and matching secret.
-        with pytest.raises(Exception):
-            owner_component.decide(cur,cfg,capability=secret,action='approve',approval_id=prepared['approval_id'])
-        monkeypatch.setenv('AI_OWNER_COMPONENT_APPROVAL_ENABLED','true')
         with pytest.raises(Exception):
             owner_component.decide(cur,{**cfg,'oauth_connection_id':str(uuid.uuid4())},capability=secret,action='approve',approval_id=prepared['approval_id'])
         result=owner_component.decide(cur,cfg,capability=secret,action='approve',approval_id=prepared['approval_id'])

@@ -92,7 +92,7 @@ def approve_many(cur, profile, approval_ids):
         raise TenantLinearError('Invalid approval batch.',400) from None
     if len(ids)!=len(approval_ids): raise TenantLinearError('Invalid approval batch.',400)
     tenant,actor=_owner(cur,profile)
-    cur.execute('''SELECT id,state FROM saas_ai_administrator_approvals
+    cur.execute('''SELECT id,state,draft_id,draft_version FROM saas_ai_administrator_approvals
       WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) AND expires_at>now()
       ORDER BY id FOR UPDATE''',(tenant,ids))
     rows=cur.fetchall()
@@ -100,6 +100,12 @@ def approve_many(cur, profile, approval_ids):
         raise TenantLinearError('Every approval in the batch must still be pending.',409)
     cur.execute('''UPDATE saas_ai_administrator_approvals SET state='approved',approved_by=%s,approved_at=now()
       WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[])''',(actor,tenant,ids))
+    cur.execute("SELECT to_regclass('saas_ai_owner_review_capabilities') AS relation")
+    if cur.fetchone()['relation']:
+        for row in rows:
+            cur.execute('''UPDATE saas_ai_owner_review_capabilities SET consumed_at=now()
+              WHERE tenant_id=%s::uuid AND draft_id=%s::uuid AND draft_version=%s AND consumed_at IS NULL''',
+              (tenant,row['draft_id'],row['draft_version']))
     _audit(cur,tenant,actor,'ai_administrator_approval_batch_approved','ai_administrator_approval_batch',','.join(ids),{'count':len(ids)})
     return {'ids':ids,'state':'approved','count':len(ids)}
 
