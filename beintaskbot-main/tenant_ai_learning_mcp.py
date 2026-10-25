@@ -252,7 +252,7 @@ def _tools(cur,cfg,name,args):
         if not isinstance(args,dict) or set(args)!={'capability','action','approval_id'}:
             raise TenantLinearError('Invalid owner component decision.',400)
         return owner_review_component.decide(cur,cfg,capability=args['capability'],action=args['action'],approval_id=args['approval_id'])
-    if name == 'administrator_owner_publish_component_prepare':
+    if name == 'administrator_owner_publish_review_component':
         if not isinstance(args,dict) or set(args)!={'draft_id','source_id','kind','agent_id','channel_id'}:
             raise TenantLinearError('Invalid owner publication review.',400)
         return owner_review_component.prepare_publish(cur,cfg,**args)
@@ -495,15 +495,16 @@ def _owner_component_completion_definition():
 
 
 def _owner_publish_component_definitions():
-    """App-only post-apply publication consent, never a model grant path."""
+    """A model may open review; only the app can complete exact consent."""
     security=[{'type':'oauth2','scopes':[DRAFT_SCOPE,PUBLISH_SCOPE]}]
     meta={'ui':{'visibility':['app'],'resourceUri':owner_review_component.RESOURCE_URI},
           'openai/outputTemplate':owner_review_component.RESOURCE_URI}
     return [
-      {'name':'administrator_owner_publish_component_prepare',
-       'description':'TEST-ONLY app preparation of exact post-apply owner publication consent. It is app-only, requires an already applied material, and returns the capability only in component metadata.',
+      {'name':'administrator_owner_publish_review_component',
+       'description':'Prepare an exact post-apply publication review for an already applied knowledge or instruction material. It cannot grant, publish, bind, or change the material; the one-use completion capability is component-only.',
        'inputSchema':{'type':'object','properties':{'draft_id':{'type':'string'},'source_id':{'type':'string'},'kind':{'type':'string','enum':['knowledge','instruction']},'agent_id':{'type':'string'},'channel_id':{'type':'string'}},'required':['draft_id','source_id','kind','agent_id','channel_id'],'additionalProperties':False},
-       'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security,'_meta':meta},
+       'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security,
+       '_meta':{'ui':{'visibility':['model','app'],'resourceUri':owner_review_component.RESOURCE_URI},'openai/outputTemplate':owner_review_component.RESOURCE_URI}},
       {'name':'administrator_owner_publish_component_complete',
        'description':'TEST-ONLY app completion of one exact post-apply publication consent. It rechecks owner, OAuth connection, scope, source hash, agent and channel before creating the existing one-use grant and publishing.',
        'inputSchema':{'type':'object','properties':{'capability':{'type':'string','minLength':32,'maxLength':200}},'required':['capability'],'additionalProperties':False},

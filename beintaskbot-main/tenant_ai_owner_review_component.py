@@ -226,8 +226,14 @@ def prepare_publish(cur,cfg,*,draft_id,source_id,kind,agent_id,channel_id):
              # psycopg may return UUID/timestamp values; component metadata
              # must remain JSON-safe before the transaction is committed.
              'material':_snapshot(source)}
+    # The launcher is model-visible so a chat can open the review surface,
+    # but it still has no authority to publish.  This snapshot is the exact
+    # material protected by the hash; only the opaque capability is withheld
+    # in component metadata.
+    public_preview={'kind':kind,'source_id':source_id,'material_hash':digest,
+                    'agent_id':agent_id,'channel_id':channel_id,'material':_snapshot(source)}
     return {'draft_id':draft_id,'source_id':source_id,'kind':kind,
-            'agent_id':agent_id,'channel_id':channel_id,
+            'agent_id':agent_id,'channel_id':channel_id,'exact_preview':public_preview,
             'publication_review_required':True,
             '_component_meta':{'ui':{'resourceUri':RESOURCE_URI},
               'owner_publish':{'capability':secret,'preview':preview}}}

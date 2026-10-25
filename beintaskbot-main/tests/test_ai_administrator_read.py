@@ -130,7 +130,7 @@ def test_owner_component_is_app_only_metadata_and_manual_decision_is_exact_once(
             tool={x['name']:x for x in (await listed.json())['result']['tools']}['administrator_owner_review_component']
             assert tool['_meta']['ui']['visibility']==['model','app']
             names={x['name'] for x in (await listed.json())['result']['tools']}
-            assert 'administrator_owner_publish_component_prepare' not in names
+            assert 'administrator_owner_publish_review_component' not in names
             resources=await client.post('/mcp',json={'jsonrpc':'2.0','id':2,'method':'resources/list'})
             assert (await resources.json())['result']['resources'][0]['uri']==owner_component.RESOURCE_URI
             html_result=await client.post('/mcp',json={'jsonrpc':'2.0','id':3,'method':'resources/read','params':{'uri':owner_component.RESOURCE_URI}})
@@ -352,8 +352,8 @@ def test_owner_widget_approval_to_existing_apply_grant_publish_and_agent_bind(db
         async with TestClient(TestServer(app)) as client:
             listed=await client.post('/mcp',json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
             tools={v['name']:v for v in (await listed.json())['result']['tools']}
-            for name in ('administrator_owner_publish_component_prepare','administrator_owner_publish_component_complete'):
-                assert tools[name]['_meta']['ui']['visibility']==['app']
+            assert tools['administrator_owner_publish_review_component']['_meta']['ui']['visibility']==['model','app']
+            assert tools['administrator_owner_publish_component_complete']['_meta']['ui']['visibility']==['app']
             review=await call(client,2,'administrator_owner_review_component',{'draft_id':draft['id'],'version':draft['version']})
             assert review['_meta']['owner_review']['exact_diff']['after']['title']=='Widget-reviewed owner procedure'
             approval=review['structuredContent']['approval_id']; review_cap=review['_meta']['owner_review']['capabilities']['approve']
@@ -362,12 +362,13 @@ def test_owner_widget_approval_to_existing_apply_grant_publish_and_agent_bind(db
             applied=await call(client,4,'administrator_apply_knowledge_draft',{'approval_id':approval,'draft_id':draft['id']})
             source_id=applied['structuredContent']['source_id']
             assert applied['structuredContent']['active'] is False and applied['structuredContent']['agent_bound'] is False
-            prepared=await call(client,5,'administrator_owner_publish_component_prepare',{'draft_id':draft['id'],'source_id':source_id,'kind':'knowledge','agent_id':oauth_agent,'channel_id':CA})
+            prepared=await call(client,5,'administrator_owner_publish_review_component',{'draft_id':draft['id'],'source_id':source_id,'kind':'knowledge','agent_id':oauth_agent,'channel_id':CA})
             assert prepared['structuredContent']['publication_review_required'] is True
             # The raw secret and exact material preview are component-only.
             assert 'capability' not in json.dumps(prepared['content'])
             assert 'capability' not in json.dumps(prepared['structuredContent'])
             publish=prepared['_meta']['owner_publish']; assert publish['preview']['material']['title']=='Widget-reviewed owner procedure'
+            assert prepared['structuredContent']['exact_preview']['material_hash']==publish['preview']['material_hash']
             published=await call(client,6,'administrator_owner_publish_component_complete',{'capability':publish['capability']})
             assert published['structuredContent']['published'] is True
             return published['structuredContent']
