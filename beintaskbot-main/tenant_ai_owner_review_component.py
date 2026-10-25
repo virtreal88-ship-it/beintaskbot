@@ -271,18 +271,19 @@ def resource_html():
  const result=api&&api.toolResponseMetadata; const envelope=result&&(result.mcp_tool_result||result.call_tool_result||result); const meta=(envelope&&(envelope._meta||envelope))||{};
  let caps={},approvalId=''; const approve=document.querySelector('#approve'),reject=document.querySelector('#reject'),publish=document.querySelector('#publish');
  const disable=()=>{approve.disabled=true;reject.disabled=true;publish.disabled=true;};
+ const toolResult=(out)=>out&&((out.result&&typeof out.result==='object')?out.result:out);
  const hydrate=(candidate)=>{ disable(); approve.onclick=null; reject.onclick=null; publish.onclick=null; publish.hidden=true;
  const review=(candidate&&candidate.owner_review)||{}, publication=(candidate&&candidate.owner_publish)||{}; caps=review.capabilities||{};approvalId=review.approval_id||'';
  document.querySelector('#diff').textContent=JSON.stringify(review.exact_diff||publication.preview||{},null,2);
- if (publication.capability && api&&typeof api.callTool==='function') { status.textContent='Review this exact applied material before publication.'; publish.hidden=false; publish.disabled=false; publish.onclick=async()=>{ try { disable(); status.textContent='Submitting publication consent…'; const out=await api.callTool('administrator_owner_publish_component_complete',{capability:publication.capability}); const value=out&&out.structuredContent; if (!value||value.published!==true||(out&&out.isError)) throw new Error('unconfirmed'); status.textContent='Published.'; } catch (_) { status.textContent='Publication could not be completed. Use the authenticated owner screen.'; } }; return; }
+ if (publication.capability && api&&typeof api.callTool==='function') { status.textContent='Review this exact applied material before publication.'; publish.hidden=false; publish.disabled=false; publish.onclick=async()=>{ try { disable(); status.textContent='Submitting publication consent…'; const result=toolResult(await api.callTool('administrator_owner_publish_component_complete',{capability:publication.capability})); const value=result&&result.structuredContent; if (!value||value.published!==true||(result&&result.isError)) throw new Error('unconfirmed'); status.textContent='Published.'; } catch (_) { status.textContent='Publication could not be completed. Use the authenticated owner screen.'; } }; return; }
  if (api&&typeof api.callTool==='function'&&typeof approvalId==='string'&&caps.approve&&caps.reject) { status.textContent='Review this exact draft version.';
    approve.disabled=false;reject.disabled=false;approve.onclick=invoke('approve');reject.onclick=invoke('reject'); }
  };
  const invoke=(action)=>async()=>{ try { status.textContent='Submitting…';
    disable();
-   const out=await api.callTool('administrator_owner_review_component_complete',{action,capability:caps[action],approval_id:approvalId});
-   const value=out&&out.structuredContent, state=value&&value.state, expected=action==='approve'?'approved':'rejected';
-   if (!value || value.id!==approvalId || state!==expected || (out&&out.isError)) throw new Error('unconfirmed');
+   const result=toolResult(await api.callTool('administrator_owner_review_component_complete',{action,capability:caps[action],approval_id:approvalId}));
+   const value=result&&result.structuredContent, state=value&&value.state, expected=action==='approve'?'approved':'rejected';
+   if (!value || value.id!==approvalId || state!==expected || (result&&result.isError)) throw new Error('unconfirmed');
    status.textContent=state==='approved'?'Approved.':'Rejected.';
    disable();
  } catch (_) { status.textContent='Review could not be submitted. Use the authenticated owner screen.'; } };

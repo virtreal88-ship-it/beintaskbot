@@ -180,12 +180,18 @@ Promise.resolve(pending).then(()=>{if(calls.length!==1||calls[0][0]!=='administr
 
 
 def test_owner_component_draft_widget_uses_only_documented_late_result_and_exact_receipts():
-    """Mock the MCP Apps JSON-RPC notification lifecycle, never arbitrary page messages."""
+    """Mock the documented host lifecycle with the serialized HTTP call result."""
     html=owner_component.resource_html()
     script=html.split('<script>',1)[1].split('</script>',1)[0]
+    # This is the exact JSON-RPC envelope emitted by the real MCP HTTP handler,
+    # rather than a direct component function result.
+    rejected_http=json.dumps(json.loads(mcp._tool_response(
+        {'id':'11111111-1111-1111-1111-111111111111','state':'rejected'}, 7
+    ).body.decode()))
     harness=r'''
 const vm=require('vm'),fs=require('fs'),source=fs.readFileSync(0,'utf8');
 const cap='a'.repeat(32), receipt='11111111-1111-1111-1111-111111111111';
+const rejectedHttp=__REJECTED_HTTP__;
 async function scenario(action,response) {
   const elements={status:{textContent:''},diff:{textContent:''},approve:{disabled:true,hidden:false},reject:{disabled:true,hidden:false},publish:{disabled:true,hidden:true}};
   let listener,resolve; const parent={}; const calls=[];
@@ -206,11 +212,12 @@ async function scenario(action,response) {
 (async()=>{
   if (await scenario('approve',{structuredContent:{id:receipt,state:'approved'}})!=='Approved.') process.exit(2);
   if (await scenario('reject',{structuredContent:{id:receipt,state:'rejected'}})!=='Rejected.') process.exit(3);
+  if (await scenario('reject',rejectedHttp)!=='Rejected.') process.exit(8);
   if (!(await scenario('approve',{structuredContent:{id:'other',state:'approved'}})).includes('could not')) process.exit(4);
   if (!(await scenario('approve',{structuredContent:{id:receipt,state:'rejected'}})).includes('could not')) process.exit(5);
   if (!(await scenario('approve',{isError:true,structuredContent:{id:receipt,state:'approved'}})).includes('could not')) process.exit(6);
 })().catch(()=>process.exit(7));
-'''
+'''.replace('__REJECTED_HTTP__',rejected_http)
     result=subprocess.run(['node','-e',harness],input=script,text=True,capture_output=True,timeout=10)
     assert result.returncode==0, result.stderr
 
