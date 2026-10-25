@@ -605,8 +605,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             else:
                 args=[tenant,lead_id,row['history_channel']];clause=''
                 if anchor_at:
-                    clause=' AND COALESCE(happened_at,created_at)<=%s'
-                    args.append(anchor_at)
+                    clause=' AND (COALESCE(happened_at,created_at),id)<=(%s,%s::uuid)'
+                    args.extend((anchor_at,str(anchor_row['id'])))
                 if before:
                     clause=''' AND (COALESCE(happened_at,created_at),id)<(SELECT COALESCE(happened_at,created_at),id FROM saas_crm_messages
                       WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid)'''
