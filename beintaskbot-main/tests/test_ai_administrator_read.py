@@ -70,6 +70,9 @@ def test_all_read_projections_are_valid_bounded_and_tenant_scoped(db,monkeypatch
                 assert knowledge['direct_link']=='unavailable_without_the_existing_owner_route_resolver'
                 assert any(item.get('reason')=='requires_reviewed_source_and_exact_publication_grant' for item in knowledge['reasons'])
                 continue
+            if name=='administrator_case_conversation_link_read':
+                with pytest.raises(Exception): admin.read(cur,cfg,name,{'case_id':str(uuid.uuid4())})
+                continue
             if name=='simulation_queue_diagnostic_read':
                 continue
             result=admin.read(cur,cfg,name,{'limit':1,'include_content':True})
