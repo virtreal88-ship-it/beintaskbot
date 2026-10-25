@@ -144,6 +144,9 @@ def migrate(cur, tenant, channel, ids, leads, before):
     condition, args = clause('reads', channel, ids, leads)
     replace_rows(cur,TABLES['reads'],tenant,condition,args,list(reads.values()))
     cur.execute("UPDATE saas_connect_direct_identities SET canonical_conversation_id=%s WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND canonical_conversation_id=%s", (jid,tenant,channel,lid))
+    for identity in ids:
+        cur.execute('''INSERT INTO saas_connect_direct_identities(tenant_id,connect_channel_id,identity_key,canonical_conversation_id)
+          VALUES(%s::uuid,%s::uuid,%s,%s) ON CONFLICT(tenant_id,connect_channel_id,identity_key) DO NOTHING''',(tenant,channel,identity,jid))
     cur.execute("UPDATE saas_crm_messages SET kommo_lead_id=%s WHERE tenant_id=%s::uuid AND channel='connect:'||%s::text AND kommo_lead_id=%s", (canonical,tenant,channel,split))
     cur.execute('DELETE FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s', (tenant,channel,lid))
 
@@ -163,8 +166,8 @@ def restore(cur, tenant, channel, ids, leads, before, after):
         cur.execute("UPDATE saas_ai_agent_jobs SET conversation_id=%s,chat_id=%s,lead_id=%s WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s", (row['conversation_id'],row['chat_id'],row['lead_id'],tenant,row['agent_id'],channel,ids[0]))
     for row in before['drafts']:
         cur.execute('UPDATE saas_ai_agent_drafts SET lead_id=%s,chat_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid', (row['lead_id'],row['chat_id'],tenant,row['id']))
-    for row in before['aliases']:
-        cur.execute('UPDATE saas_connect_direct_identities SET canonical_conversation_id=%s WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND identity_key=%s', (row['canonical_conversation_id'],tenant,channel,row['identity_key']))
+    condition,args=clause('aliases',channel,ids,leads)
+    replace_rows(cur,TABLES['aliases'],tenant,condition,args,before['aliases'])
     if capture(cur,tenant,channel,ids,leads) != before:
         raise TenantLinearError('direct_merge_rollback_verification_failed',409)
 
