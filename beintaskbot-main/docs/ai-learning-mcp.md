@@ -261,6 +261,30 @@ apply. Manual selection and preflight do not grant permission for paid calls.
 
 ## Provider-proven direct-dialogue recovery
 
+Issue #248 extends this inventory across the full configured channel history.
+It uses the existing persisted provider aliases as well as signed event pairs;
+discovery and owner-session historical reconciliation share the same resolver.
+Subsequent webhook events reuse a persisted alias even when the event omits
+`directIdentity`, including after worker restart.
+
+The read tool accepts optional `search` (up to 100 characters) for an owner to
+locate route diagnostics by their saved label/identity. Responses still omit
+names, phone numbers, JIDs, LIDs and text. Route diagnostics include lead ID,
+channel UUID, identity kind, incoming/outgoing counts, other-channel message
+counts, and an opaque route ID. `scan_complete`, `scanned_routes`,
+`excluded_routes` and `unmapped_messages` distinguish a complete scan from an
+empty result. No heuristic rewrites data: matching labels/stored phones or
+linked-device message echoes produce `provider_identity_unproven` candidates.
+Different channels remain independent. A different number in a message body
+is not the connected account's phone or a provider identity link.
+
+Existing physical reconciliation remains owner-confirmed with backup and
+rollback. Discovery now quarantines dependent cases, read markers, CRM contact
+links, assignments/jobs and aliases pointing at the split route rather than
+detaching references. Its successful reconciliation removes the duplicate
+route from the existing Dialogs search; logical mappings alone do not hide
+unreconciled histories. No new merge service or consultation workflow is added.
+
 `whatsapp_dialogue_duplicate_candidates` is a tenant/channel-scoped read-only
 inventory of possible split direct WhatsApp histories. It returns opaque pair
 IDs, aggregate incoming/outgoing message counts, provider receipt counts and

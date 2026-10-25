@@ -111,8 +111,18 @@ def _canonical_direct_conversation(cur, tenant, channel_id, conversation, data, 
     pair = data.get('directIdentity') if isinstance(data.get('directIdentity'), dict) else {}
     jid, lid = _direct_identity(pair.get('jid')), _direct_identity(pair.get('lid'))
     current = _direct_identity(conversation)
+    if current and not pair:
+        # Most subsequent events omit remoteJidAlt. Reuse only the already
+        # verified mapping for this exact connected account after restart.
+        cur.execute('''SELECT canonical_conversation_id FROM saas_connect_direct_identities
+          WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND identity_key=%s FOR SHARE''',
+          (tenant,channel_id,current))
+        known=cur.fetchone()
+        return (str(known['canonical_conversation_id']),False) if known else (conversation,False)
     if not jid or not lid or jid == lid or not current:
         return conversation, False
+    if not jid.endswith(('@s.whatsapp.net','@c.us')) or not lid.endswith('@lid') or current not in {jid,lid}:
+        return conversation, True
     aliases = tuple(dict.fromkeys((jid, lid, current)))
     cur.execute('''SELECT identity_key,canonical_conversation_id FROM saas_connect_direct_identities
       WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND identity_key=ANY(%s) FOR UPDATE''',

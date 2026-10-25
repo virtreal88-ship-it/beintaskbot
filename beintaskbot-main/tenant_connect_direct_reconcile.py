@@ -14,8 +14,6 @@ from tenant_ai_agents_store import _audit
 from tenant_linear_policy import TenantLinearError
 from tenant_connect_transport import _schema
 
-_JID=re.compile(r'^[1-9][0-9]{5,22}@(s\.whatsapp\.net|c\.us)$')
-_LID=re.compile(r'^[1-9][0-9]{5,22}@lid$')
 
 def _owner(cur, profile):
     tenant=str(profile.get('tenant_id') or ''); actor=int(profile.get('telegram_id') or 0)
@@ -25,17 +23,6 @@ def _owner(cur, profile):
     if row.get('role')!='owner' or row.get('active') is not True or row.get('status')!='active':
         raise TenantLinearError('Company owner access required.',403)
     return tenant,actor
-
-def _raw(value):
-    if isinstance(value,dict): return value
-    try: return json.loads(value) if isinstance(value,str) else {}
-    except json.JSONDecodeError: return {}
-
-def _pair(raw):
-    item=raw.get('directIdentity') if isinstance(raw,dict) else None
-    lid,jid=str((item or {}).get('lid') or ''),str((item or {}).get('jid') or '')
-    if not (_LID.fullmatch(lid) and _JID.fullmatch(jid) and raw.get('conversationId') in {lid,jid}): return None
-    return jid,lid
 
 def _id(tenant,channel,jid,lid): return hashlib.sha256((tenant+'\x1f'+channel+'\x1f'+jid+'\x1f'+lid).encode()).hexdigest()
 def _precondition(item): return hashlib.sha256(json.dumps(item,sort_keys=True,separators=(',',':')).encode()).hexdigest()
@@ -53,26 +40,17 @@ def ensure_schema(conn):
           PRIMARY KEY(tenant_id,request_id))''')
 
 def _candidates(cur, tenant, channel=''):
-    params=[tenant]; where="m.tenant_id=%s::uuid AND m.channel LIKE 'connect:%%' AND m.raw ? 'directIdentity'"
-    if channel: where+=" AND c.connect_channel_id=%s::uuid";params.append(channel)
-    cur.execute('''SELECT m.raw,c.connect_channel_id::text AS channel,c.conversation_id,c.lead_id,c.conversation_kind
-      FROM saas_crm_messages m JOIN saas_connect_conversations c ON c.tenant_id=m.tenant_id AND c.lead_id=m.kommo_lead_id
-      AND m.channel='connect:'||c.connect_channel_id::text WHERE '''+where,params)
-    evidence={}; graph={}; conflicts=set()
-    for row in cur.fetchall():
-        pair=_pair(_raw(row.get('raw')))
-        if not pair: continue
-        jid,lid=pair; key=(row['channel'],jid,lid); evidence[key]=evidence.get(key,0)+1
-        graph.setdefault((row['channel'],jid),set()).add(lid);graph.setdefault((row['channel'],lid),set()).add(jid)
-        if _raw(row.get('raw')).get('conversationIdentityConflict') is True: conflicts.update((row['channel'],jid,row['channel'],lid))
+    from tenant_connect_identity import inventory
+    cur.execute('SELECT connect_channel_id::text AS channel FROM saas_connect_channels WHERE tenant_id=%s::uuid AND (%s=\'\' OR connect_channel_id::text=%s) ORDER BY connect_channel_id',(tenant,channel,channel))
+    scans=[(row['channel'],inventory(cur,tenant,row['channel'])) for row in cur.fetchall()]
     items=[]
-    for (ch,jid,lid),receipts in sorted(evidence.items()):
+    evidence=[(ch,p) for ch,scan in scans for p in scan['pairs']]
+    for ch,proof in evidence:
+        jid,lid=proof['canonical_id'],proof['split_id'];receipts=proof['receipts']
         cur.execute('''SELECT conversation_id,lead_id,conversation_kind FROM saas_connect_conversations
           WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=ANY(%s::text[]) FOR SHARE''',(tenant,ch,[jid,lid]))
-        routes={str(row['conversation_id']):dict(row) for row in cur.fetchall()}; reasons=[]
+        routes={str(row['conversation_id']):dict(row) for row in cur.fetchall()}; reasons=list(proof['conflicts'])
         if set(routes)!={jid,lid}: reasons.append('route_missing')
-        if graph.get((ch,jid))!={lid} or graph.get((ch,lid))!={jid}: reasons.append('provider_identity_ambiguous')
-        if (ch,jid) in conflicts or (ch,lid) in conflicts: reasons.append('provider_identity_conflict')
         if any((route.get('conversation_kind') or '').casefold()=='group' for route in routes.values()): reasons.append('group_not_allowed')
         canonical,split=routes.get(jid),routes.get(lid)
         if canonical and split:
@@ -82,6 +60,11 @@ def _candidates(cur, tenant, channel=''):
                 ('saas_ai_conversation_state',"provider='connect' AND conversation_id=%s",(split['conversation_id'],)),
                 ('saas_ai_agent_jobs',"provider='connect' AND channel_id=%s::text AND conversation_id=%s",(ch,split['conversation_id'])),
                 ('saas_ai_agent_drafts','lead_id=%s',(split['lead_id'],)),
+                ('saas_support_tickets','channel_id=%s::uuid AND conversation_id=%s',(ch,split['conversation_id'])),
+                ('saas_knowledge_extractions',"route->>'channel_id'=%s AND route->>'conversation_id'=%s",(ch,split['conversation_id'])),
+                ('saas_operator_dialog_reads',"provider='connect' AND channel_id=%s AND conversation_id=%s",(ch,split['conversation_id'])),
+                ('saas_crm_native_contact_conversations',"provider='connect' AND channel_id=%s AND conversation_id=%s",(ch,split['conversation_id'])),
+                ('saas_connect_direct_identities','connect_channel_id=%s::uuid AND canonical_conversation_id=%s',(ch,split['conversation_id'])),
             ]:
                 cur.execute("SELECT to_regclass(%s) AS present",(table,))
                 if cur.fetchone()['present']:
@@ -92,7 +75,7 @@ def _candidates(cur, tenant, channel=''):
             if route:
                 cur.execute("SELECT count(*) AS n FROM saas_crm_messages WHERE tenant_id=%s::uuid AND channel='connect:'||%s::text AND kommo_lead_id=%s",(tenant,ch,route['lead_id']))
                 counts[key]=int(cur.fetchone()['n'])
-        item={'pair_id':_id(tenant,ch,jid,lid),'channel_id':ch,'provider_receipts':receipts,'canonical_messages':counts['canonical'],'split_messages':counts['split'],'eligible':not reasons,'conflicts':sorted(set(reasons))}
+        item={'pair_id':_id(tenant,ch,jid,lid),'channel_id':ch,'provider_receipts':receipts,'canonical_messages':counts['canonical'],'split_messages':counts['split'],'eligible':not reasons,'conflicts':sorted(set(reasons)),'evidence_sources':proof['sources']}
         item['precondition']=_precondition(item);items.append(item)
     return items
 
@@ -122,13 +105,12 @@ def apply(profile, payload):
                 if not item or item['precondition']!=precondition or not item['eligible']: raise TenantLinearError('direct_merge_preview_stale_or_blocked',409)
                 # Reconstruct private IDs only after the signed evidence and
                 # precondition have been verified in this same transaction.
-                cur.execute('''SELECT c.conversation_id,c.lead_id,m.raw FROM saas_crm_messages m JOIN saas_connect_conversations c ON c.tenant_id=m.tenant_id AND c.lead_id=m.kommo_lead_id WHERE m.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND m.raw ? 'directIdentity' ''',(tenant,item['channel_id']))
-                routes={}
-                for row in cur.fetchall():
-                    pair=_pair(_raw(row['raw']))
-                    if pair and _id(tenant,item['channel_id'],pair[0],pair[1])==pair_id: routes[str(row['conversation_id'])]=dict(row)
-                jid=next((k for k in routes if _JID.fullmatch(k)),None);lid=next((k for k in routes if _LID.fullmatch(k)),None)
+                from tenant_connect_identity import inventory
+                scan=inventory(cur,tenant,item['channel_id'])
+                proof=next((p for p in scan['pairs'] if not p['conflicts'] and _id(tenant,item['channel_id'],p['canonical_id'],p['split_id'])==pair_id),None)
+                jid=proof['canonical_id'] if proof else None;lid=proof['split_id'] if proof else None
                 if not jid or not lid: raise TenantLinearError('direct_merge_preview_stale_or_blocked',409)
+                routes=scan['routes']
                 canonical,split=routes[jid],routes[lid]
                 cur.execute('SELECT row_to_json(c) AS row FROM saas_connect_conversations c WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s',(tenant,item['channel_id'],lid)); route_snapshot=cur.fetchone()['row']
                 cur.execute("SELECT jsonb_agg(row_to_json(m)) AS rows FROM saas_crm_messages m WHERE tenant_id=%s::uuid AND channel='connect:'||%s::text AND kommo_lead_id=%s",(tenant,item['channel_id'],split['lead_id'])); messages=cur.fetchone()['rows'] or []
