@@ -11,6 +11,12 @@ from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, 
 from tenant_workflow_store import _read_tenant_workflow
 from tenant_policy import TenantPolicy
 
+# The employee editor intentionally exposes only these stable product grants.
+# Other stored grants (including known legacy modules) are retained verbatim
+# when an employee card is updated; an older client must never erase them.
+_EDITOR_PERMISSION_KEYS = {"tasks", "deals", "customers", "dialogs", "support"}
+_RECOGNIZED_ROLES = {"owner", "admin", "manager", "operator", "worker", "master"}
+
 def _can_manage_members(current: dict | None) -> bool:
     return bool(current and current.get('active') is not False
                 and TenantPolicy(current).allows_action('employees', 'manage'))
@@ -97,12 +103,19 @@ def _member_payload(row: dict) -> dict:
             result[key] = result[key].isoformat()
     if not isinstance(result.get("permissions"), list):
         result["permissions"] = []
-    # Stored grants are the only source of non-owner access. Keep unknown
-    # historical grants visible but never treat them as currently effective.
+    # Stored grants are assignment data, not proof of effective access: module
+    # toggles and role policy may still deny a grant.  Return both views so UI
+    # cannot accidentally present an assigned right as usable access.
     result['explicit_permissions'] = list(result['permissions'])
     result['legacy_permissions'] = [item for item in result['permissions'] if item not in _known_permissions()]
-    result['effective_permissions'] = (list(_ROLE_PERMISSIONS['owner']) if result.get('role') == 'owner'
-                                       else [item for item in result['permissions'] if item in _known_permissions()])
+    policy = TenantPolicy(result)
+    effective = []
+    for grant in result['permissions']:
+        module, separator, action = str(grant).partition(':')
+        allowed = policy.allows_action(module, action) if separator else policy.allows(module)
+        if allowed:
+            effective.append(grant)
+    result['effective_permissions'] = effective
     return result
 
 
@@ -115,13 +128,14 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT m.tenant_id, m.telegram_id, m.display_name, m.role, m.permissions, m.active,
+                SELECT m.tenant_id, m.telegram_id, m.display_name, m.role, m.permissions, m.active, t.modules,
                        m.created_at, m.updated_at, m.last_login_at, au.email, COALESCE(NULLIF(au.phone,''),up.phone,'') AS phone,
                        COALESCE(NULLIF(au.first_name,''),up.first_name,'') AS first_name,
                        COALESCE(NULLIF(au.last_name,''),up.last_name,'') AS last_name,
                        COALESCE(NULLIF(au.avatar_url,''),up.avatar_url,'') AS avatar_url,
                        COALESCE(NULLIF(au.login,''),up.login,'') AS login, au.status AS account_status
                 FROM saas_tenant_members m
+                JOIN saas_tenants t ON t.id=m.tenant_id
                 LEFT JOIN saas_auth_users au ON au.actor_id = m.telegram_id
                 LEFT JOIN saas_user_profiles up ON up.actor_id = m.telegram_id
                 WHERE m.tenant_id = %s::uuid
@@ -270,15 +284,24 @@ def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_na
     if not name:
         raise TenantPlatformError("Əməkdaşın adını yazın.")
     is_owner = target_id == int(current["telegram_id"])
-    selected_role = _role(str(role or ""), owner=is_owner)
+    requested_role = str(role or "")
+    selected_role = _role(requested_role, owner=is_owner)
     selected_permissions = _permissions(permissions, selected_role)
     existing_member = member(tenant_id, target_id)
     # A newer UI may not know a historical, now-retired grant.  Keep it
     # visible/read-only and preserve it during an otherwise unrelated edit;
     # authorization still fails closed because TenantPolicy does not infer it.
     if existing_member and selected_role != 'owner':
-        legacy=[item for item in (existing_member.get('permissions') or []) if item not in _known_permissions()]
-        selected_permissions=list(dict.fromkeys(selected_permissions+legacy))
+        # Keep any grant the current editor cannot safely represent.  Only the
+        # five explicitly rendered checkboxes may be changed by this update.
+        preserved = [item for item in (existing_member.get('permissions') or [])
+                     if item not in _EDITOR_PERMISSION_KEYS]
+        selected_permissions = list(dict.fromkeys(selected_permissions + preserved))
+        # Historical role keys remain readable.  Re-saving an untouched
+        # legacy role must not silently turn it into the normalization default.
+        existing_role = str(existing_member.get('role') or '')
+        if existing_role not in _RECOGNIZED_ROLES and requested_role == existing_role:
+            selected_role = existing_role
     existed = existing_member is not None
     if current.get('role') != 'owner':
         if selected_role in {'owner', 'admin'} or set(selected_permissions) - set(current.get('permissions') or []):
