@@ -321,11 +321,8 @@ def test_owner_widget_approval_to_existing_apply_grant_publish_and_agent_bind(db
         assert owner_component.decide(cur,cfg,capability=widget['_component_meta']['owner_review']['capabilities']['approve'],action='approve',approval_id=widget['approval_id'])['state']=='approved'
         applied=mcp._tools(cur,cfg,'administrator_apply_knowledge_draft',{'approval_id':widget['approval_id'],'draft_id':draft['id']})
         assert applied['active'] is False and applied['agent_bound'] is False
-        material=approvals._publication_object(cur,A,'knowledge',applied['source_id'])
-        grant=approvals.publication_grant(cur,PROFILE,{'material_hash':approvals._publication_hash(material),
-            'draft_id':draft['id'],'version':draft['version'],'kind':'knowledge','object_id':applied['source_id'],
-            'agent_id':oauth_agent,'channel_id':CA,'ttl_minutes':30,'review_confirmed':True})
-        published=mcp._tools(cur,cfg,'administrator_publish_reviewed',{'grant_id':grant['grant_id']})
+        consent=owner_component.prepare_publish(cur,cfg,draft_id=draft['id'],source_id=applied['source_id'],agent_id=oauth_agent,channel_id=CA)
+        published=owner_component.complete_publish(cur,cfg,capability=consent['capability'])
         assert published['published'] is True
         cur.execute('SELECT active,agent_id,provenance FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,published['source_ids'][0]))
         source=cur.fetchone(); assert source['active'] is True and str(source['agent_id'])==oauth_agent

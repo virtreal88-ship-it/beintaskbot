@@ -78,6 +78,11 @@ def ensure_schema(conn):
         cur.execute('CREATE INDEX IF NOT EXISTS saas_ai_owner_review_capability_live_idx '
                     'ON saas_ai_owner_review_capabilities(tenant_id,owner_id,expires_at) '
                     'WHERE consumed_at IS NULL')
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_owner_publish_capabilities(
+          id UUID PRIMARY KEY,tenant_id UUID NOT NULL,owner_id BIGINT NOT NULL,oauth_connection_id UUID NOT NULL,
+          capability_hash TEXT NOT NULL UNIQUE,draft_id UUID NOT NULL,draft_version INTEGER NOT NULL,
+          source_id UUID NOT NULL,material_hash TEXT NOT NULL,agent_id UUID NOT NULL,channel_id UUID NOT NULL,
+          expires_at TIMESTAMPTZ NOT NULL,consumed_at TIMESTAMPTZ NULL)''')
 
 
 def prepare(cur, cfg, data):
@@ -187,6 +192,38 @@ def decide(cur, cfg, *, capability, action, approval_id):
     _audit(cur, tenant, owner, 'ai_owner_component_review_decided', 'ai_administrator_draft', row['draft_id'],
            {'version': row['draft_version'], 'decision': action})
     return result
+
+
+def prepare_publish(cur,cfg,*,draft_id,source_id,agent_id,channel_id):
+    """Post-apply, app-only consent; no model tool grants publication."""
+    if not enabled_for_manual_bridge(): raise TenantLinearError('Owner component approval is not enabled.',403)
+    from tenant_ai_administrator_approvals import _publication_hash, _publication_object
+    tenant,owner,connection=_connection_profile(cur,cfg)
+    try: draft_id=str(uuid.UUID(str(draft_id)));source_id=str(uuid.UUID(str(source_id)));agent_id=str(uuid.UUID(str(agent_id)));channel_id=str(uuid.UUID(str(channel_id)))
+    except (TypeError,ValueError): raise TenantLinearError('Invalid publication review.',400) from None
+    if agent_id!=str(cfg['AI_LEARNING_MCP_AGENT_ID']) or channel_id!=str(cfg['AI_LEARNING_MCP_CHANNEL_ID']): raise TenantLinearError('Publication outside OAuth scope.',403)
+    cur.execute('SELECT version,state FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,draft_id));draft=cur.fetchone()
+    if not draft or draft['state']!='applied': raise TenantLinearError('Applied draft unavailable.',409)
+    source=_publication_object(cur,tenant,'knowledge',source_id); digest=_publication_hash(source);secret=secrets.token_urlsafe(32)
+    cur.execute('''INSERT INTO saas_ai_owner_publish_capabilities(id,tenant_id,owner_id,oauth_connection_id,capability_hash,draft_id,draft_version,source_id,material_hash,agent_id,channel_id,expires_at)
+      VALUES(%s,%s::uuid,%s,%s::uuid,%s,%s::uuid,%s,%s::uuid,%s,%s::uuid,%s::uuid,now()+interval '10 minutes') RETURNING expires_at''',(uuid.uuid4(),tenant,owner,connection,_hash(secret),draft_id,draft['version'],source_id,digest,agent_id,channel_id))
+    return {'draft_id':draft_id,'source_id':source_id,'material_hash':digest,'agent_id':agent_id,'channel_id':channel_id,'capability':secret}
+
+
+def complete_publish(cur,cfg,*,capability):
+    if not enabled_for_manual_bridge(): raise TenantLinearError('Owner component approval is not enabled.',403)
+    from tenant_ai_administrator_approvals import publication_grant,publication_execute,_publication_hash,_publication_object
+    tenant,owner,connection=_connection_profile(cur,cfg)
+    cur.execute('''SELECT * FROM saas_ai_owner_publish_capabilities WHERE tenant_id=%s::uuid AND owner_id=%s AND oauth_connection_id=%s::uuid AND capability_hash=%s AND consumed_at IS NULL AND expires_at>now() FOR UPDATE''',(tenant,owner,connection,_hash(capability)))
+    row=cur.fetchone()
+    if not row: raise TenantLinearError('Publication consent is unavailable.',409)
+    source=_publication_object(cur,tenant,'knowledge',str(row['source_id']))
+    if _publication_hash(source)!=row['material_hash']: raise TenantLinearError('Material changed; review again.',409)
+    cur.execute('UPDATE saas_ai_owner_publish_capabilities SET consumed_at=now() WHERE id=%s::uuid AND consumed_at IS NULL RETURNING id',(row['id'],))
+    if not cur.fetchone(): raise TenantLinearError('Publication consent already used.',409)
+    profile={'tenant_id':tenant,'telegram_id':owner}
+    grant=publication_grant(cur,profile,{'draft_id':str(row['draft_id']),'version':row['draft_version'],'kind':'knowledge','object_id':str(row['source_id']),'agent_id':str(row['agent_id']),'channel_id':str(row['channel_id']),'ttl_minutes':30,'review_confirmed':True,'material_hash':row['material_hash']})
+    return publication_execute(cur,cfg,grant['grant_id'])
 
 
 def resource_html():
