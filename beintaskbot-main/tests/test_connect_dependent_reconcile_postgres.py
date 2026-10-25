@@ -7,6 +7,7 @@ from test_connect_dependent_reconcile import (
     test_old_links_resolve_only_exact_owner_tenant_channel_and_lead,
     test_wrong_owner_and_new_dependency_stop_without_partial_changes,
     test_new_message_and_stale_preview_block_rollback,
+    test_history_paginates_all_messages_and_old_case_anchor_after_merge,
 )
 from test_connect_channel_multiprocess import database
 

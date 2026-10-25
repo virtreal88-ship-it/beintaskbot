@@ -142,3 +142,17 @@ def test_wrong_owner_and_new_dependency_stop_without_partial_changes(db,monkeypa
     db.execute("INSERT INTO saas_connect_participant_display_names(tenant_id,connect_channel_id,conversation_id,participant_jid,display_name,updated_by) VALUES(%s::uuid,%s::uuid,%s,'x@lid','Synthetic',11)",(A,CA,LID));db.commit()
     with pytest.raises(TenantLinearError):reconcile.apply(PROFILE,payload)
     assert snapshot(db)==before
+
+
+def test_history_paginates_all_messages_and_old_case_anchor_after_merge(db,monkeypatch):
+    import tenant_operator_dialogs as dialogs
+    before=seed(db,monkeypatch);reconcile.apply(PROFILE,request())
+    monkeypatch.setattr(dialogs,'_connect',lambda:db)
+    first=dialogs.history(PROFILE,'connect',8102,CA,LID)
+    second=dialogs.history(PROFILE,'connect',8102,CA,LID,before=first['next_before'])
+    messages=first['messages']+second['messages']
+    assert len(messages)==85 and len({m['id'] for m in messages})==85
+    assert {m['id'] for m in messages}=={m['id'] for m in before['messages']}
+    source=next(m['id'] for m in before['messages'] if m['kommo_lead_id']==8102)
+    anchored=dialogs.history(PROFILE,'connect',8102,CA,LID,anchor=source)
+    assert anchored['anchor_message_id']==source
