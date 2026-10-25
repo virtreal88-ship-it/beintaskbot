@@ -3506,7 +3506,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if start_arg.startswith('bind_'):
         try:
             from tenant_telegram_binding import complete_binding
-            await asyncio.to_thread(complete_binding, chat_id=int(chat_id), token=start_arg[5:])
+            chat = update.effective_chat
+            user = update.effective_user
+            if not chat or chat.type != 'private' or not user:
+                raise ValueError('private Telegram chat required')
+            await asyncio.to_thread(complete_binding, chat_id=int(chat.id), user_id=int(user.id), token=start_arg[5:])
             await update.message.reply_text('Telegram bildirişləri bu iş hesabı üçün qoşuldu.')
         except Exception:
             # A one-time binding token must not disclose its existence or the
