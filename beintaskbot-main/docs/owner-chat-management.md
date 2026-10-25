@@ -14,23 +14,35 @@ a draft, but the owner must use the existing authenticated company approval
 screen for exact hash/version approval. This deliberately prevents customer or
 agent text from becoming an approval.
 
-The MCP adapter exposes an app-only resource and returns its random capability
-only in component result metadata—never in tool text, structured state, a URL,
-or audit payload. The server binds it to tenant, owner, OAuth connection, exact
-draft version/hash, target and expiry. Its future manual decision bridge is
-disabled by default, retains the existing Origin and owner-session checks, and
-consumes the capability atomically before calling the existing approval logic.
-Until an actual Dot/Android host preserves component metadata and can be
-validated, its Approve/Reject controls remain disabled and the web review is
-the only execution path. This adapter cannot handle prompt, trigger or
+The MCP adapter exposes an MCP Apps resource (`text/html;profile=mcp-app`) and
+returns random capabilities only in component result metadata—never in tool
+text, structured state, a URL, or audit payload. The server binds every
+capability to tenant, current owner, live OAuth token/connection, exact draft
+version/hash, target, action and expiry. The launcher is model-visible; the
+completion tool is app-only and derives its connection from the validated
+bearer rather than accepting a UI-provided connection id. It re-checks token
+expiry/revocation/scope, owner authority, agent/channel scope and the draft in
+the decision transaction; one choice consumes all sibling capabilities.
+
+This is a test-only transport behind `AI_OWNER_COMPONENT_APPROVAL_ENABLED`.
+With that flag off it does not advertise the completion tool; a narrowly scoped
+pending-review launcher is still available only when administrator drafts are
+enabled. It neither weakens the existing CRM owner-session/Origin approval API
+nor treats a ChatGPT click as a signed human attestation. Dot/Android host
+acceptance and metadata preservation remain untested, so production enablement
+requires separate approval. The adapter cannot handle prompt, trigger or
 configuration drafts; an approval receipt also never bypasses
-`AI_AUTONOMOUS_APPLY_ENABLED`.
+`AI_AUTONOMOUS_APPLY_ENABLED` or publishes/binds material.
 
 `owner_management_eligibility_read` is the read-only diagnostic: it returns
 concrete `denied`, `pending`, or `uncertain` reasons without exposing customer
-content or changing a queue. Existing resolver links may be used only after
-the owner-scoped route resolver confirms the tenant/channel/conversation; a
-missing case remains a no-case route, never a fabricated card.
+content or changing a queue. `material_kind` can return the distinct
+knowledge/instruction/support-case publication prerequisite. No direct card or
+conversation URL is emitted here: this repository exposes no suitable
+owner-scoped resolver contract for that purpose. Existing resolver links may be
+used only after the owner-scoped route resolver confirms the
+tenant/channel/conversation; a missing case remains a no-case route, never a
+fabricated card.
 
 Consultations remain the existing internal lifecycle: create → queued/waiting
 → owner/developer response → confirmed-review candidate. Delivery is optional

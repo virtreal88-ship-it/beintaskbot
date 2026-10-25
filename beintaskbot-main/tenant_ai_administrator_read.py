@@ -218,7 +218,11 @@ def _simulation_queue_diagnostic(cur, cfg, args):
 
 
 def read(cur,cfg,name,args):
-    validate(args)
+    if name=='owner_management_eligibility_read':
+        if not isinstance(args,dict) or set(args)-{'material_kind'} or ('material_kind' in args and args['material_kind'] not in {'knowledge','instruction','support_case'}):
+            raise TenantLinearError('Invalid owner management eligibility request.',400)
+    else:
+        validate(args)
     scopes=set(cfg.get('granted_scopes',[]))
     if READ_SCOPE not in scopes or (args.get('include_content') and CONTENT_SCOPE not in scopes):
         raise TenantLinearError('Additional OAuth scope required.',403)
@@ -238,7 +242,6 @@ def read(cur,cfg,name,args):
                 'tenant_limit_microusd':limit_microusd(cfg['AI_LEARNING_MCP_TENANT_ID']),
                 'writes_enabled':False,'schema_compatibility':'table_presence_only_not_full_migration_validation'}
     if name=='owner_management_eligibility_read':
-        if args: raise TenantLinearError('Owner management eligibility takes no arguments.',400)
         tenant=cfg['AI_LEARNING_MCP_TENANT_ID']
         def count(sql, params=(tenant,)):
             cur.execute(sql,params); return int((cur.fetchone() or {}).get('n') or 0)
@@ -252,10 +255,19 @@ def read(cur,cfg,name,args):
         if approvals: reasons.append({'operation':'owner_approval','status':'pending','reason':'exact_receipts_waiting','count':approvals})
         if not grants: reasons.append({'operation':'publish','status':'uncertain','reason':'no_live_exact_publication_grant'})
         if os.environ.get('AI_AUTONOMOUS_APPLY_ENABLED','').lower()!='true': reasons.append({'operation':'legacy_apply','status':'denied','reason':'global_apply_kill_switch'})
+        kind=args.get('material_kind')
+        material_reason={
+          'knowledge':'requires_reviewed_source_and_exact_publication_grant',
+          'instruction':'requires_instruction_review_then_explicit_publication',
+          'support_case':'requires_confirmed_case_evidence_and_exact_publication_grant',
+        }.get(kind)
+        if material_reason:
+            reasons.append({'operation':'material_publish','material_kind':kind,'status':'pending','reason':material_reason})
         return {'read_only':True,'drafts_enabled':ready,'draft_count':drafts,'pending_approval_count':approvals,
                 'live_publication_grant_count':grants,'reasons':reasons,
                 'approval_transport':'authenticated_owner_web_session_only','chat_text_can_approve':False,
-                'source_eligibility':'owner_provided drafts are unverified until existing review/publication guards pass'}
+                'source_eligibility':'owner_provided drafts are unverified until existing review/publication guards pass',
+                'direct_link':'unavailable_without_the_existing_owner_route_resolver'}
     if name == 'simulation_queue_diagnostic_read':
         return _simulation_queue_diagnostic(cur, cfg, args)
     table,key,fields,content=SPECS[name]

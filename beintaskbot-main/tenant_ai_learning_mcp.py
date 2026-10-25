@@ -228,6 +228,7 @@ def _authorize_token(request):
             cfg['granted_scopes']=str(row.get('scope') or TOOL_SCOPE).split()
             cfg['actor_id']=row['created_by']
             cfg['oauth_connection_id']=str(row['oauth_connection_id'])
+            cfg['oauth_token_id']=str(row['id'])
             if TOOL_SCOPE in cfg['granted_scopes'] or DRAFT_SCOPE in cfg['granted_scopes'] or KNOWLEDGE_DEDUP_SCOPE in cfg['granted_scopes'] or APPLY_SCOPE in cfg['granted_scopes'] or DIALOGUE_MERGE_SCOPE in cfg['granted_scopes'] or administrator_read.READ_SCOPE in cfg['granted_scopes']:
                 _authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':row['created_by']})
                 cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',
@@ -247,6 +248,10 @@ def _authorize_token(request):
 def _tools(cur,cfg,name,args):
     if name == 'administrator_owner_review_component':
         return owner_review_component.prepare(cur,cfg,args)
+    if name == 'administrator_owner_review_component_complete':
+        if not isinstance(args,dict) or set(args)!={'capability','action'}:
+            raise TenantLinearError('Invalid owner component decision.',400)
+        return owner_review_component.decide(cur,cfg,capability=args['capability'],action=args['action'])
     if name.startswith(direct_reconcile.PREFIX):
         scope=TOOL_SCOPE if name in {direct_reconcile.PREFIX+'preview',direct_reconcile.PREFIX+'rollback_preflight'} else direct_reconcile.WRITE_SCOPE
         if scope not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
@@ -466,7 +471,19 @@ def _owner_component_definition():
       'inputSchema':{'type':'object','properties':{'draft_id':{'type':'string'},'version':{'type':'integer','minimum':1}},'required':['draft_id','version'],'additionalProperties':False},
       'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},
       'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}],
-      '_meta':{'ui':{'visibility':['app'],'resourceUri':owner_review_component.RESOURCE_URI}}}
+      '_meta':{'ui':{'visibility':['model','app'],'resourceUri':owner_review_component.RESOURCE_URI},
+               'openai/outputTemplate':owner_review_component.RESOURCE_URI}}
+
+
+def _owner_component_completion_definition():
+    return {'name':'administrator_owner_review_component_complete',
+      'description':'TEST-ONLY app completion for one exact owner-review capability. It is hidden from the model, derives tenant/owner/OAuth connection from the validated bearer, and never applies or publishes a draft.',
+      'inputSchema':{'type':'object','properties':{'action':{'type':'string','enum':['approve','reject']},
+          'capability':{'type':'string','minLength':32,'maxLength':200}},'required':['action','capability'],'additionalProperties':False},
+      'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},
+      'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}],
+      '_meta':{'ui':{'visibility':['app'],'resourceUri':owner_review_component.RESOURCE_URI},
+               'openai/outputTemplate':owner_review_component.RESOURCE_URI}}
 
 
 async def mcp(request):
@@ -475,18 +492,29 @@ async def mcp(request):
         data=await request.json(); method=data.get('method'); request_id=data.get('id')
         if method=='initialize': return _jsonrpc({'protocolVersion':'2025-06-18','serverInfo':{'name':'beintaskbot-learning-loop','version':direct_reconcile.SCHEMA_VERSION},'capabilities':{'tools':{},'resources':{}}},request_id=request_id)
         if method=='resources/list':
+            if not administrator_drafts.enabled():
+                return _jsonrpc({'resources':[]},request_id=request_id)
             return _jsonrpc({'resources':[{'uri':owner_review_component.RESOURCE_URI,'name':'Exact owner review (disabled)',
-              'mimeType':'text/html','_meta':{'ui':{'visibility':['app']}}}]},request_id=request_id)
+              'mimeType':'text/html;profile=mcp-app','_meta':{'ui':{'prefersBorder':True,
+                'csp':{'connectDomains':[],'resourceDomains':[]}},'openai/ui':{'availableDisplayModes':['inline']}}}]},request_id=request_id)
         if method=='resources/read':
+            if not administrator_drafts.enabled():
+                return _jsonrpc(error={'code':-32602,'message':'Resource not found'},request_id=request_id)
             uri=str(data.get('params',{}).get('uri',''))
             if uri != owner_review_component.RESOURCE_URI:
                 return _jsonrpc(error={'code':-32602,'message':'Resource not found'},request_id=request_id)
-            return _jsonrpc({'contents':[{'uri':owner_review_component.RESOURCE_URI,'mimeType':'text/html',
+            return _jsonrpc({'contents':[{'uri':owner_review_component.RESOURCE_URI,'mimeType':'text/html;profile=mcp-app',
                                            'text':owner_review_component.resource_html(),
-                                           '_meta':{'ui':{'visibility':['app']}}}]},request_id=request_id)
+                                           '_meta':{'ui':{'prefersBorder':True,
+                                             'csp':{'connectDomains':[],'resourceDomains':[]}},
+                                             'openai/ui':{'availableDisplayModes':['inline']}}}]},request_id=request_id)
         if method=='tools/list':
             auth=[{'type':'oauth2','scopes':[TOOL_SCOPE]}]
-            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+direct_reconcile.definitions()+dialogue_merge.definitions()+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+[_owner_component_definition()]+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
+            component_tools=[]
+            if administrator_drafts.enabled():
+                component_tools.append(_owner_component_definition())
+                if owner_review_component.enabled_for_manual_bridge(): component_tools.append(_owner_component_completion_definition())
+            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+direct_reconcile.definitions()+dialogue_merge.definitions()+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+component_tools+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
         if method=='tools/call':
             cfg=_authorize_token(request)
             tool_name=str(data.get('params',{}).get('name',''))
@@ -499,7 +527,7 @@ async def mcp(request):
                 if tool_name.startswith(direct_reconcile.PREFIX):
                     commit_attempted=True
                     conn.commit()
-                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','')=='administrator_owner_review_component' or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge':
+                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge':
                     commit_attempted=True
                     conn.commit()
             return response

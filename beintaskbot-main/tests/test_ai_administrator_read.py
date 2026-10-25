@@ -66,6 +66,9 @@ def test_all_read_projections_are_valid_bounded_and_tenant_scoped(db,monkeypatch
                 status=admin.read(cur,cfg,name,{})
                 assert status['read_only'] is True
                 assert status['chat_text_can_approve'] is False
+                knowledge=admin.read(cur,cfg,name,{'material_kind':'knowledge'})
+                assert knowledge['direct_link']=='unavailable_without_the_existing_owner_route_resolver'
+                assert any(item.get('reason')=='requires_reviewed_source_and_exact_publication_grant' for item in knowledge['reasons'])
                 continue
             if name=='simulation_queue_diagnostic_read':
                 continue
@@ -114,54 +117,128 @@ def test_owner_component_is_app_only_metadata_and_manual_decision_is_exact_once(
     connection_id=str(uuid.uuid4())
     db.execute('UPDATE saas_ai_learning_mcp_tokens SET oauth_connection_id=%s::uuid WHERE token_hash=%s',
                (connection_id,hashlib.sha256(token.encode()).hexdigest())); db.commit()
+    token_id=str(db.execute('SELECT id FROM saas_ai_learning_mcp_tokens WHERE token_hash=%s',
+                            (hashlib.sha256(token.encode()).hexdigest(),))[0]['id'])
     async def check_component_protocol():
         app=web.Application(); app.router.add_post('/mcp',mcp.mcp)
         async with TestClient(TestServer(app)) as client:
             listed=await client.post('/mcp',json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
             tool={x['name']:x for x in (await listed.json())['result']['tools']}['administrator_owner_review_component']
-            assert tool['_meta']['ui']['visibility']==['app']
+            assert tool['_meta']['ui']['visibility']==['model','app']
             resources=await client.post('/mcp',json={'jsonrpc':'2.0','id':2,'method':'resources/list'})
             assert (await resources.json())['result']['resources'][0]['uri']==owner_component.RESOURCE_URI
             html_result=await client.post('/mcp',json={'jsonrpc':'2.0','id':3,'method':'resources/read','params':{'uri':owner_component.RESOURCE_URI}})
-            assert 'disabled' in (await html_result.json())['result']['contents'][0]['text']
+            resource=(await html_result.json())['result']['contents'][0]
+            assert resource['mimeType']=='text/html;profile=mcp-app' and 'callTool' in resource['text']
     asyncio.run(check_component_protocol())
-    cfg=mcp._require_cfg(); cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE],oauth_connection_id=connection_id)
+    cfg=mcp._require_cfg(); cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE],oauth_connection_id=connection_id,oauth_token_id=token_id)
     with db.cursor() as cur:
         draft=drafts.typed_create(cur,cfg,'owner_knowledge',{'title':'Owner note','content':'Use verified procedure.','owner_note':'Owner supplied.'})
         prepared=owner_component.prepare(cur,cfg,{'draft_id':draft['id'],'version':draft['version']})
-        secret=prepared['_component_meta']['owner_review']['capability']
+        secret=prepared['_component_meta']['owner_review']['capabilities']['approve']
+        assert prepared['_component_meta']['owner_review']['exact_diff']['after']['title']=='Owner note'
         assert secret not in json.dumps({k:v for k,v in prepared.items() if k!='_component_meta'})
         wire=json.loads(mcp._tool_response(prepared,1).body.decode())['result']
         assert secret not in json.dumps(wire['content'])
         assert secret not in json.dumps(wire['structuredContent'])
-        assert wire['_meta']['owner_review']['capability']==secret
+        assert wire['_meta']['owner_review']['capabilities']['approve']==secret
         # Disabled by default even with a genuine owner and matching secret.
         with pytest.raises(Exception):
-            owner_component.decide(cur,PROFILE,oauth_connection_id=connection_id,capability=secret,decision='approve')
+            owner_component.decide(cur,cfg,capability=secret,action='approve')
         monkeypatch.setenv('AI_OWNER_COMPONENT_APPROVAL_ENABLED','true')
         with pytest.raises(Exception):
-            owner_component.decide(cur,PROFILE,oauth_connection_id=str(uuid.uuid4()),capability=secret,decision='approve')
-        result=owner_component.decide(cur,PROFILE,oauth_connection_id=connection_id,capability=secret,decision='approve')
+            owner_component.decide(cur,{**cfg,'oauth_connection_id':str(uuid.uuid4())},capability=secret,action='approve')
+        result=owner_component.decide(cur,cfg,capability=secret,action='approve')
         assert result['state']=='approved'
         with pytest.raises(Exception):
-            owner_component.decide(cur,PROFILE,oauth_connection_id=connection_id,capability=secret,decision='approve')
+            owner_component.decide(cur,cfg,capability=secret,action='approve')
     db.commit()
 
 
 def test_owner_component_rejects_stale_draft_and_disallowed_policy_bypass(db,monkeypatch):
-    _setup(monkeypatch,db); monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_OWNER_COMPONENT_APPROVAL_ENABLED','true')
+    token=_setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+drafts.DRAFT_SCOPE); monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true'); monkeypatch.setenv('AI_OWNER_COMPONENT_APPROVAL_ENABLED','true')
     connection_id=str(uuid.uuid4())
-    cfg=mcp._require_cfg(); cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE],oauth_connection_id=connection_id)
+    db.execute('UPDATE saas_ai_learning_mcp_tokens SET oauth_connection_id=%s::uuid WHERE token_hash=%s',
+               (connection_id,hashlib.sha256(token.encode()).hexdigest())); db.commit()
+    token_id=str(db.execute('SELECT id FROM saas_ai_learning_mcp_tokens WHERE token_hash=%s',
+                            (hashlib.sha256(token.encode()).hexdigest(),))[0]['id'])
+    cfg=mcp._require_cfg(); cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE],oauth_connection_id=connection_id,oauth_token_id=token_id)
     with db.cursor() as cur:
         draft=drafts.typed_create(cur,cfg,'owner_knowledge',{'title':'Stale','content':'Do this only after confirmation.','owner_note':'Owner supplied.'})
         prepared=owner_component.prepare(cur,cfg,{'draft_id':draft['id'],'version':draft['version']})
         cur.execute('UPDATE saas_ai_administrator_drafts SET title=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',('Changed',A,draft['id']))
         with pytest.raises(Exception):
-            owner_component.decide(cur,PROFILE,oauth_connection_id=connection_id,
-                                   capability=prepared['_component_meta']['owner_review']['capability'],decision='approve')
+            owner_component.decide(cur,cfg,
+                                   capability=prepared['_component_meta']['owner_review']['capabilities']['approve'],action='approve')
         prompt=drafts.create(cur,cfg,{'kind':'agent_improvement','title':'Prompt','body':{'instructions':'x'},'target':{}})
         with pytest.raises(Exception): owner_component.prepare(cur,cfg,{'draft_id':prompt['id'],'version':prompt['version']})
     db.commit()
+
+
+def test_owner_component_http_completion_is_bearer_bound_and_does_not_publish(db,monkeypatch):
+    """The real MCP transport must not echo a secret or trust UI connection IDs."""
+    token=_setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+drafts.DRAFT_SCOPE)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
+    monkeypatch.setenv('AI_OWNER_COMPONENT_APPROVAL_ENABLED','true')
+    connection_id=str(uuid.uuid4())
+    digest=hashlib.sha256(token.encode()).hexdigest()
+    db.execute('UPDATE saas_ai_learning_mcp_tokens SET oauth_connection_id=%s::uuid WHERE token_hash=%s',(connection_id,digest));db.commit()
+    token_id=str(db.execute('SELECT id FROM saas_ai_learning_mcp_tokens WHERE token_hash=%s',(digest,))[0]['id'])
+    cfg=mcp._require_cfg();cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE],oauth_connection_id=connection_id,oauth_token_id=token_id)
+    with db.cursor() as cur:
+        draft=drafts.typed_create(cur,cfg,'owner_knowledge',{'title':'HTTP owner note','content':'Keep source inactive.','owner_note':'Owner supplied.'})
+    db.commit()
+    async def check():
+        app=web.Application();app.router.add_post('/mcp',mcp.mcp)
+        async with TestClient(TestServer(app)) as client:
+            headers={'Authorization':'Bearer '+token}
+            listed=await client.post('/mcp',json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
+            by_name={item['name']:item for item in (await listed.json())['result']['tools']}
+            assert by_name['administrator_owner_review_component_complete']['_meta']['ui']['visibility']==['app']
+            prepared=await client.post('/mcp',headers=headers,json={'jsonrpc':'2.0','id':2,'method':'tools/call','params':{'name':'administrator_owner_review_component','arguments':{'draft_id':draft['id'],'version':draft['version']}}})
+            body=(await prepared.json())['result']; secret=body['_meta']['owner_review']['capabilities']['approve']
+            assert secret not in json.dumps(body['content']) and secret not in json.dumps(body['structuredContent'])
+            wrong=body['_meta']['owner_review']['capabilities']['reject']
+            denied=await client.post('/mcp',headers=headers,json={'jsonrpc':'2.0','id':3,'method':'tools/call','params':{'name':'administrator_owner_review_component_complete','arguments':{'action':'approve','capability':wrong}}})
+            assert denied.status==409 and wrong not in (await denied.text())
+            complete=await client.post('/mcp',headers=headers,json={'jsonrpc':'2.0','id':4,'method':'tools/call','params':{'name':'administrator_owner_review_component_complete','arguments':{'action':'approve','capability':secret}}})
+            value=json.loads((await complete.json())['result']['content'][0]['text'])
+            assert value['state']=='approved'
+    asyncio.run(check())
+    assert db.execute('SELECT state FROM saas_ai_administrator_approvals WHERE tenant_id=%s::uuid AND draft_id=%s::uuid',(A,draft['id']))[0]['state']=='approved'
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND title=%s',(A,'HTTP owner note'))[0]['n']==0
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_administrator_publication_grants WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
+
+
+def test_owner_component_revoked_scope_expired_and_superseded_capabilities_fail_closed(db,monkeypatch):
+    _setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+drafts.DRAFT_SCOPE)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true');monkeypatch.setenv('AI_OWNER_COMPONENT_APPROVAL_ENABLED','true')
+    connection_id=str(uuid.uuid4())
+    row=db.execute('SELECT id,token_hash FROM saas_ai_learning_mcp_tokens LIMIT 1')[0]
+    db.execute('UPDATE saas_ai_learning_mcp_tokens SET oauth_connection_id=%s::uuid WHERE id=%s::uuid',(connection_id,row['id']));db.commit()
+    cfg=mcp._require_cfg();cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE],oauth_connection_id=connection_id,oauth_token_id=str(row['id']))
+    with db.cursor() as cur:
+        draft=drafts.typed_create(cur,cfg,'owner_knowledge',{'title':'Supersede','content':'Keep inactive.','owner_note':'Owner supplied.'})
+        first=owner_component.prepare(cur,cfg,{'draft_id':draft['id'],'version':1})
+        second=owner_component.prepare(cur,cfg,{'draft_id':draft['id'],'version':1})
+        with pytest.raises(Exception): owner_component.decide(cur,cfg,capability=first['_component_meta']['owner_review']['capabilities']['approve'],action='approve')
+        db.execute("UPDATE saas_ai_learning_mcp_tokens SET scope='ai_learning.read' WHERE id=%s::uuid",(row['id'],))
+        with pytest.raises(Exception): owner_component.decide(cur,cfg,capability=second['_component_meta']['owner_review']['capabilities']['approve'],action='approve')
+        db.execute("UPDATE saas_ai_learning_mcp_tokens SET scope=%s,revoked_at=now() WHERE id=%s::uuid",(mcp.TOOL_SCOPE+' '+drafts.DRAFT_SCOPE,row['id']))
+        with pytest.raises(Exception): owner_component.decide(cur,cfg,capability=second['_component_meta']['owner_review']['capabilities']['approve'],action='approve')
+    db.commit()
+
+
+def test_owner_component_is_not_advertised_when_drafts_are_disabled(db,monkeypatch):
+    _setup(monkeypatch,db); monkeypatch.delenv('AI_LEARNING_MCP_DRAFTS_ENABLED',raising=False)
+    async def check():
+        app=web.Application();app.router.add_post('/mcp',mcp.mcp)
+        async with TestClient(TestServer(app)) as client:
+            listed=await client.post('/mcp',json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
+            assert 'administrator_owner_review_component' not in {x['name'] for x in (await listed.json())['result']['tools']}
+            resources=await client.post('/mcp',json={'jsonrpc':'2.0','id':2,'method':'resources/list'})
+            assert (await resources.json())['result']['resources']==[]
+    asyncio.run(check())
 
 
 def test_cursor_is_bound_to_tenant_tool_and_content_policy(db,monkeypatch):
