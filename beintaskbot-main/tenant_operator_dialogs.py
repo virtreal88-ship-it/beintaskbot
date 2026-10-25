@@ -535,9 +535,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
         ensure_connect_schema(conn)
         with conn.cursor() as cur:
             tenant,_,policy=access(cur,profile,'dialogs')
-            selected=assert_route(cur,tenant,policy,provider,conversation,str(channel),lead_id)
+            selected=assert_route(cur,tenant,policy,provider,conversation,str(channel),lead_id,allow_merged=True)
             if provider=='connect':
-                channel=str(selected['connect_channel_id']);conversation=selected['conversation_id']
+                channel=str(selected['connect_channel_id']);conversation=selected['conversation_id'];lead_id=int(selected['lead_id'])
             sql,scopes=projection(policy)
             cur.execute(sql+'SELECT * FROM visible WHERE provider=%s AND lead_id=%s AND channel_id=%s AND conversation_id=%s',
                 (tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'),provider,lead_id,str(channel),str(conversation)))
