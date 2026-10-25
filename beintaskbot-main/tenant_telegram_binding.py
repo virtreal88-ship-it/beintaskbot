@@ -93,7 +93,12 @@ def bound_chat_id(*, tenant_id: str, actor_id: int) -> int | None:
 
 
 def binding_snapshot(*, tenant_id: str, actor_id: int) -> dict | None:
-    """Current verified recipient identity, never an employee actor id."""
+    """Current private, verified recipient identity, never an employee id.
+
+    Old rows predate private-chat verification.  A non-positive chat id is a
+    Telegram group/channel identifier, so treat it as unbound and require an
+    explicit rebind; do not rewrite production data here.
+    """
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
@@ -101,6 +106,6 @@ def binding_snapshot(*, tenant_id: str, actor_id: int) -> dict | None:
             cur.execute('''SELECT chat_id,verified_at FROM saas_tenant_telegram_bindings
               WHERE tenant_id=%s::uuid AND actor_id=%s AND revoked_at IS NULL''', (tenant_id, int(actor_id)))
             row = cur.fetchone()
-    if not row:
+    if not row or int(row['chat_id']) <= 0 or not row.get('verified_at'):
         return None
     return {'chat_id': int(row['chat_id']), 'verified_at': row['verified_at'].isoformat()}

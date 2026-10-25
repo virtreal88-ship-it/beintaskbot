@@ -19,6 +19,7 @@ def isolated(monkeypatch):
     monkeypatch.setattr(worker, 'member', lambda *_: dict(PROFILE))
     monkeypatch.setattr(worker, 'binding_snapshot', lambda **_: {'chat_id':12345,'verified_at':'2026-10-25T08:00:00+00:00'})
     monkeypatch.setattr(worker, 'notification_channels', lambda policy, *, tenant_id, **_: ['telegram'] if policy.profile.get('tenant_id') == tenant_id else [])
+    monkeypatch.setattr(worker, '_consultation_is_actionable', lambda _: True)
 
 
 @pytest.mark.parametrize('change', [
@@ -46,7 +47,7 @@ async def test_worker_skips_invalid_recipient_without_sending_or_retry(monkeypat
     claimed = Mock(side_effect=[dict(ITEM), None])
     skipped = Mock()
     monkeypatch.setattr(worker, 'claim_delivery', claimed)
-    monkeypatch.setattr(worker, '_current_delivery_permission', lambda _: False)
+    monkeypatch.setattr(worker, '_delivery_decision', lambda _: 'skip')
     monkeypatch.setattr(worker, 'skip_delivery', skipped)
     bot=SimpleNamespace(send_message=AsyncMock())
     await worker.deliver_consultation_notifications(bot, Mock())
@@ -59,7 +60,7 @@ async def test_worker_marks_transport_timeout_unknown_without_resend(monkeypatch
     claimed = Mock(side_effect=[dict(ITEM), None])
     finished = Mock()
     monkeypatch.setattr(worker, 'claim_delivery', claimed)
-    monkeypatch.setattr(worker, '_current_delivery_permission', lambda _: True)
+    monkeypatch.setattr(worker, '_delivery_decision', lambda _: 'allow')
     monkeypatch.setattr(worker, 'finish_delivery', finished)
     bot=SimpleNamespace(send_message=AsyncMock(side_effect=TimeoutError()))
     await worker.deliver_consultation_notifications(bot, Mock())
@@ -70,3 +71,23 @@ async def test_worker_marks_transport_timeout_unknown_without_resend(monkeypatch
 def test_after_hours_never_claims_pending_delivery(monkeypatch):
     monkeypatch.setattr(worker, '_hours', lambda: False)
     assert worker.claim_delivery() is None
+
+
+def test_legacy_negative_group_binding_fails_closed(monkeypatch):
+    monkeypatch.setattr(worker, 'binding_snapshot', lambda **_: {'chat_id': -100123, 'verified_at': ITEM['binding_verified_at']})
+    assert worker._current_delivery_permission({**ITEM, 'chat_id': -100123}) is False
+
+
+def test_clock_boundary_defers_then_next_window_allows_exactly_once(monkeypatch):
+    calls=[]
+    monkeypatch.setattr(worker, '_hours', lambda: False)
+    assert worker._delivery_decision(ITEM) == 'defer'
+    monkeypatch.setattr(worker, '_hours', lambda: True)
+    monkeypatch.setattr(worker, '_consultation_is_actionable', lambda _: calls.append('lifecycle') or True)
+    assert worker._delivery_decision(ITEM) == 'allow'
+    assert calls == ['lifecycle']
+
+
+def test_answered_or_closed_race_is_terminal_before_send(monkeypatch):
+    monkeypatch.setattr(worker, '_consultation_is_actionable', lambda _: False)
+    assert worker._delivery_decision(ITEM) == 'skip'

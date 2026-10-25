@@ -37,11 +37,36 @@ def _current_delivery_permission(item: dict) -> bool:
     if profile.get('role') not in {'owner', 'admin'} and 'support' not in (profile.get('permissions') or []):
         return False
     binding = binding_snapshot(tenant_id=str(item['tenant_id']), actor_id=int(item['recipient_id']))
-    if not binding or int(binding['chat_id']) != int(item['chat_id']):
+    if not binding or int(item.get('chat_id') or 0) <= 0 or int(binding['chat_id']) <= 0 or int(binding['chat_id']) != int(item['chat_id']):
         return False
     if _binding_version(item.get('binding_verified_at')) != _binding_version(binding.get('verified_at')):
         return False
     return 'telegram' in notification_channels(TenantPolicy(profile), event='ai_developer_consultation', tenant_id=str(item['tenant_id']))
+
+
+def _consultation_is_actionable(item: dict) -> bool:
+    """Final lifecycle read immediately before provider I/O.
+
+    A response/close can race a claimed delivery.  Only the two live states
+    may be notified; the tenant predicate prevents cross-company reads.
+    """
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''SELECT 1 FROM saas_internal_consultations
+              WHERE tenant_id=%s::uuid AND id=%s::uuid
+                AND status IN ('waiting_specialist','queued_after_hours')''',
+                        (item['tenant_id'], item['consultation_id']))
+            return bool(cur.fetchone())
+
+
+def _delivery_decision(item: dict) -> str:
+    """Return allowed, defer (temporary time boundary), or skip (terminal)."""
+    if not _hours():
+        return 'defer'
+    if not _consultation_is_actionable(item):
+        return 'skip'
+    return 'allow' if _current_delivery_permission(item) else 'skip'
 
 
 def claim_delivery():
@@ -78,6 +103,17 @@ def skip_delivery(item: dict) -> None:
         conn.commit()
 
 
+def defer_delivery(item: dict) -> None:
+    """Release an in-flight row after a clock boundary without losing it."""
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''UPDATE saas_consultation_telegram_deliveries SET status='pending',updated_at=now()
+              WHERE tenant_id=%s AND consultation_id=%s AND status='sending' ''',
+                        (item['tenant_id'], item['consultation_id']))
+        conn.commit()
+
+
 def finish_delivery(item, status, message_id=None):
     if status not in {'delivered', 'unknown'}:
         raise ValueError('Invalid consultation delivery state')
@@ -96,7 +132,11 @@ async def deliver_consultation_notifications(bot, logger):
         item = await asyncio.to_thread(claim_delivery)
         if not item:
             break
-        if not await asyncio.to_thread(_current_delivery_permission, item):
+        decision = await asyncio.to_thread(_delivery_decision, item)
+        if decision == 'defer':
+            await asyncio.to_thread(defer_delivery, item)
+            break
+        if decision != 'allow':
             await asyncio.to_thread(skip_delivery, item)
             continue
         try:
