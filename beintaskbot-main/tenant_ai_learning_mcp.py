@@ -252,6 +252,14 @@ def _tools(cur,cfg,name,args):
         if not isinstance(args,dict) or set(args)!={'capability','action','approval_id'}:
             raise TenantLinearError('Invalid owner component decision.',400)
         return owner_review_component.decide(cur,cfg,capability=args['capability'],action=args['action'],approval_id=args['approval_id'])
+    if name == 'administrator_owner_publish_component_prepare':
+        if not isinstance(args,dict) or set(args)!={'draft_id','source_id','kind','agent_id','channel_id'}:
+            raise TenantLinearError('Invalid owner publication review.',400)
+        return owner_review_component.prepare_publish(cur,cfg,**args)
+    if name == 'administrator_owner_publish_component_complete':
+        if not isinstance(args,dict) or set(args)!={'capability'}:
+            raise TenantLinearError('Invalid owner publication consent.',400)
+        return owner_review_component.complete_publish(cur,cfg,capability=args['capability'])
     if name.startswith(direct_reconcile.PREFIX):
         scope=TOOL_SCOPE if name in {direct_reconcile.PREFIX+'preview',direct_reconcile.PREFIX+'rollback_preflight'} else direct_reconcile.WRITE_SCOPE
         if scope not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
@@ -486,6 +494,23 @@ def _owner_component_completion_definition():
                'openai/outputTemplate':owner_review_component.RESOURCE_URI}}
 
 
+def _owner_publish_component_definitions():
+    """App-only post-apply publication consent, never a model grant path."""
+    security=[{'type':'oauth2','scopes':[DRAFT_SCOPE,PUBLISH_SCOPE]}]
+    meta={'ui':{'visibility':['app'],'resourceUri':owner_review_component.RESOURCE_URI},
+          'openai/outputTemplate':owner_review_component.RESOURCE_URI}
+    return [
+      {'name':'administrator_owner_publish_component_prepare',
+       'description':'TEST-ONLY app preparation of exact post-apply owner publication consent. It is app-only, requires an already applied material, and returns the capability only in component metadata.',
+       'inputSchema':{'type':'object','properties':{'draft_id':{'type':'string'},'source_id':{'type':'string'},'kind':{'type':'string','enum':['knowledge','instruction']},'agent_id':{'type':'string'},'channel_id':{'type':'string'}},'required':['draft_id','source_id','kind','agent_id','channel_id'],'additionalProperties':False},
+       'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security,'_meta':meta},
+      {'name':'administrator_owner_publish_component_complete',
+       'description':'TEST-ONLY app completion of one exact post-apply publication consent. It rechecks owner, OAuth connection, scope, source hash, agent and channel before creating the existing one-use grant and publishing.',
+       'inputSchema':{'type':'object','properties':{'capability':{'type':'string','minLength':32,'maxLength':200}},'required':['capability'],'additionalProperties':False},
+       'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security,'_meta':meta},
+    ]
+
+
 async def mcp(request):
     method=None; request_id=None; tool_name=''; commit_attempted=False
     try:
@@ -513,7 +538,9 @@ async def mcp(request):
             component_tools=[]
             if administrator_drafts.enabled():
                 component_tools.append(_owner_component_definition())
-                if owner_review_component.enabled_for_manual_bridge(): component_tools.append(_owner_component_completion_definition())
+                if owner_review_component.enabled_for_manual_bridge():
+                    component_tools.append(_owner_component_completion_definition())
+                    component_tools.extend(_owner_publish_component_definitions())
             return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+direct_reconcile.definitions()+dialogue_merge.definitions()+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+component_tools+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
         if method=='tools/call':
             cfg=_authorize_token(request)

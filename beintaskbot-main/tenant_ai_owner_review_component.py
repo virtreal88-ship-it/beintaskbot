@@ -14,7 +14,7 @@ import secrets
 import uuid
 
 from tenant_ai_agents_store import _audit
-from tenant_ai_administrator_approvals import _owner, approve, request
+from tenant_ai_administrator_approvals import PUBLISH_SCOPE, _owner, approve, request
 from tenant_ai_administrator_drafts import DRAFT_SCOPE, enabled
 from tenant_linear_policy import TenantLinearError
 
@@ -39,7 +39,7 @@ def enabled_for_manual_bridge():
     return str(os.environ.get('AI_OWNER_COMPONENT_APPROVAL_ENABLED') or '').lower() == 'true'
 
 
-def _connection_profile(cur, cfg):
+def _connection_profile(cur, cfg, *, required_scopes=(DRAFT_SCOPE,)):
     """Re-read the OAuth grant in the decision transaction; never trust UI input."""
     try:
         token_id = str(uuid.UUID(str(cfg.get('oauth_token_id') or '')))
@@ -58,7 +58,8 @@ def _connection_profile(cur, cfg):
       FOR SHARE''', (token_id, tenant, cfg.get('AI_LEARNING_MCP_AGENT_ID'),
                      cfg.get('AI_LEARNING_MCP_CHANNEL_ID'), connection_id, actor))
     token = cur.fetchone()
-    if not token or DRAFT_SCOPE not in str(token.get('scope') or '').split():
+    scopes=set(str((token or {}).get('scope') or '').split())
+    if not token or not set(required_scopes) <= scopes:
         raise TenantLinearError('Owner review authorization is unavailable.', 403)
     verified_tenant, owner = _owner(cur, {'tenant_id': tenant, 'telegram_id': actor})
     return verified_tenant, owner, connection_id
@@ -83,6 +84,12 @@ def ensure_schema(conn):
           capability_hash TEXT NOT NULL UNIQUE,draft_id UUID NOT NULL,draft_version INTEGER NOT NULL,
           source_id UUID NOT NULL,material_hash TEXT NOT NULL,agent_id UUID NOT NULL,channel_id UUID NOT NULL,
           expires_at TIMESTAMPTZ NOT NULL,consumed_at TIMESTAMPTZ NULL)''')
+        # The first disabled scaffold only supported knowledge.  Keep existing
+        # rows safe while allowing the same exact-consent invariant for an
+        # applied Instruction Library lesson.
+        cur.execute("ALTER TABLE saas_ai_owner_publish_capabilities ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'knowledge'")
+        cur.execute("ALTER TABLE saas_ai_owner_publish_capabilities DROP CONSTRAINT IF EXISTS saas_ai_owner_publish_capabilities_kind_check")
+        cur.execute("ALTER TABLE saas_ai_owner_publish_capabilities ADD CONSTRAINT saas_ai_owner_publish_capabilities_kind_check CHECK(kind IN ('knowledge','instruction'))")
 
 
 def prepare(cur, cfg, data):
@@ -194,35 +201,52 @@ def decide(cur, cfg, *, capability, action, approval_id):
     return result
 
 
-def prepare_publish(cur,cfg,*,draft_id,source_id,agent_id,channel_id):
+def prepare_publish(cur,cfg,*,draft_id,source_id,kind,agent_id,channel_id):
     """Post-apply, app-only consent; no model tool grants publication."""
     if not enabled_for_manual_bridge(): raise TenantLinearError('Owner component approval is not enabled.',403)
-    from tenant_ai_administrator_approvals import _publication_hash, _publication_object
-    tenant,owner,connection=_connection_profile(cur,cfg)
+    from tenant_ai_administrator_approvals import _publication_hash, _publication_object, _snapshot
+    tenant,owner,connection=_connection_profile(cur,cfg,required_scopes=(DRAFT_SCOPE,PUBLISH_SCOPE))
     try: draft_id=str(uuid.UUID(str(draft_id)));source_id=str(uuid.UUID(str(source_id)));agent_id=str(uuid.UUID(str(agent_id)));channel_id=str(uuid.UUID(str(channel_id)))
     except (TypeError,ValueError): raise TenantLinearError('Invalid publication review.',400) from None
+    if kind not in {'knowledge','instruction'}: raise TenantLinearError('Invalid publication review.',400)
     if agent_id!=str(cfg['AI_LEARNING_MCP_AGENT_ID']) or channel_id!=str(cfg['AI_LEARNING_MCP_CHANNEL_ID']): raise TenantLinearError('Publication outside OAuth scope.',403)
-    cur.execute('SELECT version,state FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,draft_id));draft=cur.fetchone()
-    if not draft or draft['state']!='applied': raise TenantLinearError('Applied draft unavailable.',409)
-    source=_publication_object(cur,tenant,'knowledge',source_id); digest=_publication_hash(source);secret=secrets.token_urlsafe(32)
-    cur.execute('''INSERT INTO saas_ai_owner_publish_capabilities(id,tenant_id,owner_id,oauth_connection_id,capability_hash,draft_id,draft_version,source_id,material_hash,agent_id,channel_id,expires_at)
-      VALUES(%s,%s::uuid,%s,%s::uuid,%s,%s::uuid,%s,%s::uuid,%s,%s::uuid,%s::uuid,now()+interval '10 minutes') RETURNING expires_at''',(uuid.uuid4(),tenant,owner,connection,_hash(secret),draft_id,draft['version'],source_id,digest,agent_id,channel_id))
-    return {'draft_id':draft_id,'source_id':source_id,'material_hash':digest,'agent_id':agent_id,'channel_id':channel_id,'capability':secret}
+    cur.execute('SELECT version,state,kind FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,draft_id));draft=cur.fetchone()
+    if not draft or draft['state']!='applied' or draft['kind']!=kind: raise TenantLinearError('Applied draft unavailable.',409)
+    cur.execute('''SELECT id FROM saas_ai_administrator_material_rollbacks
+      WHERE tenant_id=%s::uuid AND kind=%s AND draft_id=%s::uuid AND object_id=%s::uuid AND rolled_back_at IS NULL FOR SHARE''',
+      (tenant,kind,draft_id,source_id))
+    if not cur.fetchone(): raise TenantLinearError('Material is not the applied draft.',409)
+    source=_publication_object(cur,tenant,kind,source_id); digest=_publication_hash(source);secret=secrets.token_urlsafe(32)
+    cur.execute('''INSERT INTO saas_ai_owner_publish_capabilities(id,tenant_id,owner_id,oauth_connection_id,capability_hash,draft_id,draft_version,source_id,material_hash,agent_id,channel_id,kind,expires_at)
+      VALUES(%s,%s::uuid,%s,%s::uuid,%s,%s::uuid,%s,%s::uuid,%s,%s::uuid,%s::uuid,%s,now()+interval '10 minutes') RETURNING expires_at''',(uuid.uuid4(),tenant,owner,connection,_hash(secret),draft_id,draft['version'],source_id,digest,agent_id,channel_id,kind))
+    # The exact material preview and one-use secret travel only to the app
+    # component.  The model-visible result never contains either one.
+    preview={'kind':kind,'source_id':source_id,'material_hash':digest,
+             'agent_id':agent_id,'channel_id':channel_id,
+             # psycopg may return UUID/timestamp values; component metadata
+             # must remain JSON-safe before the transaction is committed.
+             'material':_snapshot(source)}
+    return {'draft_id':draft_id,'source_id':source_id,'kind':kind,
+            'agent_id':agent_id,'channel_id':channel_id,
+            'publication_review_required':True,
+            '_component_meta':{'ui':{'resourceUri':RESOURCE_URI},
+              'owner_publish':{'capability':secret,'preview':preview}}}
 
 
 def complete_publish(cur,cfg,*,capability):
     if not enabled_for_manual_bridge(): raise TenantLinearError('Owner component approval is not enabled.',403)
     from tenant_ai_administrator_approvals import publication_grant,publication_execute,_publication_hash,_publication_object
-    tenant,owner,connection=_connection_profile(cur,cfg)
+    tenant,owner,connection=_connection_profile(cur,cfg,required_scopes=(DRAFT_SCOPE,PUBLISH_SCOPE))
     cur.execute('''SELECT * FROM saas_ai_owner_publish_capabilities WHERE tenant_id=%s::uuid AND owner_id=%s AND oauth_connection_id=%s::uuid AND capability_hash=%s AND consumed_at IS NULL AND expires_at>now() FOR UPDATE''',(tenant,owner,connection,_hash(capability)))
     row=cur.fetchone()
     if not row: raise TenantLinearError('Publication consent is unavailable.',409)
-    source=_publication_object(cur,tenant,'knowledge',str(row['source_id']))
+    if row.get('kind') not in {'knowledge','instruction'}: raise TenantLinearError('Publication consent is unavailable.',409)
+    source=_publication_object(cur,tenant,row['kind'],str(row['source_id']))
     if _publication_hash(source)!=row['material_hash']: raise TenantLinearError('Material changed; review again.',409)
     cur.execute('UPDATE saas_ai_owner_publish_capabilities SET consumed_at=now() WHERE id=%s::uuid AND consumed_at IS NULL RETURNING id',(row['id'],))
     if not cur.fetchone(): raise TenantLinearError('Publication consent already used.',409)
     profile={'tenant_id':tenant,'telegram_id':owner}
-    grant=publication_grant(cur,profile,{'draft_id':str(row['draft_id']),'version':row['draft_version'],'kind':'knowledge','object_id':str(row['source_id']),'agent_id':str(row['agent_id']),'channel_id':str(row['channel_id']),'ttl_minutes':30,'review_confirmed':True,'material_hash':row['material_hash']})
+    grant=publication_grant(cur,profile,{'draft_id':str(row['draft_id']),'version':row['draft_version'],'kind':row['kind'],'object_id':str(row['source_id']),'agent_id':str(row['agent_id']),'channel_id':str(row['channel_id']),'ttl_minutes':30,'review_confirmed':True,'material_hash':row['material_hash']})
     return publication_execute(cur,cfg,grant['grant_id'])
 
 
@@ -234,22 +258,26 @@ def resource_html():
 <h1>Owner review</h1><p id="status">Loading exact review…</p><pre id="diff" aria-label="Exact draft diff"></pre>
 <button type="button" id="approve" disabled>Approve</button>
 <button type="button" id="reject" disabled>Reject</button>
+<button type="button" id="publish" disabled hidden>Publish exact reviewed material</button>
 <p>Chat text cannot approve a draft. This test bridge uses the connected owner OAuth grant.</p>
 <script>
 (() => { const api=window.openai; const status=document.querySelector('#status');
- const result=api&&api.toolResponseMetadata; const meta=(result&&((result.mcp_tool_result||result.call_tool_result||result)._meta))||{};
- let caps={},approvalId=''; const hydrate=(candidate)=>{ const review=(candidate&&candidate.owner_review)||{}; caps=review.capabilities||{};approvalId=review.approval_id||'';
- document.querySelector('#diff').textContent=JSON.stringify(review.exact_diff||{},null,2);
+ const result=api&&api.toolResponseMetadata; const envelope=result&&(result.mcp_tool_result||result.call_tool_result||result); const meta=(envelope&&(envelope._meta||envelope))||{};
+ let caps={},approvalId=''; const approve=document.querySelector('#approve'),reject=document.querySelector('#reject'),publish=document.querySelector('#publish');
+ const disable=()=>{approve.disabled=true;reject.disabled=true;publish.disabled=true;};
+ const hydrate=(candidate)=>{ const review=(candidate&&candidate.owner_review)||{}, publication=(candidate&&candidate.owner_publish)||{}; caps=review.capabilities||{};approvalId=review.approval_id||'';
+ document.querySelector('#diff').textContent=JSON.stringify(review.exact_diff||publication.preview||{},null,2);
+ if (publication.capability && api&&typeof api.callTool==='function') { status.textContent='Review this exact applied material before publication.'; publish.hidden=false; publish.disabled=false; publish.onclick=async()=>{ try { disable(); status.textContent='Submitting publication consent…'; const out=await api.callTool('administrator_owner_publish_component_complete',{capability:publication.capability}); const value=out&&out.structuredContent; if (!value||value.published!==true||(out&&out.isError)) throw new Error('unconfirmed'); status.textContent='Published.'; } catch (_) { status.textContent='Publication could not be completed. Use the authenticated owner screen.'; } }; return; }
  if (api&&typeof api.callTool==='function'&&caps.approve&&caps.reject) { status.textContent='Review this exact draft version.';
-   const a=document.querySelector('#approve'), r=document.querySelector('#reject'); a.disabled=false;r.disabled=false;a.onclick=invoke('approve');r.onclick=invoke('reject'); }
+   approve.disabled=false;reject.disabled=false;approve.onclick=invoke('approve');reject.onclick=invoke('reject'); }
  };
  const invoke=(action)=>async()=>{ try { status.textContent='Submitting…';
    const out=await api.callTool('administrator_owner_review_component_complete',{action,capability:caps[action],approval_id:approvalId});
    const state=out&&out.structuredContent&&out.structuredContent.state;
    if ((state!=='approved'&&state!=='rejected') || (out&&out.isError)) throw new Error('unconfirmed');
    status.textContent=state==='approved'?'Approved.':'Rejected.';
-   document.querySelector('#approve').disabled=true; document.querySelector('#reject').disabled=true;
+   disable();
  } catch (_) { status.textContent='Review could not be submitted. Use the authenticated owner screen.'; } };
  hydrate(meta);
- if (!(api&&typeof api.callTool==='function'&&caps.approve&&caps.reject)) status.textContent='This host cannot securely complete the review. Use the authenticated owner screen.';
+ if (publish.hidden && !(api&&typeof api.callTool==='function'&&caps.approve&&caps.reject)) status.textContent='This host cannot securely complete the review. Use the authenticated owner screen.';
 })();</script></section></body></html>'''

@@ -1,6 +1,7 @@
 """Existing OAuth grants: bounded company reads, no privilege or secret leaks."""
 import asyncio
 import hashlib
+import subprocess
 import json
 import uuid
 
@@ -128,6 +129,8 @@ def test_owner_component_is_app_only_metadata_and_manual_decision_is_exact_once(
             listed=await client.post('/mcp',json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
             tool={x['name']:x for x in (await listed.json())['result']['tools']}['administrator_owner_review_component']
             assert tool['_meta']['ui']['visibility']==['model','app']
+            names={x['name'] for x in (await listed.json())['result']['tools']}
+            assert 'administrator_owner_publish_component_prepare' not in names
             resources=await client.post('/mcp',json={'jsonrpc':'2.0','id':2,'method':'resources/list'})
             assert (await resources.json())['result']['resources'][0]['uri']==owner_component.RESOURCE_URI
             html_result=await client.post('/mcp',json={'jsonrpc':'2.0','id':3,'method':'resources/read','params':{'uri':owner_component.RESOURCE_URI}})
@@ -155,6 +158,25 @@ def test_owner_component_is_app_only_metadata_and_manual_decision_is_exact_once(
         with pytest.raises(Exception):
             owner_component.decide(cur,cfg,capability=secret,action='approve',approval_id=prepared['approval_id'])
     db.commit()
+
+
+def test_owner_component_publish_widget_uses_component_metadata_and_exact_receipt_only():
+    """A mocked MCP host proves the static supported metadata bridge is inert until exact success."""
+    html=owner_component.resource_html()
+    script=html.split('<script>',1)[1].split('</script>',1)[0]
+    harness=r'''
+const vm=require('vm'); const fs=require('fs'); const source=fs.readFileSync(0,'utf8');
+const elements={status:{textContent:''},diff:{textContent:''},approve:{disabled:true,hidden:false},reject:{disabled:true,hidden:false},publish:{disabled:true,hidden:true}};
+const calls=[];
+const api={toolResponseMetadata:{owner_publish:{capability:'x'.repeat(32),preview:{kind:'knowledge',source_id:'source',material_hash:'hash',agent_id:'agent',channel_id:'channel',material:{title:'Exact title'}}}},callTool:async(name,args)=>{calls.push([name,args]); return {structuredContent:{published:true}};}};
+const context={window:{openai:api},document:{querySelector:(selector)=>elements[selector.slice(1)]},JSON,Error};
+vm.runInNewContext(source,context);
+if (elements.publish.hidden||elements.publish.disabled||elements.status.textContent!=='Review this exact applied material before publication.') process.exit(2);
+const pending=elements.publish.onclick(); if (!elements.publish.disabled) process.exit(3);
+Promise.resolve(pending).then(()=>{if(calls.length!==1||calls[0][0]!=='administrator_owner_publish_component_complete'||calls[0][1].capability!=='x'.repeat(32)||elements.status.textContent!=='Published.') process.exit(4);}).catch(()=>process.exit(5));
+'''
+    result=subprocess.run(['node','-e',harness],input=script,text=True,capture_output=True,timeout=10)
+    assert result.returncode==0, result.stderr
 
 
 def test_owner_component_rejects_stale_draft_and_disallowed_policy_bypass(db,monkeypatch):
@@ -296,7 +318,7 @@ def test_owner_provided_knowledge_remains_inactive_until_existing_apply_and_publ
 
 
 def test_owner_widget_approval_to_existing_apply_grant_publish_and_agent_bind(db,monkeypatch):
-    """Full isolated vertical path; approval alone never publishes anything."""
+    """Actual isolated MCP launcher/completion path; approval alone never publishes."""
     seed_simulation(db)
     token=_setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+drafts.DRAFT_SCOPE+' '+mcp.APPLY_SCOPE+' '+approvals.PUBLISH_SCOPE)
     monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
@@ -317,13 +339,40 @@ def test_owner_widget_approval_to_existing_apply_grant_publish_and_agent_bind(db
     with db.cursor() as cur:
         draft=drafts.typed_create(cur,cfg,'owner_knowledge',{
             'title':'Widget-reviewed owner procedure','content':'Use this only as reviewed knowledge.','owner_note':'Owner supplied content; no CRM evidence claimed.'})
-        widget=owner_component.prepare(cur,cfg,{'draft_id':draft['id'],'version':draft['version']})
-        assert owner_component.decide(cur,cfg,capability=widget['_component_meta']['owner_review']['capabilities']['approve'],action='approve',approval_id=widget['approval_id'])['state']=='approved'
-        applied=mcp._tools(cur,cfg,'administrator_apply_knowledge_draft',{'approval_id':widget['approval_id'],'draft_id':draft['id']})
-        assert applied['active'] is False and applied['agent_bound'] is False
-        consent=owner_component.prepare_publish(cur,cfg,draft_id=draft['id'],source_id=applied['source_id'],agent_id=oauth_agent,channel_id=CA)
-        published=owner_component.complete_publish(cur,cfg,capability=consent['capability'])
-        assert published['published'] is True
+    db.commit()
+    async def call(client, request_id, name, arguments):
+        response=await client.post('/mcp',headers={'Authorization':'Bearer '+token},json={
+            'jsonrpc':'2.0','id':request_id,'method':'tools/call','params':{'name':name,'arguments':arguments}})
+        assert response.status==200
+        value=(await response.json())['result']
+        assert value.get('isError') is not True
+        return value
+    async def vertical():
+        app=web.Application(); app.router.add_post('/mcp',mcp.mcp)
+        async with TestClient(TestServer(app)) as client:
+            listed=await client.post('/mcp',json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
+            tools={v['name']:v for v in (await listed.json())['result']['tools']}
+            for name in ('administrator_owner_publish_component_prepare','administrator_owner_publish_component_complete'):
+                assert tools[name]['_meta']['ui']['visibility']==['app']
+            review=await call(client,2,'administrator_owner_review_component',{'draft_id':draft['id'],'version':draft['version']})
+            assert review['_meta']['owner_review']['exact_diff']['after']['title']=='Widget-reviewed owner procedure'
+            approval=review['structuredContent']['approval_id']; review_cap=review['_meta']['owner_review']['capabilities']['approve']
+            completed=await call(client,3,'administrator_owner_review_component_complete',{'action':'approve','approval_id':approval,'capability':review_cap})
+            assert completed['structuredContent']['state']=='approved'
+            applied=await call(client,4,'administrator_apply_knowledge_draft',{'approval_id':approval,'draft_id':draft['id']})
+            source_id=applied['structuredContent']['source_id']
+            assert applied['structuredContent']['active'] is False and applied['structuredContent']['agent_bound'] is False
+            prepared=await call(client,5,'administrator_owner_publish_component_prepare',{'draft_id':draft['id'],'source_id':source_id,'kind':'knowledge','agent_id':oauth_agent,'channel_id':CA})
+            assert prepared['structuredContent']['publication_review_required'] is True
+            # The raw secret and exact material preview are component-only.
+            assert 'capability' not in json.dumps(prepared['content'])
+            assert 'capability' not in json.dumps(prepared['structuredContent'])
+            publish=prepared['_meta']['owner_publish']; assert publish['preview']['material']['title']=='Widget-reviewed owner procedure'
+            published=await call(client,6,'administrator_owner_publish_component_complete',{'capability':publish['capability']})
+            assert published['structuredContent']['published'] is True
+            return published['structuredContent']
+    published=asyncio.run(vertical())
+    with db.cursor() as cur:
         cur.execute('SELECT active,agent_id,provenance FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,published['source_ids'][0]))
         source=cur.fetchone(); assert source['active'] is True and str(source['agent_id'])==oauth_agent
         assert source['provenance']['source_type']=='owner_provided' and source['provenance']['verified'] is False
