@@ -82,6 +82,17 @@ def collect(profile,item,check_before_ai=None):
         kind=ref.get('media_kind')
         if not kind: continue
         message['text']=message['text'].replace('[Attachment pending_processing: contents not read]','')
+        # A receipt is exact-message/version/channel scoped.  Reuse terminal
+        # evidence instead of downloading or paying to analyse the attachment
+        # again; partial video remains explicitly partial.
+        from tenant_media_evidence import reusable, apply_reusable
+        prior=reusable(profile,ref)
+        if prior:
+            reused=apply_reusable(message,prior)
+            receipt={k:ref[k] for k in ('id','channel_id','lead_id','role','happened_at') if k in ref}
+            receipt.update(kind=kind,**reused)
+            results.append(receipt)
+            continue
         receipt={k:ref[k] for k in ('id','channel_id','lead_id','role','happened_at') if k in ref}
         receipt.update(kind=kind,status='pending_processing',code='processing_limit')
         results.append(receipt)
@@ -98,14 +109,14 @@ def collect(profile,item,check_before_ai=None):
                     message['text']+='\n[Existing transcript] '+redact(text,names)[:4000]
                     receipt.update(status='processed',code='existing_transcript');continue
                 if not consent or not item['route'].get('allow_paid_asr') or asr_used:
-                    receipt['code']='asr_authorization_required';continue
+                    receipt.update(status='unavailable',code='asr_authorization_required');continue
                 from tenant_connect_voice import validate_audio,transcription_model,FORMATS
                 from tenant_chat_ai_provider import transcribe
                 model=transcription_model(item)
                 if not model: raise LookupError('asr_model_unavailable')
                 data,mime=asyncio.run(asyncio.wait_for(download_media(current,max_bytes=MAX_BYTES-size),timeout=10))
                 size+=len(data)
-                if size>MAX_BYTES: receipt['code']='byte_budget';continue
+                if size>MAX_BYTES: receipt.update(status='unavailable',code='byte_budget');continue
                 media=validate_audio(data,FORMATS[mime],mime,max_seconds=60)
                 # Extraction is already durably reserved and is never replayed automatically.
                 if load(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
@@ -123,7 +134,7 @@ def collect(profile,item,check_before_ai=None):
             data,mime=asyncio.run(asyncio.wait_for(download_media(current,max_bytes=MAX_BYTES-size),timeout=min(10,max(.1,deadline-time.monotonic()))))
             if load(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
             size+=len(data)
-            if size>MAX_BYTES: receipt['code']='byte_budget';continue
+            if size>MAX_BYTES: receipt.update(status='unavailable',code='byte_budget');continue
             digest=hashlib.sha256(data).hexdigest();receipt['sha256']=digest
             if digest in seen:
                 prior=seen[digest];receipt.update(status=prior['status'],code='duplicate',duplicate_of=prior['id']);continue
@@ -143,10 +154,10 @@ def collect(profile,item,check_before_ai=None):
                     from io import BytesIO
                     reader=PdfReader(BytesIO(data),strict=True)
                     if reader.is_encrypted or len(reader.pages)>100 or any((p.extract_text() or '').strip() for p in reader.pages): raise ValueError('invalid_pdf')
-                    if not consent: receipt['code']='external_media_permission_required';continue
+                    if not consent: receipt.update(status='unavailable',code='external_media_permission_required');continue
                     visuals=pdf_pages(data)
             elif kind=='video':
-                if not consent: receipt['code']='external_media_permission_required';continue
+                if not consent: receipt.update(status='unavailable',code='external_media_permission_required');continue
                 visuals=video_frames(data,mime)
                 receipt['audio_status']='not_requested'
                 if item['route'].get('allow_paid_asr') and not asr_used:
@@ -169,10 +180,10 @@ def collect(profile,item,check_before_ai=None):
             else:
                 if not signature(data,mime): raise ValueError('invalid_image')
                 visuals=[(data,mime,{})]
-            if not consent: receipt['code']='external_media_permission_required';continue
+            if not consent: receipt.update(status='unavailable',code='external_media_permission_required');continue
             if item['route'].get('allow_vision') is False: receipt.update(status='unavailable',code='vision_not_approved');continue
             if not supports_images(item['model']): receipt.update(status='unsupported',code='model_has_no_vision');continue
-            if visual_count+len(visuals)>MAX_VISUALS: receipt['code']='visual_budget';continue
+            if visual_count+len(visuals)>MAX_VISUALS: receipt.update(status='partial',code='visual_budget');continue
             if not visuals: raise ValueError('empty_visuals')
             visual_count+=len(visuals)
             if item['route'].get('allow_vision') is True:
@@ -182,7 +193,8 @@ def collect(profile,item,check_before_ai=None):
                     if check_before_ai: check_before_ai()
                     text,_,_=observe_once(profile,item,ref,content,content_type,origin,generate,check_before_ai=check_before_ai)
                     message['text']+='\n[Untrusted visual observation; not a confirmed solution] '+text
-                receipt.update(status='processed',code='vision_observation',visuals=[origin for _,_,origin in visuals])
+                    receipt['observation']=text
+                receipt.update(status='partial' if kind=='video' else 'processed',code='vision_observation',visuals=[origin for _,_,origin in visuals])
                 continue
             for content,content_type,origin in visuals:
                 images.append({'content':content,'content_type':content_type,'detail':'low','source_ref':message['ref']})

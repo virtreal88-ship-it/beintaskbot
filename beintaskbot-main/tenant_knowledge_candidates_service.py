@@ -278,11 +278,17 @@ def finish(profile,item,values,usage,error,attempted,proposal=None):
                 cur.execute('UPDATE saas_ai_agent_runs SET result=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(proposal),tenant,request_id))
             if 'media_results' in item:
                 for receipt in item['media_results']:
-                    if receipt.get('code')=='awaiting_model': receipt.update(status='processed' if values is not None else 'error',code='vision_supplied' if values is not None else 'analysis_failed')
+                    if receipt.get('code')=='awaiting_model':
+                        # Images supplied to the extraction model are usable
+                        # evidence; video contributes sampled frames only.
+                        receipt.update(status=('partial' if receipt.get('kind')=='video' and values is not None else 'processed' if values is not None else 'error'),
+                                       code='vision_supplied' if values is not None else 'analysis_failed')
                 indexed={r['id']:r for r in item['media_results']}
                 for receipt in item['media_results']:
                     if receipt.get('duplicate_of') in indexed: receipt['status']=indexed[receipt['duplicate_of']]['status']
                 cur.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(item['media_results']),tenant,request_id))
+                from tenant_media_evidence import persist as persist_media_evidence
+                persist_media_evidence(cur,tenant,item['refs'],item['media_results'])
             cur.execute('UPDATE saas_knowledge_extractions SET status=%s,error_code=%s,completed_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(status,error,tenant,request_id))
             cur.execute('UPDATE saas_ai_agent_runs SET state=%s,error_code=%s,generated_at=CASE WHEN %s THEN now() ELSE generated_at END,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',
                 ('completed' if status=='completed' else ('unknown' if attempted else 'skipped'),error,bool(usage),tenant,request_id))
