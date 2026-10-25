@@ -29,7 +29,6 @@ def isolated(monkeypatch):
     lambda monkeypatch: monkeypatch.setattr(worker, 'binding_snapshot', lambda **_: None),
     lambda monkeypatch: monkeypatch.setattr(worker, 'binding_snapshot', lambda **_: {'chat_id':999,'verified_at':'2026-10-25T09:00:00+00:00'}),
     lambda monkeypatch: monkeypatch.setattr(worker, 'notification_channels', lambda *_, **__: []),
-    lambda monkeypatch: monkeypatch.setattr(worker, '_hours', lambda: False),
 ])
 def test_final_delivery_gate_rejects_revoked_access(monkeypatch, change):
     change(monkeypatch)
@@ -86,6 +85,32 @@ def test_clock_boundary_defers_then_next_window_allows_exactly_once(monkeypatch)
     monkeypatch.setattr(worker, '_consultation_is_actionable', lambda _: calls.append('lifecycle') or True)
     assert worker._delivery_decision(ITEM) == 'allow'
     assert calls == ['lifecycle']
+
+
+def test_nested_clock_flip_after_lifecycle_defers_not_skips(monkeypatch):
+    clock=iter([True, False])
+    monkeypatch.setattr(worker, '_hours', lambda: next(clock))
+    monkeypatch.setattr(worker, '_consultation_is_actionable', lambda _: True)
+    monkeypatch.setattr(worker, '_current_delivery_permission', lambda _: True)
+    assert worker._delivery_decision(ITEM) == 'defer'
+
+
+@pytest.mark.asyncio
+async def test_clock_flip_is_deferred_then_sent_once_next_morning(monkeypatch):
+    claimed=Mock(side_effect=[dict(ITEM), dict(ITEM), None])
+    deferred=Mock(); finished=Mock()
+    monkeypatch.setattr(worker, 'claim_delivery', claimed)
+    # First worker pass reaches 20:00 after lifecycle; second is next morning.
+    decisions=iter(['defer','allow'])
+    monkeypatch.setattr(worker, '_delivery_decision', lambda _: next(decisions))
+    monkeypatch.setattr(worker, 'defer_delivery', deferred)
+    monkeypatch.setattr(worker, 'finish_delivery', finished)
+    bot=SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=77)))
+    await worker.deliver_consultation_notifications(bot, Mock())
+    await worker.deliver_consultation_notifications(bot, Mock())
+    deferred.assert_called_once_with(ITEM)
+    bot.send_message.assert_awaited_once()
+    finished.assert_called_once_with(ITEM, 'delivered', 77)
 
 
 def test_answered_or_closed_race_is_terminal_before_send(monkeypatch):

@@ -29,8 +29,6 @@ def _binding_version(value: object) -> str:
 
 def _current_delivery_permission(item: dict) -> bool:
     """Recheck mutable authorization immediately before network I/O."""
-    if not _hours():
-        return False
     profile = member(str(item['tenant_id']), int(item['recipient_id']))
     if not profile or profile.get('active') is False:
         return False
@@ -66,7 +64,11 @@ def _delivery_decision(item: dict) -> str:
         return 'defer'
     if not _consultation_is_actionable(item):
         return 'skip'
-    return 'allow' if _current_delivery_permission(item) else 'skip'
+    if not _current_delivery_permission(item):
+        return 'skip'
+    # Time can cross 20:00 between the lifecycle read and the final mutable
+    # identity/opt-in check. That is temporary, never terminal.
+    return 'allow' if _hours() else 'defer'
 
 
 def claim_delivery():
