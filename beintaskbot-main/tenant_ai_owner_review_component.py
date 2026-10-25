@@ -141,18 +141,21 @@ def prepare(cur, cfg, data):
                               'expires_at': capability_expiry.isoformat(),
                               # The component renders this with textContent,
                               # not HTML, so supplied instruction text is inert.
+                              'approval_id': approval['id'],
                               'exact_diff': {'before': ({'title':prior['title'],'body':prior['body'],'target':prior['target']} if prior else None),
                                              'after': {'title':draft['title'],'body':draft['body'],'target':draft['target']},
                                              'draft_hash':target['draft_hash']}}}
     }
 
 
-def decide(cur, cfg, *, capability, action):
+def decide(cur, cfg, *, capability, action, approval_id):
     """Consume one capability through the app-only validated bearer path."""
     if not enabled_for_manual_bridge():
         raise TenantLinearError('Owner component approval is not enabled.', 403)
     if action not in {'approve', 'reject'} or not isinstance(capability, str) or not 32 <= len(capability) <= 200:
         raise TenantLinearError('Invalid owner component decision.', 400)
+    try: approval_id=str(uuid.UUID(str(approval_id)))
+    except (TypeError,ValueError): raise TenantLinearError('Invalid owner component decision.',400) from None
     tenant, owner, connection_id = _connection_profile(cur, cfg)
     profile={'tenant_id':tenant,'telegram_id':owner}
     cur.execute('''SELECT * FROM saas_ai_owner_review_capabilities
@@ -160,7 +163,7 @@ def decide(cur, cfg, *, capability, action):
         AND capability_hash=%s AND expires_at>now() AND consumed_at IS NULL
       FOR UPDATE''', (tenant, owner, connection_id, _hash(capability)))
     row = cur.fetchone()
-    if not row or row['action'] != action:
+    if not row or row['action'] != action or str(row['approval_id']) != approval_id:
         raise TenantLinearError('Owner review is unavailable, expired, or already used.', 409)
     cur.execute('''SELECT * FROM saas_ai_administrator_drafts
       WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE''', (tenant, row['draft_id']))
@@ -196,13 +199,13 @@ def resource_html():
 <script>
 (() => { const api=window.openai; const status=document.querySelector('#status');
  const result=api&&api.toolResponseMetadata; const meta=(result&&((result.mcp_tool_result||result.call_tool_result||result)._meta))||{};
- let caps={}; const hydrate=(candidate)=>{ const review=(candidate&&candidate.owner_review)||{}; caps=review.capabilities||{};
+ let caps={},approvalId=''; const hydrate=(candidate)=>{ const review=(candidate&&candidate.owner_review)||{}; caps=review.capabilities||{};approvalId=review.approval_id||'';
  document.querySelector('#diff').textContent=JSON.stringify(review.exact_diff||{},null,2);
  if (api&&typeof api.callTool==='function'&&caps.approve&&caps.reject) { status.textContent='Review this exact draft version.';
    const a=document.querySelector('#approve'), r=document.querySelector('#reject'); a.disabled=false;r.disabled=false;a.onclick=invoke('approve');r.onclick=invoke('reject'); }
  };
  const invoke=(action)=>async()=>{ try { status.textContent='Submitting…';
-   const out=await api.callTool('administrator_owner_review_component_complete',{action,capability:caps[action]});
+   const out=await api.callTool('administrator_owner_review_component_complete',{action,capability:caps[action],approval_id:approvalId});
    const state=out&&out.structuredContent&&out.structuredContent.state;
    if ((state!=='approved'&&state!=='rejected') || (out&&out.isError)) throw new Error('unconfirmed');
    status.textContent=state==='approved'?'Approved.':'Rejected.';
@@ -210,5 +213,4 @@ def resource_html():
  } catch (_) { status.textContent='Review could not be submitted. Use the authenticated owner screen.'; } };
  hydrate(meta);
  if (!(api&&typeof api.callTool==='function'&&caps.approve&&caps.reject)) status.textContent='This host cannot securely complete the review. Use the authenticated owner screen.';
- window.addEventListener('message',(event)=>{const data=event&&event.data||{};const candidate=data.params&&data.params._meta||data._meta;if(candidate) hydrate(candidate);});
 })();</script></section></body></html>'''

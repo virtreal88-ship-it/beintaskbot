@@ -249,9 +249,9 @@ def _tools(cur,cfg,name,args):
     if name == 'administrator_owner_review_component':
         return owner_review_component.prepare(cur,cfg,args)
     if name == 'administrator_owner_review_component_complete':
-        if not isinstance(args,dict) or set(args)!={'capability','action'}:
+        if not isinstance(args,dict) or set(args)!={'capability','action','approval_id'}:
             raise TenantLinearError('Invalid owner component decision.',400)
-        return owner_review_component.decide(cur,cfg,capability=args['capability'],action=args['action'])
+        return owner_review_component.decide(cur,cfg,capability=args['capability'],action=args['action'],approval_id=args['approval_id'])
     if name.startswith(direct_reconcile.PREFIX):
         scope=TOOL_SCOPE if name in {direct_reconcile.PREFIX+'preview',direct_reconcile.PREFIX+'rollback_preflight'} else direct_reconcile.WRITE_SCOPE
         if scope not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
@@ -478,8 +478,8 @@ def _owner_component_definition():
 def _owner_component_completion_definition():
     return {'name':'administrator_owner_review_component_complete',
       'description':'TEST-ONLY app completion for one exact owner-review capability. It is hidden from the model, derives tenant/owner/OAuth connection from the validated bearer, and never applies or publishes a draft.',
-      'inputSchema':{'type':'object','properties':{'action':{'type':'string','enum':['approve','reject']},
-          'capability':{'type':'string','minLength':32,'maxLength':200}},'required':['action','capability'],'additionalProperties':False},
+      'inputSchema':{'type':'object','properties':{'action':{'type':'string','enum':['approve','reject']},'approval_id':{'type':'string'},
+          'capability':{'type':'string','minLength':32,'maxLength':200}},'required':['action','capability','approval_id'],'additionalProperties':False},
       'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},
       'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}],
       '_meta':{'ui':{'visibility':['app'],'resourceUri':owner_review_component.RESOURCE_URI},
