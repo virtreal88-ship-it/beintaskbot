@@ -3,7 +3,7 @@
   let member, lead, epoch=0;
   const active=new Set(), urls=new Set(), previews=new Map(), mediaCache=new Map();
   let cacheBytes=0;
-  const MAX_PREVIEW_BYTES=50*1024*1024,MAX_CACHE_BYTES=32*1024*1024;
+  const MAX_PREVIEW_BYTES=100*1024*1024,MAX_CACHE_BYTES=32*1024*1024;
   const text=(key,fallback)=>globalThis.window?.tenantI18n?.t(key)||fallback;
   const identity=m=>m?.tenant_id+':'+m?.telegram_id;
   const formatSize=value=>{const bytes=Number(value);if(!Number.isFinite(bytes)||bytes<0)return '';if(bytes<1024)return `${bytes} B`;if(bytes<1024*1024)return `${Math.round(bytes/1024)} KB`;return `${(bytes/(1024*1024)).toFixed(1)} MB`;};
