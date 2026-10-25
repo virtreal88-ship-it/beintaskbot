@@ -97,6 +97,12 @@ def _member_payload(row: dict) -> dict:
             result[key] = result[key].isoformat()
     if not isinstance(result.get("permissions"), list):
         result["permissions"] = []
+    # Stored grants are the only source of non-owner access. Keep unknown
+    # historical grants visible but never treat them as currently effective.
+    result['explicit_permissions'] = list(result['permissions'])
+    result['legacy_permissions'] = [item for item in result['permissions'] if item not in _known_permissions()]
+    result['effective_permissions'] = (list(_ROLE_PERMISSIONS['owner']) if result.get('role') == 'owner'
+                                       else [item for item in result['permissions'] if item in _known_permissions()])
     return result
 
 

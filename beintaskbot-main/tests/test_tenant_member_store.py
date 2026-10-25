@@ -32,6 +32,13 @@ class Connection:
 
 
 class MemberStoreTests(unittest.TestCase):
+    def test_permission_payload_distinguishes_explicit_effective_and_legacy(self):
+        value=tenant_member_store._member_payload({'tenant_id':'tenant-a','telegram_id':22,
+            'role':'worker','permissions':['tasks','support','legacy:retired'],'active':True})
+        self.assertEqual(value['explicit_permissions'],['tasks','support','legacy:retired'])
+        self.assertEqual(value['effective_permissions'],['tasks','support'])
+        self.assertEqual(value['legacy_permissions'],['legacy:retired'])
+
     def test_whatsapp_number_normalization_is_exact_and_tenant_input_safe(self):
         normalize=tenant_member_store._whatsapp_digits
         self.assertEqual(normalize('+994 50 123 45 67'),'994501234567')
