@@ -28,6 +28,7 @@ import tenant_ai_administrator_drafts as administrator_drafts
 import tenant_ai_administrator_approvals as administrator_approvals
 import tenant_ai_administrator_observations as administrator_observations
 import tenant_ai_administrator_apply as administrator_apply
+import tenant_ai_owner_review_component as owner_review_component
 import tenant_ai_dialogue_merge as dialogue_merge
 import tenant_ai_direct_reconcile_mcp as direct_reconcile
 
@@ -71,6 +72,7 @@ def ensure_mcp_schema(conn):
     administrator_approvals.ensure_schema(conn)
     administrator_observations.ensure_schema(conn)
     administrator_apply.ensure_schema(conn)
+    owner_review_component.ensure_schema(conn)
     dialogue_merge.ensure_schema(conn)
     direct_reconcile.reconcile.ensure_schema(conn)
     with conn.cursor() as cur:
@@ -80,6 +82,7 @@ def ensure_mcp_schema(conn):
           client_id TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL, revoked_at TIMESTAMPTZ NULL,
           refresh_token_hash TEXT NULL UNIQUE, refresh_expires_at TIMESTAMPTZ NULL,
           scope TEXT NOT NULL DEFAULT 'ai_learning.read',
+          oauth_connection_id UUID NULL,
           requests_in_window INTEGER NOT NULL DEFAULT 0, window_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           created_by BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_learning_mcp_codes(
@@ -94,6 +97,9 @@ def ensure_mcp_schema(conn):
         cur.execute('ALTER TABLE saas_ai_learning_mcp_tokens ADD COLUMN IF NOT EXISTS refresh_token_hash TEXT NULL UNIQUE')
         cur.execute('ALTER TABLE saas_ai_learning_mcp_tokens ADD COLUMN IF NOT EXISTS refresh_expires_at TIMESTAMPTZ NULL')
         cur.execute("ALTER TABLE saas_ai_learning_mcp_tokens ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'ai_learning.read'")
+        cur.execute('ALTER TABLE saas_ai_learning_mcp_tokens ADD COLUMN IF NOT EXISTS oauth_connection_id UUID NULL')
+        # A legacy token without a connection id remains usable for its old
+        # scopes, but cannot prepare a component review (fail closed).
         cur.execute("ALTER TABLE saas_ai_learning_mcp_codes ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'ai_learning.read'")
 
 
@@ -221,6 +227,8 @@ def _authorize_token(request):
             if not row: raise TenantLinearError('Authorization required.',401)
             cfg['granted_scopes']=str(row.get('scope') or TOOL_SCOPE).split()
             cfg['actor_id']=row['created_by']
+            cfg['oauth_connection_id']=str(row['oauth_connection_id'])
+            cfg['oauth_token_id']=str(row['id'])
             if TOOL_SCOPE in cfg['granted_scopes'] or DRAFT_SCOPE in cfg['granted_scopes'] or KNOWLEDGE_DEDUP_SCOPE in cfg['granted_scopes'] or APPLY_SCOPE in cfg['granted_scopes'] or DIALOGUE_MERGE_SCOPE in cfg['granted_scopes'] or administrator_read.READ_SCOPE in cfg['granted_scopes']:
                 _authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':row['created_by']})
                 cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',
@@ -238,6 +246,20 @@ def _authorize_token(request):
 
 
 def _tools(cur,cfg,name,args):
+    if name == 'administrator_owner_review_component':
+        return owner_review_component.prepare(cur,cfg,args)
+    if name == 'administrator_owner_review_component_complete':
+        if not isinstance(args,dict) or set(args)!={'capability','action','approval_id'}:
+            raise TenantLinearError('Invalid owner component decision.',400)
+        return owner_review_component.decide(cur,cfg,capability=args['capability'],action=args['action'],approval_id=args['approval_id'])
+    if name == 'administrator_owner_publish_review_component':
+        if not isinstance(args,dict) or set(args)!={'draft_id','source_id','kind','agent_id','channel_id'}:
+            raise TenantLinearError('Invalid owner publication review.',400)
+        return owner_review_component.prepare_publish(cur,cfg,**args)
+    if name == 'administrator_owner_publish_component_complete':
+        if not isinstance(args,dict) or set(args)!={'capability'}:
+            raise TenantLinearError('Invalid owner publication consent.',400)
+        return owner_review_component.complete_publish(cur,cfg,capability=args['capability'])
     if name.startswith(direct_reconcile.PREFIX):
         scope=TOOL_SCOPE if name in {direct_reconcile.PREFIX+'preview',direct_reconcile.PREFIX+'rollback_preflight'} else direct_reconcile.WRITE_SCOPE
         if scope not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
@@ -305,6 +327,7 @@ def _tools(cur,cfg,name,args):
     if name == 'administrator_draft_restore': return administrator_drafts.restore(cur,cfg,args)
     if name == 'administrator_draft_agent_prompt_create': return administrator_drafts.typed_create(cur,cfg,'agent_prompt',args)
     if name == 'administrator_draft_knowledge_create': return administrator_drafts.typed_create(cur,cfg,'knowledge',args)
+    if name == 'administrator_draft_owner_knowledge_create': return administrator_drafts.typed_create(cur,cfg,'owner_knowledge',args)
     if name == 'administrator_draft_knowledge_separation_create': return administrator_drafts.typed_create(cur,cfg,'knowledge_separation',args)
     if name == 'administrator_draft_support_case_create': return administrator_drafts.typed_create(cur,cfg,'support_case',args)
     if name == 'administrator_draft_testing_scenario_create': return administrator_drafts.typed_create(cur,cfg,'testing_scenario',args)
@@ -384,7 +407,15 @@ def _jsonrpc(result=None, error=None, request_id=None):
 
 def _tool_response(value, request_id):
     """Serialize before commit so a response encoding failure cannot hide a write."""
-    return _jsonrpc({'content':[{'type':'text','text':json.dumps(value,ensure_ascii=False)}]},request_id=request_id)
+    # Component-only metadata is intentionally absent from text and structured
+    # content.  This is where a short-lived capability may travel; logging or
+    # echoing it would turn a display token into a chat approval token.
+    if isinstance(value,dict) and '_component_meta' in value:
+        public={key:item for key,item in value.items() if key!='_component_meta'}
+        return _jsonrpc({'content':[{'type':'text','text':json.dumps(public,ensure_ascii=False)}],
+                         'structuredContent':public,'_meta':value['_component_meta']},request_id=request_id)
+    return _jsonrpc({'content':[{'type':'text','text':json.dumps(value,ensure_ascii=False)}],
+                     'structuredContent':value},request_id=request_id)
 
 
 def _tool_error(message, *, status, request_id, retry_safety='not_committed', incident_id=None):
@@ -441,14 +472,77 @@ def _administrator_apply_definitions():
     ]
 
 
+def _owner_component_definition():
+    """App-only review preparation; it is never an approval tool."""
+    return {'name':'administrator_owner_review_component',
+      'description':'Prepare a disabled, exact-version owner review component for a knowledge, instruction, or support-case draft. It creates only a pending review; chat words and this tool cannot approve, publish, bind, or apply anything.',
+      'inputSchema':{'type':'object','properties':{'draft_id':{'type':'string'},'version':{'type':'integer','minimum':1}},'required':['draft_id','version'],'additionalProperties':False},
+      'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},
+      'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}],
+      '_meta':{'ui':{'visibility':['model','app'],'resourceUri':owner_review_component.RESOURCE_URI},
+               'openai/outputTemplate':owner_review_component.RESOURCE_URI}}
+
+
+def _owner_component_completion_definition():
+    return {'name':'administrator_owner_review_component_complete',
+      'description':'TEST-ONLY app completion for one exact owner-review capability. It is hidden from the model, derives tenant/owner/OAuth connection from the validated bearer, and never applies or publishes a draft.',
+      'inputSchema':{'type':'object','properties':{'action':{'type':'string','enum':['approve','reject']},'approval_id':{'type':'string'},
+          'capability':{'type':'string','minLength':32,'maxLength':200}},'required':['action','capability','approval_id'],'additionalProperties':False},
+      'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},
+      'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}],
+      '_meta':{'ui':{'visibility':['app'],'resourceUri':owner_review_component.RESOURCE_URI},
+               'openai/outputTemplate':owner_review_component.RESOURCE_URI}}
+
+
+def _owner_publish_component_definitions():
+    """A model may open review; only the app can complete exact consent."""
+    security=[{'type':'oauth2','scopes':[DRAFT_SCOPE,PUBLISH_SCOPE]}]
+    meta={'ui':{'visibility':['app'],'resourceUri':owner_review_component.RESOURCE_URI},
+          'openai/outputTemplate':owner_review_component.RESOURCE_URI}
+    return [
+      {'name':'administrator_owner_publish_review_component',
+       'description':'Prepare an exact post-apply publication review for an already applied knowledge or instruction material. It cannot grant, publish, bind, or change the material; the one-use completion capability is component-only.',
+       'inputSchema':{'type':'object','properties':{'draft_id':{'type':'string'},'source_id':{'type':'string'},'kind':{'type':'string','enum':['knowledge','instruction']},'agent_id':{'type':'string'},'channel_id':{'type':'string'}},'required':['draft_id','source_id','kind','agent_id','channel_id'],'additionalProperties':False},
+       'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security,
+       '_meta':{'ui':{'visibility':['model','app'],'resourceUri':owner_review_component.RESOURCE_URI},'openai/outputTemplate':owner_review_component.RESOURCE_URI}},
+      {'name':'administrator_owner_publish_component_complete',
+       'description':'TEST-ONLY app completion of one exact post-apply publication consent. It rechecks owner, OAuth connection, scope, source hash, agent and channel before creating the existing one-use grant and publishing.',
+       'inputSchema':{'type':'object','properties':{'capability':{'type':'string','minLength':32,'maxLength':200}},'required':['capability'],'additionalProperties':False},
+       'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security,'_meta':meta},
+    ]
+
+
 async def mcp(request):
     method=None; request_id=None; tool_name=''; commit_attempted=False
     try:
         data=await request.json(); method=data.get('method'); request_id=data.get('id')
-        if method=='initialize': return _jsonrpc({'protocolVersion':'2025-06-18','serverInfo':{'name':'beintaskbot-learning-loop','version':direct_reconcile.SCHEMA_VERSION},'capabilities':{'tools':{}}},request_id=request_id)
+        if method=='initialize': return _jsonrpc({'protocolVersion':'2025-06-18','serverInfo':{'name':'beintaskbot-learning-loop','version':direct_reconcile.SCHEMA_VERSION},'capabilities':{'tools':{},'resources':{}}},request_id=request_id)
+        if method=='resources/list':
+            if not administrator_drafts.enabled():
+                return _jsonrpc({'resources':[]},request_id=request_id)
+            return _jsonrpc({'resources':[{'uri':owner_review_component.RESOURCE_URI,'name':'Exact owner review (disabled)',
+              'mimeType':'text/html;profile=mcp-app','_meta':{'ui':{'prefersBorder':True,
+                'csp':{'connectDomains':[],'resourceDomains':[]}},'openai/ui':{'availableDisplayModes':['inline']}}}]},request_id=request_id)
+        if method=='resources/read':
+            if not administrator_drafts.enabled():
+                return _jsonrpc(error={'code':-32602,'message':'Resource not found'},request_id=request_id)
+            uri=str(data.get('params',{}).get('uri',''))
+            if uri != owner_review_component.RESOURCE_URI:
+                return _jsonrpc(error={'code':-32602,'message':'Resource not found'},request_id=request_id)
+            return _jsonrpc({'contents':[{'uri':owner_review_component.RESOURCE_URI,'mimeType':'text/html;profile=mcp-app',
+                                           'text':owner_review_component.resource_html(),
+                                           '_meta':{'ui':{'prefersBorder':True,
+                                             'csp':{'connectDomains':[],'resourceDomains':[]}},
+                                             'openai/ui':{'availableDisplayModes':['inline']}}}]},request_id=request_id)
         if method=='tools/list':
             auth=[{'type':'oauth2','scopes':[TOOL_SCOPE]}]
-            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+direct_reconcile.definitions()+dialogue_merge.definitions()+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
+            component_tools=[]
+            if administrator_drafts.enabled():
+                component_tools.append(_owner_component_definition())
+                if owner_review_component.enabled_for_manual_bridge():
+                    component_tools.append(_owner_component_completion_definition())
+                    component_tools.extend(_owner_publish_component_definitions())
+            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+direct_reconcile.definitions()+dialogue_merge.definitions()+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+component_tools+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
         if method=='tools/call':
             cfg=_authorize_token(request)
             tool_name=str(data.get('params',{}).get('name',''))
@@ -461,7 +555,7 @@ async def mcp(request):
                 if tool_name.startswith(direct_reconcile.PREFIX):
                     commit_attempted=True
                     conn.commit()
-                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge':
+                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge':
                     commit_attempted=True
                     conn.commit()
             return response
@@ -621,10 +715,10 @@ async def token(request):
                     cur.execute('SELECT * FROM saas_ai_learning_mcp_codes WHERE code_hash=%s AND expires_at>now() AND tenant_id=%s::uuid AND agent_id=%s::uuid AND channel_id=%s::uuid FOR UPDATE',(_hash(code),cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['AI_LEARNING_MCP_AGENT_ID'],cfg['AI_LEARNING_MCP_CHANNEL_ID'])); row=cur.fetchone()
                     if not row or row.get('used_at') or row['client_id']!=client_id or row['redirect_uri']!=redirect_uri or not hmac.compare_digest(row['code_challenge'],digest): raise TenantLinearError('Invalid authorization code.',400)
                     cur.execute('UPDATE saas_ai_learning_mcp_codes SET used_at=now() WHERE code_hash=%s',(_hash(code),))
-                    token_id=uuid.uuid4()
+                    token_id=uuid.uuid4(); connection_id=uuid.uuid4()
                     refresh=secrets.token_urlsafe(48) if OFFLINE_SCOPE in str(row['scope']).split() else None
-                    cur.execute('''INSERT INTO saas_ai_learning_mcp_tokens(id,tenant_id,token_hash,agent_id,channel_id,client_id,expires_at,refresh_token_hash,refresh_expires_at,scope,created_by)
-                      VALUES(%s,%s::uuid,%s,%s::uuid,%s::uuid,%s,now()+interval '8 hours',%s,CASE WHEN %s::text IS NULL THEN NULL ELSE now()+interval '30 days' END,%s,%s)''',(token_id,row['tenant_id'],_hash(secrets.token_urlsafe(48)),row['agent_id'],row['channel_id'],client_id,_hash(refresh) if refresh else None,refresh,row['scope'],row['actor_id']))
+                    cur.execute('''INSERT INTO saas_ai_learning_mcp_tokens(id,tenant_id,token_hash,agent_id,channel_id,client_id,expires_at,refresh_token_hash,refresh_expires_at,scope,oauth_connection_id,created_by)
+                      VALUES(%s,%s::uuid,%s,%s::uuid,%s::uuid,%s,now()+interval '8 hours',%s,CASE WHEN %s::text IS NULL THEN NULL ELSE now()+interval '30 days' END,%s,%s,%s)''',(token_id,row['tenant_id'],_hash(secrets.token_urlsafe(48)),row['agent_id'],row['channel_id'],client_id,_hash(refresh) if refresh else None,refresh,row['scope'],connection_id,row['actor_id']))
                 else:
                     refresh=str(data.get('refresh_token',''))
                     cur.execute('''SELECT * FROM saas_ai_learning_mcp_tokens WHERE refresh_token_hash=%s AND client_id=%s
