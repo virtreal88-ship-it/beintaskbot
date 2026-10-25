@@ -71,6 +71,39 @@ def test_inbound_from_configured_employee_number_is_not_a_customer_request(chann
     db.commit()
 
 
+def test_verified_jid_lid_pair_has_one_route_per_channel(channels, monkeypatch):
+    db=channels['db']; monkeypatch.setattr(transport,'_verify_signature',lambda *a:True)
+    jid='994501234567@s.whatsapp.net'; lid='123456789@lid'
+    def deliver(channel, conversation):
+        data={'id':str(uuid.uuid4()),'channelId':channel,'conversationId':conversation,'fromMe':False,
+              'type':'text','text':'route me once','directIdentity':{'jid':jid,'lid':lid}}
+        return transport.ingest(json.dumps({'id':str(uuid.uuid4()),'type':'message.inbound.received','data':data}).encode(),'mock',
+                                {'id':str(uuid.uuid4()),'type':'message.inbound.received','data':data})
+    # An inbound LID and later JID echo for one connected number converge.
+    assert deliver(CA,lid) and deliver(CA,jid)
+    routes=db.execute('''SELECT connect_channel_id::text AS channel,conversation_id FROM saas_connect_conversations
+      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id IN (%s,%s)''',(A,CA,jid,lid));db.commit()
+    assert routes==[{'channel':CA,'conversation_id':jid}]
+    messages=db.execute("SELECT DISTINCT kommo_lead_id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND channel=%s AND external_id LIKE 'connect:%%'",(A,'connect:'+CA));db.commit()
+    assert len(messages)==1
+    # The same verified person on a second connected company number is not
+    # merged or redirected across channels.
+    assert deliver(CB,lid)
+    routes=db.execute('''SELECT connect_channel_id::text AS channel,conversation_id FROM saas_connect_conversations
+      WHERE tenant_id=%s::uuid AND conversation_id=%s ORDER BY channel''',(A,jid));db.commit()
+    assert routes==[{'channel':CA,'conversation_id':jid},{'channel':CB,'conversation_id':jid}]
+
+
+def test_conflicting_verified_mapping_fails_closed_without_cross_channel_leak(channels):
+    db=channels['db']; transport._schema(db)
+    with db.cursor() as cur:
+        cur.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) VALUES(%s::uuid,%s::uuid,'a'),(%s::uuid,%s::uuid,'b')",(A,CA,A,CA))
+        cur.execute("INSERT INTO saas_connect_direct_identities(tenant_id,connect_channel_id,identity_key,canonical_conversation_id) VALUES(%s::uuid,%s::uuid,'1@lid','a'),(%s::uuid,%s::uuid,'2@s.whatsapp.net','b')",(A,CA,A,CA))
+        canonical,conflict=transport._canonical_direct_conversation(cur,A,CA,'1@lid',{'directIdentity':{'lid':'1@lid','jid':'2@s.whatsapp.net'}},{'kind':'contact'})
+        assert canonical=='1@lid' and conflict is True
+    db.commit()
+
+
 @pytest.mark.parametrize('state,expected',[('pending','pending'),('failed','failed'),('disabled','disabled'),(None,'not_requested')])
 def test_media_analysis_state_is_distinct_from_download_failure(state,expected):
     from tenant_operator_dialogs import _message
