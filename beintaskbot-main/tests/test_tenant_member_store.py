@@ -40,6 +40,13 @@ class MemberStoreTests(unittest.TestCase):
         self.assertEqual(value['effective_permissions'],['tasks','support'])
         self.assertEqual(value['legacy_permissions'],['legacy:retired'])
 
+    def test_effective_permissions_uses_member_workflow_policy(self):
+        value=tenant_member_store._member_payload({'tenant_id':'tenant-a','telegram_id':22,
+            'role':'admin','permissions':['dialogs'],'active':True,'modules':{},
+            'workflow':{'policies':[{'policy_key':'members','value':{'22':{'ai_agents_manage':True}}}]}})
+        self.assertEqual(value['explicit_permissions'],['dialogs'])
+        self.assertEqual(value['effective_permissions'],['dialogs'])
+
     def test_edit_preserves_hidden_known_and_unknown_grants_and_legacy_role(self):
         existing={'tenant_id':'tenant-a','telegram_id':22,'display_name':'Legacy','role':'legacy_role',
                   'permissions':['tasks','support','employees','finance','legacy:retired'],'active':True}

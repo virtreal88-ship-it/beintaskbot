@@ -153,8 +153,12 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
                     numbers[int(item['telegram_id'])].append({
                         'phone':'+'+str(item['phone_digits']),
                         'recognition_enabled':bool(item['recognition_enabled'])})
+            # TenantPolicy also uses per-member workflow settings (for
+            # example admin AI-management); include its authoritative source.
+            workflow = _read_tenant_workflow(cur, tenant_id)
     result=[]
     for row in rows:
+        row['workflow'] = workflow
         value=_member_payload(row)
         value['whatsapp_numbers']=numbers.get(int(row['telegram_id']),[])
         result.append(value)
