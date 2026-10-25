@@ -479,13 +479,14 @@
   async function openCaseLink(data){
     if(!hasRight('dialogs')){notice(t('noAccess'));return false;}
     const caseId=String(data?.case_id||''),messageId=String(data?.message_id||''),reviewId=data?.review_run_id?String(data.review_run_id):'';
-    if(!uuid(caseId)||!uuid(messageId)||(reviewId&&!uuid(reviewId))){notice(caseLinkText('invalid'));return false;}
+    if(!uuid(caseId)||(messageId&&!uuid(messageId))||(reviewId&&!uuid(reviewId))){notice(caseLinkText('invalid'));return false;}
     notice(caseLinkText('opening'));
     try{
-      const query=new URLSearchParams({message_id:messageId,expected_tenant_id:String(member?.tenant_id||''),expected_user_id:String(member?.telegram_id||'')});
+      const query=new URLSearchParams({expected_tenant_id:String(member?.tenant_id||''),expected_user_id:String(member?.telegram_id||'')});
+      if(messageId)query.set('message_id',messageId);
       if(reviewId)query.set('review_run_id',reviewId);
       const resolved=(await rawApi(endpoint+'knowledge-candidates/'+encodeURIComponent(caseId)+'/conversation?'+query)).result;
-      if(!resolved?.route||String(resolved.case_id)!==caseId||String(resolved.message_id)!==messageId)throw Error(caseLinkText('unavailable'));
+      if(!resolved?.route||String(resolved.case_id)!==caseId||!uuid(resolved.message_id)||(messageId&&String(resolved.message_id)!==messageId))throw Error(caseLinkText('unavailable'));
       window.tenantAppNavigate?.('dialogs',false);
       await openDialog({...resolved.route,source_message_id:resolved.message_id});
       notice('');return true;

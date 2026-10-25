@@ -365,7 +365,7 @@ def detail(profile,candidate_id):
     return {'candidate':value,'evidence':items,'route':run['route']}
 
 
-def conversation_link(profile,candidate_id,message_id,review_run_id=None):
+def conversation_link(profile,candidate_id,message_id=None,review_run_id=None):
     """Resolve one case evidence message to an authorized dialog route.
 
     The browser never gets to turn a case ID into an arbitrary conversation.
@@ -377,14 +377,28 @@ def conversation_link(profile,candidate_id,message_id,review_run_id=None):
         schema(conn)
         with conn.cursor() as cur:
             tenant,_,policy=authorize(cur,profile)
-            key=identifier(candidate_id); anchor=identifier(message_id)
+            key=identifier(candidate_id)
             cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,key))
             row=cur.fetchone()
             if not row:
                 raise TenantLinearError('Case is unavailable for this company.',404)
             if row['status']=='archived':
                 raise TenantLinearError('Case is archived; its original conversation is unavailable from this link.',410)
-            source_ids={str(value) for value in (row.get('content') or {}).get('source_message_ids',[]) if value}
+            content=row.get('content') or {}
+            source_order=[str(value) for value in content.get('source_message_ids',[]) if value]
+            source_ids=set(source_order)
+            # Old case links contained only ``case_id``.  Resolve their anchor
+            # server-side from evidence already bound to this case; never let a
+            # missing client parameter become an arbitrary dialog lookup.
+            requested=str(message_id or '').strip()
+            if requested:
+                anchor=identifier(requested)
+            else:
+                preferred=str(content.get('start_message_id') or '')
+                anchor=preferred if preferred in source_ids else (source_order[0] if source_order else None)
+                if not anchor:
+                    raise TenantLinearError('Case has no available evidence message.',404)
+                anchor=identifier(anchor)
             if anchor not in source_ids:
                 raise TenantLinearError('The requested message is not evidence for this case.',403)
             run=extraction_row(cur,tenant,row['extraction_id']); saved=run.get('route') or {}
