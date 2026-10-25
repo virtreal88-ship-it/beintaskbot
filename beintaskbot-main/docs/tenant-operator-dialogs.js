@@ -463,15 +463,61 @@
     member=next;capabilities=data.capabilities||{};loadSoundPreference();
     if($('operatorBulkAssignment')){$('operatorBulkAssignment').hidden=member?.role!=='owner';$('operatorBulkAssignment').textContent=bulkText('preview');}
     if(changed){stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
-    if(hasRight('dialogs')){refresh();if($('view-dialogs')?.classList.contains('active'))scheduleAutoRefresh();const fromNotification=!notificationRouteHandled?notificationDialogRoute():null;if(fromNotification){notificationRouteHandled=true;clearNotificationDialogRoute();const version=epoch;setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(fromNotification);},0);return;}const saved=sessionStorage.getItem(contextKey('route'));if(saved&&!currentDialog)try{const version=epoch,route=JSON.parse(saved);if(route.channel_id&&route.conversation_id)setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(route);},0);}catch(_){sessionStorage.removeItem(contextKey('route'));}}else stopAutoRefresh();
+    if(hasRight('dialogs')){refresh();if($('view-dialogs')?.classList.contains('active'))scheduleAutoRefresh();const fromNotification=!notificationRouteHandled?notificationDialogRoute():null;if(fromNotification){notificationRouteHandled=true;clearNotificationDialogRoute();const version=epoch;setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(fromNotification);},0);return;}openLocationCaseLink();const saved=sessionStorage.getItem(contextKey('route'));if(saved&&!currentDialog)try{const version=epoch,route=JSON.parse(saved);if(route.channel_id&&route.conversation_id)setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(route);},0);}catch(_){sessionStorage.removeItem(contextKey('route'));}}else stopAutoRefresh();
   }
   window.addEventListener('storage',event=>{if(event.key===soundPrefKey())loadSoundPreference();if(event.key===readSyncKey()&&!document.hidden&&$('view-dialogs')?.classList.contains('active'))void refresh();});
   document.addEventListener('tenant-profile',event=>profileChanged(event.detail));
   document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){refresh();scheduleAutoRefresh();}else stopAutoRefresh();});
   document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAutoRefresh();else if($('view-dialogs')?.classList.contains('active')){refresh();scheduleAutoRefresh();}});
   window.addEventListener('beforeunload',stopAutoRefresh);
+  window.addEventListener('popstate',()=>{caseLinkKey='';openLocationCaseLink();});
   document.addEventListener('tenant-language',()=>{updateSoundButton();if($('operatorRows')){setStates();refresh();}if($('operatorBulkAssignment'))$('operatorBulkAssignment').textContent=bulkText('preview');if(currentDialog&&currentPage){const diagnosticsOpen=$('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden,settingsOpen=$('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden;renderDialog(currentPage);if(diagnosticsOpen)openDialogDiagnostics(currentDialog);if(settingsOpen)openGroupSettings(currentDialog);}});
   document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;if($('operatorCopilot')&&!$('operatorCopilot').hidden){$('operatorCopilotClose')?.click();return;}if($('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden){closeGroupSettings();return;}if($('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden){closeDialogDiagnostics();return;}if(currentDialog)closeDialog();});
-  window.tenantOperator={messageMarkup,openDialog,closeDialog,changeState,refresh,hasRight,get member(){return member}};
+  let caseLinkKey='';
+  const caseLinkText=key=>({opening:{ru:'Открываем исходный диалог кейса…',az:'Halın ilkin dialoqu açılır…',en:'Opening the case conversation…'},invalid:{ru:'Ссылка на кейс неполная или некорректна.',az:'Hal keçidi natamam və ya yanlışdır.',en:'The case link is incomplete or invalid.'},unavailable:{ru:'Исходное сообщение кейса недоступно или у вас нет доступа к нему.',az:'Halın ilkin mesajı əlçatan deyil və ya ona girişiniz yoxdur.',en:'The original case message is unavailable or you do not have access to it.'}}[key]?.[i18n.language]||'The case conversation is unavailable.');
+  const uuid=value=>/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value||''));
+  async function openCaseLink(data){
+    if(!hasRight('dialogs')){notice(t('noAccess'));return false;}
+    const caseId=String(data?.case_id||''),messageId=String(data?.message_id||''),reviewId=data?.review_run_id?String(data.review_run_id):'';
+    if(!uuid(caseId)||!uuid(messageId)||(reviewId&&!uuid(reviewId))){notice(caseLinkText('invalid'));return false;}
+    notice(caseLinkText('opening'));
+    try{
+      const query=new URLSearchParams({message_id:messageId,expected_tenant_id:String(member?.tenant_id||''),expected_user_id:String(member?.telegram_id||'')});
+      if(reviewId)query.set('review_run_id',reviewId);
+      const resolved=(await rawApi(endpoint+'knowledge-candidates/'+encodeURIComponent(caseId)+'/conversation?'+query)).result;
+      if(!resolved?.route||String(resolved.case_id)!==caseId||String(resolved.message_id)!==messageId)throw Error(caseLinkText('unavailable'));
+      window.tenantAppNavigate?.('dialogs',false);
+      await openDialog({...resolved.route,source_message_id:resolved.message_id});
+      notice('');return true;
+    }catch(error){
+      window.tenantAppNavigate?.('dialogs',false);
+      notice(error?.message||caseLinkText('unavailable'));
+      document.dispatchEvent(new CustomEvent('tenant-learning-deep-link-error',{detail:{message:error?.message||caseLinkText('unavailable')}}));
+      return false;
+    }
+  }
+  async function openLearningReviewLink(data){
+    if(!hasRight('dialogs')){notice(t('noAccess'));return false;}
+    const reviewId=String(data?.review_run_id||''),messageId=String(data?.message_id||'');
+    if(!uuid(reviewId)||!uuid(messageId)){notice(caseLinkText('invalid'));return false;}
+    notice(caseLinkText('opening'));
+    try{
+      const resolved=(await rawApi(endpoint+'administrator/approvals?'+new URLSearchParams({review_run_id:reviewId})).result);
+      if(!resolved?.route||String(resolved.source_message_id)!==messageId)throw Error(caseLinkText('unavailable'));
+      window.tenantAppNavigate?.('dialogs',false);
+      await openDialog({...resolved.route,source_message_id:resolved.source_message_id});
+      notice('');return true;
+    }catch(error){window.tenantAppNavigate?.('dialogs',false);notice(error?.message||caseLinkText('unavailable'));document.dispatchEvent(new CustomEvent('tenant-learning-deep-link-error',{detail:{message:error?.message||caseLinkText('unavailable')}}));return false;}
+  }
+  function openLocationCaseLink(){
+    let query;try{query=new URLSearchParams(location.search);}catch{return;}
+    const caseId=query.get('case_id'),messageId=query.get('message_id'),reviewId=query.get('review_run_id')||'';
+    if(!caseId&&!messageId&&!reviewId)return;
+    const key=[caseId||'',messageId||'',reviewId].join(':');
+    if(key===caseLinkKey)return;caseLinkKey=key;
+    if(caseId)void openCaseLink({case_id:caseId,message_id:messageId,review_run_id:reviewId});
+    else void openLearningReviewLink({review_run_id:reviewId,message_id:messageId});
+  }
+  window.tenantOperator={messageMarkup,openDialog,openCaseLink,openLearningReviewLink,openLocationCaseLink,closeDialog,changeState,refresh,hasRight,get member(){return member}};
   if(window.tenantProfileSnapshot)profileChanged(window.tenantProfileSnapshot);else fetch(window.TENANT_AI_AGENTS_CONFIG?.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(!member&&data?.member)profileChanged(data);}).catch(()=>{});
 })();

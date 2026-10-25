@@ -597,6 +597,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                       AND c.conversation_id=%s AND c.lead_id=m.kommo_lead_id AND m.channel='connect:'||c.connect_channel_id::text)))''',
                   (tenant,identifier(anchor),lead_id,row['history_channel'],bool(provider=='connect' and group_jid(conversation)),conversation))
                 anchor_row=dict(cur.fetchone() or {});anchor_at=anchor_row.get('at')
+                if not anchor_row:
+                    raise TenantLinearError('The requested message is unavailable or outside the permitted conversation.',404)
             if provider=='connect' and group_jid(conversation):
                 from tenant_connect_group_history import page as group_history
                 messages=group_history(cur,tenant,conversation,before=identifier(before) if before else None,through=anchor_at)

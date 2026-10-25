@@ -13,7 +13,7 @@ from tenant_ai_agents_api import _expected, _origin
 from tenant_linear_policy import TenantLinearError
 from tenant_knowledge_candidates_service import analyze
 from tenant_knowledge_improve import improve
-from tenant_knowledge_candidates_store import detail, listing, mutate, request_detail
+from tenant_knowledge_candidates_store import conversation_link, detail, listing, mutate, request_detail
 
 def handler(member_from_request,canonical_origin,logger,resource='collection'):
     async def handle(request):
@@ -29,6 +29,10 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                 elif resource=='batch': result=await asyncio.to_thread(batches.get,profile,request.match_info['batch_id'])
                 elif resource=='request': result=await asyncio.to_thread(request_detail,profile,request.match_info['request_id'])
                 elif resource=='candidate': result=await asyncio.to_thread(detail,profile,request.match_info['candidate_id'])
+                elif resource=='conversation':
+                    if set(request.query)-{'message_id','review_run_id','expected_tenant_id','expected_user_id'} or not request.query.get('message_id'):
+                        raise TenantLinearError('Message selection is required.',400)
+                    result=await asyncio.to_thread(conversation_link,profile,request.match_info['candidate_id'],request.query['message_id'],request.query.get('review_run_id'))
                 else: result=await asyncio.to_thread(listing,profile,dict(request.query))
             else:
                 _origin(request,canonical_origin)

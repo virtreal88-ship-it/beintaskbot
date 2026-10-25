@@ -86,6 +86,20 @@ def test_case_customer_without_phone_or_company_reports_missing_values(ready):
     assert (opened['customer_name'],opened['customer_phone'],opened['company_name'])==(listed['customer_name'],listed['customer_phone'],listed['company_name'])
 
 
+def test_case_conversation_link_resolves_only_bound_tenant_evidence(ready):
+    db,_,_=ready;value=candidate(ready);anchor=value['source_message_ids'][0]
+    link=store.conversation_link(PROFILE,value['id'],anchor)
+    assert link['case_id']==value['id'] and link['message_id']==anchor
+    assert link['route']=={'provider':'connect','lead_id':41,'channel_id':CA,'conversation_id':'client'}
+    with pytest.raises(TenantLinearError):
+        store.conversation_link({'tenant_id':B,'telegram_id':22},value['id'],anchor)
+    with pytest.raises(TenantLinearError):
+        store.conversation_link(PROFILE,value['id'],str(uuid.uuid4()))
+    db.execute("UPDATE saas_knowledge_candidates SET status='archived' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,value['id']));db.commit()
+    with pytest.raises(TenantLinearError,match='archived'):
+        store.conversation_link(PROFILE,value['id'],anchor)
+
+
 def test_group_case_never_displays_group_jid_or_arbitrarily_picks_sender(ready):
     db,_,_=ready;value=candidate(ready);group='120363000000000@g.us'
     db.execute("UPDATE saas_knowledge_extractions SET route=jsonb_set(route,'{conversation_id}',to_jsonb(%s::text)) WHERE tenant_id=%s::uuid AND id=%s::uuid",(group,A,value['extraction_id']))

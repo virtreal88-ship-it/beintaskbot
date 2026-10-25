@@ -162,6 +162,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('knowledge-candidates/{candidate_id}/improve', knowledge_candidates_handler(member, origin, logger, 'improve'), ('POST',)),
         ('knowledge-candidates/{candidate_id}/boundaries', knowledge_candidates_handler(member, origin, logger, 'boundaries'), ('POST',)),
         ('knowledge-candidates/{candidate_id}/clarify', knowledge_candidates_handler(member, origin, logger, 'clarify'), ('POST',)),
+        ('knowledge-candidates/{candidate_id}/conversation', knowledge_candidates_handler(member, origin, logger, 'conversation'), ('GET',)),
         ('knowledge-candidates/requests/{request_id}', knowledge_candidates_handler(member, origin, logger, 'request'), ('GET',)),
         ('knowledge-candidates/{candidate_id}', knowledge_candidates_handler(member, origin, logger, 'candidate'), ('GET','PATCH')),
         ('knowledge-candidates/{candidate_id}/approve', knowledge_candidates_handler(member, origin, logger, 'approve'), ('POST',)),
