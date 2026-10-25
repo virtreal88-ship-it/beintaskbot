@@ -12,6 +12,7 @@ from tenant_ai_dashboard import _connect
 from tenant_linear_policy import TenantLinearError
 import tenant_ai_administrator_approvals as approvals
 import tenant_ai_administrator_apply as application
+import tenant_ai_owner_review_component as owner_component
 
 
 def _origin(request, canonical_origin):
@@ -23,6 +24,7 @@ def _with_connection(fn, *args, **kwargs):
     with _connect() as conn:
         try:
             approvals.ensure_schema(conn)
+            owner_component.ensure_schema(conn)
             with conn.cursor() as cur:
                 result=fn(cur,*args,**kwargs)
             conn.commit()
@@ -74,6 +76,15 @@ def handler(member_from_request, canonical_origin, logger):
                 elif action in {'approve','reject'}:
                     if set(data)!={'action','approval_id'}: raise TenantLinearError('Invalid approval request.',400)
                     value=await asyncio.to_thread(_with_connection,approvals.approve,profile,data['approval_id'],action)
+                elif action=='component_decision':
+                    # Origin and the normal authenticated owner session were
+                    # checked above.  The adapter itself remains disabled by
+                    # default and binds the opaque component capability to the
+                    # same tenant, owner and OAuth connection.
+                    if set(data)!={'action','oauth_connection_id','capability','decision'}:
+                        raise TenantLinearError('Invalid owner component decision.',400)
+                    value=await asyncio.to_thread(_with_connection,owner_component.decide,profile,
+                        oauth_connection_id=data['oauth_connection_id'],capability=data['capability'],decision=data['decision'])
                 elif action=='approve_batch':
                     if set(data)!={'action','approval_ids'}: raise TenantLinearError('Invalid approval batch.',400)
                     value=await asyncio.to_thread(_with_connection,approvals.approve_many,profile,data['approval_ids'])
