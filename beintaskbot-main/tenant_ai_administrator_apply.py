@@ -123,10 +123,15 @@ def apply_knowledge_draft(cur,profile,approval_id,draft_id,*,scoped_training_pol
     cur.execute('SELECT * FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,draft_id)); draft=cur.fetchone()
     if not draft or draft['kind']!='knowledge' or draft['state']!='draft': raise TenantLinearError('Knowledge draft is unavailable.',409)
     body=draft['body'] or {}; target=draft['target'] or {}
-    if set(body)!={'content','evidence_ids'} or not isinstance(body.get('content'),str) or not body['content'].strip() or not {'agent_ids'}<=set(target) or bool(set(target)-{'agent_ids','review_run_id','review_request_key'}) or not isinstance(target['agent_ids'],list): raise TenantLinearError('Invalid knowledge draft.',400)
+    evidence_mode=set(body)=={'content','evidence_ids'}
+    owner_mode=set(body)=={'content','owner_provided'} and isinstance(body.get('owner_provided'),dict)
+    if (not (evidence_mode or owner_mode) or not isinstance(body.get('content'),str) or not body['content'].strip() or not {'agent_ids'}<=set(target) or bool(set(target)-{'agent_ids','review_run_id','review_request_key','source_eligibility'}) or not isinstance(target['agent_ids'],list)):
+        raise TenantLinearError('Invalid knowledge draft.',400)
+    if owner_mode and (target.get('source_eligibility')!='owner_provided_unverified' or set(body['owner_provided'])!={'note','verified_by'} or body['owner_provided'].get('verified_by')!=actor or not isinstance(body['owner_provided'].get('note'),str) or not body['owner_provided']['note'].strip()):
+        raise TenantLinearError('Owner-provided knowledge provenance is invalid.',409)
     consume(cur,tenant,approval_id,draft_id,draft['version'],'knowledge_draft_apply')
     source=save_knowledge({'tenant_id':tenant,'telegram_id':actor},{'title':draft['title'],'kind':'text','content':body['content'].strip(),'active':False},connection=cur.connection)
-    sid=str(source['id']); provenance={'administrator_draft_id':draft_id,'approval_id':approval_id,'evidence_ids':body['evidence_ids'],'review_only':True,**{k:target[k] for k in ('review_run_id','review_request_key') if k in target}}
+    sid=str(source['id']); provenance={'administrator_draft_id':draft_id,'approval_id':approval_id,'review_only':True,**({'evidence_ids':body['evidence_ids']} if evidence_mode else {'source_type':'owner_provided','verified':False,'owner_note':body['owner_provided']['note']}),**{k:target[k] for k in ('review_run_id','review_request_key') if k in target}}
     cur.execute("UPDATE saas_ai_knowledge_sources SET provenance=COALESCE(provenance,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps(provenance),tenant,sid))
     cur.execute("INSERT INTO saas_ai_administrator_material_rollbacks(id,tenant_id,kind,draft_id,approval_id,object_id,created_by) VALUES(%s,%s::uuid,'knowledge',%s::uuid,%s::uuid,%s::uuid,%s)",(uuid.uuid4(),tenant,draft_id,approval_id,sid,actor))
     cur.execute("UPDATE saas_ai_administrator_drafts SET state='applied',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,draft_id)); _audit(cur,tenant,actor,'ai_administrator_knowledge_applied','knowledge_source',sid,{'draft_id':draft_id,'approval_id':approval_id,'review_only':True})

@@ -83,6 +83,23 @@ def test_message_content_redacts_secrets_and_preserves_ids(db,monkeypatch):
     assert 'raw' not in detailed['items'][0]
 
 
+def test_owner_bootstrap_knowledge_has_no_fabricated_crm_evidence(db,monkeypatch):
+    _setup(monkeypatch,db)
+    cfg=mcp._require_cfg();cfg['granted_scopes']=[drafts.DRAFT_SCOPE]
+    with db.cursor() as cur:
+        draft=drafts.typed_create(cur,cfg,'owner_knowledge',{
+            'title':'Owner supplied setup note','content':'Use only the documented warehouse procedure.',
+            'owner_note':'Confirmed by the company owner.'})
+    assert draft['kind']=='knowledge'
+    assert draft['body']['owner_provided']['verified_by']==11
+    assert 'evidence_ids' not in draft['body']
+    assert draft['target']['source_eligibility']=='owner_provided_unverified'
+    cfg['actor_id']=22
+    with db.cursor() as cur:
+        with pytest.raises(Exception):
+            drafts.typed_create(cur,cfg,'owner_knowledge',{'title':'x','content':'x','owner_note':'x'})
+
+
 def test_cursor_is_bound_to_tenant_tool_and_content_policy(db,monkeypatch):
     _setup(monkeypatch,db)
     cfg=mcp._require_cfg();cfg['granted_scopes']=[admin.READ_SCOPE,admin.CONTENT_SCOPE]
