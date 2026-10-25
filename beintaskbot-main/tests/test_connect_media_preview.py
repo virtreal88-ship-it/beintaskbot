@@ -128,6 +128,13 @@ def test_scoped_url_timeout_and_no_redirects(monkeypatch):
     assert factory.call_args.kwargs['auto_decompress'] is False
 
 
+def test_final_preview_limits_are_exact_and_keep_audio_unchanged():
+    assert media.media_limit('image') == 20*1024*1024
+    assert media.media_limit('audio') == media.media_limit('voice') == 10*1024*1024
+    assert media.media_limit('video') == 50*1024*1024
+    assert media.media_limit('document') == 5*1024*1024
+
+
 @pytest.mark.parametrize('status',[404,410,413,415,429,500,302])
 def test_safe_unavailable_and_provider_errors(monkeypatch,status):
     transport(monkeypatch,status=status)
@@ -139,8 +146,8 @@ def test_safe_unavailable_and_provider_errors(monkeypatch,status):
 @pytest.mark.parametrize('headers,chunks',[
     ({'Content-Type':'text/html'},None),({'Content-Type':'image/svg+xml'},None),
     ({'X-Connect-Channel-Id':CB},None),({'X-Connect-Message-Id':str(uuid.uuid4())},None),
-    ({'Content-Encoding':'gzip'},None),({'Content-Length':str(8*1024*1024+1)},None),
-    ({'Content-Length':'20'},[b'short']),({},[b'x'*(8*1024*1024+1)]),({},[])])
+    ({'Content-Encoding':'gzip'},None),({'Content-Length':str(20*1024*1024+1)},None),
+    ({'Content-Length':'20'},[b'short']),({},[b'x'*(20*1024*1024+1)]),({},[])])
 def test_mime_size_identity_and_truncation(monkeypatch,headers,chunks):
     transport(monkeypatch,headers=headers,chunks=chunks)
     with pytest.raises(TenantLinearError):run(media.download_media(item()))

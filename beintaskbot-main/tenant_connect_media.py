@@ -23,6 +23,10 @@ class PublicResolver(aiohttp.resolver.DefaultResolver):
 
 VIDEO_TYPES={'video/mp4','video/webm'}
 DOCUMENT_TYPES={'application/pdf','text/plain','application/vnd.openxmlformats-officedocument.wordprocessingml.document'}
+IMAGE_MAX_BYTES=20*1024*1024
+AUDIO_MAX_BYTES=10*1024*1024
+VIDEO_MAX_BYTES=50*1024*1024
+DOCUMENT_MAX_BYTES=5*1024*1024
 # The interactive attachment viewer may safely deliver these original formats;
 # AI document extraction intentionally remains limited to DOCUMENT_TYPES above.
 DOCUMENT_PREVIEW_TYPES=DOCUMENT_TYPES | {
@@ -32,6 +36,15 @@ DOCUMENT_PREVIEW_TYPES=DOCUMENT_TYPES | {
     'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     'text/csv', 'text/rtf', 'application/rtf',
 }
+
+def media_limit(kind):
+    return {
+        'image': IMAGE_MAX_BYTES,
+        'audio': AUDIO_MAX_BYTES,
+        'voice': AUDIO_MAX_BYTES,
+        'video': VIDEO_MAX_BYTES,
+        'document': DOCUMENT_MAX_BYTES,
+    }.get(kind, 0)
 
 
 def retry_after_seconds(value, default=60):
@@ -63,7 +76,7 @@ async def download_media(item, *, max_bytes=None, preview_documents=False):
         raise TenantLinearError('Connect bağlantısını yoxlayın.', 503)
     kind = item['row']['message_type']
     document_types=DOCUMENT_PREVIEW_TYPES if preview_documents else DOCUMENT_TYPES
-    cap,types={'image':(8*1024*1024,IMAGE_TYPES),'audio':(10*1024*1024,AUDIO_TYPES),'voice':(10*1024*1024,AUDIO_TYPES),'video':(16*1024*1024,VIDEO_TYPES),'document':(5*1024*1024,document_types)}.get(kind,(0,set()))
+    cap,types={'image':(IMAGE_MAX_BYTES,IMAGE_TYPES),'audio':(AUDIO_MAX_BYTES,AUDIO_TYPES),'voice':(AUDIO_MAX_BYTES,AUDIO_TYPES),'video':(VIDEO_MAX_BYTES,VIDEO_TYPES),'document':(DOCUMENT_MAX_BYTES,document_types)}.get(kind,(0,set()))
     if max_bytes is not None: cap=min(cap,max(0,int(max_bytes)))
     if not cap: raise TenantLinearError('Fayl formatı dəstəklənmir.',415)
     url = (CONNECT_URL.rstrip('/') + '/v1/channels/' + channel + '/messages/' + message +
@@ -78,7 +91,7 @@ async def download_media(item, *, max_bytes=None, preview_documents=False):
                 if response.status in {404, 410}:
                     raise TenantLinearError('Fayl artıq mövcud deyil və ya WhatsApp-dan alına bilmir.', 404)
                 if response.status == 413:
-                    raise TenantLinearError('Fayl çox böyükdür: şəkil 8 MB, audio 10 MB.', 413)
+                    raise TenantLinearError('Fayl çox böyükdür: şəkil 20 MB, audio 10 MB, video 50 MB.', 413)
                 if response.status == 415:
                     raise TenantLinearError('Fayl formatı dəstəklənmir və ya fayl zədələnib.', 415)
                 if response.status == 429:
@@ -96,12 +109,12 @@ async def download_media(item, *, max_bytes=None, preview_documents=False):
                     raise TenantLinearError('Fayl formatı dəstəklənmir.', 415)
                 length = response.headers.get('Content-Length')
                 if length and not 0 < int(length) <= cap:
-                    raise TenantLinearError('Fayl çox böyükdür.', 413)
+                    raise TenantLinearError('Fayl çox böyükdür: şəkil 20 MB, audio 10 MB, video 50 MB.', 413)
                 chunks, size = [], 0
                 async for chunk in response.content.iter_chunked(65536):
                     size += len(chunk)
                     if size > cap:
-                        raise TenantLinearError('Fayl çox böyükdür.', 413)
+                        raise TenantLinearError('Fayl çox böyükdür: şəkil 20 MB, audio 10 MB, video 50 MB.', 413)
                     chunks.append(chunk)
                 if not size or length and size != int(length):
                     raise ValueError('Incomplete media')

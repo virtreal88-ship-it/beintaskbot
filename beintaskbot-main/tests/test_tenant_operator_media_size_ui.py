@@ -20,3 +20,13 @@ if(JSON.stringify(result)!==JSON.stringify({known:'1.0 MB',byteBoundary:'1 KB',z
     assert completed.returncode==0, completed.stderr
     i18n=(ROOT/'docs'/'tenant-operator-i18n.js').read_text(encoding='utf-8')
     assert "mediaSizeUnknown:['Размер неизвестен','Ölçü məlum deyil','Size unknown']" in i18n
+
+
+def test_attachment_preview_allows_final_video_limit_without_retaining_it_in_cache():
+    source=(ROOT/'docs'/'tenant-chat-attachments.js').read_text(encoding='utf-8')
+    assert 'MAX_PREVIEW_BYTES=50*1024*1024,MAX_CACHE_BYTES=32*1024*1024' in source
+    assert 'if(size>MAX_PREVIEW_BYTES)' in source
+    assert 'if(!blob.size||blob.size>MAX_PREVIEW_BYTES)' in source
+    assert 'if(blob.size<=MAX_CACHE_BYTES)' in source
+    i18n=(ROOT/'docs'/'tenant-operator-i18n.js').read_text(encoding='utf-8')
+    assert "mediaLarge:['Файл слишком большой: фото до 20 МБ, аудио до 10 МБ, видео до 50 МБ.'" in i18n

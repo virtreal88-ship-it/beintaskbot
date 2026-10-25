@@ -3,6 +3,7 @@
   let member, lead, epoch=0;
   const active=new Set(), urls=new Set(), previews=new Map(), mediaCache=new Map();
   let cacheBytes=0;
+  const MAX_PREVIEW_BYTES=50*1024*1024,MAX_CACHE_BYTES=32*1024*1024;
   const text=(key,fallback)=>globalThis.window?.tenantI18n?.t(key)||fallback;
   const identity=m=>m?.tenant_id+':'+m?.telegram_id;
   const formatSize=value=>{const bytes=Number(value);if(!Number.isFinite(bytes)||bytes<0)return '';if(bytes<1024)return `${bytes} B`;if(bytes<1024*1024)return `${Math.round(bytes/1024)} KB`;return `${(bytes/(1024*1024)).toFixed(1)} MB`;};
@@ -65,15 +66,17 @@
               const {done,value}=await reader.read();if(done)break;
               if(!valid()){await reader.cancel();return;}
               size+=value.length;if(auto&&size>5*1024*1024){await reader.cancel();throw Error(text('mediaLarge','Fayl çox böyükdür.'));}
-              if(size>20*1024*1024){await reader.cancel();throw Error('Fayl çox böyükdür.');}
+              if(size>MAX_PREVIEW_BYTES){await reader.cancel();throw Error('Fayl çox böyükdür.');}
               chunks.push(value);status.textContent=total>0?' Yüklənir: '+Math.min(100,Math.round(size/total*100))+'%':' Yüklənir…';
             }
             const contentType=response.headers.get('Content-Type')||'application/octet-stream';
             blob=new Blob(chunks,{type:contentType});if(!valid())return;
-            if(blob.size<=20*1024*1024){while(cacheBytes+blob.size>20*1024*1024&&mediaCache.size){const [oldKey,oldBlob]=mediaCache.entries().next().value;mediaCache.delete(oldKey);cacheBytes-=oldBlob.size;}if(cacheBytes+blob.size<=20*1024*1024){mediaCache.set(cacheKey,blob);cacheBytes+=blob.size;}}
+            // Large previews remain one-shot Blob URLs. They are never retained
+            // in the 32 MiB in-tab cache after playback or preview is closed.
+            if(blob.size<=MAX_CACHE_BYTES){while(cacheBytes+blob.size>MAX_CACHE_BYTES&&mediaCache.size){const [oldKey,oldBlob]=mediaCache.entries().next().value;mediaCache.delete(oldKey);cacheBytes-=oldBlob.size;}if(cacheBytes+blob.size<=MAX_CACHE_BYTES){mediaCache.set(cacheKey,blob);cacheBytes+=blob.size;}}
           }
           if(auto&&blob.size>5*1024*1024)throw Error(text('mediaLarge','Fayl çox böyükdür.'));
-          if(!blob.size||blob.size>20*1024*1024)throw Error('Fayl ölçüsü düzgün deyil.');
+          if(!blob.size||blob.size>MAX_PREVIEW_BYTES)throw Error('Fayl ölçüsü düzgün deyil.');
           blobUrl=URL.createObjectURL(blob);urls.add(blobUrl);
           const type=blob.type.split(';')[0],expected=host.dataset.mediaKind;if(expected==='image'&&!type.startsWith('image/'))throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));if(expected==='audio'&&!type.startsWith('audio/')&&type!=='application/ogg')throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));if(expected==='video'&&!type.startsWith('video/'))throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));let node,media;
           if(['image/jpeg','image/png','image/webp','image/gif'].includes(type)){
