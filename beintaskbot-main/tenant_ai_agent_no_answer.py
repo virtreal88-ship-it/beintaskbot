@@ -7,14 +7,14 @@ is deterministically insufficient regardless of model output.
 import json
 from tenant_linear_policy import TenantLinearError
 
-POLICY_ACTIONS = {'stop', 'handoff', 'create_task', 'clarify', 'call_expert'}
+POLICY_ACTIONS = {'stop', 'handoff', 'create_task', 'clarify', 'call_expert', 'consult_developer'}
 FALLBACK_ACTIONS = {'stop', 'handoff'}
 
 
 def validate_policy(value):
     if value is None:
         value = {}
-    allowed = {'enabled', 'action', 'fallback_action', 'max_clarifications', 'stop_reply'}
+    allowed = {'enabled', 'action', 'fallback_action', 'max_clarifications', 'stop_reply', 'developer_id'}
     if not isinstance(value, dict) or set(value) - allowed:
         raise TenantLinearError('No-answer policy is invalid.')
     enabled = value.get('enabled', False)
@@ -22,6 +22,7 @@ def validate_policy(value):
     fallback = value.get('fallback_action', 'stop')
     limit = value.get('max_clarifications', 1)
     reply = value.get('stop_reply', '')
+    developer = value.get('developer_id')
     if (type(enabled) is not bool or not isinstance(action, str) or action not in POLICY_ACTIONS
             or not isinstance(fallback, str) or fallback not in FALLBACK_ACTIONS):
         raise TenantLinearError('No-answer policy is invalid.')
@@ -29,8 +30,11 @@ def validate_policy(value):
         raise TenantLinearError('Clarification limit must be between 1 and 3.')
     if not isinstance(reply, str) or len(reply) > 500 or any(ord(ch) < 32 and ch not in '\n\r\t' for ch in reply):
         raise TenantLinearError('Stop reply is invalid.')
+    if action=='consult_developer':
+        if type(developer) is not int or developer <= 0: raise TenantLinearError('A designated developer is required.')
+    elif developer is not None: raise TenantLinearError('Developer is only valid for developer consultation.')
     return {'enabled': enabled, 'action': action, 'fallback_action': fallback,
-            'max_clarifications': limit, 'stop_reply': reply.strip()}
+            'max_clarifications': limit, 'stop_reply': reply.strip(),'developer_id':developer}
 
 
 def assess(raw, knowledge):

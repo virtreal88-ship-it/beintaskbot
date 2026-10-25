@@ -9,7 +9,7 @@ from tenant_ai_agent_worker import _expert_evidence, _apply_no_answer_policy, _c
 def test_new_policy_defaults_are_safe_and_existing_policy_can_remain_disabled():
     assert validate_policy(None) == {
         'enabled': False, 'action': 'stop', 'fallback_action': 'stop',
-        'max_clarifications': 1, 'stop_reply': '',
+        'max_clarifications': 1, 'stop_reply': '', 'developer_id': None,
     }
     assert validate_policy({'enabled': False})['enabled'] is False
 
@@ -23,6 +23,8 @@ def test_new_policy_defaults_are_safe_and_existing_policy_can_remain_disabled():
     {'enabled': True, 'fallback_action': 'create_task'},
     {'stop_reply': 'x' * 501},
     {'enabled': 1},
+    {'enabled': True, 'action': 'consult_developer'},
+    {'enabled': True, 'action': 'consult_developer', 'developer_id': '11'},
 ])
 def test_policy_rejects_unsafe_or_out_of_range_configuration(value):
     with pytest.raises(TenantLinearError):
@@ -74,6 +76,11 @@ def test_configured_no_answer_actions_are_selected_only_for_evidence_signals(act
     policy={'enabled':True,'action':action,'fallback_action':'handoff','max_clarifications':2}
     assert selected_action(policy,'missing_knowledge')['action']==action
     assert selected_action(policy,'not_a_signal')['action']=='continue'
+
+
+def test_developer_consultation_requires_explicit_designated_employee():
+    policy={'enabled':True,'action':'consult_developer','developer_id':11,'fallback_action':'handoff'}
+    assert selected_action(policy,'missing_knowledge')['action']=='consult_developer'
 
 
 def test_clarification_limit_uses_configured_fallback_and_expert_requires_evidence():
@@ -160,4 +167,22 @@ async def test_no_answer_employee_task_falls_back_without_permission(monkeypatch
         'unsupported_evidence',{'external_id':'m'},'Can you help?',[],[],lambda *a:None,None,Logger())
     assert result['handled'] is True
     assert len(calls)==1 and 'employee_request_not_permitted' in calls[0][2]
+
+
+@pytest.mark.asyncio
+async def test_manual_developer_consultation_handoffs_then_uses_internal_only_receipt(monkeypatch):
+    import tenant_ai_agent_worker as worker
+    import tenant_internal_consultations as consultations
+    calls=[]
+    async def fake_to_thread(fn,*args,**kwargs): return fn(*args,**kwargs)
+    monkeypatch.setattr(worker.asyncio,'to_thread',fake_to_thread)
+    monkeypatch.setattr(worker,'handoff',lambda job,reason:calls.append(('handoff',reason)) or True)
+    monkeypatch.setattr(consultations,'create_from_ai',lambda job,**kwargs:calls.append(('consultation',kwargs)) or {'created':True,'status':'waiting_specialist','customer_message_sent':False})
+    class Logger:
+        def info(self,*args,**kwargs): pass
+    job={'tenant_id':'00000000-0000-0000-0000-000000000101','agent_id':'00000000-0000-0000-0000-000000000301','provider':'connect','channel_id':'00000000-0000-0000-0000-000000000201','conversation_id':'client','event_fingerprint':'webhook-1'}
+    result=await worker._apply_no_answer_policy(job,{'run_id':None},{'enabled':True,'action':'consult_developer','developer_id':11,'fallback_action':'handoff','max_clarifications':1,'stop_reply':''},'missing_knowledge',{'external_id':'m1'},'Printer is not working',[],[],None,None,Logger())
+    assert result['handled'] and result['consultation']['customer_message_sent'] is False
+    assert [item[0] for item in calls]==['handoff','consultation']
+    assert calls[1][1]['recipient_id']==11 and calls[1][1]['evidence']['source_external_id']=='m1'
 
