@@ -100,3 +100,23 @@ rollback rather than overwriting it. Legacy backups require separate review.
 Old source links resolve through the exact active backup only for history reads,
 with tenant/channel/lead matching; mutation routes do not gain this redirect.
 Backups remain private PostgreSQL records, never public media or audit payloads.
+
+### Proven avatar timestamp drift
+
+An already-available avatar GET no longer updates route `updated_at`. Older
+deployments did so after downloading the protected avatar even when status was
+unchanged. Timestamp-only drift is NOT ignored globally: stored snapshot digests
+still contain all fields. Owner-only `rollback_preflight()` locks and compares the
+complete live dataset without restoring anything. It permits a strictly newer
+route timestamp only with an existing, exact before/after-digest audit receipt
+from independent administrative verification of authenticated Railway avatar HTTP
+logs. The internal certification helper is not exposed through HTTP or MCP, and
+neither preflight nor rollback can certify their own evidence. Missing/unknown
+provenance, further touches, new fields or any substantive route/dependency/message
+change fail closed. Receipt evidence records the deployment, request time, status,
+channel and lead; message text/secrets are not recorded.
+
+Rollback keeps the legitimate newer canonical timestamp, restores the source
+route from the original snapshot and verifies against an explicit expected result
+with that single certified timestamp substitution. Original backups are never
+rewritten; rollback audit/request receipts identify the certification used.
