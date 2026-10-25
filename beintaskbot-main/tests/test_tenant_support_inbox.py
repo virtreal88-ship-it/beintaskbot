@@ -646,6 +646,37 @@ def test_simulation_executor_records_virtual_reply_and_has_no_live_effects(db,mo
     assert db.execute("SELECT sum(actual_tokens) AS n FROM saas_ai_simulation_usage WHERE tenant_id=%s::uuid",(A,))[0]['n']==37
 
 
+def test_simulation_next_synthetic_turn_receives_prior_virtual_state(db,monkeypatch):
+    """Only the preceding virtual result in this simulation session is reused."""
+    source=seed_simulation(db)
+    _enable_spend_budget(db,monkeypatch)
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION', json.dumps({'test-model': {'input': 1_000_000, 'output': 2_000_000}}))
+    monkeypatch.setattr(simulation,'runtime_flag',lambda _name: True)
+    monkeypatch.setattr(actions,'enabled_triggers',lambda *_: [])
+    monkeypatch.setattr(run_store,'knowledge_context',lambda *_args,**_kwargs: [])
+    monkeypatch.setattr(simulation,'_provider_credentials',lambda *_: ('mock-key','test-model','company',{}))
+    prior_states=[]
+    def fake_generate(*_args,**kwargs):
+        prior_states.append(kwargs['extra_context']['prior_simulation_state'])
+        return f'Synthetic draft {len(prior_states)}',{'total_tokens':7}
+    monkeypatch.setattr('tenant_chat_ai_provider.generate',fake_generate)
+
+    assert queue_simulation(db,source=source,event='synthetic-first')
+    assert simulation.process(simulation.claim_next())
+    second=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type) VALUES(%s::uuid,%s::uuid,41,'connect:synthetic-second',%s,'incoming','Synthetic client','Synthetic follow-up','text')",
+               (second,A,'connect:'+CA));db.commit()
+    assert queue_simulation(db,source=second,event='synthetic-second')
+    assert simulation.process(simulation.claim_next())
+
+    assert prior_states[0]=={}
+    assert prior_states[1]=={'outcome':'virtual_reply','last_reply':'Synthetic draft 1',
+                             'stop_reason':'','sent':False}
+    state=db.execute("SELECT virtual_state FROM saas_ai_simulation_dialog_state WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id='client'",(A,CA))[0]['virtual_state']
+    assert state['source_message_id']==second and state['last_reply']=='Synthetic draft 2'
+    assert not db.execute("SELECT 1 FROM saas_ai_simulation_dialog_state WHERE tenant_id=%s::uuid",(B,))
+
+
 @pytest.mark.parametrize('action,expected_outcome,event_type',[
     ('stop','virtual_stop',None),('handoff','virtual_stop','virtual_handoff'),
     ('create_task','virtual_stop','virtual_employee_request'),('clarify','virtual_reply',None),

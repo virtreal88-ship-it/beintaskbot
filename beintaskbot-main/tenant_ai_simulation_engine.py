@@ -309,7 +309,10 @@ def claim_next():
               WHERE id=%s::uuid AND tenant_id=%s::uuid AND state='queued' RETURNING *''',
               (token,row['id'],row['tenant_id']))
             claimed = dict(cur.fetchone())
-            claimed.update({key:row[key] for key in ('agent_id','token_budget','message_limit','max_parallel','max_calls_per_event','max_output_tokens')})
+            # Keep the exact config-session version through completion.  The
+            # virtual dialog state is keyed to this start time, not to the
+            # worker's current wall clock.
+            claimed.update({key:row[key] for key in ('agent_id','simulation_started_at','token_budget','message_limit','max_parallel','max_calls_per_event','max_output_tokens')})
         conn.commit()
         return claimed
 
@@ -900,11 +903,17 @@ def process(job):
                 cur.execute('''SELECT c.enabled,c.emergency_stop,c.max_output_tokens,c.max_calls_per_event,c.token_budget,
                     a.id,a.instructions,a.model,a.language,a.style,a.safety,a.expert_policy,a.response_policy,a.schedule,
                     s.enabled AS company_enabled,s.operating_mode AS company_mode,s.emergency_stop AS company_stop,t.status AS tenant_status,
-                    i.metadata,i.secrets FROM saas_ai_simulation_configs c
+                    i.metadata,i.secrets,
+                    (SELECT d.virtual_state FROM saas_ai_simulation_dialog_state d
+                      WHERE %s::boolean AND d.tenant_id=c.tenant_id
+                        AND d.channel_id=%s::uuid AND d.conversation_id=%s
+                        AND d.session_started_at=c.starts_at) AS prior_virtual_state
+                    FROM saas_ai_simulation_configs c
                   JOIN saas_ai_agents a ON a.tenant_id=c.tenant_id AND a.id=c.agent_id
                   JOIN saas_ai_agent_settings s ON s.tenant_id=c.tenant_id JOIN saas_tenants t ON t.id=c.tenant_id
                   LEFT JOIN saas_tenant_integrations i ON i.tenant_id=c.tenant_id AND i.provider='chat_ai'
-                  WHERE c.tenant_id=%s::uuid FOR SHARE OF c,a,s,t''',(tenant,))
+                  WHERE c.tenant_id=%s::uuid FOR SHARE OF c,a,s,t''',
+                  (not bool(job.get('recheck_of_run_id')),channel,conversation,tenant))
                 config=cur.fetchone() or {}
                 if (not runtime_flag('AI_SIMULATION_ENABLED') or not runtime_flag('AI_AGENTS_ENABLED')
                     or not config.get('enabled') or config.get('emergency_stop') or config.get('company_stop')
