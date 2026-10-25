@@ -4,7 +4,7 @@ import uuid
 
 from tenant_platform_common import (
     _DEFAULT_MODULES, _DEFAULT_NOTIFICATIONS, _ROLE_PERMISSIONS,
-    _permissions, _role, _slug, _tenant_payload,
+    _permissions, _known_permissions, _role, _slug, _tenant_payload,
 )
 from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, _json
 from tenant_workflow_store import _read_tenant_workflow
@@ -266,6 +266,12 @@ def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_na
     selected_role = _role(str(role or ""), owner=is_owner)
     selected_permissions = _permissions(permissions, selected_role)
     existing_member = member(tenant_id, target_id)
+    # A newer UI may not know a historical, now-retired grant.  Keep it
+    # visible/read-only and preserve it during an otherwise unrelated edit;
+    # authorization still fails closed because TenantPolicy does not infer it.
+    if existing_member and selected_role != 'owner':
+        legacy=[item for item in (existing_member.get('permissions') or []) if item not in _known_permissions()]
+        selected_permissions=list(dict.fromkeys(selected_permissions+legacy))
     existed = existing_member is not None
     if current.get('role') != 'owner':
         if selected_role in {'owner', 'admin'} or set(selected_permissions) - set(current.get('permissions') or []):
