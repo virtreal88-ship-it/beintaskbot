@@ -140,6 +140,26 @@ def test_direct_login_employee_is_atomic_and_does_not_require_synthetic_email(db
     db.rollback()
 
 
+def test_employee_rights_round_trip_preserves_hidden_and_legacy_grants(db, monkeypatch):
+    """Real isolated PostgreSQL round-trip for the employee-editor payload."""
+    monkeypatch.setattr(member_store, '_connect', lambda: db)
+    db.execute('''INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions)
+      VALUES(%s::uuid,77,'operator','Legacy employee',%s::jsonb)''',
+               (A,'["tasks","deals","customers","employees","finance","legacy:retired"]'))
+    db.commit()
+    member_store.upsert_member(tenant_id=A,owner_id=11,telegram_id=77,
+        display_name='Legacy employee',role='operator',permissions=['tasks','deals','customers','dialogs','support'])
+    db.commit()
+    row=db.execute('SELECT role,permissions FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=77',(A,))[0]
+    assert row['role']=='operator'
+    assert set(row['permissions'])=={'tasks','deals','customers','dialogs','support','employees','finance','legacy:retired'}
+    # The returned shape separates stored grants from policy-effective access.
+    reopened=member_store.list_members(tenant_id=A,owner_id=11)
+    target=next(item for item in reopened if item['telegram_id']==77)
+    assert {'employees','finance','legacy:retired'} <= set(target['explicit_permissions'])
+    assert target['legacy_permissions']==['legacy:retired']
+
+
 def test_manual_ticket_survives_unavailable_ai(db):
     result=manual()
     assert result['ticket']['summary_state']=='unavailable'
