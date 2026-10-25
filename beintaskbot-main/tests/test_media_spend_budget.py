@@ -37,6 +37,26 @@ def test_media_reservations_share_cap_and_are_idempotent(priced):
     assert priced.execute("SELECT reserved_microusd,state FROM saas_ai_spend_reservations WHERE call_key='media:asr'")[0]=={'reserved_microusd':300,'state':'reserved'}
 
 
+def test_second_worker_observes_committed_media_reservation(priced):
+    """A competing request must see an already committed reservation under the shared cap.
+
+    PGlite has one process/connection, so this is deliberately a two-transaction
+    regression rather than a claim of native PostgreSQL lock-concurrency coverage.
+    """
+    with priced.cursor() as cur:
+        budget.reserve_media(cur,A,'media:first','knowledge_asr','asr-model','asr',3)
+    priced.commit()
+
+    with priced.cursor() as cur:
+        with pytest.raises(TenantLinearError,match='ai_spend_budget_exhausted'):
+            budget.reserve_media(cur,A,'media:second','knowledge_vision','vision-model','vision_low',1)
+    priced.rollback()
+
+    assert priced.execute(
+        "SELECT reserved_microusd,state FROM saas_ai_spend_reservations WHERE call_key='media:first'"
+    )[0]=={'reserved_microusd':900,'state':'reserved'}
+
+
 def test_media_settlement_releases_unused_and_retains_unknown(priced):
     with priced.cursor() as cur:
         budget.reserve_media(cur,A,'media:unused','knowledge_asr','asr-model','asr',1)
