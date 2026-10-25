@@ -4,6 +4,7 @@ This module never calls a model or exposes CRM/Connect credentials.  It is
 disabled unless the Railway owner supplies all MCP_* variables.  OAuth access
 tokens are opaque, hashed at rest, short lived and may be revoked.
 """
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -546,9 +547,19 @@ async def mcp(request):
         if method=='tools/call':
             cfg=_authorize_token(request)
             tool_name=str(data.get('params',{}).get('name',''))
+            arguments=data.get('params',{}).get('arguments') or {}
+            # `_authorize_token` has already completed and committed the MCP
+            # schema setup in its own connection.  Historical replay opens its
+            # own read-only connection, so dispatching it while this handler
+            # holds another transaction (and a migration DDL lock) can wait on
+            # itself.  Keep this narrow read path outside the write dispatcher
+            # and off the aiohttp event loop; all approval/apply writes below
+            # retain their original single-transaction behavior.
+            if tool_name in {'administrator_historical_replay_candidates','administrator_historical_replay_preflight'}:
+                output=await asyncio.to_thread(_tools,None,cfg,tool_name,arguments)
+                return _tool_response(output,request_id)
             with _connect() as conn:
-                ensure_mcp_schema(conn)
-                with conn.cursor() as cur: output=_tools(cur,cfg,tool_name,data.get('params',{}).get('arguments') or {})
+                with conn.cursor() as cur: output=_tools(cur,cfg,tool_name,arguments)
                 # Serialize the whole response before any write is committed.
                 # An encoder exception therefore remains rollback-safe.
                 response=_tool_response(output,request_id)
