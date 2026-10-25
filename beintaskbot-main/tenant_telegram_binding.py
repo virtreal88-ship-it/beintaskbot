@@ -46,7 +46,14 @@ def request_binding(*, tenant_id: str, actor_id: int, bot_username: str) -> dict
             'start_payload': 'bind_' + raw}
 
 
-def complete_binding(*, chat_id: int, token: str) -> dict:
+def complete_binding(*, chat_id: int, user_id: int, token: str) -> dict:
+    """Consume a binding token only from the owner of a private Telegram chat."""
+    try:
+        chat_id, user_id = int(chat_id), int(user_id)
+    except (TypeError, ValueError):
+        raise TenantPlatformError('Telegram şəxsi söhbəti təsdiqlənmədi.') from None
+    if chat_id <= 0 or user_id <= 0 or chat_id != user_id:
+        raise TenantPlatformError('Telegram şəxsi söhbəti təsdiqlənmədi.')
     digest = hashlib.sha256(str(token or '').encode()).hexdigest()
     with _connect() as conn:
         _ensure_schema(conn)
@@ -63,7 +70,7 @@ def complete_binding(*, chat_id: int, token: str) -> dict:
                 raise TenantPlatformError('Şirkət üzvlüyü aktiv deyil.')
             cur.execute('''INSERT INTO saas_tenant_telegram_bindings(tenant_id,actor_id,chat_id,verified_at,revoked_at)
               VALUES(%s,%s,%s,now(),NULL) ON CONFLICT(tenant_id,actor_id) DO UPDATE SET chat_id=EXCLUDED.chat_id,
-              verified_at=now(),revoked_at=NULL''', (row['tenant_id'], row['actor_id'], int(chat_id)))
+              verified_at=now(),revoked_at=NULL''', (row['tenant_id'], row['actor_id'], chat_id))
             cur.execute('UPDATE saas_tenant_telegram_binding_tokens SET used_at=now() WHERE id=%s', (row['id'],))
         conn.commit()
     return {'bound': True, 'tenant_id': str(row['tenant_id']), 'actor_id': int(row['actor_id'])}
@@ -81,11 +88,19 @@ def binding_status(*, tenant_id: str, actor_id: int) -> dict:
 
 
 def bound_chat_id(*, tenant_id: str, actor_id: int) -> int | None:
+    snapshot = binding_snapshot(tenant_id=tenant_id, actor_id=actor_id)
+    return snapshot['chat_id'] if snapshot else None
+
+
+def binding_snapshot(*, tenant_id: str, actor_id: int) -> dict | None:
+    """Current verified recipient identity, never an employee actor id."""
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             _schema(cur)
-            cur.execute('''SELECT chat_id FROM saas_tenant_telegram_bindings
+            cur.execute('''SELECT chat_id,verified_at FROM saas_tenant_telegram_bindings
               WHERE tenant_id=%s::uuid AND actor_id=%s AND revoked_at IS NULL''', (tenant_id, int(actor_id)))
             row = cur.fetchone()
-    return int(row['chat_id']) if row else None
+    if not row:
+        return None
+    return {'chat_id': int(row['chat_id']), 'verified_at': row['verified_at'].isoformat()}

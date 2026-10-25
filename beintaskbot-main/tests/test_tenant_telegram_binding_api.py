@@ -1,8 +1,11 @@
 import json
 import unittest
 from unittest.mock import AsyncMock, Mock
+import pytest
 
 from tenant_telegram_binding_api import TelegramBindingContext, handler
+from tenant_platform_core import TenantPlatformError
+from tenant_telegram_binding import complete_binding
 
 
 class Request:
@@ -31,3 +34,10 @@ class BindingApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_binding_requires_session(self):
         self.member.return_value=None
         self.assertEqual((await self.api(Request())).status,401)
+
+
+def test_binding_rejects_groups_and_spoofed_sender_before_database_access():
+    with pytest.raises(TenantPlatformError):
+        complete_binding(chat_id=-100123, user_id=42, token='one-time')
+    with pytest.raises(TenantPlatformError):
+        complete_binding(chat_id=42, user_id=43, token='one-time')

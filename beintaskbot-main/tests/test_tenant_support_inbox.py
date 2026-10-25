@@ -26,6 +26,9 @@ import tenant_ai_dashboard as ai_dashboard
 import tenant_ai_spend_budget as spend_budget
 import tenant_internal_consultations as consultations
 import tenant_member_store as member_store
+import tenant_consultation_notification_worker as consultation_worker
+import tenant_telegram_binding as telegram_binding
+import tenant_notifications as tenant_notifications
 from tenant_linear_policy import TenantLinearError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1093,6 +1096,34 @@ def test_internal_consultation_is_tenant_scoped_idempotent_and_never_sends_custo
     foreign={'tenant_id':B,'telegram_id':22}
     assert consultations.listing(foreign,ticket)['consultations']==[]
     with pytest.raises(TenantLinearError): consultations.reply(foreign,first['id'],{'response':'x','kind':'diagnosis'})
+
+
+def test_after_hours_ai_consultation_waits_for_in_hours_final_authorization(db, monkeypatch):
+    monkeypatch.setattr(consultations, '_connect', lambda: db)
+    monkeypatch.setattr(consultation_worker, '_connect', lambda: db)
+    monkeypatch.setattr(consultations, '_hours', lambda: False)
+    profile={'tenant_id':A,'telegram_id':11,'active':True,'role':'owner','permissions':['support'],'workflow':{}}
+    monkeypatch.setattr(member_store, 'member', lambda *_: profile)
+    monkeypatch.setattr(telegram_binding, 'binding_snapshot', lambda **_: {'chat_id':777,'verified_at':'2026-10-25T08:00:00+00:00'})
+    monkeypatch.setattr(tenant_notifications, 'notification_channels', lambda *_, **__: ['telegram'])
+    manual()
+    job={'tenant_id':A,'agent_id':AGENT,'provider':'connect','channel_id':CA,'conversation_id':'client','event_fingerprint':'webhook-after-hours'}
+    receipt=consultations.create_from_ai(job,recipient_id=11,reason='ai_developer_consultation:missing_knowledge',evidence={})
+    assert receipt['status']=='queued_after_hours' and receipt['delivery']=='telegram_pending'
+    queued=db.execute('''SELECT status,chat_id,binding_verified_at FROM saas_consultation_telegram_deliveries
+      WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid''',(A,receipt['id']))[0]
+    assert queued['status']=='pending' and queued['chat_id']==777
+    monkeypatch.setattr(consultation_worker, '_hours', lambda: False)
+    assert consultation_worker.claim_delivery() is None
+    monkeypatch.setattr(consultation_worker, '_hours', lambda: True)
+    monkeypatch.setattr(consultation_worker, 'member', lambda *_: profile)
+    monkeypatch.setattr(consultation_worker, 'binding_snapshot', lambda **_: {'chat_id':777,'verified_at':'2026-10-25T08:00:00+00:00'})
+    monkeypatch.setattr(consultation_worker, 'notification_channels', lambda *_, **__: ['telegram'])
+    claimed=consultation_worker.claim_delivery()
+    assert claimed and claimed['consultation_id']==receipt['id']
+    assert consultation_worker._current_delivery_permission(claimed)
+    row=db.execute('SELECT status FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,receipt['id']))[0]
+    assert row['status']=='waiting_specialist'
 
 
 def test_ai_consultation_uses_handoff_case_notifies_recipient_and_never_sends_customer_message(db, monkeypatch):
