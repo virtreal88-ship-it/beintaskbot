@@ -73,3 +73,30 @@ this was reproduced on baseline, without bypassing any security policy. Windows-
 are not counted as passes. Polling remains bounded at 30 seconds; no new realtime
 transport was introduced. Avatar refresh remains subject to the existing saved
 Connect copy/one-time source-fetch policy, rather than periodic Evolution calls.
+
+## Owner reconciliation of stopped direct conversations (Issue 248)
+
+The existing physical reconciliation now snapshots both routes, all messages,
+conversation states, terminal AI jobs, drafts, read cursors and identity aliases.
+Preview includes counts and a full-row digest; changes invalidate approval.
+Fixed-order PostgreSQL table locks (5-second lock timeout) fence concurrent writes
+during the short transaction. Audit, backup, receipt and migration commit together.
+Request UUID reuse requires identical parameters. No worker, provider or sender is
+called by this path; jobs keep their terminal state, revision and evidence.
+
+Only stopped states are supported: Human takes precedence over Paused, assignments
+must agree, and the state revision increases without resuming AI. Both originals
+are retained for rollback. Read-cursor collisions retain the earlier cursor, so
+unread messages cannot silently become read. Draft UUIDs, run/source evidence,
+message UUIDs, raw payloads, media and timestamps remain unchanged. Only routing
+fields move. In-flight/unknown jobs or sends, unscoped legacy states, conflicting
+assignments, unsupported case/contact/CRM/virtual-state dependencies and unknown
+foreign keys block reconciliation. Nothing clears those guards automatically.
+
+Version-2 rollback compares the complete current scoped dataset with the saved
+post-merge snapshot, then restores every original row and verifies equality before
+commit. A later message, read, edit, new dependency or schema mismatch blocks
+rollback rather than overwriting it. Legacy backups require separate review.
+Old source links resolve through the exact active backup only for history reads,
+with tenant/channel/lead matching; mutation routes do not gain this redirect.
+Backups remain private PostgreSQL records, never public media or audit payloads.

@@ -99,6 +99,10 @@ def test_scan_does_not_miss_evidence_after_first_thousand_messages(db):
 
 def test_existing_reconcile_accepts_alias_evidence_and_preserves_media(db,monkeypatch):
     monkeypatch.setattr(reconcile,'_connect',lambda:db);reconcile.ensure_schema(db);routes(db)
+    # Listing initializes absent cursors. Seed its cursor before the backup so
+    # an exact rollback is not asked to erase a later employee-visible change.
+    db.execute("""INSERT INTO saas_operator_dialog_reads(tenant_id,telegram_id,provider,channel_id,
+      conversation_id,lead_id,last_read_at) VALUES(%s::uuid,11,'connect',%s,%s,6101,now())""",(A,CA,JID));db.commit()
     before=db.execute('SELECT id,external_id,media_url,happened_at,author_name FROM saas_crm_messages ORDER BY id');db.commit()
     candidate=reconcile.preview(PROFILE,CA)['items'][0]
     result=reconcile.apply(PROFILE,{'operation':'merge','pair_id':candidate['pair_id'],
@@ -118,12 +122,12 @@ def test_existing_reconcile_accepts_alias_evidence_and_preserves_media(db,monkey
 
 def test_case_evidence_and_assignments_quarantine_physical_reconciliation(db,monkeypatch):
     monkeypatch.setattr(reconcile,'_connect',lambda:db);reconcile.ensure_schema(db);routes(db)
-    # An existing read cursor is already a dependency. The physical workflow
-    # must not detach it; logical merge remains independently reversible.
-    db.execute('''INSERT INTO saas_operator_dialog_reads(tenant_id,telegram_id,provider,channel_id,
-      conversation_id,lead_id,last_read_at) VALUES(%s::uuid,11,'connect',%s,%s,6102,now())''',(A,CA,LID));db.commit()
+    # Unknown participant-level data must not be removed by FK cascade.
+    db.execute('''INSERT INTO saas_connect_participant_display_names(tenant_id,connect_channel_id,
+      conversation_id,participant_jid,display_name,updated_by)
+      VALUES(%s::uuid,%s::uuid,%s,'synthetic@lid','Synthetic',11)''',(A,CA,LID));db.commit()
     candidate=reconcile.preview(PROFILE,CA)['items'][0]
-    assert not candidate['eligible'] and 'dependent_state_requires_review' in candidate['conflicts']
+    assert not candidate['eligible'] and 'unsupported_route_dependency:saas_connect_participant_display_names' in candidate['conflicts']
     with pytest.raises(TenantLinearError):
         reconcile.apply(PROFILE,{'operation':'merge','pair_id':candidate['pair_id'],
           'precondition':candidate['precondition'],'request_id':str(uuid.uuid4()),'confirm':True})

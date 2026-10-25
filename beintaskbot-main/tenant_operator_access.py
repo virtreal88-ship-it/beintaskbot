@@ -25,13 +25,25 @@ def authorize(cur,profile,permission='support'):
     return tenant,actor
 
 
-def assert_route(cur,tenant,policy,provider,conversation='',channel='',lead_id=None):
+def assert_route(cur,tenant,policy,provider,conversation='',channel='',lead_id=None,*,allow_merged=False):
     if provider=='connect':
         cur.execute('''SELECT c.* FROM saas_connect_conversations c WHERE c.tenant_id=%s::uuid
           AND (%s::bigint IS NULL OR c.lead_id=%s::bigint)
           AND (%s='' OR c.conversation_id=%s) AND (%s='' OR c.connect_channel_id::text=%s)''',
           (tenant,lead_id,lead_id,conversation,conversation,channel,channel))
         rows=cur.fetchall()
+        if allow_merged and not rows and lead_id is not None and channel:
+            # Exact, audited physical-merge redirect; never guess by name/phone.
+            # Retain old support/evidence links without exposing another route.
+            cur.execute("SELECT to_regclass('saas_connect_direct_merge_backups') AS present")
+            if cur.fetchone()['present']:
+                cur.execute('''SELECT c.* FROM saas_connect_direct_merge_backups b
+                  JOIN saas_connect_conversations c ON c.tenant_id=b.tenant_id
+                    AND c.connect_channel_id=b.channel_id AND c.conversation_id=b.canonical_conversation_id
+                  WHERE b.tenant_id=%s::uuid AND b.channel_id::text=%s AND b.state='merged'
+                    AND b.snapshot->>'version'='2' AND (b.snapshot->'leads'->>1)::bigint=%s
+                    AND (%s='' OR b.split_conversation_id=%s)''', (tenant,channel,int(lead_id),conversation,conversation))
+                rows=cur.fetchall()
         if len(rows)!=1: raise TenantLinearError('Диалог недоступен в этой компании или требуется выбрать канал.',404)
         return dict(rows[0])
     if provider!='kommo': raise TenantLinearError('Некорректный источник.')
