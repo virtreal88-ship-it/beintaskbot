@@ -229,6 +229,24 @@ def test_owner_component_revoked_scope_expired_and_superseded_capabilities_fail_
     db.commit()
 
 
+def test_web_reject_invalidates_widget_before_rerequest(db,monkeypatch):
+    token=_setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+drafts.DRAFT_SCOPE)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true');monkeypatch.setenv('AI_OWNER_COMPONENT_APPROVAL_ENABLED','true')
+    connection=str(uuid.uuid4()); digest=hashlib.sha256(token.encode()).hexdigest()
+    db.execute('UPDATE saas_ai_learning_mcp_tokens SET oauth_connection_id=%s::uuid WHERE token_hash=%s',(connection,digest));db.commit()
+    token_id=str(db.execute('SELECT id FROM saas_ai_learning_mcp_tokens WHERE token_hash=%s',(digest,))[0]['id'])
+    cfg=mcp._require_cfg();cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE],oauth_connection_id=connection,oauth_token_id=token_id)
+    with db.cursor() as cur:
+        draft=drafts.typed_create(cur,cfg,'owner_knowledge',{'title':'Web reject','content':'Inactive only.','owner_note':'Owner.'})
+        first=owner_component.prepare(cur,cfg,{'draft_id':draft['id'],'version':1})
+        approvals.approve(cur,PROFILE,first['approval_id'],'reject')
+        with pytest.raises(Exception): owner_component.decide(cur,cfg,capability=first['_component_meta']['owner_review']['capabilities']['approve'],action='approve')
+        second=owner_component.prepare(cur,cfg,{'draft_id':draft['id'],'version':1})
+        with pytest.raises(Exception): owner_component.decide(cur,cfg,capability=first['_component_meta']['owner_review']['capabilities']['reject'],action='reject')
+        assert second['approval_state']=='pending'
+    db.commit()
+
+
 def test_owner_component_is_not_advertised_when_drafts_are_disabled(db,monkeypatch):
     _setup(monkeypatch,db); monkeypatch.delenv('AI_LEARNING_MCP_DRAFTS_ENABLED',raising=False)
     async def check():
@@ -239,6 +257,22 @@ def test_owner_component_is_not_advertised_when_drafts_are_disabled(db,monkeypat
             resources=await client.post('/mcp',json={'jsonrpc':'2.0','id':2,'method':'resources/list'})
             assert (await resources.json())['result']['resources']==[]
     asyncio.run(check())
+
+
+def test_owner_provided_knowledge_remains_inactive_until_existing_apply_and_publish_gates(db,monkeypatch):
+    seed_simulation(db); _setup(monkeypatch,db)
+    monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true');monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')
+    cfg=mcp._require_cfg();cfg.update(actor_id=11,granted_scopes=[drafts.DRAFT_SCOPE,mcp.APPLY_SCOPE,approvals.PUBLISH_SCOPE],AI_LEARNING_MCP_AGENT_ID=AGENT,AI_LEARNING_MCP_CHANNEL_ID=CA)
+    with db.cursor() as cur:
+        draft=drafts.typed_create(cur,cfg,'owner_knowledge',{'title':'Owner verified for review','content':'Never invent a repair.','owner_note':'Owner confirms this is a draft, not CRM evidence.'})
+        receipt=approvals.request(cur,PROFILE,draft['id'],draft['version']);approvals.approve(cur,PROFILE,receipt['id'],'approve')
+        applied=apply.apply_knowledge_draft(cur,PROFILE,receipt['id'],draft['id'])
+        assert applied['active'] is False and applied['agent_bound'] is False
+        material=approvals._publication_object(cur,A,'knowledge',applied['source_id'])
+        grant=approvals.publication_grant(cur,PROFILE,{'material_hash':approvals._publication_hash(material),'draft_id':draft['id'],'version':draft['version'],'kind':'knowledge','object_id':applied['source_id'],'agent_id':AGENT,'channel_id':CA,'ttl_minutes':30,'review_confirmed':True})
+        published=mcp._tools(cur,cfg,'administrator_publish_reviewed',{'grant_id':grant['grant_id']})
+        assert published['published'] is True and published['public_link_created'] is False
+    db.commit()
 
 
 def test_cursor_is_bound_to_tenant_tool_and_content_policy(db,monkeypatch):

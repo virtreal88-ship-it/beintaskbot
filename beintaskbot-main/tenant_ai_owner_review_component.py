@@ -110,9 +110,8 @@ def prepare(cur, cfg, data):
     # fresh request becomes actionable. An already approved version is never
     # reopened through this bridge.
     cur.execute('''UPDATE saas_ai_owner_review_capabilities SET consumed_at=now()
-      WHERE tenant_id=%s::uuid AND owner_id=%s AND oauth_connection_id=%s::uuid
-        AND draft_id=%s::uuid AND draft_version=%s AND consumed_at IS NULL''',
-      (tenant, owner, connection_id, draft_id, data['version']))
+      WHERE tenant_id=%s::uuid AND draft_id=%s::uuid AND draft_version=%s AND consumed_at IS NULL''',
+      (tenant, draft_id, data['version']))
     approval = request(cur, profile, draft_id, data['version'])
     if approval['state'] != 'pending':
         raise TenantLinearError('This draft version was already decided; create a new version to review it again.', 409)
@@ -149,11 +148,7 @@ def prepare(cur, cfg, data):
 
 
 def decide(cur, cfg, *, capability, action):
-    """Consume one capability and approve/reject through the existing owner path.
-
-    The caller is responsible for deriving ``profile`` from the normal browser
-    session and enforcing Origin before it reaches this function.
-    """
+    """Consume one capability through the app-only validated bearer path."""
     if not enabled_for_manual_bridge():
         raise TenantLinearError('Owner component approval is not enabled.', 403)
     if action not in {'approve', 'reject'} or not isinstance(capability, str) or not 32 <= len(capability) <= 200:
@@ -201,14 +196,19 @@ def resource_html():
 <script>
 (() => { const api=window.openai; const status=document.querySelector('#status');
  const result=api&&api.toolResponseMetadata; const meta=(result&&((result.mcp_tool_result||result.call_tool_result||result)._meta))||{};
- const review=meta.owner_review||{}; const caps=review.capabilities||{};
+ let caps={}; const hydrate=(candidate)=>{ const review=(candidate&&candidate.owner_review)||{}; caps=review.capabilities||{};
  document.querySelector('#diff').textContent=JSON.stringify(review.exact_diff||{},null,2);
+ if (api&&typeof api.callTool==='function'&&caps.approve&&caps.reject) { status.textContent='Review this exact draft version.';
+   const a=document.querySelector('#approve'), r=document.querySelector('#reject'); a.disabled=false;r.disabled=false;a.onclick=invoke('approve');r.onclick=invoke('reject'); }
+ };
  const invoke=(action)=>async()=>{ try { status.textContent='Submitting…';
    const out=await api.callTool('administrator_owner_review_component_complete',{action,capability:caps[action]});
-   status.textContent=(out&&out.structuredContent&&out.structuredContent.state)||'Review submitted.';
+   const state=out&&out.structuredContent&&out.structuredContent.state;
+   if ((state!=='approved'&&state!=='rejected') || (out&&out.isError)) throw new Error('unconfirmed');
+   status.textContent=state==='approved'?'Approved.':'Rejected.';
    document.querySelector('#approve').disabled=true; document.querySelector('#reject').disabled=true;
  } catch (_) { status.textContent='Review could not be submitted. Use the authenticated owner screen.'; } };
- if (api&&typeof api.callTool==='function'&&caps.approve&&caps.reject) { status.textContent='Review this exact draft version.';
-   const a=document.querySelector('#approve'), r=document.querySelector('#reject'); a.disabled=false;r.disabled=false;a.onclick=invoke('approve');r.onclick=invoke('reject');
- } else status.textContent='This host cannot securely complete the review. Use the authenticated owner screen.';
+ hydrate(meta);
+ if (!(api&&typeof api.callTool==='function'&&caps.approve&&caps.reject)) status.textContent='This host cannot securely complete the review. Use the authenticated owner screen.';
+ window.addEventListener('message',(event)=>{const data=event&&event.data||{};const candidate=data.params&&data.params._meta||data._meta;if(candidate) hydrate(candidate);});
 })();</script></section></body></html>'''

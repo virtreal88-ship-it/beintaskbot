@@ -70,6 +70,14 @@ def approve(cur, profile, approval_id, decision):
     if not row or row['state']!='pending': raise TenantLinearError('Approval is unavailable or expired.',409)
     state='approved' if decision=='approve' else 'rejected'
     cur.execute('UPDATE saas_ai_administrator_approvals SET state=%s,approved_by=%s,approved_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(state,actor,tenant,approval_id))
+    # The MCP-app capability table is optional during a rolling deployment.
+    # Once present, every web decision invalidates all per-connection widgets
+    # for the exact draft version before the receipt can be used elsewhere.
+    cur.execute("SELECT to_regclass('saas_ai_owner_review_capabilities') AS relation")
+    if cur.fetchone()['relation']:
+        cur.execute('''UPDATE saas_ai_owner_review_capabilities SET consumed_at=now()
+          WHERE tenant_id=%s::uuid AND draft_id=%s::uuid AND draft_version=%s AND consumed_at IS NULL''',
+          (tenant,row['draft_id'],row['draft_version']))
     _audit(cur,tenant,actor,'ai_administrator_approval_'+state,'ai_administrator_approval',approval_id,{})
     return {'id':approval_id,'state':state}
 
