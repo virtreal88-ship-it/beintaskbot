@@ -140,14 +140,26 @@ def prepare(profile,data,review=None):
             if vision_calls and not campaign_source:raise TenantLinearError('Vision-кеш доступен только утверждённой кампании.',403)
 
             if extra_calls and int(meta.get('daily_limit') or 50)<=int(0): raise TenantLinearError('Недостаточно бюджета.',429)
-            # The shared monetary ledger has no price catalog for media models.
-            # Under a hard tenant cap, fail closed instead of silently bypassing it.
-            from tenant_ai_spend_budget import limit_microusd
-            if limit_microusd(tenant) and (data.get('allow_paid_asr') or data.get('allow_vision')):
-                raise TenantLinearError('ai_spend_unsupported_extra_model',409)
+            # Each possible paid media branch has its own configured fixed
+            # tariff.  Missing/unsupported prices fail closed before any bytes
+            # leave the service; the text-token reservation alone is not a
+            # monetary authorization for ASR or vision.
+            from tenant_ai_spend_budget import limit_microusd, reserve_media
             event='knowledge_extraction:'+request_id
             from tenant_ai_spend_budget import reserve as reserve_spend
             reserve_spend(cur,tenant,'extraction:'+request_id,'live_case_extraction',model,MAX_TOKENS,1800)
+            media_spend={}
+            if limit_microusd(tenant) and data.get('allow_paid_asr'):
+                from tenant_connect_voice import transcription_model
+                asr_model=transcription_model({'credential_source':source,'config':meta})
+                if not asr_model: raise TenantLinearError('ai_spend_media_price_unknown',409)
+                key_name='extraction:'+request_id+':asr'
+                reserve_media(cur,tenant,key_name,'knowledge_asr',asr_model,'asr',1)
+                media_spend['asr']={'key':key_name,'model':asr_model,'operation':'asr','units':1}
+            if limit_microusd(tenant) and vision_calls:
+                key_name='extraction:'+request_id+':vision'
+                reserve_media(cur,tenant,key_name,'knowledge_vision',model,'vision_low',vision_calls)
+                media_spend['vision']={'key':key_name,'model':model,'operation':'vision_low','units':vision_calls}
             cur.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,state) VALUES(%s::uuid,%s,'connect','knowledge_extraction','completed')",(tenant,event))
             cur.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,reserved_calls) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,%s,'generating',1)",(tenant,request_id,agent['id'],event,model))
             cur.execute("INSERT INTO saas_ai_agent_token_usage(tenant_id,id,run_id,agent_id,model,reserved_tokens) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s)",(tenant,str(uuid.uuid4()),request_id,agent['id'],model,MAX_TOKENS))
@@ -164,7 +176,7 @@ def prepare(profile,data,review=None):
                 cur.execute("UPDATE saas_knowledge_extractions SET media_results=%s::jsonb,deadline=now()+interval '240 seconds' WHERE tenant_id=%s::uuid AND id=%s::uuid",(_json(pending),tenant,request_id))
             store._audit(cur,tenant,item['actor'],'knowledge_extraction_requested','knowledge_extraction',request_id)
         conn.commit()
-    return {**item,'id':request_id,'key':key,'model':model,'agent_id':str(agent['id']),'review':review,'credential_source':source,'config':meta,'api_key':key}
+    return {**item,'id':request_id,'key':key,'model':model,'agent_id':str(agent['id']),'review':review,'credential_source':source,'config':meta,'api_key':key,'media_spend':media_spend}
 
 
 def parse(raw,item):
@@ -296,11 +308,20 @@ def finish(profile,item,values,usage,error,attempted,proposal=None):
             cur.execute('UPDATE saas_ai_agent_runs SET state=%s,error_code=%s,generated_at=CASE WHEN %s THEN now() ELSE generated_at END,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',
                 ('completed' if status=='completed' else ('unknown' if attempted else 'skipped'),error,bool(usage),tenant,request_id))
         conn.commit()
-    from tenant_ai_spend_budget import settle as settle_spend, release as release_spend
+    from tenant_ai_spend_budget import settle as settle_spend, release as release_spend, settle_media
     if not attempted:
         release_spend(item['tenant'],'extraction:'+str(item['id']))
     else:
         settle_spend(item['tenant'],'extraction:'+str(item['id']),usage or {},unknown=(status=='unknown'))
+    for name, plan in (item.get('media_spend') or {}).items():
+        if name=='asr':
+            attempted=1 if item.get('asr_attempted') else 0
+            unknown=bool(attempted and 'asr_usage' not in item)
+        else:
+            attempted=int(item.get('vision_attempts') or 0)
+            unknown=attempted>len(item.get('vision_usage') or [])
+        settle_media(item['tenant'],plan['key'],operation=plan['operation'],attempted_units=attempted,
+                     reserved_units=plan['units'],unknown=unknown)
 
 
 def check_active(profile,item):

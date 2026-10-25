@@ -37,6 +37,26 @@ def price(model):
         return None
 
 
+def media_price(model, operation):
+    """Return an allowlisted, fixed worst-case price for one media call.
+
+    Media APIs do not consistently return token usage.  They therefore cannot
+    share the text-token tariff.  Operations are admitted only when Railway
+    has an explicit non-secret tariff for the exact configured model and
+    operation (``asr`` or ``vision_low``); no code default can spend money.
+    """
+    if operation not in {'asr', 'vision_low'}:
+        return None
+    raw = _json_env('AI_MEDIA_OPERATION_PRICES_MICROUSD').get(str(model))
+    if not isinstance(raw, dict):
+        return None
+    try:
+        value = int(raw.get(operation))
+        return value if value > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 def ensure_schema(conn):
     with conn.cursor() as cur:
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_spend_reservations(
@@ -91,6 +111,65 @@ def reserve(cur, tenant_id, call_key, kind, model, input_upper=0, output_upper=0
                   VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,'reserved')''',
                 (tenant_id, reservation_id, str(call_key)[:200], str(model)[:100], str(kind)[:40], amount))
     return reservation_id
+
+
+def reserve_media(cur, tenant_id, call_key, kind, model, operation, units):
+    """Reserve a fixed, configured upper bound before a media provider call."""
+    cap = limit_microusd(tenant_id)
+    if not cap:
+        return None
+    if type(units) is not int or units < 1:
+        raise TenantLinearError('ai_spend_media_units_invalid', 409)
+    unit = media_price(model, operation)
+    if unit is None:
+        raise TenantLinearError('ai_spend_media_price_unknown', 409)
+    amount = unit * units
+    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ('tenant-ai-spend:' + str(tenant_id),))
+    cur.execute('SELECT id,state FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key=%s FOR UPDATE',
+                (tenant_id, str(call_key)[:200]))
+    old = cur.fetchone()
+    if old:
+        if old['state'] in {'reserved', 'unknown', 'settled'}:
+            return str(old['id'])
+        raise TenantLinearError('ai_spend_reservation_released', 409)
+    cur.execute('''SELECT COALESCE(sum(CASE WHEN state IN ('reserved','unknown') THEN reserved_microusd
+                    ELSE COALESCE(actual_microusd,reserved_microusd) END),0) AS used
+                   FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid''', (tenant_id,))
+    if int((cur.fetchone() or {}).get('used') or 0) + amount > cap:
+        raise TenantLinearError('ai_spend_budget_exhausted', 429)
+    reservation_id = str(uuid.uuid4())
+    cur.execute('''INSERT INTO saas_ai_spend_reservations
+                  (tenant_id,id,call_key,model,kind,reserved_microusd,state)
+                  VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,'reserved')''',
+                (tenant_id, reservation_id, str(call_key)[:200], str(model)[:100], str(kind)[:40], amount))
+    return reservation_id
+
+
+def settle_media(tenant_id, call_key, *, operation, attempted_units=0, reserved_units=0, unknown=False):
+    """Settle only known completed media calls; ambiguity retains the reserve."""
+    if not limit_microusd(tenant_id):
+        return
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ('tenant-ai-spend:' + str(tenant_id),))
+            cur.execute('SELECT model,reserved_microusd,state FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key=%s FOR UPDATE',
+                        (tenant_id, str(call_key)[:200]))
+            row = cur.fetchone()
+            if not row or row['state'] != 'reserved':
+                conn.commit(); return
+            unit = media_price(row['model'], operation)
+            actual = None if unknown or unit is None else unit * max(0, int(attempted_units or 0))
+            if actual is None or actual > int(row['reserved_microusd']):
+                cur.execute("UPDATE saas_ai_spend_reservations SET state='unknown',completed_at=now() WHERE tenant_id=%s::uuid AND call_key=%s",
+                            (tenant_id, str(call_key)[:200]))
+            elif not attempted_units:
+                cur.execute("UPDATE saas_ai_spend_reservations SET state='released',actual_microusd=0,completed_at=now() WHERE tenant_id=%s::uuid AND call_key=%s",
+                            (tenant_id, str(call_key)[:200]))
+            else:
+                cur.execute("UPDATE saas_ai_spend_reservations SET state='settled',actual_microusd=%s,completed_at=now() WHERE tenant_id=%s::uuid AND call_key=%s",
+                            (actual, tenant_id, str(call_key)[:200]))
+        conn.commit()
 
 
 def settle(tenant_id, call_key, usage, unknown=False):
