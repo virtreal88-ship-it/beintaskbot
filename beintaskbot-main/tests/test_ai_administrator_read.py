@@ -8,7 +8,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient,TestServer
 
-from test_tenant_support_inbox import A,B,CA,AGENT,PROFILE,database,db,seed_simulation,seed_simulation_run
+from test_tenant_support_inbox import A,B,CA,CB,AGENT,PROFILE,database,db,seed_simulation,seed_simulation_run
 from test_ai_learning_mcp import _setup
 import tenant_ai_learning_mcp as mcp
 import tenant_ai_administrator_read as admin
@@ -260,6 +260,22 @@ def test_owner_component_is_not_advertised_when_drafts_are_disabled(db,monkeypat
             resources=await client.post('/mcp',json={'jsonrpc':'2.0','id':2,'method':'resources/list'})
             assert (await resources.json())['result']['resources']==[]
     asyncio.run(check())
+
+
+def test_case_conversation_link_read_uses_existing_authorized_case_route(db,monkeypatch):
+    from test_knowledge_candidates import ready as candidate_ready, candidate as make_candidate
+    setup=candidate_ready.__wrapped__(db,monkeypatch)
+    value=make_candidate(setup)
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT));db.commit()
+    _setup(monkeypatch,db)
+    cfg=mcp._require_cfg();cfg.update(actor_id=11,granted_scopes=[admin.READ_SCOPE],AI_LEARNING_MCP_AGENT_ID=AGENT,AI_LEARNING_MCP_CHANNEL_ID=CA)
+    with db.cursor() as cur:
+        result=admin.read(cur,cfg,'administrator_case_conversation_link_read',{'case_id':value['id'],'message_id':value['source_message_ids'][0]})
+        assert result['route']=={'provider':'connect','channel_id':CA,'lead_id':41}
+        assert result['anchor_message_id']==value['source_message_ids'][0]
+        with pytest.raises(Exception): admin.read(cur,{**cfg,'AI_LEARNING_MCP_TENANT_ID':B,'actor_id':22},'administrator_case_conversation_link_read',{'case_id':value['id']})
+        with pytest.raises(Exception): admin.read(cur,{**cfg,'AI_LEARNING_MCP_CHANNEL_ID':str(uuid.uuid4())},'administrator_case_conversation_link_read',{'case_id':value['id']})
+    db.rollback()
 
 
 def test_owner_provided_knowledge_remains_inactive_until_existing_apply_and_publish_gates(db,monkeypatch):
