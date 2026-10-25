@@ -45,6 +45,12 @@ def _permissions(value, role: str) -> list[str]:
     return list(dict.fromkeys(requested))
 
 
+def _known_permissions() -> set[str]:
+    modules = {permission for values in _ROLE_PERMISSIONS.values() for permission in values}
+    return modules | {f'{module}:{action}' for module in modules
+                      for action in ('view','create','update','delete','assign','manage')}
+
+
 def _slug(name: str) -> str:
     base = re.sub(r"[^a-z0-9]+", "-", str(name).casefold()).strip("-")[:42] or "company"
     return f"{base}-{secrets.token_hex(3)}"
