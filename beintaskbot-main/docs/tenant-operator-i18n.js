@@ -23,6 +23,7 @@
     reasonLegacyChannel:['Старое состояние диалога не привязано к каналу. Требуется проверка администратором.','Dialoqun köhnə vəziyyəti kanala bağlı deyil. Administrator yoxlaması tələb olunur.','The legacy dialogue state has no channel binding. Administrator review is required.'],
     openPhoto:['Открыть фото','Şəkli aç','View photo'],openAudio:['Прослушать','Dinlə','Listen'],savedTranscript:['Сохранённая транскрипция','Saxlanılmış transkripsiya','Saved transcription'],
     mediaUnavailable:['Файл недоступен. Возможно, WhatsApp больше не хранит его.','Fayl əlçatan deyil. WhatsApp onu artıq saxlamaya bilər.','File unavailable. WhatsApp may no longer retain it.'],
+    mediaSizeUnknown:['Размер неизвестен','Ölçü məlum deyil','Size unknown'],
     mediaFailed:['Не удалось загрузить файл. Повторите позже.','Fayl yüklənmədi. Sonra yenidən yoxlayın.','Could not load the file. Try again later.'],
     mediaLarge:['Файл слишком большой: фото до 8 МБ, аудио до 10 МБ.','Fayl çox böyükdür: şəkil 8 MB, audio 10 MB.','File too large: photos up to 8 MB, audio up to 10 MB.'],
     mediaInvalid:['Файл повреждён или формат не поддерживается.','Fayl zədələnib və ya format dəstəklənmir.','File damaged or format unsupported.'],
