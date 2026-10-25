@@ -13,6 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from test_tenant_support_inbox import A, CA, PROFILE, database, db, seed_job, seed_simulation_run
 import tenant_ai_learning_mcp as mcp
+import tenant_ai_dialogue_merge as dialogue_merge
 import tenant_ai_agents_store as agents
 
 
@@ -132,8 +133,11 @@ def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, 
             assert mcp.OFFLINE_SCOPE in data['scopes_supported']
             assert mcp.KNOWLEDGE_DEDUP_SCOPE in data['scopes_supported']
             assert mcp.APPLY_SCOPE in data['scopes_supported']
+            assert mcp.DIALOGUE_MERGE_SCOPE in data['scopes_supported']
             protected=await client.get('/.well-known/oauth-protected-resource/mcp/ai-learning')
             assert (await protected.json())['resource']=='https://crm.test/mcp/ai-learning'
+            listed=await client.post('/mcp/ai-learning',json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
+            assert {'whatsapp_dialogue_duplicate_candidates','whatsapp_dialogue_merge'} <= {item['name'] for item in (await listed.json())['result']['tools']}
     asyncio.run(check())
 
 
@@ -167,6 +171,59 @@ def test_owner_mcp_knowledge_duplicate_preview_archive_rollback_is_scoped_and_id
     with db.cursor() as cur:
         with pytest.raises(Exception):
             mcp._tools(cur,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'knowledge_duplicate_preview',{'canonical_id':canonical,'duplicate_ids':[duplicate]})
+
+
+def test_mcp_dialogue_merge_is_provider_proven_private_and_reversible(db, monkeypatch):
+    _setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+mcp.DIALOGUE_MERGE_SCOPE)
+    dialogue_merge.ensure_schema(db)
+    jid,lid='994501234567@s.whatsapp.net','80427641475293@lid'
+    jid_lead,lid_lead=5101,5102
+    for conversation,lead in ((jid,jid_lead),(lid,lid_lead)):
+        db.execute('''INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,conversation_kind)
+          VALUES(%s::uuid,%s::uuid,%s,%s,'contact')''',(A,CA,conversation,lead))
+    for index,(lead,direction,conversation) in enumerate(((jid_lead,'incoming',jid),(lid_lead,'outgoing',lid))):
+        db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,raw)
+          VALUES(%s::uuid,%s::uuid,%s,%s,'connect:'||%s::text,%s,'private message',%s::jsonb)''',
+          (str(uuid.uuid4()),A,lead,'connect:identity-'+str(index),CA,direction,
+           json.dumps({'conversationId':conversation,'directIdentity':{'jid':jid,'lid':lid}})))
+    db.commit()
+    cfg={'AI_LEARNING_MCP_TENANT_ID':A,'AI_LEARNING_MCP_CHANNEL_ID':CA,
+         'AI_LEARNING_MCP_CURSOR_SECRET':'test-only-cursor-secret','actor_id':11,
+         'granted_scopes':[mcp.TOOL_SCOPE,mcp.DIALOGUE_MERGE_SCOPE]}
+    with db.cursor() as cur:
+        preview=mcp._tools(cur,cfg,'whatsapp_dialogue_duplicate_candidates',{})['items']
+        candidate=next(item for item in preview if item['eligible'])
+        assert candidate['canonical']=={'n':1,'incoming':1,'outgoing':0}
+        assert candidate['split']=={'n':1,'incoming':0,'outgoing':1}
+        assert jid not in json.dumps(candidate) and lid not in json.dumps(candidate)
+        before=db.execute('SELECT id,kommo_lead_id,external_id FROM saas_crm_messages WHERE kommo_lead_id=ANY(%s::bigint[]) ORDER BY id',([jid_lead,lid_lead],))
+        merge_request=str(uuid.uuid4())
+        merged=mcp._tools(cur,cfg,'whatsapp_dialogue_merge',{'operation':'merge','pair_id':candidate['pair_id'],
+          'precondition':candidate['precondition'],'request_id':merge_request})
+        assert merged['state']=='merged' and merged['logical_only'] and merged['preserved_message_ids']
+        replay=mcp._tools(cur,cfg,'whatsapp_dialogue_merge',{'operation':'merge','pair_id':candidate['pair_id'],
+          'precondition':candidate['precondition'],'request_id':merge_request})
+        assert replay['idempotent_replay'] is True
+        assert db.execute('SELECT id,kommo_lead_id,external_id FROM saas_crm_messages WHERE kommo_lead_id=ANY(%s::bigint[]) ORDER BY id',([jid_lead,lid_lead],))==before
+        current=mcp._tools(cur,cfg,'whatsapp_dialogue_duplicate_candidates',{'pair_id':candidate['pair_id']})['items'][0]
+        rolled=mcp._tools(cur,cfg,'whatsapp_dialogue_merge',{'operation':'rollback','pair_id':candidate['pair_id'],
+          'precondition':current['precondition'],'request_id':str(uuid.uuid4())})
+        assert rolled['state']=='rolled_back'
+    assert db.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE action IN ('ai_dialogue_merge_merge','ai_dialogue_merge_rollback')")[0]['n']==2
+    with db.cursor() as cur:
+        with pytest.raises(Exception):
+            mcp._tools(cur,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'whatsapp_dialogue_merge',{'operation':'merge','pair_id':candidate['pair_id'],
+              'precondition':candidate['precondition'],'request_id':str(uuid.uuid4())})
+    other='994507654321@s.whatsapp.net'
+    db.execute('''INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,conversation_kind)
+      VALUES(%s::uuid,%s::uuid,%s,5103,'contact')''',(A,CA,other))
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,raw)
+      VALUES(%s::uuid,%s::uuid,5103,'connect:ambiguous','connect:'||%s::text,'incoming',%s::jsonb)''',
+      (str(uuid.uuid4()),A,CA,json.dumps({'conversationId':lid,'directIdentity':{'jid':other,'lid':lid}})))
+    db.commit()
+    with db.cursor() as cur:
+        conflicted=mcp._tools(cur,cfg,'whatsapp_dialogue_duplicate_candidates',{'pair_id':candidate['pair_id']})['items'][0]
+    assert conflicted['eligible'] is False and 'provider_identity_ambiguous' in conflicted['conflicts']
 
 
 def test_draft_scope_requires_reauthorization_and_has_accurate_consent(db, monkeypatch):

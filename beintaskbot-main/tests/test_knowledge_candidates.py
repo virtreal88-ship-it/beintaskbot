@@ -102,6 +102,19 @@ def test_case_conversation_link_resolves_only_bound_tenant_evidence(ready):
         store.conversation_link(PROFILE,value['id'],anchor)
 
 
+def test_internal_forward_without_customer_evidence_cannot_become_support_case(ready):
+    db,_,_=ready;value=candidate(ready)
+    db.execute('''UPDATE saas_crm_messages SET direction='outgoing',raw='{}'::jsonb
+      WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[])''',(A,value['source_message_ids']))
+    db.commit()
+    opened=store.detail(PROFILE,value['id'])['candidate']
+    assert opened['source_customer_proven'] is False
+    assert opened['source_provenance']=='original_customer_unproven'
+    assert opened['can_approve'] is False and opened['approval_block_reason']=='original_customer_unproven'
+    with pytest.raises(TenantLinearError,match='original_customer_unproven'):
+        store.mutate(PROFILE,value['id'],{'expected_version':opened['version'],'agent_ids':[EXPERT]},'approve')
+
+
 def test_group_case_never_displays_group_jid_or_arbitrarily_picks_sender(ready):
     db,_,_=ready;value=candidate(ready);group='120363000000000@g.us'
     db.execute("UPDATE saas_knowledge_extractions SET route=jsonb_set(route,'{conversation_id}',to_jsonb(%s::text)) WHERE tenant_id=%s::uuid AND id=%s::uuid",(group,A,value['extraction_id']))
