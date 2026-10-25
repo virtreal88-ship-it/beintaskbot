@@ -142,8 +142,10 @@ def _public_context_line(value, *, conversation_id=''):
     author_type=str(value.get('author_type') or '')
     if author_type not in {'customer','participant','operator'}:
         author_type=context_author_type(value,conversation_id)
+    text=value.get('text') if 'text' in value else value.get('body')
+    receipt=str(value.get('media_evidence_context') or '')
     return {'role':author_type,'at':_iso(value.get('at') or value.get('happened_at') or value.get('created_at')),
-            'text':_redact(value.get('text') if 'text' in value else value.get('body')),
+            'text':_redact((str(text or '')+'\n'+receipt).strip()),
             'attachment':value.get('message_type') not in {'','text',None}}
 
 
@@ -205,8 +207,11 @@ def _runs(cur, cfg, cursor='', limit=10, include_context=False):
                   ORDER BY COALESCE(happened_at,created_at) DESC,created_at DESC,id DESC LIMIT 4''',
                   (cfg['AI_LEARNING_MCP_TENANT_ID'],row['lead_id'],'connect:'+cfg['AI_LEARNING_MCP_CHANNEL_ID'],
                    cfg['AI_LEARNING_MCP_TENANT_ID'],row['source_message_id'],row['source_message_id']))
+                context_rows=list(reversed(cur.fetchall()))
+                from tenant_media_evidence import annotate_rows
+                annotate_rows(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],context_rows)
                 item['context']=[_public_context_line(value,conversation_id=row['conversation_id'])
-                                 for value in reversed(cur.fetchall())]
+                                 for value in context_rows]
                 item['context_provenance']='legacy_cutoff_reconstruction'
         items.append(item)
     return {'items':items,'next_cursor':_cursor(cfg,page[-1]['created_at'],page[-1]['id']) if len(rows)>safe else None}

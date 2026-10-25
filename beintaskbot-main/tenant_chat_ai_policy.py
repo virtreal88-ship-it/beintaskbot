@@ -98,6 +98,7 @@ def history(rows, transcripts, *, analyzed_media=None, focus_media_ids=None, doc
         if str(row.get('channel') or '').startswith('connect:') and raw.get('verified_employee_id') is not None:
             role = 'SALES MANAGER'
         text = str(row.get('body') or '')[:2000]
+        receipt_context = str(row.get('media_evidence_context') or '')[:4000]
         if audio(row):
             transcript = transcripts.get(str(row['external_id']))
             if transcript:
@@ -116,5 +117,7 @@ def history(rows, transcripts, *, analyzed_media=None, focus_media_ids=None, doc
             else:
                 missing += 1
                 text += '\n[Attachment unavailable or not analyzed: do not infer its contents]'
+        if receipt_context:
+            text += '\n' + receipt_context
         lines.append({'speaker': role, 'text': text, 'at': str(row.get('happened_at') or '')})
     return lines, missing

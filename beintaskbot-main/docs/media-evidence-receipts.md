@@ -19,10 +19,12 @@ contract is added.  This avoids using a cache to expand their authority.
 
 ## Separate limits decision
 
-Preview/download limits (video 100 MiB / 120 seconds) are not analysis limits.
-Existing knowledge extraction stays at 20 MiB / 60 seconds, four files and two
-visuals.  Any change needs a separate cost, privacy, decoder and owner-consent
-review; it must not be inferred from the preview setting.
+Preview/download limits are separate from analysis admission.  Knowledge
+extraction now has an explicitly approved single-video bound of 100 MiB / 120
+seconds; photos remain 20 MiB and audio remains 10 MiB.  The existing four-file,
+two-visual and timeout bounds remain, only one video is downloaded in a fragment,
+and sampled frames remain partial evidence.  Any further limit change needs a
+separate cost, privacy, decoder and owner-consent review.
 
 ## One-video procedure after separate approval
 

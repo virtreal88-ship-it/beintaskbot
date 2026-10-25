@@ -151,6 +151,23 @@ def test_video_frames_are_bounded(context,monkeypatch):
     assert len(media.collect({},item)[0])==2
 
 
+def test_video_analysis_limit_is_100_mib_inclusive_and_separate_from_photo_audio():
+    assert media.media_byte_limit('video')==100*1024*1024
+    media.validate_media_size('video',100*1024*1024)
+    with pytest.raises(ValueError,match='video_size_limit'):
+        media.validate_media_size('video',100*1024*1024+1)
+    assert media.media_byte_limit('image')==20*1024*1024
+    assert media.media_byte_limit('audio')==10*1024*1024
+
+
+def test_video_analysis_duration_accepts_120_and_rejects_longer_or_missing():
+    media.validate_video_duration(120)
+    with pytest.raises(ValueError,match='video_duration_limit'):
+        media.validate_video_duration(120.001)
+    with pytest.raises(ValueError,match='video_duration_limit'):
+        media.validate_video_duration(None)
+
+
 def test_terminal_receipt_reuses_exact_scoped_evidence_without_download(context,monkeypatch):
     item,add,download=context;add('video')
     item['tenant_id']='tenant'

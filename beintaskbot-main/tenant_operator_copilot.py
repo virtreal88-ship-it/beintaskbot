@@ -54,6 +54,9 @@ def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message
                 body = prefix + '\n' + notice + '\n' + appendix[:room]
             else:
                 body = body[:max(0, max_message_chars - len(notice) - 1)] + ' ' + notice
+        receipt_context=str(row.get('media_evidence_context') or '')[:max_message_chars]
+        if receipt_context:
+            body=(body+'\n'+receipt_context)[:max_message_chars]
         room = max_chars - used
         if room <= 0:
             break
@@ -312,6 +315,8 @@ def run(profile, data):
             rows = list(reversed(cur.fetchall()))
             if not rows:
                 raise TenantLinearError('В диалоге пока нет сообщений.', 409)
+            from tenant_media_evidence import annotate_rows
+            annotate_rows(cur, tenant, rows)
             cur.execute('SELECT turns FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE', thread_key)
             turns_row = cur.fetchone() or {}
             turns = turns_row.get('turns') if isinstance(turns_row.get('turns'), list) else []

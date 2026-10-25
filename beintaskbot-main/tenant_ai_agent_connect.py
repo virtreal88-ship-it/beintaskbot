@@ -465,6 +465,8 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
                 AND m.channel=%s ORDER BY m.happened_at DESC,m.id DESC LIMIT 80
               ) recent ORDER BY happened_at,id''', (tenant, int(lead_id), 'connect:' + channel_id))
             rows = cur.fetchall()
+            from tenant_media_evidence import annotate_rows
+            annotate_rows(cur, tenant, rows)
     return [{'external_id': str(row.get('external_id') or '').removeprefix('connect:'),
              'direction': str(row.get('direction') or ''), 'body': str(row.get('body') or ''),
              'message_type': str(row.get('message_type') or 'text'), 'media_url': str(row.get('media_url') or ''),

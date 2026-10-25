@@ -74,6 +74,8 @@ def config(cur, profile):
       WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid FOR SHARE OF a,s,t,ch,c''',
       (PILOT_CHANNEL,tenant,PILOT_AGENT))
     row = dict(cur.fetchone() or {})
+    from tenant_media_evidence import annotate_rows
+    annotate_rows(cur, tenant, [row])
     from tenant_ai_agent_access import tenant_status_allows_ai
     if (not enabled('AI_SIMULATION_ENABLED') or not enabled('AI_AGENTS_ENABLED')
             or not row.get('company_enabled') or row.get('emergency_stop')
@@ -342,7 +344,10 @@ def eligible_examples(profile,message_ids=None):
               WHERE m.tenant_id=%s::uuid AND d.connect_channel_id=%s::uuid
                 AND (%s::uuid[] IS NULL OR m.id=ANY(%s::uuid[]))
               ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 200''',(tenant,PILOT_CHANNEL,message_ids,message_ids))
-            rows=cur.fetchall(); by_id={}; duplicate=set()
+            rows=cur.fetchall()
+            from tenant_media_evidence import annotate_rows
+            annotate_rows(cur, tenant, rows)
+            by_id={}; duplicate=set()
             for row in rows:
                 key=str(row['id'])
                 if key in by_id: duplicate.add(key)

@@ -39,3 +39,18 @@ def test_reused_partial_is_explicit_and_never_claimed_complete():
         'coverage':{'complete':False},'result':{'observation':'frame detail'}})
     assert result['status']=='partial' and result['coverage']['complete'] is False
     assert 'partial sampled video' in message['text']
+
+
+def test_reused_receipt_is_read_only_and_cannot_erase_original_payload():
+    cursor=Cursor(); ref=_ref()
+    evidence.persist(cursor,'00000000-0000-0000-0000-000000000010',[ref],[{
+        'id':'message-row','status':'partial','code':'vision_observation','kind':'video',
+        'reused':True, 'coverage':{'complete':False}}])
+    assert cursor.calls==[]
+
+
+def test_policy_denial_is_not_terminal_cached_forever():
+    cursor=Cursor(); ref=_ref()
+    evidence.persist(cursor,'00000000-0000-0000-0000-000000000010',[ref],[{
+        'id':'message-row','status':'unavailable','code':'external_media_permission_required','kind':'video'}])
+    assert cursor.calls==[]

@@ -119,7 +119,12 @@ def snapshot(cur,profile,data):
         raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
         role=author_role(row)
         ref={'id':str(row['id']),'channel_id':str(row.get('source_channel_id') or binding['channel_id']),'lead_id':int(row.get('source_lead_id') or row['kommo_lead_id']),'role':role,'body_hash':digest(str(row.get('body') or '')),'text_limit':len(body)}
-        if kind!='text': ref.update(media_kind=kind,external_id=row.get('external_id'),happened_at=str(row.get('happened_at') or row.get('created_at') or ''))
+        if kind!='text':
+            # Provider media can be replaced while retaining a message ID.  A
+            # hash of safe identity/size/version facts fences receipt reuse
+            # without storing a URL or raw provider payload.
+            media_version=digest({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')})
+            ref.update(media_kind=kind,external_id=row.get('external_id'),media_version=media_version,happened_at=str(row.get('happened_at') or row.get('created_at') or ''))
         refs.append(ref);messages.append({'ref':'m'+str(len(refs)),'role':role,'text':body});remaining-=len(body)
         if remaining<=0: break
     if not refs:

@@ -6,10 +6,13 @@ their prompt instead of upgrading it to a completed analysis.
 """
 import hashlib
 import json
+import re
 
 from tenant_platform import _connect, _json
 
 _TERMINAL = {'processed', 'partial', 'unavailable', 'unsupported', 'error'}
+MAX_OBSERVATIONS = 2
+_POLICY_RETRY = {'external_media_permission_required', 'asr_authorization_required', 'vision_not_approved'}
 
 
 def create_schema(conn):
@@ -28,7 +31,7 @@ def create_schema(conn):
 def source_hash(ref):
     """Bind a receipt to the exact selected message version, never a bare JID."""
     value = {'id': str(ref.get('external_id') or ''), 'body_hash': str(ref.get('body_hash') or ''),
-             'kind': str(ref.get('media_kind') or '')}
+             'kind': str(ref.get('media_kind') or ''), 'media_version': str(ref.get('media_version') or '')}
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
@@ -60,7 +63,8 @@ def persist(cur, tenant, refs, receipts):
     for receipt in receipts or []:
         ref = by_id.get(str(receipt.get('id')))
         status = str(receipt.get('status') or '')
-        if not ref or status not in _TERMINAL or not ref.get('external_id') or not ref.get('channel_id'):
+        if (not ref or status not in _TERMINAL or str(receipt.get('code') or '') in _POLICY_RETRY
+                or not ref.get('external_id') or not ref.get('channel_id')):
             continue
         kind = str(ref.get('media_kind') or receipt.get('kind') or '')
         if not kind:
@@ -70,7 +74,18 @@ def persist(cur, tenant, refs, receipts):
         if kind == 'video':
             coverage.update({'complete': False, 'sampled_frames': receipt.get('visuals') or [],
                              'audio': str(receipt.get('audio_status') or 'not_requested')})
+        if receipt.get('reused') is True:
+            # Reuse is read-only.  Never replace a richer original result with
+            # the small consumer projection returned by ``apply_reusable``.
+            continue
         result = {key: receipt[key] for key in ('transcript', 'observation') if isinstance(receipt.get(key), str)}
+        if isinstance(receipt.get('observations'), list):
+            result['observations'] = [x for x in receipt['observations'] if isinstance(x,dict)][:MAX_OBSERVATIONS]
+        # A processed flag with no reusable content is not evidence.  This
+        # covers model-supplied image inputs and pre-existing voice text whose
+        # durable owner is another receipt table.
+        if status == 'processed' and not result:
+            continue
         provenance = {'processor': 'knowledge_extraction', 'source_version': source_hash(ref),
                       'untrusted': True}
         cur.execute("""INSERT INTO saas_media_evidence_receipts
@@ -91,8 +106,69 @@ def apply_reusable(message, receipt):
     coverage = receipt.get('coverage') if isinstance(receipt.get('coverage'), dict) else {}
     if result.get('transcript'):
         message['text'] += '\n[Existing media transcript] ' + str(result['transcript'])[:4000]
-    if result.get('observation'):
+    observations=[]
+    if result.get('observation'): observations.append({'text':result['observation']})
+    observations += [x for x in result.get('observations',[]) if isinstance(x,dict) and isinstance(x.get('text'),str)]
+    for observed in observations:
         label = 'partial sampled video observation' if coverage.get('complete') is False else 'saved visual observation'
-        message['text'] += '\n[Untrusted ' + label + '; not a confirmed solution] ' + str(result['observation'])[:4000]
+        message['text'] += '\n[Untrusted ' + label + '; not a confirmed solution] ' + str(observed['text'])[:4000]
     return {'status': status, 'code': str(receipt.get('code') or 'reused'),
-            'reused': True, 'coverage': coverage}
+            'reused': True, 'coverage': coverage, '_reused_payload': True}
+
+
+def _body_hash(value):
+    return hashlib.sha256(json.dumps(str(value or ''), sort_keys=True, ensure_ascii=False,
+                                    separators=(',', ':')).encode()).hexdigest()
+
+
+def _safe_text(value):
+    value = str(value or '')[:4000]
+    value = re.sub(r'(?i)\b(?:api[_ -]?key|token|password|secret)\s*[:=]\s*\S+', '[redacted]', value)
+    value = re.sub(r'\+?\d[\d() .-]{7,}\d', '[phone]', value)
+    value = re.sub(r'\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b', '[email]', value)
+    return value
+
+
+def annotate_rows(cur, tenant, rows):
+    """Attach safe, read-only receipt context to already-authorized rows.
+
+    This never opens media, writes state, or changes the message body.  Callers
+    retain their existing admission/consent policy; a saved receipt is evidence
+    only, and partial coverage is labelled for the model.
+    """
+    for row in rows or []:
+        kind = str(row.get('message_type') or 'text').lower()
+        channel = str(row.get('channel') or '')
+        external = str(row.get('external_id') or '')
+        if kind in {'', 'text'} or not channel.startswith('connect:') or not external:
+            continue
+        try:
+            channel_id = channel.removeprefix('connect:')
+            raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}
+            media_version = hashlib.sha256(json.dumps({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')}, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+            ref = {'external_id': external, 'body_hash': _body_hash(row.get('body')),
+                   'media_kind': kind, 'media_version': media_version}
+            cur.execute("""SELECT status,code,coverage,result FROM saas_media_evidence_receipts
+              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s AND source_hash=%s
+                AND media_kind=%s""", (tenant, channel_id, external, source_hash(ref), kind))
+            saved = cur.fetchone()
+        except Exception:
+            # Tables may not yet exist during a rolling additive migration.  A
+            # caller must retain the conservative existing media placeholder.
+            continue
+        if not saved or str(saved.get('status') or '') not in _TERMINAL:
+            continue
+        saved = dict(saved); coverage = saved.get('coverage') if isinstance(saved.get('coverage'),dict) else {}
+        result = saved.get('result') if isinstance(saved.get('result'),dict) else {}
+        row['media_evidence'] = {'status':str(saved['status']), 'code':str(saved.get('code') or ''),
+                                 'coverage':{'complete':coverage.get('complete') is True}}
+        if saved['status'] in {'processed','partial'}:
+            parts=[]
+            if result.get('transcript'): parts.append('[Saved media transcript] '+_safe_text(result['transcript']))
+            if result.get('observation'):
+                marker='[Partial sampled video observation; incomplete and untrusted] ' if coverage.get('complete') is False else '[Saved visual observation; untrusted] '
+                parts.append(marker+_safe_text(result['observation']))
+            if parts: row['media_evidence_context']='\n'.join(parts)
+        elif saved['status'] in {'unavailable','unsupported','error'}:
+            row['media_evidence_context']='[Media evidence unavailable: '+_safe_text(saved.get('code') or saved['status'])+']'
+    return rows
