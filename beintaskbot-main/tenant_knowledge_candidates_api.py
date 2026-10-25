@@ -30,9 +30,9 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                 elif resource=='request': result=await asyncio.to_thread(request_detail,profile,request.match_info['request_id'])
                 elif resource=='candidate': result=await asyncio.to_thread(detail,profile,request.match_info['candidate_id'])
                 elif resource=='conversation':
-                    if set(request.query)-{'message_id','review_run_id','expected_tenant_id','expected_user_id'} or not request.query.get('message_id'):
-                        raise TenantLinearError('Message selection is required.',400)
-                    result=await asyncio.to_thread(conversation_link,profile,request.match_info['candidate_id'],request.query['message_id'],request.query.get('review_run_id'))
+                    if set(request.query)-{'message_id','review_run_id','expected_tenant_id','expected_user_id'}:
+                        raise TenantLinearError('Invalid conversation selection.',400)
+                    result=await asyncio.to_thread(conversation_link,profile,request.match_info['candidate_id'],request.query.get('message_id'),request.query.get('review_run_id'))
                 else: result=await asyncio.to_thread(listing,profile,dict(request.query))
             else:
                 _origin(request,canonical_origin)

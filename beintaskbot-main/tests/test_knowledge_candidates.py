@@ -91,6 +91,8 @@ def test_case_conversation_link_resolves_only_bound_tenant_evidence(ready):
     link=store.conversation_link(PROFILE,value['id'],anchor)
     assert link['case_id']==value['id'] and link['message_id']==anchor
     assert link['route']=={'provider':'connect','lead_id':41,'channel_id':CA,'conversation_id':'client'}
+    direct=store.conversation_link(PROFILE,value['id'])
+    assert direct['case_id']==value['id'] and direct['message_id'] in value['source_message_ids']
     with pytest.raises(TenantLinearError):
         store.conversation_link({'tenant_id':B,'telegram_id':22},value['id'],anchor)
     with pytest.raises(TenantLinearError):
