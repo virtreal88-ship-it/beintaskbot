@@ -19,8 +19,6 @@ from tenant_linear_policy import TenantLinearError
 
 
 MERGE_SCOPE = 'ai_learning.dialogue_merge'
-_LID = re.compile(r'^[0-9]{5,22}@lid$')
-_JID = re.compile(r'^[0-9]{5,22}@s\.whatsapp\.net$')
 
 
 def ensure_schema(conn):
@@ -72,54 +70,16 @@ def _owner(cur,cfg):
     return tenant,actor
 
 
-def _raw(value):
-    if isinstance(value,dict): return value
-    if isinstance(value,str):
-        try:
-            result=json.loads(value)
-            return result if isinstance(result,dict) else {}
-        except json.JSONDecodeError: pass
-    return {}
-
-
-def _direct_pair(raw):
-    pair=raw.get('directIdentity')
-    if not isinstance(pair,dict): return None
-    lid,jid=str(pair.get('lid') or ''),str(pair.get('jid') or '')
-    if not (_LID.fullmatch(lid) and _JID.fullmatch(jid) and raw.get('conversationId') in {lid,jid}): return None
-    return lid,jid
-
-
 def _pairs(cur,cfg):
     """Return only same-channel, non-group pairs proven by signed Connect data."""
     tenant,actor=_owner(cur,cfg); channel=str(uuid.UUID(str(cfg['AI_LEARNING_MCP_CHANNEL_ID'])))
-    cur.execute('''SELECT m.raw,m.external_id,c.conversation_id,c.lead_id
-      FROM saas_crm_messages m JOIN saas_connect_conversations c
-        ON c.tenant_id=m.tenant_id AND c.lead_id=m.kommo_lead_id
-        AND m.channel='connect:'||c.connect_channel_id::text
-      WHERE m.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid
-        AND m.external_id LIKE 'connect:%%' AND m.raw ? 'directIdentity'
-      ORDER BY m.id LIMIT 1000''',(tenant,channel))
-    graph={}; evidence={}; conflicting=set()
-    for row in cur.fetchall():
-        raw=_raw(row.get('raw')); pair=_direct_pair(raw)
-        if not pair: continue
-        lid,jid=pair
-        if str(row.get('conversation_id') or '') not in {lid,jid}: continue
-        graph.setdefault(lid,set()).add(jid);graph.setdefault(jid,set()).add(lid)
-        evidence.setdefault((lid,jid),0);evidence[(lid,jid)]+=1
-        if raw.get('conversationIdentityConflict') is True: conflicting.update(pair)
-    cur.execute('''SELECT conversation_id,lead_id,conversation_kind FROM saas_connect_conversations
-      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid''',(tenant,channel))
-    routes={str(row['conversation_id']):row for row in cur.fetchall()}
+    from tenant_connect_identity import inventory
+    scanned=inventory(cur,tenant,channel);routes=scanned['routes']
     items=[]
-    for (lid,jid),receipts in sorted(evidence.items()):
+    for proof in scanned['pairs']:
+        jid,lid=proof['canonical_id'],proof['split_id'];receipts=proof['receipts']
         left,right=routes.get(jid),routes.get(lid)
-        reasons=[]
-        if not left or not right: reasons.append('route_missing')
-        if graph.get(lid)!={jid} or graph.get(jid)!={lid}: reasons.append('provider_identity_ambiguous')
-        if lid in conflicting or jid in conflicting: reasons.append('provider_identity_conflict')
-        if any(str((route or {}).get('conversation_kind') or '').lower()=='group' for route in (left,right)): reasons.append('group_not_allowed')
+        reasons=list(proof['conflicts'])
         pair_id=_token(cfg,'dialogue-pair',tenant,channel,jid,lid)
         canonical={'n':0,'incoming':0,'outgoing':0};split={'n':0,'incoming':0,'outgoing':0}
         if left:
@@ -134,12 +94,12 @@ def _pairs(cur,cfg):
             split=dict(cur.fetchone() or split)
         cur.execute('''SELECT state FROM saas_ai_dialogue_merges WHERE tenant_id=%s::uuid AND pair_id=%s FOR SHARE''',(tenant,pair_id))
         mapping=cur.fetchone() or {}
-        identity_digest=_token(cfg,'provider-evidence',tenant,channel,jid,lid,receipts)
+        identity_digest=_token(cfg,'provider-evidence',tenant,channel,jid,lid,receipts,proof['sources'],reasons)
         state=str(mapping.get('state') or 'candidate')
         item={'pair_id':pair_id,'state':state,'eligible':not reasons and state!='merged','provider_receipts':receipts,
               'canonical':{key:int(canonical.get(key) or 0) for key in ('n','incoming','outgoing')},
               'split':{key:int(split.get(key) or 0) for key in ('n','incoming','outgoing')},
-              'conflicts':reasons, 'identity_digest':identity_digest}
+              'conflicts':reasons, 'identity_digest':identity_digest,'evidence_sources':proof['sources']}
         item['precondition']=_token(cfg,'dialogue-precondition',pair_id,state,identity_digest,
                                     item['canonical']['n'],item['split']['n'])
         items.append(item)
@@ -147,14 +107,35 @@ def _pairs(cur,cfg):
 
 
 def preview(cur,cfg,args):
-    if not isinstance(args,dict) or set(args)-{'pair_id'}: raise TenantLinearError('Invalid dialogue duplicate request.',400)
-    _,_,_,items=_pairs(cur,cfg)
+    if not isinstance(args,dict) or set(args)-{'pair_id','search'}: raise TenantLinearError('Invalid dialogue duplicate request.',400)
+    search=args.get('search','')
+    if not isinstance(search,str) or len(search)>100:raise TenantLinearError('Invalid dialogue search.',400)
+    tenant,_,channel,items=_pairs(cur,cfg)
     if args.get('pair_id'):
         items=[item for item in items if hmac.compare_digest(item['pair_id'],str(args['pair_id']))]
         if not items: raise TenantLinearError('Verified dialogue pair is unavailable.',404)
     # Identity digests are only a server-side freshness input, never a
     # customer/contact identifier.  Do not expose them to MCP.
-    return {'items':[ {key:value for key,value in item.items() if key!='identity_digest'} for item in items]}
+    from tenant_connect_identity import inventory
+    scan=inventory(cur,tenant,channel)
+    routes=[]
+    for identity,row in sorted(scan['routes'].items()):
+        if search and not any(search.casefold() in str(row.get(field) or '').casefold()
+                              for field in ('conversation_id','contact_name','display_name','manual_display_name','phone')):continue
+        reasons=sorted({reason for p in scan['pairs'] if identity in {p['canonical_id'],p['split_id']} for reason in p['conflicts']})
+        cur.execute('''SELECT count(*) AS n FROM saas_crm_messages WHERE tenant_id=%s::uuid
+          AND kommo_lead_id=%s AND channel<>%s''',(tenant,row['lead_id'],'connect:'+channel))
+        legacy=int(cur.fetchone()['n'])
+        routes.append({'route_id':_token(cfg,'dialogue-route',tenant,channel,identity),
+          'lead_id':int(row['lead_id']),'channel_id':channel,
+          'identity_kind':'lid' if identity.endswith('@lid') else 'phone_jid',
+          'messages':int(row['messages']),'incoming':int(row['incoming']),'outgoing':int(row['outgoing']),
+          'other_channel_messages':legacy,'conflicts':reasons,
+          'resolution':'review_required' if reasons else 'identity_not_compared'})
+    return {'items':[ {key:value for key,value in item.items() if key!='identity_digest'} for item in items],
+            'routes':routes,'scan_complete':scan['complete'],'scanned_routes':scan['scanned_routes'],
+            'excluded_routes':scan['excluded_routes'],'unmapped_messages':scan['unmapped_messages'],
+            'original_customer_identity':'unknown_until_provider_verified'}
 
 
 def _request(cur,tenant,request_id,operation,pair_id,precondition):
@@ -197,15 +178,12 @@ def execute(cur,cfg,args):
         # receives opaque pair IDs and aggregate counts, not JIDs/LIDs/phones.
         # The item was derived under the same cursor transaction.  Fetch pair
         # values again privately rather than accepting a client conversation ID.
-        cur.execute('''SELECT DISTINCT c.conversation_id,c.lead_id,m.raw FROM saas_crm_messages m
-          JOIN saas_connect_conversations c ON c.tenant_id=m.tenant_id AND c.lead_id=m.kommo_lead_id
-          WHERE m.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND m.channel='connect:'||%s::text
-            AND m.external_id LIKE 'connect:%%' AND m.raw ? 'directIdentity' ''',(tenant,channel,channel))
+        from tenant_connect_identity import inventory
+        fresh=inventory(cur,tenant,channel)
         match=None
-        for row in cur.fetchall():
-            pair=_direct_pair(_raw(row.get('raw')))
-            if pair and hmac.compare_digest(_token(cfg,'dialogue-pair',tenant,channel,pair[1],pair[0]),pair_id):
-                match=pair;break
+        for proof in fresh['pairs']:
+            if not proof['conflicts'] and hmac.compare_digest(_token(cfg,'dialogue-pair',tenant,channel,proof['canonical_id'],proof['split_id']),pair_id):
+                match=(proof['split_id'],proof['canonical_id']);break
         if not match: raise TenantLinearError('Verified dialogue pair is unavailable.',409)
         lid,jid=match
         cur.execute('''SELECT conversation_id,lead_id FROM saas_connect_conversations WHERE tenant_id=%s::uuid
@@ -235,9 +213,9 @@ def execute(cur,cfg,args):
 
 
 def definitions():
-    read={'type':'object','properties':{'pair_id':{'type':'string','pattern':'^[0-9a-f]{64}$'}},'additionalProperties':False}
+    read={'type':'object','properties':{'pair_id':{'type':'string','pattern':'^[0-9a-f]{64}$'},'search':{'type':'string','maxLength':100}},'additionalProperties':False}
     write={'type':'object','properties':{'operation':{'type':'string','enum':['merge','rollback']},'pair_id':{'type':'string','pattern':'^[0-9a-f]{64}$'},'precondition':{'type':'string','pattern':'^[0-9a-f]{64}$'},'request_id':{'type':'string','format':'uuid'}},'required':['operation','pair_id','precondition','request_id'],'additionalProperties':False}
     return [
-      {'name':'whatsapp_dialogue_duplicate_candidates','description':'Owner-scoped read-only provider-proven direct WhatsApp split-history candidates. Returns only opaque pair IDs, aggregate counts and conflicts; never phone/JID/LID, text, names, or media.', 'inputSchema':read,'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':['ai_learning.read']}]},
+      {'name':'whatsapp_dialogue_duplicate_candidates','description':'Owner-scoped full-channel direct WhatsApp identity inventory with optional search. Reports provider-confirmed aliases and blocked heuristic candidates, route/lead IDs, aggregate counts and conflicts; never phone/JID/LID, text, names, or media. Only eligible provider-proven pairs may be merged.', 'inputSchema':read,'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':['ai_learning.read']}]},
       {'name':'whatsapp_dialogue_merge','description':'Owner-delegated reversible logical merge for one freshly previewed, provider-proven direct pair. It never rewrites messages, attachments, timestamps, attribution, cases, CRM or WhatsApp; groups and ambiguous identities fail closed.', 'inputSchema':write,'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[MERGE_SCOPE]}]},
     ]
