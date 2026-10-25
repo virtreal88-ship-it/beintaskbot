@@ -169,11 +169,47 @@ const vm=require('vm'); const fs=require('fs'); const source=fs.readFileSync(0,'
 const elements={status:{textContent:''},diff:{textContent:''},approve:{disabled:true,hidden:false},reject:{disabled:true,hidden:false},publish:{disabled:true,hidden:true}};
 const calls=[];
 const api={toolResponseMetadata:{owner_publish:{capability:'x'.repeat(32),preview:{kind:'knowledge',source_id:'source',material_hash:'hash',agent_id:'agent',channel_id:'channel',material:{title:'Exact title'}}}},callTool:async(name,args)=>{calls.push([name,args]); return {structuredContent:{published:true}};}};
-const context={window:{openai:api},document:{querySelector:(selector)=>elements[selector.slice(1)]},JSON,Error};
+const context={window:{openai:api,parent:{},addEventListener:()=>{}},document:{querySelector:(selector)=>elements[selector.slice(1)]},JSON,Error};
 vm.runInNewContext(source,context);
 if (elements.publish.hidden||elements.publish.disabled||elements.status.textContent!=='Review this exact applied material before publication.') process.exit(2);
 const pending=elements.publish.onclick(); if (!elements.publish.disabled) process.exit(3);
 Promise.resolve(pending).then(()=>{if(calls.length!==1||calls[0][0]!=='administrator_owner_publish_component_complete'||calls[0][1].capability!=='x'.repeat(32)||elements.status.textContent!=='Published.') process.exit(4);}).catch(()=>process.exit(5));
+'''
+    result=subprocess.run(['node','-e',harness],input=script,text=True,capture_output=True,timeout=10)
+    assert result.returncode==0, result.stderr
+
+
+def test_owner_component_draft_widget_uses_only_documented_late_result_and_exact_receipts():
+    """Mock the MCP Apps JSON-RPC notification lifecycle, never arbitrary page messages."""
+    html=owner_component.resource_html()
+    script=html.split('<script>',1)[1].split('</script>',1)[0]
+    harness=r'''
+const vm=require('vm'),fs=require('fs'),source=fs.readFileSync(0,'utf8');
+const cap='a'.repeat(32), receipt='11111111-1111-1111-1111-111111111111';
+async function scenario(action,response) {
+  const elements={status:{textContent:''},diff:{textContent:''},approve:{disabled:true,hidden:false},reject:{disabled:true,hidden:false},publish:{disabled:true,hidden:true}};
+  let listener,resolve; const parent={}; const calls=[];
+  const api={toolResponseMetadata:{},callTool:(name,args)=>{calls.push([name,args]); return new Promise(r=>resolve=r);}};
+  const context={window:{openai:api,parent,addEventListener:(kind,fn)=>{if(kind==='message')listener=fn;}},document:{querySelector:q=>elements[q.slice(1)]},JSON,Error};
+  vm.runInNewContext(source,context);
+  if (!elements.approve.disabled||!elements.reject.disabled||typeof listener!=='function') throw Error('not disabled before late result');
+  // Untrusted non-parent input must not enable a decision.
+  listener({source:{},data:{jsonrpc:'2.0',method:'ui/notifications/tool-result',params:{_meta:{owner_review:{approval_id:receipt,capabilities:{approve:cap,reject:cap},exact_diff:{}}}}}});
+  if (!elements.approve.disabled) throw Error('accepted arbitrary message');
+  listener({source:parent,data:{jsonrpc:'2.0',method:'ui/notifications/tool-result',params:{_meta:{owner_review:{approval_id:receipt,capabilities:{approve:cap,reject:cap},exact_diff:{title:'exact'}}}}}});
+  const button=elements[action]; if (button.disabled) throw Error('late result did not hydrate');
+  const pending=button.onclick(); if (!elements.approve.disabled||!elements.reject.disabled) throw Error('pending controls enabled');
+  resolve(response); await pending;
+  if (calls.length!==1||calls[0][0]!=='administrator_owner_review_component_complete'||calls[0][1].approval_id!==receipt||calls[0][1].action!==action) throw Error('wrong completion request');
+  return elements.status.textContent;
+}
+(async()=>{
+  if (await scenario('approve',{structuredContent:{id:receipt,state:'approved'}})!=='Approved.') process.exit(2);
+  if (await scenario('reject',{structuredContent:{id:receipt,state:'rejected'}})!=='Rejected.') process.exit(3);
+  if (!(await scenario('approve',{structuredContent:{id:'other',state:'approved'}})).includes('could not')) process.exit(4);
+  if (!(await scenario('approve',{structuredContent:{id:receipt,state:'rejected'}})).includes('could not')) process.exit(5);
+  if (!(await scenario('approve',{isError:true,structuredContent:{id:receipt,state:'approved'}})).includes('could not')) process.exit(6);
+})().catch(()=>process.exit(7));
 '''
     result=subprocess.run(['node','-e',harness],input=script,text=True,capture_output=True,timeout=10)
     assert result.returncode==0, result.stderr
