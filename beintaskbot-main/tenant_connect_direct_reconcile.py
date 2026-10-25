@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import uuid
+from contextlib import nullcontext
 
 from tenant_platform import _connect, _json
 from tenant_ai_agents_store import _audit
@@ -76,25 +77,30 @@ def preview(profile, channel_id=''):
             tenant,_=_owner(cur,profile); items=_candidates(cur,tenant,str(channel_id or ''))
         conn.commit();return {'items':items,'total':len(items),'eligible':sum(x['eligible'] for x in items)}
 
-def apply(profile, payload):
+def apply(profile, payload, *, connection=None, channel_id=None):
     if not isinstance(payload,dict) or set(payload)!={'operation','pair_id','precondition','request_id','confirm'} or payload['confirm'] is not True:
         raise TenantLinearError('direct_merge_confirmation_required',400)
     operation=str(payload['operation']);pair_id=str(payload['pair_id']);precondition=str(payload['precondition'])
     if operation not in {'merge','rollback'} or not re.fullmatch(r'[a-f0-9]{64}',pair_id) or not re.fullmatch(r'[a-f0-9]{64}',precondition): raise TenantLinearError('direct_merge_request_invalid',400)
     try: request_id=str(uuid.UUID(str(payload['request_id'])))
     except (TypeError,ValueError): raise TenantLinearError('direct_merge_request_invalid',400) from None
-    with _connect() as conn:
-        ensure_schema(conn)
+    with (nullcontext(connection) if connection is not None else _connect()) as conn:
+        if connection is None: ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,actor=_owner(cur,profile)
             dependencies.lock(cur)
             cur.execute('SELECT result FROM saas_connect_direct_merge_requests WHERE tenant_id=%s::uuid AND request_id=%s::uuid FOR UPDATE',(tenant,request_id)); old=cur.fetchone()
             request_digest=_precondition(payload)
             if old:
+                if channel_id:
+                    cur.execute('SELECT channel_id::text AS channel FROM saas_connect_direct_merge_backups WHERE tenant_id=%s::uuid AND pair_id=%s', (tenant,pair_id))
+                    if (cur.fetchone() or {}).get('channel') != channel_id: raise TenantLinearError('direct_merge_channel_forbidden',403)
                 if old['result'].get('request_digest')!=request_digest: raise TenantLinearError('direct_merge_request_key_conflict',409)
                 return {**dict(old['result']),'idempotent_replay':True}
             candidates=_candidates(cur,tenant); item=next((x for x in candidates if x['pair_id']==pair_id),None)
             cur.execute('SELECT * FROM saas_connect_direct_merge_backups WHERE tenant_id=%s::uuid AND pair_id=%s FOR UPDATE',(tenant,pair_id)); backup=cur.fetchone()
+            if channel_id and str((item or backup or {}).get('channel_id') or '') != channel_id:
+                raise TenantLinearError('direct_merge_channel_forbidden',403)
             if operation=='merge':
                 if not item or item['precondition']!=precondition or not item['eligible']: raise TenantLinearError('direct_merge_preview_stale_or_blocked',409)
                 if backup and backup['state']=='merged': raise TenantLinearError('direct_merge_backup_conflict',409)
@@ -131,23 +137,25 @@ def apply(profile, payload):
             result['request_digest']=request_digest
             cur.execute('INSERT INTO saas_connect_direct_merge_requests(tenant_id,request_id,operation,pair_id,result) VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)',(tenant,request_id,operation,pair_id,_json(result)))
             _audit(cur,tenant,actor,'connect_direct_merge_'+operation,'connect_conversation',pair_id,{'channel_id':(item or backup)['channel_id'],'physical':True,'snapshot_version':2,'before_digest':_precondition(snapshot['before']),'after_digest':_precondition(snapshot['after']),'dependency_counts':result.get('dependency_counts',{}),'preserved_timestamp_touches':result.get('preserved_timestamp_touches',[])})
-        conn.commit();return result
+        if connection is None: conn.commit()
+        return result
 
 
-def rollback_preflight(profile,pair_id):
+def rollback_preflight(profile,pair_id, *, connection=None, channel_id=None):
     """Deterministic owner-only dry run under the same locks; never restores data."""
-    with _connect() as conn:
-        ensure_schema(conn)
+    with (nullcontext(connection) if connection is not None else _connect()) as conn:
+        if connection is None: ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,_=_owner(cur,profile);dependencies.lock(cur)
             cur.execute("SELECT * FROM saas_connect_direct_merge_backups WHERE tenant_id=%s::uuid AND pair_id=%s AND state='merged' FOR UPDATE",(tenant,pair_id))
             backup=cur.fetchone()
             if not backup or backup['snapshot'].get('version')!=2: raise TenantLinearError('direct_merge_rollback_unavailable',409)
+            if channel_id and str(backup['channel_id']) != channel_id: raise TenantLinearError('direct_merge_channel_forbidden',403)
             s=backup['snapshot'];channel=str(backup['channel_id'])
             current=dependencies.capture(cur,tenant,channel,s['ids'],s['leads'])
             reasons=dependencies.conflicts(cur,tenant,channel,s['ids'],s['leads'],current)
             if reasons: raise TenantLinearError('direct_merge_rollback_dependency_conflict',409)
             _,touches=dependencies.rollback_expected(cur,tenant,s['before'],s['after'],current)
             result={'eligible':True,'pair_id':pair_id,'backup_id':str(backup['id']),'current_digest':_precondition(current),'preserved_timestamp_touches':touches}
-        conn.rollback()
+        if connection is None: conn.rollback()
         return result
