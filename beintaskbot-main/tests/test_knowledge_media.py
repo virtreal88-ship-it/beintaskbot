@@ -215,8 +215,75 @@ def test_real_synthetic_video_decoder(tmp_path,monkeypatch):
     track,extension,mime=media.video_audio(path.read_bytes(),'video/mp4')
     assert extension=='wav' and mime=='audio/wav' and track.startswith(b'RIFF')
 
-from test_knowledge_candidates import ready, db, database, A, CA, PROFILE
+from test_knowledge_candidates import ready, db, database, A, CA, AGENT, PROFILE
 import tenant_knowledge_candidates_service as service
+
+
+def _authorized_inline_campaign(database, data):
+    """Synthetic approved campaign fixture; no real source or provider."""
+    import tenant_knowledge_campaign_schema as campaign_schema
+    import uuid
+    campaign_id=str(uuid.uuid4());request_id=str(uuid.uuid4())
+    campaign_schema.create_schema(database)
+    route={'provider':'connect','channel_id':CA,'conversation_id':'client','history_mode':'channel',
+           'allow_external_media':True,'allow_paid_asr':True,'approved_channel_ids':[CA]}
+    database.execute("""INSERT INTO saas_knowledge_campaigns
+      (tenant_id,id,created_by,sources,analysis_agent_id,status,approved_at,max_calls,max_tokens,media_policy)
+      VALUES(%s::uuid,%s::uuid,11,%s::jsonb,%s::uuid,'running',now(),8,64000,%s::jsonb)""",
+      (A,campaign_id,json.dumps([CA]),AGENT,json.dumps({'allow_external_media':True,'allow_paid_asr':True,'max_vision_calls':2,'max_asr_calls':1})))
+    database.execute("""INSERT INTO saas_knowledge_campaign_fragments
+      (tenant_id,campaign_id,id,source_key,route,status,lease_until)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,'synthetic-inline',%s::jsonb,'running',now()+interval '5 minutes')""",
+      (A,campaign_id,request_id,json.dumps(route)))
+    source=str(uuid.uuid4())
+    database.execute("""INSERT INTO saas_crm_messages
+      (tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,raw,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,'synthetic-inline-image',%s,'incoming','synthetic attachment','image',%s::jsonb,now()+interval '4 seconds')""",
+      (A,source,'connect:'+CA,json.dumps({'mediaId':'synthetic-inline','fileLength':100})))
+    database.commit()
+    return {**data,'request_id':request_id,'allow_external_media':True,'allow_paid_asr':True,
+            'approved_channel_ids':[CA]}
+
+
+def _priced_campaign_env(monkeypatch,database):
+    import tenant_ai_spend_budget as budget
+    monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD',json.dumps({A:1_000_000}))
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'fixture':{'input':1,'output':1}}))
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({
+        'fixture':{'vision_low':100},'gpt-4o-mini-transcribe':{'asr':50},
+    }))
+    monkeypatch.setattr(budget,'_connect',lambda:database)
+    monkeypatch.setattr(service,'platform_model',lambda:'fixture')
+
+
+def test_campaign_inline_visual_success_keeps_unknown_visual_reserve_and_aggregates_tokens(ready,monkeypatch):
+    """Authorized legacy inline route crosses the final mocked provider once."""
+    database,generation,data=ready
+    data=_authorized_inline_campaign(database,data);_priced_campaign_env(monkeypatch,database)
+    def collect(_,item,**__):
+        item['asr_attempted']=True;item['asr_usage']={'input_tokens':8,'output_tokens':2,'total_tokens':10}
+        ref=item['refs'][-1];return ([{'content':b'synthetic','content_type':'image/png','detail':'low','source_ref':item['messages'][-1]['ref']}],
+          [{**{key:ref[key] for key in ('id','channel_id','lead_id','role','happened_at')},'kind':'image','status':'pending_processing','code':'awaiting_model'}])
+    monkeypatch.setattr(media,'collect',collect)
+    response=service.analyze(PROFILE,data)
+    assert generation.call_args.kwargs['images'] and response['request']['status']=='completed'
+    rows={row['kind']:(row['state'],row['actual_microusd']) for row in database.execute('SELECT kind,state,actual_microusd FROM saas_ai_spend_reservations')}
+    assert rows['knowledge_asr'][0]=='settled' and rows['knowledge_vision']==('unknown',None)
+    assert database.execute('SELECT total_tokens FROM saas_ai_agent_token_usage WHERE run_id=%s::uuid',(response['request']['id'],))[0]['total_tokens']==70
+
+
+def test_campaign_inline_visual_provider_exception_keeps_visual_reserve_unknown(ready,monkeypatch):
+    """An exception after the final image boundary never refunds its reserve."""
+    database,generation,data=ready
+    data=_authorized_inline_campaign(database,data);_priced_campaign_env(monkeypatch,database)
+    def collect(_,item,**__):
+        ref=item['refs'][-1];return ([{'content':b'synthetic','content_type':'image/png','detail':'low','source_ref':item['messages'][-1]['ref']}],
+          [{**{key:ref[key] for key in ('id','channel_id','lead_id','role','happened_at')},'kind':'image','status':'pending_processing','code':'awaiting_model'}])
+    monkeypatch.setattr(media,'collect',collect);generation.side_effect=RuntimeError('synthetic provider failure')
+    response=service.analyze(PROFILE,data)
+    assert generation.call_count==1 and response['request']['status']=='unknown'
+    row=database.execute("SELECT state,actual_microusd FROM saas_ai_spend_reservations WHERE kind='knowledge_vision'")[0]
+    assert row=={'state':'unknown','actual_microusd':None}
 
 def test_media_only_source_is_retained_status_persisted_and_replay_idempotent(ready,monkeypatch):
     import uuid
