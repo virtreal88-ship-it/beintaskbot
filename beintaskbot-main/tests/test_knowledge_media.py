@@ -303,13 +303,15 @@ def test_finish_separates_text_media_unknown_and_media_only_cancel(ready,monkeyp
     monkeypatch.setattr(budget,'release',lambda *args,**kwargs:released.append((args,kwargs)))
 
     item=service.prepare(PROFILE,data)
-    item.update(generation_attempted=True,asr_attempted=True,vision_attempts=1,vision_usage=[],
+    item.update(generation_attempted=True,asr_attempted=True,vision_attempts=0,inline_vision_attempted=True,vision_usage=[],
       media_spend={
         'asr':{'key':'asr-key','operation':'asr','units':1},
         'vision':{'key':'vision-key','operation':'vision_low','units':2},
       })
-    service.finish(PROFILE,item,[],{'input_tokens':7,'output_tokens':3,'total_tokens':10},'',True)
+    service.finish(PROFILE,item,[],{'input_tokens':7,'output_tokens':3,'total_tokens':10},'',True,
+                   accounting_usage={'input_tokens':12,'output_tokens':8,'total_tokens':20})
     assert settled and settled[0][0][2]=={'input_tokens':7,'output_tokens':3,'total_tokens':10}
+    assert database.execute('SELECT total_tokens FROM saas_ai_agent_token_usage WHERE run_id=%s::uuid',(item['id'],))[0]['total_tokens']==20
     assert released==[]
     assert [(call[0][1],call[1]['unknown']) for call in media]==[('asr-key',True),('vision-key',True)]
 
