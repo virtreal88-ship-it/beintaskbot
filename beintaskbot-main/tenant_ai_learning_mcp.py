@@ -32,6 +32,7 @@ import tenant_ai_administrator_apply as administrator_apply
 import tenant_ai_owner_review_component as owner_review_component
 import tenant_ai_dialogue_merge as dialogue_merge
 import tenant_ai_direct_reconcile_mcp as direct_reconcile
+import tenant_ai_knowledge_extraction_preflight as knowledge_extraction_preflight
 
 TOOL_SCOPE = 'ai_learning.read'
 DRAFT_SCOPE = administrator_drafts.DRAFT_SCOPE
@@ -252,6 +253,10 @@ def _authorize_token(request):
 
 
 def _tools(cur,cfg,name,args):
+    if name == knowledge_extraction_preflight.NAME:
+        if TOOL_SCOPE not in set(cfg.get('granted_scopes') or []):
+            raise TenantLinearError('Additional OAuth scope required.',403)
+        return knowledge_extraction_preflight.preflight(cur,cfg,args)
     if name == 'administrator_owner_review_component':
         return owner_review_component.prepare(cur,cfg,args)
     if name == 'administrator_owner_review_component_complete':
@@ -548,7 +553,7 @@ async def mcp(request):
                 if owner_review_component.enabled_for_manual_bridge():
                     component_tools.append(_owner_component_completion_definition())
                     component_tools.extend(_owner_publish_component_definitions())
-            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+direct_reconcile.definitions()+dialogue_merge.definitions()+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+component_tools+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
+            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+knowledge_extraction_preflight.definitions(TOOL_SCOPE)+direct_reconcile.definitions()+dialogue_merge.definitions()+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+component_tools+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
         if method=='tools/call':
             cfg=_authorize_token(request)
             tool_name=str(data.get('params',{}).get('name',''))
