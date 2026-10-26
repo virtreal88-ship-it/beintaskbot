@@ -174,3 +174,25 @@ def test_insufficient_case_budget_never_queues_first_attachment(ready,monkeypatc
           'case_plan_hash':row['progress']['plan_hash']})
     assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaign_fragments')[0]['n']==0
     assert db.execute('SELECT status FROM saas_knowledge_campaigns WHERE id=%s::uuid',(key,))[0]['status']=='awaiting_budget'
+
+
+def test_stopped_case_campaign_reports_cancelled_or_incomplete(ready,monkeypatch):
+    db,card,_=_case(ready)
+    monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    key=str(uuid.uuid4())
+    campaigns.prepare(PROFILE,{'request_id':key,'case_id':card['id'],'channel_ids':[CA],
+      'analysis_agent_id':AGENT,'max_calls':6,'max_tokens':48000,
+      'allow_external_media':True,'allow_paid_asr':False,
+      'max_main_calls':2,'max_asr_calls':0,'max_vision_calls':4})
+    row=db.execute('SELECT * FROM saas_knowledge_campaigns WHERE id=%s::uuid',(key,))[0]
+    campaigns.approve(PROFILE,key,{'expected_version':row['version'],'channel_ids':[CA],
+      'max_calls':6,'max_tokens':48000,'confirm_external_processing':True,
+      'media_policy':row['media_policy'],'case_id':card['id'],
+      'case_plan_hash':row['progress']['plan_hash']})
+    assert campaigns.get(PROFILE,key)['campaign']['progress']['phase']=='processing'
+    version=db.execute('SELECT version FROM saas_knowledge_campaigns WHERE id=%s::uuid',(key,))[0]['version']
+    campaigns.control(PROFILE,key,version,'stop')
+    assert campaigns.get(PROFILE,key)['campaign']['progress']['phase']=='cancelled'
+    db.execute("UPDATE saas_knowledge_campaign_fragments SET status='blocked',error_code='source_unavailable' WHERE campaign_id=%s::uuid",(key,))
+    db.commit()
+    assert campaigns.get(PROFILE,key)['campaign']['progress']['phase']=='incomplete'

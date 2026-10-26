@@ -169,7 +169,18 @@ def get(profile, campaign_id=None):
             sources_pending=cur.fetchone()['n']
             progress=dict(row['progress'])
             if progress.get('mode')=='case_media':
-                progress['phase']='incomplete' if progress.get('unavailable_count') or any(counts.get(state) for state in ('unknown','blocked','failed','partial')) else 'completed' if row['status']=='stopped' else 'pending_consent' if not row['approved_at'] else 'processing'
+                cur.execute("""SELECT count(*) AS n FROM saas_knowledge_campaign_fragments
+                  WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='completed'
+                    AND extraction_id IS NOT NULL AND error_code=''""",(tenant,row['id']))
+                succeeded=int(cur.fetchone()['n'])
+                eligible=int(progress.get('eligible_count') or 0)
+                if row['status']=='stopped' and (counts.get('pending') or counts.get('running')):
+                    progress['phase']='cancelled'
+                elif (progress.get('unavailable_count') or any(counts.get(state) for state in ('unknown','blocked','failed','partial'))
+                      or row['status']=='stopped' and (eligible==0 or succeeded!=eligible)):
+                    progress['phase']='incomplete'
+                elif row['status']=='stopped':progress['phase']='completed'
+                else:progress['phase']='pending_consent' if not row['approved_at'] else 'processing'
             elif progress and not sources_pending and not counts.get('pending') and not counts.get('running'):
                 progress['phase']='waiting_completion'
             cur.execute('''SELECT count(DISTINCT c.id) AS cards FROM saas_knowledge_candidates c
