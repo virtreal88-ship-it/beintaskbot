@@ -269,12 +269,15 @@ def resource_html():
 <script>
 (() => { const api=window.openai; const status=document.querySelector('#status');
  const result=api&&api.toolResponseMetadata; const envelope=result&&(result.mcp_tool_result||result.call_tool_result||result); const meta=(envelope&&(envelope._meta||envelope))||{};
- let caps={},approvalId=''; const approve=document.querySelector('#approve'),reject=document.querySelector('#reject'),publish=document.querySelector('#publish');
+ let caps={},approvalId='',extractionIds={}; const approve=document.querySelector('#approve'),reject=document.querySelector('#reject'),publish=document.querySelector('#publish');
  const disable=()=>{approve.disabled=true;reject.disabled=true;publish.disabled=true;};
  const toolResult=(out)=>out&&((out.result&&typeof out.result==='object')?out.result:out);
  const hydrate=(candidate)=>{ disable(); approve.onclick=null; reject.onclick=null; publish.onclick=null; publish.hidden=true;
- const review=(candidate&&candidate.owner_review)||{}, publication=(candidate&&candidate.owner_publish)||{}; caps=review.capabilities||{};approvalId=review.approval_id||'';
- document.querySelector('#diff').textContent=JSON.stringify(review.exact_diff||publication.preview||{},null,2);
+ const review=(candidate&&candidate.owner_review)||{}, publication=(candidate&&candidate.owner_publish)||{}, extraction=(candidate&&candidate.owner_single_extraction)||{}; caps=review.capabilities||extraction.capabilities||{};approvalId=review.approval_id||'';extractionIds=extraction.consent_ids||{};
+ document.querySelector('#diff').textContent=JSON.stringify(review.exact_diff||publication.preview||extraction.exact_preview||{},null,2);
+ if (extractionIds.approve && extractionIds.reject && caps.approve && caps.reject && api&&typeof api.callTool==='function') { status.textContent='Review this exact attachment extraction.';
+   const invokeExtraction=(action)=>async()=>{ try { disable(); status.textContent='Submitting…'; const result=toolResult(await api.callTool('administrator_single_message_extraction_component_complete',{action,capability:caps[action],consent_id:extractionIds[action]})); const value=result&&result.structuredContent, expected=action==='approve'?'approved':'rejected'; if(!value||value.state!==expected||(result&&result.isError)) throw new Error('unconfirmed'); status.textContent=expected==='approved'?'Approved and queued.':'Rejected.'; } catch (_) { status.textContent='Consent could not be submitted. Use the authenticated owner screen.'; } };
+   approve.disabled=false; reject.disabled=false; approve.onclick=invokeExtraction('approve'); reject.onclick=invokeExtraction('reject'); return; }
  if (publication.capability && api&&typeof api.callTool==='function') { status.textContent='Review this exact applied material before publication.'; publish.hidden=false; publish.disabled=false; publish.onclick=async()=>{ try { disable(); status.textContent='Submitting publication consent…'; const result=toolResult(await api.callTool('administrator_owner_publish_component_complete',{capability:publication.capability})); const value=result&&result.structuredContent; if (!value||value.published!==true||(result&&result.isError)) throw new Error('unconfirmed'); status.textContent='Published.'; } catch (_) { status.textContent='Publication could not be completed. Use the authenticated owner screen.'; } }; return; }
  if (api&&typeof api.callTool==='function'&&typeof approvalId==='string'&&caps.approve&&caps.reject) { status.textContent='Review this exact draft version.';
    approve.disabled=false;reject.disabled=false;approve.onclick=invoke('approve');reject.onclick=invoke('reject'); }
