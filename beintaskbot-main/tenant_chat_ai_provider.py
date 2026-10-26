@@ -28,6 +28,23 @@ class ChatAIProviderError(RuntimeError):
         super().__init__('Chat AI provider returned HTTP ' + str(self.status_code) + ' (' + self.category + ')')
 
 
+def safe_failure_code(error):
+    """A bounded diagnostic identifier; never copy exception text or payloads."""
+    if isinstance(error,ChatAIProviderError):
+        status=error.status_code if 100<=error.status_code<=599 else 500
+        return 'provider_http_'+str(status)+'_'+error.category
+    if isinstance(error,(TimeoutError,requests.exceptions.Timeout)):return 'provider_timeout'
+    if isinstance(error,requests.exceptions.ConnectionError):return 'provider_connection_error'
+    if isinstance(error,(ValueError,TypeError,KeyError)):return 'provider_response_invalid'
+    return 'provider_call_failed'
+
+
+def is_safe_failure_code(value):
+    return isinstance(value,str) and (value in {'dispatch_blocked','extraction_preflight_failed',
+      'media_processing_failed','provider_timeout','provider_connection_error','provider_response_invalid',
+      'provider_call_failed'} or re.fullmatch(r'provider_http_[1-5][0-9]{2}_(invalid_credentials|project_access|billing_or_quota|model_access|rate_limit|request_rejected|unknown)',value) is not None)
+
+
 def _provider_error_category(response):
     """Map provider error identifiers to safe diagnostic categories only."""
     try:

@@ -118,6 +118,9 @@ def persist(cur, tenant, refs, receipts):
         result = {key: receipt[key] for key in ('transcript', 'observation') if isinstance(receipt.get(key), str)}
         if receipt.get('failure_stage') in _SAFE_FAILURE_STAGES:
             result['failure_stage'] = receipt['failure_stage']
+        from tenant_chat_ai_provider import is_safe_failure_code
+        if is_safe_failure_code(receipt.get('failure_code')):
+            result['failure_code']=receipt['failure_code']
         if isinstance(receipt.get('observations'), list):
             result['observations'] = [x for x in receipt['observations'] if isinstance(x,dict)][:MAX_OBSERVATIONS]
         # An empty terminal result is not reusable evidence.  In particular,
@@ -158,6 +161,9 @@ def apply_reusable(message, receipt):
     # persist() skips reused receipts and cannot overwrite the original.
     payload={key:_safe_text(result[key]) for key in ('transcript','observation')
              if isinstance(result.get(key),str) and result[key].strip()}
+    from tenant_chat_ai_provider import is_safe_failure_code
+    if is_safe_failure_code(result.get('failure_code')):payload['failure_code']=result['failure_code']
+    if result.get('failure_stage') in _SAFE_FAILURE_STAGES:payload['failure_stage']=result['failure_stage']
     if isinstance(result.get('observations'),list):
         payload['observations']=[{'text':_safe_text(x['text'])} for x in result['observations']
             if isinstance(x,dict) and isinstance(x.get('text'),str) and x['text'].strip()][:MAX_OBSERVATIONS]
@@ -243,6 +249,9 @@ def annotate_rows(cur, tenant, rows):
             media_meta['visual_status'] = 'failed' if saved['status'] == 'error' else ('sampled' if coverage.get('sampled_frames') else 'unknown')
         if result.get('failure_stage') in _SAFE_FAILURE_STAGES:
             media_meta['failure_stage'] = result['failure_stage']
+        from tenant_chat_ai_provider import is_safe_failure_code
+        if is_safe_failure_code(result.get('failure_code')):
+            media_meta['failure_code']=result['failure_code']
         row['media_evidence'] = media_meta
         if saved['status'] in {'processed','partial'}:
             parts=[]

@@ -51,6 +51,9 @@ def project(refs,receipts,execution_status,*,include_content=False):
             item['visual_status']='failed' if state=='error' else 'partial' if (row or {}).get('visuals') or state=='partial' else 'unknown'
         stage=(row or {}).get('failure_stage')
         if stage in {'source_validation','media_download','media_validation','video_decode','audio_transcription','visual_analysis','visual_input_prepare'}:item['failure_stage']=stage
+        from tenant_chat_ai_provider import is_safe_failure_code
+        failure=(row or {}).get('failure_code')
+        if is_safe_failure_code(failure):item['failure_code']=failure
         if include_content and row:
             # Redaction/content OAuth gates belong to the existing caller. Never
             # project URLs, provider inputs, raw payloads, keys or binary bytes.
