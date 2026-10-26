@@ -1,4 +1,5 @@
 """Read-only admission checks for one exact owner-consented media source."""
+from tenant_ai_agent_key_policy import retired_text_model
 import hashlib
 import json
 import math
@@ -61,6 +62,8 @@ def _model(cur,cfg):
     if not row or not row.get('enabled') or not row.get('settings_enabled') or row.get('emergency_stop'):
         return None,None,False,'agent_unavailable'
     meta=row.get('metadata') or {}; model=str(row.get('model') or meta.get('model') or platform_model()).strip()
+    if not model or retired_text_model(model):
+        return model,None,False,'configuration_required'
     tenant_key=bool(row.get('tenant_credential_present'))
     # ``choose_api_credential`` is the execution selector.  Feed it only a
     # non-secret presence sentinel; if a stored tenant key is malformed the

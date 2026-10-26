@@ -133,3 +133,28 @@ def test_cancellation_while_reservation_thread_commits_releases_without_attempt(
     provider.assert_not_called()
     assert ledger(priced)[0]['state']=='released'
     run(id,data);provider.assert_not_called()
+
+@pytest.mark.parametrize('retired',['gpt-4o-mini','gpt-4o-mini-2024-07-18'])
+def test_retired_model_fails_before_any_reservation_or_provider(priced,monkeypatch,retired):
+    from tenant_ai_agent_key_policy import choose_api_credential
+    monkeypatch.setattr(store,'choose_api_credential',choose_api_credential)
+    priced.execute('UPDATE saas_ai_agents SET model=%s',(retired,));priced.commit()
+    provider=Mock();monkeypatch.setattr(service,'generate',provider)
+    with pytest.raises(TenantLinearError,match='configuration_required'):run(new())
+    provider.assert_not_called()
+    assert not ledger(priced)
+    assert not priced.execute('SELECT request_id FROM saas_chat_ai_runs')
+    assert not priced.execute('SELECT id FROM saas_ai_test_turns')
+
+@pytest.mark.parametrize('agent_model,platform_ready,expected',[
+    ('explicit-agent',True,'explicit-agent'),('',True,'fixture-model'),('',False,'company-model')])
+def test_testing_model_priority_is_unchanged(priced,monkeypatch,agent_model,platform_ready,expected):
+    monkeypatch.setattr(store,'platform_service_ready',lambda:platform_ready)
+    monkeypatch.setattr(store,'platform_model_allowed',lambda model:True)
+    real_config=store.config
+    monkeypatch.setattr(store,'config',lambda *args:{**real_config(*args),'model':agent_model,
+        'metadata':{'model':'company-model','enabled':True,'consent':True}})
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({expected:{'input':1000,'output':1000}}))
+    item=store.reserve(PROFILE,new(),message())
+    assert item['model']==expected
+    assert ledger(priced)[0]['model']==expected

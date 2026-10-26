@@ -175,6 +175,18 @@ class Storage(unittest.TestCase):
         self.assertEqual(saved['copilot_model'],'copilot-only')
         self.assertEqual(saved['copilot_daily_limit'],7)
 
+    def test_retired_text_model_blocks_before_quota_receipt_or_media_read(self):
+        for model in ('gpt-4o-mini','gpt-4o-mini-2024-07-18'):
+            self.cur.fetchone.side_effect=[None]
+            self.access.return_value=(TENANT,20,{**CONNECTION,'metadata':{**CONFIG,'model':model}})
+            with self.assertRaisesRegex(TenantLinearError,'configuration_required'):
+                self.service.reserve(SESSION,COMMAND)
+        self.conn.commit.assert_not_called()
+        self.fernet.decrypt.assert_not_called()
+        sql=str(self.cur.execute.call_args_list)
+        self.assertNotIn('INSERT INTO',sql)
+        self.assertNotIn('FROM saas_crm_messages',sql)
+
     def test_receipt_and_quota_committed_before_provider(self):
         item=self.service.reserve(SESSION,COMMAND)
         self.assertEqual(item['api_key'],'company-key');self.conn.commit.assert_called_once()

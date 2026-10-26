@@ -1,4 +1,5 @@
 """Bounded chat input; messages are evidence, never privileged instructions."""
+from tenant_ai_agent_key_policy import require_text_model
 import hashlib
 import json
 import re
@@ -16,7 +17,7 @@ def configuration(data):
         raise TenantLinearError('OpenAI-yə məlumat göndərilməsinə icazə verin.')
     for field in ('model', 'transcription_model'):
         value = data.get(field)
-        if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', value):
+        if not isinstance(value, str) or (not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', value) and (value or result['enabled'])):
             raise TenantLinearError('Modelin adını yazın.')
         result[field] = value
     limit = data.get('daily_limit')
@@ -30,8 +31,12 @@ def configuration(data):
         raise TenantLinearError('AI Copilot ayarı düzgün deyil.')
     result['copilot_enabled'] = copilot_enabled
     copilot_model = data.get('copilot_model', result['model'])
-    if not isinstance(copilot_model, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', copilot_model):
+    if not isinstance(copilot_model, str) or (not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', copilot_model) and (copilot_model or result['enabled'])):
         raise TenantLinearError('AI Copilot modelinin adını yazın.')
+    if result['enabled']:
+        require_text_model(result['model'])
+        if copilot_enabled:
+            require_text_model(copilot_model)
     result['copilot_model'] = copilot_model
     copilot_limit = data.get('copilot_daily_limit', 50)
     if type(copilot_limit) is not int or not 1 <= copilot_limit <= 1000:

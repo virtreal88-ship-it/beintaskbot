@@ -10,6 +10,7 @@ Telegram Bot with Kommo CRM Integration — AI Function Calling Architecture
 - Azerbaijani interface
 - Kommo webhook endpoint for stage change notifications
 """
+from tenant_ai_agent_key_policy import require_text_model
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -2875,7 +2876,7 @@ async def process_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
     
     try:
         response = llm_client.chat.completions.create(
-            model=LLM_MODEL,
+            model=require_text_model(LLM_MODEL),
             messages=messages,
             tools=AI_TOOLS,
             tool_choice="required",
@@ -2925,7 +2926,7 @@ async def process_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result_text})
                 
                 response2 = llm_client.chat.completions.create(
-                    model=LLM_MODEL,
+                    model=require_text_model(LLM_MODEL),
                     messages=messages,
                     timeout=30,
                 )
@@ -14409,7 +14410,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
 
     def _ask_summary() -> str:
         resp = llm_client.chat.completions.create(
-            model=LLM_MODEL,
+            model=require_text_model(LLM_MODEL),
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             temperature=0.2,
             max_tokens=500,
@@ -15994,7 +15995,7 @@ def _linear_news_ai_content(issue: dict) -> dict[str, str]:
     )
     try:
         response = llm_client.chat.completions.create(
-            model=LLM_MODEL,
+            model=require_text_model(LLM_MODEL),
             messages=[
                 {
                     "role": "system",
@@ -16649,7 +16650,7 @@ async def _sync_linear_news(issues: list[dict]) -> None:
                 continue
             classified += 1
             try:
-                classification = await asyncio.to_thread(classify_news_source, source, llm_client, LLM_MODEL)
+                classification = await asyncio.to_thread(classify_news_source, source, llm_client, require_text_model(LLM_MODEL))
                 await asyncio.to_thread(save_linear_news_classification, str(row["source_issue_id"]), classification)
                 raw["news_classification"] = classification
                 row["raw"] = raw
@@ -16702,7 +16703,7 @@ async def _sync_linear_news(issues: list[dict]) -> None:
                 break
             classified += 1
             try:
-                classification = await asyncio.to_thread(classify_news_source, issue, llm_client, LLM_MODEL)
+                classification = await asyncio.to_thread(classify_news_source, issue, llm_client, require_text_model(LLM_MODEL))
             except Exception:
                 logger.exception("Linear news classification failed for %s", issue.get("id"))
                 return
@@ -16989,7 +16990,7 @@ def _linear_ai_rewrite(text: str, title: str = "") -> str:
     if not text:
         raise RuntimeError("Redaktə etmək üçün mətn yazın.")
     response = llm_client.chat.completions.create(
-        model=LLM_MODEL,
+        model=require_text_model(LLM_MODEL),
         messages=[
             {
                 "role": "system",
@@ -17348,7 +17349,7 @@ async def handle_telegram_login(request: web.Request) -> web.Response:
 
 def _ask_tenant_onboarding(system: str, prompt: str) -> str:
     response = llm_client.chat.completions.create(
-        model=LLM_MODEL,
+        model=require_text_model(LLM_MODEL),
         messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
         temperature=0.25,
         max_tokens=500,

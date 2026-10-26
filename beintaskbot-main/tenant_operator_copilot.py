@@ -1,4 +1,5 @@
 """On-demand, tenant/dialog/employee-scoped AI Copilot for Connect operators."""
+from tenant_ai_agent_key_policy import require_text_model
 import hashlib
 import json
 import logging
@@ -290,6 +291,7 @@ def run(profile, data):
                 error = TenantLinearError('Результат предыдущего AI-запроса неизвестен; он не будет отправлен повторно.', 409)
                 error.keep_request = True
                 raise error
+            require_text_model(model)
             cur.execute("SELECT COALESCE(sum(reserved_calls),0) AS used FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date", (tenant,))
             if int((cur.fetchone() or {}).get('used') or 0) >= int(config.get('daily_limit') or 50):
                 raise TenantLinearError('Дневной лимит AI компании исчерпан.', 429)

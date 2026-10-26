@@ -19,9 +19,8 @@ KOMMO_TOKEN = _required_env("KOMMO_TOKEN")
 KOMMO_DOMAIN = "texnikidestek50.kommo.com"
 KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}"
 BAKU_TZ = timezone(timedelta(hours=4))
-# Keep the model configurable per Railway environment.  This project key is
-# currently granted access to this stable, low-latency chat model.
-LLM_MODEL = str(os.environ.get("OPENAI_MODEL") or "gpt-4o-mini-2024-07-18").strip()
+# Text generation requires an explicit configured model; no automatic replacement.
+LLM_MODEL = str(os.environ.get("OPENAI_MODEL") or "").strip()
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
 CANONICAL_WEB_ORIGIN = str(os.environ.get("CANONICAL_WEB_ORIGIN") or "https://crm.pro.az").rstrip("/")
 # Telegram buttons must never point at a deployment-specific Railway URL.

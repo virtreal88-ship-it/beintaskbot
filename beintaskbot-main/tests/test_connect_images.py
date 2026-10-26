@@ -17,7 +17,7 @@ def test_unavailable_without_url_counted(kind):
  assert missing==1 and 'caption' in lines[0]['text'] and 'do not infer' in lines[0]['text']
  assert history([row(kind='image')],{},analyzed_media={MESSAGE})[1]==0
 
-@pytest.mark.parametrize('model,expected',[('gpt-4o',True),('gpt-4o-mini',True),('gpt-4.1',True),('gpt-4.1-2025-04-14',True),('gpt-4.1-2025-04-14-fake',False),('gpt-4.1-2099-01-01',False),('gpt-4o-fake',False),('unknown',False)])
+@pytest.mark.parametrize('model,expected',[('gpt-4o',True),('gpt-4o-mini',False),('gpt-4.1',True),('gpt-4.1-2025-04-14',True),('gpt-4.1-2025-04-14-fake',False),('gpt-4.1-2099-01-01',False),('gpt-4o-fake',False),('unknown',False)])
 def test_exact_model_capabilities(model,expected):
  with patch.dict(os.environ,{},clear=True):assert photos.supports_images(model)==expected
  with patch.dict(os.environ,{'AI_AGENTS_VISION_MODELS':''}):assert not photos.supports_images(model)
@@ -68,7 +68,7 @@ for _name in list(WorkerVoice.__dict__):
  if _name.startswith('test_') and _name not in PhotoWorker.__dict__:setattr(PhotoWorker,_name,None)
 
 
-@pytest.mark.parametrize('model',['gpt-4o-mini','gpt-4.1-2025-04-14'])
+@pytest.mark.parametrize('model',['gpt-4o','gpt-4.1-2025-04-14'])
 def test_provider_low_detail_is_transmitted(model):
  response=Mock(status_code=200);response.json.return_value={'status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':'Synthetic answer'}]}]}
  with patch('tenant_chat_ai_provider.requests.post',return_value=response) as post:
@@ -97,7 +97,7 @@ def test_image_limits_and_error_fallback(case):
  async def run():
   with patch.object(photos,'supports_images',return_value=case!='unknown'),patch.object(photos,'resolve',return_value={}),patch.object(photos,'live',return_value=True),patch.object(photos,'generation_budget_available',return_value=case!='budget'),patch.object(photos,'download_media',new=AsyncMock(return_value=(PNG,'video/mp4' if case=='mime' else 'image/png'))) as download,patch.object(photos,'MAX_TOTAL_BYTES',1 if case=='oversize' else 99999):
    if case=='timeout':download.side_effect=asyncio.TimeoutError()
-   images,seen=await photos.prepare(JOB,RESERVATION,[row(kind='image')],'gpt-4o-mini',Mock());assert images==[] and not seen
+   images,seen=await photos.prepare(JOB,RESERVATION,[row(kind='image')],'gpt-4o',Mock());assert images==[] and not seen
    if case in ('unknown','budget'):download.assert_not_called()
  asyncio.run(run())
 

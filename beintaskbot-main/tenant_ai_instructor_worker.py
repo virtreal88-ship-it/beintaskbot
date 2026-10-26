@@ -7,6 +7,8 @@ the client messaging or CRM action layers.
 """
 from __future__ import annotations
 
+from tenant_ai_agent_key_policy import retired_text_model
+
 import asyncio
 import json
 import os
@@ -66,6 +68,9 @@ def _provider_pair(job):
     selected=[]
     for row in (primary,expert):
         model=str(row.get('model') or metadata.get('model') or '').strip()
+        if retired_text_model(model):
+            secret.clear()
+            raise ContractError('configuration_required')
         if not model or model not in models:
             secret.clear()
             raise ContractError('agent_model_unavailable')

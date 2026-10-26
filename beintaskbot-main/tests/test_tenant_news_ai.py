@@ -15,7 +15,7 @@ class Provider(unittest.TestCase):
 
     def test_direct_bounded_request_and_uncertainty_not_excluded(self):
         with patch.object(provider.requests,'post',return_value=self.response(category='uncertain')) as post:
-            result=provider.classify('company-key','gpt-4o-mini','Feature','Details')
+            result=provider.classify('company-key','gpt-4.1-mini','Feature','Details')
         self.assertFalse(result['excluded']);args=post.call_args
         self.assertEqual(args.args[0],'https://api.openai.com/v1/responses');self.assertFalse(args.kwargs['allow_redirects'])
         self.assertFalse(args.kwargs['json']['store']);self.assertNotIn('tools',args.kwargs['json']);self.assertEqual(args.kwargs['json']['max_output_tokens'],1500)
@@ -37,7 +37,7 @@ class Settings(unittest.TestCase):
         self.cipher=Fernet(Fernet.generate_key())
         self.service=loaders.load('tenant_news_ai_settings',{'_connect':self.connect,'_ensure_schema':Mock(),'_fernet':Mock(return_value=self.cipher)}, {'tenant_platform'})
         self.person={'role':'owner','active':True,'status':'active'}
-        self.data={'enabled':True,'consent':True,'daily_limit':10,'model':'gpt-4o-mini','api_key':'company-private-key-123456','expected_updated_at':''}
+        self.data={'enabled':True,'consent':True,'daily_limit':10,'model':'gpt-4.1-mini','api_key':'company-private-key-123456','expected_updated_at':''}
 
     def test_key_encrypted_and_bound_to_company_no_echo(self):
         self.cur.fetchone.side_effect=[self.person,None,{'secrets':b'encrypted','metadata':{'enabled':True},'updated_at':STAMP}]
@@ -64,9 +64,18 @@ class Worker(unittest.TestCase):
         self.cipher=Fernet(Fernet.generate_key());self.classify=Mock()
         self.service=loaders.load('tenant_news_ai_worker',{'_connect':self.connect,'_fernet':Mock(return_value=self.cipher),
             'ensure_ai_schema':Mock(),'classify':self.classify}, {'tenant_platform','tenant_news_ai_schema','tenant_news_ai_provider'})
-        self.item={**row(),'tenant_id':TENANT,'api_key':'company-key','model':'gpt-4o-mini','config_version':'v1'}
-        self.connection={'metadata':{'enabled':True,'consent':True,'daily_limit':10,'model':'gpt-4o-mini'},'updated_at':'v1',
+        self.item={**row(),'tenant_id':TENANT,'api_key':'company-key','model':'gpt-4.1-mini','config_version':'v1'}
+        self.connection={'metadata':{'enabled':True,'consent':True,'daily_limit':10,'model':'gpt-4.1-mini'},'updated_at':'v1',
             'secrets':self.cipher.encrypt(json.dumps({'tenant_id':TENANT,'provider':'news_ai','api_key':'company-key'}).encode())}
+
+    def test_retired_configuration_fails_before_receipt_or_provider(self):
+        self.connection['metadata']['model']='gpt-4o-mini-2024-07-18'
+        self.cur.fetchone.side_effect=[self.item,self.connection]
+        with self.assertRaisesRegex(TenantLinearError,'configuration_required'):
+            self.service.claim()
+        self.conn.commit.assert_not_called()
+        self.classify.assert_not_called()
+        self.assertNotIn('INSERT INTO saas_news_ai_runs',str(self.cur.execute.call_args_list))
 
     def test_paid_call_receipt_committed_first_and_quota_checked(self):
         self.cur.fetchone.side_effect=[self.item,self.connection,{'used':0},{'news_id':OTHER}]

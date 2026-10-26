@@ -32,10 +32,12 @@ class ReplyTests(unittest.TestCase):
             self.assertIs(call.kwargs['messages'],self.messages)
             self.assertEqual(call.kwargs['temperature'],0.45)
         self.assertNotIn('PRIVATE',str(self.logger.mock_calls))
-    def test_mini_only_account_can_still_generate_with_media(self):
-        self.api.create.side_effect=[ProviderError('model_not_found')]*3+[response()]
-        self.assertEqual(generate(self.api,'gpt-4.1-2025-04-14',self.messages,self.logger)[1],'gpt-4o-mini')
-        self.assertEqual(self.api.create.call_count,4)
+    def test_retired_preference_never_falls_back_or_calls_provider(self):
+        from tenant_linear_policy import TenantLinearError
+        for model in ('gpt-4o-mini','gpt-4o-mini-2024-07-18',''):
+            with self.assertRaisesRegex(TenantLinearError,'configuration_required'):
+                generate(self.api,model,self.messages,self.logger)
+        self.api.create.assert_not_called()
     def test_no_fallback_for_key_quota_rate_limit_timeout_or_bad_image(self):
         for error in (ProviderError('invalid_api_key',401),ProviderError('insufficient_quota',429),
                       ProviderError('rate_limit_exceeded',429),ProviderError('invalid_image',400),TimeoutError()):
@@ -45,10 +47,10 @@ class ReplyTests(unittest.TestCase):
     def test_all_models_unavailable_are_bounded(self):
         self.api.create.side_effect=ProviderError('model_not_found')
         with self.assertRaises(ProviderError):generate(self.api,'gpt-4.1',self.messages,self.logger)
-        self.assertEqual(self.api.create.call_count,3)
+        self.assertEqual(self.api.create.call_count,2)
     def test_no_duplicate_candidates_or_unbounded_model_search(self):
-        self.assertEqual(candidates('gpt-4.1'),['gpt-4.1','gpt-4o','gpt-4o-mini'])
-        self.assertLessEqual(len(candidates('custom')),4)
+        self.assertEqual(candidates('gpt-4.1'),['gpt-4.1','gpt-4o'])
+        self.assertLessEqual(len(candidates('custom')),3)
     def test_log_does_not_expose_exception_body_or_key(self):
         log_failure(self.logger,ProviderError('SECRET_KEY',500))
         self.assertNotIn('SECRET',str(self.logger.mock_calls));self.assertNotIn('PRIVATE',str(self.logger.mock_calls))

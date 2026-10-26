@@ -1,4 +1,5 @@
 """Connect photo inputs: read-only route, bounded cost, no send authority."""
+from tenant_ai_agent_key_policy import retired_text_model
 import asyncio,hashlib,os,uuid,time
 from datetime import datetime,timedelta
 from tenant_platform import _connect
@@ -8,7 +9,7 @@ from tenant_connect_voice import active,generation_budget_available
 from tenant_ai_group_coordination import job_allowed
 
 # Exact IDs only; no prefix inference. Operator overrides are server-owned.
-KNOWN_VISION={'gpt-4o','gpt-4o-mini','gpt-4.1','gpt-4.1-2025-04-14','gpt-4.1-mini','gpt-4.1-nano'}
+KNOWN_VISION={'gpt-6-luna','gpt-4o','gpt-4.1','gpt-4.1-2025-04-14','gpt-4.1-mini','gpt-4.1-nano'}
 MAX_IMAGES=2
 MAX_TOTAL_BYTES=8*1024*1024
 TURN_SECONDS=35
@@ -17,6 +18,7 @@ _download_slots=asyncio.Semaphore(2)
 class ImageInactive(ValueError):pass
 
 def supports_images(model):
+    if retired_text_model(model):return False
     configured=os.environ.get('AI_AGENTS_VISION_MODELS')
     allowed=set(configured.split(',')) if configured is not None else KNOWN_VISION
     return str(model).strip() in {m.strip() for m in allowed if m.strip()}

@@ -1,4 +1,5 @@
 """Owner-owned encrypted OpenAI credential and explicit news processing consent."""
+from tenant_ai_agent_key_policy import retired_text_model, require_text_model
 import json
 import re
 from tenant_platform import _connect, _ensure_schema, _fernet
@@ -20,6 +21,7 @@ def authorize(cur, session):
 def public(row):
     row = row or {}; config = row.get('metadata') or {}
     return {'configured': bool(row.get('secrets')), 'enabled': config.get('enabled') is True,
+        'configuration_required': not config.get('model') or retired_text_model(config.get('model')),
         'model': config.get('model', ''), 'daily_limit': config.get('daily_limit', 10), 'updated_at': str(row.get('updated_at') or '')}
 
 
@@ -39,8 +41,10 @@ def save(session, data):
         raise TenantLinearError('AI ayarları düzgün deyil.')
     if enabled and consent is not True:
         raise TenantLinearError('Mətnlərin OpenAI-yə göndərilməsinə icazə verin.')
-    if not isinstance(model, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', model):
+    if not isinstance(model, str) or (not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', model) and (model or enabled)):
         raise TenantLinearError('Modelin adını yazın.')
+    if enabled:
+        require_text_model(model)
     if not isinstance(key, str) or (key and (not 20 <= len(key) <= 500 or any(c.isspace() for c in key))):
         raise TenantLinearError('API açarı düzgün deyil.')
     with _connect() as conn:

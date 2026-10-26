@@ -27,7 +27,7 @@ class HistoryReply(unittest.TestCase):
         self.assertEqual(len(dedicated), 1)
         self.assertTrue(all(node in list(ast.walk(reply)) for node in dedicated))
         summary = next(node for node in handler.body if isinstance(node, ast.FunctionDef) and node.name == '_ask_summary')
-        self.assertIn('model=LLM_MODEL', ast.unparse(summary))
+        self.assertIn('model=require_text_model(LLM_MODEL)', ast.unparse(summary))
 
     def test_complete_company_prompt_and_critical_rules(self):
         prompt = history_reply_instructions()

@@ -1,4 +1,5 @@
 """Bounded model-access recovery for legacy reply drafts, never message sending."""
+from tenant_ai_agent_key_policy import require_text_model
 import re
 from typing import Protocol
 
@@ -15,7 +16,8 @@ class Log(Protocol):
 def candidates(preferred: str) -> list[str]:
     # These models all accept the existing text/image Chat Completions request.
     # Never turn a model error into a gateway call or an arbitrary model search.
-    return list(dict.fromkeys([preferred, 'gpt-4.1', 'gpt-4o', 'gpt-4o-mini']))
+    preferred = require_text_model(preferred)
+    return list(dict.fromkeys([preferred, 'gpt-4.1', 'gpt-4o']))
 
 
 def error_code(error: Exception) -> str:

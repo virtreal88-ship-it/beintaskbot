@@ -1,4 +1,5 @@
 """Live authority, immutable request receipt and conservative daily paid-call budget."""
+from tenant_ai_agent_key_policy import require_text_model
 import json
 from tenant_platform import _connect, _fernet, _read_tenant_workflow
 from tenant_policy import TenantPolicy
@@ -43,6 +44,8 @@ def reserve(session, command):
                 error.keep_request = True
                 raise error
             config = connection['metadata']
+            if command['mode'] != 'transcribe':
+                require_text_model(config.get('model'))
             if command['mode'] == 'transcribe':
                 if config.get('audio_enabled') is not True:
                     raise TenantLinearError('Səs transkripsiyası aktiv deyil.', 409)

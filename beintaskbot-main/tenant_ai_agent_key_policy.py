@@ -6,6 +6,20 @@ allowing a catalogue change without an application release.
 """
 import json
 import os
+import re
+
+
+def retired_text_model(model):
+    """Text model retirement only; transcription models and history are untouched."""
+    return bool(re.fullmatch(r"gpt-4o-mini(?:-\d{4}-\d{2}-\d{2})?", str(model or "").strip(), re.I))
+
+
+def require_text_model(model):
+    value = str(model or "").strip()
+    if not value or retired_text_model(value):
+        from tenant_linear_policy import TenantLinearError
+        raise TenantLinearError("configuration_required: select a supported text model; no automatic replacement.", 409)
+    return value
 
 
 def platform_agent_pairs():
@@ -21,7 +35,11 @@ def platform_agent_pairs():
 def platform_model():
     """Backward-compatible name for the platform default model."""
     requested = str(os.environ.get('AI_AGENTS_PLATFORM_DEFAULT_MODEL') or '').strip()
-    configured = platform_models()
+    configured = _configured_platform_models()
+    # Keep a stale explicit default visible to admission guards, never silently
+    # select a different model with a different price or credential.
+    if retired_text_model(requested):
+        return requested
     if requested and requested in configured:
         return requested
     legacy = str(os.environ.get('OPENAI_HISTORY_REPLY_MODEL') or '').strip()
@@ -34,7 +52,7 @@ def _enabled(value):
     return str(value or '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
-def platform_models():
+def _configured_platform_models():
     """Return safe API model identifiers configured by a platform admin.
 
     ``AI_AGENTS_PLATFORM_MODELS`` accepts either a JSON array of identifiers
@@ -59,6 +77,10 @@ def platform_models():
     if legacy and legacy not in values:
         values.append(legacy)
     return list(dict.fromkeys(values))
+
+
+def platform_models():
+    return [value for value in _configured_platform_models() if not retired_text_model(value)]
 
 
 def platform_model_choices():
@@ -118,6 +140,8 @@ def choose_api_credential(tenant_id, agent_id, provider, company_key, model=''):
     legacy/custom models.  New agents (and any agent selecting a centrally
     admitted model) use the shared key by default.
     """
+    if model:
+        require_text_model(model)
     use_platform = (platform_key_ready(tenant_id, agent_id, provider)
                     and (platform_agent_enabled(tenant_id, agent_id, provider)
                          or not str(company_key or '')

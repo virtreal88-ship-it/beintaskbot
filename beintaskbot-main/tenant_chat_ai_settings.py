@@ -1,4 +1,5 @@
 """Separate company chat key; never read the global or news AI credential."""
+from tenant_ai_agent_key_policy import retired_text_model, require_text_model
 import json
 import re
 from tenant_platform import _connect, _fernet
@@ -44,6 +45,8 @@ def public(row):
         'copilot_daily_limit': metadata.get('copilot_daily_limit', 50),
         'copilot_employee_permission': 'chat_ai',
         'provider': 'OpenAI',
+        'configuration_required': any(not value or retired_text_model(value) for value in
+            (metadata.get('model'), metadata.get('copilot_model') or metadata.get('model'))),
     })
     return result
 
@@ -117,6 +120,10 @@ def save(session, data):
                 config['copilot_enabled'] = old_metadata.get('copilot_enabled', True)
             if 'copilot_daily_limit' not in data:
                 config['copilot_daily_limit'] = old_metadata.get('copilot_daily_limit', 50)
+            if config['enabled']:
+                require_text_model(config['model'])
+                if config['copilot_enabled']:
+                    require_text_model(config['copilot_model'])
             encrypted = previous.get('secrets')
             if data.get('remove_key') is True:
                 encrypted = None

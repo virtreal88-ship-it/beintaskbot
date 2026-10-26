@@ -94,6 +94,22 @@ jobs:
           tests/test_instruction_expert_integration.py
           tests/test_instruction_videos.py
           tests/test_instruction_video_postgres.py
+      - name: Run text model retirement regressions
+        run: >-
+          python -m pytest -q -rs
+          tests/test_retired_text_models.py
+          tests/test_tenant_ai_agent_key_policy.py
+          tests/test_legacy_chat_reply_provider.py
+          tests/test_legacy_runtime_config.py
+          tests/test_legacy_chat_reply_prompt.py
+          tests/test_tenant_chat_ai.py
+          tests/test_tenant_chat_ai_api.py
+          tests/test_tenant_news_ai.py
+          tests/test_tenant_operator_copilot.py
+      - name: Run model settings UI regressions
+        run: |
+          node tests/test_tenant_chat_ai_model_picker_ui.cjs
+          node tests/test_tenant_chat_ai_ui.cjs
       - name: Run instruction card regression
         run: |
           node tests/test_instruction_editor.cjs

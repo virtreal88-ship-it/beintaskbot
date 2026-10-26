@@ -16,7 +16,8 @@ const settle=async()=>{for(let i=0;i<25;i++)await new Promise(r=>setImmediate(r)
  };
  w.eval(read('docs/tenant-chat-ai-settings.js'));await settle();
  const picker=d.querySelector('#tcCopilotModel');assert.equal(picker.tagName,'SELECT');assert.equal(d.querySelector('#tcCopilotModels'),null);
- d.querySelector('#tcCopilotListModels').click();await settle();assert.deepEqual([...picker.options].map(x=>x.value),['','gpt-4.1-mini','gpt-4o-mini']);
+ assert.equal(picker.value,'');assert.match(d.querySelector('#tcCopilotStatus').textContent,/configuration_required/);
+ d.querySelector('#tcCopilotListModels').click();await settle();assert.deepEqual([...picker.options].map(x=>x.value),['','gpt-4.1-mini']);
  picker.value='gpt-4.1-mini';d.querySelector('#tcAiSave').click();await settle();
  const save=calls.find(call=>call.path==='/api/platform/chat/ai/settings'&&call.method==='POST');assert.equal(save.body.copilot_model,'gpt-4.1-mini');assert.equal(save.body.model,'agent-model','Copilot choice does not overwrite agent model');
  assert.match(d.querySelector('#tcAiNotice').textContent,/gpt-4.1-mini/);assert.equal(calls.some(call=>call.path.includes('/chat/send')),false);

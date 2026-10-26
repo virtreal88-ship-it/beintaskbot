@@ -1,4 +1,5 @@
 """One opt-in draft per tick. Quota/receipt committed before paid provider call."""
+from tenant_ai_agent_key_policy import require_text_model
 import json
 from tenant_platform import _connect, _fernet
 from tenant_news_ai_schema import ensure_ai_schema
@@ -30,6 +31,7 @@ def claim():
             connection = cur.fetchone(); config = connection['metadata']
             if config.get('enabled') is not True or config.get('consent') is not True or not connection['secrets']:
                 return None
+            require_text_model(config.get('model'))
             cur.execute("SELECT count(*) AS used FROM saas_news_ai_runs WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date", (tenant,))
             if cur.fetchone()['used'] >= config['daily_limit']:
                 return None

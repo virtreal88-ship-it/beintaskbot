@@ -1,4 +1,5 @@
 """Direct Responses API, bounded source excerpt, strict JSON, no tools or retries."""
+from tenant_ai_agent_key_policy import require_text_model
 import json
 import math
 import requests
@@ -17,6 +18,7 @@ SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['categor
 
 
 def classify(key: str, model: str, title: str, summary: str) -> dict:
+    model = require_text_model(model)
     response = requests.post('https://api.openai.com/v1/responses', headers={'Authorization':'Bearer ' + key},
         json={'model':model,'store':False,'max_output_tokens':1500,'instructions':INSTRUCTIONS,
             'input':json.dumps({'title':title[:255],'text':summary[:1200]},ensure_ascii=False),

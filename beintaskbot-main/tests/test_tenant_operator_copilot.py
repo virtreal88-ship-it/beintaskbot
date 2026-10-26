@@ -124,7 +124,7 @@ def test_copilot_uses_its_own_model_and_never_sends_a_message(monkeypatch):
 def test_provider_failure_logs_only_allowlisted_metadata(monkeypatch):
     tenant='aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';actor=22
     connection={'secrets':b'cipher','metadata':{'enabled':True,'consent':True,'model':'agent-model',
-        'copilot_enabled':True,'copilot_model':'gpt-4o-mini','daily_limit':100,'copilot_daily_limit':8},'updated_at':'v1'}
+        'copilot_enabled':True,'copilot_model':'gpt-4.1-mini','daily_limit':100,'copilot_daily_limit':8},'updated_at':'v1'}
     conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
     cur=conn.cursor.return_value.__enter__.return_value
     cur.fetchone.side_effect=[None,connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
@@ -138,7 +138,7 @@ def test_provider_failure_logs_only_allowlisted_metadata(monkeypatch):
     warning=Mock();monkeypatch.setattr(copilot._LOGGER,'warning',warning)
     with pytest.raises(TenantLinearError):copilot.run({'tenant_id':tenant,'telegram_id':actor},request())
     rendered=' '.join(str(part) for part in warning.call_args.args)
-    assert 'model_access' in rendered and '404' in rendered and 'gpt-4o-mini' in rendered and 'responses' in rendered
+    assert 'model_access' in rendered and '404' in rendered and 'gpt-4.1-mini' in rendered and 'responses' in rendered
     assert 'private customer text' not in rendered and 'private-secret' not in rendered and tenant not in rendered
 
 
@@ -287,7 +287,7 @@ def test_existing_responses_provider_sends_confirmed_photo_as_input_image(monkey
         'usage':{'input_tokens':10,'output_tokens':5,'total_tokens':15}})
     post=Mock(return_value=response);monkeypatch.setattr(provider.requests,'post',post)
     image=b'jpeg-test-image'
-    result,usage=provider.generate('secret','gpt-4o-mini','reply',[{'speaker':'CLIENT','text':'What does this error mean?'}],
+    result,usage=provider.generate('secret','gpt-4.1-mini','reply',[{'speaker':'CLIENT','text':'What does this error mean?'}],
         'Prepare a helpful reply.',images=[{'content':image,'content_type':'image/jpeg','detail':'low'}],with_usage=True)
     assert result=='Check the displayed error.' and usage['total_tokens']==15
     assert post.call_count==1

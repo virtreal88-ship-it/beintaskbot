@@ -25,7 +25,7 @@ Video/PDF/document analysis is not enabled.
 
 ## Models and budgets
 
-Exact reviewed OpenAI IDs: gpt-4o, gpt-4o-mini, gpt-4.1, gpt-4.1-2025-04-14, gpt-4.1-mini, gpt-4.1-nano.
+Exact reviewed OpenAI IDs: gpt-4o, gpt-4.1, gpt-4.1-2025-04-14, gpt-4.1-mini, gpt-4.1-nano.
 No model is switched automatically. Unknown/date/custom IDs remain text-only until
 operator-confirmed via server-only AI_AGENTS_VISION_MODELS (comma-separated exact
 IDs; an explicitly empty value disables photo processing). This is a capability

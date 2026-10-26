@@ -1,4 +1,5 @@
 """Tenant-scoped persistence for agent settings and knowledge sources."""
+from tenant_ai_agent_key_policy import retired_text_model, require_text_model
 import hashlib
 import json
 import uuid
@@ -342,6 +343,7 @@ def configuration_options(profile):
     company_models=meta.get('models') if isinstance(meta.get('models'),list) else []
     company_models=[str(x).strip() for x in company_models if isinstance(x,str) and x.strip()]
     if configured and configured not in company_models: company_models.insert(0,configured)
+    company_models = [model for model in company_models if not retired_text_model(model)]
     models = platform_model_choices() if platform_available else []
     model_ids = {item['id'] for item in models}
     for item in company_models:
@@ -461,6 +463,8 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                 if configured and configured not in allowed_models:
                     allowed_models.append(configured)
                 requested = str(patch.get('model') or '')
+                if requested:
+                    require_text_model(requested)
                 platform_selected = platform_service_ready() and (not requested or platform_model_allowed(requested))
                 company_selected = requested in allowed_models
                 if not platform_selected and (not integration.get('secrets') or config.get('enabled') is not True

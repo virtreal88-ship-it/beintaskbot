@@ -1,4 +1,5 @@
 """Direct OpenAI calls; no tools, redirects, global keys or automatic retries."""
+from tenant_ai_agent_key_policy import retired_text_model, require_text_model
 import base64
 import json
 import re
@@ -87,7 +88,7 @@ def list_models(key):
                      and model_id.fullmatch(str(row.get('id') or ''))
                      and (str(row.get('id') or '').startswith('gpt-')
                           or re.fullmatch(r'o[1-9][A-Za-z0-9_.:-]*', str(row.get('id') or '')))})
-    return models[:200]
+    return [model for model in models if not retired_text_model(model)][:200]
 
 
 def probe_model(key, model):
@@ -107,6 +108,7 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
     bytes.  Keeping that optional input here prevents the Connect worker from
     falling back to a second model client with different safety behavior.
     """
+    model = require_text_model(model)
     prompt = INSTRUCTIONS if instructions is None else str(instructions)
     input_data = {'mode': mode, 'conversation': lines, 'manager_draft': draft}
     if extra_context is not None:
