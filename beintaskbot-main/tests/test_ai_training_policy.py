@@ -501,3 +501,49 @@ def test_company_unconfirmed_case_remains_unconfirmed(ready,monkeypatch):
         assert after['content']['outcome']==before['outcome']
         assert after['content'].get('work_status')==before.get('work_status')
     db.commit()
+
+
+@pytest.mark.parametrize('mutation',[None,'media_identity','external_identity','receipt_result','receipt_coverage','receipt_provenance','receipt_withdrawn'])
+def test_company_video_draft_binds_saved_receipt_and_attachment_version(setup,monkeypatch,mutation):
+    import tenant_media_evidence as media
+    db,cfg=setup
+    media.create_schema(db)
+    raw={'mediaId':'original-media','fileLength':100,'url':'https://private.example/attachment?token=secret'}
+    with db.cursor() as cur:
+        p=company_policy(cur,cfg)
+        cur.execute('SELECT id,body FROM saas_crm_messages WHERE tenant_id=%s::uuid AND channel=%s LIMIT 1',(A,'connect:'+CA))
+        message=cur.fetchone();message_id=str(message['id']);body=message['body']
+        external='synthetic-media-external'
+        cur.execute("UPDATE saas_crm_messages SET message_type='video',external_id=%s,raw=%s::jsonb WHERE id=%s::uuid",(external,json.dumps(raw),message_id))
+        ref={'id':message_id,'channel_id':CA,'external_id':external,'body_hash':media._body_hash(body),'media_kind':'video','media_version':media.media_version(raw),'role':'customer'}
+        media.persist(cur,A,[ref],[{'id':message_id,'kind':'video','status':'error','code':'visual_provider_failed','audio_status':'processed','transcript':'Saved ASR v1','failure_stage':'visual_analysis'}])
+        draft=drafts.typed_create(cur,cfg,'knowledge',{'title':'Partial video guidance','content':'Saved audio guidance; partial audio only, visual analysis failed. Outcome unconfirmed. Owner addition: check stock.','evidence_ids':[message_id],'agent_ids':[]})
+        def no_processing(*args,**kwargs):raise AssertionError('Publication must only read the existing receipt in its transaction')
+        monkeypatch.setattr(media,'reusable',no_processing)
+        monkeypatch.setattr(media,'_connect',no_processing)
+        args={'policy_id':p,'target_agent_id':AGENT,'target_channel_id':CA}
+        listing=mcp._tools(cur,cfg,'administrator_training_owner_drafts',args)
+        item=next(v for v in listing['items'] if v['source_id']==draft['id'])
+        output=json.dumps(listing)
+        assert external not in output and raw['url'] not in output and 'Saved ASR v1' not in output
+        prepared=op(cur,cfg,p,'create',kind='knowledge',source_id=draft['id'],source_version=draft['version'],source_hash=item['source_hash'],target_agent_id=AGENT,target_channel_id=CA)
+        if mutation=='media_identity':cur.execute("UPDATE saas_crm_messages SET raw=jsonb_set(raw,'{mediaId}','\"replacement\"'::jsonb) WHERE id=%s::uuid",(message_id,))
+        elif mutation=='external_identity':cur.execute("UPDATE saas_crm_messages SET external_id='replacement-external' WHERE id=%s::uuid",(message_id,))
+        elif mutation=='receipt_result':cur.execute("UPDATE saas_media_evidence_receipts SET result=jsonb_set(result,'{transcript}','\"Changed ASR\"'::jsonb) WHERE tenant_id=%s::uuid AND external_id=%s",(A,external))
+        elif mutation=='receipt_coverage':cur.execute("UPDATE saas_media_evidence_receipts SET coverage=jsonb_set(coverage,'{audio}','\"unavailable_or_error\"'::jsonb) WHERE tenant_id=%s::uuid AND external_id=%s",(A,external))
+        elif mutation=='receipt_provenance':cur.execute("UPDATE saas_media_evidence_receipts SET provenance='{}'::jsonb WHERE tenant_id=%s::uuid AND external_id=%s",(A,external))
+        elif mutation=='receipt_withdrawn':cur.execute('DELETE FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid AND external_id=%s',(A,external))
+        assert db.execute('SELECT body FROM saas_crm_messages WHERE id=%s::uuid',(message_id,))[0]['body']==body
+        if mutation:
+            with pytest.raises(TenantLinearError,match='evidence changed'):
+                op(cur,cfg,p,'publish',**target(prepared),target_agent_id=AGENT,target_channel_id=CA)
+            assert db.execute('SELECT count(*) AS n FROM saas_ai_administrator_publication_grants WHERE policy_id=%s::uuid',(p,))[0]['n']==0
+        else:
+            before=db.execute('SELECT * FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid AND external_id=%s',(A,external))[0]
+            published=op(cur,cfg,p,'publish',**target(prepared),target_agent_id=AGENT,target_channel_id=CA)
+            source=db.execute('SELECT content,provenance FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(published['source_ids'][0],))[0]
+            assert source['content']==item['preview']['content']
+            assert 'partial audio only, visual analysis failed' in source['content']
+            assert source['provenance']['review_status']=='owner_delegated_evidence_draft'
+            assert db.execute('SELECT * FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid AND external_id=%s',(A,external))[0]==before
+    db.commit()

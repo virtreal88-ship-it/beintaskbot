@@ -469,3 +469,8 @@ A separate authenticated owner is still required. Delegated preparation records
 the policy on the receipt with no human `approved_by` or human-approval audit.
 Safe withdrawal derives its target from the persisted grant and does not require
 the old target agent/channel to remain active or present.
+Media-backed draft hashes also bind the existing attachment version fence and
+an exact saved receipt digest (status, ASR/result, coverage and provenance).
+Publication rechecks these in the same transaction and locks existing receipt
+rows against edits/withdrawal. Only hashes enter draft evidence metadata; no
+attachment URL, raw payload, receipt text, fetch or reprocessing is added.

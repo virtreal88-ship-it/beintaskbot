@@ -599,11 +599,17 @@ def _owner_draft_basis(cur,profile,draft_id,version,digest,policy,*,preview=Fals
         import hashlib,json
         from tenant_ai_administrator_drafts import _message_evidence
         evidence=_message_evidence(cur,tenant,body.get('evidence_ids'))
-        cur.execute('''SELECT id,body,channel,kommo_lead_id,direction,message_type FROM saas_crm_messages
+        cur.execute('''SELECT id,body,channel,kommo_lead_id,direction,message_type,external_id,raw FROM saas_crm_messages
           WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) ORDER BY id FOR SHARE''',(tenant,evidence))
         rows=[dict(v) for v in cur.fetchall()]
         if any(v['channel']!='connect:'+str(policy['channel_id']) for v in rows):
             raise TenantLinearError('Draft evidence outside the selected channel.',403)
+        from tenant_media_evidence import publication_fingerprint
+        for row in rows:
+            row['media_evidence_fingerprint']=publication_fingerprint(cur,tenant,row)
+            # Only the existing identity fence and exact receipt digest enter
+            # the source hash; raw attachments/URLs never enter tool output.
+            row.pop('raw',None);row.pop('external_id',None)
         basis['source_evidence']={'ids':sorted(evidence),'hash':hashlib.sha256(json.dumps(_snapshot(rows),sort_keys=True,separators=(',',':')).encode()).hexdigest()}
         calculated=hashlib.sha256(json.dumps({'draft':calculated,'evidence':basis['source_evidence']},sort_keys=True,separators=(',',':')).encode()).hexdigest()
         basis['hash']=calculated
