@@ -23,6 +23,9 @@ An image is complete only with saved nonempty visual text; legacy
 reuse stub is enriched from the exact current shared receipt before reporting
 case completeness or supplying an improvement. A historical availability flag
 cannot survive withdrawal of that shared result.
+This current shared-result check is mandatory for every reused receipt,
+including newer receipts that copied visual text; a copied payload cannot
+restore evidence after withdrawal or a version mismatch.
 
 `public_request.status` can now be `partial`, with the original execution state
 in `execution_status`; database extraction state/idempotency is unchanged.

@@ -777,11 +777,11 @@ def case_media_coverage(cur,tenant,run,chosen,content,*,include_content=False):
         if message['message_type']=='text':
             receipts.append({'id':key,'status':'unknown','code':'source_version_unverified'});continue
         receipt=dict(saved[key]) if previous and key in saved and source_hash(previous)==source_hash(ref) else None
-        if receipt and receipt.get('reused') is True and not has_visual_result(receipt):
-            # A historical stub's availability flag cannot outlive withdrawal
-            # of the current shared result. Refresh it from the exact lookup.
-            receipt.pop('has_visual_result',None)
-        # apply_reusable deliberately strips result text from extraction stubs.
+        if receipt and receipt.get('reused') is True:
+            # Both legacy stubs and copied reuse payloads are historical
+            # snapshots. Neither can authorize evidence after withdrawal.
+            receipt=None
+        # Legacy apply_reusable stripped result text from extraction stubs.
         # annotate_rows has independently matched the current tenant/channel/
         # external ID/source hash. Enrich from that exact saved receipt only.
         if message.get('media_evidence') and (receipt is None or receipt.get('reused') is True or not has_visual_result(receipt) and not receipt.get('transcript')):
@@ -790,7 +790,8 @@ def case_media_coverage(cur,tenant,run,chosen,content,*,include_content=False):
             if include_content and message.get('media_evidence_context'):receipt['observation']=message['media_evidence_context']
         if receipt is not None:receipts.append(receipt)
         elif key in saved:
-            receipts.append({'id':key,'status':'unknown','code':'source_version_unverified'})
+            code='shared_media_result_unavailable' if saved[key].get('reused') is True and previous and source_hash(previous)==source_hash(ref) else 'source_version_unverified'
+            receipts.append({'id':key,'status':'unknown','code':code})
     result=project(refs,receipts,execution,include_content=include_content)
     if include_content:
         names=[chosen.get('contact_name'),chosen.get('phone')]

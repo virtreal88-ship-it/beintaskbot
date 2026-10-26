@@ -109,7 +109,8 @@ def test_reused_projection_metadata_requires_a_real_saved_visual_result():
         assert 'result' not in result['media_results'][0]
 
 
-def test_case_detail_uses_validated_boundaries_and_version_receipt(ready):
+@pytest.mark.parametrize('reuse_style',['legacy_stub','copied_observation','copied_observations'])
+def test_case_detail_uses_validated_boundaries_and_version_receipt(ready,monkeypatch,reuse_style):
     conn,_,_=ready;card=candidate(ready);content=conn.execute('SELECT content FROM saas_knowledge_candidates WHERE id=%s::uuid',(card['id'],))[0]['content'];key=content['start_message_id']
     conn.execute("UPDATE saas_crm_messages SET message_type='image',raw=%s::jsonb WHERE id=%s::uuid",(json.dumps({'mediaId':'one'}),key));conn.commit()
     evidence.create_schema(conn)
@@ -120,6 +121,10 @@ def test_case_detail_uses_validated_boundaries_and_version_receipt(ready):
     for source in run['source_refs']:
         if source['id']==key:source.update(ref)
     stub={'id':key,'status':'processed','code':'vision_observation','coverage':{'complete':True},'reused':True,'_reused_payload':True,'has_visual_result':True}
+    if reuse_style!='legacy_stub':
+        payload={'observation':'Saved synthetic technical fact'} if reuse_style=='copied_observation' else {'observations':[{'text':'Saved synthetic technical fact'}]}
+        stub={'id':key,**evidence.apply_reusable({'text':''},{'status':'processed','code':'vision_observation','coverage':{'complete':True},'result':payload})}
+        assert evidence.has_visual_result(stub)  # Reach the new copied-payload branch.
     conn.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb,media_results=%s::jsonb WHERE id=%s::uuid',
       (json.dumps(run['source_refs']),json.dumps([stub]),card['extraction_id']))
     conn.commit()
@@ -133,8 +138,24 @@ def test_case_detail_uses_validated_boundaries_and_version_receipt(ready):
     assert metadata['media_coverage']['complete'] and 'result' not in metadata['media_results'][0]
     second=store.detail(PROFILE,card['id'])['candidate'];assert second['media_processing']==first['media_processing']
     conn.execute('DELETE FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid',(A,));conn.commit()
-    withdrawn=store.detail(PROFILE,card['id'])['candidate']
+    detail=store.detail(PROFILE,card['id']);withdrawn=detail['candidate']
     assert not withdrawn['media_coverage']['complete'] and 'result' not in withdrawn['media_processing'][0]
+    assert withdrawn['media_processing'][0]['code']=='shared_media_result_unavailable'
+    assert 'Saved synthetic technical fact' not in json.dumps(detail)
+    import tenant_knowledge_improve as improve
+    import tenant_knowledge_candidates_service as service
+    from tenant_linear_policy import TenantLinearError
+    from unittest.mock import Mock
+    prepare=Mock();monkeypatch.setattr(service,'prepare',prepare)
+    with pytest.raises(TenantLinearError,match='case_media_incomplete'):
+        improve.improve(PROFILE,card['id'],{'request_id':str(uuid.uuid4()),'expected_version':card['version']})
+    prepare.assert_not_called()
+    from test_ai_learning_mcp import _setup
+    import tenant_ai_learning_mcp as mcp
+    import tenant_ai_administrator_read as admin
+    _setup(monkeypatch,conn);cfg=mcp._require_cfg();cfg['actor_id']=11;cfg['granted_scopes']=[admin.READ_SCOPE,admin.CONTENT_SCOPE]
+    with conn.cursor() as cur:read=admin.read(cur,cfg,'cases_read',{'id':card['id'],'include_content':True})['items'][0]
+    assert not read['media_coverage']['complete'] and 'Saved synthetic technical fact' not in json.dumps(read)
     with conn.cursor() as cur:evidence.persist(cur,A,[ref],[{'id':key,'status':'processed','code':'vision_observation','observation':'Saved synthetic technical fact'}])
     conn.commit()
     conn.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid",(json.dumps({'mediaId':'replaced'}),key));conn.commit()
