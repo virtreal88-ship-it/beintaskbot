@@ -310,7 +310,7 @@ def test_company_policy_is_explicit_unbounded_revocable_and_tenant_scoped(setup)
     db,cfg=setup
     with db.cursor() as cur:
         with pytest.raises(TenantLinearError):approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':False})
-        policy_id=approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':True})['policy_id']
+        policy_id=company_policy(cur,cfg)
         row=db.execute('SELECT scope_kind,agent_id,channel_id,max_operations,max_per_hour,expires_at FROM saas_ai_training_policies WHERE id=%s::uuid',(policy_id,))[0]
         assert row=={'scope_kind':'company','agent_id':None,'channel_id':None,'max_operations':None,'max_per_hour':None,'expires_at':None}
         with pytest.raises(TenantLinearError):approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':True})
@@ -327,7 +327,7 @@ def test_company_policy_publishes_one_exact_owner_draft_to_one_selected_agent(se
     second=str(uuid.uuid4())
     db.execute("INSERT INTO saas_ai_agents(id,tenant_id,name,created_by,enabled,mode,role,scopes,expert_policy,model) VALUES(%s::uuid,%s::uuid,'Second company agent',11,TRUE,'automatic','primary',%s::jsonb,'{}'::jsonb,'test-model')",(second,A,json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':False}])))
     with db.cursor() as cur:
-        policy_id=approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':True})['policy_id']
+        policy_id=company_policy(cur,cfg)
         proposal=drafts.typed_create(cur,cfg,'owner_knowledge',{'title':'Owner supplied rule','content':'Use lot number before stock count.','owner_note':'Owner provided this rule.'})
         listed=approval.training_sources(cur,cfg,{'policy_id':policy_id,'kind':'owner_knowledge_draft','target_agent_id':second,'target_channel_id':CA})
         item=next(x for x in listed['items'] if x['source_id']==proposal['id'])
@@ -354,7 +354,7 @@ def test_company_policy_publishes_one_exact_owner_draft_to_one_selected_agent(se
 def test_company_owner_draft_hash_mutation_and_unlimited_operation_receipts(setup):
     db,cfg=setup
     with db.cursor() as cur:
-        policy_id=approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':True})['policy_id']
+        policy_id=company_policy(cur,cfg)
         proposal=drafts.typed_create(cur,cfg,'owner_knowledge',{'title':'Exact owner draft','content':'Count the stock by lot.','owner_note':'Owner supplied.'})
         listed=approval.training_sources(cur,cfg,{'policy_id':policy_id,'kind':'owner_knowledge_draft','target_agent_id':AGENT,'target_channel_id':CA})
         item=listed['items'][0]
@@ -370,7 +370,7 @@ def test_company_owner_draft_hash_mutation_and_unlimited_operation_receipts(setu
 def test_company_policy_publishes_one_evidence_checked_case_as_delegated(ready,monkeypatch):
     db,cfg,value=case_setup(ready,monkeypatch,True)
     with db.cursor() as cur:
-        policy_id=approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':True})['policy_id']
+        policy_id=company_policy(cur,cfg)
         prepared=approval.training_operation(cur,cfg,'create',{'policy_id':policy_id,'request_id':str(uuid.uuid4()),
           'kind':'support_case','source_id':value['id'],'target_agent_id':AGENT,'target_channel_id':CA})
         assert prepared['eligible']
@@ -390,7 +390,7 @@ def test_company_policy_publishes_one_evidence_checked_case_as_delegated(ready,m
 def test_company_policy_instruction_is_logged_as_delegated_not_individually_approved(setup):
     db,cfg=setup;source=trusted(setup,'instruction')
     with db.cursor() as cur:
-        policy_id=approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':True})['policy_id']
+        policy_id=company_policy(cur,cfg)
         prepared=approval.training_operation(cur,cfg,'create',{'policy_id':policy_id,'request_id':str(uuid.uuid4()),
           'kind':'instruction','source_id':source,'target_agent_id':AGENT,'target_channel_id':CA})
         published=approval.training_operation(cur,cfg,'publish',{'policy_id':policy_id,'request_id':str(uuid.uuid4()),**target(prepared),
@@ -400,4 +400,104 @@ def test_company_policy_instruction_is_logged_as_delegated_not_individually_appr
         assert source_row['provenance']['authorization_mode']=='owner_delegated_policy'
         assert source_row['provenance']['delegation_policy_id']==policy_id and 'approved_by' not in source_row['provenance']
         assert db.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE action='instruction_delegated_approval'")[0]['n']==1
+    db.commit()
+
+
+def company_policy(cur,cfg):
+    # Same identity/connection fields the HTTP authenticator derives, with a
+    # real disposable token row rechecked and locked by the mutation guard.
+    connection=str(uuid.uuid4())
+    cur.execute("UPDATE saas_ai_learning_mcp_tokens SET agent_id=%s::uuid,oauth_connection_id=%s::uuid,scope=%s WHERE tenant_id=%s::uuid RETURNING id,token_hash",(cfg['AI_LEARNING_MCP_AGENT_ID'],connection,' '.join([mcp.TOOL_SCOPE,drafts.DRAFT_SCOPE,approval.PUBLISH_SCOPE]),A))
+    row=cur.fetchone()
+    cfg.update(oauth_token_id=str(row['id']),oauth_connection_id=connection,oauth_token_hash=row['token_hash'])
+    return approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':True})['policy_id']
+
+
+@pytest.mark.parametrize('kind',['knowledge','instruction'])
+def test_company_reviewed_source_path_and_truthful_receipt(setup,kind):
+    db,cfg=setup;source=trusted(setup,kind)
+    with db.cursor() as cur:
+        policy_id=company_policy(cur,cfg)
+        listed=mcp._tools(cur,cfg,'administrator_training_sources',{'policy_id':policy_id,'kind':kind,'target_agent_id':AGENT,'target_channel_id':CA})
+        assert source in [v['source_id'] for v in listed['items']]
+        prepared=op(cur,cfg,policy_id,'create',kind=kind,source_id=source,target_agent_id=AGENT,target_channel_id=CA)
+        receipt=db.execute('SELECT id,approved_by,delegation_policy_id FROM saas_ai_administrator_approvals WHERE draft_id=%s::uuid',(prepared['draft_id'],))[0]
+        assert receipt['approved_by'] is None and str(receipt['delegation_policy_id'])==policy_id
+        assert db.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE entity_id=%s AND action='ai_administrator_approval_approved'",(str(receipt['id']),))[0]['n']==0
+        published=op(cur,cfg,policy_id,'publish',**target(prepared),target_agent_id=AGENT,target_channel_id=CA)
+        provenance=db.execute('SELECT provenance FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(published['source_ids'][0],))[0]['provenance']
+        assert 'approved_by' not in provenance and provenance['authorization_mode']=='owner_delegated_policy'
+    db.commit()
+
+
+def evidence_draft(cur,cfg):
+    cur.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND channel=%s LIMIT 1',(A,'connect:'+CA))
+    message=str(cur.fetchone()['id'])
+    draft=drafts.typed_create(cur,cfg,'knowledge',{'title':'Full instruction draft','content':'Evidence-backed guidance. Owner addition: check stock. Caveat: outcome remains unconfirmed.','evidence_ids':[message],'agent_ids':[]})
+    return draft,message
+
+
+@pytest.mark.parametrize('mutation',[None,'draft','evidence','revoked','oauth','target_archived'])
+def test_company_ordinary_evidence_draft_exact_review_and_withdrawal(setup,monkeypatch,mutation):
+    from types import SimpleNamespace
+    db,cfg=setup
+    with db.cursor() as cur:
+        policy_id=company_policy(cur,cfg)
+        draft,message=evidence_draft(cur,cfg)
+        items=mcp._tools(cur,cfg,'administrator_training_owner_drafts',{'policy_id':policy_id,'target_agent_id':AGENT,'target_channel_id':CA})['items']
+        item=next(v for v in items if v['source_id']==draft['id'])
+        assert item['basis']['kind']=='evidence_backed_draft'
+        prepared=op(cur,cfg,policy_id,'create',kind='knowledge',source_id=draft['id'],source_version=draft['version'],source_hash=item['source_hash'],target_agent_id=AGENT,target_channel_id=CA)
+    db.commit()
+    if mutation=='oauth':
+        monkeypatch.setenv('AI_LEARNING_MCP_AGENT_ID',AGENT)
+        cfg=mcp._authorize_token(SimpleNamespace(headers={'Authorization':'Bearer read-only-test-token'}))
+    with db.cursor() as cur:
+        if mutation=='draft':cur.execute("UPDATE saas_ai_administrator_drafts SET body=jsonb_set(body,'{content}','\"mutated\"'::jsonb) WHERE id=%s::uuid",(draft['id'],))
+        elif mutation=='evidence':cur.execute("UPDATE saas_crm_messages SET body='mutated source' WHERE id=%s::uuid",(message,))
+        elif mutation=='revoked':approval.training_policy_revoke(cur,PROFILE,policy_id)
+        elif mutation=='oauth':cur.execute('UPDATE saas_ai_learning_mcp_tokens SET revoked_at=now() WHERE id=%s::uuid',(cfg['oauth_token_id'],))
+        if mutation in {'draft','evidence','revoked','oauth'}:
+            with pytest.raises(TenantLinearError):op(cur,cfg,policy_id,'publish',**target(prepared),target_agent_id=AGENT,target_channel_id=CA)
+            assert db.execute('SELECT count(*) AS n FROM saas_ai_administrator_publication_grants WHERE policy_id=%s::uuid',(policy_id,))[0]['n']==0
+        else:
+            published=op(cur,cfg,policy_id,'publish',**target(prepared),target_agent_id=AGENT,target_channel_id=CA)
+            source=db.execute('SELECT content,provenance FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(published['source_ids'][0],))[0]
+            assert 'Owner addition' in source['content'] and 'unconfirmed' in source['content']
+            assert source['provenance']['review_status']=='owner_delegated_evidence_draft'
+            assert 'approved_by' not in source['provenance'] and 'owner_provided_draft_hash' not in source['provenance']
+            if mutation=='target_archived':
+                cur.execute('UPDATE saas_ai_agents SET archived_at=now() WHERE id=%s::uuid',(AGENT,))
+                cur.execute('DELETE FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid',(A,CA))
+            approval.training_policy_revoke(cur,PROFILE,policy_id)
+            assert op(cur,cfg,policy_id,'rollback',grant_id=published['grant_id'])['rolled_back']
+    db.commit()
+
+
+def test_company_draft_preview_hash_binds_evidence_before_prepare(setup):
+    db,cfg=setup
+    with db.cursor() as cur:
+        p=company_policy(cur,cfg);draft,message=evidence_draft(cur,cfg)
+        args={'policy_id':p,'target_agent_id':AGENT,'target_channel_id':CA}
+        item=next(v for v in mcp._tools(cur,cfg,'administrator_training_owner_drafts',args)['items'] if v['source_id']==draft['id'])
+        with pytest.raises(TenantLinearError):mcp._tools(cur,{**cfg,'granted_scopes':[approval.PUBLISH_SCOPE]},'administrator_training_owner_drafts',args)
+        cur.execute("UPDATE saas_crm_messages SET body='Changed before preparation' WHERE id=%s::uuid",(message,))
+        with pytest.raises(TenantLinearError,match='evidence changed'):
+            op(cur,cfg,p,'create',kind='knowledge',source_id=draft['id'],source_version=draft['version'],source_hash=item['source_hash'],target_agent_id=AGENT,target_channel_id=CA)
+        assert db.execute('SELECT count(*) AS n FROM saas_ai_training_operations WHERE policy_id=%s::uuid',(p,))[0]['n']==0
+    db.commit()
+
+
+def test_company_unconfirmed_case_remains_unconfirmed(ready,monkeypatch):
+    db,cfg,value=case_setup(ready,monkeypatch,False)
+    before=db.execute('SELECT content FROM saas_knowledge_candidates WHERE id=%s::uuid',(value['id'],))[0]['content']
+    with db.cursor() as cur:
+        p=company_policy(cur,cfg)
+        prepared=op(cur,cfg,p,'create',kind='support_case',source_id=value['id'],target_agent_id=AGENT,target_channel_id=CA)
+        assert not prepared['eligible'] and prepared['clarification_reason']
+        with pytest.raises(TenantLinearError):op(cur,cfg,p,'publish',**target(prepared),target_agent_id=AGENT,target_channel_id=CA)
+        after=db.execute('SELECT content,status FROM saas_knowledge_candidates WHERE id=%s::uuid',(value['id'],))[0]
+        assert after['status']=='needs_clarification'
+        assert after['content']['outcome']==before['outcome']
+        assert after['content'].get('work_status')==before.get('work_status')
     db.commit()

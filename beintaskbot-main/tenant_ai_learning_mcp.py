@@ -240,6 +240,7 @@ def _authorize_token(request):
             cfg['actor_id']=row['created_by']
             cfg['oauth_connection_id']=str(row['oauth_connection_id'])
             cfg['oauth_token_id']=str(row['id'])
+            cfg['oauth_token_hash']=row['token_hash']
             if TOOL_SCOPE in cfg['granted_scopes'] or DRAFT_SCOPE in cfg['granted_scopes'] or KNOWLEDGE_DEDUP_SCOPE in cfg['granted_scopes'] or APPLY_SCOPE in cfg['granted_scopes'] or DIALOGUE_MERGE_SCOPE in cfg['granted_scopes'] or administrator_read.READ_SCOPE in cfg['granted_scopes']:
                 _authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':row['created_by']})
                 cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',

@@ -382,9 +382,9 @@ no fanout. New tools:
 - `administrator_training_sources`: list policy-eligible reviewed material for
   one target; ordinary verified sources only.
 - `administrator_training_owner_drafts`: with both draft and publish OAuth
-  scopes, list exact owner-provided knowledge drafts and hashes for one target.
+  scopes, list exact owner-created knowledge drafts (owner-provided or evidence-backed) and hashes for one target. Evidence-backed hashes also bind the current tenant/channel-scoped source records.
 - `administrator_training_create`: prepare material from a verified source, or
-  an exact owner-provided knowledge draft under the company policy.
+  an exact owner-provided or evidence-backed knowledge draft under the company policy. Its full text, including caveats and owner additions, is preserved as delegated content; evidence references do not attest to every claim.
 - `administrator_training_update`: refresh an unpublished policy material from
   verified evidence, with the current draft version and material hash.
 - `administrator_training_publish`: publish one prepared exact material under
@@ -462,3 +462,10 @@ into status-only fixtures. They verify rejection of unknown outcomes; no custome
 messages, names, IDs or attachments are copied into tests. These are not full
 historical conversation replays. Positive lifecycle tests use synthetic evidence
 and a synthetic authorized owner. No production materials are modified.
+
+Company policy mutations recheck and lock the current OAuth token/connection in
+the business transaction, including scope, expiry, revocation and token rotation.
+A separate authenticated owner is still required. Delegated preparation records
+the policy on the receipt with no human `approved_by` or human-approval audit.
+Safe withdrawal derives its target from the persisted grant and does not require
+the old target agent/channel to remain active or present.
