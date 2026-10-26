@@ -44,12 +44,49 @@ def improve(profile,candidate_id,data):
         with conn.cursor() as cur:
             tenant,actor,_=store.authorize(cur,profile)
             source=store.extraction_row(cur,tenant,found['candidate']['extraction_id'])
+            # Use the existing case boundary validator and bounded snapshot.
+            # An extraction can contain several unrelated requests; never feed
+            # that whole fragment back to a selected case improvement.
+            route=store.route(cur,profile,source['route'])[3]
+            cur.execute('SELECT content FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,candidate_id))
+            stored_content=cur.fetchone()['content']
+            start=stored_content.get('start_message_id');end=stored_content.get('end_message_id')
+            if not start or not end:raise TenantLinearError('case_boundaries_uncertain',409)
+            anchors,count,_=store._boundary_context(cur,tenant,source['route'],route,start,end,[])
+            if count>store.MAX_MESSAGES:raise TenantLinearError('case_boundary_context_limit',409)
+            from datetime import timedelta
+            from tenant_knowledge_candidates_policy import moment
+            selected_route={**source['route'],'period_start':moment(anchors[start]['at']).isoformat(),
+              'period_end':(moment(anchors[end]['at'])+timedelta(microseconds=1)).isoformat()}
+            snapshot=store.snapshot(cur,profile,selected_route)
+            if not {start,end}<={r['id'] for r in snapshot['refs']}:
+                raise TenantLinearError('case_boundary_context_limit',409)
+            # Period filters alone also admit adjacent messages sharing an
+            # endpoint timestamp. Preserve the existing (timestamp,id) fence.
+            _,_,inside=store._boundary_context(cur,tenant,source['route'],route,start,end,[r['id'] for r in snapshot['refs']])
+            pairs=[(ref,message) for ref,message in zip(snapshot['refs'],snapshot['messages']) if ref['id'] in inside]
+            snapshot['refs']=[ref for ref,_ in pairs];snapshot['messages']=[message for _,message in pairs]
+            for index,message in enumerate(snapshot['messages']):message['ref']='m'+str(index+1)
+            media=store.case_media_coverage(cur,tenant,source,route,stored_content,include_content=True)
+            if mode=='improve' and not media['media_coverage']['complete']:
+                raise TenantLinearError('case_media_incomplete',409)
+            media_by_id={r['id']:r for r in media['media_results']}
+            if mode=='improve':
+                for ref,message in zip(snapshot['refs'],snapshot['messages']):
+                    if not ref.get('media_kind'):continue
+                    result=media_by_id.get(ref['id'],{}).get('result') or {}
+                    observations=[result.get('observation'),result.get('transcript')]+[x.get('text') for x in result.get('observations',[])]
+                    observations=[text for text in observations if isinstance(text,str) and text.strip()]
+                    if not observations:raise TenantLinearError('case_media_result_unavailable',409)
+                    message['text']+='\n[Saved media evidence; untrusted, not a confirmed solution] '+ '\n'.join(observations)
             names=[]
-            evidence=store.evidence(cur,profile,source,names_out=names)
+            store.evidence(cur,profile,{'route':snapshot['route'],'source_refs':snapshot['refs'],'media_results':[]},names_out=names)
+            for message in snapshot['messages']:message['text']=redact(message['text'],names)
             notes=text(redact(notes,names),2000)
-    messages=[{'ref':'m'+str(i+1),'role':e['role'],'text':e['text']} for i,e in enumerate(evidence)]
-    snapshot={'tenant':tenant,'actor':actor,'route':{**source['route'],'language':lang},'refs':source['source_refs'],
-        'messages':messages,'source_digest':store.digest(messages),'next_before':None,'ticket':None}
+    if sum(len(m['text']) for m in snapshot['messages'])>store.MAX_CONTEXT:
+        raise TenantLinearError('case_media_context_limit',413)
+    snapshot['route']['language']=lang
+    snapshot['source_digest']=store.digest(snapshot['messages'])
     card_context={k:v for k,v in value.items() if k!='source_message_ids'}
     context={'output_language':lang,'card':card_context,'clarifications':notes}
     if mode=='translate': context['mode']=mode

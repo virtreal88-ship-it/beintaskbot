@@ -279,7 +279,9 @@ def tick():
           before_provider=lambda: require_extraction_enabled(item))
         request=response.get('request') or {}
         state=request.get('status')
-        if state not in {'completed','failed','unknown'}:
+        if state=='partial':
+            finish(item,request_id,'media_incomplete')
+        elif state not in {'completed','failed','unknown'}:
             finish(item,error_code='extraction_state_unknown')
         else:
             finish(item,request_id,'' if state=='completed' else 'provider_'+state)

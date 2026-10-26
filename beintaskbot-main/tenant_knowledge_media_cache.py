@@ -42,7 +42,9 @@ def observe_once(profile,item,ref,content,mime,origin,invoke,check_before_ai=Non
                 cur.execute('SELECT state,transcript FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND fingerprint=%s',(tenant,fingerprint))
                 receipt=cur.fetchone()
                 if receipt['state']=='completed':return receipt['transcript'],{},False
-                raise TenantLinearError('Результат Vision неизвестен или ещё обрабатывается.',409)
+                error=TenantLinearError('Результат Vision неизвестен или ещё обрабатывается.',409)
+                error.media_outcome_unknown=True
+                raise error
         conn.commit()
     # Claim remains running on process death. A new worker MUST NOT reclaim it.
     item['vision_attempts']=item.get('vision_attempts',0)+1
@@ -62,7 +64,8 @@ def observe_once(profile,item,ref,content,mime,origin,invoke,check_before_ai=Non
                 cur.execute("UPDATE saas_knowledge_media_cache SET state='completed',transcript=%s,usage=%s::jsonb WHERE tenant_id=%s::uuid AND fingerprint=%s AND token=%s::uuid AND state='running'",(text,_json(usage or {}),tenant,fingerprint,token))
             conn.commit()
         return text,usage,True
-    except Exception:
+    except Exception as error:
+        error.media_outcome_unknown=True
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("UPDATE saas_knowledge_media_cache SET state='unknown' WHERE tenant_id=%s::uuid AND fingerprint=%s AND token=%s::uuid",(tenant,fingerprint,token))
@@ -85,7 +88,9 @@ def transcribe_once(profile,item,model,media,invoke,check_before_ai=None):
                 cur.execute('SELECT state,transcript FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND fingerprint=%s',(tenant,fingerprint))
                 receipt=cur.fetchone()
                 if receipt['state']=='completed':return redact(receipt['transcript'],item.get('redaction_names',[])),{},False
-                raise TenantLinearError('Результат предыдущего ASR неизвестен или ещё обрабатывается.',409)
+                error=TenantLinearError('Результат предыдущего ASR неизвестен или ещё обрабатывается.',409)
+                error.media_outcome_unknown=True
+                raise error
         conn.commit()
     # Mark attempted before crossing the external boundary, even if it throws.
     item['asr_attempted']=True
@@ -98,7 +103,8 @@ def transcribe_once(profile,item,model,media,invoke,check_before_ai=None):
                 cur.execute("UPDATE saas_knowledge_media_cache SET state='completed',transcript=%s WHERE tenant_id=%s::uuid AND fingerprint=%s AND token=%s::uuid AND state='running'",(text,tenant,fingerprint,token))
             conn.commit()
         return text,usage,True
-    except Exception:
+    except Exception as error:
+        error.media_outcome_unknown=True
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("UPDATE saas_knowledge_media_cache SET state='unknown' WHERE tenant_id=%s::uuid AND fingerprint=%s AND token=%s::uuid",(tenant,fingerprint,token))
