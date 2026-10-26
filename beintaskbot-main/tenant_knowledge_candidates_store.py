@@ -609,7 +609,7 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                     return {'candidate':public_card(cur,cur.fetchone())}
                 return detail(profile,candidate_id)
             run=extraction_row(cur,tenant,row['extraction_id']);items=evidence(cur,profile,run)
-            if action=='approve':
+            if action in {'approve','delegated_approve'}:
                 ids=data.get('agent_ids')
                 if not isinstance(ids,list) or not 1<=len(ids)<=20: raise TenantLinearError('Выберите от 1 до 20 агентов.')
                 agents=sorted(set(identifier(v) for v in ids))
@@ -671,25 +671,45 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
             elif action=='reject':
                 if set(data)-{'expected_version'}: raise TenantLinearError('Неизвестное поле.')
                 cur.execute("UPDATE saas_knowledge_candidates SET status='rejected',version=version+1,reviewed_by=%s,reviewed_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(actor,tenant,row['id']))
-            elif action=='approve':
-                if set(data)-{'expected_version','agent_ids'}: raise TenantLinearError('Неизвестное поле.')
+            elif action in {'approve','delegated_approve'}:
+                allowed={'expected_version','agent_ids'}|({'delegation_policy_id','channel_id'} if action=='delegated_approve' else set())
+                if set(data)-allowed: raise TenantLinearError('Неизвестное поле.')
+                delegation=None
+                if action=='delegated_approve':
+                    policy_id=identifier(data.get('delegation_policy_id'));channel_id=identifier(data.get('channel_id'))
+                    cur.execute('SELECT * FROM saas_ai_training_policies WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,policy_id));delegation=cur.fetchone()
+                    if (not delegation or delegation['owner_id']!=actor or delegation.get('scope_kind')!='company'
+                        or delegation.get('revoked_at') is not None or delegation.get('expires_at') is not None
+                        or 'support_case' not in delegation['kinds'] or 'publish' not in delegation['rights']):
+                        raise TenantLinearError('Delegated case publication is unavailable.',403)
+                    if str(run['route'].get('channel_id'))!=channel_id: raise TenantLinearError('Case route changed.',403)
                 if not any(item.get('role')=='customer' for item in items if item.get('id') in row['content'].get('source_message_ids',[])):
                     raise TenantLinearError('original_customer_unproven',409)
                 value=enforce_confirmation(card(row['content'],[i['id'] for i in items],allow_boundary_outside_sources=True),items)
                 reason=approval_reason(value)
                 if reason: raise TenantLinearError(reason,409)
                 for agent_id in agents:
-                    cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,agent_id))
-                    if not cur.fetchone(): raise TenantLinearError('Агент недоступен в этой компании.',404)
+                    cur.execute('SELECT scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,agent_id));target=cur.fetchone()
+                    if not target: raise TenantLinearError('Агент недоступен в этой компании.',404)
+                    if delegation is not None:
+                        from tenant_ai_administrator_approvals import _publication_agent_scope
+                        if not _publication_agent_scope(target['scopes'],channel_id):raise TenantLinearError('Agent scope changed.',403)
                 content=publication_text(value)
                 for agent_id in agents:
                     source=save_knowledge(profile,{'title':value['title'],'kind':'text','content':content,'active':True,'agent_id':agent_id,'setup_key':'candidate_'+str(row['id']).replace('-','')},connection=conn)
-                    cur.execute('UPDATE saas_ai_knowledge_sources SET provenance=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
-                        (_json({'candidate_id':str(row['id']),'extraction_id':str(run['id']),'route':run['route'],'source_message_ids':value['source_message_ids'],'approved_by':actor}),tenant,source['id']))
+                    provenance={'candidate_id':str(row['id']),'extraction_id':str(run['id']),'route':run['route'],'source_message_ids':value['source_message_ids']}
+                    if delegation is None: provenance['approved_by']=actor
+                    else: provenance.update({'authorization_mode':'owner_delegated_policy','delegation_policy_id':str(delegation['id']),'review_status':'policy_delegated_case'})
+                    cur.execute('UPDATE saas_ai_knowledge_sources SET provenance=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(provenance),tenant,source['id']))
                     cur.execute('INSERT INTO saas_knowledge_candidate_sources(tenant_id,candidate_id,agent_id,source_id) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid)',(tenant,row['id'],agent_id,source['id']))
-                cur.execute("UPDATE saas_knowledge_candidates SET status='approved',version=version+1,reviewed_by=%s,reviewed_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(actor,tenant,row['id']))
+                if delegation is None:
+                    cur.execute("UPDATE saas_knowledge_candidates SET status='approved',version=version+1,reviewed_by=%s,reviewed_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(actor,tenant,row['id']))
+                else:
+                    cur.execute("UPDATE saas_knowledge_candidates SET status='approved',version=version+1,reviewed_by=NULL,reviewed_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,row['id']))
             else: raise TenantLinearError('Некорректное действие.')
-            _audit(cur,tenant,actor,'knowledge_candidate_'+action,'knowledge_candidate',row['id'],{'message_count':message_count} if action=='boundaries' else {})
+            audit_action='knowledge_candidate_delegated_publish' if action=='delegated_approve' else 'knowledge_candidate_'+action
+            audit_data={'delegation_policy_id':str(delegation['id']),'agent_ids':agents,'channel_id':channel_id} if action=='delegated_approve' else {'message_count':message_count} if action=='boundaries' else {}
+            _audit(cur,tenant,actor,audit_action,'knowledge_candidate',row['id'],audit_data)
             if connection is not None:
                 cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,candidate_id))
                 return {'candidate':public_card(cur,cur.fetchone())}

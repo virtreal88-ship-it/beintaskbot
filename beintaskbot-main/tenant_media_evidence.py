@@ -36,6 +36,35 @@ def source_hash(ref):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+
+def media_version(raw):
+    """Existing attachment identity/version fence shared by read projections."""
+    raw=raw if isinstance(raw,dict) else {}
+    return hashlib.sha256(json.dumps({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')}, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+
+
+def publication_fingerprint(cur,tenant,row):
+    """Hash exact saved media evidence in the caller's transaction; no fetches.
+
+    Return only hashes, never attachment URLs/raw fields or receipt text. Lock
+    an existing receipt so edits/withdrawal serialize with publication.
+    """
+    kind=str(row.get('message_type') or 'text').lower()
+    if kind in {'','text'}:return None
+    channel=str(row.get('channel') or '')
+    ref={'external_id':row.get('external_id'),'body_hash':_body_hash(row.get('body')),
+         'media_kind':kind,'media_version':media_version(row.get('raw'))}
+    version=source_hash(ref);saved=None
+    cur.execute("SELECT to_regclass('public.saas_media_evidence_receipts') AS relation")
+    if cur.fetchone()['relation']:
+        cur.execute("""SELECT status,code,coverage,result,provenance,media_kind,direction,created_at,updated_at
+          FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
+            AND external_id=%s AND source_hash=%s AND media_kind=%s FOR SHARE""",
+          (tenant,channel.removeprefix('connect:'),str(ref['external_id'] or ''),version,kind))
+        saved=cur.fetchone()
+    snapshot=json.dumps(dict(saved) if saved else None,sort_keys=True,default=str,ensure_ascii=False,separators=(',',':'))
+    return {'source_hash':version,'receipt_hash':hashlib.sha256(snapshot.encode()).hexdigest()}
+
 def reusable(profile, ref):
     """Return only the exact-tenant/channel/version terminal receipt, if any."""
     if not isinstance(profile, dict) or not profile.get('tenant_id'):
@@ -166,9 +195,9 @@ def annotate_rows(cur, tenant, rows):
             cur.execute('SAVEPOINT ' + savepoint)
             channel_id = channel.removeprefix('connect:')
             raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}
-            media_version = hashlib.sha256(json.dumps({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')}, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+            version = media_version(raw)
             ref = {'external_id': external, 'body_hash': _body_hash(row.get('body')),
-                   'media_kind': kind, 'media_version': media_version}
+                   'media_kind': kind, 'media_version': version}
             cur.execute("""SELECT status,code,coverage,result FROM saas_media_evidence_receipts
               WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s AND source_hash=%s
                 AND media_kind=%s""", (tenant, channel_id, external, source_hash(ref), kind))

@@ -240,6 +240,7 @@ def _authorize_token(request):
             cfg['actor_id']=row['created_by']
             cfg['oauth_connection_id']=str(row['oauth_connection_id'])
             cfg['oauth_token_id']=str(row['id'])
+            cfg['oauth_token_hash']=row['token_hash']
             if TOOL_SCOPE in cfg['granted_scopes'] or DRAFT_SCOPE in cfg['granted_scopes'] or KNOWLEDGE_DEDUP_SCOPE in cfg['granted_scopes'] or APPLY_SCOPE in cfg['granted_scopes'] or DIALOGUE_MERGE_SCOPE in cfg['granted_scopes'] or administrator_read.READ_SCOPE in cfg['granted_scopes']:
                 _authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':row['created_by']})
                 cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',
@@ -295,6 +296,10 @@ def _tools(cur,cfg,name,args):
         return dialogue_merge.execute(cur,cfg,args)
     if name=='administrator_training_sources':
         return administrator_approvals.training_sources(cur,cfg,args)
+    if name=='administrator_training_owner_drafts':
+        if DRAFT_SCOPE not in set(cfg.get('granted_scopes') or []) or not isinstance(args,dict) or set(args)-{'policy_id','target_agent_id','target_channel_id','limit'} or not {'policy_id','target_agent_id','target_channel_id'}<=set(args):
+            raise TenantLinearError('Additional OAuth scope required or invalid owner draft request.',403)
+        return administrator_approvals.training_sources(cur,cfg,{'kind':'owner_knowledge_draft',**args})
     if name in {'administrator_training_create','administrator_training_update','administrator_training_publish','administrator_training_rollback'}:
         return administrator_approvals.training_operation(cur,cfg,name.removeprefix('administrator_training_'),args)
     if name=='administrator_training_policies':

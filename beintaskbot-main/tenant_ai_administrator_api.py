@@ -58,6 +58,9 @@ def handler(member_from_request, canonical_origin, logger):
                 action=data.get('action')
                 if action=='training_policy_create':
                     value=await asyncio.to_thread(_with_connection,approvals.training_policy_create,profile,{k:v for k,v in data.items() if k!='action'})
+                elif action=='training_company_policy_create':
+                    if set(data)!={'action','consent_confirmed'}: raise TenantLinearError('Invalid company-wide delegation request.',400)
+                    value=await asyncio.to_thread(_with_connection,approvals.training_company_policy_create,profile,{'consent_confirmed':data['consent_confirmed']})
                 elif action=='training_policy_revoke':
                     if set(data)!={'action','policy_id'}: raise TenantLinearError('Invalid policy revocation.',400)
                     value=await asyncio.to_thread(_with_connection,approvals.training_policy_revoke,profile,data['policy_id'])
