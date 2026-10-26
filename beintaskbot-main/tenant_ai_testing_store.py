@@ -171,11 +171,13 @@ def reserve(profile,id,data,*,campaign_id=None):
                 lines.append({'speaker':'CLIENT','text':turn['client_text'][:2000]})
                 if turn.get('response'):lines.append({'speaker':'AGENT','text':turn['response'][:2000]})
             lines.append({'speaker':'CLIENT','text':text})
-            # Same active, agent-scoped knowledge lookup as the worker, on the current transaction.
+            # Reuse bounded multilingual lexical expansion on this transaction.
+            from tenant_knowledge_search import tsquery, patterns
+            query=tsquery(text[:1000]); query_patterns=patterns(text[:1000])
             cur.execute('''SELECT s.id AS source_id,s.title,c.content FROM saas_ai_knowledge_chunks c JOIN saas_ai_knowledge_sources s
               ON s.tenant_id=c.tenant_id AND s.id=c.source_id WHERE c.tenant_id=%s::uuid AND s.active=TRUE AND (s.agent_id IS NULL OR s.agent_id=%s::uuid)
-              AND (c.search_vector @@ plainto_tsquery('simple',%s) OR c.content ILIKE %s)
-              ORDER BY ts_rank(c.search_vector,plainto_tsquery('simple',%s)) DESC,s.updated_at DESC,c.chunk_no LIMIT 6''',(tenant,value['agent_id'],text[:1000],'%'+text[:120]+'%',text[:1000]))
+              AND (c.search_vector @@ to_tsquery('simple',%s) OR c.content ILIKE ANY(%s))
+              ORDER BY ts_rank(c.search_vector,to_tsquery('simple',%s)) DESC,s.updated_at DESC,c.chunk_no LIMIT 6''',(tenant,value['agent_id'],query,query_patterns,query))
             knowledge=[{'source_id':str(r['source_id']),'title':r['title'],'content':r['content'][:1800]} for r in cur.fetchall()];trace['knowledge']=knowledge
             rules='\n'.join((row['company_instructions'],row['instructions'],str(scope.get('instructions') or ''))).strip()
             prompt=INSTRUCTIONS+'\n\nBusiness instructions:\n'+rules+'\n'+server_instructions()+'\nThis is a virtual test. All proposed actions are simulated. Never claim a real message, CRM change, task, or webhook was executed.'

@@ -1,0 +1,24 @@
+[
+  {
+    "id": "7678ae0a-9388-4372-88d6-0057a8c7f836",
+    "kind": "text",
+    "title": "Sayım sənədində fərq və faktiki qalığın tətbiqi",
+    "active": true,
+    "content": "Bəli, faktiki qalığı daxil etdikdən sonra fərq sayım sənədində görünür. Fərq həm müsbət, həm də mənfi ola bilər. Bunun üçün sənədi keçirməyə ehtiyac yoxdur. Sənəd keçirildikdən sonra daxil edilmiş faktiki miqdarlar anbar qalığına tətbiq olunur.",
+    "agent_id": "67da1058-2ffb-48fa-bfd9-d3d01c1990d1",
+    "created_at": "2026-10-26T05:54:51.935199+00:00",
+    "updated_at": "2026-10-26T05:54:51.935199+00:00",
+    "content_hash": "28ad653a8440dac05ad9bdb706b50dbfd571cf6ed55b925086e3b06f84ce54a8"
+  },
+  {
+    "id": "252dab47-82be-4410-adb8-fe0c0197f746",
+    "kind": "text",
+    "title": "Sayım sənədinin yaradılması, davam etdirilməsi və keçirilməsi",
+    "active": true,
+    "content": "Mənbə və yoxlama həddi: əməkdaşın videoda danışığının saxlanmış transkripsiyası. Video kadrlarının analizi uğursuz olub; ekran elementlərinin dəqiq adları və görünüşü vizual olaraq təsdiqlənməyib. Bu material müştərinin əməliyyatı uğurla tamamladığını sübut etmir.\n\nİnventarizasiya qaydası:\n1. Məhsullar bölməsində sayım bölməsinə daxil olun və yeni sayım sənədi yaradın.\n2. Sayım aparılacaq anbarı seçin, sənədə ad verin və yadda saxlayın.\n3. Saxlanmış sənədi yenidən açaraq sayımı davam etdirmək olar. Sayımı aparan işçinin adını və sayılan rəfin adını qeyd etmək olar.\n4. Məhsulu adı və ya barkodu ilə daxil edin, faktiki sayılmış miqdarı yazın və yadda saxlayın.\n5. Sayım həmin gün bitməzsə, sənədi yadda saxlayıb bağlamaq və növbəti gün davam etmək olar. Əvvəl daxil edilmiş məhsullar və miqdarlar saxlanır.\n6. Bütün məhsulların sayımı bitdikdən sonra sənədi keçirin. Sənəd keçirildikdə daxil edilmiş faktiki miqdarlar anbar qalığına tətbiq olunur. Yadda saxlamaq və sənədi keçirmək fərqli əməliyyatlardır.\n\nSahibin ayrıca təsdiqlədiyi əlavə məlumat (videonun vizual nəticəsi deyil): faktiki qalığı daxil etdikdən sonra fərq sayım sənədində görünür. Fərq həm müsbət, həm də mənfi ola bilər; fərqi görmək üçün sənədi keçirməyə ehtiyac yoxdur.\n\nAgent üçün sərhəd: bu təlimat addımları izah etmək üçündür. Agent müştərinin yerinə sənəd keçirməməli və stok məlumatlarını özbaşına dəyişməməlidir. Dəqiq düymə adı və ya ekran yeri bu mənbədə aydın deyilsə, onu uydurmamalıdır.",
+    "agent_id": "67da1058-2ffb-48fa-bfd9-d3d01c1990d1",
+    "created_at": "2026-10-26T07:24:42.238969+00:00",
+    "updated_at": "2026-10-26T07:24:42.238969+00:00",
+    "content_hash": "7312314a2fd67083a84bb0b839f236ebc140bc4af3a7324f9ff557de998733bb"
+  }
+]
