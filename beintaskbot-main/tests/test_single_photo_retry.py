@@ -140,7 +140,7 @@ def test_owner_retry_fails_closed_before_enqueue(prior,change,monkeypatch):
     assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaigns')[0]['n']==1
 
 
-@pytest.mark.parametrize('change',['revoke','token','source','price'])
+@pytest.mark.parametrize('change',['revoke','token','source','price','cap_disabled'])
 def test_revoked_or_changed_retry_between_enqueue_and_provider(prior,change,monkeypatch):
     db,cfg,args,_,_=prior;_,result=prepare_and_approve(prior)
     claim=campaigns.claim(A,result['campaign_id']);assert claim
@@ -148,6 +148,7 @@ def test_revoked_or_changed_retry_between_enqueue_and_provider(prior,change,monk
     if change=='token':db.execute('UPDATE saas_ai_learning_mcp_tokens SET revoked_at=now() WHERE id=%s::uuid',(cfg['oauth_token_id'],))
     if change=='source':db.execute("UPDATE saas_crm_messages SET external_id='changed' WHERE id=%s::uuid",(args['message_id'],))
     if change=='price':monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'fixture-model':{'vision_low':11}}))
+    if change=='cap_disabled':monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD',json.dumps({A:0}))
     db.commit()
     with pytest.raises(TenantLinearError):worker.check_fence(db.cursor(),A,claim['id'])
     assert db.execute("SELECT count(*) AS n FROM saas_ai_spend_reservations WHERE call_key NOT LIKE 'parent:%%'")[0]['n']==0

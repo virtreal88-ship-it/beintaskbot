@@ -100,6 +100,9 @@ def preview(context):
 def validate(cur,row,source,*,budget_available=False):
     """Fresh owner/token, source, tariff and prior-cache fences, in the mutation tx."""
     if not row.get('retry_of'):return None
+    from tenant_ai_spend_budget import limit_microusd
+    if not limit_microusd(str(row['tenant_id'])):
+        raise TenantLinearError('A capped spend ledger is required for this retry.',409)
     import tenant_ai_single_message_extraction as consent
     cfg={'AI_LEARNING_MCP_TENANT_ID':str(row['tenant_id']),
       'AI_LEARNING_MCP_AGENT_ID':str(row['agent_id']),'AI_LEARNING_MCP_CHANNEL_ID':str(row['channel_id']),
