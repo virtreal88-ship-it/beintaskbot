@@ -370,18 +370,30 @@ The owner panel shows the policy and its recent operation receipts. Existing
 company audit reads provide the longer audit trail.
 
 MCP uses the existing `ai_learning.publish` OAuth permission; creation/update also
-requires `ai_learning.drafts`. Existing OAuth revocation and tenant/owner checks
-remain authoritative. New tools:
+requires `ai_learning.drafts`. Listing owner-provided knowledge drafts requires
+both scopes. Existing OAuth revocation and tenant/owner checks remain authoritative.
+Company-wide delegation is a distinct owner opt-in, disabled until the owner
+explicitly creates it in the panel. It covers all active agents in that tenant,
+all three material kinds, has no operation limit or expiry, and remains active
+until revoked. Every operation still selects exactly one agent/channel; there is
+no fanout. New tools:
 
 - `administrator_training_policies`: list policies/audit for the OAuth scope.
-- `administrator_training_create`: prepare material from a verified source.
+- `administrator_training_sources`: list policy-eligible reviewed material for
+  one target; ordinary verified sources only.
+- `administrator_training_owner_drafts`: with both draft and publish OAuth
+  scopes, list exact owner-provided knowledge drafts and hashes for one target.
+- `administrator_training_create`: prepare material from a verified source, or
+  an exact owner-provided knowledge draft under the company policy.
 - `administrator_training_update`: refresh an unpublished policy material from
   verified evidence, with the current draft version and material hash.
-- `administrator_training_publish`: publish the prepared exact material under the
-  policy, automatically minting/consuming the existing bounded publication receipt
-  in the same transaction. No additional per-material owner click is required. Internal approval receipts
-  explicitly record the delegation policy; copied knowledge is labeled
-  `policy_verified_knowledge`, not an individual manual owner review.
+- `administrator_training_publish`: publish one prepared exact material under
+  the policy, minting/consuming the existing one-use publication receipt in the
+  same transaction. The assistant must invoke it separately after discussing
+  that exact material with the owner in chat. The backend does not verify chat
+  consent; it records the delegated policy action accurately. There is no
+  background or batch publishing. Owner-provided material is labeled as delegated,
+  not as individually approved or CRM-verified.
 - `administrator_training_rollback`: guarded withdrawal of a policy publication.
 
 Each mutation carries an explicit UUID `request_id`. A locked policy row
@@ -428,10 +440,11 @@ not authorization to perform paid model processing.
 
 ### Production setup / scoped authorization
 
-The **owner's permission setup is one policy submission** in the existing AI
-Administrator panel for the intended agent/channel, selected rights/materials
-and limits; it replaces per-case grant clicks. An active policy is the exact
-tenant-scoped authorization for training publication. It is independent of the
+The bounded policy setup is one submission in the existing AI Administrator
+panel for the intended agent/channel, selected rights/materials and limits. The
+company-wide policy is a separate owner opt-in in the same panel. Each active
+policy is exact tenant-scoped authorization for training publication, while each
+publication still requires a distinct tool invocation after owner discussion. It is independent of the
 legacy `AI_AUTONOMOUS_APPLY_ENABLED` switch, which remains a kill switch for the
 older general application flow (such as agent/prompt changes). Therefore an
 operator never has to enable broad application for every tenant in order to use

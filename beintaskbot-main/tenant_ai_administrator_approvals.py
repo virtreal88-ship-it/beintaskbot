@@ -194,9 +194,16 @@ def publication_grant(cur,profile,data,*,policy=None):
     kind=data['kind'];row=_publication_object(cur,tenant,kind,ids['object_id'])
     if data.get('material_hash')!=_publication_hash(row): raise TenantLinearError('Material changed since owner review.',409)
     if kind in {'knowledge','instruction'}:
-        cur.execute('''SELECT id FROM saas_ai_administrator_material_rollbacks WHERE tenant_id=%s::uuid
-          AND draft_id=%s::uuid AND object_id=%s::uuid AND kind=%s AND rolled_back_at IS NULL''',(tenant,ids['draft_id'],ids['object_id'],kind))
-        if not cur.fetchone(): raise TenantLinearError('Material is not the applied draft.',409)
+        delegated_owner_knowledge=(kind=='knowledge' and policy is not None and policy.get('scope_kind')=='company'
+          and (row.get('provenance') or {}).get('review_status')=='owner_delegated_owner_provided')
+        if delegated_owner_knowledge:
+            _owner_draft_basis(cur,profile,ids['draft_id'],data['version'],(row.get('provenance') or {}).get('owner_provided_draft_hash'),policy)
+            if row.get('provenance',{}).get('owner_provided_draft_id')!=ids['draft_id']:
+                raise TenantLinearError('Owner-provided source provenance mismatch.',409)
+        else:
+            cur.execute('''SELECT id FROM saas_ai_administrator_material_rollbacks WHERE tenant_id=%s::uuid
+              AND draft_id=%s::uuid AND object_id=%s::uuid AND kind=%s AND rolled_back_at IS NULL''',(tenant,ids['draft_id'],ids['object_id'],kind))
+            if not cur.fetchone(): raise TenantLinearError('Material is not the applied draft.',409)
         if kind=='instruction' and row['state'] not in {'draft','pending_review','approved'}: raise TenantLinearError('Instruction is not awaiting publication.',409)
         if kind=='knowledge' and (row['active'] or row['agent_id'] is not None or row['provenance'].get('review_only') is not True): raise TenantLinearError('Knowledge is not an inactive reviewed proposal.',409)
     else:
@@ -255,9 +262,13 @@ def publication_execute(cur,cfg,grant_id,*,rollback=False):
     tenant,actor=_owner(cur,profile)
     try: grant_id=str(uuid.UUID(str(grant_id)))
     except (ValueError,TypeError): raise TenantLinearError('Invalid publication grant.',400) from None
-    cur.execute('SELECT policy_id FROM saas_ai_administrator_publication_grants WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,grant_id));policy_ref=cur.fetchone()
+    cur.execute('''SELECT g.policy_id,g.agent_id,g.channel_id,p.scope_kind FROM saas_ai_administrator_publication_grants g
+      LEFT JOIN saas_ai_training_policies p ON p.tenant_id=g.tenant_id AND p.id=g.policy_id
+      WHERE g.tenant_id=%s::uuid AND g.id=%s::uuid''',(tenant,grant_id));policy_ref=cur.fetchone()
     if policy_ref and policy_ref.get('policy_id') is not None:
-        training_policy_guard(cur,cfg,str(policy_ref['policy_id']),'rollback' if rollback else 'publish')
+        training_policy_guard(cur,cfg,str(policy_ref['policy_id']),'rollback' if rollback else 'publish',
+          str(policy_ref['agent_id']) if policy_ref.get('scope_kind')=='company' else None,
+          str(policy_ref['channel_id']) if policy_ref.get('scope_kind')=='company' else None,grant_id if rollback else None)
     # A bounded training policy is a separate, tenant-scoped owner consent.
     # Keep the global switch as a kill switch for the older general apply flow,
     # but never require an operator to enable that broad flow to execute an
@@ -265,7 +276,8 @@ def publication_execute(cur,cfg,grant_id,*,rollback=False):
     elif str(os.environ.get('AI_AUTONOMOUS_APPLY_ENABLED','')).lower()!='true':
         raise TenantLinearError('Autonomous application is disabled.',403)
     cur.execute('SELECT *,(expires_at>now()) AS live FROM saas_ai_administrator_publication_grants WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,grant_id));g=cur.fetchone()
-    if not g or g['owner_id']!=actor or str(g['agent_id'])!=cfg['AI_LEARNING_MCP_AGENT_ID'] or str(g['channel_id'])!=cfg['AI_LEARNING_MCP_CHANNEL_ID']:
+    company_policy=bool(policy_ref and policy_ref.get('scope_kind')=='company')
+    if not g or g['owner_id']!=actor or (not company_policy and (str(g['agent_id'])!=cfg['AI_LEARNING_MCP_AGENT_ID'] or str(g['channel_id'])!=cfg['AI_LEARNING_MCP_CHANNEL_ID'])):
         raise TenantLinearError('Publication outside delegated OAuth scope.',403)
     if rollback and g['state']=='rolled_back': return {'grant_id':grant_id,'rolled_back':True}
     if not rollback and g['state']=='consumed': return g['result']
@@ -279,6 +291,8 @@ def publication_execute(cur,cfg,grant_id,*,rollback=False):
     # Validate route again; a changed agent cannot expand this grant.
     cur.execute('SELECT scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR SHARE',(tenant,g['agent_id']));agent=cur.fetchone()
     if not rollback and (not agent or not _publication_agent_scope(agent['scopes'],str(g['channel_id']))): raise TenantLinearError('Agent scope changed.',403)
+    delegated_prepared=(_training_prepared(cur,{'id':g['policy_id']},str(g['draft_id']),str(g['object_id']))
+      if company_policy else None)
     if rollback:
         sources=expected['sources']
         provenance_key={'instruction':'instruction_id','support_case':'candidate_id','knowledge':'publication_grant_id'}[g['kind']]
@@ -304,23 +318,36 @@ def publication_execute(cur,cfg,grant_id,*,rollback=False):
     if kind=='instruction':
         import tenant_instruction_library as lib
         if row['state']=='draft': row=lib.operation(profile,'submit',{'expected_version':row['version']},key,connection=cur.connection)
-        if row['state']=='pending_review': row=lib.operation(profile,'approve',{'expected_version':row['version'],'review_confirmed':True},key,connection=cur.connection)
-        lib.operation(profile,'publish',{'expected_version':row['version'],'agent_ids':[agent_id]},key,connection=cur.connection)
+        if row['state']=='pending_review':
+            if company_policy:
+                basis=delegated_prepared['basis']
+                row=lib.operation(profile,'delegate_approve',{'expected_version':row['version'],'delegation_policy_id':str(g['policy_id']),
+                  'source_id':basis['id'],'source_hash':basis['hash'],'agent_id':agent_id,'channel_id':str(g['channel_id'])},key,connection=cur.connection)
+            else:row=lib.operation(profile,'approve',{'expected_version':row['version'],'review_confirmed':True},key,connection=cur.connection)
+        publish_data={'expected_version':row['version'],'agent_ids':[agent_id]}
+        if company_policy:
+            basis=delegated_prepared['basis'];publish_data.update({'delegation_policy_id':str(g['policy_id']),'source_id':basis['id'],'source_hash':basis['hash'],'agent_id':agent_id,'channel_id':str(g['channel_id'])})
+        lib.operation(profile,'publish',publish_data,key,connection=cur.connection)
         predicate="provenance->>'instruction_id'=%s"
     elif kind=='support_case':
         import tenant_knowledge_candidates_store as cases
-        cases.mutate(profile,key,{'expected_version':row['version'],'agent_ids':[agent_id]},'approve',connection=cur.connection)
+        case_action='delegated_approve' if company_policy else 'approve'
+        case_data={'expected_version':row['version'],'agent_ids':[agent_id]}
+        if company_policy:case_data.update({'delegation_policy_id':str(g['policy_id']),'channel_id':str(g['channel_id'])})
+        cases.mutate(profile,key,case_data,case_action,connection=cur.connection)
         predicate="provenance->>'candidate_id'=%s"
     else:
         source=save_knowledge(profile,{'title':row['title'],'kind':row['kind'],'content':row['content'],'active':True,'agent_id':agent_id},connection=cur.connection)
-        provenance={**row['provenance'],'review_only':False,'review_status':('policy_verified_knowledge' if g.get('policy_id') is not None else 'owner_verified_knowledge'),'publication_grant_id':grant_id,'approved_by':actor}
+        owner_draft_source=(row.get('provenance') or {}).get('review_status')=='owner_delegated_owner_provided'
+        provenance={**row['provenance'],'review_only':False,'review_status':('owner_delegated_owner_provided' if owner_draft_source else 'policy_verified_knowledge' if g.get('policy_id') is not None else 'owner_verified_knowledge'),'publication_grant_id':grant_id}
+        if not owner_draft_source:provenance['approved_by']=actor
         # This attests to reviewed knowledge, never a confirmed historical outcome.
         cur.execute('UPDATE saas_ai_knowledge_sources SET provenance=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(provenance),tenant,source['id']))
         predicate="provenance->>'publication_grant_id'=%s";key=grant_id
     cur.execute('SELECT * FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND '+predicate+' ORDER BY id FOR UPDATE',(tenant,key))
     sources=[_snapshot(dict(v)) for v in cur.fetchall()]
     if g.get('policy_id') is not None:
-        prepared=_training_prepared(cur,{'id':g['policy_id']},str(g['draft_id']),str(g['object_id']))
+        prepared=delegated_prepared or _training_prepared(cur,{'id':g['policy_id']},str(g['draft_id']),str(g['object_id']))
         for source in sources:
             cur.execute("UPDATE saas_ai_knowledge_sources SET provenance=provenance||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(_json({'training_basis':prepared['basis'],'delegation_policy_id':str(g['policy_id'])}),tenant,source['id']))
         cur.execute('SELECT * FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND '+predicate+' ORDER BY id FOR UPDATE',(tenant,key));sources=[_snapshot(dict(v)) for v in cur.fetchall()]
@@ -401,6 +428,15 @@ def _training_policy_schema(cur):
       sequence BIGSERIAL UNIQUE,policy_id UUID NOT NULL REFERENCES saas_ai_training_policies(id),request_id UUID NOT NULL,
       action TEXT NOT NULL,request_hash TEXT NOT NULL,result JSONB NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
       PRIMARY KEY(policy_id,request_id))''')
+    # Null scope/limits are reserved for a separately owner-confirmed company
+    # delegation. Existing rows remain agent/channel-bound and bounded.
+    cur.execute("ALTER TABLE saas_ai_training_policies ADD COLUMN IF NOT EXISTS scope_kind TEXT NOT NULL DEFAULT 'agent_channel'")
+    for column in ('agent_id','channel_id','max_operations','max_per_hour','expires_at'):
+        cur.execute('ALTER TABLE saas_ai_training_policies ALTER COLUMN '+column+' DROP NOT NULL')
+    cur.execute("ALTER TABLE saas_ai_training_policies DROP CONSTRAINT IF EXISTS saas_ai_training_policies_scope_kind_check")
+    cur.execute("ALTER TABLE saas_ai_training_policies ADD CONSTRAINT saas_ai_training_policies_scope_kind_check CHECK (scope_kind IN ('agent_channel','company'))")
+    cur.execute("ALTER TABLE saas_ai_training_policies DROP CONSTRAINT IF EXISTS saas_ai_training_policies_company_bounds_check")
+    cur.execute("ALTER TABLE saas_ai_training_policies ADD CONSTRAINT saas_ai_training_policies_company_bounds_check CHECK ((scope_kind='agent_channel' AND agent_id IS NOT NULL AND channel_id IS NOT NULL AND max_operations BETWEEN 1 AND 1000 AND max_per_hour BETWEEN 1 AND 100 AND expires_at IS NOT NULL) OR (scope_kind='company' AND agent_id IS NULL AND channel_id IS NULL AND max_operations IS NULL AND max_per_hour IS NULL AND expires_at IS NULL))")
 
 
 def training_policy_create(cur,profile,data):
@@ -425,6 +461,27 @@ def training_policy_create(cur,profile,data):
     return {'policy_id':key,'state':'active'}
 
 
+def training_company_policy_create(cur,profile,data):
+    """Explicit owner consent for unbounded company-wide training publication."""
+    from tenant_ai_agents_store import _json
+    tenant,actor=_owner(cur,profile)
+    if not isinstance(data,dict) or set(data)!={'consent_confirmed'} or data.get('consent_confirmed') is not True:
+        raise TenantLinearError('Explicit company-wide publication consent is required.',400)
+    cur.execute("SELECT id FROM saas_ai_training_policies WHERE tenant_id=%s::uuid AND scope_kind='company' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp()) FOR UPDATE",(tenant,))
+    if cur.fetchone():raise TenantLinearError('An active company-wide policy already exists; revoke it before replacing it.',409)
+    key=str(uuid.uuid4())
+    kinds=['knowledge','instruction','support_case']
+    rights=['create','update','publish','rollback']
+    cur.execute('''INSERT INTO saas_ai_training_policies
+      (id,tenant_id,owner_id,agent_id,channel_id,kinds,rights,max_operations,max_per_hour,expires_at,scope_kind)
+      VALUES(%s::uuid,%s::uuid,%s,NULL,NULL,%s::jsonb,%s::jsonb,NULL,NULL,NULL,'company')''',
+      (key,tenant,actor,_json(kinds),_json(rights)))
+    _audit(cur,tenant,actor,'ai_training_company_policy_granted','ai_training_policy',key,
+      {'scope':'company_all_agents','kinds':kinds,'rights':rights,'operation_limits':'unlimited','expires_at':None})
+    return {'policy_id':key,'state':'active','scope':'company_all_agents','expires_at':None,
+            'max_operations':None,'max_per_hour':None,'kinds':kinds,'rights':rights}
+
+
 def _training_uuid(value):
     try:return str(uuid.UUID(str(value)))
     except (ValueError,TypeError):raise TenantLinearError('Invalid delegation identifier.',400) from None
@@ -440,9 +497,9 @@ def training_policy_revoke(cur,profile,policy_id):
 
 def training_policy_list(cur,profile,cfg=None):
     tenant,_=_owner(cur,profile)
-    cur.execute('SELECT *,(expires_at>now() AND revoked_at IS NULL) AS active FROM saas_ai_training_policies WHERE tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 100',(tenant,))
+    cur.execute('SELECT *,(COALESCE(expires_at>now(),TRUE) AND revoked_at IS NULL) AS active FROM saas_ai_training_policies WHERE tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 100',(tenant,))
     policies=[dict(v) for v in cur.fetchall()]
-    if cfg:policies=[v for v in policies if str(v['agent_id'])==cfg['AI_LEARNING_MCP_AGENT_ID'] and str(v['channel_id'])==cfg['AI_LEARNING_MCP_CHANNEL_ID']]
+    if cfg:policies=[v for v in policies if v.get('scope_kind')=='company' or (str(v['agent_id'])==cfg['AI_LEARNING_MCP_AGENT_ID'] and str(v['channel_id'])==cfg['AI_LEARNING_MCP_CHANNEL_ID'])]
     for p in policies:
         cur.execute('SELECT action,result,created_at FROM saas_ai_training_operations WHERE policy_id=%s::uuid ORDER BY created_at DESC LIMIT 100',(p['id'],));p['recent_operations']=[_snapshot(dict(v)) for v in cur.fetchall()]
     # `AI_AUTONOMOUS_APPLY_ENABLED` governs the legacy general application
@@ -462,17 +519,66 @@ def training_policy_list(cur,profile,cfg=None):
     return result
 
 
-def training_policy_guard(cur,cfg,policy_id,action):
+def training_policy_guard(cur,cfg,policy_id,action,target_agent_id=None,target_channel_id=None,grant_id=None):
     if PUBLISH_SCOPE not in set(cfg.get('granted_scopes') or []):raise TenantLinearError('Additional OAuth scope required.',403)
     profile={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']};tenant,actor=_owner(cur,profile)
     # All policy mutations serialize here, including revoke and quota checks.
-    cur.execute('SELECT *,(expires_at>clock_timestamp()) AS live FROM saas_ai_training_policies WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,_training_uuid(policy_id)));p=cur.fetchone()
-    if not p or p['owner_id']!=actor or str(p['agent_id'])!=cfg['AI_LEARNING_MCP_AGENT_ID'] or str(p['channel_id'])!=cfg['AI_LEARNING_MCP_CHANNEL_ID'] or action not in p['rights']:raise TenantLinearError('Operation outside owner delegation.',403)
+    cur.execute('SELECT *,(COALESCE(expires_at>clock_timestamp(),TRUE)) AS live FROM saas_ai_training_policies WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,_training_uuid(policy_id)));p=cur.fetchone()
+    if not p or p['owner_id']!=actor or action not in p['rights']:raise TenantLinearError('Operation outside owner delegation.',403)
+    if p.get('scope_kind')=='company':
+        if action=='rollback' and grant_id:
+            cur.execute('SELECT agent_id,channel_id FROM saas_ai_administrator_publication_grants WHERE tenant_id=%s::uuid AND id=%s::uuid AND policy_id=%s::uuid',(tenant,_training_uuid(grant_id),p['id']))
+            target=cur.fetchone()
+            if not target:raise TenantLinearError('Publication outside policy.',403)
+            target_agent_id,target_channel_id=target['agent_id'],target['channel_id']
+        try:target_agent_id=str(uuid.UUID(str(target_agent_id)));target_channel_id=str(uuid.UUID(str(target_channel_id)))
+        except (TypeError,ValueError):raise TenantLinearError('Explicit target agent and channel are required.',400) from None
+        cur.execute('SELECT scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR SHARE',(tenant,target_agent_id));agent=cur.fetchone()
+        cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid FOR SHARE',(tenant,target_channel_id));channel=cur.fetchone()
+        if not agent or not channel or (action!='rollback' and not _publication_agent_scope(agent['scopes'],target_channel_id)):
+            raise TenantLinearError('Target is outside the active company agent/channel scope.',403)
+        p=dict(p);p['agent_id']=target_agent_id;p['channel_id']=target_channel_id
+    elif (str(p['agent_id'])!=cfg['AI_LEARNING_MCP_AGENT_ID'] or str(p['channel_id'])!=cfg['AI_LEARNING_MCP_CHANNEL_ID']
+          or target_agent_id is not None or target_channel_id is not None):raise TenantLinearError('Operation outside owner delegation.',403)
     # Safe withdrawal remains possible after expiry/revocation, never new writes.
     if action!='rollback' and (not p['live'] or p['revoked_at'] is not None):raise TenantLinearError('Delegation expired or revoked.',403)
-    cur.execute('SELECT scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR SHARE',(tenant,p['agent_id']));agent=cur.fetchone()
-    if action!='rollback' and (not agent or not _publication_agent_scope(agent['scopes'],str(p['channel_id']))):raise TenantLinearError('Agent scope changed.',403)
+    if p.get('scope_kind')!='company':
+        cur.execute('SELECT scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR SHARE',(tenant,p['agent_id']));agent=cur.fetchone()
+        if action!='rollback' and (not agent or not _publication_agent_scope(agent['scopes'],str(p['channel_id']))):raise TenantLinearError('Agent scope changed.',403)
     return dict(p),profile
+
+
+def _company_target(cur,p,tenant,agent_id,channel_id):
+    """Resolve one explicit target under a company policy; never auto-fanout."""
+    if p.get('scope_kind')!='company':
+        if agent_id is not None or channel_id is not None:
+            raise TenantLinearError('Target override is unavailable for this policy.',403)
+        return p
+    try: agent_id=str(uuid.UUID(str(agent_id)));channel_id=str(uuid.UUID(str(channel_id)))
+    except (TypeError,ValueError):raise TenantLinearError('Explicit target agent and channel are required.',400) from None
+    cur.execute('SELECT scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR SHARE',(tenant,agent_id));agent=cur.fetchone()
+    cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid FOR SHARE',(tenant,channel_id));channel=cur.fetchone()
+    if not agent or not channel or not _publication_agent_scope(agent['scopes'],channel_id):raise TenantLinearError('Target is outside the active agent/channel scope.',403)
+    result=dict(p);result['agent_id']=agent_id;result['channel_id']=channel_id
+    return result
+
+
+def _owner_draft_basis(cur,profile,draft_id,version,digest,policy):
+    """Exact owner-provided knowledge only; this is not CRM-verified evidence."""
+    from tenant_ai_owner_review_component import _draft_hash
+    tenant=str(profile['tenant_id']);actor=profile['telegram_id']
+    try:draft_id=str(uuid.UUID(str(draft_id)))
+    except (TypeError,ValueError):raise TenantLinearError('Invalid owner draft.',400) from None
+    cur.execute('''SELECT * FROM saas_ai_administrator_drafts
+      WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE''',(tenant,draft_id));draft=cur.fetchone()
+    if (not draft or draft['kind']!='knowledge' or draft['state']!='draft' or draft['version']!=version
+        or draft['created_by']!=actor or draft['body'].get('owner_provided',{}).get('verified_by')!=actor
+        or draft['target'].get('source_eligibility')!='owner_provided_unverified'
+        or policy['owner_id']!=actor or policy.get('scope_kind')!='company'):
+        raise TenantLinearError('Current owner-provided knowledge draft is unavailable for this delegation.',403)
+    calculated=_draft_hash(draft)
+    if not isinstance(digest,str) or digest!=calculated:raise TenantLinearError('Owner draft changed; review its exact hash again.',409)
+    return dict(draft),{'kind':'owner_provided_draft','id':draft_id,'version':version,'hash':calculated}
 
 
 def _training_case(cur,profile,key,channel):
@@ -552,19 +658,34 @@ def training_sources(cur,cfg,data):
     here.  The returned identifiers can be passed to ``training_create``;
     that operation revalidates the evidence under the same policy lock.
     """
-    if (not isinstance(data,dict) or set(data)-{'policy_id','kind','limit'}
+    if (not isinstance(data,dict) or set(data)-{'policy_id','kind','limit','target_agent_id','target_channel_id'}
             or not {'policy_id','kind'} <= set(data)):
         raise TenantLinearError('Invalid training source request.',400)
-    if data['kind'] not in {'knowledge','instruction','support_case'}:
+    if data['kind'] not in {'knowledge','instruction','support_case','owner_knowledge_draft'}:
         raise TenantLinearError('Invalid training source kind.',400)
     limit=data.get('limit',25)
     if type(limit) is not int or not 1 <= limit <= 50:
         raise TenantLinearError('Invalid training source limit.',400)
-    policy,profile=training_policy_guard(cur,cfg,data['policy_id'],'create')
-    kind=data['kind']
+    policy,profile=training_policy_guard(cur,cfg,data['policy_id'],'create',data.get('target_agent_id'),data.get('target_channel_id'))
+    has_target='target_agent_id' in data and 'target_channel_id' in data
+    if (policy.get('scope_kind')=='company')!=has_target:raise TenantLinearError('Target must match the policy scope.',403)
+    if data['kind']=='owner_knowledge_draft' and policy.get('scope_kind')!='company':raise TenantLinearError('Owner drafts require a company delegation.',403)
+    kind='knowledge' if data['kind']=='owner_knowledge_draft' else data['kind']
     if kind not in policy['kinds']:
         raise TenantLinearError('Material type outside delegation.',403)
     tenant=str(policy['tenant_id'])
+    if data['kind']=='owner_knowledge_draft':
+        if DRAFT_SCOPE not in set(cfg.get('granted_scopes') or []):raise TenantLinearError('Additional OAuth scope required.',403)
+        from tenant_ai_owner_review_component import _draft_hash
+        cur.execute('''SELECT * FROM saas_ai_administrator_drafts WHERE tenant_id=%s::uuid
+          AND kind='knowledge' AND state='draft' AND created_by=%s AND target->>'source_eligibility'='owner_provided_unverified'
+          ORDER BY updated_at DESC,id DESC LIMIT %s''',(tenant,policy['owner_id'],limit))
+        items=[]
+        for row in cur.fetchall():
+            value=dict(row);body=value.get('body') or {}
+            if body.get('owner_provided',{}).get('verified_by')!=policy['owner_id'] or not isinstance(body.get('content'),str) or not body['content'].strip():continue
+            items.append({'source_id':str(value['id']),'kind':data['kind'],'title':value['title'],'version':value['version'],'source_hash':_draft_hash(value),'preview':{'title':value['title'],'content':body['content']}})
+        return {'policy_id':str(policy['id']),'kind':data['kind'],'items':items}
     # Scan a bounded set because provenance can make a superficially matching
     # row ineligible. Nothing from drafts is queried or exposed here.
     if kind=='knowledge':
@@ -603,15 +724,21 @@ def training_operation(cur,cfg,action,data):
     if not isinstance(data,dict) or action not in {'create','update','publish','rollback'}:raise TenantLinearError('Invalid training operation.',400)
     base={'policy_id','request_id'}
     fields={'create':{'kind','source_id'},'update':{'draft_id','object_id','version','material_hash','source_id'},'publish':{'draft_id','object_id','version','material_hash'},'rollback':{'grant_id'}}[action]
-    if set(data)!=base|fields:raise TenantLinearError('Invalid training contract.',400)
-    p,profile=training_policy_guard(cur,cfg,data['policy_id'],action);tenant=str(p['tenant_id']);actor=p['owner_id']
+    optional={'target_agent_id','target_channel_id'}|({'source_version','source_hash'} if action=='create' else set())
+    if set(data)-optional!=base|fields or len(set(data)&{'target_agent_id','target_channel_id'}) not in (0,2) or len(set(data)&{'source_version','source_hash'}) not in (0,2):raise TenantLinearError('Invalid training contract.',400)
+    p,profile=training_policy_guard(cur,cfg,data['policy_id'],action,data.get('target_agent_id'),data.get('target_channel_id'),data.get('grant_id') if action=='rollback' else None);tenant=str(p['tenant_id']);actor=p['owner_id']
+    if action in {'create','update'} and DRAFT_SCOPE not in set(cfg.get('granted_scopes') or []):raise TenantLinearError('Additional OAuth scope required.',403)
+    has_target=('target_agent_id' in data and 'target_channel_id' in data)
+    if p.get('scope_kind')=='company' and action!='rollback' and not has_target:raise TenantLinearError('Company policy operations require one explicit target.',403)
+    if p.get('scope_kind')!='company' and has_target:raise TenantLinearError('Target must match the policy scope.',403)
+    if bool('source_version' in data) != (action=='create' and data.get('kind')=='knowledge' and p.get('scope_kind')=='company'):raise TenantLinearError('Only company policy owner knowledge accepts an exact owner draft.',403)
     request_id=_training_uuid(data['request_id']);digest=hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     cur.execute('SELECT action,request_hash,result FROM saas_ai_training_operations WHERE policy_id=%s::uuid AND request_id=%s::uuid',(p['id'],request_id));old=cur.fetchone()
     if old:
         if old['action']!=action or old['request_hash']!=digest:raise TenantLinearError('Idempotency key reused with different parameters.',409)
         return old['result']
     cur.execute("SELECT count(*) AS total,count(*) FILTER(WHERE created_at>clock_timestamp()-interval '1 hour') AS hourly FROM saas_ai_training_operations WHERE policy_id=%s::uuid",(p['id'],));counts=cur.fetchone()
-    if action!='rollback' and (counts['total']>=p['max_operations'] or counts['hourly']>=p['max_per_hour']):raise TenantLinearError('Delegation operation limit reached.',429)
+    if action!='rollback' and ((p.get('max_operations') is not None and counts['total']>=p['max_operations']) or (p.get('max_per_hour') is not None and counts['hourly']>=p['max_per_hour'])):raise TenantLinearError('Delegation operation limit reached.',429)
     if action=='rollback':
         cur.execute('SELECT policy_id,state FROM saas_ai_administrator_publication_grants WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,_training_uuid(data['grant_id'])));grant=cur.fetchone()
         if not grant or str(grant['policy_id'])!=str(p['id']):raise TenantLinearError('Publication outside policy.',403)
@@ -639,15 +766,23 @@ def training_operation(cur,cfg,action,data):
             _,basis=_training_basis(cur,profile,kind,key,p) if not reason else (row,{'kind':kind,'id':key,'hash':_publication_hash(_publication_object(cur,tenant,kind,key))})
             object_id=key
         else:
-            row,basis=_training_source(cur,profile,kind,key,p);reason=None
-            proposal={'title':row['title'],'content':row['content'],'evidence_ids':[],'agent_ids':[]} if kind=='knowledge' else {'title':row['doc']['title'],'doc':row['doc']}
-            d=(drafts.create(cur,cfg,{'kind':'knowledge','title':row['title'],'body':{'content':row['content'],'evidence_ids':[]},'target':{'agent_ids':[]}}) if kind=='knowledge' else drafts.typed_create(cur,cfg,kind,proposal))
-            receipt=request(cur,profile,d['id'],d['version']);approve(cur,profile,receipt['id'],'approve')
-            cur.execute('UPDATE saas_ai_administrator_approvals SET delegation_policy_id=%s::uuid WHERE tenant_id=%s::uuid AND id=%s::uuid',(p['id'],tenant,receipt['id']))
-            _audit(cur,tenant,actor,'ai_training_verified_copy_authorized','ai_administrator_approval',receipt['id'],{'policy_id':str(p['id']),'basis':basis,'individual_owner_click':False})
-            applied=(application.apply_knowledge_draft if kind=='knowledge' else application.apply_instruction_draft)(
-              cur,profile,receipt['id'],d['id'],scoped_training_policy_id=p['id'])
-            object_id=applied.get('source_id') or applied['lesson_id']
+            if 'source_version' in data:
+                owner_draft,basis=_owner_draft_basis(cur,profile,key,data['source_version'],data['source_hash'],p)
+                content=owner_draft['body'].get('content')
+                if kind!='knowledge' or not isinstance(content,str) or not content.strip():raise TenantLinearError('Owner knowledge draft has no content.',409)
+                source=save_knowledge(profile,{'title':owner_draft['title'],'kind':'text','content':content.strip(),'active':False},connection=cur.connection)
+                object_id=str(source['id']);reason=None;d=owner_draft
+                cur.execute('UPDATE saas_ai_knowledge_sources SET provenance=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json({'owner_provided_draft_id':key,'owner_provided_draft_version':owner_draft['version'],'owner_provided_draft_hash':basis['hash'],'review_status':'owner_delegated_owner_provided','review_only':True}),tenant,object_id))
+                _audit(cur,tenant,actor,'ai_training_owner_draft_prepared','knowledge_source',object_id,{'policy_id':str(p['id']),'draft_id':key,'draft_version':owner_draft['version'],'draft_hash':basis['hash'],'agent_id':p['agent_id'],'channel_id':p['channel_id']})
+            else:
+                row,basis=_training_source(cur,profile,kind,key,p);reason=None
+                proposal={'title':row['title'],'content':row['content'],'evidence_ids':[],'agent_ids':[]} if kind=='knowledge' else {'title':row['doc']['title'],'doc':row['doc']}
+                d=(drafts.create(cur,cfg,{'kind':'knowledge','title':row['title'],'body':{'content':row['content'],'evidence_ids':[]},'target':{'agent_ids':[]}}) if kind=='knowledge' else drafts.typed_create(cur,cfg,kind,proposal))
+                receipt=request(cur,profile,d['id'],d['version']);approve(cur,profile,receipt['id'],'approve')
+                cur.execute('UPDATE saas_ai_administrator_approvals SET delegation_policy_id=%s::uuid WHERE tenant_id=%s::uuid AND id=%s::uuid',(p['id'],tenant,receipt['id']))
+                _audit(cur,tenant,actor,'ai_training_verified_copy_authorized','ai_administrator_approval',receipt['id'],{'policy_id':str(p['id']),'basis':basis,'individual_owner_click':False})
+                applied=(application.apply_knowledge_draft if kind=='knowledge' else application.apply_instruction_draft)(cur,profile,receipt['id'],d['id'],scoped_training_policy_id=p['id'])
+                object_id=applied.get('source_id') or applied['lesson_id']
         material=_publication_object(cur,tenant,kind,object_id)
         result={'draft_id':d['id'],'version':d['version'],'object_id':object_id,'material_hash':_publication_hash(material),'kind':kind,'basis':basis,'eligible':not bool(reason),'clarification_reason':reason}
     else:
@@ -678,9 +813,14 @@ def training_operation(cur,cfg,action,data):
         else:
             # Revalidate authoritative provenance AND exact prepared contents. A generic
             # draft edit cannot smuggle facts into a delegated publication.
-            source,basis=_training_basis(cur,profile,kind,prepared['basis']['id'],p)
-            if basis!=prepared['basis'] or not prepared['eligible']:raise TenantLinearError('Evidence changed; clarification or refresh required.',409)
-            if kind=='knowledge' and (material['content']!=source['content'] or material['title']!=source['title']):raise TenantLinearError('Knowledge differs from verified evidence.',409)
+            if prepared['basis'].get('kind')=='owner_provided_draft':
+                source,basis=_owner_draft_basis(cur,profile,prepared['basis']['id'],prepared['basis']['version'],prepared['basis']['hash'],p)
+                if basis!=prepared['basis'] or material['content']!=source['body'].get('content','').strip() or material['title']!=source['title']:
+                    raise TenantLinearError('Owner draft or prepared material changed.',409)
+            else:
+                source,basis=_training_basis(cur,profile,kind,prepared['basis']['id'],p)
+                if basis!=prepared['basis'] or not prepared['eligible']:raise TenantLinearError('Evidence changed; clarification or refresh required.',409)
+                if kind=='knowledge' and (material['content']!=source['content'] or material['title']!=source['title']):raise TenantLinearError('Knowledge differs from verified evidence.',409)
             if kind=='instruction':
                 from tenant_instruction_library import document
                 if document(material['doc'])!=document(source['doc']):raise TenantLinearError('Instruction differs from verified evidence.',409)
@@ -694,20 +834,25 @@ def training_operation(cur,cfg,action,data):
 def training_definitions():
     base={'policy_id':{'type':'string','format':'uuid'},'request_id':{'type':'string','format':'uuid'}}
     target={'draft_id':{'type':'string','format':'uuid'},'object_id':{'type':'string','format':'uuid'},'version':{'type':'integer','minimum':1},'material_hash':{'type':'string','minLength':64,'maxLength':64}}
+    company_target={'target_agent_id':{'type':'string','format':'uuid'},'target_channel_id':{'type':'string','format':'uuid'}}
     specs={
-      'create':({'kind':{'type':'string','enum':['knowledge','instruction','support_case']},'source_id':{'type':'string','format':'uuid'}},'Prepare a private material from an existing reviewed source under an owner policy. source_id is a verified Knowledge Source, approved Instruction Library lesson, or support-case candidate — never an Administrator draft ID. Knowledge/instructions copy approved material; case proposals keep real evidence. Uncertain cases are labeled for clarification, never published.'),
+      'create':({'kind':{'type':'string','enum':['knowledge','instruction','support_case']},'source_id':{'type':'string','format':'uuid'},'source_version':{'type':'integer','minimum':1},'source_hash':{'type':'string','minLength':64,'maxLength':64}},'Prepare a private material from an existing reviewed source under an owner policy. Under an explicit company-wide owner policy, a knowledge source may instead be an exact owner-provided knowledge draft, identified by its version and hash; it is published as delegated owner-provided content, never CRM-verified. Other drafts are rejected. Support cases retain real evidence and outcome guards.'),
       'update':({**target,'source_id':{'type':'string','format':'uuid'}},'Update an unpublished policy material from verified evidence, with exact versions/hashes. No arbitrary facts or cross-case outcomes.'),
-      'publish':(target,'Publish an eligible verified policy material without per-case owner clicks. Rechecks evidence, scope, versions, quotas and revocation. No messages or public links.'),
+      'publish':(target,'Publish one exact eligible material after it has been discussed with the owner in chat. This separate tool invocation is not a chat-consent check. Rechecks evidence, target scope, versions, policy and revocation. No background or batch publishing, messages or public links.'),
       'rollback':({'grant_id':{'type':'string','format':'uuid'}},'Withdraw an unchanged policy publication, preserving history. Safe withdrawal remains possible after policy expiry/revocation.')}
     result=[{'name':'administrator_training_policies','description':'Read owner-created training delegation policies and their audit receipts for this OAuth agent/channel. Cannot grant policies.',
       'inputSchema':{'type':'object','properties':{},'additionalProperties':False},'annotations':{'readOnlyHint':True},'securitySchemes':[{'type':'oauth2','scopes':[PUBLISH_SCOPE]}]}]
     result.append({'name':'administrator_training_sources','description':'List reviewed, policy-eligible source materials for one kind. Administrator drafts are deliberately excluded; use one returned source_id with administrator_training_create.',
-      'inputSchema':{'type':'object','properties':{'policy_id':{'type':'string','format':'uuid'},'kind':{'type':'string','enum':['knowledge','instruction','support_case']},'limit':{'type':'integer','minimum':1,'maximum':50}},'required':['policy_id','kind'],'additionalProperties':False},
+      'inputSchema':{'type':'object','properties':{'policy_id':{'type':'string','format':'uuid'},'kind':{'type':'string','enum':['knowledge','instruction','support_case']},'limit':{'type':'integer','minimum':1,'maximum':50},**company_target},'required':['policy_id','kind'],'additionalProperties':False},
       'annotations':{'readOnlyHint':True},'securitySchemes':[{'type':'oauth2','scopes':[PUBLISH_SCOPE]}]})
+    result.append({'name':'administrator_training_owner_drafts','description':'List the exact owner-provided knowledge drafts eligible for this company policy. Returns preview, current version and hash; does not publish. Requires existing draft and publish OAuth scopes.',
+      'inputSchema':{'type':'object','properties':{'policy_id':{'type':'string','format':'uuid'},'target_agent_id':{'type':'string','format':'uuid'},'target_channel_id':{'type':'string','format':'uuid'},'limit':{'type':'integer','minimum':1,'maximum':50}},'required':['policy_id','target_agent_id','target_channel_id'],'additionalProperties':False},
+      'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[PUBLISH_SCOPE,DRAFT_SCOPE]}]})
     for action,(extra,description) in specs.items():
-        fields={**base,**extra}
+        fields={**base,**extra,**company_target}
+        required=set(base)|set(extra)-({'source_version','source_hash'} if action=='create' else set())
         result.append({'name':'administrator_training_'+action,'description':description,
-          'inputSchema':{'type':'object','properties':fields,'required':list(fields),'additionalProperties':False},
+          'inputSchema':{'type':'object','properties':fields,'required':sorted(required),'additionalProperties':False},
           'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},
           'securitySchemes':[{'type':'oauth2','scopes':[PUBLISH_SCOPE]+([DRAFT_SCOPE] if action in {'create','update'} else [])}]})
     return result

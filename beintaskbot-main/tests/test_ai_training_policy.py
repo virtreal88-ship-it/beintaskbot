@@ -304,3 +304,100 @@ def test_transitive_evidence_withdrawal_and_draft_injection_are_blocked(setup):
         cur.execute('UPDATE saas_ai_knowledge_sources SET active=FALSE WHERE id=%s::uuid',(source,))
         with pytest.raises(TenantLinearError):op(cur,cfg,p,'create',kind='knowledge',source_id=result['source_ids'][0])
     db.commit()
+
+
+def test_company_policy_is_explicit_unbounded_revocable_and_tenant_scoped(setup):
+    db,cfg=setup
+    with db.cursor() as cur:
+        with pytest.raises(TenantLinearError):approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':False})
+        policy_id=approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':True})['policy_id']
+        row=db.execute('SELECT scope_kind,agent_id,channel_id,max_operations,max_per_hour,expires_at FROM saas_ai_training_policies WHERE id=%s::uuid',(policy_id,))[0]
+        assert row=={'scope_kind':'company','agent_id':None,'channel_id':None,'max_operations':None,'max_per_hour':None,'expires_at':None}
+        with pytest.raises(TenantLinearError):approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':True})
+        other_cfg={**cfg,'AI_LEARNING_MCP_TENANT_ID':B,'actor_id':22}
+        with pytest.raises(TenantLinearError):approval.training_policy_guard(cur,other_cfg,policy_id,'publish',AGENT,CA)
+        approval.training_policy_revoke(cur,PROFILE,policy_id)
+        with pytest.raises(TenantLinearError):approval.training_policy_guard(cur,cfg,policy_id,'publish',AGENT,CA)
+        assert approval.training_policy_list(cur,PROFILE,cfg)['training_status']=='owner_consent_required'
+    db.commit()
+
+
+def test_company_policy_publishes_one_exact_owner_draft_to_one_selected_agent(setup):
+    db,cfg=setup
+    second=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_ai_agents(id,tenant_id,name,created_by,enabled,mode,role,scopes,expert_policy,model) VALUES(%s::uuid,%s::uuid,'Second company agent',11,TRUE,'automatic','primary',%s::jsonb,'{}'::jsonb,'test-model')",(second,A,json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':False}])))
+    with db.cursor() as cur:
+        policy_id=approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':True})['policy_id']
+        proposal=drafts.typed_create(cur,cfg,'owner_knowledge',{'title':'Owner supplied rule','content':'Use lot number before stock count.','owner_note':'Owner provided this rule.'})
+        listed=approval.training_sources(cur,cfg,{'policy_id':policy_id,'kind':'owner_knowledge_draft','target_agent_id':second,'target_channel_id':CA})
+        item=next(x for x in listed['items'] if x['source_id']==proposal['id'])
+        prepared=approval.training_operation(cur,cfg,'create',{'policy_id':policy_id,'request_id':str(uuid.uuid4()),'kind':'knowledge','source_id':proposal['id'],'source_version':proposal['version'],'source_hash':item['source_hash'],'target_agent_id':second,'target_channel_id':CA})
+        assert prepared['eligible'] and prepared['basis']['kind']=='owner_provided_draft'
+        cur.execute('SELECT active,agent_id,provenance FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(prepared['object_id'],));private=cur.fetchone()
+        assert private['active'] is False and private['agent_id'] is None
+        assert private['provenance']['review_status']=='owner_delegated_owner_provided' and 'approved_by' not in private['provenance']
+        changed=dict(target(prepared),target_agent_id=second,target_channel_id=CA)
+        published=approval.training_operation(cur,cfg,'publish',{'policy_id':policy_id,'request_id':str(uuid.uuid4()),**changed})
+        assert published['published'] and len(published['source_ids'])==1
+        cur.execute('SELECT active,agent_id,provenance FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(published['source_ids'][0],));live=cur.fetchone()
+        assert live['active'] is True and str(live['agent_id'])==second
+        assert live['provenance']['review_status']=='owner_delegated_owner_provided' and 'approved_by' not in live['provenance']
+        assert live['provenance']['owner_provided_draft_hash']==item['source_hash']
+        with pytest.raises(TenantLinearError):approval.training_operation(cur,cfg,'publish',{'policy_id':policy_id,'request_id':str(uuid.uuid4()),**{**changed,'target_channel_id':CB}})
+        approval.training_policy_revoke(cur,PROFILE,policy_id)
+        with pytest.raises(TenantLinearError):approval.training_operation(cur,cfg,'publish',{'policy_id':policy_id,'request_id':str(uuid.uuid4()),**changed})
+        rolled=approval.training_operation(cur,cfg,'rollback',{'policy_id':policy_id,'request_id':str(uuid.uuid4()),'grant_id':published['grant_id']})
+        assert rolled['rolled_back']
+    db.commit()
+
+
+def test_company_owner_draft_hash_mutation_and_unlimited_operation_receipts(setup):
+    db,cfg=setup
+    with db.cursor() as cur:
+        policy_id=approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':True})['policy_id']
+        proposal=drafts.typed_create(cur,cfg,'owner_knowledge',{'title':'Exact owner draft','content':'Count the stock by lot.','owner_note':'Owner supplied.'})
+        listed=approval.training_sources(cur,cfg,{'policy_id':policy_id,'kind':'owner_knowledge_draft','target_agent_id':AGENT,'target_channel_id':CA})
+        item=listed['items'][0]
+        db.execute('''INSERT INTO saas_ai_training_operations(policy_id,request_id,action,request_hash,result)
+          SELECT %s::uuid,gen_random_uuid(),'historical','x','{}'::jsonb FROM generate_series(1,1005)''',(policy_id,))
+        db.execute("UPDATE saas_ai_administrator_drafts SET body=jsonb_set(body,'{content}','\"Changed after listing\"'::jsonb) WHERE id=%s::uuid",(proposal['id'],))
+        with pytest.raises(TenantLinearError):approval.training_operation(cur,cfg,'create',{'policy_id':policy_id,'request_id':str(uuid.uuid4()),'kind':'knowledge','source_id':proposal['id'],'source_version':proposal['version'],'source_hash':item['source_hash'],'target_agent_id':AGENT,'target_channel_id':CA})
+        assert approval.training_policy_list(cur,PROFILE,cfg)['items'][0]['active']
+        assert db.execute('SELECT max_operations,max_per_hour,expires_at FROM saas_ai_training_policies WHERE id=%s::uuid',(policy_id,))[0]['expires_at'] is None
+    db.commit()
+
+
+def test_company_policy_publishes_one_evidence_checked_case_as_delegated(ready,monkeypatch):
+    db,cfg,value=case_setup(ready,monkeypatch,True)
+    with db.cursor() as cur:
+        policy_id=approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':True})['policy_id']
+        prepared=approval.training_operation(cur,cfg,'create',{'policy_id':policy_id,'request_id':str(uuid.uuid4()),
+          'kind':'support_case','source_id':value['id'],'target_agent_id':AGENT,'target_channel_id':CA})
+        assert prepared['eligible']
+        args={'policy_id':policy_id,'request_id':str(uuid.uuid4()),**target(prepared),'target_agent_id':AGENT,'target_channel_id':CA}
+        published=approval.training_operation(cur,cfg,'publish',args)
+        assert published['published'] and len(published['source_ids'])==1
+        source=db.execute('SELECT provenance,active FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(published['source_ids'][0],))[0]
+        assert source['active'] and source['provenance']['authorization_mode']=='owner_delegated_policy'
+        assert source['provenance']['delegation_policy_id']==policy_id and 'approved_by' not in source['provenance']
+        candidate=db.execute('SELECT reviewed_by,status FROM saas_knowledge_candidates WHERE id=%s::uuid',(value['id'],))[0]
+        assert candidate['status']=='approved' and candidate['reviewed_by'] is None
+        approval.training_policy_revoke(cur,PROFILE,policy_id)
+        assert approval.training_operation(cur,cfg,'rollback',{'policy_id':policy_id,'request_id':str(uuid.uuid4()),'grant_id':published['grant_id']})['rolled_back']
+    db.commit()
+
+
+def test_company_policy_instruction_is_logged_as_delegated_not_individually_approved(setup):
+    db,cfg=setup;source=trusted(setup,'instruction')
+    with db.cursor() as cur:
+        policy_id=approval.training_company_policy_create(cur,PROFILE,{'consent_confirmed':True})['policy_id']
+        prepared=approval.training_operation(cur,cfg,'create',{'policy_id':policy_id,'request_id':str(uuid.uuid4()),
+          'kind':'instruction','source_id':source,'target_agent_id':AGENT,'target_channel_id':CA})
+        published=approval.training_operation(cur,cfg,'publish',{'policy_id':policy_id,'request_id':str(uuid.uuid4()),**target(prepared),
+          'target_agent_id':AGENT,'target_channel_id':CA})
+        assert published['published']
+        source_row=db.execute('SELECT provenance FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(published['source_ids'][0],))[0]
+        assert source_row['provenance']['authorization_mode']=='owner_delegated_policy'
+        assert source_row['provenance']['delegation_policy_id']==policy_id and 'approved_by' not in source_row['provenance']
+        assert db.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE action='instruction_delegated_approval'")[0]['n']==1
+    db.commit()

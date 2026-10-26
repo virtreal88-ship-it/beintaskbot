@@ -58,9 +58,9 @@ def document(value):
     return v
 
 def transition(state,action):
-    expected={'submit':'draft','approve':'pending_review','publish':'approved'}
+    expected={'submit':'draft','approve':'pending_review','delegate_approve':'pending_review','publish':'approved'}
     if action not in expected or state!=expected[action]: raise TenantLinearError('Invalid review transition',409)
-    return {'submit':'pending_review','approve':'approved','publish':'published'}[action]
+    return {'submit':'pending_review','approve':'approved','delegate_approve':'approved','publish':'published'}[action]
 
 def schema(conn):
     ensure_schema(conn)
@@ -100,6 +100,7 @@ def operation(profile,action,data=None,lesson_id=None,*,connection=None):
         schema(conn)
         with conn.cursor() as c:
             tenant,actor=_authorize(c,profile)
+            delegated_policy=None;delegated_basis=None;delegated_source_id=None;delegated_channel=None
             if action=='list':
                 q=str(data.get('q',''))[:180];state=data.get('state','');offset=min(max(int(data.get('offset',0)),0),100000)
                 c.execute('''SELECT id,version,state,doc->>'title' AS title,doc->>'language' AS language,updated_at
@@ -171,10 +172,28 @@ def operation(profile,action,data=None,lesson_id=None,*,connection=None):
                     if connection is None: conn.commit()
                     return {'token':token}
                 elif action!='unpublish':
-                    state=transition(row['state'],action)
+                    delegated_policy=None;delegated_basis=None;delegated_source_id=None;delegated_channel=None
+                    if action=='delegate_approve' or (action=='publish' and 'delegation_policy_id' in data):
+                        from tenant_ai_administrator_approvals import _training_uuid,_training_basis,_publication_agent_scope
+                        required={'expected_version','delegation_policy_id','source_id','source_hash','agent_id','channel_id'}
+                        if action=='publish': required=required|{'agent_ids'}
+                        if set(data)!=required:raise TenantLinearError('Invalid delegated instruction operation.',400)
+                        policy_id=_training_uuid(data['delegation_policy_id']);delegated_source_id=_training_uuid(data['source_id'])
+                        target_agent=_training_uuid(data['agent_id']);delegated_channel=_training_uuid(data['channel_id'])
+                        c.execute('SELECT * FROM saas_ai_training_policies WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,policy_id));delegated_policy=c.fetchone()
+                        if (not delegated_policy or delegated_policy['owner_id']!=actor or delegated_policy.get('scope_kind')!='company'
+                            or delegated_policy.get('revoked_at') is not None or delegated_policy.get('expires_at') is not None
+                            or 'instruction' not in delegated_policy['kinds'] or 'publish' not in delegated_policy['rights']):raise TenantLinearError('Delegated instruction operation is unavailable.',403)
+                        c.execute('SELECT scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR SHARE',(tenant,target_agent));target=c.fetchone()
+                        if not target or not _publication_agent_scope(target['scopes'],delegated_channel):raise TenantLinearError('Instruction target scope changed.',403)
+                        delegated_basis_policy=dict(delegated_policy);delegated_basis_policy.update({'agent_id':target_agent,'channel_id':delegated_channel})
+                        _,delegated_basis=_training_basis(c,profile,'instruction',delegated_source_id,delegated_basis_policy)
+                        if delegated_basis['hash']!=data['source_hash']:raise TenantLinearError('Instruction source changed; review again.',409)
+                        if action=='publish' and data['agent_ids']!=[target_agent]:raise TenantLinearError('Delegated publication must target exactly one selected agent.',403)
+                    state=transition(row['state'],'approve' if action=='delegate_approve' else action)
                     if action=='approve' and data.get('review_confirmed') is not True: raise TenantLinearError('Explicit employee review required',400)
                     v=document(row['doc']);_assets(c,tenant,v);_video(c,tenant,v)
-                    if action=='approve':
+                    if action in {'approve','delegate_approve'}:
                         v['review_status']='approved'
                         if v.get('video'):v['video']['review_status']='approved'
                     if action=='publish' and v.get('video') and (row['doc'].get('video') or {}).get('review_status')!='approved':
@@ -187,9 +206,13 @@ def operation(profile,action,data=None,lesson_id=None,*,connection=None):
                         for agent in agents:
                             agent=identifier(agent)
                             source=save_knowledge(profile,{'title':v['title'],'kind':'text','content':_json(v),'active':True,'agent_id':agent,'setup_key':'instruction_'+key.replace('-','')+'_'+str(row['version'])},connection=conn)
-                            c.execute('UPDATE saas_ai_knowledge_sources SET provenance=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json({'instruction_id':key,'review_status':'approved','approved_by':actor,'lesson':{'operation':v['operation'],'language':v['language'],'ui_version':v.get('verification',{}).get('ui_version','unreported')}}),tenant,source['id']))
+                            provenance={'instruction_id':key,'review_status':'approved','lesson':{'operation':v['operation'],'language':v['language'],'ui_version':v.get('verification',{}).get('ui_version','unreported')}}
+                            if delegated_policy is None:provenance['approved_by']=actor
+                            else:provenance.update({'authorization_mode':'owner_delegated_policy','delegation_policy_id':str(delegated_policy['id']),'training_basis':delegated_basis})
+                            c.execute('UPDATE saas_ai_knowledge_sources SET provenance=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(provenance),tenant,source['id']))
                     c.execute('UPDATE saas_instruction_lessons SET state=%s,doc=%s::jsonb,published_doc=%s::jsonb,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(state,_json(v),_json(v) if state=='published' else None,tenant,key))
-            _audit(c,tenant,actor,'instruction_'+action,'instruction',key)
+            audit_action='instruction_delegated_approval' if action=='delegate_approve' else 'instruction_delegated_publish' if action=='publish' and delegated_policy is not None else 'instruction_'+action
+            _audit(c,tenant,actor,audit_action,'instruction',key,{'delegation_policy_id':str(delegated_policy['id'])} if delegated_policy is not None else {})
             c.execute('SELECT * FROM saas_instruction_lessons WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,key));result=_row(c.fetchone())
         if connection is None: conn.commit()
         return result
