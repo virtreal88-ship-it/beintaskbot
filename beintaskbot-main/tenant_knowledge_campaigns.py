@@ -128,13 +128,22 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
     tenant-wide scheduling hold for an independently identified attachment.
     """
     route=fragment['route']
-    cur.execute('''SELECT f.route,e.source_refs FROM saas_knowledge_campaign_fragments f
+    cur.execute('''SELECT f.id,f.route,e.source_refs FROM saas_knowledge_campaign_fragments f
       LEFT JOIN saas_knowledge_extractions e ON e.tenant_id=f.tenant_id
         AND e.id=COALESCE(f.extraction_id,f.id)
       WHERE f.tenant_id=%s::uuid AND f.status='unknown' ''',(tenant,))
     unknown=cur.fetchall()
     if not unknown:
         return False
+    retry_parent=None
+    if route.get('retry_of'):
+        from tenant_ai_single_photo_retry import authority
+        try:
+            consent=authority(cur,tenant,fragment['id'])
+        except TenantLinearError:
+            return True
+        if str(consent['retry_of'])!=str(route['retry_of']):return True
+        retry_parent=str(consent['retry_of'])
     def scoped_id(value):
         try:
             return str(uuid.UUID(value)) if isinstance(value,str) else None
@@ -150,6 +159,8 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
         return True
     selected=(channel,scoped_id(ids[0]))
     for old in unknown:
+        if retry_parent and str(old['id'])==retry_parent:
+            continue  # Only this exact, owner-acknowledged parent; its hold stays.
         old_route=old['route'] or {}
         old_ids=old_route.get('message_ids')
         identities=set()

@@ -1,16 +1,31 @@
 # One owner-authorized retry of an unknown media attempt
 
-Proposal for review; this change does not enable or execute retries.
+Implemented as an optional extension of the existing owner component; no
+runtime consent is created and no retry runs on deployment or read. Review
+and a fresh authenticated owner decision are required before a paid retry.
 
-Extend the existing single-message owner consent flow with a one-use retry
-action, not a persistent publishing or spending permission. Bind the approval
+Call `administrator_single_message_extraction_review` with its existing
+`message_id`, `channel_id`, `lead_id` plus `retry_of`, exact `source_version`
+and a unique `request_id`. All three retry fields are required together.
+Only a terminal unknown **image** attempt from the existing single-message
+owner flow is eligible. Its source, original byte hash and unknown cache token
+must still be verifiable; missing legacy evidence fails closed.
+
+The same existing app-only completion requires the owner's explicit
+`acknowledge_prior_unknown=true` checkbox. It queues one new fragment through
+the ordinary worker, with a ten-minute consent expiry. Repeated completions
+return the same receipt, including after expiry; they do not queue another.
+Stopping the new campaign or revoking its OAuth authorization blocks dispatch.
+
+The existing single-message owner consent has a one-use retry action and
+creates no persistent publishing or spending permission. It binds the approval
 to the prior extraction ID, the same message/channel/tenant/owner, exact media
 version and body hash, agent/model/config hash, and the existing media policy.
 The authenticated owner action must explicitly acknowledge that the previous
 provider outcome and charge are unknown. Chat text is not a backend capability.
 
-Consume the approval and enqueue one child attempt atomically under the existing
-campaign lock. Persist the prior-attempt link and request idempotency key. Repeat
+Approval is consumed and one child attempt queued atomically under the existing
+campaign lock, with a persisted prior-attempt link and request idempotency key. Repeat
 submissions return the same child receipt; an unknown child cannot create a
 second child. Keep the previous extraction, cache entry, and all monetary holds
 unchanged. Reject stale source/config, foreign tenant, revoked/expired approval,
@@ -29,7 +44,7 @@ recompute and display the exact bound at approval time rather than treating
 those amounts as a permanent tariff. A price/config change invalidates approval.
 No reserve release, status reset, automatic background retry, or bulk history run.
 
-Required tests: duplicate/parallel approval and claim, same-source/version fences,
+Regression tests cover duplicate/parallel approval and claim, same-source/version fences,
 cross-tenant denial, revocation between enqueue and dispatch, insufficient budget
 including old holds, cache reuse, one child only, and an unknown child with no
 automatic retry. Execution requires review of this supported path first.

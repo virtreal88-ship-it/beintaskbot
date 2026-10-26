@@ -90,7 +90,17 @@ def prepare(profile,data,review=None):
                 bound_context(item)
             if data.get('retry_of'):
                 old=store.extraction_row(cur,tenant,identifier(data['retry_of']))
-                if not old or old['status'] not in {'failed','completed'}:raise TenantLinearError('Неопределённые запросы не повторяются.',409)
+                if old and old['status']=='unknown':
+                    from tenant_ai_single_photo_retry import authority
+                    consent=authority(cur,tenant,request_id)
+                    if str(consent['retry_of'])!=str(old['id']):raise TenantLinearError('Retry parent changed.',409)
+                    if (any(data.get(key)!=consent['route'].get(key) for key in
+                        ('message_ids','channel_id','conversation_id','source_version','analysis_agent_id'))
+                        or len(item['refs'])!=1 or str(item['refs'][0]['id'])!=str(consent['message_id'])):
+                        raise TenantLinearError('Exact retry request changed.',409)
+                    item['_owner_retry_id']=str(consent['id'])
+                elif not old or old['status'] not in {'failed','completed'}:
+                    raise TenantLinearError('Неопределённые запросы не повторяются.',409)
                 if old['route']['channel_id']!=item['route']['channel_id'] or old['route']['conversation_id']!=item['route']['conversation_id']:raise TenantLinearError('Источник не совпадает.',409)
                 if old['status']=='completed' and not any(m.get('status')!='processed' or m.get('audio_status')=='unavailable_or_error' for m in old.get('media_results') or []):raise TenantLinearError('Фрагмент уже обработан.',409)
                 store.evidence(cur,profile,old)

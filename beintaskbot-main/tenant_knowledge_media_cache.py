@@ -51,6 +51,15 @@ def observe_once(profile,item,ref,content,mime,origin,invoke,check_before_ai=Non
             checked,_,_=store.authorize(cur,profile)
             if checked!=tenant:raise TenantLinearError('Нет доступа.',403)
             schema(cur)
+            if item.get('_owner_retry_id'):
+                # Completed evidence still reuses the original cache. A new
+                # namespace requires the exact consumed owner retry consent.
+                cur.execute('SELECT state,transcript FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND fingerprint=%s',(tenant,fingerprint))
+                prior=cur.fetchone()
+                if prior and prior['state']=='completed':return prior['transcript'],{},False
+                from tenant_ai_single_photo_retry import cache_namespace
+                fingerprint=cache_namespace(cur,item,fingerprint,meta)
+                meta={**meta,'owner_retry':True}
             cur.execute('''INSERT INTO saas_knowledge_media_cache(tenant_id,fingerprint,state,token,metadata)
               VALUES(%s::uuid,%s,'running',%s::uuid,%s::jsonb) ON CONFLICT DO NOTHING RETURNING token''',
               (tenant,fingerprint,token,_json(meta)))

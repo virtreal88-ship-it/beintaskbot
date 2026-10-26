@@ -265,7 +265,7 @@ def _tools(cur,cfg,name,args):
     if name == single_message_extraction.PREPARE_NAME:
         return single_message_extraction.prepare(cur,cfg,args)
     if name == single_message_extraction.COMPLETE_NAME:
-        if not isinstance(args,dict) or set(args)!={'consent_id','capability','action'}:
+        if not isinstance(args,dict) or set(args) not in ({'consent_id','capability','action'},{'consent_id','capability','action','acknowledge_prior_unknown'}):
             raise TenantLinearError('Invalid owner extraction decision.',400)
         return single_message_extraction.complete(cur,cfg,**args)
     if name == 'administrator_owner_review_component':

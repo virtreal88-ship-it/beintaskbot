@@ -286,7 +286,7 @@ def test_single_message_component_uses_only_app_completion_and_exact_state():
     harness=r'''
 const vm=require('vm'),fs=require('fs'),source=fs.readFileSync(0,'utf8');
 const cap='a'.repeat(32), approve='11111111-1111-1111-1111-111111111111', reject='22222222-2222-2222-2222-222222222222';
-const elements={status:{textContent:''},diff:{textContent:''},approve:{disabled:true,hidden:false},reject:{disabled:true,hidden:false},publish:{disabled:true,hidden:true}};const calls=[];
+const elements={retryNotice:{hidden:true},retryAcknowledge:{checked:false},status:{textContent:''},diff:{textContent:''},approve:{disabled:true,hidden:false},reject:{disabled:true,hidden:false},publish:{disabled:true,hidden:true}};const calls=[];
 const api={toolResponseMetadata:{owner_single_extraction:{consent_ids:{approve,reject},capabilities:{approve:cap,reject:'b'.repeat(32)},exact_preview:{message_id:'id',attachment_kind:'video'}}},callTool:async(n,a)=>{calls.push([n,a]);return {structuredContent:{state:a.action==='approve'?'approved':'rejected'}};}};
 const context={window:{openai:api,parent:{},addEventListener:()=>{}},document:{querySelector:q=>elements[q.slice(1)]},JSON,Error};vm.runInNewContext(source,context);
 if(elements.approve.disabled||elements.reject.disabled)process.exit(2);Promise.resolve(elements.approve.onclick()).then(()=>{if(calls.length!==1||calls[0][0]!=='administrator_single_message_extraction_component_complete'||calls[0][1].consent_id!==approve||calls[0][1].capability!==cap||elements.status.textContent!=='Approved and queued.')process.exit(3);}).catch(()=>process.exit(4));
@@ -314,7 +314,9 @@ def test_single_message_worker_claims_only_selected_message_and_finishes_actual_
     assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaign_sources WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
     assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid',(A,))[0]['n']==1
     fragment=db.execute('SELECT status FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid',(A,))[0]
-    assert fragment['status']=='completed'
+    # The mock supplies no media result. Text extraction can finish while
+    # attachment coverage correctly keeps this fragment partial.
+    assert fragment['status']=='partial'
     assert db.execute('SELECT status FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid',(A,))[0]['status']=='stopped'
 
 

@@ -40,23 +40,28 @@ def ensure_schema(conn):
         cur.execute('CREATE INDEX IF NOT EXISTS saas_ai_single_message_consent_live_idx ON saas_ai_single_message_extraction_consents(tenant_id,owner_id,expires_at) WHERE state=\'pending\'')
         for column,definition in (('message_kind',"TEXT NOT NULL DEFAULT ''"),('body_hash',"TEXT NOT NULL DEFAULT ''"),
                                   ('external_id',"TEXT NOT NULL DEFAULT ''"),('model_id',"TEXT NOT NULL DEFAULT ''"),
-                                  ('asr_model_id',"TEXT NOT NULL DEFAULT ''"),('config_hash',"TEXT NOT NULL DEFAULT ''")):
+                                  ('asr_model_id',"TEXT NOT NULL DEFAULT ''"),('config_hash',"TEXT NOT NULL DEFAULT ''"),
+                                  ('retry_of','UUID'),('retry_request_id','UUID'),('retry_token_id','UUID'),
+                                  ('retry_budget',"JSONB NOT NULL DEFAULT '{}'"),('retry_cache',"JSONB NOT NULL DEFAULT '{}'")):
             cur.execute('ALTER TABLE saas_ai_single_message_extraction_consents ADD COLUMN IF NOT EXISTS '+column+' '+definition)
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS single_photo_retry_once ON saas_ai_single_message_extraction_consents(tenant_id,retry_of) WHERE action='approve' AND fragment_id IS NOT NULL AND retry_of IS NOT NULL")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS single_photo_retry_request ON saas_ai_single_message_extraction_consents(tenant_id,retry_request_id,action) WHERE retry_request_id IS NOT NULL")
 
 
 def _parse_args(data):
     required={'message_id','channel_id','lead_id'}
-    if not isinstance(data,dict) or set(data)!=required:
+    if not isinstance(data,dict) or set(data) not in (required,required|{'retry_of','source_version','request_id'}):
         raise TenantLinearError('Invalid single-message extraction review.',400)
     return data
 
 
-def _preview(source,policy,model):
+def _preview(source,policy,model,retry=None):
     # No body, contact identity, raw metadata, provider ID or hidden dialogue
     # key leaks into the model-visible result.
+    from tenant_ai_single_photo_retry import preview as retry_preview
     return {'message_id':source['message_id'],'attachment_kind':source['kind'],
       'channel_id':source['channel_id'],'agent_id':model,'media_policy':policy,
-      'execution':'existing_guarded_campaign_worker'}
+      'execution':'existing_guarded_campaign_worker',**({'source_version':source['version']} if retry else {}),**retry_preview(retry)}
 
 
 def prepare(cur,cfg,data):
@@ -65,7 +70,7 @@ def prepare(cur,cfg,data):
         raise TenantLinearError('Additional OAuth scope required.',403)
     if not enabled_for_manual_bridge():
         raise TenantLinearError('Owner component approval is not enabled.',403)
-    data=_parse_args(data);source=preflight._source(cur,cfg,data)
+    data=_parse_args(data);source=preflight._source(cur,cfg,{k:data[k] for k in ('message_id','channel_id','lead_id')})
     model,credential_source,ready,reason=preflight._model(cur,cfg)
     if not ready: raise TenantLinearError('Extraction configuration is unavailable: '+reason,409)
     tenant,owner,connection=_connection_profile(cur,cfg,required_scopes=(DRAFT_SCOPE,))
@@ -75,19 +80,29 @@ def prepare(cur,cfg,data):
         raise TenantLinearError('Extraction configuration is unavailable: asr_model_unavailable',409)
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
       ('single-message-extraction:'+tenant+':'+source['message_id']+':'+source['version'],))
+    from tenant_ai_single_photo_retry import prepare as prepare_retry
+    retry=prepare_retry(cur,cfg,data,source,model,policy) if 'retry_of' in data else {}
+    if retry:
+        cur.execute('SELECT retry_of,message_id,source_version FROM saas_ai_single_message_extraction_consents WHERE tenant_id=%s::uuid AND retry_request_id=%s::uuid LIMIT 1',(tenant,retry['retry_request_id']))
+        prior_request=cur.fetchone()
+        if prior_request and (str(prior_request['retry_of'])!=retry['retry_of'] or str(prior_request['message_id'])!=source['message_id'] or prior_request['source_version']!=source['version']):
+            raise TenantLinearError('Retry request_id already used for another source.',409)
     # The same source/version gets a single pending consent.  A model cannot
     # obtain a second capability to race a live owner review.
     cur.execute("UPDATE saas_ai_single_message_extraction_consents SET state='expired',updated_at=now() WHERE tenant_id=%s::uuid AND message_id=%s::uuid AND source_version=%s AND state='pending' AND expires_at<=now()",
       (tenant,source['message_id'],source['version']))
     cur.execute('''SELECT * FROM saas_ai_single_message_extraction_consents
       WHERE tenant_id=%s::uuid AND message_id=%s::uuid AND source_version=%s
-        AND (state='approved' OR (state='pending' AND consumed_at IS NULL))
-      ORDER BY CASE WHEN state='approved' THEN 0 ELSE 1 END,created_at DESC LIMIT 1 FOR UPDATE''',(tenant,source['message_id'],source['version']))
+        AND retry_of IS NOT DISTINCT FROM %s::uuid
+        AND ((retry_of IS NOT NULL AND fragment_id IS NOT NULL) OR state='approved' OR (state='pending' AND consumed_at IS NULL))
+      ORDER BY CASE WHEN state='approved' THEN 0 ELSE 1 END,created_at DESC LIMIT 1 FOR UPDATE''',(tenant,source['message_id'],source['version'],retry.get('retry_of')))
     old=cur.fetchone()
     # SQL is the authority on TTL at completion; do not parse adapter-specific
     # timestamp wrappers merely to decide whether an already exact receipt may
     # be reopened.
-    if old and old['state'] in {'approved','pending'}:
+    if old and (old['state'] in {'approved','pending'} or (old.get('retry_of') and old.get('fragment_id'))):
+        if old.get('retry_of') and old.get('fragment_id'):
+            return _retry_receipt(old)
         if old['state']=='approved':
             return {'consent_id':str(old['id']),'state':'approved','exact_preview':_preview(source,old['media_policy'],cfg['AI_LEARNING_MCP_AGENT_ID']),
                     'execution':'existing_guarded_campaign_worker'}
@@ -97,23 +112,23 @@ def prepare(cur,cfg,data):
     secret=secrets.token_urlsafe(32); key=str(uuid.uuid4())
     cur.execute('''INSERT INTO saas_ai_single_message_extraction_consents
       (id,tenant_id,owner_id,oauth_connection_id,message_id,channel_id,lead_id,conversation_id,
-       source_version,message_kind,body_hash,external_id,agent_id,model_id,asr_model_id,config_hash,media_policy,capability_hash,action,expires_at)
-      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s,%s,%s,%s::jsonb,%s,\'approve\',now()+interval \'10 minutes\')''',
+       source_version,message_kind,body_hash,external_id,agent_id,model_id,asr_model_id,config_hash,media_policy,capability_hash,action,expires_at,retry_of,retry_request_id,retry_token_id,retry_budget,retry_cache)
+      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s,%s,%s,%s::jsonb,%s,\'approve\',now()+interval \'10 minutes\',%s::uuid,%s::uuid,%s::uuid,%s::jsonb,%s::jsonb)''',
       (key,tenant,owner,connection,source['message_id'],source['channel_id'],source['lead_id'],source['conversation_id'],
-       source['version'],source['kind'],source['body_hash'],source['external_id'],cfg['AI_LEARNING_MCP_AGENT_ID'],model,voice_model,preflight.config_hash(cur,cfg,credential_source,voice_model),json.dumps(policy),_hash(secret)))
+       source['version'],source['kind'],source['body_hash'],source['external_id'],cfg['AI_LEARNING_MCP_AGENT_ID'],model,voice_model,preflight.config_hash(cur,cfg,credential_source,voice_model),json.dumps(policy),_hash(secret),retry.get('retry_of'),retry.get('retry_request_id'),retry.get('retry_token_id'),json.dumps(retry.get('retry_budget',{})),json.dumps(retry.get('retry_cache',{}))))
     # A separate reject capability prevents action substitution while sharing
     # the exact source and connection fence.
     reject=secrets.token_urlsafe(32); reject_key=str(uuid.uuid4())
     cur.execute('''INSERT INTO saas_ai_single_message_extraction_consents
       (id,tenant_id,owner_id,oauth_connection_id,message_id,channel_id,lead_id,conversation_id,
-       source_version,message_kind,body_hash,external_id,agent_id,model_id,asr_model_id,config_hash,media_policy,capability_hash,action,expires_at)
-      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s,%s,%s,%s::jsonb,%s,\'reject\',now()+interval \'10 minutes\')''',
+       source_version,message_kind,body_hash,external_id,agent_id,model_id,asr_model_id,config_hash,media_policy,capability_hash,action,expires_at,retry_of,retry_request_id,retry_token_id,retry_budget,retry_cache)
+      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s,%s,%s,%s::jsonb,%s,\'reject\',now()+interval \'10 minutes\',%s::uuid,%s::uuid,%s::uuid,%s::jsonb,%s::jsonb)''',
       (reject_key,tenant,owner,connection,source['message_id'],source['channel_id'],source['lead_id'],source['conversation_id'],
-       source['version'],source['kind'],source['body_hash'],source['external_id'],cfg['AI_LEARNING_MCP_AGENT_ID'],model,voice_model,preflight.config_hash(cur,cfg,credential_source,voice_model),json.dumps(policy),_hash(reject)))
-    _audit(cur,tenant,owner,'single_message_extraction_consent_prepared','crm_message',source['message_id'],{'channel_id':source['channel_id'],'kind':source['kind']})
-    return {'consent_id':key,'state':'pending','owner_consent_required':True,'exact_preview':_preview(source,policy,cfg['AI_LEARNING_MCP_AGENT_ID']),
+       source['version'],source['kind'],source['body_hash'],source['external_id'],cfg['AI_LEARNING_MCP_AGENT_ID'],model,voice_model,preflight.config_hash(cur,cfg,credential_source,voice_model),json.dumps(policy),_hash(reject),retry.get('retry_of'),retry.get('retry_request_id'),retry.get('retry_token_id'),json.dumps(retry.get('retry_budget',{})),json.dumps(retry.get('retry_cache',{}))))
+    _audit(cur,tenant,owner,'single_message_extraction_consent_prepared','crm_message',source['message_id'],{'channel_id':source['channel_id'],'kind':source['kind'],**({'retry_of':retry['retry_of'],'max_microusd':retry['retry_budget']['max_microusd']} if retry else {})})
+    return {'consent_id':key,'state':'pending','owner_consent_required':True,'exact_preview':_preview(source,policy,cfg['AI_LEARNING_MCP_AGENT_ID'],retry),
       '_component_meta':{'ui':{'resourceUri':RESOURCE_URI},'owner_single_extraction':{
-        'consent_ids':{'approve':key,'reject':reject_key},'capabilities':{'approve':secret,'reject':reject},'exact_preview':_preview(source,policy,cfg['AI_LEARNING_MCP_AGENT_ID'])}}}
+        'consent_ids':{'approve':key,'reject':reject_key},'capabilities':{'approve':secret,'reject':reject},'exact_preview':_preview(source,policy,cfg['AI_LEARNING_MCP_AGENT_ID'],retry)}}}
 
 
 def _occurred(value):
@@ -132,7 +147,12 @@ def _activate(cur,cfg,row,source):
     tenant=str(row['tenant_id']);profile={'tenant_id':tenant,'telegram_id':row['owner_id']};policy=row['media_policy']
     schema.create_schema(cur.connection);store.schema(cur.connection)
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('knowledge-campaign:'+tenant,))
-    cur.execute("SELECT 1 FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND status<>'stopped' FOR UPDATE",(tenant,))
+    from tenant_ai_single_photo_retry import validate as validate_retry
+    prior=validate_retry(cur,row,source,budget_available=True)
+    if prior:
+        cur.execute("SELECT 1 FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status IN ('pending','running') LIMIT 1",(tenant,prior['campaign_id']))
+        if cur.fetchone():raise TenantLinearError('Prior campaign still has active work.',409)
+    cur.execute("SELECT 1 FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND status<>'stopped' AND (%s::uuid IS NULL OR id<>%s::uuid) FOR UPDATE",(tenant,(prior or {}).get('campaign_id'),(prior or {}).get('campaign_id')))
     if cur.fetchone(): raise TenantLinearError('Another knowledge campaign is active.',409)
     amount=reservation(policy);campaign_id=str(uuid.uuid5(uuid.NAMESPACE_URL,'single-message-extraction:'+str(row['id'])))
     at=_occurred(source['occurred_at']); route={'provider':'connect','channel_id':source['channel_id'],
@@ -141,6 +161,7 @@ def _activate(cur,cfg,row,source):
       'analysis_agent_id':str(row['agent_id']),'allow_external_media':policy['allow_external_media'],
       'allow_paid_asr':policy['allow_paid_asr'],'allow_vision':bool(policy['max_vision_calls']),
       'approved_channel_ids':[source['channel_id']]}
+    if row.get('retry_of'):route['retry_of']=str(row['retry_of'])
     cur.execute('''INSERT INTO saas_knowledge_campaigns
       (tenant_id,id,created_by,sources,analysis_agent_id,status,approved_by,approved_at,max_calls,max_tokens,media_policy)
       VALUES(%s::uuid,%s::uuid,%s,%s::jsonb,%s::uuid,\'running\',%s,now(),%s,%s,%s::jsonb)''',
@@ -158,13 +179,27 @@ def _activate(cur,cfg,row,source):
       'execution':'queued_existing_guarded_campaign_worker'}
 
 
-def complete(cur,cfg,*,consent_id,capability,action):
+def complete(cur,cfg,*,consent_id,capability,action,acknowledge_prior_unknown=False):
     if not enabled_for_manual_bridge(): raise TenantLinearError('Owner component approval is not enabled.',403)
     if action not in {'approve','reject'} or not isinstance(capability,str) or not 32<=len(capability)<=200:
         raise TenantLinearError('Invalid owner extraction decision.',400)
     try: consent_id=identifier(consent_id)
     except TenantLinearError: raise TenantLinearError('Invalid owner extraction decision.',400) from None
     tenant,owner,connection=_connection_profile(cur,cfg,required_scopes=(DRAFT_SCOPE,))
+    cur.execute('''SELECT retry_of FROM saas_ai_single_message_extraction_consents
+      WHERE tenant_id=%s::uuid AND id=%s::uuid AND owner_id=%s AND oauth_connection_id=%s::uuid
+        AND capability_hash=%s AND action=%s''',(tenant,consent_id,owner,connection,_hash(capability),action))
+    retry_lock=cur.fetchone()
+    if retry_lock and retry_lock.get('retry_of'):
+        cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+          ('single-photo-retry:'+tenant+':'+str(retry_lock['retry_of']),))
+    # Durable replay authenticates the original capability but never queues twice.
+    cur.execute('''SELECT * FROM saas_ai_single_message_extraction_consents WHERE tenant_id=%s::uuid AND id=%s::uuid
+      AND owner_id=%s AND oauth_connection_id=%s::uuid AND capability_hash=%s AND action=%s
+      AND retry_of IS NOT NULL AND fragment_id IS NOT NULL''',
+      (tenant,consent_id,owner,connection,_hash(capability),action))
+    replay=cur.fetchone()
+    if replay:return _retry_receipt(replay)
     cur.execute('''SELECT message_id,source_version FROM saas_ai_single_message_extraction_consents
       WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='pending' AND expires_at<=now()''',(tenant,consent_id))
     expired=cur.fetchone()
@@ -178,6 +213,8 @@ def complete(cur,cfg,*,consent_id,capability,action):
       (tenant,consent_id,owner,connection,_hash(capability),action))
     row=cur.fetchone()
     if not row: raise TenantLinearError('Owner extraction consent is unavailable, expired, or already used.',409)
+    if row.get('retry_of') and action=='approve' and acknowledge_prior_unknown is not True:
+        raise TenantLinearError('Acknowledge the unknown prior charge and this one additional attempt.',400)
     source=preflight._source(cur,cfg,{'message_id':str(row['message_id']),'channel_id':str(row['channel_id']),'lead_id':row['lead_id']})
     model,credential_source,ready,_=preflight._model(cur,cfg)
     voice_model=preflight.asr_model(cur,cfg,credential_source)
@@ -195,7 +232,7 @@ def complete(cur,cfg,*,consent_id,capability,action):
         _audit(cur,tenant,owner,'single_message_extraction_consent_rejected','crm_message',row['message_id'],{})
         return {'consent_id':consent_id,'state':'rejected'}
     result=_activate(cur,cfg,row,source)
-    _audit(cur,tenant,owner,'single_message_extraction_consent_approved','crm_message',row['message_id'],{'campaign_id':result['campaign_id']})
+    _audit(cur,tenant,owner,'single_message_extraction_consent_approved','crm_message',row['message_id'],{'campaign_id':result['campaign_id'],**({'retry_of':str(row['retry_of']),'prior_charge_unknown_acknowledged':True,'max_microusd':row['retry_budget']['max_microusd']} if row.get('retry_of') else {})})
     return result
 
 
@@ -220,6 +257,9 @@ def dispatch_fence(cur,tenant,fragment_id):
             or model!=row['model_id'] or voice_model!=row['asr_model_id']
             or preflight.config_hash(cur,cfg,credential_source,voice_model)!=row['config_hash']):
         raise TenantLinearError('Owner-approved source or AI configuration changed.',409)
+    if row.get('retry_of'):
+        from tenant_ai_single_photo_retry import validate
+        validate(cur,row,source)
     return True
 
 
@@ -227,13 +267,19 @@ def _source_for_row(cur,cfg,row):
     return preflight._source(cur,cfg,{'message_id':str(row['message_id']),'channel_id':str(row['channel_id']),'lead_id':row['lead_id']})
 
 
+def _retry_receipt(row):
+    return {'consent_id':str(row['id']),'state':row['state'],'campaign_id':str(row['campaign_id']),
+      'fragment_id':str(row['fragment_id']),'retry_of':str(row['retry_of']),'replayed':True,
+      'execution':'existing_guarded_campaign_worker'}
+
+
 def definitions():
     meta={'ui':{'visibility':['app'],'resourceUri':RESOURCE_URI},'openai/outputTemplate':RESOURCE_URI}
     return [
-      {'name':PREPARE_NAME,'description':'Prepare a component-only exact owner consent for one existing attachment. It cannot read media, reserve money, start extraction, or approve itself.',
-       'inputSchema':{'type':'object','properties':{'message_id':{'type':'string','format':'uuid'},'channel_id':{'type':'string','format':'uuid'},'lead_id':{'type':'integer','minimum':1}},'required':['message_id','channel_id','lead_id'],'additionalProperties':False},
+      {'name':PREPARE_NAME,'description':'Prepare a component-only exact owner consent for one existing attachment. It cannot read media, reserve money, start extraction, or approve itself. For one additional attempt of an eligible unknown image, supply retry_of (prior extraction UUID), source_version and a unique request_id together. The owner must acknowledge the unknown prior charge in the component; old holds remain.',
+       'inputSchema':{'type':'object','properties':{'message_id':{'type':'string','format':'uuid'},'channel_id':{'type':'string','format':'uuid'},'lead_id':{'type':'integer','minimum':1},'retry_of':{'type':'string','format':'uuid'},'source_version':{'type':'string','pattern':'^[a-f0-9]{64}$'},'request_id':{'type':'string','format':'uuid'}},'required':['message_id','channel_id','lead_id'],'additionalProperties':False},
        'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}],
        '_meta':{'ui':{'visibility':['model','app'],'resourceUri':RESOURCE_URI},'openai/outputTemplate':RESOURCE_URI}},
       {'name':COMPLETE_NAME,'description':'TEST-ONLY app completion of one exact owner consent. It rechecks OAuth owner, connection, source version and scope, then queues one bounded existing Campaign fragment. It never calls the provider directly.',
-       'inputSchema':{'type':'object','properties':{'consent_id':{'type':'string','format':'uuid'},'capability':{'type':'string','minLength':32,'maxLength':200},'action':{'type':'string','enum':['approve','reject']}},'required':['consent_id','capability','action'],'additionalProperties':False},
+       'inputSchema':{'type':'object','properties':{'consent_id':{'type':'string','format':'uuid'},'capability':{'type':'string','minLength':32,'maxLength':200},'action':{'type':'string','enum':['approve','reject']},'acknowledge_prior_unknown':{'type':'boolean'}},'required':['consent_id','capability','action'],'additionalProperties':False},
        'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}], '_meta':meta}]
