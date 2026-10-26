@@ -42,6 +42,7 @@ def ensure_schema(conn):
                                   ('external_id',"TEXT NOT NULL DEFAULT ''"),('model_id',"TEXT NOT NULL DEFAULT ''"),
                                   ('asr_model_id',"TEXT NOT NULL DEFAULT ''"),('config_hash',"TEXT NOT NULL DEFAULT ''"),
                                   ('retry_of','UUID'),('retry_request_id','UUID'),('retry_token_id','UUID'),
+                                  ('photo_model',"TEXT NOT NULL DEFAULT ''"),
                                   ('retry_budget',"JSONB NOT NULL DEFAULT '{}'"),('retry_cache',"JSONB NOT NULL DEFAULT '{}'")):
             cur.execute('ALTER TABLE saas_ai_single_message_extraction_consents ADD COLUMN IF NOT EXISTS '+column+' '+definition)
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS single_photo_retry_once ON saas_ai_single_message_extraction_consents(tenant_id,retry_of) WHERE action='approve' AND fragment_id IS NOT NULL AND retry_of IS NOT NULL")
@@ -50,9 +51,18 @@ def ensure_schema(conn):
 
 def _parse_args(data):
     required={'message_id','channel_id','lead_id'}
-    if not isinstance(data,dict) or set(data) not in (required,required|{'retry_of','source_version','request_id'}):
+    if not isinstance(data,dict) or set(data)-{'photo_model'} not in (required,required|{'retry_of','source_version','request_id'}):
         raise TenantLinearError('Invalid single-message extraction review.',400)
+    if 'photo_model' in data and data['photo_model'] not in ('gpt-4.1','gpt-4.1-2025-04-14'):
+        raise TenantLinearError('Unsupported photo model.',400)
     return data
+
+
+def _selection(cur,cfg,photo_model=''):
+    if photo_model:
+        from tenant_ai_photo_model import select
+        return select(cur,cfg,photo_model)
+    return preflight._model(cur,cfg)
 
 
 def _preview(source,policy,model,retry=None):
@@ -61,7 +71,8 @@ def _preview(source,policy,model,retry=None):
     from tenant_ai_single_photo_retry import preview as retry_preview
     return {'message_id':source['message_id'],'attachment_kind':source['kind'],
       'channel_id':source['channel_id'],'agent_id':model,'media_policy':policy,
-      'execution':'existing_guarded_campaign_worker',**({'source_version':source['version']} if retry else {}),**retry_preview(retry)}
+      'execution':'existing_guarded_campaign_worker',**({'source_version':source['version']} if retry else {}),**retry_preview(retry),
+      **({'photo_model':retry['photo_model'],'photo_only':True,'maximum_additional_microusd':retry['retry_budget']['max_microusd'],'maximum_additional_usd':format(retry['retry_budget']['max_microusd']/1_000_000,'.6f')} if retry and retry.get('photo_model') else {})}
 
 
 def prepare(cur,cfg,data):
@@ -71,10 +82,13 @@ def prepare(cur,cfg,data):
     if not enabled_for_manual_bridge():
         raise TenantLinearError('Owner component approval is not enabled.',403)
     data=_parse_args(data);source=preflight._source(cur,cfg,{k:data[k] for k in ('message_id','channel_id','lead_id')})
-    model,credential_source,ready,reason=preflight._model(cur,cfg)
+    photo_model=data.get('photo_model','')
+    if photo_model and source['kind']!='image':raise TenantLinearError('Photo model requires one image.',400)
+    model,credential_source,ready,reason=_selection(cur,cfg,photo_model)
     if not ready: raise TenantLinearError('Extraction configuration is unavailable: '+reason,409)
     tenant,owner,connection=_connection_profile(cur,cfg,required_scopes=(DRAFT_SCOPE,))
-    policy=preflight.policy_for(source['kind'])
+    from tenant_ai_photo_model import POLICY as PHOTO_POLICY,budget as photo_budget
+    policy=dict(PHOTO_POLICY) if photo_model else preflight.policy_for(source['kind'])
     voice_model=preflight.asr_model(cur,cfg,credential_source)
     if policy['max_asr_calls'] and not voice_model:
         raise TenantLinearError('Extraction configuration is unavailable: asr_model_unavailable',409)
@@ -82,7 +96,9 @@ def prepare(cur,cfg,data):
       ('single-message-extraction:'+tenant+':'+source['message_id']+':'+source['version'],))
     from tenant_ai_single_photo_retry import prepare as prepare_retry
     retry=prepare_retry(cur,cfg,data,source,model,policy) if 'retry_of' in data else {}
-    if retry:
+    if photo_model:
+        retry.update(photo_model=photo_model,retry_budget=photo_budget(cur,tenant,model),retry_token_id=identifier(cfg['oauth_token_id']))
+    if retry.get('retry_of'):
         cur.execute('SELECT retry_of,message_id,source_version FROM saas_ai_single_message_extraction_consents WHERE tenant_id=%s::uuid AND retry_request_id=%s::uuid LIMIT 1',(tenant,retry['retry_request_id']))
         prior_request=cur.fetchone()
         if prior_request and (str(prior_request['retry_of'])!=retry['retry_of'] or str(prior_request['message_id'])!=source['message_id'] or prior_request['source_version']!=source['version']):
@@ -101,6 +117,8 @@ def prepare(cur,cfg,data):
     # timestamp wrappers merely to decide whether an already exact receipt may
     # be reopened.
     if old and (old['state'] in {'approved','pending'} or (old.get('retry_of') and old.get('fragment_id'))):
+        if old.get('photo_model','')!=photo_model:
+            raise TenantLinearError('Existing consent has a different photo selection; use its exact receipt.',409)
         if old.get('retry_of') and old.get('fragment_id'):
             return _retry_receipt(old)
         if old['state']=='approved':
@@ -125,7 +143,9 @@ def prepare(cur,cfg,data):
       VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s,%s,%s,%s::jsonb,%s,\'reject\',now()+interval \'10 minutes\',%s::uuid,%s::uuid,%s::uuid,%s::jsonb,%s::jsonb)''',
       (reject_key,tenant,owner,connection,source['message_id'],source['channel_id'],source['lead_id'],source['conversation_id'],
        source['version'],source['kind'],source['body_hash'],source['external_id'],cfg['AI_LEARNING_MCP_AGENT_ID'],model,voice_model,preflight.config_hash(cur,cfg,credential_source,voice_model),json.dumps(policy),_hash(reject),retry.get('retry_of'),retry.get('retry_request_id'),retry.get('retry_token_id'),json.dumps(retry.get('retry_budget',{})),json.dumps(retry.get('retry_cache',{}))))
-    _audit(cur,tenant,owner,'single_message_extraction_consent_prepared','crm_message',source['message_id'],{'channel_id':source['channel_id'],'kind':source['kind'],**({'retry_of':retry['retry_of'],'max_microusd':retry['retry_budget']['max_microusd']} if retry else {})})
+    if photo_model:
+        cur.execute('UPDATE saas_ai_single_message_extraction_consents SET photo_model=%s WHERE tenant_id=%s::uuid AND id IN (%s::uuid,%s::uuid)',(photo_model,tenant,key,reject_key))
+    _audit(cur,tenant,owner,'single_message_extraction_consent_prepared','crm_message',source['message_id'],{'channel_id':source['channel_id'],'kind':source['kind'],**({'retry_of':retry['retry_of'],'max_microusd':retry['retry_budget']['max_microusd']} if retry.get('retry_of') else {}),**({'photo_model':photo_model,'photo_only':True,'max_microusd':retry['retry_budget']['max_microusd']} if photo_model else {})})
     return {'consent_id':key,'state':'pending','owner_consent_required':True,'exact_preview':_preview(source,policy,cfg['AI_LEARNING_MCP_AGENT_ID'],retry),
       '_component_meta':{'ui':{'resourceUri':RESOURCE_URI},'owner_single_extraction':{
         'consent_ids':{'approve':key,'reject':reject_key},'capabilities':{'approve':secret,'reject':reject},'exact_preview':_preview(source,policy,cfg['AI_LEARNING_MCP_AGENT_ID'],retry)}}}
@@ -152,7 +172,10 @@ def _activate(cur,cfg,row,source):
     if prior:
         cur.execute("SELECT 1 FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status IN ('pending','running') LIMIT 1",(tenant,prior['campaign_id']))
         if cur.fetchone():raise TenantLinearError('Prior campaign still has active work.',409)
-    cur.execute("SELECT 1 FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND status<>'stopped' AND (%s::uuid IS NULL OR id<>%s::uuid) FOR UPDATE",(tenant,(prior or {}).get('campaign_id'),(prior or {}).get('campaign_id')))
+    excluded=([prior['campaign_id']]+prior.get('ancestor_campaigns',[])) if prior else []
+    cur.execute("SELECT 1 FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND campaign_id=ANY(%s::uuid[]) AND status IN ('pending','running') LIMIT 1",(tenant,excluded))
+    if cur.fetchone():raise TenantLinearError('Prior lineage still has active work.',409)
+    cur.execute("SELECT 1 FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND status<>'stopped' AND NOT(id=ANY(%s::uuid[])) FOR UPDATE",(tenant,excluded))
     if cur.fetchone(): raise TenantLinearError('Another knowledge campaign is active.',409)
     amount=reservation(policy);campaign_id=str(uuid.uuid5(uuid.NAMESPACE_URL,'single-message-extraction:'+str(row['id'])))
     at=_occurred(source['occurred_at']); route={'provider':'connect','channel_id':source['channel_id'],
@@ -162,6 +185,7 @@ def _activate(cur,cfg,row,source):
       'allow_paid_asr':policy['allow_paid_asr'],'allow_vision':bool(policy['max_vision_calls']),
       'approved_channel_ids':[source['channel_id']]}
     if row.get('retry_of'):route['retry_of']=str(row['retry_of'])
+    if row.get('photo_model'):route['photo_model']=row['photo_model']
     cur.execute('''INSERT INTO saas_knowledge_campaigns
       (tenant_id,id,created_by,sources,analysis_agent_id,status,approved_by,approved_at,max_calls,max_tokens,media_policy)
       VALUES(%s::uuid,%s::uuid,%s,%s::jsonb,%s::uuid,\'running\',%s,now(),%s,%s,%s::jsonb)''',
@@ -216,13 +240,16 @@ def complete(cur,cfg,*,consent_id,capability,action,acknowledge_prior_unknown=Fa
     if row.get('retry_of') and action=='approve' and acknowledge_prior_unknown is not True:
         raise TenantLinearError('Acknowledge the unknown prior charge and this one additional attempt.',400)
     source=preflight._source(cur,cfg,{'message_id':str(row['message_id']),'channel_id':str(row['channel_id']),'lead_id':row['lead_id']})
-    model,credential_source,ready,_=preflight._model(cur,cfg)
+    model,credential_source,ready,_=_selection(cur,cfg,row.get('photo_model',''))
     voice_model=preflight.asr_model(cur,cfg,credential_source)
     if (not ready or source['version']!=row['source_version'] or source['conversation_id']!=row['conversation_id']
             or source['kind']!=row['message_kind'] or source['body_hash']!=row['body_hash']
             or source['external_id']!=row['external_id'] or model!=row['model_id'] or voice_model!=row['asr_model_id']
             or preflight.config_hash(cur,cfg,credential_source,voice_model)!=row['config_hash']):
         raise TenantLinearError('Source changed; review it again.',409)
+    from tenant_ai_photo_model import fence as photo_fence,budget as photo_budget
+    photo_fence(cur,row,source)
+    if row.get('photo_model'):photo_budget(cur,tenant,row['photo_model'])
     # Mark every sibling capability terminal before a campaign can exist.
     cur.execute('''UPDATE saas_ai_single_message_extraction_consents SET consumed_at=now(),updated_at=now()
       WHERE tenant_id=%s::uuid AND message_id=%s::uuid AND source_version=%s AND state=\'pending\' AND consumed_at IS NULL''',
@@ -232,7 +259,7 @@ def complete(cur,cfg,*,consent_id,capability,action,acknowledge_prior_unknown=Fa
         _audit(cur,tenant,owner,'single_message_extraction_consent_rejected','crm_message',row['message_id'],{})
         return {'consent_id':consent_id,'state':'rejected'}
     result=_activate(cur,cfg,row,source)
-    _audit(cur,tenant,owner,'single_message_extraction_consent_approved','crm_message',row['message_id'],{'campaign_id':result['campaign_id'],**({'retry_of':str(row['retry_of']),'prior_charge_unknown_acknowledged':True,'max_microusd':row['retry_budget']['max_microusd']} if row.get('retry_of') else {})})
+    _audit(cur,tenant,owner,'single_message_extraction_consent_approved','crm_message',row['message_id'],{'campaign_id':result['campaign_id'],**({'photo_model':row['photo_model'],'photo_only':True,'max_microusd':row['retry_budget']['max_microusd']} if row.get('photo_model') else {}),**({'retry_of':str(row['retry_of']),'prior_charge_unknown_acknowledged':True,'max_microusd':row['retry_budget']['max_microusd']} if row.get('retry_of') else {})})
     return result
 
 
@@ -250,13 +277,15 @@ def dispatch_fence(cur,tenant,fragment_id):
     cfg={'AI_LEARNING_MCP_TENANT_ID':str(row['tenant_id']),'AI_LEARNING_MCP_AGENT_ID':str(row['agent_id']),
       'AI_LEARNING_MCP_CHANNEL_ID':str(row['channel_id'])}
     source=_source_for_row(cur,cfg,row)
-    model,credential_source,ready,_=preflight._model(cur,cfg); voice_model=preflight.asr_model(cur,cfg,credential_source)
+    model,credential_source,ready,_=_selection(cur,cfg,row.get('photo_model','')); voice_model=preflight.asr_model(cur,cfg,credential_source)
     if (not ready or (row['media_policy'].get('max_asr_calls') and not voice_model)
             or source['version']!=row['source_version'] or source['kind']!=row['message_kind']
             or source['body_hash']!=row['body_hash'] or source['external_id']!=row['external_id']
             or model!=row['model_id'] or voice_model!=row['asr_model_id']
             or preflight.config_hash(cur,cfg,credential_source,voice_model)!=row['config_hash']):
         raise TenantLinearError('Owner-approved source or AI configuration changed.',409)
+    from tenant_ai_photo_model import fence as photo_fence
+    photo_fence(cur,row,source)
     if row.get('retry_of'):
         from tenant_ai_single_photo_retry import validate
         validate(cur,row,source)
@@ -276,8 +305,8 @@ def _retry_receipt(row):
 def definitions():
     meta={'ui':{'visibility':['app'],'resourceUri':RESOURCE_URI},'openai/outputTemplate':RESOURCE_URI}
     return [
-      {'name':PREPARE_NAME,'description':'Prepare a component-only exact owner consent for one existing attachment. It cannot read media, reserve money, start extraction, or approve itself. For one additional attempt of an eligible unknown image, supply retry_of (prior extraction UUID), source_version and a unique request_id together. The owner must acknowledge the unknown prior charge in the component; old holds remain.',
-       'inputSchema':{'type':'object','properties':{'message_id':{'type':'string','format':'uuid'},'channel_id':{'type':'string','format':'uuid'},'lead_id':{'type':'integer','minimum':1},'retry_of':{'type':'string','format':'uuid'},'source_version':{'type':'string','pattern':'^[a-f0-9]{64}$'},'request_id':{'type':'string','format':'uuid'}},'required':['message_id','channel_id','lead_id'],'additionalProperties':False},
+      {'name':PREPARE_NAME,'description':'Prepare a component-only exact owner consent for one existing attachment. It cannot read media, reserve money, start extraction, or approve itself. For one additional attempt of an eligible unknown image, supply retry_of (prior extraction UUID), source_version and a unique request_id together. The owner must acknowledge the unknown prior charge in the component; old holds remain. Optional photo_model selects GPT-4.1 for one image observation only (no text/ASR call, no agent/default changes). A model-access failure may receive one model-change recovery; it cannot be retried again.',
+       'inputSchema':{'type':'object','properties':{'message_id':{'type':'string','format':'uuid'},'channel_id':{'type':'string','format':'uuid'},'lead_id':{'type':'integer','minimum':1},'retry_of':{'type':'string','format':'uuid'},'source_version':{'type':'string','pattern':'^[a-f0-9]{64}$'},'request_id':{'type':'string','format':'uuid'},'photo_model':{'type':'string','enum':['gpt-4.1','gpt-4.1-2025-04-14']}},'required':['message_id','channel_id','lead_id'],'additionalProperties':False},
        'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[DRAFT_SCOPE]}],
        '_meta':{'ui':{'visibility':['model','app'],'resourceUri':RESOURCE_URI},'openai/outputTemplate':RESOURCE_URI}},
       {'name':COMPLETE_NAME,'description':'TEST-ONLY app completion of one exact owner consent. It rechecks OAuth owner, connection, source version and scope, then queues one bounded existing Campaign fragment. It never calls the provider directly.',

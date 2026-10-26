@@ -222,12 +222,31 @@ def _consent_execution(cur,cfg,source,consent_id):
 
 def preflight(cur,cfg,args):
     """Safe readiness facts only: never attachment bytes, URLs, keys or writes."""
-    source=_source(cur,cfg,args); model,credential_source,configured,reason=_model(cur,cfg)
+    source=_source(cur,cfg,args); photo_model=''
+    if args.get('consent_id'):
+        cur.execute("SELECT to_regclass('saas_ai_single_message_extraction_consents') AS relation")
+        if (cur.fetchone() or {}).get('relation'):
+            cur.execute('''SELECT photo_model FROM saas_ai_single_message_extraction_consents
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND owner_id=%s AND oauth_connection_id=%s::uuid
+                AND message_id=%s::uuid AND channel_id=%s::uuid AND lead_id=%s AND agent_id=%s::uuid''',
+              (cfg['AI_LEARNING_MCP_TENANT_ID'],identifier(args['consent_id']),cfg.get('actor_id'),cfg.get('oauth_connection_id'),
+               source['message_id'],source['channel_id'],source['lead_id'],cfg['AI_LEARNING_MCP_AGENT_ID']))
+            photo_model=(cur.fetchone() or {}).get('photo_model') or ''
+    if photo_model:
+        from tenant_ai_photo_model import select
+        model,credential_source,configured,reason=select(cur,cfg,photo_model)
+    else:model,credential_source,configured,reason=_model(cur,cfg)
     execution=_consent_execution(cur,cfg,source,args.get('consent_id'))
     status={'consent_execution':execution} if execution else {}
     if reason: return {'ready':False,'reason_code':reason,'message_id':source['message_id'],'attachment_kind':source['kind'],**status}
     voice_model=asr_model(cur,cfg,credential_source)
-    policy=policy_for(source['kind']);tariffs,budget_ready=_budget(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],model,voice_model,policy)
+    policy=policy_for(source['kind'])
+    if photo_model:
+        from tenant_ai_photo_model import POLICY,budget
+        policy=dict(POLICY);tariffs={'text':True,'vision_low':True,'asr':True}
+        try:budget(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],photo_model);budget_ready=True
+        except TenantLinearError:budget_ready=False
+    else:tariffs,budget_ready=_budget(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],model,voice_model,policy)
     if policy['max_asr_calls'] and not voice_model:
         return {'ready':False,'reason_code':'asr_model_unavailable','message_id':source['message_id'],
           'attachment_kind':source['kind'],'model_id':model,'asr_model_id':None,'provider_domain':DOMAIN,

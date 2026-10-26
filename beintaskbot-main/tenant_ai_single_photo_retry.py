@@ -11,6 +11,9 @@ import tenant_ai_knowledge_extraction_preflight as preflight
 
 
 def quote(model, policy):
+    if policy.get("max_main_calls")==0:
+        from tenant_ai_photo_model import quote as photo_quote
+        return photo_quote(model)
     from tenant_ai_spend_budget import price, media_price
     text=price(model);vision=media_price(model,'vision_low')
     if text is None or vision is None:
@@ -21,11 +24,11 @@ def quote(model, policy):
       'max_vision_calls':policy['max_vision_calls'],'max_asr_calls':0}
 
 
-def parent(cur,tenant,owner,source,prior_id,agent,model):
+def parent(cur,tenant,owner,source,prior_id,agent,model,photo_model=""):
     """The parent must itself have been approved through the exact owner flow."""
     cur.execute('''SELECT e.source_refs,e.media_results,e.route,e.status,c.id AS campaign_id,
       x.message_id,x.channel_id,x.source_version,x.body_hash,x.external_id,x.lead_id,
-      x.conversation_id,x.agent_id,x.owner_id,x.retry_of,r.model
+      x.conversation_id,x.agent_id,x.owner_id,x.retry_of,x.id AS consent_id,x.retry_cache,x.photo_model,r.model
       FROM saas_knowledge_extractions e
       JOIN saas_ai_single_message_extraction_consents x ON x.tenant_id=e.tenant_id AND x.fragment_id=e.id
       JOIN saas_knowledge_campaign_fragments f ON f.tenant_id=e.tenant_id AND f.id=e.id
@@ -36,8 +39,9 @@ def parent(cur,tenant,owner,source,prior_id,agent,model):
         AND x.state='approved' AND x.action='approve' AND x.message_kind='image'
         AND c.status IN ('blocked','paused','stopped') FOR SHARE OF e,x,f,c,r''',(tenant,identifier(prior_id)))
     old=cur.fetchone()
-    if (not old or old['retry_of'] or old['owner_id']!=owner or source['kind']!='image'
-        or str(old['agent_id'])!=str(agent) or old['model']!=model
+    if (not old or (old['retry_of'] and not photo_model) or old['photo_model'] or old['owner_id']!=owner or source['kind']!='image'
+        or str(old['agent_id'])!=str(agent) or (not photo_model and old['model']!=model)
+        or (photo_model and old['model']==model)
         or any(str(old[key])!=str(source[name]) for key,name in (
           ('message_id','message_id'),('channel_id','channel_id'),('lead_id','lead_id'),
           ('source_version','version'),('body_hash','body_hash'),('external_id','external_id'),
@@ -61,18 +65,39 @@ def parent(cur,tenant,owner,source,prior_id,agent,model):
         or results[0].get('status')!='unknown' or results[0].get('failure_stage')!='visual_analysis'
         or not isinstance(results[0].get('sha256'),str) or len(results[0]['sha256'])!=64):
         raise TenantLinearError('Unknown visual attempt identity is unavailable.',409)
-    cur.execute('''SELECT fingerprint,token,metadata FROM saas_knowledge_media_cache
+    ancestors=[];ancestor_campaigns=[]
+    if photo_model:
+        if results[0].get('failure_code')!='provider_http_403_model_access':
+            raise TenantLinearError('Model-change recovery requires a recorded model-access refusal.',409)
+        if old['retry_of']:
+            # At most the original one-use retry may have one model recovery.
+            # Validate the root as well; neither historical hold/cache is modified.
+            root=parent(cur,tenant,owner,source,str(old['retry_of']),agent,old['model'])
+            if old['retry_cache']!=root['cache']:
+                raise TenantLinearError('Prior retry lineage changed.',409)
+            ancestors=[str(old['retry_of'])];ancestor_campaigns=[root['campaign_id']]
+    if photo_model and old['retry_of']:
+        from tenant_knowledge_candidates_store import digest
+        expected=digest({'parent_cache':old['retry_cache']['fingerprint'],'owner_retry_consent':str(old['consent_id'])})
+        cur.execute("""SELECT fingerprint,token,metadata FROM saas_knowledge_media_cache
+          WHERE tenant_id=%s::uuid AND fingerprint=%s AND state IN ('unknown','running')
+          AND metadata->>'kind'='vision' AND metadata->>'model'=%s
+          AND metadata->>'channel_id'=%s AND metadata->>'sha256'=%s
+          AND metadata->>'owner_retry'='true' AND metadata->'origin'='{}'::jsonb FOR SHARE""",
+          (tenant,expected,old['model'],source['channel_id'],results[0]['sha256']))
+    else:
+        cur.execute('''SELECT fingerprint,token,metadata FROM saas_knowledge_media_cache
       WHERE tenant_id=%s::uuid AND state IN ('unknown','running')
         AND metadata->>'kind'='vision' AND metadata->>'model'=%s
         AND metadata->>'channel_id'=%s AND metadata->>'sha256'=%s
         AND NOT (metadata ? 'owner_retry')
         AND metadata->'origin'='{}'::jsonb LIMIT 2 FOR SHARE''',
-      (tenant,model,source['channel_id'],results[0]['sha256']))
+      (tenant,old['model'],source['channel_id'],results[0]['sha256']))
     caches=cur.fetchall()
     if len(caches)!=1:
         raise TenantLinearError('Exact unknown visual cache is unavailable or ambiguous.',409)
     cache=caches[0]
-    return {'campaign_id':str(old['campaign_id']),
+    return {'campaign_id':str(old['campaign_id']),'ancestors':ancestors,'ancestor_campaigns':ancestor_campaigns,
       'cache':{'fingerprint':cache['fingerprint'],'token':str(cache['token']),'sha256':results[0]['sha256']}}
 
 
@@ -80,9 +105,13 @@ def prepare(cur,cfg,data,source,model,policy):
     prior=identifier(data['retry_of']);request_id=identifier(data['request_id'])
     if data['source_version']!=source['version']:
         raise TenantLinearError('Retry source version changed.',409)
-    old=parent(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],source,prior,cfg['AI_LEARNING_MCP_AGENT_ID'],model)
+    old=parent(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],source,prior,cfg['AI_LEARNING_MCP_AGENT_ID'],model,data.get('photo_model',''))
     amount=quote(model,policy)
-    _,ready=preflight._budget(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],model,'',policy)
+    if data.get('photo_model'):
+        from tenant_ai_photo_model import budget
+        budget(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],model);ready=True
+    else:
+        _,ready=preflight._budget(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],model,'',policy)
     if not ready:raise TenantLinearError('Retry budget unavailable; old unknown holds remain charged to the cap.',409)
     return {'retry_of':prior,'retry_request_id':request_id,'retry_budget':amount,
       'retry_cache':old['cache'],'retry_token_id':identifier(cfg['oauth_token_id'])}
@@ -113,10 +142,13 @@ def validate(cur,row,source,*,budget_available=False):
       (row['tenant_id'],row['id']))
     if not (cur.fetchone() or {}).get('live'):
         raise TenantLinearError('One-use retry consent expired.',409)
-    old=parent(cur,str(row['tenant_id']),row['owner_id'],source,str(row['retry_of']),row['agent_id'],row['model_id'])
+    old=parent(cur,str(row['tenant_id']),row['owner_id'],source,str(row['retry_of']),row['agent_id'],row['model_id'],row.get('photo_model',''))
     if old['cache']!=row['retry_cache'] or quote(row['model_id'],row['media_policy'])!=row['retry_budget']:
         raise TenantLinearError('Retry attempt or tariff changed; review again.',409)
-    if budget_available:
+    if budget_available and row.get('photo_model'):
+        from tenant_ai_photo_model import budget
+        budget(cur,str(row['tenant_id']),row['photo_model'])
+    elif budget_available:
         _,ready=preflight._budget(cur,str(row['tenant_id']),row['model_id'],'',row['media_policy'])
         if not ready:raise TenantLinearError('Retry budget unavailable; old unknown holds remain charged to the cap.',409)
     return old
@@ -143,7 +175,9 @@ def cache_namespace(cur,item,base_fingerprint,meta):
     row=authority(cur,item['tenant'],item['id'])
     if (str(row['retry_of'])!=str(item['route'].get('retry_of'))
         or str(row['id'])!=item.get('_owner_retry_id')
-        or row['retry_cache']['fingerprint']!=base_fingerprint or row['retry_cache']['sha256']!=meta['sha256']):
+        or (not row.get('photo_model') and row['retry_cache']['fingerprint']!=base_fingerprint)
+        or (row.get('photo_model') and meta['model']!=row['photo_model'])
+        or row['retry_cache']['sha256']!=meta['sha256']):
         raise TenantLinearError('Retry cache or image bytes changed.',409)
     from tenant_knowledge_candidates_store import digest
-    return digest({'parent_cache':base_fingerprint,'owner_retry_consent':str(row['id'])})
+    return digest({'parent_cache':row['retry_cache']['fingerprint'],'owner_retry_consent':str(row['id'])})

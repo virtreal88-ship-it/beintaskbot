@@ -135,7 +135,7 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
     unknown=cur.fetchall()
     if not unknown:
         return False
-    retry_parent=None
+    retry_parents=set()
     if route.get('retry_of'):
         from tenant_ai_single_photo_retry import authority
         try:
@@ -143,7 +143,13 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
         except TenantLinearError:
             return True
         if str(consent['retry_of'])!=str(route['retry_of']):return True
-        retry_parent=str(consent['retry_of'])
+        retry_parents.add(str(consent['retry_of']))
+        if consent.get('photo_model'):
+            from tenant_ai_single_photo_retry import validate
+            from tenant_ai_single_message_extraction import _source_for_row
+            cfg={'AI_LEARNING_MCP_TENANT_ID':tenant,'AI_LEARNING_MCP_CHANNEL_ID':str(consent['channel_id'])}
+            checked=validate(cur,consent,_source_for_row(cur,cfg,consent))
+            retry_parents.update(checked['ancestors'])
     def scoped_id(value):
         try:
             return str(uuid.UUID(value)) if isinstance(value,str) else None
@@ -159,7 +165,7 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
         return True
     selected=(channel,scoped_id(ids[0]))
     for old in unknown:
-        if retry_parent and str(old['id'])==retry_parent:
+        if str(old['id']) in retry_parents:
             continue  # Only this exact, owner-acknowledged parent; its hold stays.
         old_route=old['route'] or {}
         old_ids=old_route.get('message_ids')

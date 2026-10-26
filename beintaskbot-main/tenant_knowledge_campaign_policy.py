@@ -23,6 +23,8 @@ def validate(data, total):
 def reservation(policy):
     # Upper bounds, including cache misses. Unused reservations are deliberately
     # retained: never refund a possibly dispatched external operation.
+    if policy.get('max_main_calls')==0 and policy.get('max_vision_calls')==1 and policy.get('allow_external_media') is True and policy.get('max_asr_calls')==0 and not policy.get('allow_paid_asr'):
+        return {'main':0,'asr':0,'vision':1,'calls':1,'tokens':2648}
     asr=int(policy.get('allow_paid_asr',False) and policy.get('max_asr_calls',0)>0)
     vision=2 if policy.get('allow_external_media',False) and policy.get('max_vision_calls',0)>0 else 0
     return {'main':1,'asr':asr,'vision':vision,'calls':1+asr+vision,

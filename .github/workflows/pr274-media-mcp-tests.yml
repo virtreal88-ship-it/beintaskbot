@@ -82,6 +82,8 @@ jobs:
           tests/test_knowledge_extraction_preflight.py
           tests/test_single_photo_retry.py
           tests/test_single_photo_retry_postgres.py
+          tests/test_photo_model.py
+          tests/test_photo_model_postgres.py
           tests/test_knowledge_campaigns.py::test_restart_unknown_never_replays_or_refunds
           tests/test_knowledge_campaign_unknown_postgres.py
           tests/test_knowledge_refinement.py::test_improve_proposal_only_explicit_save_and_idempotency
