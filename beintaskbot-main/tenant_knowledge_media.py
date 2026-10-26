@@ -213,7 +213,7 @@ def collect(profile,item,check_before_ai=None):
                         item['asr_usage']=usage;text=redact(text,names)[:4000]
                         receipt.update(audio_status='processed',transcript=text,model=model)
                         message['text']+='\n[Video audio transcript] '+text
-                    except Exception: receipt['audio_status']='unavailable_or_error'
+                    except Exception as error: receipt['audio_status']='unknown' if getattr(error,'media_outcome_unknown',False) else 'unavailable_or_error'
             else:
                 if not signature(data,mime): raise ValueError('invalid_image')
                 visuals=[(data,mime,{})]
@@ -242,12 +242,14 @@ def collect(profile,item,check_before_ai=None):
         except LiveExtractionDisabled: raise
         except LookupError as error: receipt.update(status='unsupported',code=str(error),failure_stage=stage)
         except TenantLinearError as error:
+            if getattr(error,'media_outcome_unknown',False):
+                receipt.update(status='unknown',code='media_result_unknown',failure_stage=stage);continue
             code='video_size_limit' if kind=='video' and error.status==413 else 'media_size_limit' if error.status==413 else 'media_unavailable'
             receipt.update(status='unavailable' if error.status in {403,404,410,413} else 'unsupported' if error.status==415 else 'error',code=code,failure_stage=stage)
         except ValueError as error:
             code=str(error)
             receipt.update(status='unsupported' if code in {'video_size_limit','video_duration_limit'} else 'error',code=code if code in {'video_size_limit','video_duration_limit'} else 'media_processing_failed',failure_stage=stage)
-        except Exception: receipt.update(status='error',code='media_processing_failed',failure_stage=stage)
+        except Exception as error: receipt.update(status='unknown' if getattr(error,'media_outcome_unknown',False) else 'error',code='media_result_unknown' if getattr(error,'media_outcome_unknown',False) else 'media_processing_failed',failure_stage=stage)
     for receipt in results:
         message=next(m for r,m in zip(item['refs'],item['messages']) if r['id']==receipt['id'])
         message['text']+='\n[Attachment status: '+receipt['status']+'; '+receipt['code']+'. Never infer unread contents.]'

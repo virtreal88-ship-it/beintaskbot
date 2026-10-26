@@ -58,6 +58,14 @@ jobs:
           tests/test_tenant_knowledge_search.py
           tests/test_tenant_ai_testing_retrieval.py
           tests/test_knowledge_candidates.py
+          tests/test_case_media_coverage.py
+          tests/test_knowledge_refinement.py::test_improve_proposal_only_explicit_save_and_idempotency
+          tests/test_knowledge_refinement.py::test_improve_errors_and_changes_never_write_card
+          tests/test_knowledge_refinement.py::test_improve_permissions_input_limits_and_request_binding
+          tests/test_knowledge_refinement.py::test_improve_channel_revocation_and_known_name_redaction
+          tests/test_knowledge_refinement.py::test_improve_timeout_unknown_no_retry_and_token_reservation
+          tests/test_knowledge_refinement.py::test_improve_deadline_blocks_proposal
+          tests/test_knowledge_refinement.py::test_improve_api_origin_identity_and_dispatch
           tests/test_night_release.py
           tests/test_instruction_library.py
           tests/test_instruction_expert_integration.py
@@ -67,3 +75,4 @@ jobs:
         run: |
           node tests/test_instruction_editor.cjs
           node tests/test_instruction_video_card.cjs
+          SUPPORT_CASES_JSDOM=../.support-test-deps/node_modules/jsdom node tests/test_case_media_coverage_ui.cjs

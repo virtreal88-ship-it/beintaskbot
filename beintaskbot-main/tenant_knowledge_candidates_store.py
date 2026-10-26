@@ -220,10 +220,13 @@ def extraction_row(cur,tenant,request_id):
 
 def public_request(row):
     expired=row['status']=='running' and row.get('expired')
-    return {'id':str(row['id']),'status':'unknown' if expired else row['status'],
+    from tenant_knowledge_media_coverage import project
+    coverage=project(row.get('source_refs'),row.get('media_results'), 'unknown' if expired else row['status'])
+    coverage['media_coverage']['scope']='extraction_fragment'
+    return {'id':str(row['id']),**coverage,
       'error_code':'provider_timeout' if expired else row['error_code'],'route':row['route'],
       'source_message_ids':[ref['id'] for ref in row['source_refs']],'message_count':len(row['source_refs']),
-      'media_results':row.get('media_results') or [],'next_before':row['route'].get('next_before'),'limits':{'max_messages':MAX_MESSAGES,'max_context_chars':MAX_CONTEXT,'max_cards':5}}
+      'next_before':row['route'].get('next_before'),'limits':{'max_messages':MAX_MESSAGES,'max_context_chars':MAX_CONTEXT,'max_cards':5}}
 
 
 def _safe_client_name(value):
@@ -314,15 +317,21 @@ def _case_customer(cur,tenant,route_value,card,dialog=None):
             'conversation_kind':'direct','conversation_name':'','participant_count':0,'participants':[]}
 
 
-def _public_media_processing(media_results,source_ids,extraction_status):
+def _public_media_processing(media_results,source_ids,extraction_status,source_refs=None):
+    from tenant_knowledge_media_coverage import project
     source_ids={str(value) for value in source_ids or []}
-    return [{'id':str(item.get('id') or ''),'status':str(item.get('status') or ''),
-      'code':str(item.get('code') or ''),'audio_status':str(item.get('audio_status') or ''),
-      'extraction_status':str(extraction_status or '')}
-      for item in media_results or [] if str(item.get('id') or '') in source_ids]
+    if source_refs is None:
+        # Preserve the legacy status-only projection for callers without an
+        # inventory. It cannot establish aggregate completeness.
+        return [{'id':str(item.get('id') or ''),'status':str(item.get('status') or ''),
+          'code':str(item.get('code') or ''),'audio_status':str(item.get('audio_status') or ''),
+          'extraction_status':str(extraction_status or '')}
+          for item in media_results or [] if str(item.get('id') or '') in source_ids]
+    refs=source_refs
+    return project([r for r in refs if str(r.get('id')) in source_ids],media_results,extraction_status)['media_results']
 
 
-def public_card(cur,row,content_language='az',source_route=None,tenant=None,dialog=None,media_results=None,extraction_status=None):
+def public_card(cur,row,content_language='az',source_route=None,tenant=None,dialog=None,media_results=None,extraction_status=None,source_refs=None,include_media_content=False):
     value={**_row(row),**row['content']};value.pop('content',None);value.pop('content_hash',None)
     if value.get('reviewed_at'): value['reviewed_at']=value['reviewed_at'].isoformat()
     value['extraction_id']=str(row['extraction_id'])
@@ -345,7 +354,14 @@ def public_card(cur,row,content_language='az',source_route=None,tenant=None,dial
     route=source_route or {}
     value['source_route']={key:route[key] for key in ('provider','channel_id','conversation_id','phone') if route.get(key)}
     if media_results is not None:
-        value['media_processing']=_public_media_processing(media_results,sources,extraction_status)
+        value['media_processing']=_public_media_processing(media_results,sources,extraction_status,source_refs)
+        if tenant and dialog and source_route is not None:
+            coverage=case_media_coverage(cur,tenant,{'route':source_route,'source_refs':source_refs,
+              'media_results':media_results,'status':extraction_status},dialog,row['content'],include_content=include_media_content)
+            value['media_processing']=coverage['media_results']
+            value['media_coverage']=coverage['media_coverage']
+            value['media_analysis_status']=coverage['status']
+
     if tenant:
         value.update(_case_customer(cur,tenant,route,value,dialog))
     # Existing records predate the explicit content-language field. Their extraction
@@ -364,8 +380,9 @@ def request_detail(profile,request_id):
         schema(conn)
         with conn.cursor() as cur:
             tenant,_,_=authorize(cur,profile);row=extraction_row(cur,tenant,request_id);evidence(cur,profile,row)
+            chosen=route(cur,profile,row['route'])[3]
             cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND extraction_id=%s::uuid ORDER BY created_at,id',(tenant,row['id']))
-            cards=[public_card(cur,r,row.get('route',{}).get('language') or 'az',media_results=row.get('media_results') or []) for r in cur.fetchall()]
+            cards=[public_card(cur,r,row.get('route',{}).get('language') or 'az',source_route=row['route'],tenant=tenant,dialog=chosen,media_results=row.get('media_results') or [],extraction_status=row.get('status'),source_refs=row.get('source_refs'),include_media_content=True) for r in cur.fetchall()]
     return {'request':public_request(row),'candidates':cards}
 
 
@@ -379,7 +396,7 @@ def detail(profile,candidate_id):
             if not row: raise TenantLinearError('Карточка не найдена.',404)
             run=extraction_row(cur,tenant,row['extraction_id']);items=evidence(cur,profile,run)
             chosen=route(cur,profile,run['route'])[3]
-            value=public_card(cur,row,run.get('route',{}).get('language') or 'az',run['route'],tenant,chosen,run.get('media_results') or [],run.get('status'))
+            value=public_card(cur,row,run.get('route',{}).get('language') or 'az',run['route'],tenant,chosen,run.get('media_results') or [],run.get('status'),run.get('source_refs'),include_media_content=True)
             value['boundary_summary']=boundary_summary(cur,tenant,run['route'],chosen,value)
     return {'candidate':value,'evidence':items,'route':run['route']}
 
@@ -529,7 +546,7 @@ def listing(profile,data):
                     runs[extraction_id]=extraction_row(cur,tenant,extraction_id)
                     runs[extraction_id]['_chosen']=route(cur,profile,runs[extraction_id]['route'])[3]
                 source_route=runs[extraction_id].get('route',{})
-                cards.append(public_card(cur,row,source_route.get('language') or 'az',source_route,tenant,runs[extraction_id]['_chosen'],runs[extraction_id].get('media_results') or [],runs[extraction_id].get('status')))
+                cards.append(public_card(cur,row,source_route.get('language') or 'az',source_route,tenant,runs[extraction_id]['_chosen'],runs[extraction_id].get('media_results') or [],runs[extraction_id].get('status'),runs[extraction_id].get('source_refs')))
     return {'candidates':cards,'limit':limit,'next_before':str(values[limit-1]['id']) if len(values)>limit else None}
 
 
@@ -715,3 +732,69 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                 return {'candidate':public_card(cur,cur.fetchone())}
         conn.commit()
     return detail(profile,candidate_id)
+
+
+def case_media_coverage(cur,tenant,run,chosen,content,*,include_content=False):
+    """Reuse verified case endpoints; never substitute an extraction or history.
+
+    The normal caller already holds route authority. Reads only metadata/text
+    for the exact bounded interval; no media bytes, remote downloads or writes.
+    """
+    from tenant_knowledge_media_coverage import project
+    from tenant_media_evidence import annotate_rows,media_version,source_hash
+    execution=run.get('status')
+    def uncertain(reason):
+        result=project(None,[],execution)
+        result['media_coverage'].update(scope='case_interval',boundary_status='uncertain',reason=reason)
+        return result
+    start=content.get('start_message_id');end=content.get('end_message_id')
+    if not start or not end:return uncertain('case_boundaries_missing')
+    try:
+        anchors,count,_=_boundary_context(cur,tenant,run['route'],chosen,start,end,[])
+    except TenantLinearError:return uncertain('case_boundaries_unavailable')
+    if count>MAX_MESSAGES:return uncertain('case_boundary_context_limit')
+    channel=str(run['route']['channel_id'])
+    cur.execute("""SELECT id::text AS id,external_id,body,raw,message_type,channel,
+        COALESCE(happened_at,created_at) AS at
+      FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
+        AND (COALESCE(happened_at,created_at),id)>=(%s::timestamptz,%s::uuid)
+        AND (COALESCE(happened_at,created_at),id)<=(%s::timestamptz,%s::uuid)
+      ORDER BY COALESCE(happened_at,created_at),id LIMIT %s""",
+      (tenant,int(chosen['lead_id']),'connect:'+channel,anchors[start]['at'],start,anchors[end]['at'],end,MAX_MESSAGES))
+    messages=cur.fetchall()
+    refs=[];receipts=[]
+    original={str(r.get('id')):r for r in run.get('source_refs') or []}
+    saved={str(r.get('id')):r for r in run.get('media_results') or []}
+    messages=[r for r in messages if r['message_type']!='text' or original.get(str(r['id']),{}).get('media_kind')]
+    annotate_rows(cur,tenant,messages)
+    for message in messages:
+        key=str(message['id'])
+        ref={'id':key,'channel_id':channel,'external_id':message['external_id'],
+          'body_hash':digest(str(message.get('body') or '')),'media_kind':original.get(key,{}).get('media_kind') if message['message_type']=='text' else message['message_type'],
+          'media_version':media_version(message.get('raw'))}
+        refs.append(ref)
+        previous=original.get(key)
+        if message['message_type']=='text':
+            receipts.append({'id':key,'status':'unknown','code':'source_version_unverified'});continue
+        if previous and key in saved and source_hash(previous)==source_hash(ref):
+            receipts.append(saved[key])
+        elif message.get('media_evidence'):
+            evidence=message['media_evidence']
+            receipt={**evidence,'id':key,'channel_id':channel,'reused':True}
+            if include_content and message.get('media_evidence_context'):receipt['observation']=message['media_evidence_context']
+            receipts.append(receipt)
+        elif key in saved:
+            receipts.append({'id':key,'status':'unknown','code':'source_version_unverified'})
+    result=project(refs,receipts,execution,include_content=include_content)
+    if include_content:
+        names=[chosen.get('contact_name'),chosen.get('phone')]
+        for message in messages:
+            raw=message.get('raw') if isinstance(message.get('raw'),dict) else {}
+            names.extend(raw.get(k) for k in ('participantName','pushName','senderName','contactName'))
+        for receipt in result['media_results']:
+            payload=receipt.get('result') or {}
+            for key in ('observation','transcript'):
+                if key in payload:payload[key]=redact(payload[key],names)
+            for observation in payload.get('observations',[]):observation['text']=redact(observation['text'],names)
+    result['media_coverage'].update(scope='case_interval',boundary_status='verified')
+    return result

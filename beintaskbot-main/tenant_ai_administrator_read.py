@@ -342,6 +342,10 @@ def read(cur,cfg,name,args):
     columns=fields.split()+(content.split() if args.get('include_content') else [])
     # `raw` is fetched only for the existing bounded messages projection and
     # removed before sanitisation/return. It is never a caller-selectable field.
+    if name=='cases_read' and 'content' not in columns:columns.append('content')
+    if name=='case_evidence_read':
+        # Internal projection for metadata coverage; strip before returning.
+        columns.extend(k for k in ('source_refs','media_results') if k not in columns)
     if name=='messages_read':
         # Body is needed locally for the exact version fence even when the
         # caller has not requested content; it is removed before return.
@@ -369,6 +373,25 @@ def read(cur,cfg,name,args):
     rows=[]
     for row in cur.fetchall():
         item=row['item']
+        if name=='cases_read':
+            import tenant_knowledge_candidates_store as cases
+            profile={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg.get('actor_id')}
+            try:
+                run=cases.extraction_row(cur,profile['tenant_id'],item['extraction_id'])
+                chosen=cases.route(cur,profile,run['route'])[3]
+                coverage=cases.case_media_coverage(cur,profile['tenant_id'],run,chosen,item.get('content') or {},include_content=args.get('include_content') is True)
+            except TenantLinearError:
+                from tenant_knowledge_media_coverage import project
+                coverage=project(None,[],None)
+                coverage['media_coverage'].update(scope='case_interval',boundary_status='uncertain',reason='case_route_unavailable')
+            item.update(media_processing=coverage['media_results'],media_coverage=coverage['media_coverage'],media_analysis_status=coverage['status'])
+            if not args.get('include_content'):item.pop('content',None)
+        if name=='case_evidence_read':
+            from tenant_knowledge_media_coverage import project
+            refs=item.get('source_refs');receipts=item.pop('media_results',None)
+            item.update(project(refs,receipts,item.get('status'),include_content=args.get('include_content') is True))
+            item['media_coverage']['scope']='extraction_fragment'
+            if not args.get('include_content'):item.pop('source_refs',None)
         if name=='messages_read':
             # The existing messages read scope may expose only a receipt's
             # status.  Its redacted evidence text follows the same explicit

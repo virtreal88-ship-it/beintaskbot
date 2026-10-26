@@ -154,9 +154,10 @@ def process(profile,batch_id):
             if not admitted:return
             result=analyze(profile,payload);request=result['request']
             extraction=request['id'];count=request['message_count'];status=request['status']
-            success=success or status=='completed'
-            if status!='completed': errors=True;code=request['error_code'] or 'analysis_unavailable'
-            elif request.get('next_before'):
+            success=success or status in {'completed','partial'}
+            if status=='partial':errors=True;code='media_incomplete'
+            elif status!='completed': errors=True;code=request['error_code'] or 'analysis_unavailable'
+            if status in {'completed','partial'} and request.get('next_before'):
                 cursor=request['next_before']
                 if cursor==route.get('before'): code='cursor_no_progress';errors=True
                 else: queue.append({**route,'before':cursor})
