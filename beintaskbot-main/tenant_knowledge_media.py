@@ -120,6 +120,7 @@ def collect(profile,item,check_before_ai=None):
         if len(results)>MAX_FILES or time.monotonic()>deadline: continue
         if kind not in {'image','audio','voice','video','document'}:
             receipt.update(status='unsupported',code='unsupported_format');continue
+        stage='source_validation'
         try:
             # Re-check employee access to the exact historical source, never current channel substitution.
             current=load(profile,ref['lead_id'],ref['external_id'])
@@ -135,10 +136,12 @@ def collect(profile,item,check_before_ai=None):
                 from tenant_chat_ai_provider import transcribe
                 model=transcription_model(item)
                 if not model: raise LookupError('asr_model_unavailable')
+                stage='media_download'
                 data,mime=asyncio.run(asyncio.wait_for(download_media(current,max_bytes=min(MAX_AUDIO_BYTES,MAX_BYTES-size)),timeout=10))
                 size+=len(data)
                 validate_media_size(kind,len(data))
                 if size>MAX_BYTES: receipt.update(status='unavailable',code='byte_budget');continue
+                stage='media_validation'
                 media=validate_audio(data,FORMATS[mime],mime,max_seconds=60)
                 # Extraction is already durably reserved and is never replayed automatically.
                 if load(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
@@ -158,8 +161,10 @@ def collect(profile,item,check_before_ai=None):
             cap=media_byte_limit(kind) if kind=='video' else MAX_BYTES-size
             if cap<=0:
                 receipt.update(status='unavailable',code='byte_budget');continue
+            stage='media_download'
             data,mime=asyncio.run(asyncio.wait_for(download_media(current,max_bytes=cap),timeout=min(10,max(.1,deadline-time.monotonic()))))
             if load(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
+            stage='media_validation'
             validate_media_size(kind,len(data))
             if kind=='video': video_used=True
             else:
@@ -188,6 +193,7 @@ def collect(profile,item,check_before_ai=None):
                     visuals=pdf_pages(data)
             elif kind=='video':
                 if not consent: receipt.update(status='unavailable',code='external_media_permission_required');continue
+                stage='video_decode'
                 visuals=video_frames(data,mime)
                 receipt['audio_status']='not_requested'
                 if item['route'].get('allow_paid_asr') and not asr_used:
@@ -195,6 +201,7 @@ def collect(profile,item,check_before_ai=None):
                         from tenant_connect_voice import transcription_model
                         from tenant_chat_ai_provider import transcribe
                         from tenant_knowledge_candidates_service import check_active
+                        stage='audio_transcription'
                         track=video_audio(data,mime);model=transcription_model(item)
                         if not model: raise LookupError('asr_model_unavailable')
                         if load(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
@@ -217,6 +224,7 @@ def collect(profile,item,check_before_ai=None):
             if not visuals: raise ValueError('empty_visuals')
             visual_count+=len(visuals)
             if item['route'].get('allow_vision') is True:
+                stage='visual_analysis'
                 from tenant_knowledge_media_cache import observe_once
                 from tenant_chat_ai_provider import generate
                 for content,content_type,origin in visuals:
@@ -226,19 +234,20 @@ def collect(profile,item,check_before_ai=None):
                     receipt.setdefault('observations',[]).append({'origin':origin,'text':text})
                 receipt.update(status='partial' if kind=='video' else 'processed',code='vision_observation',visuals=[origin for _,_,origin in visuals])
                 continue
+            stage='visual_input_prepare'
             for content,content_type,origin in visuals:
                 images.append({'content':content,'content_type':content_type,'detail':'low','source_ref':message['ref']})
             receipt.update(status='pending_processing',code='awaiting_model',visuals=[origin for _,_,origin in visuals])
             message['text']+='\n[Visual inputs supplied: '+message['ref']+']'
         except LiveExtractionDisabled: raise
-        except LookupError as error: receipt.update(status='unsupported',code=str(error))
+        except LookupError as error: receipt.update(status='unsupported',code=str(error),failure_stage=stage)
         except TenantLinearError as error:
             code='video_size_limit' if kind=='video' and error.status==413 else 'media_size_limit' if error.status==413 else 'media_unavailable'
-            receipt.update(status='unavailable' if error.status in {403,404,410,413} else 'unsupported' if error.status==415 else 'error',code=code)
+            receipt.update(status='unavailable' if error.status in {403,404,410,413} else 'unsupported' if error.status==415 else 'error',code=code,failure_stage=stage)
         except ValueError as error:
             code=str(error)
-            receipt.update(status='unsupported' if code in {'video_size_limit','video_duration_limit'} else 'error',code=code if code in {'video_size_limit','video_duration_limit'} else 'media_processing_failed')
-        except Exception: receipt.update(status='error',code='media_processing_failed')
+            receipt.update(status='unsupported' if code in {'video_size_limit','video_duration_limit'} else 'error',code=code if code in {'video_size_limit','video_duration_limit'} else 'media_processing_failed',failure_stage=stage)
+        except Exception: receipt.update(status='error',code='media_processing_failed',failure_stage=stage)
     for receipt in results:
         message=next(m for r,m in zip(item['refs'],item['messages']) if r['id']==receipt['id'])
         message['text']+='\n[Attachment status: '+receipt['status']+'; '+receipt['code']+'. Never infer unread contents.]'
