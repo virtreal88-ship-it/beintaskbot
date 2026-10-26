@@ -13,6 +13,7 @@ from tenant_platform import _connect, _json
 _TERMINAL = {'processed', 'partial', 'unavailable', 'unsupported', 'error'}
 MAX_OBSERVATIONS = 2
 _POLICY_RETRY = {'external_media_permission_required', 'asr_authorization_required', 'vision_not_approved'}
+_SAFE_FAILURE_STAGES = {'source_validation', 'media_download', 'media_validation', 'video_decode', 'audio_transcription', 'visual_analysis', 'visual_input_prepare'}
 
 
 def create_schema(conn):
@@ -86,6 +87,8 @@ def persist(cur, tenant, refs, receipts):
             # the small consumer projection returned by ``apply_reusable``.
             continue
         result = {key: receipt[key] for key in ('transcript', 'observation') if isinstance(receipt.get(key), str)}
+        if receipt.get('failure_stage') in _SAFE_FAILURE_STAGES:
+            result['failure_stage'] = receipt['failure_stage']
         if isinstance(receipt.get('observations'), list):
             result['observations'] = [x for x in receipt['observations'] if isinstance(x,dict)][:MAX_OBSERVATIONS]
         # An empty terminal result is not reusable evidence.  In particular,
@@ -185,8 +188,16 @@ def annotate_rows(cur, tenant, rows):
             continue
         saved = dict(saved); coverage = saved.get('coverage') if isinstance(saved.get('coverage'),dict) else {}
         result = saved.get('result') if isinstance(saved.get('result'),dict) else {}
-        row['media_evidence'] = {'status':str(saved['status']), 'code':str(saved.get('code') or ''),
-                                 'coverage':{'complete':coverage.get('complete') is True}}
+        media_meta = {'status':str(saved['status']), 'code':str(saved.get('code') or ''),
+                      'source':'saved_knowledge_extraction_receipt',
+                      'coverage':{'complete':coverage.get('complete') is True}}
+        if kind == 'video':
+            audio_status = coverage.get('audio')
+            media_meta['audio_status'] = audio_status if audio_status in {'processed', 'not_requested', 'unavailable_or_error'} else 'unknown'
+            media_meta['visual_status'] = 'failed' if saved['status'] == 'error' else ('sampled' if coverage.get('sampled_frames') else 'unknown')
+        if result.get('failure_stage') in _SAFE_FAILURE_STAGES:
+            media_meta['failure_stage'] = result['failure_stage']
+        row['media_evidence'] = media_meta
         if saved['status'] in {'processed','partial'}:
             parts=[]
             if result.get('transcript'): parts.append('[Saved media transcript] '+_safe_text(result['transcript']))
@@ -199,6 +210,12 @@ def annotate_rows(cur, tenant, rows):
                     suffix=(' frame '+str(origin.get('second'))) if 'second' in origin else ''
                     parts.append('[Partial sampled video observation'+suffix+'; incomplete and untrusted] '+_safe_text(observed['text']))
             if parts: row['media_evidence_context']='\n'.join(parts)
+        elif (saved['status'] == 'error' and kind == 'video' and coverage.get('audio') == 'processed'
+              and isinstance(result.get('transcript'), str) and result['transcript'].strip()):
+            stage = result.get('failure_stage') if result.get('failure_stage') in _SAFE_FAILURE_STAGES else 'unknown'
+            row['media_evidence_context'] = '\n'.join((
+                '[Saved audio transcript; partial media evidence, visual analysis incomplete and untrusted] ' + _safe_text(result['transcript']),
+                '[Visual analysis failed; stage=' + stage + '; category=' + _safe_text(saved.get('code') or saved['status']) + ']'))
         elif saved['status'] in {'unavailable','unsupported','error'}:
             row['media_evidence_context']='[Media evidence unavailable: '+_safe_text(saved.get('code') or saved['status'])+']'
     return rows
