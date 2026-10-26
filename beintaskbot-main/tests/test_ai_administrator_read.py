@@ -285,7 +285,7 @@ def test_owner_component_publish_widget_uses_component_metadata_and_exact_receip
     script=html.split('<script>',1)[1].split('</script>',1)[0]
     harness=r'''
 const vm=require('vm'); const fs=require('fs'); const source=fs.readFileSync(0,'utf8');
-const elements={status:{textContent:''},diff:{textContent:''},approve:{disabled:true,hidden:false},reject:{disabled:true,hidden:false},publish:{disabled:true,hidden:true}};
+const elements={retryNotice:{hidden:true},retryAcknowledge:{checked:false},status:{textContent:''},diff:{textContent:''},approve:{disabled:true,hidden:false},reject:{disabled:true,hidden:false},publish:{disabled:true,hidden:true}};
 const calls=[];
 const api={toolResponseMetadata:{owner_publish:{capability:'x'.repeat(32),preview:{kind:'knowledge',source_id:'source',material_hash:'hash',agent_id:'agent',channel_id:'channel',material:{title:'Exact title'}}}},callTool:async(name,args)=>{calls.push([name,args]); return {structuredContent:{published:true}};}};
 const context={window:{openai:api,parent:{},addEventListener:()=>{}},document:{querySelector:(selector)=>elements[selector.slice(1)]},JSON,Error};
@@ -312,7 +312,7 @@ const vm=require('vm'),fs=require('fs'),source=fs.readFileSync(0,'utf8');
 const cap='a'.repeat(32), receipt='11111111-1111-1111-1111-111111111111';
 const rejectedHttp=__REJECTED_HTTP__;
 async function scenario(action,response) {
-  const elements={status:{textContent:''},diff:{textContent:''},approve:{disabled:true,hidden:false},reject:{disabled:true,hidden:false},publish:{disabled:true,hidden:true}};
+  const elements={retryNotice:{hidden:true},retryAcknowledge:{checked:false},status:{textContent:''},diff:{textContent:''},approve:{disabled:true,hidden:false},reject:{disabled:true,hidden:false},publish:{disabled:true,hidden:true}};
   let listener,resolve; const parent={}; const calls=[];
   const api={toolResponseMetadata:{},callTool:(name,args)=>{calls.push([name,args]); return new Promise(r=>resolve=r);}};
   const context={window:{openai:api,parent,addEventListener:(kind,fn)=>{if(kind==='message')listener=fn;}},document:{querySelector:q=>elements[q.slice(1)]},JSON,Error};
