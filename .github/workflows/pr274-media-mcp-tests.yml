@@ -64,6 +64,7 @@ jobs:
           tests/test_media_evidence.py
           tests/test_media_evidence_pglite.py
           tests/test_knowledge_media.py
+          tests/test_media_dispatch.py
           tests/test_ai_learning_mcp.py
           tests/test_ai_training_policy.py
           tests/test_administrator_publication.py

@@ -240,17 +240,32 @@ def collect(profile,item,check_before_ai=None):
             receipt.update(status='pending_processing',code='awaiting_model',visuals=[origin for _,_,origin in visuals])
             message['text']+='\n[Visual inputs supplied: '+message['ref']+']'
         except LiveExtractionDisabled: raise
-        except LookupError as error: receipt.update(status='unsupported',code=str(error),failure_stage=stage)
+        except LookupError as error:
+            _failure_detail(receipt,error)
+            code=str(error) if str(error) in {'video_decoder_unavailable','pdf_renderer_unavailable','video_audio_unavailable','asr_model_unavailable'} else 'media_processing_failed'
+            receipt.update(status='unknown' if getattr(error,'media_outcome_unknown',False) else 'unsupported',code='media_result_unknown' if getattr(error,'media_outcome_unknown',False) else code,failure_stage=stage)
         except TenantLinearError as error:
+            _failure_detail(receipt,error)
             if getattr(error,'media_outcome_unknown',False):
                 receipt.update(status='unknown',code='media_result_unknown',failure_stage=stage);continue
             code='video_size_limit' if kind=='video' and error.status==413 else 'media_size_limit' if error.status==413 else 'media_unavailable'
             receipt.update(status='unavailable' if error.status in {403,404,410,413} else 'unsupported' if error.status==415 else 'error',code=code,failure_stage=stage)
         except ValueError as error:
+            _failure_detail(receipt,error)
+            if getattr(error,'media_outcome_unknown',False):
+                receipt.update(status='unknown',code='media_result_unknown',failure_stage=stage);continue
             code=str(error)
             receipt.update(status='unsupported' if code in {'video_size_limit','video_duration_limit'} else 'error',code=code if code in {'video_size_limit','video_duration_limit'} else 'media_processing_failed',failure_stage=stage)
-        except Exception as error: receipt.update(status='unknown' if getattr(error,'media_outcome_unknown',False) else 'error',code='media_result_unknown' if getattr(error,'media_outcome_unknown',False) else 'media_processing_failed',failure_stage=stage)
+        except Exception as error:
+            _failure_detail(receipt,error)
+            receipt.update(status='unknown' if getattr(error,'media_outcome_unknown',False) else 'error',code='media_result_unknown' if getattr(error,'media_outcome_unknown',False) else 'media_processing_failed',failure_stage=stage)
     for receipt in results:
         message=next(m for r,m in zip(item['refs'],item['messages']) if r['id']==receipt['id'])
         message['text']+='\n[Attachment status: '+receipt['status']+'; '+receipt['code']+'. Never infer unread contents.]'
     return images,results
+
+
+def _failure_detail(receipt,error):
+    from tenant_chat_ai_provider import is_safe_failure_code
+    code=getattr(error,'media_failure_code',None)
+    receipt['failure_code']=code if is_safe_failure_code(code) else 'media_processing_failed'
