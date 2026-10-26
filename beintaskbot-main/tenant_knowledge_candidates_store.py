@@ -59,6 +59,7 @@ def route(cur,profile,data):
     for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
         if flag in data: binding[flag]=data[flag]
     if data.get('retry_of'):binding['retry_of']=identifier(data['retry_of'])
+    if data.get('photo_model'):binding['photo_model']=data['photo_model']
     if start: binding.update(period_start=start,period_end=end)
     return tenant,actor,policy,chosen,binding,ticket
 
