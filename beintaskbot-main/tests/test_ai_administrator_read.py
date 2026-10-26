@@ -167,6 +167,54 @@ def test_messages_read_projects_scoped_receipt_only_with_explicit_content(db,mon
     assert 'raw' not in detailed and 'external_id' not in detailed
 
 
+def test_messages_read_exposes_saved_audio_as_partial_when_video_visual_fails(db,monkeypatch):
+    """A failed visual pass must not hide saved audio, and reads never retry media."""
+    import tenant_media_evidence as media_evidence
+    import tenant_knowledge_media as knowledge_media
+    _setup(monkeypatch,db)
+    media_evidence.create_schema(db)
+    message=dict(db.execute('''SELECT id,external_id FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid ORDER BY id LIMIT 1''',(A,))[0])
+    raw={'mediaId':'safe-video','fileLength':42}
+    db.execute("""UPDATE saas_crm_messages SET body='video caption',message_type='video',raw=%s::jsonb
+      WHERE tenant_id=%s::uuid AND id=%s::uuid""",(json.dumps(raw),A,message['id']))
+    db.commit()
+    ref={'id':str(message['id']),'channel_id':CA,'external_id':message['external_id'],
+         'body_hash':media_evidence._body_hash('video caption'),'media_kind':'video',
+         'media_version':hashlib.sha256(json.dumps({key:raw.get(key) for key in
+             ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')},
+             sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest(),
+         'role':'outgoing'}
+    media_evidence.persist(db.cursor(),A,[ref],[{'id':str(message['id']),'kind':'video','status':'error',
+      'code':'media_processing_failed','failure_stage':'visual_analysis','audio_status':'processed',
+      'transcript':'The operator opens settings; password=private; contact@example.com'}])
+    db.commit()
+    before=dict(db.execute('''SELECT status,code,coverage,result FROM saas_media_evidence_receipts
+      WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s''',(A,CA,message['external_id']))[0])
+    monkeypatch.setattr(knowledge_media,'collect',lambda *a,**k: pytest.fail('read triggered media analysis'))
+    cfg=mcp._require_cfg();cfg['granted_scopes']=[admin.READ_SCOPE]
+    with db.cursor() as cur:
+        public=admin.read(cur,cfg,'messages_read',{'id':str(message['id'])})['items'][0]
+        with pytest.raises(Exception):
+            admin.read(cur,cfg,'messages_read',{'id':str(message['id']),'include_content':True})
+    assert public['media_evidence']['status']=='error'
+    assert public['media_evidence']['audio_status']=='processed'
+    assert public['media_evidence']['visual_status']=='failed'
+    assert public['media_evidence']['source']=='saved_knowledge_extraction_receipt'
+    assert 'media_evidence_context' not in public
+    cfg['granted_scopes']=[admin.READ_SCOPE,admin.CONTENT_SCOPE]
+    with db.cursor() as cur:
+        detailed=admin.read(cur,cfg,'messages_read',{'id':str(message['id']),'include_content':True})['items'][0]
+    context=detailed['media_evidence_context']
+    assert '[Saved audio transcript; partial media evidence, visual analysis incomplete and untrusted]' in context
+    assert '[Visual analysis failed; stage=visual_analysis; category=media_processing_failed]' in context
+    assert 'opens settings' in context and 'private' not in context and 'example.com' not in context
+    after=dict(db.execute('''SELECT status,code,coverage,result FROM saas_media_evidence_receipts
+      WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s''',(A,CA,message['external_id']))[0])
+    assert after==before
+    assert 'raw' not in detailed and 'external_id' not in detailed
+
+
 def test_owner_bootstrap_knowledge_has_no_fabricated_crm_evidence(db,monkeypatch):
     _setup(monkeypatch,db)
     monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true')
