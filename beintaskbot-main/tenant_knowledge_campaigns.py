@@ -135,27 +135,48 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
     unknown=cur.fetchall()
     if not unknown:
         return False
+    def scoped_id(value):
+        try:
+            return str(uuid.UUID(value)) if isinstance(value,str) else None
+        except ValueError:
+            return None
+
     ids=route.get('message_ids')
+    channel=scoped_id(route.get('channel_id'))
+    version=route.get('source_version')
     if ((campaign.get('progress') or {}).get('mode') not in {'single_message','case_media'}
-        or not isinstance(ids,list) or len(ids)!=1 or not route.get('source_version')):
+        or not isinstance(ids,list) or len(ids)!=1 or not scoped_id(ids[0]) or not channel
+        or not isinstance(version,str) or len(version)!=64 or any(c not in '0123456789abcdef' for c in version.lower())):
         return True
+    selected=(channel,scoped_id(ids[0]))
     for old in unknown:
         old_route=old['route'] or {}
         old_ids=old_route.get('message_ids')
-        if isinstance(old_ids,list) and old_ids:
-            if old_route.get('channel_id')!=route.get('channel_id'):
-                continue
-            if ids[0] in old_ids:
-                return True  # Same attachment, including a changed media version.
-            continue
+        identities=set()
+        if old_ids is not None:
+            if not isinstance(old_ids,list) or not old_ids or any(not scoped_id(value) for value in old_ids):
+                return True
+            if selected[1] in {scoped_id(value) for value in old_ids}:
+                return True
+            old_channel=scoped_id(old_route.get('channel_id'))
+            if old_channel:
+                identities.update((old_channel,scoped_id(value)) for value in old_ids)
         refs=old['source_refs']
-        if not isinstance(refs,list) or not refs:
-            return True  # A legacy/unresolved source cannot prove disjointness.
-        for ref in refs:
-            if not isinstance(ref,dict) or not ref.get('id') or not ref.get('channel_id'):
+        if refs is not None:
+            if not isinstance(refs,list) or not refs:
                 return True
-            if str(ref['id'])==str(ids[0]) and str(ref['channel_id'])==str(route.get('channel_id')):
-                return True
+            for ref in refs:
+                if not isinstance(ref,dict):
+                    return True
+                ref_id=scoped_id(ref.get('id'))
+                ref_channel=scoped_id(ref.get('channel_id'))
+                if not ref_id or not ref_channel:
+                    return True
+                if ref_id==selected[1]:
+                    return True
+                identities.add((ref_channel,ref_id))
+        if not identities or selected in identities:
+            return True  # Same attachment/version replacement or unresolved source.
     return False
 
 

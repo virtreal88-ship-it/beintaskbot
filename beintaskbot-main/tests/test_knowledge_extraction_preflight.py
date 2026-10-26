@@ -133,6 +133,40 @@ def test_unidentified_unknown_keeps_global_hold(db,monkeypatch):
     assert db.execute("SELECT status FROM saas_knowledge_campaign_fragments WHERE id=%s::uuid",(old,))[0]['status']=='unknown'
 
 
+@pytest.mark.parametrize('kind,claimable',[
+    ('missing_channel_overlap',False),('missing_channel_ref_overlap',False),
+    ('missing_channel_route_overlap',False),
+    ('missing_channel_disjoint',True),('malformed_ids',False)])
+def test_legacy_unknown_needs_complete_source_identity(db,monkeypatch,kind,claimable):
+    seed_job(db);_pricing(monkeypatch);cfg=_cfg();_bridge(monkeypatch,cfg)
+    monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    consent.ensure_schema(db);photo=_source(db);other=_source(db)
+    prepared=consent.prepare(db.cursor(),cfg,{'message_id':photo,'channel_id':CA,'lead_id':41})
+    meta=prepared['_component_meta']['owner_single_extraction'];db.commit()
+    result=consent.complete(db.cursor(),cfg,consent_id=meta['consent_ids']['approve'],capability=meta['capabilities']['approve'],action='approve');db.commit()
+    old=str(uuid.uuid4());event='unknown-'+old
+    ref_id=other if kind in {'missing_channel_disjoint','missing_channel_route_overlap','malformed_ids'} else photo
+    route_id=photo if kind=='missing_channel_route_overlap' else other if kind=='missing_channel_ref_overlap' else ref_id
+    old_route={'message_ids':[42] if kind=='malformed_ids' else [route_id],
+      'source_version':'older-version'}
+    if kind=='malformed_ids':old_route['channel_id']=CA
+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider) VALUES(%s::uuid,%s,'connect')",(A,event))
+    db.execute("""INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,'fixture-model','unknown')""",(A,old,AGENT,event))
+    db.execute("""INSERT INTO saas_knowledge_extractions
+      (tenant_id,id,created_by,route,source_refs,source_digest,fingerprint,request_key,status,deadline)
+      VALUES(%s::uuid,%s::uuid,11,%s::jsonb,%s::jsonb,'old',%s,%s,'unknown',now())""",
+      (A,old,json.dumps(old_route),json.dumps([{'id':ref_id,'channel_id':CA}]),old,event))
+    db.execute("""INSERT INTO saas_knowledge_campaign_fragments
+      (tenant_id,campaign_id,id,source_key,route,status)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::jsonb,'unknown')""",
+      (A,result['campaign_id'],old,event,json.dumps(old_route)))
+    db.commit()
+    claimed=campaigns.claim(A,result['campaign_id'])
+    assert bool(claimed) is claimable
+    assert db.execute("SELECT status FROM saas_knowledge_campaign_fragments WHERE id=%s::uuid",(old,))[0]['status']=='unknown'
+
+
 def test_consent_reject_stale_foreign_and_media_change_fail_closed(db,monkeypatch):
     seed_job(db);_pricing(monkeypatch);cfg=_cfg();_bridge(monkeypatch,cfg);message=_source(db);consent.ensure_schema(db)
     with pytest.raises(TenantLinearError,match='OAuth channel'):
