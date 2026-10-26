@@ -196,14 +196,21 @@ def test_ordinary_campaign_never_uses_single_message_dispatch_fence(db,monkeypat
     import tenant_knowledge_quality as quality
     seed_job(db);campaign_schema.create_schema(db)
     campaign=str(uuid.uuid4())
-    db.execute("""INSERT INTO saas_knowledge_campaigns(tenant_id,id,created_by,sources,analysis_agent_id,status,approved_at,max_calls,max_tokens,progress)
-      VALUES(%s::uuid,%s::uuid,11,%s::jsonb,%s::uuid,'running',now(),1,16000,'{}'::jsonb)""",(A,campaign,json.dumps([CA]),AGENT));db.commit()
-    monkeypatch.setattr(worker,'_connect',lambda:db);monkeypatch.setattr(worker,'reconcile',lambda *_:None)
+    policy={'allow_external_media':False,'allow_paid_asr':False,'max_main_calls':1,'max_asr_calls':0,'max_vision_calls':0}
+    fragment=str(uuid.uuid4());route={'provider':'connect','channel_id':CA,'conversation_id':'client','history_mode':'channel','approved_channel_ids':[CA]}
+    db.execute("""INSERT INTO saas_knowledge_campaigns(tenant_id,id,created_by,sources,analysis_agent_id,status,approved_at,max_calls,max_tokens,media_policy,progress)
+      VALUES(%s::uuid,%s::uuid,11,%s::jsonb,%s::uuid,'running',now(),1,16000,%s::jsonb,'{}'::jsonb)""",(A,campaign,json.dumps([CA]),AGENT,json.dumps(policy)))
+    db.execute("""INSERT INTO saas_knowledge_campaign_fragments(tenant_id,campaign_id,id,source_key,route)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,'ordinary',%s::jsonb)""",(A,campaign,fragment,json.dumps(route)));db.commit()
+    monkeypatch.setattr(worker,'_connect',lambda:db);monkeypatch.setattr(campaigns,'_connect',lambda:db);monkeypatch.setattr(worker,'reconcile',lambda *_:None)
     monkeypatch.setattr(worker.discovery,'discover',lambda *_:None);monkeypatch.setattr(quality,'tick',lambda *_:False)
-    monkeypatch.setattr(worker.queue,'claim',lambda *_:None)
     import tenant_ai_single_message_extraction as single
     monkeypatch.setattr(single,'dispatch_fence',lambda *_:(_ for _ in ()).throw(AssertionError('ordinary campaign must not use single consent')))
-    assert worker.tick() is False
+    dispatched=[];completed=[]
+    monkeypatch.setattr(worker,'analyze',lambda profile,data: dispatched.append(data) or {'request':{'id':data['request_id'],'status':'completed','media_results':[]}})
+    monkeypatch.setattr(campaigns,'complete',lambda claimed,result: completed.append((claimed,result)) or True)
+    assert worker.tick() is True
+    assert len(dispatched)==1 and dispatched[0]['request_id']==fragment and len(completed)==1
 
 
 def test_disabled_company_asr_is_explicitly_not_ready(db,monkeypatch):
