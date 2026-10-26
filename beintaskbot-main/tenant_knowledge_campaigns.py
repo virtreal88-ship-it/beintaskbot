@@ -212,9 +212,17 @@ def complete(claimed, response):
               (state,request['id'],_json({'message_count':request.get('message_count'),'media_results':media}),
                code,tenant,claimed['id'],claimed['lease_token']))
             if not cur.fetchone():return False
+            cur.execute('SELECT progress FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,claimed['campaign_id']))
+            campaign=cur.fetchone()
+            single_message=isinstance((campaign or {}).get('progress'),dict) and campaign['progress'].get('mode')=='single_message'
+            if single_message:
+                # One exact owner consent must never grow into discovery,
+                # follow-up pages or quality work.  Terminal result remains
+                # stored on the fragment; the campaign itself is closed.
+                cur.execute("UPDATE saas_knowledge_campaigns SET status='stopped',version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,claimed['campaign_id']))
             # Completed text can advance while unavailable attachments remain a
             # durable partial fragment for an explicit, budgeted later retry.
-            if request.get('next_before') and state in {'completed','partial'}:
+            if not single_message and request.get('next_before') and state in {'completed','partial'}:
                 cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,claimed['campaign_id']))
                 campaign=cur.fetchone()
                 route={**claimed['route'],'before':identifier(request['next_before'])}

@@ -30,13 +30,18 @@ def ensure_schema(conn):
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_single_message_extraction_consents(
           id UUID PRIMARY KEY,tenant_id UUID NOT NULL,owner_id BIGINT NOT NULL,oauth_connection_id UUID NOT NULL,
           message_id UUID NOT NULL,channel_id UUID NOT NULL,lead_id BIGINT NOT NULL,conversation_id TEXT NOT NULL,
-          source_version TEXT NOT NULL,agent_id UUID NOT NULL,media_policy JSONB NOT NULL,
+          source_version TEXT NOT NULL,message_kind TEXT NOT NULL,body_hash TEXT NOT NULL,external_id TEXT NOT NULL,
+          agent_id UUID NOT NULL,model_id TEXT NOT NULL,config_hash TEXT NOT NULL,media_policy JSONB NOT NULL,
           capability_hash TEXT NOT NULL UNIQUE,action TEXT NOT NULL CHECK(action IN ('approve','reject')),
           state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','rejected','revoked','expired')),
           expires_at TIMESTAMPTZ NOT NULL,consumed_at TIMESTAMPTZ NULL,
           campaign_id UUID NULL,fragment_id UUID NULL,route JSONB NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
         cur.execute('CREATE INDEX IF NOT EXISTS saas_ai_single_message_consent_live_idx ON saas_ai_single_message_extraction_consents(tenant_id,owner_id,expires_at) WHERE state=\'pending\'')
+        for column,definition in (('message_kind',"TEXT NOT NULL DEFAULT ''"),('body_hash',"TEXT NOT NULL DEFAULT ''"),
+                                  ('external_id',"TEXT NOT NULL DEFAULT ''"),('model_id',"TEXT NOT NULL DEFAULT ''"),
+                                  ('config_hash',"TEXT NOT NULL DEFAULT ''")):
+            cur.execute('ALTER TABLE saas_ai_single_message_extraction_consents ADD COLUMN IF NOT EXISTS '+column+' '+definition)
 
 
 def _parse_args(data):
@@ -61,7 +66,7 @@ def prepare(cur,cfg,data):
     if not enabled_for_manual_bridge():
         raise TenantLinearError('Owner component approval is not enabled.',403)
     data=_parse_args(data);source=preflight._source(cur,cfg,data)
-    model,_,ready,reason=preflight._model(cur,cfg)
+    model,credential_source,ready,reason=preflight._model(cur,cfg)
     if not ready: raise TenantLinearError('Extraction configuration is unavailable: '+reason,409)
     tenant,owner,connection=_connection_profile(cur,cfg,required_scopes=(DRAFT_SCOPE,))
     policy=preflight.policy_for(source['kind'])
@@ -69,6 +74,8 @@ def prepare(cur,cfg,data):
       ('single-message-extraction:'+tenant+':'+source['message_id']+':'+source['version'],))
     # The same source/version gets a single pending consent.  A model cannot
     # obtain a second capability to race a live owner review.
+    cur.execute("UPDATE saas_ai_single_message_extraction_consents SET state='expired',updated_at=now() WHERE tenant_id=%s::uuid AND message_id=%s::uuid AND source_version=%s AND state='pending' AND expires_at<=now()",
+      (tenant,source['message_id'],source['version']))
     cur.execute('''SELECT * FROM saas_ai_single_message_extraction_consents
       WHERE tenant_id=%s::uuid AND message_id=%s::uuid AND source_version=%s
         AND (state='approved' OR (state='pending' AND consumed_at IS NULL))
@@ -87,19 +94,19 @@ def prepare(cur,cfg,data):
     secret=secrets.token_urlsafe(32); key=str(uuid.uuid4())
     cur.execute('''INSERT INTO saas_ai_single_message_extraction_consents
       (id,tenant_id,owner_id,oauth_connection_id,message_id,channel_id,lead_id,conversation_id,
-       source_version,agent_id,media_policy,capability_hash,action,expires_at)
-      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s::uuid,%s::jsonb,%s,\'approve\',now()+interval \'10 minutes\')''',
+       source_version,message_kind,body_hash,external_id,agent_id,model_id,config_hash,media_policy,capability_hash,action,expires_at)
+      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s,%s,%s::jsonb,%s,\'approve\',now()+interval \'10 minutes\')''',
       (key,tenant,owner,connection,source['message_id'],source['channel_id'],source['lead_id'],source['conversation_id'],
-       source['version'],cfg['AI_LEARNING_MCP_AGENT_ID'],json.dumps(policy),_hash(secret)))
+       source['version'],source['kind'],source['body_hash'],source['external_id'],cfg['AI_LEARNING_MCP_AGENT_ID'],model,preflight.config_hash(cur,cfg,credential_source),json.dumps(policy),_hash(secret)))
     # A separate reject capability prevents action substitution while sharing
     # the exact source and connection fence.
     reject=secrets.token_urlsafe(32); reject_key=str(uuid.uuid4())
     cur.execute('''INSERT INTO saas_ai_single_message_extraction_consents
       (id,tenant_id,owner_id,oauth_connection_id,message_id,channel_id,lead_id,conversation_id,
-       source_version,agent_id,media_policy,capability_hash,action,expires_at)
-      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s::uuid,%s::jsonb,%s,\'reject\',now()+interval \'10 minutes\')''',
+       source_version,message_kind,body_hash,external_id,agent_id,model_id,config_hash,media_policy,capability_hash,action,expires_at)
+      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s,%s,%s::jsonb,%s,\'reject\',now()+interval \'10 minutes\')''',
       (reject_key,tenant,owner,connection,source['message_id'],source['channel_id'],source['lead_id'],source['conversation_id'],
-       source['version'],cfg['AI_LEARNING_MCP_AGENT_ID'],json.dumps(policy),_hash(reject)))
+       source['version'],source['kind'],source['body_hash'],source['external_id'],cfg['AI_LEARNING_MCP_AGENT_ID'],model,preflight.config_hash(cur,cfg,credential_source),json.dumps(policy),_hash(reject)))
     _audit(cur,tenant,owner,'single_message_extraction_consent_prepared','crm_message',source['message_id'],{'channel_id':source['channel_id'],'kind':source['kind']})
     return {'consent_id':key,'state':'pending','owner_consent_required':True,'exact_preview':_preview(source,policy,cfg['AI_LEARNING_MCP_AGENT_ID']),
       '_component_meta':{'ui':{'resourceUri':RESOURCE_URI},'owner_single_extraction':{
@@ -128,12 +135,15 @@ def _activate(cur,cfg,row,source):
     at=_occurred(source['occurred_at']); route={'provider':'connect','channel_id':source['channel_id'],
       'conversation_id':source['conversation_id'],'history_mode':'channel','message_ids':[source['message_id']],
       'source_version':source['version'],'period_start':at.isoformat(),'period_end':(at+timedelta(seconds=1)).isoformat(),
-      'analysis_agent_id':str(row['agent_id']),**policy,'allow_vision':bool(policy['max_vision_calls']),
+      'analysis_agent_id':str(row['agent_id']),'allow_external_media':policy['allow_external_media'],
+      'allow_paid_asr':policy['allow_paid_asr'],'allow_vision':bool(policy['max_vision_calls']),
       'approved_channel_ids':[source['channel_id']]}
     cur.execute('''INSERT INTO saas_knowledge_campaigns
       (tenant_id,id,created_by,sources,analysis_agent_id,status,approved_by,approved_at,max_calls,max_tokens,media_policy)
       VALUES(%s::uuid,%s::uuid,%s,%s::jsonb,%s::uuid,\'running\',%s,now(),%s,%s,%s::jsonb)''',
       (tenant,campaign_id,row['owner_id'],json.dumps([source['channel_id']]),row['agent_id'],row['owner_id'],amount['calls'],amount['tokens'],json.dumps(policy)))
+    cur.execute("UPDATE saas_knowledge_campaigns SET progress=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      (json.dumps({'mode':'single_message','message_id':source['message_id']}),tenant,campaign_id))
     campaign={'tenant_id':tenant,'id':campaign_id,'sources':[source['channel_id']],'media_policy':policy}
     fragment=campaigns.enqueue(cur,profile,campaign,route)
     cur.execute('''UPDATE saas_ai_single_message_extraction_consents SET state=\'approved\',consumed_at=now(),
@@ -152,6 +162,13 @@ def complete(cur,cfg,*,consent_id,capability,action):
     try: consent_id=identifier(consent_id)
     except TenantLinearError: raise TenantLinearError('Invalid owner extraction decision.',400) from None
     tenant,owner,connection=_connection_profile(cur,cfg,required_scopes=(DRAFT_SCOPE,))
+    cur.execute('''SELECT message_id,source_version FROM saas_ai_single_message_extraction_consents
+      WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='pending' AND expires_at<=now()''',(tenant,consent_id))
+    expired=cur.fetchone()
+    if expired:
+        # Approve/reject sibling capabilities belong to one launch; when one
+        # expires all become terminal before a fresh exact review is possible.
+        cur.execute("UPDATE saas_ai_single_message_extraction_consents SET state='expired',updated_at=now() WHERE tenant_id=%s::uuid AND message_id=%s::uuid AND source_version=%s AND state='pending'",(tenant,expired['message_id'],expired['source_version']))
     cur.execute('''SELECT * FROM saas_ai_single_message_extraction_consents WHERE tenant_id=%s::uuid AND id=%s::uuid
       AND owner_id=%s AND oauth_connection_id=%s::uuid AND capability_hash=%s AND action=%s
       AND state=\'pending\' AND consumed_at IS NULL AND expires_at>now() FOR UPDATE''',
@@ -159,7 +176,11 @@ def complete(cur,cfg,*,consent_id,capability,action):
     row=cur.fetchone()
     if not row: raise TenantLinearError('Owner extraction consent is unavailable, expired, or already used.',409)
     source=preflight._source(cur,cfg,{'message_id':str(row['message_id']),'channel_id':str(row['channel_id']),'lead_id':row['lead_id']})
-    if source['version']!=row['source_version'] or source['conversation_id']!=row['conversation_id']:
+    model,credential_source,ready,_=preflight._model(cur,cfg)
+    if (not ready or source['version']!=row['source_version'] or source['conversation_id']!=row['conversation_id']
+            or source['kind']!=row['message_kind'] or source['body_hash']!=row['body_hash']
+            or source['external_id']!=row['external_id'] or model!=row['model_id']
+            or preflight.config_hash(cur,cfg,credential_source)!=row['config_hash']):
         raise TenantLinearError('Source changed; review it again.',409)
     # Mark every sibling capability terminal before a campaign can exist.
     cur.execute('''UPDATE saas_ai_single_message_extraction_consents SET consumed_at=now(),updated_at=now()

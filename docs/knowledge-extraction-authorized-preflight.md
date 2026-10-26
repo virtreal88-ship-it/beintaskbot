@@ -15,9 +15,9 @@ combined text/ASR/vision upper bound must still fit the tenant cap.
 
 ## Existing safe execution path
 
-The component-only `administrator_single_message_extraction_review` launcher
-creates a short-lived pending owner consent for exactly one permitted attachment.
-Its app-only completion revalidates the owner OAuth connection, tenant, channel,
+The model/app-visible `administrator_single_message_extraction_review` launcher
+creates only a short-lived pending owner consent for exactly one permitted attachment.
+Its TEST-ONLY app-only completion revalidates the owner OAuth connection, tenant, channel,
 lead, media-version fence and policy, then creates one existing Campaign with
 one pending fragment.  It never makes a provider call directly.  A rejected,
 expired, stale, foreign or replayed capability cannot activate the fragment.

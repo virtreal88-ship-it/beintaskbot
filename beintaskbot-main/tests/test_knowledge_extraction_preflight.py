@@ -10,6 +10,12 @@ from tenant_linear_policy import TenantLinearError
 import tenant_ai_knowledge_extraction_preflight as preflight
 import tenant_ai_single_message_extraction as consent
 import tenant_ai_owner_review_component as component
+import tenant_ai_learning_mcp as mcp
+import tenant_knowledge_campaign_worker as worker
+import tenant_knowledge_campaigns as campaigns
+import tenant_knowledge_candidates_service as extraction_service
+import tenant_ai_spend_budget as spend_budget
+import tenant_knowledge_media as knowledge_media
 
 
 def _cfg():
@@ -30,6 +36,8 @@ def _source(database, *, tenant=A, channel=CA, lead=41):
 def _pricing(monkeypatch):
     monkeypatch.setenv('AI_AGENTS_PLATFORM_MODELS',json.dumps(['fixture-model']))
     monkeypatch.setenv('AI_AGENTS_PLATFORM_DEFAULT_MODEL','fixture-model')
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_ENABLED','true')
+    monkeypatch.setenv('OPENAI_API_KEY','test-only-not-a-real-key')
     monkeypatch.setenv('AI_AGENTS_TRANSCRIPTION_MODEL','fixture-asr')
     monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'fixture-model':{'input':1,'output':1}}))
     monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'fixture-model':{'vision_low':10},'fixture-asr':{'asr':10}}))
@@ -56,6 +64,9 @@ def test_component_consent_queues_only_exact_fragment_and_is_idempotent(db,monke
     consent.ensure_schema(db);prepared=consent.prepare(db.cursor(),cfg,{'message_id':message,'channel_id':CA,'lead_id':41})
     assert prepared['state']=='pending' and 'capability' not in prepared
     meta=prepared['_component_meta']['owner_single_extraction'];db.commit()
+    wire=json.loads(mcp._tool_response(prepared,1).body.decode())['result']
+    assert meta['capabilities']['approve'] not in json.dumps(wire['content'])
+    assert meta['capabilities']['approve'] not in json.dumps(wire['structuredContent'])
     result=consent.complete(db.cursor(),cfg,consent_id=meta['consent_ids']['approve'],capability=meta['capabilities']['approve'],action='approve');db.commit()
     assert result['state']=='approved' and result['execution']=='queued_existing_guarded_campaign_worker'
     row=db.execute('''SELECT c.sources,c.status,f.status AS fragment_status,f.route FROM saas_knowledge_campaigns c
@@ -78,6 +89,16 @@ def test_consent_reject_stale_foreign_and_media_change_fail_closed(db,monkeypatc
     assert rejected['state']=='rejected'
     with pytest.raises(TenantLinearError,match='unavailable'):
         consent.complete(db.cursor(),cfg,consent_id=meta['consent_ids']['approve'],capability=meta['capabilities']['approve'],action='approve')
+
+
+def test_expired_pending_consent_requires_a_fresh_exact_review(db,monkeypatch):
+    seed_job(db);_pricing(monkeypatch);cfg=_cfg();_bridge(monkeypatch,cfg);message=_source(db);consent.ensure_schema(db)
+    first=consent.prepare(db.cursor(),cfg,{'message_id':message,'channel_id':CA,'lead_id':41});meta=first['_component_meta']['owner_single_extraction'];db.commit()
+    db.execute("UPDATE saas_ai_single_message_extraction_consents SET expires_at=now()-interval '1 second' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,meta['consent_ids']['approve']));db.commit()
+    with pytest.raises(TenantLinearError,match='unavailable'):
+        consent.complete(db.cursor(),cfg,consent_id=meta['consent_ids']['approve'],capability=meta['capabilities']['approve'],action='approve')
+    fresh=consent.prepare(db.cursor(),cfg,{'message_id':message,'channel_id':CA,'lead_id':41})
+    assert fresh['state']=='pending' and fresh['consent_id']!=first['consent_id']
     # A pre-existing pending capability also cannot survive a media identity change.
     message2=_source(db);prepared=consent.prepare(db.cursor(),cfg,{'message_id':message2,'channel_id':CA,'lead_id':41});meta=prepared['_component_meta']['owner_single_extraction'];db.commit()
     db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps({'mediaId':'replaced','fileLength':101}),A,message2));db.commit()
@@ -120,3 +141,26 @@ if(elements.approve.disabled||elements.reject.disabled)process.exit(2);Promise.r
 '''
     result=subprocess.run(['node','-e',harness],input=script,text=True,capture_output=True,timeout=10)
     assert result.returncode==0,result.stderr
+
+
+def test_single_message_worker_claims_only_selected_message_and_finishes_actual_extraction(db,monkeypatch):
+    seed_job(db);_pricing(monkeypatch);cfg=_cfg();_bridge(monkeypatch,cfg);message=_source(db);consent.ensure_schema(db)
+    prepared=consent.prepare(db.cursor(),cfg,{'message_id':message,'channel_id':CA,'lead_id':41});meta=prepared['_component_meta']['owner_single_extraction'];db.commit()
+    consent.complete(db.cursor(),cfg,consent_id=meta['consent_ids']['approve'],capability=meta['capabilities']['approve'],action='approve');db.commit()
+    monkeypatch.setattr(worker,'_connect',lambda:db);monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    monkeypatch.setattr(extraction_service,'_connect',lambda:db);monkeypatch.setattr(extraction_service.store,'_connect',lambda:db);monkeypatch.setattr(spend_budget,'_connect',lambda:db)
+    monkeypatch.setattr(worker,'reconcile',lambda profile,campaign_id:None)
+    # Actual prepare/check_active/finish run; only outbound model/media transport
+    # is mocked.  No attachment bytes or provider request leaves the fixture.
+    seen=[]
+    def fake_generate(key,model,mode,lines,draft,**kwargs):
+        seen.extend(lines);return '{"cards":[]}',{'input_tokens':1,'output_tokens':1,'total_tokens':2}
+    monkeypatch.setattr(extraction_service,'generate',fake_generate)
+    monkeypatch.setattr(knowledge_media,'collect',lambda profile,item,**kwargs:([],[]))
+    assert worker.tick() is True
+    assert len(seen)==1 and seen[0]['ref']=='m1'
+    assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaign_sources WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
+    assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid',(A,))[0]['n']==1
+    fragment=db.execute('SELECT status FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid',(A,))[0]
+    assert fragment['status']=='completed'
+    assert db.execute('SELECT status FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid',(A,))[0]['status']=='stopped'

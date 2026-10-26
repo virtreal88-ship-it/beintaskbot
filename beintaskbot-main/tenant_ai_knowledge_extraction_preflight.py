@@ -4,7 +4,7 @@ import json
 import math
 
 from tenant_linear_policy import TenantLinearError, identifier
-from tenant_ai_agent_key_policy import platform_model, platform_model_allowed
+from tenant_ai_agent_key_policy import platform_model, platform_model_allowed, choose_api_credential, platform_key_ready
 from tenant_ai_spend_budget import limit_microusd, price, media_price
 
 NAME='administrator_knowledge_extraction_preflight'
@@ -45,7 +45,8 @@ def _source(cur,cfg,args):
       ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')})
     return {'message_id':message,'channel_id':channel,'lead_id':lead,
       'conversation_id':str(conversations[0]['conversation_id']),'kind':kind,
-      'version':version,'occurred_at':str(row['occurred_at'])}
+      'version':version,'body_hash':_digest(str(row.get('body') or '')),
+      'external_id':str(row.get('external_id') or ''),'occurred_at':str(row['occurred_at'])}
 
 
 def _model(cur,cfg):
@@ -61,11 +62,38 @@ def _model(cur,cfg):
         return None,None,False,'agent_unavailable'
     meta=row.get('metadata') or {}; model=str(row.get('model') or meta.get('model') or platform_model()).strip()
     tenant_key=bool(row.get('tenant_credential_present'))
+    # ``choose_api_credential`` is the execution selector.  Feed it only a
+    # non-secret presence sentinel; if a stored tenant key is malformed the
+    # executor still rejects it before dispatch, while preflight never reads it.
+    source=choose_api_credential(tenant,agent,'connect','configured' if tenant_key else '',model)[1]
     tenant_ready=tenant_key and meta.get('enabled') is True and meta.get('consent') is True and model in list(meta.get('models') or [])+[meta.get('model')]
-    platform_ready=(not tenant_key) and bool(model) and platform_model_allowed(model)
-    if not model or not (tenant_ready or platform_ready):
-        return model,('tenant' if tenant_key else 'platform'),False,('credential_unavailable' if model else 'model_not_allowlisted')
-    return model,('tenant' if tenant_key else 'platform'),True,''
+    platform_ready=source=='platform' and platform_key_ready(tenant,agent,'connect') and platform_model_allowed(model)
+    ready=platform_ready if source=='platform' else tenant_ready
+    if not model or not ready:
+        return model,source,False,('credential_unavailable' if model else 'model_not_allowlisted')
+    return model,source,True,''
+
+
+def config_hash(cur,cfg,credential_source):
+    """Non-secret fingerprint of the exact execution configuration."""
+    cur.execute('''SELECT a.model,a.enabled,s.enabled AS settings_enabled,s.emergency_stop,i.metadata,
+      (i.secrets IS NOT NULL) AS tenant_credential_present FROM saas_ai_agents a
+      JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id
+      LEFT JOIN saas_tenant_integrations i ON i.tenant_id=a.tenant_id AND i.provider='chat_ai'
+      WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid''',(cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['AI_LEARNING_MCP_AGENT_ID']))
+    row=cur.fetchone() or {}; meta=row.get('metadata') or {}
+    return _digest({'model':row.get('model'),'enabled':row.get('enabled'),'settings_enabled':row.get('settings_enabled'),
+      'emergency_stop':row.get('emergency_stop'),'credential_source':credential_source,
+      'tenant_credential_present':bool(row.get('tenant_credential_present')),
+      'metadata':{'model':meta.get('model'),'models':meta.get('models'),'enabled':meta.get('enabled'),'consent':meta.get('consent')}})
+
+
+def asr_model(cur,cfg,credential_source):
+    """Use the same non-secret integration metadata passed by extraction."""
+    cur.execute("SELECT metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'",(cfg['AI_LEARNING_MCP_TENANT_ID'],))
+    meta=(cur.fetchone() or {}).get('metadata') or {}
+    from tenant_connect_voice import transcription_model
+    return transcription_model({'credential_source':credential_source,'config':meta})
 
 
 def policy_for(kind):
@@ -84,7 +112,10 @@ def _budget(cur,tenant,model,asr_model,policy):
     tariffs={'text':text is not None,'vision_low':not policy['max_vision_calls'] or vision is not None,
       'asr':not policy['max_asr_calls'] or asr is not None}
     if not cap or not all(tariffs.values()): return tariffs,False
-    text_cost=int(math.ceil(16000*max(text)/1_000_000))
+    # Matches the extraction reservation: a 16k bounded input plus its 1.8k
+    # response ceiling.  Do not collapse them to one tariff because configured
+    # input/output prices can differ.
+    text_cost=int(math.ceil(16000*text[0]/1_000_000))+int(math.ceil(1800*text[1]/1_000_000))
     total=text_cost+int(vision or 0)*policy['max_vision_calls']+int(asr or 0)*policy['max_asr_calls']
     cur.execute("""SELECT COALESCE(sum(CASE WHEN state IN ('reserved','unknown') THEN reserved_microusd
       ELSE COALESCE(actual_microusd,reserved_microusd) END),0) AS used
@@ -92,7 +123,7 @@ def _budget(cur,tenant,model,asr_model,policy):
     return tariffs,int((cur.fetchone() or {}).get('used') or 0)+total<=cap
 
 
-def _approved_fragment(cur,tenant,source,agent,consent_id):
+def _approved_fragment(cur,tenant,source,agent,model,credential_source,cfg,consent_id):
     if not consent_id: return None,'owner_consent_required'
     try: consent_id=identifier(consent_id)
     except TenantLinearError: return None,'owner_consent_required'
@@ -108,12 +139,17 @@ def _approved_fragment(cur,tenant,source,agent,consent_id):
     if not row or row.get('state')!='approved': return None,'owner_consent_required'
     if (str(row.get('message_id'))!=source['message_id'] or str(row.get('channel_id'))!=source['channel_id']
       or int(row.get('lead_id') or 0)!=source['lead_id'] or row.get('source_version')!=source['version']
-      or str(row.get('agent_id'))!=agent): return None,'source_or_agent_changed'
+      or row.get('message_kind')!=source['kind'] or row.get('body_hash')!=source['body_hash']
+      or row.get('external_id')!=source['external_id'] or str(row.get('agent_id'))!=agent
+      or row.get('model_id')!=model or row.get('config_hash')!=config_hash(cur,cfg,credential_source)): return None,'source_or_agent_changed'
     route=row.get('route') if isinstance(row.get('route'),dict) else {}
     policy=row.get('media_policy') if isinstance(row.get('media_policy'),dict) else {}
     exact=(route.get('message_ids')==[source['message_id']] and route.get('source_version')==source['version']
       and route.get('channel_id')==source['channel_id'] and route.get('conversation_id')==source['conversation_id']
-      and all(route.get(k)==policy.get(k) for k in policy) and row.get('sources')==[source['channel_id']]
+      and route.get('allow_external_media')==policy.get('allow_external_media')
+      and route.get('allow_paid_asr')==policy.get('allow_paid_asr')
+      and route.get('allow_vision')==bool(policy.get('max_vision_calls'))
+      and row.get('sources')==[source['channel_id']]
       and row.get('fragment_status')=='running' and row.get('campaign_status')=='running' and row.get('lease_live')
       and str(row.get('analysis_agent_id'))==agent)
     return (row if exact else None),('lease_or_exact_fragment_required' if not exact else '')
@@ -123,12 +159,11 @@ def preflight(cur,cfg,args):
     """Safe readiness facts only: never attachment bytes, URLs, keys or writes."""
     source=_source(cur,cfg,args); model,credential_source,configured,reason=_model(cur,cfg)
     if reason: return {'ready':False,'reason_code':reason,'message_id':source['message_id'],'attachment_kind':source['kind']}
-    from tenant_connect_voice import transcription_model
-    asr_model=transcription_model({'credential_source':credential_source,'config':{}})
-    policy=policy_for(source['kind']);tariffs,budget_ready=_budget(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],model,asr_model,policy)
-    fragment,fragment_reason=_approved_fragment(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],source,cfg['AI_LEARNING_MCP_AGENT_ID'],args.get('consent_id'))
+    voice_model=asr_model(cur,cfg,credential_source)
+    policy=policy_for(source['kind']);tariffs,budget_ready=_budget(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],model,voice_model,policy)
+    fragment,fragment_reason=_approved_fragment(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],source,cfg['AI_LEARNING_MCP_AGENT_ID'],model,credential_source,cfg,args.get('consent_id'))
     return {'ready':bool(fragment and budget_ready),'reason_code':'' if fragment and budget_ready else (fragment_reason or 'tariff_or_budget_unavailable'),
-      'message_id':source['message_id'],'attachment_kind':source['kind'],'model_id':model,'asr_model_id':asr_model or None,
+      'message_id':source['message_id'],'attachment_kind':source['kind'],'model_id':model,'asr_model_id':voice_model or None,
       'provider_domain':DOMAIN,'credential_source':credential_source,'credential_configured':configured,
       'tariffs':tariffs,'spend_cap_enforced':bool(limit_microusd(cfg['AI_LEARNING_MCP_TENANT_ID'])),
       'execution':'existing_knowledge_campaign_fragment_only'}

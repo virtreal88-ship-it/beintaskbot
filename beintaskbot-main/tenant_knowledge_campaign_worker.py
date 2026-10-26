@@ -36,18 +36,21 @@ def tick():
             if not settings or not settings['enabled'] or settings['emergency_stop']:
                 cur.execute("UPDATE saas_knowledge_campaigns SET status='paused',version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,key))
                 conn.commit();return False
-            try:discovery.discover(cur,profile,campaign)
-            except TenantLinearError:
-                cur.execute("UPDATE saas_knowledge_campaigns SET status='blocked',version=version+1,progress=progress||'{\"error\":\"source_scope_changed\"}'::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,key))
-                conn.commit();return False
-            cur.execute("SELECT 1 FROM saas_knowledge_campaign_sources WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='pending' LIMIT 1",(tenant,key))
-            if campaign['progress'] and not cur.fetchone():
-                discovery.discover_resolved(cur,profile,campaign)
+            single_message=isinstance(campaign.get('progress'),dict) and campaign['progress'].get('mode')=='single_message'
+            if not single_message:
+                try:discovery.discover(cur,profile,campaign)
+                except TenantLinearError:
+                    cur.execute("UPDATE saas_knowledge_campaigns SET status='blocked',version=version+1,progress=progress||'{\"error\":\"source_scope_changed\"}'::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,key))
+                    conn.commit();return False
+                cur.execute("SELECT 1 FROM saas_knowledge_campaign_sources WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='pending' LIMIT 1",(tenant,key))
+                if campaign['progress'] and not cur.fetchone():
+                    discovery.discover_resolved(cur,profile,campaign)
             cur.execute('UPDATE saas_knowledge_campaigns SET updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,key))
         conn.commit()
     reconcile(profile,key)
-    from tenant_knowledge_quality import tick as check_quality
-    if check_quality(profile,key):return True
+    if not single_message:
+        from tenant_knowledge_quality import tick as check_quality
+        if check_quality(profile,key):return True
     claimed=queue.claim(tenant,key)
     if not claimed:return False
     try:
@@ -63,7 +66,7 @@ def tick():
                 empty=not receipt and error.status==409 and 'нет доступного текста' in str(error)
                 code='no_text' if empty else 'provider_unknown' if receipt else 'limit_exceeded' if error.status==429 else 'source_unavailable'
                 cur.execute("UPDATE saas_knowledge_campaign_fragments SET status=%s,error_code=%s WHERE tenant_id=%s::uuid AND id=%s::uuid AND lease_token=%s::uuid",('unknown' if receipt else 'completed' if empty else 'blocked',code,tenant,claimed['id'],claimed['lease_token']))
-                if empty and getattr(error,'next_before',None):
+                if empty and getattr(error,'next_before',None) and not single_message:
                     queue.enqueue(cur,profile,campaign,{**claimed['route'],'before':error.next_before})
                 if not empty:
                     cur.execute("UPDATE saas_knowledge_campaigns SET status=%s,version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid",('paused' if error.status==429 and not receipt else 'blocked',tenant,key))
