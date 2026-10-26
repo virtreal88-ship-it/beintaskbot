@@ -37,8 +37,24 @@ jobs:
         run: python -m pip install -r requirements.txt pytest imageio-ffmpeg
       - name: Install PDF renderer
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes poppler-utils ffmpeg
+          packages=()
+          command -v pdftoppm >/dev/null || packages+=(poppler-utils)
+          command -v ffmpeg >/dev/null || packages+=(ffmpeg)
+          if ((${#packages[@]})); then
+            . /etc/os-release
+            test "$ID" = ubuntu
+            test -r /usr/share/keyrings/ubuntu-archive-keyring.gpg
+            printf 'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu %s main restricted universe multiverse\n' "$VERSION_CODENAME" > "$RUNNER_TEMP/ci-ubuntu.list"
+            printf 'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu %s-updates main restricted universe multiverse\n' "$VERSION_CODENAME" >> "$RUNNER_TEMP/ci-ubuntu.list"
+            printf 'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://security.ubuntu.com/ubuntu %s-security main restricted universe multiverse\n' "$VERSION_CODENAME" >> "$RUNNER_TEMP/ci-ubuntu.list"
+            apt_options=(-o "Dir::Etc::sourcelist=$RUNNER_TEMP/ci-ubuntu.list" -o 'Dir::Etc::sourceparts=-' -o Acquire::Retries=2 -o Acquire::https::Timeout=20)
+            sudo timeout 120s apt-get "${apt_options[@]}" update
+            sudo timeout 300s env DEBIAN_FRONTEND=noninteractive apt-get \
+              "${apt_options[@]}" \
+              install --yes --no-install-recommends "${packages[@]}"
+          fi
+          pdftoppm -v
+          ffmpeg -version | head -n 1
       - name: Install isolated PGlite test dependency
         run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0
       - name: Run media and MCP regression tests

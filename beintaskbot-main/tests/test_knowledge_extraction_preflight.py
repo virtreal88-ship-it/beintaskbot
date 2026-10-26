@@ -119,9 +119,13 @@ def test_preflight_needs_exact_running_lease_and_combined_budget(db,monkeypatch)
     # the exact fragment lease can proceed toward extraction.
     value=preflight.preflight(db.cursor(),cfg,{'message_id':message,'channel_id':CA,'lead_id':41,'consent_id':result['consent_id']})
     assert value['ready'] is False and value['reason_code']=='lease_or_exact_fragment_required'
-    assert value['consent_execution']=={'state':'approved','campaign_id':result['campaign_id'],
-      'fragment_id':result['fragment_id'],'campaign_status':'running','fragment_status':'pending',
-      'lease_live':False,'fragment_status_counts':{'pending':1},'error_code':None}
+    status=value['consent_execution']
+    assert status['state']=='approved' and status['campaign_id']==result['campaign_id']
+    assert status['fragment_id']==result['fragment_id'] and status['campaign_status']=='running'
+    assert status['fragment_status']=='pending' and status['fragment_status_counts']=={'pending':1}
+    assert status['lease_live'] is False and status['error_code'] is None
+    assert status['claim_diagnostic']['campaign_approved'] is True
+    assert status['claim_diagnostic']['other_unknown_fragments']==0
     db.execute("UPDATE saas_knowledge_campaign_fragments SET status='running',lease_token=%s::uuid,lease_until=now()+interval '5 minutes' WHERE tenant_id=%s::uuid",(str(uuid.uuid4()),A));db.commit()
     value=preflight.preflight(db.cursor(),cfg,{'message_id':message,'channel_id':CA,'lead_id':41,'consent_id':result['consent_id']})
     assert value['ready'] is True
@@ -165,6 +169,29 @@ def test_preflight_reports_exact_fragment_state_without_cross_owner_or_tenant_le
     db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
       (json.dumps({'mediaId':'replacement','fileLength':100}),A,message));db.commit()
     assert 'consent_execution' not in preflight.preflight(db.cursor(),cfg,selection)
+
+
+def test_preflight_shows_prior_unknown_fragment_claim_gate_only_to_exact_owner(db,monkeypatch):
+    seed_job(db);_pricing(monkeypatch);cfg=_cfg();_bridge(monkeypatch,cfg);message=_source(db);consent.ensure_schema(db)
+    prepared=consent.prepare(db.cursor(),cfg,{'message_id':message,'channel_id':CA,'lead_id':41})
+    meta=prepared['_component_meta']['owner_single_extraction'];db.commit()
+    result=consent.complete(db.cursor(),cfg,consent_id=meta['consent_ids']['approve'],
+      capability=meta['capabilities']['approve'],action='approve');db.commit()
+    old_campaign=str(uuid.uuid4());old_fragment=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_knowledge_campaigns
+      (tenant_id,id,created_by,sources,analysis_agent_id,status,max_calls,max_tokens)
+      VALUES(%s::uuid,%s::uuid,11,%s::jsonb,%s::uuid,'stopped',1,1000)""",
+      (A,old_campaign,json.dumps([CA]),AGENT))
+    db.execute("""INSERT INTO saas_knowledge_campaign_fragments
+      (tenant_id,campaign_id,id,source_key,route,status,error_code)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,'old',%s::jsonb,'unknown','interrupted')""",
+      (A,old_campaign,old_fragment,json.dumps({})));db.commit()
+    selection={'message_id':message,'channel_id':CA,'lead_id':41,'consent_id':result['consent_id']}
+    diagnostic=preflight.preflight(db.cursor(),cfg,selection)['consent_execution']['claim_diagnostic']
+    assert diagnostic['other_unknown_fragments']==1 and diagnostic['other_running_fragments']==0
+    assert diagnostic['held_test_turns']==0
+    assert 'consent_execution' not in preflight.preflight(db.cursor(),
+      {**cfg,'oauth_connection_id':str(uuid.uuid4())},selection)
 
 
 def test_single_message_component_uses_only_app_completion_and_exact_state():
