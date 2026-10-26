@@ -868,6 +868,9 @@ def training_operation(cur,cfg,action,data):
                 if document(material['doc'])!=document(source['doc']):raise TenantLinearError('Instruction differs from verified evidence.',409)
             grant=publication_grant(cur,profile,{'draft_id':draft_id,'version':d['version'],'kind':kind,'object_id':object_id,'agent_id':str(p['agent_id']),'channel_id':str(p['channel_id']),'ttl_minutes':30,'review_confirmed':True,'material_hash':data['material_hash']},policy=p)
             result=publication_execute(cur,cfg,grant['grant_id'])
+    # Native psycopg rows contain UUIDs; use the same normalized JSON shape
+    # for the persisted receipt, audit, MCP response and idempotent replay.
+    result=_snapshot(result)
     cur.execute('INSERT INTO saas_ai_training_operations(policy_id,request_id,action,request_hash,result) VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)',(p['id'],request_id,action,digest,_json(result)))
     _audit(cur,tenant,actor,'ai_training_delegated_'+action,'ai_training_policy',p['id'],{'request_id':request_id,'result':result})
     return result
