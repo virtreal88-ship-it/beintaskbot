@@ -115,10 +115,11 @@ def manage(c,profile,lesson_id,action,data,body=None):
     row=c.fetchone()
     if not row:raise TenantLinearError('Instruction unavailable',404)
     if action=='video_list':
-        c.execute('SELECT '+ASSET_COLUMNS+' FROM saas_instruction_videos WHERE tenant_id=%s::uuid AND lesson_id=%s::uuid ORDER BY created_at,id',(tenant,lesson))
-        items=[safe(r) for r in c.fetchall()]
+        offset=max(0,min(int(data.get('offset',0)),1000000))
+        c.execute('SELECT '+ASSET_COLUMNS+' FROM saas_instruction_videos WHERE tenant_id=%s::uuid AND lesson_id=%s::uuid ORDER BY created_at DESC,id LIMIT 51 OFFSET %s',(tenant,lesson,offset))
+        rows=c.fetchall();items=[safe(r) for r in rows[:50]]
         c.execute('SELECT COALESCE(sum(size_bytes),0) AS used FROM saas_instruction_videos WHERE tenant_id=%s::uuid',(tenant,))
-        return {'items':items,'production_send_enabled':False,'storage_used_bytes':int(c.fetchone()['used']),
+        return {'items':items,'next_offset':offset+50 if len(rows)>50 else None,'production_send_enabled':False,'storage_used_bytes':int(c.fetchone()['used']),
           'storage_limit_bytes':TENANT_STORAGE_BYTES}
     if data.get('expected_version')!=row['version']:raise TenantLinearError('Instruction version changed',409)
     if action=='video_upload':

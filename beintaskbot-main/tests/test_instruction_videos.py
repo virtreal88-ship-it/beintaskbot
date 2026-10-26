@@ -243,3 +243,14 @@ def test_full_advertised_file_boundary_uses_disk_not_a_giant_test_buffer(monkeyp
         assert videos.validate_file(source)==120
         source.truncate(100*1024*1024+1)
         with pytest.raises(ValueError):videos.validate_file(source)
+
+
+def test_video_metadata_pages_are_bounded(setup):
+    conn,row,_=setup;asset=add(setup)
+    # Synthetic retained rows exercise list size without loading blobs.
+    conn.execute('''INSERT INTO saas_instruction_videos(tenant_id,lesson_id,id,body,sha256,duration_seconds,metadata,size_bytes)
+      SELECT tenant_id,lesson_id,md5(n::text)::uuid,body,sha256,duration_seconds,metadata,size_bytes
+      FROM saas_instruction_videos CROSS JOIN generate_series(1,50) n WHERE id=%s::uuid''',(asset['id'],));conn.commit()
+    first=op(row,'video_list');second=op(row,'video_list',offset=first['next_offset'])
+    assert len(first['items'])==50 and first['next_offset']==50
+    assert len(second['items'])==1 and second['next_offset'] is None

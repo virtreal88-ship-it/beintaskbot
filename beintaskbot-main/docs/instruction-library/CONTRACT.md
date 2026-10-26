@@ -165,3 +165,5 @@ This is a storage/selection/virtual-consent sandbox. Its manually entered text
 answer and simulated yes are not an AI conversation or authenticated real-client
 consent. Native independent-process byte-quota and deduplication races run only
 in the existing disposable localhost PostgreSQL fixture, including genuine CI.
+Video metadata listing follows the library's 50-row pagination pattern; listing
+many retained assets never returns an unbounded metadata collection per request.
