@@ -257,6 +257,14 @@ def _authorize_token(request):
     return cfg
 
 
+def _company_model_list(cfg,args):
+    # The explicit free provider GET runs off the event loop. Authentication
+    # schema setup has already committed; no nested migration lock is held.
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            return _tools(cur,cfg,'company_ai_settings_read',args)
+
+
 def _tools(cur,cfg,name,args):
     if name == knowledge_extraction_preflight.NAME:
         if TOOL_SCOPE not in set(cfg.get('granted_scopes') or []):
@@ -584,6 +592,9 @@ async def mcp(request):
             # retain their original single-transaction behavior.
             if tool_name in {'administrator_historical_replay_candidates','administrator_historical_replay_preflight'}:
                 output=await asyncio.to_thread(_tools,None,cfg,tool_name,arguments)
+                return _tool_response(output,request_id)
+            if tool_name=='company_ai_settings_read' and isinstance(arguments,dict) and arguments.get('list_provider_models') is True:
+                output=await asyncio.to_thread(_company_model_list,cfg,arguments)
                 return _tool_response(output,request_id)
             with _connect() as conn:
                 with conn.cursor() as cur: output=_tools(cur,cfg,tool_name,arguments)

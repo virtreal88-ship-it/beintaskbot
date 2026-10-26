@@ -558,7 +558,7 @@ def test_read_tool_registry_has_strict_schema_no_write_tools():
     for tool in admin.definitions():
         assert tool['inputSchema']['additionalProperties'] is False
         assert tool['securitySchemes'][0]['scopes']==['ai_learning.read']
-        assert tool['annotations']=={'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False}
+        assert tool['annotations']=={'readOnlyHint':True,'destructiveHint':False,'openWorldHint':tool['name']=='company_ai_settings_read'}
 
 
 def test_simulation_queue_diagnostic_is_tenant_bound_read_only(db,monkeypatch):
