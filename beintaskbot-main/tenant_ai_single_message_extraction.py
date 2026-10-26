@@ -31,7 +31,7 @@ def ensure_schema(conn):
           id UUID PRIMARY KEY,tenant_id UUID NOT NULL,owner_id BIGINT NOT NULL,oauth_connection_id UUID NOT NULL,
           message_id UUID NOT NULL,channel_id UUID NOT NULL,lead_id BIGINT NOT NULL,conversation_id TEXT NOT NULL,
           source_version TEXT NOT NULL,message_kind TEXT NOT NULL,body_hash TEXT NOT NULL,external_id TEXT NOT NULL,
-          agent_id UUID NOT NULL,model_id TEXT NOT NULL,config_hash TEXT NOT NULL,media_policy JSONB NOT NULL,
+          agent_id UUID NOT NULL,model_id TEXT NOT NULL,asr_model_id TEXT NOT NULL DEFAULT '',config_hash TEXT NOT NULL,media_policy JSONB NOT NULL,
           capability_hash TEXT NOT NULL UNIQUE,action TEXT NOT NULL CHECK(action IN ('approve','reject')),
           state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','rejected','revoked','expired')),
           expires_at TIMESTAMPTZ NOT NULL,consumed_at TIMESTAMPTZ NULL,
@@ -40,7 +40,7 @@ def ensure_schema(conn):
         cur.execute('CREATE INDEX IF NOT EXISTS saas_ai_single_message_consent_live_idx ON saas_ai_single_message_extraction_consents(tenant_id,owner_id,expires_at) WHERE state=\'pending\'')
         for column,definition in (('message_kind',"TEXT NOT NULL DEFAULT ''"),('body_hash',"TEXT NOT NULL DEFAULT ''"),
                                   ('external_id',"TEXT NOT NULL DEFAULT ''"),('model_id',"TEXT NOT NULL DEFAULT ''"),
-                                  ('config_hash',"TEXT NOT NULL DEFAULT ''")):
+                                  ('asr_model_id',"TEXT NOT NULL DEFAULT ''"),('config_hash',"TEXT NOT NULL DEFAULT ''")):
             cur.execute('ALTER TABLE saas_ai_single_message_extraction_consents ADD COLUMN IF NOT EXISTS '+column+' '+definition)
 
 
@@ -70,6 +70,9 @@ def prepare(cur,cfg,data):
     if not ready: raise TenantLinearError('Extraction configuration is unavailable: '+reason,409)
     tenant,owner,connection=_connection_profile(cur,cfg,required_scopes=(DRAFT_SCOPE,))
     policy=preflight.policy_for(source['kind'])
+    voice_model=preflight.asr_model(cur,cfg,credential_source)
+    if policy['max_asr_calls'] and not voice_model:
+        raise TenantLinearError('Extraction configuration is unavailable: asr_model_unavailable',409)
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
       ('single-message-extraction:'+tenant+':'+source['message_id']+':'+source['version'],))
     # The same source/version gets a single pending consent.  A model cannot
@@ -94,19 +97,19 @@ def prepare(cur,cfg,data):
     secret=secrets.token_urlsafe(32); key=str(uuid.uuid4())
     cur.execute('''INSERT INTO saas_ai_single_message_extraction_consents
       (id,tenant_id,owner_id,oauth_connection_id,message_id,channel_id,lead_id,conversation_id,
-       source_version,message_kind,body_hash,external_id,agent_id,model_id,config_hash,media_policy,capability_hash,action,expires_at)
-      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s,%s,%s::jsonb,%s,\'approve\',now()+interval \'10 minutes\')''',
+       source_version,message_kind,body_hash,external_id,agent_id,model_id,asr_model_id,config_hash,media_policy,capability_hash,action,expires_at)
+      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s,%s,%s,%s::jsonb,%s,\'approve\',now()+interval \'10 minutes\')''',
       (key,tenant,owner,connection,source['message_id'],source['channel_id'],source['lead_id'],source['conversation_id'],
-       source['version'],source['kind'],source['body_hash'],source['external_id'],cfg['AI_LEARNING_MCP_AGENT_ID'],model,preflight.config_hash(cur,cfg,credential_source),json.dumps(policy),_hash(secret)))
+       source['version'],source['kind'],source['body_hash'],source['external_id'],cfg['AI_LEARNING_MCP_AGENT_ID'],model,voice_model,preflight.config_hash(cur,cfg,credential_source,voice_model),json.dumps(policy),_hash(secret)))
     # A separate reject capability prevents action substitution while sharing
     # the exact source and connection fence.
     reject=secrets.token_urlsafe(32); reject_key=str(uuid.uuid4())
     cur.execute('''INSERT INTO saas_ai_single_message_extraction_consents
       (id,tenant_id,owner_id,oauth_connection_id,message_id,channel_id,lead_id,conversation_id,
-       source_version,message_kind,body_hash,external_id,agent_id,model_id,config_hash,media_policy,capability_hash,action,expires_at)
-      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s,%s,%s::jsonb,%s,\'reject\',now()+interval \'10 minutes\')''',
+       source_version,message_kind,body_hash,external_id,agent_id,model_id,asr_model_id,config_hash,media_policy,capability_hash,action,expires_at)
+      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s,%s,%s,%s::jsonb,%s,\'reject\',now()+interval \'10 minutes\')''',
       (reject_key,tenant,owner,connection,source['message_id'],source['channel_id'],source['lead_id'],source['conversation_id'],
-       source['version'],source['kind'],source['body_hash'],source['external_id'],cfg['AI_LEARNING_MCP_AGENT_ID'],model,preflight.config_hash(cur,cfg,credential_source),json.dumps(policy),_hash(reject)))
+       source['version'],source['kind'],source['body_hash'],source['external_id'],cfg['AI_LEARNING_MCP_AGENT_ID'],model,voice_model,preflight.config_hash(cur,cfg,credential_source,voice_model),json.dumps(policy),_hash(reject)))
     _audit(cur,tenant,owner,'single_message_extraction_consent_prepared','crm_message',source['message_id'],{'channel_id':source['channel_id'],'kind':source['kind']})
     return {'consent_id':key,'state':'pending','owner_consent_required':True,'exact_preview':_preview(source,policy,cfg['AI_LEARNING_MCP_AGENT_ID']),
       '_component_meta':{'ui':{'resourceUri':RESOURCE_URI},'owner_single_extraction':{
@@ -177,10 +180,11 @@ def complete(cur,cfg,*,consent_id,capability,action):
     if not row: raise TenantLinearError('Owner extraction consent is unavailable, expired, or already used.',409)
     source=preflight._source(cur,cfg,{'message_id':str(row['message_id']),'channel_id':str(row['channel_id']),'lead_id':row['lead_id']})
     model,credential_source,ready,_=preflight._model(cur,cfg)
+    voice_model=preflight.asr_model(cur,cfg,credential_source)
     if (not ready or source['version']!=row['source_version'] or source['conversation_id']!=row['conversation_id']
             or source['kind']!=row['message_kind'] or source['body_hash']!=row['body_hash']
-            or source['external_id']!=row['external_id'] or model!=row['model_id']
-            or preflight.config_hash(cur,cfg,credential_source)!=row['config_hash']):
+            or source['external_id']!=row['external_id'] or model!=row['model_id'] or voice_model!=row['asr_model_id']
+            or preflight.config_hash(cur,cfg,credential_source,voice_model)!=row['config_hash']):
         raise TenantLinearError('Source changed; review it again.',409)
     # Mark every sibling capability terminal before a campaign can exist.
     cur.execute('''UPDATE saas_ai_single_message_extraction_consents SET consumed_at=now(),updated_at=now()
@@ -193,6 +197,34 @@ def complete(cur,cfg,*,consent_id,capability,action):
     result=_activate(cur,cfg,row,source)
     _audit(cur,tenant,owner,'single_message_extraction_consent_approved','crm_message',row['message_id'],{'campaign_id':result['campaign_id']})
     return result
+
+
+def dispatch_fence(cur,tenant,fragment_id):
+    """Revalidate a consent-bound fragment at dispatch and before generation.
+
+    This takes no caller data: the fragment owns all source identifiers, and a
+    changed attachment/config terminates the already-approved work rather than
+    reusing an owner capability for different bytes or a different model.
+    """
+    cur.execute('''SELECT * FROM saas_ai_single_message_extraction_consents
+      WHERE tenant_id=%s::uuid AND fragment_id=%s::uuid AND state='approved' LIMIT 1 FOR SHARE''',(tenant,fragment_id))
+    row=cur.fetchone()
+    if not row: raise TenantLinearError('Single-message owner consent is unavailable.',409)
+    cfg={'AI_LEARNING_MCP_TENANT_ID':str(row['tenant_id']),'AI_LEARNING_MCP_AGENT_ID':str(row['agent_id']),
+      'AI_LEARNING_MCP_CHANNEL_ID':str(row['channel_id'])}
+    source=_source_for_row(cur,cfg,row)
+    model,credential_source,ready,_=preflight._model(cur,cfg); voice_model=preflight.asr_model(cur,cfg,credential_source)
+    if (not ready or (row['media_policy'].get('max_asr_calls') and not voice_model)
+            or source['version']!=row['source_version'] or source['kind']!=row['message_kind']
+            or source['body_hash']!=row['body_hash'] or source['external_id']!=row['external_id']
+            or model!=row['model_id'] or voice_model!=row['asr_model_id']
+            or preflight.config_hash(cur,cfg,credential_source,voice_model)!=row['config_hash']):
+        raise TenantLinearError('Owner-approved source or AI configuration changed.',409)
+    return True
+
+
+def _source_for_row(cur,cfg,row):
+    return preflight._source(cur,cfg,{'message_id':str(row['message_id']),'channel_id':str(row['channel_id']),'lead_id':row['lead_id']})
 
 
 def definitions():

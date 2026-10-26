@@ -10,13 +10,16 @@ from tenant_knowledge_candidates_service import analyze
 
 
 def check_fence(cur, tenant, extraction_id):
-    cur.execute('''SELECT f.status,c.status AS campaign_status,f.lease_until>now() AS live,c.sources,e.source_refs
+    cur.execute('''SELECT f.status,c.status AS campaign_status,f.lease_until>now() AS live,c.sources,c.progress,e.source_refs
       FROM saas_knowledge_campaign_fragments f JOIN saas_knowledge_campaigns c
       ON c.tenant_id=f.tenant_id AND c.id=f.campaign_id LEFT JOIN saas_knowledge_extractions e ON e.tenant_id=f.tenant_id AND e.id=f.id WHERE f.tenant_id=%s::uuid AND f.id=%s::uuid''',(tenant,extraction_id))
     row=cur.fetchone()
     if row and (row['status']!='running' or row['campaign_status']!='running' or not row['live'] or any(str(r.get('channel_id')) not in row['sources'] for r in row.get('source_refs') or [])):
         raise TenantLinearError('Накопление знаний остановлено.',409)
     if row:
+        if isinstance(row.get('progress'),dict) and row['progress'].get('mode')=='single_message':
+            from tenant_ai_single_message_extraction import dispatch_fence
+            dispatch_fence(cur,tenant,extraction_id)
         # Durable progress heartbeat without unbounded lease extension. The 360s
         # lease remains strictly above the 240s extraction hard deadline.
         cur.execute("UPDATE saas_knowledge_campaign_fragments SET updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND status='running' AND lease_until>now()",(tenant,extraction_id))
@@ -54,6 +57,12 @@ def tick():
     claimed=queue.claim(tenant,key)
     if not claimed:return False
     try:
+        # This is the pre-reservation dispatch fence. ``check_active`` runs it
+        # again immediately before the generation boundary.
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                from tenant_ai_single_message_extraction import dispatch_fence
+                dispatch_fence(cur,tenant,claimed['id'])
         result=analyze(profile,{**claimed['route'],'request_id':str(claimed['id'])})
         queue.complete(claimed,result)
     except TenantLinearError as error:

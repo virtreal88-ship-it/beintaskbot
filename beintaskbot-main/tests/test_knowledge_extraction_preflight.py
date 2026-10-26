@@ -164,3 +164,30 @@ def test_single_message_worker_claims_only_selected_message_and_finishes_actual_
     fragment=db.execute('SELECT status FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid',(A,))[0]
     assert fragment['status']=='completed'
     assert db.execute('SELECT status FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid',(A,))[0]['status']=='stopped'
+
+
+def test_worker_rechecks_changed_approved_media_before_provider(db,monkeypatch):
+    seed_job(db);_pricing(monkeypatch);cfg=_cfg();_bridge(monkeypatch,cfg);message=_source(db);consent.ensure_schema(db)
+    prepared=consent.prepare(db.cursor(),cfg,{'message_id':message,'channel_id':CA,'lead_id':41});meta=prepared['_component_meta']['owner_single_extraction'];db.commit()
+    consent.complete(db.cursor(),cfg,consent_id=meta['consent_ids']['approve'],capability=meta['capabilities']['approve'],action='approve');db.commit()
+    # The consent is valid but its underlying provider-media identity changed
+    # while queued.  Dispatch must block before prepare/reservation/provider.
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps({'mediaId':'changed','fileLength':101}),A,message));db.commit()
+    monkeypatch.setattr(worker,'_connect',lambda:db);monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    monkeypatch.setattr(worker,'reconcile',lambda profile,campaign_id:None)
+    called=[];monkeypatch.setattr(worker,'analyze',lambda *args,**kwargs: called.append(True))
+    assert worker.tick() is True
+    assert not called
+    assert db.execute('SELECT status FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid',(A,))[0]['status']=='blocked'
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
+
+
+def test_disabled_company_asr_is_explicitly_not_ready(db,monkeypatch):
+    seed_job(db);_pricing(monkeypatch);message=_source(db)
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_ENABLED','false');monkeypatch.delenv('OPENAI_API_KEY')
+    db.execute("UPDATE saas_ai_agents SET model='company-model' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
+    db.execute("""INSERT INTO saas_tenant_integrations(tenant_id,provider,secrets,metadata)
+      VALUES(%s::uuid,'chat_ai',%s,%s::jsonb)""",(A,b'test-only',json.dumps({'enabled':True,'consent':True,'models':['company-model'],'audio_enabled':False})))
+    db.commit()
+    value=preflight.preflight(db.cursor(),_cfg(),{'message_id':message,'channel_id':CA,'lead_id':41})
+    assert value['ready'] is False and value['reason_code']=='asr_model_unavailable' and value['tariffs']['asr'] is False

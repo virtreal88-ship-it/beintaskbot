@@ -74,7 +74,7 @@ def _model(cur,cfg):
     return model,source,True,''
 
 
-def config_hash(cur,cfg,credential_source):
+def config_hash(cur,cfg,credential_source,voice_model=''):
     """Non-secret fingerprint of the exact execution configuration."""
     cur.execute('''SELECT a.model,a.enabled,s.enabled AS settings_enabled,s.emergency_stop,i.metadata,
       (i.secrets IS NOT NULL) AS tenant_credential_present FROM saas_ai_agents a
@@ -85,15 +85,17 @@ def config_hash(cur,cfg,credential_source):
     return _digest({'model':row.get('model'),'enabled':row.get('enabled'),'settings_enabled':row.get('settings_enabled'),
       'emergency_stop':row.get('emergency_stop'),'credential_source':credential_source,
       'tenant_credential_present':bool(row.get('tenant_credential_present')),
-      'metadata':{'model':meta.get('model'),'models':meta.get('models'),'enabled':meta.get('enabled'),'consent':meta.get('consent')}})
+      'metadata':{'model':meta.get('model'),'models':meta.get('models'),'enabled':meta.get('enabled'),'consent':meta.get('consent'),
+        'audio_enabled':meta.get('audio_enabled'),'transcription_model':meta.get('transcription_model')},'asr_model':voice_model})
 
 
 def asr_model(cur,cfg,credential_source):
     """Use the same non-secret integration metadata passed by extraction."""
     cur.execute("SELECT metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'",(cfg['AI_LEARNING_MCP_TENANT_ID'],))
     meta=(cur.fetchone() or {}).get('metadata') or {}
-    from tenant_connect_voice import transcription_model
-    return transcription_model({'credential_source':credential_source,'config':meta})
+    from tenant_connect_voice import transcription_model, VoiceError
+    try:return transcription_model({'credential_source':credential_source,'config':meta})
+    except VoiceError:return ''
 
 
 def policy_for(kind):
@@ -110,7 +112,7 @@ def _budget(cur,tenant,model,asr_model,policy):
     vision=media_price(model,'vision_low') if policy['max_vision_calls'] else 0
     asr=media_price(asr_model,'asr') if policy['max_asr_calls'] and asr_model else 0
     tariffs={'text':text is not None,'vision_low':not policy['max_vision_calls'] or vision is not None,
-      'asr':not policy['max_asr_calls'] or asr is not None}
+      'asr':not policy['max_asr_calls'] or bool(asr_model and asr is not None)}
     if not cap or not all(tariffs.values()): return tariffs,False
     # Matches the extraction reservation: a 16k bounded input plus its 1.8k
     # response ceiling.  Do not collapse them to one tariff because configured
@@ -141,7 +143,8 @@ def _approved_fragment(cur,tenant,source,agent,model,credential_source,cfg,conse
       or int(row.get('lead_id') or 0)!=source['lead_id'] or row.get('source_version')!=source['version']
       or row.get('message_kind')!=source['kind'] or row.get('body_hash')!=source['body_hash']
       or row.get('external_id')!=source['external_id'] or str(row.get('agent_id'))!=agent
-      or row.get('model_id')!=model or row.get('config_hash')!=config_hash(cur,cfg,credential_source)): return None,'source_or_agent_changed'
+      or row.get('model_id')!=model or row.get('asr_model_id')!=asr_model(cur,cfg,credential_source)
+      or row.get('config_hash')!=config_hash(cur,cfg,credential_source,asr_model(cur,cfg,credential_source))): return None,'source_or_agent_changed'
     route=row.get('route') if isinstance(row.get('route'),dict) else {}
     policy=row.get('media_policy') if isinstance(row.get('media_policy'),dict) else {}
     exact=(route.get('message_ids')==[source['message_id']] and route.get('source_version')==source['version']
@@ -161,6 +164,12 @@ def preflight(cur,cfg,args):
     if reason: return {'ready':False,'reason_code':reason,'message_id':source['message_id'],'attachment_kind':source['kind']}
     voice_model=asr_model(cur,cfg,credential_source)
     policy=policy_for(source['kind']);tariffs,budget_ready=_budget(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],model,voice_model,policy)
+    if policy['max_asr_calls'] and not voice_model:
+        return {'ready':False,'reason_code':'asr_model_unavailable','message_id':source['message_id'],
+          'attachment_kind':source['kind'],'model_id':model,'asr_model_id':None,'provider_domain':DOMAIN,
+          'credential_source':credential_source,'credential_configured':configured,'tariffs':tariffs,
+          'spend_cap_enforced':bool(limit_microusd(cfg['AI_LEARNING_MCP_TENANT_ID'])),
+          'execution':'existing_knowledge_campaign_fragment_only'}
     fragment,fragment_reason=_approved_fragment(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],source,cfg['AI_LEARNING_MCP_AGENT_ID'],model,credential_source,cfg,args.get('consent_id'))
     return {'ready':bool(fragment and budget_ready),'reason_code':'' if fragment and budget_ready else (fragment_reason or 'tariff_or_budget_unavailable'),
       'message_id':source['message_id'],'attachment_kind':source['kind'],'model_id':model,'asr_model_id':voice_model or None,
