@@ -38,7 +38,8 @@ _STOPWORDS = set("""nə nəsə necə hansı harada nə vaxt zaman mən biz siz b
 ola olar olsa olan bilər bilirəm bilərəm olarmı var yox burda burada proqram proqramda
 is are the a an to of in on for it can how what when where i we you
 как что где когда можно ли я мы вы это в во на и или из за с со для по бы
-одного другой будет есть программу программе""".split())
+одного другой будет есть программу программе
+analiz analysis анализ""".split())
 
 
 def _fold(value):
@@ -48,9 +49,38 @@ def _fold(value):
         str.maketrans({'ə':'e','ı':'i','ö':'o','ü':'u','ğ':'g','ş':'s','ç':'c'})).replace('\u0307','')
 
 
+# Only complete known stems plus inflectional endings can expand a group.
+# A shared four-letter prefix does not establish a concept (different/difference).
+_AZ_SUFFIXES = {
+    'da','de','dan','den','a','e','ya','ye','i','u','in','un','nin','nun',
+    'lar','ler','lari','leri','larda','lerde','lardan','lerden',
+    'ni','nu','ini','unu','si','su','sini','sunu','inda','inde','sinda','sinde',
+    'ib','ub','yib','yub','yin','yun','maq','mek',
+}
+_RU_ENDINGS = {'а','у','ы','и','е','ой','ом','ов','ам','ах','ами',
+    'ия','ии','ию','ией','ий','иям','иях','иями','ие','ию','ием',
+    'ый','ая','ое','ые','ую','ого','ому','ым','ых','ыми'}
+
+
+def _variants(term):
+    if re.search('[а-яё]',term):
+        stem=term
+        for ending in ('ия','ие','ый','ий','а'):
+            if term.endswith(ending):
+                stem=term[:-len(ending)]
+                break
+        return {stem+ending for ending in _RU_ENDINGS}
+    variants={term+ending for ending in _AZ_SUFFIXES | {'s','es','ed','ing'}}
+    if term.endswith('q'):
+        variants.update(term[:-1]+'g'+ending for ending in _AZ_SUFFIXES if ending[0] in 'aeiu')
+    if term.endswith('e'):
+        variants.add(term[:-1]+'ing')
+    return variants
+
+
 def _matches(words, group):
     normalized={_fold(term) for term in group}
-    return bool(words & normalized or any(word[:4]==term[:4] for word in words for term in normalized if len(word)>=4 and len(term)>=4))
+    return bool(words & normalized or any(words & _variants(term) for term in normalized if len(term)>=4))
 
 
 def terms(value, limit=24):
@@ -85,8 +115,7 @@ def tsquery(value):
 
 
 def patterns(value):
-    # Substring fallback is for known domain variants, not arbitrary question
-    # words (e.g. analiz must not match a video's analizi disclaimer).
-    vocabulary={_fold(term) for group in _GROUPS+_CONTEXTUAL_GROUPS for term in group}
-    return ['%' + term.replace('%', '').replace('_', '') + '%' for term in terms(value)
-            if len(term)>=4 and _fold(term) in vocabulary]
+    # Retain the established bounded substring fallback for unknown business
+    # vocabulary too (qeydiyyat -> qeydiyyatdan). Scaffolding/noise is removed
+    # by terms(), rather than excluding all non-dictionary concepts.
+    return ['%' + term.replace('%', '').replace('_', '') + '%' for term in terms(value) if len(term)>=4]

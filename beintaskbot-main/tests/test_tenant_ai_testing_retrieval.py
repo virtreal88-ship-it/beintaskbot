@@ -75,6 +75,7 @@ def test_save_continue_paraphrases_include_full_instruction(indexed,query):
 
 @pytest.mark.parametrize('query',[
     'Sabah hava necə olacaq?',
+    'What different payment methods do you offer?',
     'Как настроить интернет роутер?',
     'Telefon nömrəsini necə dəyişmək olar?',
     'Şifrəni necə saxlamaq olar?',
@@ -105,4 +106,18 @@ def test_retrieval_keeps_tenant_agent_active_filters_and_source_identity(indexed
     # Shared company knowledge remains eligible under the existing agent filter.
     db.execute('UPDATE saas_ai_knowledge_sources SET active=FALSE WHERE tenant_id=%s::uuid AND agent_id=%s::uuid',(A,AGENT));db.commit()
     assert {r['source_id'] for r in retrieve('Sayım fərqi')}=={global_source['id']}
+    provider.assert_not_called()
+
+
+def test_worker_keeps_unknown_az_suffix_fallback_and_scope_filters(indexed,monkeypatch):
+    import tenant_ai_agent_run_store as runs
+    db,_,provider=indexed
+    monkeypatch.setattr(runs,'_connect',lambda:db)
+    source=agents.save_knowledge(PROFILE,{'title':'Registration help','kind':'text',
+        'content':'Qeydiyyatdan sonra hesaba daxil olun.','active':True,'agent_id':AGENT})
+    rows=runs.knowledge_context(A,'qeydiyyat',agent_id=AGENT)
+    assert {row['source_id'] for row in rows}=={source['id']}
+    assert not runs.knowledge_context(B,'qeydiyyat',agent_id=AGENT)
+    assert not runs.knowledge_context(A,'qeydiyyat',agent_id=uid())
+    assert not runs.knowledge_context(A,'What different payment methods do you offer?',agent_id=AGENT)
     provider.assert_not_called()
