@@ -80,6 +80,59 @@ def test_component_consent_queues_only_exact_fragment_and_is_idempotent(db,monke
     assert again['state']=='approved' and again['consent_id']==result['consent_id']
 
 
+@pytest.mark.parametrize('same_source',[False,True])
+def test_unknown_fragment_only_blocks_overlapping_exact_photo(db,monkeypatch,same_source):
+    seed_job(db);_pricing(monkeypatch);cfg=_cfg();_bridge(monkeypatch,cfg)
+    monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    consent.ensure_schema(db)
+    photo=_source(db)
+    db.execute("UPDATE saas_crm_messages SET message_type='image' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,photo))
+    other=photo if same_source else _source(db)
+    prepared=consent.prepare(db.cursor(),cfg,{'message_id':photo,'channel_id':CA,'lead_id':41})
+    meta=prepared['_component_meta']['owner_single_extraction'];db.commit()
+    consent.complete(db.cursor(),cfg,consent_id=meta['consent_ids']['approve'],capability=meta['capabilities']['approve'],action='approve');db.commit()
+    current=db.execute("SELECT id,route FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND status='pending'",(A,))[0]
+    old_route={**current['route'],'message_ids':[other], 'source_version':'older-version'}
+    old=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_knowledge_campaign_fragments
+      (tenant_id,campaign_id,id,source_key,route,status)
+      VALUES(%s::uuid,(SELECT id FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid),%s::uuid,%s,%s::jsonb,'unknown')""",
+      (A,A,old,'old-unknown-'+old,json.dumps(old_route)))
+    db.commit()
+    claimed=campaigns.claim(A,str(db.execute("SELECT id FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid",(A,))[0]['id']))
+    assert bool(claimed) is not same_source
+    assert db.execute("SELECT status FROM saas_knowledge_campaign_fragments WHERE id=%s::uuid",(old,))[0]['status']=='unknown'
+    assert not db.execute("SELECT id FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid",(A,))
+    if claimed:
+        assert str(claimed['id'])==str(current['id'])
+        assert campaigns.claim(A,str(db.execute("SELECT id FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid",(A,))[0]['id'])) is None
+        # Scheduling an independent item cannot bypass the shared spend cap.
+        db.execute("""INSERT INTO saas_ai_spend_reservations
+          (tenant_id,id,call_key,model,kind,reserved_microusd,state)
+          VALUES(%s::uuid,%s::uuid,'old-unknown-call','fixture-model','test',5000000,'unknown')""",
+          (A,str(uuid.uuid4())))
+        db.commit()
+        with pytest.raises(TenantLinearError,match='ai_spend_budget_exhausted'):
+            spend_budget.reserve(db.cursor(),A,'new-photo-call','test','fixture-model',total_upper=100)
+
+
+def test_unidentified_unknown_keeps_global_hold(db,monkeypatch):
+    seed_job(db);_pricing(monkeypatch);cfg=_cfg();_bridge(monkeypatch,cfg)
+    monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    consent.ensure_schema(db);photo=_source(db)
+    prepared=consent.prepare(db.cursor(),cfg,{'message_id':photo,'channel_id':CA,'lead_id':41})
+    meta=prepared['_component_meta']['owner_single_extraction'];db.commit()
+    result=consent.complete(db.cursor(),cfg,consent_id=meta['consent_ids']['approve'],capability=meta['capabilities']['approve'],action='approve');db.commit()
+    old=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_knowledge_campaign_fragments
+      (tenant_id,campaign_id,id,source_key,route,status)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::jsonb,'unknown')""",
+      (A,result['campaign_id'],old,'unidentified-'+old,json.dumps({'channel_id':CA})))
+    db.commit()
+    assert campaigns.claim(A,result['campaign_id']) is None
+    assert db.execute("SELECT status FROM saas_knowledge_campaign_fragments WHERE id=%s::uuid",(old,))[0]['status']=='unknown'
+
+
 def test_consent_reject_stale_foreign_and_media_change_fail_closed(db,monkeypatch):
     seed_job(db);_pricing(monkeypatch);cfg=_cfg();_bridge(monkeypatch,cfg);message=_source(db);consent.ensure_schema(db)
     with pytest.raises(TenantLinearError,match='OAuth channel'):
