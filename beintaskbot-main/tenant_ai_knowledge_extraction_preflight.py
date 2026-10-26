@@ -169,7 +169,9 @@ def _consent_execution(cur,cfg,source,consent_id):
     cur.execute("SELECT to_regclass('saas_ai_single_message_extraction_consents') AS relation")
     if not (cur.fetchone() or {}).get('relation'): return None
     cur.execute('''SELECT x.state AS consent_state,x.campaign_id,x.fragment_id,
-      c.status AS campaign_status,f.status AS fragment_status,
+      c.status AS campaign_status,c.approved_at IS NOT NULL AS campaign_approved,
+      c.updated_at>now()-interval '30 seconds' AS campaign_polled_recent,
+      f.status AS fragment_status,
       f.lease_until>now() AS lease_live,f.error_code
       FROM saas_ai_single_message_extraction_consents x
       LEFT JOIN saas_knowledge_campaigns c ON c.tenant_id=x.tenant_id AND c.id=x.campaign_id
@@ -191,6 +193,21 @@ def _consent_execution(cur,cfg,source,consent_id):
           WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid GROUP BY status''',
           (cfg['AI_LEARNING_MCP_TENANT_ID'],row['campaign_id']))
         counts={item['status']:int(item['n']) for item in cur.fetchall()}
+    claim_diagnostic=None
+    if row.get('consent_state')=='approved' and row.get('fragment_status')=='pending':
+        cur.execute('''SELECT status,count(*) AS n FROM saas_knowledge_campaign_fragments
+          WHERE tenant_id=%s::uuid AND id<>%s::uuid AND status IN ('running','unknown')
+          GROUP BY status''',(cfg['AI_LEARNING_MCP_TENANT_ID'],row['fragment_id']))
+        other={item['status']:int(item['n']) for item in cur.fetchall()}
+        cur.execute('''SELECT count(*) AS n FROM saas_knowledge_quality_checks q
+          JOIN saas_ai_test_turns t ON t.tenant_id=q.tenant_id AND t.id=q.id
+          WHERE q.tenant_id=%s::uuid AND t.state IN ('generating','unknown')''',
+          (cfg['AI_LEARNING_MCP_TENANT_ID'],))
+        claim_diagnostic={'campaign_approved':bool(row.get('campaign_approved')),
+          'campaign_polled_recent':bool(row.get('campaign_polled_recent')),
+          'other_running_fragments':other.get('running',0),
+          'other_unknown_fragments':other.get('unknown',0),
+          'held_test_turns':int(cur.fetchone()['n'])}
     # Codes are internal machine codes; never expose a free-form provider error.
     known_codes={'interrupted','provider_unknown','limit_exceeded','source_unavailable',
                  'media_incomplete','no_text'}
@@ -199,7 +216,8 @@ def _consent_execution(cur,cfg,source,consent_id):
       'fragment_id':str(row['fragment_id']) if row.get('fragment_id') else None,
       'campaign_status':row.get('campaign_status'),'fragment_status':row.get('fragment_status'),
       'lease_live':bool(row.get('lease_live')),'fragment_status_counts':counts,
-      'error_code':code if code in known_codes else 'other' if code else None}
+      'error_code':code if code in known_codes else 'other' if code else None,
+      **({'claim_diagnostic':claim_diagnostic} if claim_diagnostic is not None else {})}
 
 
 def preflight(cur,cfg,args):
