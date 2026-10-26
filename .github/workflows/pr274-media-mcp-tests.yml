@@ -39,3 +39,7 @@ jobs:
           tests/test_ai_learning_mcp.py
           tests/test_ai_training_policy.py
           tests/test_administrator_publication.py
+          tests/test_tenant_ai_testing.py
+          tests/test_tenant_ai_testing_api.py
+          tests/test_media_spend_budget.py
+          tests/test_tenant_ai_testing_spend.py

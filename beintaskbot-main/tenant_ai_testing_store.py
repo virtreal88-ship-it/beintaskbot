@@ -13,6 +13,7 @@ from tenant_ai_agent_safety import sanitize_draft,server_instructions
 from tenant_ai_agent_runtime_flags import enabled as runtime_flag
 from tenant_ai_agent_key_policy import choose_api_credential,platform_service_ready,platform_model,platform_model_allowed,platform_token_limit
 from tenant_ai_testing_budget import TOKEN_USAGE_SQL
+from tenant_ai_spend_budget import reserve as reserve_spend, settle as settle_spend, release as release_spend, price
 from tenant_chat_ai_provider import INSTRUCTIONS
 from tenant_linear_policy import TenantLinearError,identifier
 
@@ -190,13 +191,27 @@ def reserve(profile,id,data,*,campaign_id=None):
             snapshot={'agent_version':row['version'],'settings_version':str(row['settings_version']),'config_version':str(row.get('config_version')),'session_revision':value['revision']}
             cur.execute('SELECT 1 FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(tenant,request))
             if cur.fetchone():raise TenantLinearError('Код запроса уже использован другой AI-операцией.',409)
+            spend_key='testing:'+request
+            # Byte length bounds text input tokens; include the provider JSON
+            # envelope and fixed output maximum. Pin the settlement tariff.
+            reserved_prices=price(model)
+            reserve_spend(cur,tenant,spend_key,'testing_primary',model,total_upper=tokens+256)
             cur.execute("INSERT INTO saas_chat_ai_runs(tenant_id,request_id,requested_by,lead_id,input_hash,config_version,status,reserved_calls) VALUES(%s::uuid,%s::uuid,%s,0,%s,'virtual-test','sending',1)",(tenant,request,actor,digest))
             cur.execute("INSERT INTO saas_ai_test_turns(tenant_id,id,session_id,input_hash,client_text,state,trace,reserved_tokens,snapshot) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,'generating',%s::jsonb,%s,%s::jsonb)",(tenant,request,id,digest,text,json.dumps(trace),tokens,json.dumps(snapshot)))
             cur.execute('UPDATE saas_ai_test_sessions SET pending_turn=%s::uuid,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(request,tenant,id))
         conn.commit()
-    return {'tenant_id':tenant,'session_id':id,'request_id':request,'profile':profile,'api_key':key,'model':model,'lines':lines,'instructions':prompt,'extra':extra,'language':row['language'],'snapshot':snapshot,'handoff_after_reply':any('handoff_after_reply' in (t.get('actions') or []) for t in triggers)}
+    return {'tenant_id':tenant,'session_id':id,'request_id':request,'profile':profile,'api_key':key,'model':model,'spend_call_key':spend_key,'reserved_prices':reserved_prices,'lines':lines,'instructions':prompt,'extra':extra,'language':row['language'],'snapshot':snapshot,'handoff_after_reply':any('handoff_after_reply' in (t.get('actions') or []) for t in triggers)}
 
-def finish(item,response=None,usage=None):
+def finish(item,response=None,usage=None,*,attempted=True):
+    # Usage is charged even if live settings changes discard the response.
+    # Ambiguous attempts retain their full monetary hold.
+    if item.get('spend_call_key'):
+        if not attempted:
+            release_spend(item['tenant_id'],item['spend_call_key'])
+        else:
+            known=isinstance(usage,dict) and int(usage.get('total_tokens') or 0)>0
+            settle_spend(item['tenant_id'],item['spend_call_key'],usage or {},
+                         unknown=not known,reserved_prices=item.get('reserved_prices'))
     with _connect() as conn:
         setup(conn)
         with conn.cursor() as cur:
@@ -205,7 +220,7 @@ def finish(item,response=None,usage=None):
             cur.execute('SELECT state,snapshot,total_tokens FROM saas_ai_test_turns WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,request));turn=cur.fetchone()
             if not turn or turn['state']=='completed':return
             actual=max(actual,int(turn['total_tokens']))
-            state='unknown' if response is None else 'superseded';valid=False
+            state='unknown' if attempted and response is None else 'superseded';valid=False
             if response is not None and turn['state']=='generating':
                 try:
                     _,actor=_authorize(cur,item['profile']);value=session(cur,tenant,actor,item['session_id'],True);row=config(cur,tenant,value['agent_id'])
@@ -214,7 +229,7 @@ def finish(item,response=None,usage=None):
                 except TenantLinearError:valid=False
             if valid:state='completed'
             if turn['state']!='generating':state=turn['state'];response=None
-            cur.execute('UPDATE saas_ai_test_turns SET state=%s,response=%s,total_tokens=%s,reserved_tokens=CASE WHEN %s THEN 0 ELSE reserved_tokens END,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(state,sanitize_draft(response,item['language']) if valid else '',actual,actual>0,tenant,request))
+            cur.execute('UPDATE saas_ai_test_turns SET state=%s,response=%s,total_tokens=%s,reserved_tokens=CASE WHEN %s THEN 0 ELSE reserved_tokens END,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(state,sanitize_draft(response,item['language']) if valid else '',actual,actual>0 or not attempted,tenant,request))
             cur.execute('UPDATE saas_chat_ai_runs SET status=%s,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid',('completed' if valid else 'unknown' if state=='unknown' else 'skipped',tenant,request))
             cur.execute("UPDATE saas_ai_test_sessions SET pending_turn=NULL,reply_count=reply_count+%s,state=CASE WHEN %s THEN 'human' ELSE state END,reason=CASE WHEN %s THEN 'trigger_reply_then_handoff' ELSE reason END,revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND pending_turn=%s::uuid",(int(valid),bool(valid and item['handoff_after_reply']),bool(valid and item['handoff_after_reply']),tenant,item['session_id'],request))
             if session_row and state in {'unknown','superseded'}:

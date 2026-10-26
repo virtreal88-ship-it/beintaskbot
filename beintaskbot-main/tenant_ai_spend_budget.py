@@ -189,7 +189,7 @@ def settle_media(tenant_id, call_key, *, operation, attempted_units=0, reserved_
         conn.commit()
 
 
-def settle(tenant_id, call_key, usage, unknown=False):
+def settle(tenant_id, call_key, usage, unknown=False, *, reserved_prices=None):
     """Settle confirmed tokens; ambiguity retains the entire reservation."""
     if not limit_microusd(tenant_id):
         return
@@ -203,7 +203,7 @@ def settle(tenant_id, call_key, usage, unknown=False):
             if not row or row['state'] != 'reserved':
                 conn.commit()
                 return
-            prices = price(row['model'])
+            prices = reserved_prices if reserved_prices is not None else price(row['model'])
             values = usage if isinstance(usage, dict) else {}
             if unknown or not prices:
                 actual = None
