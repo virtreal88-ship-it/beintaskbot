@@ -119,14 +119,52 @@ def test_preflight_needs_exact_running_lease_and_combined_budget(db,monkeypatch)
     # the exact fragment lease can proceed toward extraction.
     value=preflight.preflight(db.cursor(),cfg,{'message_id':message,'channel_id':CA,'lead_id':41,'consent_id':result['consent_id']})
     assert value['ready'] is False and value['reason_code']=='lease_or_exact_fragment_required'
+    assert value['consent_execution']=={'state':'approved','campaign_id':result['campaign_id'],
+      'fragment_id':result['fragment_id'],'campaign_status':'running','fragment_status':'pending',
+      'lease_live':False,'fragment_status_counts':{'pending':1},'error_code':None}
     db.execute("UPDATE saas_knowledge_campaign_fragments SET status='running',lease_token=%s::uuid,lease_until=now()+interval '5 minutes' WHERE tenant_id=%s::uuid",(str(uuid.uuid4()),A));db.commit()
     value=preflight.preflight(db.cursor(),cfg,{'message_id':message,'channel_id':CA,'lead_id':41,'consent_id':result['consent_id']})
     assert value['ready'] is True
+    assert value['consent_execution']['fragment_status']=='running'
+    assert value['consent_execution']['lease_live'] is True
     # An existing reservation consuming the cap makes the same source not ready
     # without changing the fragment or creating a second reservation.
     db.execute("INSERT INTO saas_ai_spend_reservations(tenant_id,id,call_key,model,kind,reserved_microusd,state) VALUES(%s::uuid,%s::uuid,'other','fixture-model','test',5000000,'reserved')",(A,str(uuid.uuid4())));db.commit()
     value=preflight.preflight(db.cursor(),cfg,{'message_id':message,'channel_id':CA,'lead_id':41,'consent_id':result['consent_id']})
     assert value['ready'] is False and value['reason_code']=='tariff_or_budget_unavailable'
+
+
+def test_preflight_reports_exact_fragment_state_without_cross_owner_or_tenant_leak(db,monkeypatch):
+    seed_job(db);_pricing(monkeypatch);cfg=_cfg();_bridge(monkeypatch,cfg);message=_source(db);consent.ensure_schema(db)
+    prepared=consent.prepare(db.cursor(),cfg,{'message_id':message,'channel_id':CA,'lead_id':41})
+    meta=prepared['_component_meta']['owner_single_extraction'];db.commit()
+    result=consent.complete(db.cursor(),cfg,consent_id=meta['consent_ids']['approve'],
+      capability=meta['capabilities']['approve'],action='approve');db.commit()
+    selection={'message_id':message,'channel_id':CA,'lead_id':41,'consent_id':result['consent_id']}
+    db.execute("UPDATE saas_knowledge_campaign_fragments SET status='blocked',error_code='source_unavailable' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,result['fragment_id']))
+    db.execute("UPDATE saas_knowledge_campaigns SET status='blocked' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,result['campaign_id']));db.commit()
+    status=preflight.preflight(db.cursor(),cfg,selection)['consent_execution']
+    assert status['campaign_status']=='blocked' and status['fragment_status_counts']=={'blocked':1}
+    assert status['fragment_status']=='blocked' and status['error_code']=='source_unavailable'
+    db.execute("UPDATE saas_knowledge_campaign_fragments SET status='unknown',error_code='interrupted' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,result['fragment_id']));db.commit()
+    status=preflight.preflight(db.cursor(),cfg,selection)['consent_execution']
+    assert status['fragment_status']=='unknown' and status['fragment_status_counts']=={'unknown':1}
+    assert status['error_code']=='interrupted'
+    db.execute("UPDATE saas_knowledge_campaign_fragments SET status='completed',error_code='' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,result['fragment_id']))
+    db.execute("UPDATE saas_knowledge_campaigns SET status='stopped' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,result['campaign_id']));db.commit()
+    status=preflight.preflight(db.cursor(),cfg,selection)['consent_execution']
+    assert status['campaign_status']=='stopped' and status['fragment_status_counts']=={'completed':1}
+    assert status['error_code'] is None
+    assert 'consent_execution' not in preflight.preflight(db.cursor(),{**cfg,'oauth_connection_id':str(uuid.uuid4())},selection)
+    assert 'consent_execution' not in preflight.preflight(db.cursor(),{**cfg,'actor_id':999},selection)
+    assert 'consent_execution' not in preflight.preflight(db.cursor(),cfg,{**selection,'consent_id':str(uuid.uuid4())})
+    other=_source(db,tenant=B,channel=CB,lead=42)
+    foreign_cfg={**cfg,'AI_LEARNING_MCP_TENANT_ID':B,'AI_LEARNING_MCP_CHANNEL_ID':CB}
+    assert 'consent_execution' not in preflight.preflight(db.cursor(),foreign_cfg,
+      {'message_id':other,'channel_id':CB,'lead_id':42,'consent_id':result['consent_id']})
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      (json.dumps({'mediaId':'replacement','fileLength':100}),A,message));db.commit()
+    assert 'consent_execution' not in preflight.preflight(db.cursor(),cfg,selection)
 
 
 def test_single_message_component_uses_only_app_completion_and_exact_state():

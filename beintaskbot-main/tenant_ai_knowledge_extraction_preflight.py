@@ -136,7 +136,9 @@ def _approved_fragment(cur,tenant,source,agent,model,credential_source,cfg,conse
       FROM saas_ai_single_message_extraction_consents x
       LEFT JOIN saas_knowledge_campaign_fragments f ON f.tenant_id=x.tenant_id AND f.id=x.fragment_id
       LEFT JOIN saas_knowledge_campaigns c ON c.tenant_id=f.tenant_id AND c.id=f.campaign_id
-      WHERE x.tenant_id=%s::uuid AND x.id=%s::uuid''',(tenant,consent_id))
+      WHERE x.tenant_id=%s::uuid AND x.id=%s::uuid AND x.owner_id=%s
+        AND x.oauth_connection_id=%s::uuid''',
+      (tenant,consent_id,cfg.get('actor_id'),cfg.get('oauth_connection_id')))
     row=cur.fetchone()
     if not row or row.get('state')!='approved': return None,'owner_consent_required'
     if (str(row.get('message_id'))!=source['message_id'] or str(row.get('channel_id'))!=source['channel_id']
@@ -158,10 +160,54 @@ def _approved_fragment(cur,tenant,source,agent,model,credential_source,cfg,conse
     return (row if exact else None),('lease_or_exact_fragment_required' if not exact else '')
 
 
+def _consent_execution(cur,cfg,source,consent_id):
+    """Owner-scoped state of the already created exact fragment; no claim or retry."""
+    if not consent_id or not cfg.get('oauth_connection_id') or not cfg.get('actor_id'):
+        return None
+    try: consent_id=identifier(consent_id)
+    except TenantLinearError: return None
+    cur.execute("SELECT to_regclass('saas_ai_single_message_extraction_consents') AS relation")
+    if not (cur.fetchone() or {}).get('relation'): return None
+    cur.execute('''SELECT x.state AS consent_state,x.campaign_id,x.fragment_id,
+      c.status AS campaign_status,f.status AS fragment_status,
+      f.lease_until>now() AS lease_live,f.error_code
+      FROM saas_ai_single_message_extraction_consents x
+      LEFT JOIN saas_knowledge_campaigns c ON c.tenant_id=x.tenant_id AND c.id=x.campaign_id
+      LEFT JOIN saas_knowledge_campaign_fragments f ON f.tenant_id=x.tenant_id
+        AND f.campaign_id=x.campaign_id AND f.id=x.fragment_id
+      WHERE x.tenant_id=%s::uuid AND x.id=%s::uuid AND x.owner_id=%s
+        AND x.oauth_connection_id=%s::uuid AND x.message_id=%s::uuid
+        AND x.channel_id=%s::uuid AND x.lead_id=%s AND x.agent_id=%s::uuid
+        AND x.source_version=%s AND x.body_hash=%s AND x.external_id=%s
+        AND x.action='approve' ''',
+      (cfg['AI_LEARNING_MCP_TENANT_ID'],consent_id,cfg['actor_id'],cfg['oauth_connection_id'],
+       source['message_id'],source['channel_id'],source['lead_id'],cfg['AI_LEARNING_MCP_AGENT_ID'],
+       source['version'],source['body_hash'],source['external_id']))
+    row=cur.fetchone()
+    if not row:return None
+    counts={}
+    if row.get('campaign_id'):
+        cur.execute('''SELECT status,count(*) AS n FROM saas_knowledge_campaign_fragments
+          WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid GROUP BY status''',
+          (cfg['AI_LEARNING_MCP_TENANT_ID'],row['campaign_id']))
+        counts={item['status']:int(item['n']) for item in cur.fetchall()}
+    # Codes are internal machine codes; never expose a free-form provider error.
+    known_codes={'interrupted','provider_unknown','limit_exceeded','source_unavailable',
+                 'media_incomplete','no_text'}
+    code=str(row.get('error_code') or '')
+    return {'state':row['consent_state'],'campaign_id':str(row['campaign_id']) if row.get('campaign_id') else None,
+      'fragment_id':str(row['fragment_id']) if row.get('fragment_id') else None,
+      'campaign_status':row.get('campaign_status'),'fragment_status':row.get('fragment_status'),
+      'lease_live':bool(row.get('lease_live')),'fragment_status_counts':counts,
+      'error_code':code if code in known_codes else 'other' if code else None}
+
+
 def preflight(cur,cfg,args):
     """Safe readiness facts only: never attachment bytes, URLs, keys or writes."""
     source=_source(cur,cfg,args); model,credential_source,configured,reason=_model(cur,cfg)
-    if reason: return {'ready':False,'reason_code':reason,'message_id':source['message_id'],'attachment_kind':source['kind']}
+    execution=_consent_execution(cur,cfg,source,args.get('consent_id'))
+    status={'consent_execution':execution} if execution else {}
+    if reason: return {'ready':False,'reason_code':reason,'message_id':source['message_id'],'attachment_kind':source['kind'],**status}
     voice_model=asr_model(cur,cfg,credential_source)
     policy=policy_for(source['kind']);tariffs,budget_ready=_budget(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],model,voice_model,policy)
     if policy['max_asr_calls'] and not voice_model:
@@ -169,16 +215,16 @@ def preflight(cur,cfg,args):
           'attachment_kind':source['kind'],'model_id':model,'asr_model_id':None,'provider_domain':DOMAIN,
           'credential_source':credential_source,'credential_configured':configured,'tariffs':tariffs,
           'spend_cap_enforced':bool(limit_microusd(cfg['AI_LEARNING_MCP_TENANT_ID'])),
-          'execution':'existing_knowledge_campaign_fragment_only'}
+          'execution':'existing_knowledge_campaign_fragment_only',**status}
     fragment,fragment_reason=_approved_fragment(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],source,cfg['AI_LEARNING_MCP_AGENT_ID'],model,credential_source,cfg,args.get('consent_id'))
     return {'ready':bool(fragment and budget_ready),'reason_code':'' if fragment and budget_ready else (fragment_reason or 'tariff_or_budget_unavailable'),
       'message_id':source['message_id'],'attachment_kind':source['kind'],'model_id':model,'asr_model_id':voice_model or None,
       'provider_domain':DOMAIN,'credential_source':credential_source,'credential_configured':configured,
       'tariffs':tariffs,'spend_cap_enforced':bool(limit_microusd(cfg['AI_LEARNING_MCP_TENANT_ID'])),
-      'execution':'existing_knowledge_campaign_fragment_only'}
+      'execution':'existing_knowledge_campaign_fragment_only',**status}
 
 
 def definitions(scope):
-    return [{'name':NAME,'description':'Owner-only read-only preflight for one attachment. Ready requires exact owner consent, unchanged media version, matching source/agent/policy, a live campaign fragment lease and combined configured tariff/budget readiness. It never reads content, starts analysis, creates campaigns, reserves budget, or calls a provider.',
+    return [{'name':NAME,'description':'Owner-only read-only preflight for one attachment. An exact consent also returns its campaign and fragment states, counts, and safe error code. Ready requires unchanged media version, matching source/agent/policy, a live fragment lease and combined configured tariff/budget readiness. It never reads content, starts analysis, creates campaigns, reserves budget, or calls a provider.',
       'inputSchema':{'type':'object','properties':{'message_id':{'type':'string','format':'uuid'},'channel_id':{'type':'string','format':'uuid'},'lead_id':{'type':'integer','minimum':1},'consent_id':{'type':'string','format':'uuid'}},'required':['message_id','channel_id','lead_id'],'additionalProperties':False},
       'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[scope]}]}]
