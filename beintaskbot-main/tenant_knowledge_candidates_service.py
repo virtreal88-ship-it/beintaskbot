@@ -34,7 +34,7 @@ class LiveExtractionDisabled(Exception):
 
 
 def prepare(profile,data,review=None):
-    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision'}
+    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректные параметры анализа.')
     for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
         if flag in data and type(data[flag]) is not bool: raise TenantLinearError('Некорректное разрешение медиа.')
@@ -77,6 +77,13 @@ def prepare(profile,data,review=None):
                 from tenant_knowledge_campaign_worker import check_fence
                 check_fence(cur,tenant,request_id)
             item=review['snapshot'] if review else store.snapshot(cur,profile,data)
+            # The owner single-message path carries a one-way safe media
+            # identity fence.  Existing campaign/history routes omit it and
+            # retain their current bounded behavior.
+            if data.get('source_version'):
+                if (not isinstance(data['source_version'],str) or len(data['source_version'])!=64
+                        or len(item['refs'])!=1 or item['refs'][0].get('media_version')!=data['source_version']):
+                    raise TenantLinearError('Media source changed; obtain a new owner consent.',409)
             cur.execute('SELECT 1 FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,request_id))
             if cur.fetchone():
                 from tenant_knowledge_campaign_discovery import bound_context

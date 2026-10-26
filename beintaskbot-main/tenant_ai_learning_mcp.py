@@ -33,6 +33,8 @@ import tenant_ai_owner_review_component as owner_review_component
 import tenant_ai_dialogue_merge as dialogue_merge
 import tenant_ai_direct_reconcile_mcp as direct_reconcile
 import tenant_ai_knowledge_extraction_preflight as knowledge_extraction_preflight
+import tenant_ai_single_message_extraction as single_message_extraction
+import tenant_knowledge_campaign_schema as knowledge_campaign_schema
 
 TOOL_SCOPE = 'ai_learning.read'
 DRAFT_SCOPE = administrator_drafts.DRAFT_SCOPE
@@ -77,6 +79,8 @@ def ensure_mcp_schema(conn):
     owner_review_component.ensure_schema(conn)
     dialogue_merge.ensure_schema(conn)
     direct_reconcile.reconcile.ensure_schema(conn)
+    single_message_extraction.ensure_schema(conn)
+    knowledge_campaign_schema.create_schema(conn)
     with conn.cursor() as cur:
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_learning_mcp_tokens(
           id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -257,6 +261,12 @@ def _tools(cur,cfg,name,args):
         if TOOL_SCOPE not in set(cfg.get('granted_scopes') or []):
             raise TenantLinearError('Additional OAuth scope required.',403)
         return knowledge_extraction_preflight.preflight(cur,cfg,args)
+    if name == single_message_extraction.PREPARE_NAME:
+        return single_message_extraction.prepare(cur,cfg,args)
+    if name == single_message_extraction.COMPLETE_NAME:
+        if not isinstance(args,dict) or set(args)!={'consent_id','capability','action'}:
+            raise TenantLinearError('Invalid owner extraction decision.',400)
+        return single_message_extraction.complete(cur,cfg,**args)
     if name == 'administrator_owner_review_component':
         return owner_review_component.prepare(cur,cfg,args)
     if name == 'administrator_owner_review_component_complete':
@@ -548,12 +558,14 @@ async def mcp(request):
         if method=='tools/list':
             auth=[{'type':'oauth2','scopes':[TOOL_SCOPE]}]
             component_tools=[]
+            single_message_tools=[]
             if administrator_drafts.enabled():
                 component_tools.append(_owner_component_definition())
                 if owner_review_component.enabled_for_manual_bridge():
                     component_tools.append(_owner_component_completion_definition())
                     component_tools.extend(_owner_publish_component_definitions())
-            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type':'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+knowledge_extraction_preflight.definitions(TOOL_SCOPE)+direct_reconcile.definitions()+dialogue_merge.definitions()+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+component_tools+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
+                    single_message_tools=single_message_extraction.definitions()
+            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type': 'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+knowledge_extraction_preflight.definitions(TOOL_SCOPE)+single_message_tools+direct_reconcile.definitions()+dialogue_merge.definitions()+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+component_tools+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
         if method=='tools/call':
             cfg=_authorize_token(request)
             tool_name=str(data.get('params',{}).get('name',''))
@@ -576,7 +588,7 @@ async def mcp(request):
                 if tool_name.startswith(direct_reconcile.PREFIX):
                     commit_attempted=True
                     conn.commit()
-                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge':
+                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('administrator_single_message_extraction_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge':
                     commit_attempted=True
                     conn.commit()
             return response
