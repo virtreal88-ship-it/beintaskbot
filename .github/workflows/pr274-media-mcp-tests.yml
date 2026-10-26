@@ -13,6 +13,18 @@ jobs:
   media-mcp:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    services:
+      video-test-postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: isolated-video-fixture
+        ports:
+          - 55439:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=55439 user=postgres password=isolated-video-fixture dbname=postgres
     defaults:
       run:
         working-directory: beintaskbot-main
@@ -50,6 +62,7 @@ jobs:
           tests/test_instruction_library.py
           tests/test_instruction_expert_integration.py
           tests/test_instruction_videos.py
+          tests/test_instruction_video_postgres.py
       - name: Run instruction card regression
         run: |
           node tests/test_instruction_editor.cjs

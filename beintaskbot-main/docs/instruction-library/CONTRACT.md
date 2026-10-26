@@ -130,3 +130,38 @@ any original customer video. The existing operator file route uses Kommo Drive a
 Connect AI currently exposes text delivery only. Its video upload/send contract
 must be verified before adding an adapter. These limits were not changed.
 Separate pilot approval/review is required before enabling that boundary. No customer-send permission is granted here.
+
+### Bounded private storage
+
+The operational byte budget is 500 MiB per company, across all instruction
+videos including inactive/revoked history. It is independent of publication
+permissions and knowledge/case counts. Upload transactions acquire a tenant
+advisory lock before deduplication and the byte-budget check/insert. Repeating
+identical bytes/metadata on a card returns its existing asset/version; changed
+metadata must use the explicit metadata edit (which resets approval). The same
+file on a different instruction consumes its actual stored bytes. Quota exhaustion
+returns 413 without deleting or reactivating anything. This pilot has no purge
+operation and never silently discards history to make room.
+
+HTTP admission allows one upload and two preview streams per worker. Uploads
+spool to a temporary file in 64 KiB chunks, with a 100 MiB bound; validation/hash
+read bounded blocks. At the single final database bind there is at most one
+100 MiB file buffer per worker (plus bounded driver encoding overhead), without
+an accumulated bytearray/bytes duplicate. Temporary files close on all outcomes.
+The mutation path has an additional process upload slot. The stored content/hash/
+size are immutable at the database boundary. Metadata/approve/revoke/confirm
+queries never select or return file bytes, and confirmation does not rehash the
+blob. Byte accounting uses stored size metadata and includes every retained row.
+
+Private playback authenticates before revealing size and supports a single HTTP
+byte Range (206), suffix/open ranges and unsatisfiable/multiple ranges (416).
+Both ranged and full GETs read/write at most 1 MiB at a time with network back
+pressure; every block rechecks active member/tenant authority. Public share tokens
+have no video access. The prior successful virtual receipt is replayed after
+expiry/revocation under the same authenticated tenant/actor/dialog/agent binding,
+without another send/audit event. New sends still fail closed.
+
+This is a storage/selection/virtual-consent sandbox. Its manually entered text
+answer and simulated yes are not an AI conversation or authenticated real-client
+consent. Native independent-process byte-quota and deduplication races run only
+in the existing disposable localhost PostgreSQL fixture, including genuine CI.

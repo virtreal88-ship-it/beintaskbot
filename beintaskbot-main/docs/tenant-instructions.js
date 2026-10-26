@@ -74,8 +74,8 @@ function videoPanel(){
  box.append(el('h3',lang==='ru'?'Видео инструкции':'Instruction videos'),el('p',lang==='ru'?'Проверенное видео для повторного использования. Сейчас доступна виртуальная проверка; отправка клиентам выключена.':'Reviewed reusable videos. Virtual testing only; customer delivery is disabled.'));root.append(box);
  const valid=()=>epoch===company&&row?.id===lessonId&&box.isConnected;
  const run=async(action,extra={})=>{if(dirty)throw Error(t('dirty'));return api('/'+lessonId,{action,expected_version:version,...extra});};
- const items=el('div');box.append(items);
- async function load(){const result=await run('video_list');if(!valid())return;items.replaceChildren();for(const asset of result.items){
+ const capacity=el('p');const items=el('div');box.append(capacity,items);
+ async function load(){const result=await run('video_list');if(!valid())return;capacity.textContent=result.storage_limit_bytes?('Private storage: '+Math.round(result.storage_used_bytes/1048576)+' / '+Math.round(result.storage_limit_bytes/1048576)+' MiB (including revoked files)'):'';items.replaceChildren();for(const asset of result.items){
   const card=el('section',undefined,{class:'il-card'});card.append(el('p',Object.values(asset.metadata).join(' · ')),el('p','v'+asset.version+' · '+(asset.active?(asset.reusable_approved?'Approved':'Review required'):'Revoked')));
   const player=el('video',undefined,{controls:'',preload:'none',style:'max-width:100%'});player.src='/api/platform/instructions/'+lessonId+'/assets/'+asset.id+'.mp4?'+new URLSearchParams(identity());card.append(player);
   const consent=el('input',undefined,{type:'checkbox'}),label=el('label');label.append(consent,document.createTextNode(lang==='ru'?'Я просмотрел именно это видео: его можно повторно отправлять клиентам, личные данные проверены.':'I reviewed this exact video and its visible personal data; it is safe to reuse with customers.'));card.append(label);
@@ -88,7 +88,7 @@ function videoPanel(){
   const data=new FormData();data.append('metadata',JSON.stringify({...identity(),action:'video_upload',expected_version:version,source_kind:'owner_upload',metadata:Object.fromEntries(Object.entries(inputs).map(([k,v])=>[k,v.value]))}));data.append('video',file.files[0]);
   const response=await fetch('/api/platform/instructions/'+lessonId,{method:'POST',credentials:'same-origin',body:data}),result=await response.json();if(!valid())return;if(!response.ok||!result.success)throw Error(result.error||response.status);file.value='';await load();
  }));box.append(form);
- const demo=el('fieldset');demo.append(el('legend',lang==='ru'?'Виртуальная проверка предложения':'Virtual offer test'));
+ const demo=el('fieldset');demo.append(el('legend',lang==='ru'?'Хранение, выбор и виртуальное согласие':'Storage, selection and virtual consent sandbox'));
  const agent=el('select');for(const a of agents)agent.append(el('option',a.name,{value:a.id}));demo.append(agent);
  const demoFields={};for(const [name,label]of Object.entries({query:'Вопрос / Question',product:'Продукт / Product',product_version:'Версия / Version',text_answer:'Текст ответа перед предложением / Text answer first'})){const wrap=el('label',label),input=el('input',undefined,{type:'text'});input.value='';demoFields[name]=input;wrap.append(input);demo.append(wrap);}
  const output=el('p','',{role:'status'});demo.append(output);let pending=null;

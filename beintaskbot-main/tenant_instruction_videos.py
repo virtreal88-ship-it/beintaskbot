@@ -9,6 +9,9 @@ import re
 import subprocess
 import tempfile
 import uuid
+import io
+import shutil
+import threading
 from pathlib import Path
 from tenant_platform import _json
 from tenant_linear_policy import TenantLinearError, identifier
@@ -16,6 +19,12 @@ from tenant_ai_agents_store import _authorize, _audit
 
 MAX_BYTES = 100 * 1024 * 1024
 MAX_SECONDS = 120
+# Operational storage bound, independent of knowledge/publication quotas.
+TENANT_STORAGE_BYTES = 500 * 1024 * 1024
+DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+UPLOAD_SLOT = threading.BoundedSemaphore(1)
+ASSET_COLUMNS = 'id,version,sha256,duration_seconds,active,reusable_approved,metadata,size_bytes'
+
 
 def schema(conn):
     with conn.cursor() as c:
@@ -29,6 +38,24 @@ def schema(conn):
           FOREIGN KEY(tenant_id,lesson_id) REFERENCES saas_instruction_lessons(tenant_id,id),
           CHECK(octet_length(body)>0 AND octet_length(body)<=104857600),
           CHECK(duration_seconds>0 AND duration_seconds<=120))''')
+        c.execute('ALTER TABLE saas_instruction_videos ADD COLUMN IF NOT EXISTS size_bytes BIGINT')
+        c.execute("SELECT attstorage FROM pg_attribute WHERE attrelid='saas_instruction_videos'::regclass AND attname='body'")
+        if c.fetchone()['attstorage']!='e':c.execute('ALTER TABLE saas_instruction_videos ALTER COLUMN body SET STORAGE EXTERNAL')
+        c.execute('UPDATE saas_instruction_videos SET size_bytes=octet_length(body) WHERE size_bytes IS NULL')
+        c.execute('ALTER TABLE saas_instruction_videos ALTER COLUMN size_bytes SET NOT NULL')
+        c.execute("SELECT 1 FROM pg_constraint WHERE conrelid='saas_instruction_videos'::regclass AND conname='instruction_video_size'")
+        if not c.fetchone():c.execute('ALTER TABLE saas_instruction_videos ADD CONSTRAINT instruction_video_size CHECK(size_bytes=octet_length(body))')
+        c.execute("""CREATE OR REPLACE FUNCTION instruction_video_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN
+            IF NEW.body IS DISTINCT FROM OLD.body OR NEW.sha256 IS DISTINCT FROM OLD.sha256
+               OR NEW.size_bytes IS DISTINCT FROM OLD.size_bytes THEN
+              RAISE EXCEPTION 'Video content is immutable';
+            END IF;
+            RETURN NEW;
+          END $$""")
+        c.execute("SELECT 1 FROM pg_trigger WHERE tgrelid='saas_instruction_videos'::regclass AND tgname='instruction_video_immutable'")
+        if not c.fetchone():
+            c.execute('CREATE TRIGGER instruction_video_immutable BEFORE UPDATE OF body,sha256,size_bytes ON saas_instruction_videos FOR EACH ROW EXECUTE FUNCTION instruction_video_immutable()')
         c.execute('''CREATE TABLE IF NOT EXISTS saas_instruction_video_offers(
           tenant_id UUID NOT NULL, id UUID NOT NULL, actor BIGINT NOT NULL,
           agent_id UUID NOT NULL, dialog_id UUID NOT NULL, asset_id UUID NOT NULL,
@@ -40,10 +67,14 @@ def schema(conn):
           CHECK(status IN ('offered','virtual_sent','unknown','superseded')))''')
 
 def validate_file(body):
-    if not body or len(body)>MAX_BYTES: raise ValueError('video_size_limit')
+    stream=io.BytesIO(body) if isinstance(body,bytes) else body
+    stream.seek(0,2);size=stream.tell();stream.seek(0)
+    if not 0<size<=MAX_BYTES: raise ValueError('video_size_limit')
     # Decode metadata locally; do not trust a filename, MIME or client duration.
     with tempfile.TemporaryDirectory(prefix='instruction-video-') as folder:
-        source=Path(folder)/'video.mp4';source.write_bytes(body)
+        source=Path(folder)/'video.mp4'
+        with source.open('wb') as output:shutil.copyfileobj(stream,output,DOWNLOAD_CHUNK_BYTES)
+        stream.seek(0)
         try:
             probe=subprocess.run(['ffprobe','-v','error','-show_entries',
           'format=format_name,duration:stream=codec_type','-of','json',str(source)],
@@ -70,7 +101,7 @@ def metadata(value):
 
 def safe(row):
     return {'id':str(row['id']),'version':row['version'],'sha256':row['sha256'],
-      'duration_seconds':row['duration_seconds'],'active':row['active'],
+      'size_bytes':row['size_bytes'],'duration_seconds':row['duration_seconds'],'active':row['active'],
       'reusable_approved':row['reusable_approved'],
       'metadata':{k:v for k,v in row['metadata'].items() if k!='source_ref'}}
 
@@ -84,20 +115,41 @@ def manage(c,profile,lesson_id,action,data,body=None):
     row=c.fetchone()
     if not row:raise TenantLinearError('Instruction unavailable',404)
     if action=='video_list':
-        c.execute('SELECT id,version,sha256,duration_seconds,active,reusable_approved,metadata FROM saas_instruction_videos WHERE tenant_id=%s::uuid AND lesson_id=%s::uuid ORDER BY created_at,id',(tenant,lesson))
-        return {'items':[safe(r) for r in c.fetchall()],'production_send_enabled':False}
+        c.execute('SELECT '+ASSET_COLUMNS+' FROM saas_instruction_videos WHERE tenant_id=%s::uuid AND lesson_id=%s::uuid ORDER BY created_at,id',(tenant,lesson))
+        items=[safe(r) for r in c.fetchall()]
+        c.execute('SELECT COALESCE(sum(size_bytes),0) AS used FROM saas_instruction_videos WHERE tenant_id=%s::uuid',(tenant,))
+        return {'items':items,'production_send_enabled':False,'storage_used_bytes':int(c.fetchone()['used']),
+          'storage_limit_bytes':TENANT_STORAGE_BYTES}
     if data.get('expected_version')!=row['version']:raise TenantLinearError('Instruction version changed',409)
     if action=='video_upload':
         # Native file upload only. No WhatsApp import or URL download authority.
         if data.get('source_kind')!='owner_upload':raise TenantLinearError('Explicit reviewed import is required for CRM media',403)
         if (data.get('metadata') or {}).get('source_ref'):raise TenantLinearError('CRM imports are not enabled',403)
-        duration=validate_file(body);meta=metadata(data['metadata']);key=str(uuid.uuid4())
-        c.execute('''INSERT INTO saas_instruction_videos(tenant_id,lesson_id,id,body,sha256,duration_seconds,metadata)
-          VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb) RETURNING *''',
-          (tenant,lesson,key,body,hashlib.sha256(body).hexdigest(),duration,_json(meta)))
+        if not UPLOAD_SLOT.acquire(blocking=False):raise TenantLinearError('Another video upload is in progress; retry later',429)
+        try:
+            stream=io.BytesIO(body) if isinstance(body,bytes) else body
+            duration=validate_file(stream);meta=metadata(data['metadata']);key=str(uuid.uuid4())
+            digest=hashlib.sha256();size=0;stream.seek(0)
+            while chunk:=stream.read(DOWNLOAD_CHUNK_BYTES):digest.update(chunk);size+=len(chunk)
+            sha=digest.hexdigest()
+            # Across all lessons and workers in this tenant, including inactive files.
+            c.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('instruction-video-storage:'+tenant,))
+            c.execute('SELECT '+ASSET_COLUMNS+' FROM saas_instruction_videos WHERE tenant_id=%s::uuid AND lesson_id=%s::uuid AND sha256=%s ORDER BY created_at LIMIT 1',(tenant,lesson,sha))
+            existing=c.fetchone()
+            if existing:
+                if existing['metadata']!=meta:raise TenantLinearError('This file is already attached; edit its metadata instead',409)
+                return safe(existing)
+            c.execute('SELECT COALESCE(sum(size_bytes),0) AS used FROM saas_instruction_videos WHERE tenant_id=%s::uuid',(tenant,))
+            if int(c.fetchone()['used'])+size>TENANT_STORAGE_BYTES:
+                raise TenantLinearError('Private video storage is full (500 MiB per company, including revoked files); no files were removed',413)
+            stream.seek(0)
+            c.execute('INSERT INTO saas_instruction_videos(tenant_id,lesson_id,id,body,sha256,duration_seconds,metadata,size_bytes) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb,%s) RETURNING '+ASSET_COLUMNS,
+              (tenant,lesson,key,stream.read(MAX_BYTES+1),sha,duration,_json(meta),size))
+        finally:UPLOAD_SLOT.release()
+
     else:
         key=identifier(data['asset_id'])
-        c.execute('SELECT * FROM saas_instruction_videos WHERE tenant_id=%s::uuid AND lesson_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,lesson,key))
+        c.execute('SELECT '+ASSET_COLUMNS+' FROM saas_instruction_videos WHERE tenant_id=%s::uuid AND lesson_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,lesson,key))
         asset=c.fetchone()
         if not asset:raise TenantLinearError('Video unavailable',404)
         if data.get('asset_version')!=asset['version']:raise TenantLinearError('Video version changed',409)
@@ -106,15 +158,15 @@ def manage(c,profile,lesson_id,action,data,body=None):
             if data.get('client_safe_reviewed') is not True or data.get('sha256')!=asset['sha256'] or not asset['active']:
                 raise TenantLinearError('Review the exact video and visible personal data first',409)
             c.execute('''UPDATE saas_instruction_videos SET reusable_approved=TRUE,approved_by=%s,version=version+1
-              WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING *''',(actor,tenant,key))
+              WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING '''+ASSET_COLUMNS,(actor,tenant,key))
         elif action=='video_revoke':
             c.execute('''UPDATE saas_instruction_videos SET active=FALSE,reusable_approved=FALSE,approved_by=NULL,version=version+1
-              WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING *''',(tenant,key))
+              WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING '''+ASSET_COLUMNS,(tenant,key))
         elif action=='video_metadata':
             meta=metadata(data['metadata'])
             if meta.get('source_ref')!=asset['metadata'].get('source_ref'):raise ValueError('source_ref_immutable')
             c.execute('''UPDATE saas_instruction_videos SET metadata=%s::jsonb,reusable_approved=FALSE,approved_by=NULL,version=version+1
-              WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING *''',(_json(meta),tenant,key))
+              WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING '''+ASSET_COLUMNS,(_json(meta),tenant,key))
         else:raise ValueError('video_action')
     result=safe(c.fetchone())
     _audit(c,tenant,actor,action,'instruction',lesson,{'asset_id':key,'version':result['version'],'sha256':result['sha256']})
@@ -125,13 +177,13 @@ def candidates(c,tenant,agent,query,product_version=None,product=None):
     tenant=identifier(tenant);agent=identifier(agent)
     c.execute("SELECT to_regclass('saas_instruction_videos') IS NOT NULL AS available")
     if not c.fetchone()['available']:return {'status':'not_found','items':[]}
-    c.execute('''SELECT DISTINCT v.created_at,v.id,v.lesson_id,v.version,v.sha256,v.duration_seconds,v.active,v.reusable_approved,v.metadata,l.doc->>'title' AS title FROM saas_instruction_videos v
+    c.execute('''SELECT DISTINCT v.created_at,v.id,v.lesson_id,v.version,v.sha256,v.size_bytes,v.duration_seconds,v.active,v.reusable_approved,v.metadata,l.doc->>'title' AS title FROM saas_instruction_videos v
       JOIN saas_instruction_lessons l ON l.tenant_id=v.tenant_id AND l.id=v.lesson_id
       JOIN saas_ai_knowledge_sources s ON s.tenant_id=l.tenant_id AND s.provenance->>'instruction_id'=l.id::text
       JOIN saas_ai_agents a ON a.tenant_id=s.tenant_id AND a.id=s.agent_id
       WHERE v.tenant_id=%s::uuid AND s.agent_id=%s::uuid AND a.archived_at IS NULL
         AND s.active=TRUE AND s.provenance->>'review_status'='approved' AND l.state='published' AND v.active=TRUE AND v.reusable_approved=TRUE
-        AND v.approved_by IS NOT NULL AND octet_length(v.body)>0
+        AND v.approved_by IS NOT NULL AND v.size_bytes>0
         AND l.published_doc->>'review_status'='approved'
         AND to_tsvector('simple',%s) @@ plainto_tsquery('simple',v.metadata->>'task')
         AND (%s='' OR lower(v.metadata->>'product')=lower(%s))
@@ -191,16 +243,20 @@ def virtual_action(c,profile,lesson_id,action,data):
         return {'offer_id':key,'status':'offered','simulation':True,'customer_sent':False,
           'offer_text':'Would you like the video: '+item['title']+' ('+item['metadata']['task']+')?'}
     if action!='video_confirm' or not offer:raise TenantLinearError('No matching offer',409)
+    if offer['status']=='virtual_sent':
+        c.execute('SELECT lesson_id FROM saas_instruction_videos WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,offer['asset_id']))
+        if str((c.fetchone() or {}).get('lesson_id'))!=lesson:raise TenantLinearError('Offer belongs to another instruction',403)
+        return {'offer_id':key,'asset_id':str(offer['asset_id']),'asset_version':offer['asset_version'],
+          'sha256':offer['asset_hash'],'status':'virtual_sent','simulation':True,'customer_sent':False}
     if offer['status']=='superseded':raise TenantLinearError('A newer offer replaced this offer',409)
     if offer['status']=='unknown':raise TenantLinearError('Unknown delivery outcome; do not retry',409)
     if data.get('simulated_client_yes') is not True:raise TenantLinearError('Specific client confirmation required',409)
-    c.execute('''SELECT v.*,l.version AS lesson_version,l.state FROM saas_instruction_videos v
+    c.execute('''SELECT v.id,v.version,v.sha256,v.active,v.reusable_approved,l.version AS lesson_version,l.state FROM saas_instruction_videos v
       JOIN saas_instruction_lessons l ON l.tenant_id=v.tenant_id AND l.id=v.lesson_id
       WHERE v.tenant_id=%s::uuid AND v.id=%s::uuid AND v.lesson_id=%s::uuid FOR SHARE OF v,l''',(tenant,offer['asset_id'],lesson))
     asset=c.fetchone()
     if (not asset or not offer['fresh'] or not asset['active'] or not asset['reusable_approved'] or
         asset['version']!=offer['asset_version'] or asset['sha256']!=offer['asset_hash'] or
-        hashlib.sha256(bytes(asset['body'])).hexdigest()!=offer['asset_hash'] or
         asset['lesson_version']!=offer['lesson_version'] or asset['state']!='published'):
         raise TenantLinearError('Offer expired or video changed/revoked',409)
     # Revalidate current agent/source authority at the virtual delivery boundary.

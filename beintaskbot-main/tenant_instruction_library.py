@@ -302,14 +302,23 @@ def expert_lookup(cur,tenant_id,primary_agent_id,query):
     return result
 
 
-def private_video(profile,lesson_id,asset_id):
-    import tenant_instruction_videos as videos
+def private_video_info(profile,lesson_id,asset_id):
     with _connect() as conn:
         with conn.cursor() as c:
             tenant,_=_authorize(c,profile)
-            c.execute("SELECT body,sha256 FROM saas_instruction_videos WHERE tenant_id=%s::uuid AND lesson_id=%s::uuid AND id=%s::uuid",(tenant,identifier(lesson_id),identifier(asset_id)))
+            c.execute("SELECT size_bytes,sha256 FROM saas_instruction_videos WHERE tenant_id=%s::uuid AND lesson_id=%s::uuid AND id=%s::uuid",(tenant,identifier(lesson_id),identifier(asset_id)))
             row=c.fetchone()
             if not row:raise TenantLinearError('Video unavailable',404)
-            body=bytes(row['body'])
-            if hashlib.sha256(body).hexdigest()!=row['sha256']:raise TenantLinearError('Video integrity check failed',409)
-            return body
+            return dict(row)
+
+
+def private_video(profile,lesson_id,asset_id,offset=0,length=1024*1024):
+    from tenant_instruction_videos import DOWNLOAD_CHUNK_BYTES
+    if not 0<=offset or not 0<length<=DOWNLOAD_CHUNK_BYTES:raise ValueError('video_range')
+    with _connect() as conn:
+        with conn.cursor() as c:
+            tenant,_=_authorize(c,profile)
+            c.execute("SELECT substring(body from %s for %s) AS chunk FROM saas_instruction_videos WHERE tenant_id=%s::uuid AND lesson_id=%s::uuid AND id=%s::uuid",(offset+1,length,tenant,identifier(lesson_id),identifier(asset_id)))
+            row=c.fetchone()
+            if not row:raise TenantLinearError('Video unavailable',404)
+            return bytes(row['chunk'])
