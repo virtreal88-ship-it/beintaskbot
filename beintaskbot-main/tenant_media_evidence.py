@@ -153,9 +153,16 @@ def apply_reusable(message, receipt):
         origin=observed.get('origin') if isinstance(observed.get('origin'),dict) else {}
         suffix=(' frame '+str(origin.get('second'))) if 'second' in origin else ''
         message['text'] += '\n[Untrusted ' + label + suffix + '; not a confirmed solution] ' + _safe_text(observed['text'])
+    # Keep the exact saved text with the extraction receipt as well as its
+    # model context. Public projections retain their existing content gate;
+    # persist() skips reused receipts and cannot overwrite the original.
+    payload={key:_safe_text(result[key]) for key in ('transcript','observation')
+             if isinstance(result.get(key),str) and result[key].strip()}
+    if isinstance(result.get('observations'),list):
+        payload['observations']=[{'text':_safe_text(x['text'])} for x in result['observations']
+            if isinstance(x,dict) and isinstance(x.get('text'),str) and x['text'].strip()][:MAX_OBSERVATIONS]
     return {'status': status, 'code': str(receipt.get('code') or 'reused'),
-            'reused': True, 'coverage': coverage, '_reused_payload': True,
-            'has_visual_result': has_visual_result(result)}
+            'reused': True, 'coverage': coverage, '_reused_payload': True,**payload}
 
 
 def has_visual_result(result):
