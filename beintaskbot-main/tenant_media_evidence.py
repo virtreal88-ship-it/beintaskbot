@@ -154,7 +154,16 @@ def apply_reusable(message, receipt):
         suffix=(' frame '+str(origin.get('second'))) if 'second' in origin else ''
         message['text'] += '\n[Untrusted ' + label + suffix + '; not a confirmed solution] ' + _safe_text(observed['text'])
     return {'status': status, 'code': str(receipt.get('code') or 'reused'),
-            'reused': True, 'coverage': coverage, '_reused_payload': True}
+            'reused': True, 'coverage': coverage, '_reused_payload': True,
+            'has_visual_result': has_visual_result(result)}
+
+
+def has_visual_result(result):
+    """Metadata derived from saved visual text, never from an input/success flag."""
+    if not isinstance(result,dict):return False
+    if isinstance(result.get('observation'),str) and result['observation'].strip():return True
+    observations=result.get('observations')
+    return isinstance(observations,list) and any(isinstance(x,dict) and isinstance(x.get('text'),str) and x['text'].strip() for x in observations)
 
 
 def _body_hash(value):
@@ -219,6 +228,7 @@ def annotate_rows(cur, tenant, rows):
         result = saved.get('result') if isinstance(saved.get('result'),dict) else {}
         media_meta = {'status':str(saved['status']), 'code':str(saved.get('code') or ''),
                       'source':'saved_knowledge_extraction_receipt',
+                      'has_visual_result':has_visual_result(result),
                       'coverage':{'complete':coverage.get('complete') is True}}
         if kind == 'video':
             audio_status = coverage.get('audio')

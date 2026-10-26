@@ -83,6 +83,32 @@ def test_content_gates_and_wrong_channel_receipt():
     assert coverage.project(refs,receipts,'completed',include_content=True)['media_results'][0]['result']['observation']=='private'
 
 
+@pytest.mark.parametrize('legacy',[
+    {'code':'vision_supplied'}, {'code':'vision_observation'},
+    {'code':'vision_observation','observation':'  '},
+    {'code':'vision_observation','observations':[{'text':''}]},
+    {'code':'vision_supplied','transcript':'Caption is not a visual result'},
+])
+def test_processed_image_without_saved_visual_result_is_not_complete(legacy):
+    receipt={'id':'photo','status':'processed','coverage':{'complete':True},**legacy}
+    before=copy.deepcopy(receipt)
+    result=coverage.project([{'id':'photo','media_kind':'image'}],[receipt],'completed')
+    assert result['status']=='partial' and not result['media_coverage']['complete']
+    assert result['media_results'][0]['status']=='partial' and not result['media_results'][0]['complete']
+    assert receipt==before  # Do not rewrite the original execution receipt.
+
+
+def test_reused_projection_metadata_requires_a_real_saved_visual_result():
+    ref={'id':'photo','media_kind':'image'}
+    for payload,complete in [({},False),({'transcript':'audio only'},False),
+                             ({'observations':[{'text':'visible technical error'}]},True)]:
+        receipt=evidence.apply_reusable({'text':''},{'status':'processed','code':'vision_observation',
+            'coverage':{'complete':True},'result':payload})
+        result=coverage.project([ref],[{'id':'photo',**receipt}],'completed')
+        assert result['media_coverage']['complete'] is complete
+        assert 'result' not in result['media_results'][0]
+
+
 def test_case_detail_uses_validated_boundaries_and_version_receipt(ready):
     conn,_,_=ready;card=candidate(ready);content=conn.execute('SELECT content FROM saas_knowledge_candidates WHERE id=%s::uuid',(card['id'],))[0]['content'];key=content['start_message_id']
     conn.execute("UPDATE saas_crm_messages SET message_type='image',raw=%s::jsonb WHERE id=%s::uuid",(json.dumps({'mediaId':'one'}),key));conn.commit()
@@ -90,11 +116,27 @@ def test_case_detail_uses_validated_boundaries_and_version_receipt(ready):
     row=conn.execute('SELECT external_id,body,raw FROM saas_crm_messages WHERE id=%s::uuid',(key,))[0]
     ref={'id':key,'channel_id':CA,'external_id':row['external_id'],'media_kind':'image','media_version':evidence.media_version(row['raw']),'body_hash':store.digest(row['body']),'role':'customer'}
     with conn.cursor() as cur:evidence.persist(cur,A,[ref],[{'id':key,'status':'processed','code':'vision_observation','observation':'Saved synthetic technical fact'}])
+    run=conn.execute('SELECT source_refs FROM saas_knowledge_extractions WHERE id=%s::uuid',(card['extraction_id'],))[0]
+    for source in run['source_refs']:
+        if source['id']==key:source.update(ref)
+    stub={'id':key,'status':'processed','code':'vision_observation','coverage':{'complete':True},'reused':True,'_reused_payload':True,'has_visual_result':True}
+    conn.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb,media_results=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps(run['source_refs']),json.dumps([stub]),card['extraction_id']))
     conn.commit()
     first=store.detail(PROFILE,card['id'])['candidate']
     assert first['media_coverage']['scope']=='case_interval'
     assert first['media_processing'][0]['reused'] and first['media_processing'][0]['complete']
+    assert 'Saved synthetic technical fact' in json.dumps(first['media_processing'])
+    with conn.cursor() as cur:
+        current=store.extraction_row(cur,A,card['extraction_id'])
+        metadata=store.case_media_coverage(cur,A,current,{'lead_id':41},content)
+    assert metadata['media_coverage']['complete'] and 'result' not in metadata['media_results'][0]
     second=store.detail(PROFILE,card['id'])['candidate'];assert second['media_processing']==first['media_processing']
+    conn.execute('DELETE FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid',(A,));conn.commit()
+    withdrawn=store.detail(PROFILE,card['id'])['candidate']
+    assert not withdrawn['media_coverage']['complete'] and 'result' not in withdrawn['media_processing'][0]
+    with conn.cursor() as cur:evidence.persist(cur,A,[ref],[{'id':key,'status':'processed','code':'vision_observation','observation':'Saved synthetic technical fact'}])
+    conn.commit()
     conn.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid",(json.dumps({'mediaId':'replaced'}),key));conn.commit()
     # The extraction source-version guard may reject the changed source itself;
     # neither path can expose the old receipt as current evidence.
@@ -270,6 +312,11 @@ def test_improve_uses_saved_photo_and_excludes_same_timestamp_neighbors(ready,mo
     evidence.create_schema(conn)
     ref={'id':start,'channel_id':CA,'external_id':row['external_id'],'media_kind':'image','media_version':evidence.media_version({'mediaId':'synthetic'}),'body_hash':store.digest(row['body'])}
     with conn.cursor() as cur:evidence.persist(cur,A,[ref],[{'id':start,'status':'processed','code':'vision_observation','observation':'VISIBLE_TECHNICAL_742'}])
+    run=conn.execute('SELECT source_refs FROM saas_knowledge_extractions WHERE id=%s::uuid',(card['extraction_id'],))[0]
+    for source in run['source_refs']:
+        if source['id']==start:source.update(ref)
+    conn.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb,media_results=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps(run['source_refs']),json.dumps([{'id':start,'status':'processed','code':'vision_observation','coverage':{'complete':True},'reused':True}]),card['extraction_id']))
     conn.commit()
     class Inspected(Exception):pass
     def inspect(profile,payload,review):

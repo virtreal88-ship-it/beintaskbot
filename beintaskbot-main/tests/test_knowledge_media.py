@@ -266,7 +266,11 @@ def test_campaign_inline_visual_success_keeps_unknown_visual_reserve_and_aggrega
           [{**{key:ref[key] for key in ('id','channel_id','lead_id','role','happened_at')},'kind':'image','status':'pending_processing','code':'awaiting_model'}])
     monkeypatch.setattr(media,'collect',collect)
     response=service.analyze(PROFILE,data)
-    assert generation.call_args.kwargs['images'] and response['request']['status']=='completed'
+    assert generation.call_args.kwargs['images'] and response['request']['execution_status']=='completed'
+    # Inline supply succeeded, but no reusable visual observation was saved.
+    assert response['request']['status']=='partial' and not response['request']['media_coverage']['complete']
+    stored=database.execute('SELECT status,media_results FROM saas_knowledge_extractions WHERE id=%s::uuid',(response['request']['id'],))[0]
+    assert stored['status']=='completed' and stored['media_results'][0]['code']=='vision_supplied'
     rows={row['kind']:(row['state'],row['actual_microusd']) for row in database.execute('SELECT kind,state,actual_microusd FROM saas_ai_spend_reservations')}
     assert rows['knowledge_asr'][0]=='settled' and rows['knowledge_vision']==('unknown',None)
     assert database.execute('SELECT total_tokens FROM saas_ai_agent_token_usage WHERE run_id=%s::uuid',(response['request']['id'],))[0]['total_tokens']==70

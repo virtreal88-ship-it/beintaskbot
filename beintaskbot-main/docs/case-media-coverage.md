@@ -18,6 +18,11 @@ stops are `pending_consent`; unsupported formats, errors, unknown provider
 outcomes and sampled video remain explicit. Caption and UI preview are not
 analysis evidence. A saved result is reused only for exact attachment/version;
 replacement/withdrawal cannot reuse a stale observation.
+An image is complete only with saved nonempty visual text; legacy
+`processed/vision_supplied` without an observation remains partial. A stripped
+reuse stub is enriched from the exact current shared receipt before reporting
+case completeness or supplying an improvement. A historical availability flag
+cannot survive withdrawal of that shared result.
 
 `public_request.status` can now be `partial`, with the original execution state
 in `execution_status`; database extraction state/idempotency is unchanged.

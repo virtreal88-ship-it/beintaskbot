@@ -741,7 +741,7 @@ def case_media_coverage(cur,tenant,run,chosen,content,*,include_content=False):
     for the exact bounded interval; no media bytes, remote downloads or writes.
     """
     from tenant_knowledge_media_coverage import project
-    from tenant_media_evidence import annotate_rows,media_version,source_hash
+    from tenant_media_evidence import annotate_rows,media_version,source_hash,has_visual_result
     execution=run.get('status')
     def uncertain(reason):
         result=project(None,[],execution)
@@ -776,13 +776,19 @@ def case_media_coverage(cur,tenant,run,chosen,content,*,include_content=False):
         previous=original.get(key)
         if message['message_type']=='text':
             receipts.append({'id':key,'status':'unknown','code':'source_version_unverified'});continue
-        if previous and key in saved and source_hash(previous)==source_hash(ref):
-            receipts.append(saved[key])
-        elif message.get('media_evidence'):
+        receipt=dict(saved[key]) if previous and key in saved and source_hash(previous)==source_hash(ref) else None
+        if receipt and receipt.get('reused') is True and not has_visual_result(receipt):
+            # A historical stub's availability flag cannot outlive withdrawal
+            # of the current shared result. Refresh it from the exact lookup.
+            receipt.pop('has_visual_result',None)
+        # apply_reusable deliberately strips result text from extraction stubs.
+        # annotate_rows has independently matched the current tenant/channel/
+        # external ID/source hash. Enrich from that exact saved receipt only.
+        if message.get('media_evidence') and (receipt is None or receipt.get('reused') is True or not has_visual_result(receipt) and not receipt.get('transcript')):
             evidence=message['media_evidence']
             receipt={**evidence,'id':key,'channel_id':channel,'reused':True}
             if include_content and message.get('media_evidence_context'):receipt['observation']=message['media_evidence_context']
-            receipts.append(receipt)
+        if receipt is not None:receipts.append(receipt)
         elif key in saved:
             receipts.append({'id':key,'status':'unknown','code':'source_version_unverified'})
     result=project(refs,receipts,execution,include_content=include_content)

@@ -5,6 +5,7 @@ Execution completion and media completeness are different facts.
 """
 import re
 from tenant_knowledge_candidates_policy import redact
+from tenant_media_evidence import has_visual_result
 
 SUPPORTED={'image','audio','voice','video','document'}
 CONSENT={'external_media_permission_required','asr_authorization_required','vision_not_approved'}
@@ -37,6 +38,10 @@ def project(refs,receipts,execution_status,*,include_content=False):
         if (execution_status in {'unknown','failed'} or execution_status=='completed' and code=='awaiting_model') and state=='pending_processing':state='unknown'
         coverage=(row or {}).get('coverage') or {}
         complete=state=='processed' and kind!='video' and coverage.get('complete') is not False
+        # Inline input acceptance is not a reusable visual observation. The
+        # metadata flag is derived only while reading an exact saved result.
+        visual_available=has_visual_result(row) or (row or {}).get('has_visual_result') is True
+        if kind=='image':complete=complete and visual_available
         if state=='processed' and not complete:state='partial'
         item={'id':key,'kind':kind,'status':state,'code':code,'complete':complete,
               'reused':(row or {}).get('reused') is True,'extraction_status':execution_status}
