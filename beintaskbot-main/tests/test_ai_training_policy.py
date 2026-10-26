@@ -547,3 +547,36 @@ def test_company_video_draft_binds_saved_receipt_and_attachment_version(setup,mo
             assert source['provenance']['review_status']=='owner_delegated_evidence_draft'
             assert db.execute('SELECT * FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid AND external_id=%s',(A,external))[0]==before
     db.commit()
+
+
+@pytest.mark.parametrize('draft_kind',['knowledge','owner_knowledge'])
+def test_native_uuid_draft_result_survives_receipt_json_and_publication(setup,monkeypatch,draft_kind):
+    db,cfg=setup
+    original=approval._owner_draft_basis
+    native_ids=[]
+    def native_basis(*args,**kwargs):
+        row,basis=original(*args,**kwargs)
+        # psycopg returns real UUID objects; the PGlite adapter returns strings.
+        row={**row,'id':uuid.UUID(str(row['id'])),'tenant_id':uuid.UUID(str(row['tenant_id']))}
+        native_ids.append(row['id'])
+        return row,basis
+    monkeypatch.setattr(approval,'_owner_draft_basis',native_basis)
+    with db.cursor() as cur:
+        p=company_policy(cur,cfg)
+        if draft_kind=='knowledge':draft,_=evidence_draft(cur,cfg)
+        else:draft=drafts.typed_create(cur,cfg,'owner_knowledge',{'title':'Owner rule','content':'Keep the exact owner rule.','owner_note':'Owner supplied.'})
+        listed=mcp._tools(cur,cfg,'administrator_training_owner_drafts',{'policy_id':p,'target_agent_id':AGENT,'target_channel_id':CA})
+        item=next(v for v in listed['items'] if v['source_id']==draft['id'])
+        args={'policy_id':p,'request_id':str(uuid.uuid4()),'kind':'knowledge','source_id':draft['id'],'source_version':draft['version'],'source_hash':item['source_hash'],'target_agent_id':AGENT,'target_channel_id':CA}
+        prepared=mcp._tools(cur,cfg,'administrator_training_create',args)
+        assert native_ids and all(isinstance(v,uuid.UUID) for v in native_ids)
+        assert prepared['draft_id']==draft['id'] and isinstance(prepared['draft_id'],str)
+        receipt=db.execute('SELECT result FROM saas_ai_training_operations WHERE policy_id=%s::uuid AND request_id=%s::uuid',(p,args['request_id']))[0]['result']
+        assert json.loads(json.dumps(prepared))==receipt
+        assert mcp._tools(cur,cfg,'administrator_training_create',args)==receipt
+        mcp._tool_response(prepared,1)  # Actual MCP encoder must also accept it.
+        published=op(cur,cfg,p,'publish',**target(prepared),target_agent_id=AGENT,target_channel_id=CA)
+        mcp._tool_response(published,2)
+        source=db.execute('SELECT active,agent_id,content FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(published['source_ids'][0],))[0]
+        assert source['active'] and str(source['agent_id'])==AGENT and source['content']==item['preview']['content']
+    db.commit()
