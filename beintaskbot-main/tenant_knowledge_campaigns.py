@@ -14,7 +14,7 @@ from tenant_knowledge_campaign_policy import FIELDS, validate, reservation, fits
 
 
 def prepare(profile, data):
-    allowed={'request_id','channel_ids','analysis_agent_id','max_calls','max_tokens'} | FIELDS
+    allowed={'request_id','channel_ids','analysis_agent_id','max_calls','max_tokens','case_id'} | FIELDS
     if not isinstance(data,dict) or set(data)-allowed:
         raise TenantLinearError('Некорректные параметры.')
     key=identifier(data.get('request_id'))
@@ -32,10 +32,22 @@ def prepare(profile, data):
         with conn.cursor() as cur:
             tenant,actor,_=store.authorize(cur,profile)
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('knowledge-campaign:'+tenant,))
+            case_plan=None
+            if data.get('case_id'):
+                from tenant_case_media_admission import plan, routes
+                case_plan=plan(cur,profile,data['case_id'])
+                if case_plan['status']!='pending_consent':
+                    raise TenantLinearError(case_plan['reason'],409)
+                if channels!=[case_plan['channel_id']] or not case_plan['media']:
+                    raise TenantLinearError('Case source or attachments unavailable.',409)
+                eligible_count=len(list(routes(case_plan,agent)))
+                if not eligible_count:
+                    raise TenantLinearError('No unprocessed eligible attachments; inspect saved case media status.',409)
             cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,key))
             old=cur.fetchone()
             if old:
-                if old['media_policy']!=policy or old['sources']!=channels or str(old['analysis_agent_id'])!=agent or old['max_calls']!=calls or old['max_tokens']!=tokens:
+                old_case=(old.get('progress') or {}).get('case_id')
+                if old['media_policy']!=policy or old['sources']!=channels or str(old['analysis_agent_id'])!=agent or old['max_calls']!=calls or old['max_tokens']!=tokens or old_case!=(case_plan or {}).get('case_id') or (case_plan and old['progress'].get('plan_hash')!=case_plan['plan_hash']):
                     raise TenantLinearError('request_id уже используется.',409)
                 return key
             for channel in channels:
@@ -45,10 +57,14 @@ def prepare(profile, data):
             if not cur.fetchone(): raise TenantLinearError('Агент недоступен.',404)
             cur.execute("SELECT 1 FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND status<>'stopped'",(tenant,))
             if cur.fetchone(): raise TenantLinearError('Процесс уже подготовлен.',409)
+            progress={'mode':'case_media','case_id':case_plan['case_id'],
+              'plan_hash':case_plan['plan_hash'],'case_version':case_plan['case_version'],
+              'attachment_count':len(case_plan['media']), 'eligible_count':eligible_count,
+              'unavailable_count':sum(not item['complete'] for item in case_plan['media'])-eligible_count} if case_plan else {}
             cur.execute('''INSERT INTO saas_knowledge_campaigns
-              (tenant_id,id,created_by,sources,analysis_agent_id,max_calls,max_tokens,media_policy)
-              VALUES(%s::uuid,%s::uuid,%s,%s::jsonb,%s::uuid,%s,%s,%s::jsonb)''',
-              (tenant,key,actor,_json(channels),agent,calls,tokens,_json(policy)))
+              (tenant_id,id,created_by,sources,analysis_agent_id,max_calls,max_tokens,media_policy,progress)
+              VALUES(%s::uuid,%s::uuid,%s,%s::jsonb,%s::uuid,%s,%s,%s::jsonb,%s::jsonb)''',
+              (tenant,key,actor,_json(channels),agent,calls,tokens,_json(policy),_json(progress)))
             store._audit(cur,tenant,actor,'knowledge_campaign_prepared','knowledge_campaign',key)
         conn.commit()
     return key
@@ -72,14 +88,15 @@ def control(profile, campaign_id, expected_version, action):
                 cur.execute('''UPDATE saas_knowledge_campaign_fragments f SET status='pending',error_code=''
                   WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='blocked' AND error_code='limit_exceeded'
                   AND NOT EXISTS(SELECT 1 FROM saas_knowledge_extractions e WHERE e.tenant_id=f.tenant_id AND e.id=f.id)''',(tenant,campaign_id))
-                cur.execute('''SELECT f.* FROM saas_knowledge_campaign_fragments f JOIN saas_knowledge_extractions e
+                if (row.get('progress') or {}).get('mode') not in {'case_media','single_message'}:
+                    cur.execute('''SELECT f.* FROM saas_knowledge_campaign_fragments f JOIN saas_knowledge_extractions e
                   ON e.tenant_id=f.tenant_id AND e.id=f.extraction_id WHERE f.tenant_id=%s::uuid AND f.campaign_id=%s::uuid
                   AND f.status IN ('partial','failed') AND NOT f.result ? 'retry_fragment_id' AND e.status IN ('completed','failed')
                   AND (e.status='failed' OR EXISTS(SELECT 1 FROM jsonb_array_elements(e.media_results) m WHERE m->>'status'<>'processed' OR m->>'audio_status'='unavailable_or_error'))
                   ORDER BY f.created_at,f.id LIMIT 4''',(tenant,campaign_id))
-                for failed in cur.fetchall():
-                    retry=enqueue(cur,profile,row,{**failed['route'],'retry_of':str(failed['extraction_id'])})
-                    cur.execute("UPDATE saas_knowledge_campaign_fragments SET result=result||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(_json({'retry_fragment_id':retry}),tenant,failed['id']))
+                    for failed in cur.fetchall():
+                        retry=enqueue(cur,profile,row,{**failed['route'],'retry_of':str(failed['extraction_id'])})
+                        cur.execute("UPDATE saas_knowledge_campaign_fragments SET result=result||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(_json({'retry_fragment_id':retry}),tenant,failed['id']))
             state={'pause':'paused','resume':'running','stop':'stopped'}[action]
             cur.execute('UPDATE saas_knowledge_campaigns SET status=%s,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(state,tenant,campaign_id))
             store._audit(cur,tenant,actor,'knowledge_campaign_'+action,'knowledge_campaign',campaign_id)
@@ -151,7 +168,9 @@ def get(profile, campaign_id=None):
             cur.execute("SELECT count(*) AS n FROM saas_knowledge_campaign_sources WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='pending'",(tenant,row['id']))
             sources_pending=cur.fetchone()['n']
             progress=dict(row['progress'])
-            if progress and not sources_pending and not counts.get('pending') and not counts.get('running'):
+            if progress.get('mode')=='case_media':
+                progress['phase']='incomplete' if progress.get('unavailable_count') or any(counts.get(state) for state in ('unknown','blocked','failed','partial')) else 'completed' if row['status']=='stopped' else 'pending_consent' if not row['approved_at'] else 'processing'
+            elif progress and not sources_pending and not counts.get('pending') and not counts.get('running'):
                 progress['phase']='waiting_completion'
             cur.execute('''SELECT count(DISTINCT c.id) AS cards FROM saas_knowledge_candidates c
               JOIN saas_knowledge_campaign_fragments f ON f.tenant_id=c.tenant_id AND f.extraction_id=c.extraction_id
@@ -199,7 +218,7 @@ def complete(claimed, response):
     """Fence completion by lease; partial media never becomes completed history."""
     request=response['request'];tenant=str(claimed['tenant_id'])
     media=request.get('media_results')
-    missing=media is None or any(m.get('status')!='processed' or m.get('kind')=='video' or m.get('audio_status')=='unavailable_or_error' for m in media)
+    missing=media is None or any(m.get('status')!='processed' or m.get('complete') is False or m.get('kind')=='video' or m.get('audio_status')=='unavailable_or_error' for m in media)
     state=request['status']
     if state=='completed' and missing:state='partial'
     if state not in {'completed','partial','failed','unknown'}:state='unknown'
@@ -214,15 +233,20 @@ def complete(claimed, response):
             if not cur.fetchone():return False
             cur.execute('SELECT progress FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,claimed['campaign_id']))
             campaign=cur.fetchone()
-            single_message=isinstance((campaign or {}).get('progress'),dict) and campaign['progress'].get('mode')=='single_message'
+            mode=(campaign or {}).get('progress',{}).get('mode')
+            single_message=mode=='single_message'
             if single_message:
                 # One exact owner consent must never grow into discovery,
                 # follow-up pages or quality work.  Terminal result remains
                 # stored on the fragment; the campaign itself is closed.
                 cur.execute("UPDATE saas_knowledge_campaigns SET status='stopped',version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,claimed['campaign_id']))
+            elif mode=='case_media':
+                cur.execute("SELECT 1 FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status IN ('pending','running','unknown') LIMIT 1",(tenant,claimed['campaign_id']))
+                if not cur.fetchone():
+                    cur.execute("UPDATE saas_knowledge_campaigns SET status='stopped',version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,claimed['campaign_id']))
             # Completed text can advance while unavailable attachments remain a
             # durable partial fragment for an explicit, budgeted later retry.
-            if not single_message and request.get('next_before') and state in {'completed','partial'}:
+            if mode not in {'single_message','case_media'} and request.get('next_before') and state in {'completed','partial'}:
                 cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,claimed['campaign_id']))
                 campaign=cur.fetchone()
                 route={**claimed['route'],'before':identifier(request['next_before'])}
@@ -234,7 +258,8 @@ def complete(claimed, response):
 
 def approve(profile,campaign_id,data):
     """Explicit source/budget confirmation, never called by deployment/startup."""
-    if set(data)!={'expected_version','channel_ids','max_calls','max_tokens','confirm_external_processing','media_policy'} or data['confirm_external_processing'] is not True:
+    required={'expected_version','channel_ids','max_calls','max_tokens','confirm_external_processing','media_policy'}
+    if not isinstance(data,dict) or set(data) not in (required,required|{'case_id','case_plan_hash'}) or data['confirm_external_processing'] is not True:
         raise TenantLinearError('Подтвердите источники и бюджет внешней обработки.')
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -264,9 +289,40 @@ def approve(profile,campaign_id,data):
 
             amount=reservation(new_policy)
             if not fits(new_policy,row['reserved_kinds'],amount) or calls<amount['calls'] or tokens<amount['tokens']:raise TenantLinearError('Бюджет не покрывает фрагмент.')
-            from tenant_knowledge_campaign_discovery import seed
-            if row['status']=='awaiting_budget':seed(cur,profile,row)
+            case_mode=(row.get('progress') or {}).get('mode')=='case_media'
+            case_plan=None
+            if case_mode:
+                if (set(data)!=required|{'case_id','case_plan_hash'}
+                    or data['case_id']!=row['progress']['case_id']
+                    or data['case_plan_hash']!=row['progress']['plan_hash']):
+                    raise TenantLinearError('Confirm this exact case and attachment plan.',409)
+                from tenant_case_media_admission import plan, routes
+                case_plan=plan(cur,profile,row['progress']['case_id'])
+                if case_plan['status']!='pending_consent' or case_plan['plan_hash']!=row['progress']['plan_hash']:
+                    raise TenantLinearError('Case boundary or attachment changed; prepare a new plan.',409)
+                pending=list(routes(case_plan,row['analysis_agent_id']))
+                if not pending:
+                    raise TenantLinearError('Case media already complete.',409)
+                if not new_policy['allow_external_media']:
+                    raise TenantLinearError('External media consent required.',409)
+                pending_ids={route['message_ids'][0] for route in pending}
+                visual=any(item['kind'] in {'image','video','document'} for item in case_plan['media'] if item['id'] in pending_ids)
+                audio=any(item['kind'] in {'audio','voice','video'} for item in case_plan['media'] if item['id'] in pending_ids)
+                if (new_policy['max_main_calls']<len(pending)
+                    or visual and not amount['vision']
+                    or audio and not amount['asr']
+                    or any(new_policy['max_'+kind+'_calls']<len(pending)*amount[kind]
+                           for kind in ('main','asr','vision'))
+                    or calls<len(pending)*amount['calls'] or tokens<len(pending)*amount['tokens']):
+                    raise TenantLinearError('Budget does not cover all case attachments.',409)
+            else:
+                if set(data)!=required:raise TenantLinearError('Некорректные параметры.',400)
+                from tenant_knowledge_campaign_discovery import seed
+                if row['status']=='awaiting_budget':seed(cur,profile,row)
             cur.execute("UPDATE saas_knowledge_campaigns SET status='running',max_calls=%s,max_tokens=%s,media_policy=%s::jsonb,approved_by=%s,approved_at=now(),version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid",(calls,tokens,_json(new_policy),actor,tenant,campaign_id))
+            if case_plan:
+                approved={**row,'media_policy':new_policy}
+                for fragment_route in pending:enqueue(cur,profile,approved,fragment_route)
             from tenant_knowledge_quality import schema as quality_schema
             quality_schema(cur)
             cur.execute('''UPDATE saas_knowledge_quality_checks q SET state='pending' WHERE tenant_id=%s::uuid

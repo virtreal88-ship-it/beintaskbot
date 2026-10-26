@@ -15,7 +15,27 @@
     const policyLabels={ru:['Передавать медиа внешнему AI','Разрешить платный ASR','Основной AI и проверки','ASR','Vision'],az:['Medianı xarici AI-yə ötür','Ödənişli ASR icazəsi','Əsas AI və yoxlamalar','ASR','Vision'],en:['Send media to external AI','Allow paid ASR','Main AI and checks','ASR','Vision']}[language]||[];
     const policyFields=document.createElement('fieldset');policyFields.innerHTML=`<label><input type="checkbox" data-media> ${policyLabels[0]}</label><label><input type="checkbox" data-asr> ${policyLabels[1]}</label>${['main','asr','vision'].map((k,i)=>`<label>${policyLabels[i+2]}<input type="number" min="0" max="10000" value="0" data-limit-${k}></label>`).join('')}`;
     host.querySelector('[data-campaign-plan]').insertBefore(policyFields,host.querySelector('[data-prepare]'));
-    root.prepend(host);let campaign=null,busy=false,consentVersion=null,lastCards=0,requestId=crypto.randomUUID();
+    root.prepend(host);let campaign=null,busy=false,consentVersion=null,lastCards=0,requestId=crypto.randomUUID(),caseChoice=null;
+    const caseNotice=document.createElement('button');caseNotice.type='button';caseNotice.className='outline';caseNotice.dataset.campaignCase='';caseNotice.hidden=true;host.querySelector('[data-campaign-plan]').prepend(caseNotice);
+    caseNotice.onclick=()=>{caseChoice=null;caseNotice.hidden=true;host.querySelectorAll('[data-source]').forEach(input=>{input.disabled=false;input.checked=false;});};
+    window.addEventListener('case-media-admission',event=>{
+      if(!live())return;
+      const choice=event.detail||{};
+      if(!choice.id||!choice.channelId)return;
+      caseChoice={id:choice.id,title:String(choice.title||''),channelId:choice.channelId};
+      host.querySelectorAll('[data-source]').forEach(input=>{input.checked=input.value===choice.channelId;input.disabled=true;});
+      caseNotice.textContent=({ru:'Только вложения обращения: ',az:'Yalnız müraciətin əlavələri: ',en:'Case attachments only: '}[language]||'Case attachments only: ')+caseChoice.title;
+      caseNotice.hidden=false;
+      const count=Math.min(80,Math.max(1,Number(choice.attachmentCount)||1));
+      host.querySelector('[data-media]').checked=true;
+      host.querySelector('[data-asr]').checked=choice.hasAudio===true;
+      host.querySelector('[data-limit-main]').value=String(count);
+      host.querySelector('[data-limit-asr]').value=String(choice.hasAudio?count:0);
+      host.querySelector('[data-limit-vision]').value=String(choice.hasVisual?2*count:0);
+      host.querySelector('[data-calls]').value=String((1+Number(!!choice.hasAudio)+2*Number(!!choice.hasVisual))*count);
+      host.querySelector('[data-tokens]').value=String((16000+8000*Number(!!choice.hasAudio)+8000*Number(!!choice.hasVisual))*count);
+      host.open=true;host.scrollIntoView?.({block:'start'});
+    });
     const base='/api/platform/ai/knowledge-candidates/campaigns',q=new URLSearchParams(ctx.expected());
     const live=()=>generation===current&&host.isConnected;
     const post=(url,data)=>ctx.api(url,{method:'POST',body:JSON.stringify({...ctx.expected(),...data})});
@@ -35,6 +55,7 @@
       ];
       const stateLabel=states[language]?.[campaign.status]||states.en[campaign.status]||t[11];
       status.innerHTML=`<p class="campaign-state">${esc(stateLabel)}</p><div class="campaign-metrics">${blocks.join('')}</div><p class="campaign-run-notice">${esc(t[35])}</p>`;
+      if(campaign.progress?.mode==='case_media')status.querySelector('.campaign-run-notice').textContent=({ru:'Только вложения одного обращения; история канала не сканируется. Вложений: ',az:'Yalnız bir müraciətin əlavələri; kanal tarixçəsi yoxlanmır. Əlavələr: ',en:'One case’s attachments only; channel history is not scanned. Attachments: '}[language]||'Case attachments: ')+String(campaign.progress.attachment_count);
       if(campaign.progress?.phase==='waiting_completion'){const note={ru:'Ожидаются явно завершённые обращения; неполные фрагменты сохранены.',az:'Açıq şəkildə tamamlanmış müraciətlər gözlənilir; natamam fraqmentlər saxlanılıb.',en:'Waiting for explicitly completed conversations; incomplete fragments are retained.'}[language];status.querySelector('.campaign-run-notice').textContent+=' '+note;}
       const add=(label,action)=>{const b=document.createElement('button');b.type='button';b.className='outline';b.textContent=label;b.onclick=()=>perform(action);actions.append(b);};
       if(['awaiting_budget','budget_exhausted'].includes(campaign.status)){
@@ -44,11 +65,11 @@
     }
     async function refresh(){const result=await ctx.api(base+'?'+q);if(live()){campaign=result.campaign;draw();if(campaign&&campaign.cards!==lastCards){lastCards=campaign.cards;await ctx.refreshCards?.();}}}
     async function perform(action){if(busy||!live())return;busy=true;host.querySelector('[data-error]').textContent='';try{
-      if(action==='start'){if(consentVersion!==campaign.version)return;await post(base+'/'+campaign.id+'/start',{expected_version:campaign.version,channel_ids:campaign.channel_ids,max_calls:campaign.status==='budget_exhausted'?Number(host.querySelector('[data-renew-calls]').value):campaign.max_calls,max_tokens:campaign.status==='budget_exhausted'?Number(host.querySelector('[data-renew-tokens]').value):campaign.max_tokens,confirm_external_processing:true,media_policy:campaign.status==='budget_exhausted'?{...campaign.media_policy,...Object.fromEntries(['main','asr','vision'].map(k=>['max_'+k+'_calls',Number(host.querySelector('[data-renew-'+k+']').value)]))}:campaign.media_policy});}
+      if(action==='start'){if(consentVersion!==campaign.version)return;await post(base+'/'+campaign.id+'/start',{expected_version:campaign.version,channel_ids:campaign.channel_ids,max_calls:campaign.status==='budget_exhausted'?Number(host.querySelector('[data-renew-calls]').value):campaign.max_calls,max_tokens:campaign.status==='budget_exhausted'?Number(host.querySelector('[data-renew-tokens]').value):campaign.max_tokens,confirm_external_processing:true,media_policy:campaign.status==='budget_exhausted'?{...campaign.media_policy,...Object.fromEntries(['main','asr','vision'].map(k=>['max_'+k+'_calls',Number(host.querySelector('[data-renew-'+k+']').value)]))}:campaign.media_policy,...(campaign.progress?.mode==='case_media'?{case_id:campaign.progress.case_id,case_plan_hash:campaign.progress.plan_hash}:{})});}
       else if(action!=='refresh')await post(base+'/'+campaign.id+'/control',{expected_version:campaign.version,action});await refresh();
     }catch(error){if(live())host.querySelector('[data-error]').textContent=error.message;}finally{busy=false;}}
     host.querySelector('[data-prepare]').onclick=async()=>{if(busy)return;busy=true;try{
-      const result=await post(base,{request_id:requestId,channel_ids:[...host.querySelectorAll('[data-source]:checked')].map(x=>x.value),analysis_agent_id:host.querySelector('[data-agent]').value,max_calls:Number(host.querySelector('[data-calls]').value),max_tokens:Number(host.querySelector('[data-tokens]').value),allow_external_media:host.querySelector('[data-media]').checked,allow_paid_asr:host.querySelector('[data-asr]').checked,max_main_calls:Number(host.querySelector('[data-limit-main]').value),max_asr_calls:Number(host.querySelector('[data-limit-asr]').value),max_vision_calls:Number(host.querySelector('[data-limit-vision]').value)});
+      const result=await post(base,{request_id:requestId,channel_ids:[...host.querySelectorAll('[data-source]:checked')].map(x=>x.value),analysis_agent_id:host.querySelector('[data-agent]').value,max_calls:Number(host.querySelector('[data-calls]').value),max_tokens:Number(host.querySelector('[data-tokens]').value),allow_external_media:host.querySelector('[data-media]').checked,allow_paid_asr:host.querySelector('[data-asr]').checked,max_main_calls:Number(host.querySelector('[data-limit-main]').value),max_asr_calls:Number(host.querySelector('[data-limit-asr]').value),max_vision_calls:Number(host.querySelector('[data-limit-vision]').value),...(caseChoice?{case_id:caseChoice.id}:{})});
       if(live()){campaign=result.campaign;requestId=crypto.randomUUID();draw();}
     }catch(error){if(live())host.querySelector('[data-error]').textContent=error.message;}finally{busy=false;}};
     async function poll(){if(!live())return;try{if(!['awaiting_budget','budget_exhausted'].includes(campaign?.status))await refresh();}catch(error){if(live())host.querySelector('[data-error]').textContent=error.message;}if(live())setTimeout(poll,10000);}
