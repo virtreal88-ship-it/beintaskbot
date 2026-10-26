@@ -13,6 +13,18 @@ jobs:
   media-mcp:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    services:
+      video-test-postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: isolated-video-fixture
+        ports:
+          - 55439:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=55439 user=postgres password=isolated-video-fixture dbname=postgres
     defaults:
       run:
         working-directory: beintaskbot-main
@@ -26,9 +38,9 @@ jobs:
       - name: Install PDF renderer
         run: |
           sudo apt-get update
-          sudo apt-get install --yes poppler-utils
+          sudo apt-get install --yes poppler-utils ffmpeg
       - name: Install isolated PGlite test dependency
-        run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11
+        run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0
       - name: Run media and MCP regression tests
         run: >-
           python -m pytest -q -rs
@@ -47,3 +59,11 @@ jobs:
           tests/test_tenant_ai_testing_retrieval.py
           tests/test_knowledge_candidates.py
           tests/test_night_release.py
+          tests/test_instruction_library.py
+          tests/test_instruction_expert_integration.py
+          tests/test_instruction_videos.py
+          tests/test_instruction_video_postgres.py
+      - name: Run instruction card regression
+        run: |
+          node tests/test_instruction_editor.cjs
+          node tests/test_instruction_video_card.cjs

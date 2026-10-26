@@ -100,6 +100,15 @@ def operation(profile,action,data=None,lesson_id=None,*,connection=None):
         schema(conn)
         with conn.cursor() as c:
             tenant,actor=_authorize(c,profile)
+            if action.startswith('video_'):
+                import tenant_instruction_videos as videos
+                videos.schema(conn)
+                if action in {'video_find','video_offer','video_confirm'}:
+                    result=videos.virtual_action(c,profile,lesson_id,action,data)
+                else:
+                    result=videos.manage(c,profile,lesson_id,action,data,data.get('_video_body'))
+                if connection is None:conn.commit()
+                return result
             delegated_policy=None;delegated_basis=None;delegated_source_id=None;delegated_channel=None
             if action=='list':
                 q=str(data.get('q',''))[:180];state=data.get('state','');offset=min(max(int(data.get('offset',0)),0),100000)
@@ -250,7 +259,9 @@ def expert_lookup(cur,tenant_id,primary_agent_id,query):
     Search results are candidates, not proof of UI-version compatibility.
     """
     tenant=identifier(tenant_id);agent=identifier(primary_agent_id)
-    result={'tool':'instruction_library','read_only':True,'customer_send_allowed':False,
+    from tenant_instruction_videos import candidates
+    video_candidates=candidates(cur,tenant,agent,query)
+    result={'video_candidates':video_candidates,'tool':'instruction_library','read_only':True,'customer_send_allowed':False,
             'status':'not_found','evidence':[]}
     cur.execute("SELECT to_regclass('saas_instruction_lessons') IS NOT NULL AS available")
     if not cur.fetchone()['available']:
@@ -289,3 +300,25 @@ def expert_lookup(cur,tenant_id,primary_agent_id,query):
     from tenant_ai_instructor_contract import availability
     result['browser_fallback']=availability()['status']
     return result
+
+
+def private_video_info(profile,lesson_id,asset_id):
+    with _connect() as conn:
+        with conn.cursor() as c:
+            tenant,_=_authorize(c,profile)
+            c.execute("SELECT size_bytes,sha256 FROM saas_instruction_videos WHERE tenant_id=%s::uuid AND lesson_id=%s::uuid AND id=%s::uuid",(tenant,identifier(lesson_id),identifier(asset_id)))
+            row=c.fetchone()
+            if not row:raise TenantLinearError('Video unavailable',404)
+            return dict(row)
+
+
+def private_video(profile,lesson_id,asset_id,offset=0,length=1024*1024):
+    from tenant_instruction_videos import DOWNLOAD_CHUNK_BYTES
+    if not 0<=offset or not 0<length<=DOWNLOAD_CHUNK_BYTES:raise ValueError('video_range')
+    with _connect() as conn:
+        with conn.cursor() as c:
+            tenant,_=_authorize(c,profile)
+            c.execute("SELECT substring(body from %s for %s) AS chunk FROM saas_instruction_videos WHERE tenant_id=%s::uuid AND lesson_id=%s::uuid AND id=%s::uuid",(offset+1,length,tenant,identifier(lesson_id),identifier(asset_id)))
+            row=c.fetchone()
+            if not row:raise TenantLinearError('Video unavailable',404)
+            return bytes(row['chunk'])
