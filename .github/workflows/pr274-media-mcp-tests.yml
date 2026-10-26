@@ -1,0 +1,39 @@
+name: PR274 media and MCP tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - fix/read-partial-audio-on-media-error
+
+permissions:
+  contents: read
+
+jobs:
+  media-mcp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Python test dependencies
+        run: python -m pip install -r requirements.txt pytest imageio-ffmpeg
+      - name: Install PDF renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes poppler-utils
+      - name: Install isolated PGlite test dependency
+        run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11
+      - name: Run media and MCP regression tests
+        run: >-
+          python -m pytest -q -rs
+          tests/test_ai_administrator_read.py
+          tests/test_media_evidence.py
+          tests/test_media_evidence_pglite.py
+          tests/test_knowledge_media.py
+          tests/test_ai_learning_mcp.py
