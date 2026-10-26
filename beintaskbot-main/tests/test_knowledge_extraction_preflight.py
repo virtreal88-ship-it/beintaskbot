@@ -166,13 +166,22 @@ def test_single_message_worker_claims_only_selected_message_and_finishes_actual_
     assert db.execute('SELECT status FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid',(A,))[0]['status']=='stopped'
 
 
-def test_worker_rechecks_changed_approved_media_before_provider(db,monkeypatch):
+@pytest.mark.parametrize('mutation',('media','body','external_id','model'))
+def test_worker_rechecks_all_changed_approved_source_fences_before_provider(db,monkeypatch,mutation):
     seed_job(db);_pricing(monkeypatch);cfg=_cfg();_bridge(monkeypatch,cfg);message=_source(db);consent.ensure_schema(db)
     prepared=consent.prepare(db.cursor(),cfg,{'message_id':message,'channel_id':CA,'lead_id':41});meta=prepared['_component_meta']['owner_single_extraction'];db.commit()
     consent.complete(db.cursor(),cfg,consent_id=meta['consent_ids']['approve'],capability=meta['capabilities']['approve'],action='approve');db.commit()
     # The consent is valid but its underlying provider-media identity changed
     # while queued.  Dispatch must block before prepare/reservation/provider.
-    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps({'mediaId':'changed','fileLength':101}),A,message));db.commit()
+    if mutation=='media':
+        db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps({'mediaId':'changed','fileLength':101}),A,message))
+    elif mutation=='body':
+        db.execute("UPDATE saas_crm_messages SET body='changed body' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,message))
+    elif mutation=='external_id':
+        db.execute("UPDATE saas_crm_messages SET external_id='changed-external' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,message))
+    else:
+        db.execute("UPDATE saas_ai_agents SET model='changed-model' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
+    db.commit()
     monkeypatch.setattr(worker,'_connect',lambda:db);monkeypatch.setattr(campaigns,'_connect',lambda:db)
     monkeypatch.setattr(worker,'reconcile',lambda profile,campaign_id:None)
     called=[];monkeypatch.setattr(worker,'analyze',lambda *args,**kwargs: called.append(True))
@@ -180,6 +189,21 @@ def test_worker_rechecks_changed_approved_media_before_provider(db,monkeypatch):
     assert not called
     assert db.execute('SELECT status FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid',(A,))[0]['status']=='blocked'
     assert db.execute('SELECT count(*) AS n FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
+
+
+def test_ordinary_campaign_never_uses_single_message_dispatch_fence(db,monkeypatch):
+    import tenant_knowledge_campaign_schema as campaign_schema
+    import tenant_knowledge_quality as quality
+    seed_job(db);campaign_schema.create_schema(db)
+    campaign=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_knowledge_campaigns(tenant_id,id,created_by,sources,analysis_agent_id,status,approved_at,max_calls,max_tokens,progress)
+      VALUES(%s::uuid,%s::uuid,11,%s::jsonb,%s::uuid,'running',now(),1,16000,'{}'::jsonb)""",(A,campaign,json.dumps([CA]),AGENT));db.commit()
+    monkeypatch.setattr(worker,'_connect',lambda:db);monkeypatch.setattr(worker,'reconcile',lambda *_:None)
+    monkeypatch.setattr(worker.discovery,'discover',lambda *_:None);monkeypatch.setattr(quality,'tick',lambda *_:False)
+    monkeypatch.setattr(worker.queue,'claim',lambda *_:None)
+    import tenant_ai_single_message_extraction as single
+    monkeypatch.setattr(single,'dispatch_fence',lambda *_:(_ for _ in ()).throw(AssertionError('ordinary campaign must not use single consent')))
+    assert worker.tick() is False
 
 
 def test_disabled_company_asr_is_explicitly_not_ready(db,monkeypatch):

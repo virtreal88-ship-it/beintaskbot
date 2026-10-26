@@ -59,10 +59,11 @@ def tick():
     try:
         # This is the pre-reservation dispatch fence. ``check_active`` runs it
         # again immediately before the generation boundary.
-        with _connect() as conn:
-            with conn.cursor() as cur:
-                from tenant_ai_single_message_extraction import dispatch_fence
-                dispatch_fence(cur,tenant,claimed['id'])
+        if single_message:
+            with _connect() as conn:
+                with conn.cursor() as cur:
+                    from tenant_ai_single_message_extraction import dispatch_fence
+                    dispatch_fence(cur,tenant,claimed['id'])
         result=analyze(profile,{**claimed['route'],'request_id':str(claimed['id'])})
         queue.complete(claimed,result)
     except TenantLinearError as error:
