@@ -26,9 +26,9 @@ jobs:
       - name: Install PDF renderer
         run: |
           sudo apt-get update
-          sudo apt-get install --yes poppler-utils
+          sudo apt-get install --yes poppler-utils ffmpeg
       - name: Install isolated PGlite test dependency
-        run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11
+        run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0
       - name: Run media and MCP regression tests
         run: >-
           python -m pytest -q -rs
@@ -47,3 +47,10 @@ jobs:
           tests/test_tenant_ai_testing_retrieval.py
           tests/test_knowledge_candidates.py
           tests/test_night_release.py
+          tests/test_instruction_library.py
+          tests/test_instruction_expert_integration.py
+          tests/test_instruction_videos.py
+      - name: Run instruction card regression
+        run: |
+          node tests/test_instruction_editor.cjs
+          node tests/test_instruction_video_card.cjs

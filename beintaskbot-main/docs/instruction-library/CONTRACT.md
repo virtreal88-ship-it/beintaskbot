@@ -79,3 +79,54 @@ submit/approve/publish to a synthetic test agent, public published viewer.
 Mobile 390px has no horizontal overflow after min-width correction.
 No production APIs or paid services used. Test server is tests/run_instruction_demo.py;
 it requires explicit --sample path and never reads production credentials.
+
+## Reusable video pilot (simulation only)
+
+A saved instruction card can hold several private MP4 assets in the existing
+PostgreSQL storage (BYTEA, as for library screenshots). No bucket, credentials,
+provider import, public media URL, paid processing, or CRM attachment is needed.
+Uploads are decoded with local ffprobe and capped at 100 MiB / 120 seconds.
+The current pilot does **not** import WhatsApp media, including message 18cee9ee.
+
+Each asset has a SHA-256, immutable file bytes, version, task, product,
+product version, and when-to-offer description. Uploads start unapproved. Only
+an authenticated active company owner can approve the exact version/hash as
+client-safe after reviewing visible data. Revocation disables discovery and
+confirmation. Metadata edits reset approval and increment the asset version.
+Sources remain private; no raw CRM URL, phone number or JID is returned.
+Video approval does not change the instruction's text publication lifecycle.
+
+The opt-in existing `instruction_library` expert tool exposes bounded approved
+video references alongside text evidence. Selection is lexical task matching,
+not embedding search or a general semantic classifier. The owner should use
+short task terms matching customer vocabulary. Missing product/version or
+multiple matches require clarification; nothing selects a random video.
+The when-to-offer description is returned as guidance, not interpreted as an
+executable rule. Normal text knowledge and operator attachments are unchanged.
+
+Existing card/API demonstration:
+1. Save/review/publish a synthetic instruction to a test agent.
+2. Attach a locally generated MP4 to its card, with task, product, version and
+   when-to-offer. The private preview requires current member authorization.
+3. Owner reviews the file and selects “Approve reuse”.
+4. In the same card's “Virtual offer test”, select the agent, enter a synthetic
+   question, product/version, and the text answer first. “Find and offer” creates
+   an exact asset offer. “Simulated client yes” creates a virtual receipt.
+
+`video_offer` is bound to actor, tenant, sandbox dialog, agent, asset version/hash,
+lesson version and a unique offer UUID. A newer offer supersedes the previous
+outstanding offer in that dialog. Confirmation rechecks current source/agent,
+asset integrity/approval and expiry (10 minutes). Dialog locking serializes
+competing offers and receipt writes; a repeated confirmation returns the same
+receipt. Unknown receipts block retries. Every receipt is labelled simulation,
+`customer_sent=false`; sandbox consent is never represented as real client
+consent. The API has **no live delivery branch**, even if production flags change.
+
+Remaining pilot gate: connect authenticated customer consent and delivery to the
+existing operator/Connect attachment transport, with its actual mode, scope,
+stop/handoff and automatic-send pilot guards. This draft does not claim live
+AI delivery, transport unknown-outcome handling, or a reviewed reusable copy of
+any original customer video. The existing operator file route uses Kommo Drive and caps uploads at 5 MiB;
+Connect AI currently exposes text delivery only. Its video upload/send contract
+must be verified before adding an adapter. These limits were not changed.
+Separate pilot approval/review is required before enabling that boundary. No customer-send permission is granted here.

@@ -10,6 +10,7 @@ w.BeinLesson={mount:(_r,doc,options)=>{validateLesson(doc);mounted={doc,options}
 w.fetch=async(url,options={})=>{url=String(url);const payload=options.body?JSON.parse(options.body):null;calls.push({url,payload});let result;
  if(url.includes('/me'))return{ok:true,json:async()=>({member:{tenant_id:id,telegram_id:11}})};
  if(url.includes('/ai/agents'))result=[];
+ else if(payload?.action==='video_list')result={items:[],production_send_enabled:false};
  else if(payload){assert.equal(payload.expected_tenant_id,id);assert.equal(payload.expected_user_id,'11');assert.equal(payload.expected_version,record.version);record={...record,version:record.version+1,doc:payload.doc||record.doc,state:payload.action==='submit'?'pending_review':'draft'};result=record;}
  else if(url.includes('/instructions/'+id))result=record;
  else result={items:[{id,title:'Lesson',state:'draft',language:'en'}],next_offset:null};
