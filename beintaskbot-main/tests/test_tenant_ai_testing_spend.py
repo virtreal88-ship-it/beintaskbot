@@ -110,3 +110,26 @@ def test_discarded_output_is_still_charged_and_finish_is_idempotent(priced):
     row=ledger(priced)[0]
     assert row['state']=='settled' and row['actual_microusd']==40
     assert priced.execute('SELECT state,response FROM saas_ai_test_turns')[0]=={'state':'superseded','response':''}
+
+
+def test_cancellation_while_reservation_thread_commits_releases_without_attempt(priced, monkeypatch):
+    import threading
+    committed=threading.Event();release=threading.Event()
+    real_reserve=store.reserve
+    def delayed(*args, **kwargs):
+        item=real_reserve(*args, **kwargs)
+        committed.set()
+        assert release.wait(5)
+        return item
+    monkeypatch.setattr(service,'reserve',delayed)
+    provider=Mock();monkeypatch.setattr(service,'generate',provider)
+    id=new();data=message()
+    async def cancel():
+        task=asyncio.create_task(service.turn(PROFILE,id,data))
+        assert await asyncio.to_thread(committed.wait,5)
+        task.cancel();release.set()
+        with pytest.raises(asyncio.CancelledError):await task
+    asyncio.run(cancel())
+    provider.assert_not_called()
+    assert ledger(priced)[0]['state']=='released'
+    run(id,data);provider.assert_not_called()
