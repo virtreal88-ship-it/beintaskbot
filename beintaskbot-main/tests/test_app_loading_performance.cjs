@@ -171,4 +171,52 @@ async function deepLinkReadPollTests(){
  console.log('PASS deep link/read/poll: delayed authentication, exact route, readmark race, one timer, hidden-tab pause and reauthorization');
 }
 
-(async()=>{await requestTests();await agentTests();await dialogTests();await bootstrapTests();await focusTests();await deepLinkReadPollTests();})().catch(error=>{console.error(error);process.exitCode=1;});
+async function hiddenChatActionTests(){
+ const b=browser('tasks'),{w,requests,emit,reply}=b;
+ try{
+  w.tenantProfileSnapshot=profile;w.history.replaceState({leadId:41},'');
+  const chat=w.document.createElement('div');chat.className='wa-composer';chat.innerHTML='<textarea id="deal-chat-input"></textarea>';w.document.body.append(chat);
+  w.eval(read('docs/tenant-ai-agents.js'));await settle();
+  let state='active';
+  const completeControl=async()=>{const owned=requests.filter(r=>r.url.includes('/for-lead/')).at(-1);assert.ok(owned);reply(owned,{conversation_id:'client@s.whatsapp.net',provider:'connect',channel_id:row(1).channel_id});await settle();const control=requests.filter(r=>r.url.includes('/state?')).at(-1);reply(control,{state,agent_name:'Synthetic agent',resume_allowed:true});await settle();};
+  await completeControl();
+  for(const [label,action,nextState] of [['Приостановить AI','pause','paused'],['Возобновить AI','resume','active'],['Передать человеку','handoff','human']]){
+   const button=[...w.document.querySelectorAll('#aiAgentChatToggle button')].find(node=>node.textContent===label);assert.ok(button,label);
+   const pending=button.onclick();await settle();const mutation=requests.at(-1);assert.equal(mutation.options.method,'POST');assert.ok(mutation.url.endsWith('/'+action));
+   const data=JSON.parse(mutation.options.body);assert.equal(data.provider,'connect');assert.equal(data.channel_id,row(1).channel_id);assert.equal(data.expected_tenant_id,profile.member.tenant_id);assert.equal(data.expected_user_id,11);
+   state=nextState;reply(mutation,{state});await settle();await completeControl();await pending;
+  }
+  assert.ok(!requests.some(r=>/\/(agents|simulation|knowledge)(\/|\?|$)/.test(r.url)),'chat actions do not eagerly fetch hidden agent configuration');
+  const before=requests.length;await w.document.getElementById('aiSaveSettings').onclick();assert.equal(requests.length,before,'configuration mutations remain blocked until settings are ready');assert.match(w.document.getElementById('aiAgentsNotice').textContent,/loading/);
+  const stale=[...w.document.querySelectorAll('#aiAgentChatToggle button')][0];assert.ok(stale);emit('tenant-profile',{...profile,capabilities:{modules:{ai_agents:false}}});await stale.onclick();assert.equal(requests.length,before,'old action closure cannot mutate after revocation');
+ }finally{w.close();}
+ console.log('PASS hidden chat: real Pause/Resume/Handoff path works without configuration reads; config/revoked actions remain blocked');
+}
+async function sameScopePendingFocusTests(){
+ const b=browser(),{w,requests,emit,reply}=b;
+ try{
+  w.tenantProfileSnapshot=profile;w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));emit('tenant-profile',profile);
+  const oldList=requests[0];const previousOpen=w.tenantOperator.openDialog(row(1));reply(requests.at(-1),{dialog:row(1),messages:[]});await previousOpen;const oldOpen=w.tenantOperator.openDialog(row(3)),oldHistory=requests.at(-1);
+  w.dispatchEvent(new w.Event('focus'));const reauth=requests.at(-1);reauth.resolve(response(profile));await settle();
+  const newList=requests.filter(r=>r.url.includes('/dialogs?')).at(-1),newHistory=requests.filter(r=>r.url.includes('/history?')).at(-1);
+  assert.notEqual(newList,oldList,'same-profile focus starts a replacement list');assert.notEqual(newHistory,oldHistory,'pending selected history resumes after same-profile authorization');
+  reply(newList,list([row(3)]));reply(newHistory,{dialog:row(3),messages:[]});await settle();
+  reply(oldList,list([row(1)]));reply(oldHistory,{dialog:row(1),messages:[]});await oldOpen;await settle();
+  assert.match(w.document.getElementById('operatorRows').textContent,/Synthetic 3/);assert.match(w.document.getElementById('operatorConversationHeader').textContent,/Synthetic 3/);
+  assert.doesNotMatch(w.document.getElementById('operatorNotice').textContent,/scope changed/);
+ }finally{w.close();}
+ const a=browser('ai_agents');
+ try{
+  a.w.tenantProfileSnapshot=profile;a.w.eval(read('docs/tenant-ai-agents.js'));const obsolete=a.requests.slice();assert.equal(obsolete.length,4);
+  a.w.dispatchEvent(new a.w.Event('focus'));a.requests.at(-1).resolve(response(profile));await settle();const replacement=a.requests.slice(5,9);assert.equal(replacement.length,4,'same-profile focus replaces obsolete agent load');
+  for(const request of replacement)a.reply(request,request.url.endsWith('/agents')?[]:{});await settle();
+  for(const request of obsolete)a.reply(request,request.url.endsWith('/agents')?[{id:'old',name:'OBSOLETE'}]:{});await settle();
+  assert.match(a.w.document.getElementById('aiAgentList').textContent,/noAgents/);assert.doesNotMatch(a.w.document.getElementById('aiAgentList').textContent,/OBSOLETE/);assert.equal(a.w.document.getElementById('aiAgentList').getAttribute('aria-busy'),'false');
+  a.w.dispatchEvent(new a.w.Event('focus'));a.requests.at(-1).resolve(response(profile));await settle();const warm=a.requests.slice(-4);assert.equal(warm.filter(request=>request.url.endsWith('/agents')).length,1,'warm ready focus starts fresh agent reads');
+  for(const request of warm)a.reply(request,request.url.endsWith('/agents')?[]:{});await settle();assert.equal(a.w.document.querySelector('[data-ai-overview-create]').disabled,false,'configuration readiness recovers after warm focus');
+
+ }finally{a.w.close();}
+ console.log('PASS same-scope focus: obsolete list/history/agent flights cannot suppress replacement loads');
+}
+
+(async()=>{await requestTests();await agentTests();await dialogTests();await bootstrapTests();await focusTests();await deepLinkReadPollTests();await hiddenChatActionTests();await sameScopePendingFocusTests();})().catch(error=>{console.error(error);process.exitCode=1;});

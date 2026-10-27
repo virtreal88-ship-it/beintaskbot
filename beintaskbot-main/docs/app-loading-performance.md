@@ -28,7 +28,7 @@ The request-consumer rows are controlled trigger counts, not a measured producti
 
 `tests/fixtures/operator_list_baseline.py` freezes the original listing function from the baseline commit. The comparison uses the same unchanged projection, decoration, authorization and eligibility rules for both paths. It verifies complete normalized results for 121 routes, multiple pages, empty/out-of-range pages, search/channel/agent/state filters, cross-tenant exclusion, unread initialization/read marking, identity conflicts, folded groups, assignees and channel-specific group state. Existing operator/assignment/support suites cover further permission, job and mutation behavior. Timestamp strings are normalized to equivalent ISO instants before comparison.
 
-The browser fixture exercises slow/failed/coalesced requests, delayed body consumption, header/credential isolation, superseded initial authorization, parallel bootstrap, hidden agents, empty/error states, filter/history response ordering, tenant/permission revocation, silent workspace changes on focus, delayed-auth notification deep links, read-mark/list races, polling and hidden-tab suspension. Every network request is intercepted; the only synthetic mutation exercised in the new loading test is an operator read mark.
+The browser fixture exercises slow/failed/coalesced requests, delayed body consumption, header/credential isolation, superseded initial authorization, parallel bootstrap, hidden agents, empty/error states, filter/history response ordering, tenant/permission revocation, silent workspace changes on focus, delayed-auth notification deep links, read-mark/list races, polling, hidden-tab suspension, same-profile focus during initial and warm loads, and real chat-control action dispatch while agent configuration remains hidden. Configuration writes still require loaded settings, and revoked chat controls cannot send a request. Every network request is intercepted; synthetic mutations cover operator read marks and the existing chat Pause/Resume/Handoff actions only.
 
 ## Reproduce
 
@@ -47,7 +47,7 @@ node tests/test_connect_chat_controls_runtime.cjs
 node tests/test_connect_media_preview_ui.cjs
 ```
 
-The focused SQL suite has 25 cases; the loading test reports six browser/request scenario groups. `.github/workflows/app-loading-performance.yml` also runs the existing operator, assignment, support, copilot and web-route regressions. The frozen fixture needs no Git history in a shallow CI checkout.
+The focused SQL suite has 25 cases; the loading test reports eight browser/request scenario groups. `.github/workflows/app-loading-performance.yml` also runs the existing operator, assignment, support, copilot and web-route regressions. The frozen fixture needs no Git history in a shallow CI checkout.
 
 ## Limits
 
