@@ -493,13 +493,15 @@ def source_review_preflight(profile,candidate_id,message_id,expected_version):
         raise TenantLinearError('Некорректная версия карточки.')
     normalized_message_id=identifier(message_id)
     with _connect() as conn:
-        schema(conn)
+        # _connect returns a fresh connection in production.  Roll back any
+        # wrapper/test transaction before this function's SELECT-only reads.
+        conn.rollback()
         with conn.cursor() as cur:
             tenant,_,policy=authorize(cur,profile)
             if policy.profile.get('role')!='owner':
                 raise TenantLinearError('Только владелец может проверять новую provenance вложения.',403)
             key=identifier(candidate_id)
-            cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,key))
+            cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,key))
             row=cur.fetchone()
             if not row: raise TenantLinearError('Карточка не найдена.',404)
             run=extraction_row(cur,tenant,row['extraction_id'])
