@@ -124,7 +124,9 @@ def positive_confirmation(value,informational=False):
         r'hell\s+(?:olunmayib|edilmeyib|olunmayacaq|edilmeyecek|olunmadi|edilmedi)|'
         r'problem\s+(?:(?:(?:hələ|hele|yenə|yene)(?:\s+(?:də|de))?|still|gələcəkdə|gelecekde)\s+)?'
         r'(?:qalır|qalir|qalıb|qalib|qaldı|qaldi|qalacaq|qayıtdı|qayitdi|qayıdıb|qayidib|'
-        r'(?:yenidən|yeniden)\s+(?:başladı|basladi|başlayıb|baslayib)|davam\s+(?:edir|edəcək|edecek)|var|olacaq|remains?|persists?|continues?)|'
+        r'(?:yenidən|yeniden)\s+(?:başladı|basladi|başlayıb|baslayib|qayıtdı|qayitdi|qayıdıb|qayidib)|'
+        r'geri\s+(?:qayıtdı|qayitdi|qayıdıb|qayidib)|təkrarlan(?:ıb|dı|ır)|tekrarlan(?:ib|di|ir)|'
+        r'davam\s+(?:edir|edəcək|edecek)|var|olacaq|remains?|persists?|continues?)|'
         r'issue\s+(?:remains?|persists?|continues?)|'
         r'если|возможно|кажется|попробуйте|проверьте|if|check|maybe|should|might|бы|должно|может|наверное|'
         r'əgər|eger|bəlkə|belke|olsa|olsaydı|olsaydi|ola\s+bilər|ola\s+biler)\b',value,re.I): return False
