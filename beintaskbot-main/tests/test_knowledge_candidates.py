@@ -209,7 +209,13 @@ def test_owner_reviews_changed_media_as_new_version_without_rewriting_extraction
 
 @pytest.mark.parametrize('sibling_claimed',[False,True])
 @pytest.mark.parametrize(('confirmation_text','should_publish'),[
+    ('Duzelib chox sagolun. Bu nece olmushdu ki? Neyi sehv yazmishiq bele gosterirdi',True),
     ('Duzelib chox sagolun, internet duzelib.',True),
+    ('Duzelib chox sagolun? Bu nece olmushdu ki? Neyi sehv yazmishiq bele gosterirdi',False),
+    ('Duzelib chox sagolun. Amma problem həll edilməyib?',False),
+    ('Duzelib chox sagolun. Əgər internet düzəlibsə?',False),
+    ('O yazdı: "Duzelib chox sagolun"',False),
+    ('Kaş Duzelib chox sagolun.',False),
     ('Duzelib amma problem qalıb.',False),
     ('Duzelib amma problem qalacaq.',False),
     ('Duzelib amma problem yenə də qalacaq.',False),
@@ -646,6 +652,7 @@ def test_hypotheses_and_questions_not_confirmation(value):
     assert not policy.positive_confirmation(value)
 
 @pytest.mark.parametrize(('value','expected'),[
+    ('Duzelib chox sagolun. Bu nece olmushdu ki? Neyi sehv yazmishiq bele gosterirdi',True),
     ('Duzelib chox sagolun',True),
     ('DÜZƏLİB, ÇOX SAĞ OLUN',True),
     ('Düzəlib, internet yenə işləyir',True),
@@ -653,6 +660,11 @@ def test_hypotheses_and_questions_not_confirmation(value):
     ('duzelmeyib',False),
     ('düzəlməyib',False),
     ('duzelib?',False),
+    ('Duzelib chox sagolun?',False),
+    ('O yazdı: "Duzelib chox sagolun"',False),
+    ('Duzelib chox sagolun. Əgər internet düzəlibsə?',False),
+    ('Duzelib chox sagolun. Amma problem həll edilməyib?',False),
+    ('Kaş Duzelib chox sagolun.',False),
     ('Duzelib amma problem qalir',False),
     ('Duzelib amma problem qalıb',False),
     ('Duzelib amma problem qalib',False),

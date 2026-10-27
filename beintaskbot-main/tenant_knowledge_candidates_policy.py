@@ -117,7 +117,18 @@ def card(data,allowed_ids,allow_boundary_outside_sources=False):
 
 
 def positive_confirmation(value,informational=False):
-    if any(mark in value for mark in ('?','؟','？')) or re.search(
+    # The customer's question here asks retrospectively how the issue arose;
+    # it follows a complete, declarative "fixed, thank you" sentence. Permit
+    # only this exact tail. A question attached to the fix claim stays false.
+    retrospective_az_question = bool(re.fullmatch(
+        r'\s*duzelib\s+chox\s+sagolun\.\s*bu\s+nece\s+olmushdu\s+ki\?\s*'
+        r'neyi\s+sehv\s+yazmishiq\s+bele\s+gosterirdi[.!]?\s*', value, re.I))
+    quoted_confirmation = re.search(
+        r'''(?is)["“«'][^"“”«»']{0,240}\b(?:исправлен[оа]?|həll\s+olundu|aradan\s+qaldırıldı|'''
+        r'''заработал[оа]?|вс[её]\s+работает|теперь\s+работает|проблема\s+решена|помогло|'''
+        r'''it\s+works|working\s+now|resolved|fixed|düzəldi|düzəlib|duzelib|işləyir)\b'''
+        r'''[^"“”«»']{0,240}["”»']''', value)
+    if quoted_confirmation or (any(mark in value for mark in ('?','؟','？')) and not retrospective_az_question) or re.search(
         r'\b(?:не|нет|not|never|yox|işləmir|islemir|düzəlməyib|duzelmeyib|düzəlmədi|duzelmedi|'
         r'düzəlmir|duzelmir|düzəlməyəcək|duzelmeyecek|'
         r'həll\s+(?:olunmayıb|edilməyib|olunmayacaq|edilməyəcək|olunmadı|edilmədi)|'
@@ -139,7 +150,7 @@ def positive_confirmation(value,informational=False):
         r'gələ\s+bilər|gele\s+biler|davam\s+(?:edir|edəcək|edecek)|var|olacaq|remains?|persists?|continues?)|'
         r'issue\s+(?:remains?|persists?|continues?)|'
         r'если|возможно|кажется|попробуйте|проверьте|if|check|maybe|should|might|бы|должно|может|наверное|'
-        r'əgər|eger|bəlkə|belke|olsa|olsaydı|olsaydi|ola\s+bilər|ola\s+biler)\b',value,re.I): return False
+        r'əgər|eger|bəlkə|belke|kaş|kas|olsa|olsaydı|olsaydi|ola\s+bilər|ola\s+biler)\b',value,re.I): return False
     if informational and re.search(r'понятно|спасибо.{0,40}информац|thank.{0,20}information|aydındır|məlumat.{0,40}təşəkkür',value,re.I): return True
     return bool(re.search(
         r'\b(?:исправлен[оа]?|həll\s+olundu|aradan\s+qaldırıldı|заработал[оа]?|вс[её]\s+работает|'
