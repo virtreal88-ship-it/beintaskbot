@@ -81,7 +81,14 @@ def read(profile,id):
         setup(conn)
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile);value=session(cur,tenant,actor,id)
-            row=config(cur,tenant,value['agent_id']);value['agent_name']=row['name'];value['block_reason']=gate(row)
+            try:
+                row=config(cur,tenant,value['agent_id']);value['agent_name']=row['name'];value['block_reason']=gate(row)
+            except TenantLinearError as error:
+                if error.status!=404:raise
+                cur.execute('SELECT display_name,deleted_at FROM saas_ai_agent_history_identities WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,value['agent_id']))
+                identity=cur.fetchone()
+                if not identity or not identity.get('deleted_at'):raise
+                value['agent_name']=identity['display_name'];value['block_reason']='agent_deleted'
             cur.execute('SELECT * FROM saas_ai_test_turns WHERE tenant_id=%s::uuid AND session_id=%s::uuid ORDER BY created_at,id LIMIT 100',(tenant,id))
             turns=[public(r) for r in cur.fetchall()]
     return {'session':public(value),'turns':turns,'simulation':True}
@@ -91,7 +98,10 @@ def listing(profile):
         setup(conn)
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
-            cur.execute('SELECT s.id,s.agent_id,a.name AS agent_name,s.state,s.updated_at FROM saas_ai_test_sessions s JOIN saas_ai_agents a ON a.tenant_id=s.tenant_id AND a.id=s.agent_id WHERE s.tenant_id=%s::uuid AND s.created_by=%s ORDER BY s.updated_at DESC,s.id LIMIT 20',(tenant,actor))
+            cur.execute('''SELECT s.id,s.agent_id,COALESCE(a.name,hi.display_name) AS agent_name,s.state,s.updated_at
+              FROM saas_ai_test_sessions s LEFT JOIN saas_ai_agents a ON a.tenant_id=s.tenant_id AND a.id=s.agent_id
+              LEFT JOIN saas_ai_agent_history_identities hi ON hi.tenant_id=s.tenant_id AND hi.id=s.agent_id
+              WHERE s.tenant_id=%s::uuid AND s.created_by=%s ORDER BY s.updated_at DESC,s.id LIMIT 20''',(tenant,actor))
             return [public(r) for r in cur.fetchall()]
 
 def control(profile,id,data):

@@ -40,6 +40,16 @@ def test_cursor_is_opaque_signed_and_context_redaction(monkeypatch):
     assert '[phone]' in mcp._redact('call +994501234567') and '[redacted]' in mcp._redact('api_key=private')
 
 
+def test_dialog_assignment_requires_separate_owner_oauth_scope():
+    scopes=mcp._requested_scopes(mcp.TOOL_SCOPE+' '+mcp.DIALOG_ASSIGN_SCOPE)
+    assert mcp.DIALOG_ASSIGN_SCOPE in scopes
+    text,button=mcp._consent_text(scopes)
+    assert 'leaves the dialog paused' in text and 'never activates automatic replies' in text
+    assert button=='Allow dialog assignment'
+    with pytest.raises(Exception):
+        mcp._requested_scopes(mcp.TOOL_SCOPE+' arbitrary.write')
+
+
 def _setup(monkeypatch, database, scope=None):
     monkeypatch.setattr(mcp, '_connect', lambda: database)
     monkeypatch.setenv('AI_LEARNING_MCP_ENABLED','true')
@@ -134,11 +144,198 @@ def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, 
             assert mcp.KNOWLEDGE_DEDUP_SCOPE in data['scopes_supported']
             assert mcp.APPLY_SCOPE in data['scopes_supported']
             assert mcp.DIALOGUE_MERGE_SCOPE in data['scopes_supported']
+            assert mcp.DIALOG_ASSIGN_SCOPE in data['scopes_supported']
+            assert mcp.SUPPORT_CASE_SCOPE in data['scopes_supported']
+            assert mcp.SUPPORT_MEDIA_SCOPE in data['scopes_supported']
+            assert mcp.AGENT_MANAGE_SCOPE in data['scopes_supported']
             protected=await client.get('/.well-known/oauth-protected-resource/mcp/ai-learning')
             assert (await protected.json())['resource']=='https://crm.test/mcp/ai-learning'
             listed=await client.post('/mcp/ai-learning',json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
-            assert {'whatsapp_dialogue_duplicate_candidates','whatsapp_dialogue_merge'} <= {item['name'] for item in (await listed.json())['result']['tools']}
+            definitions={item['name']:item for item in (await listed.json())['result']['tools']}
+            assert {'whatsapp_dialogue_duplicate_candidates','whatsapp_dialogue_merge',
+                    'support_dialog_agent_options','support_dialog_agent_assign','support_cases_list',
+                    'support_case_detail','support_case_confirm_publish','support_case_edit_publish',
+                    'support_case_edit_boundaries','support_case_reject_delete','support_case_delete_status','support_agents_list',
+                    'support_agent_archive_transfer','support_agent_archive_status','support_agent_delete_preview','support_agent_permanent_delete'} <= set(definitions)
+            assert {'support_media_snapshot_preview','support_media_campaign_prepare','support_media_campaign_read',
+                    'support_media_campaign_start','support_media_campaign_control'} <= set(definitions)
+            assert definitions['support_dialog_agent_assign']['securitySchemes']==[{'type':'oauth2','scopes':[mcp.DIALOG_ASSIGN_SCOPE]}]
+            assert definitions['support_case_reject_delete']['annotations']['destructiveHint'] is True
+            assert definitions['support_agent_archive_transfer']['annotations']['destructiveHint'] is True
+            assert definitions['support_agent_permanent_delete']['annotations']['destructiveHint'] is True
     asyncio.run(check())
+
+
+def test_mcp_current_case_media_tools_use_fixed_grant_and_exact_start_confirmation(db,monkeypatch):
+    _setup(monkeypatch,db)
+    import tenant_knowledge_campaigns as campaigns
+    campaign_id=str(uuid.uuid4());snapshot='a'*64;agent=str(uuid.uuid4());channel=str(uuid.uuid4())
+    cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.TOOL_SCOPE,mcp.SUPPORT_MEDIA_SCOPE]}
+    profile={'tenant_id':A,'telegram_id':11};seen=[]
+    monkeypatch.setattr(campaigns,'preview_existing_cases',lambda p:(seen.append(('preview',p)) or {'case_count':4,'eligible_count':2}))
+    monkeypatch.setattr(campaigns,'prepare',lambda p,data:(seen.append(('prepare',p,data.copy())) or campaign_id))
+    current={'id':campaign_id,'version':7,'status':'awaiting_budget','channel_ids':[channel],
+        'max_calls':8,'max_tokens':80000,'media_policy':{'allow_external_media':True,'allow_paid_asr':False,
+            'max_main_calls':2,'max_asr_calls':0,'max_vision_calls':4},
+        'max_cost_microusd':10_000_000,'video_model':'gpt-4.1',
+        'progress':{'mode':'case_media_batch','snapshot_hash':snapshot}}
+    monkeypatch.setattr(campaigns,'get',lambda p,cid:(seen.append(('read',p,str(cid))) or {'campaign':current}))
+    monkeypatch.setattr(campaigns,'approve',lambda p,cid,data:(seen.append(('start',p,str(cid),data.copy())) or {'campaign':{'id':cid,'status':'running'}}))
+    with db.cursor() as cur:
+        assert mcp._tools(cur,cfg,'support_media_snapshot_preview',{})['eligible_count']==2
+        with pytest.raises(Exception):mcp._tools(cur,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'support_media_snapshot_preview',{})
+    prepared=mcp._tools(None,cfg,'support_media_campaign_prepare',{'request_id':campaign_id,
+        'channel_ids':[channel],'analysis_agent_id':agent,'max_calls':8,'max_tokens':80000,
+        'media_policy':current['media_policy'],'video_model':'gpt-4.1'})
+    assert prepared['approval_required'] is True and prepared['provider_calls_started'] is False
+    assert seen[-1][2]['max_cost_microusd']==10_000_000 and seen[-1][2]['all_existing_cases'] is True
+    with pytest.raises(Exception):mcp._tools(None,cfg,'support_media_campaign_start',{
+        'campaign_id':campaign_id,'expected_version':7,'snapshot_hash':'b'*64,'confirm_external_processing':True})
+    with pytest.raises(Exception):mcp._tools(None,cfg,'support_media_campaign_start',{
+        'campaign_id':campaign_id,'expected_version':7,'snapshot_hash':snapshot,'confirm_external_processing':False})
+    assert not any(call[0]=='start' for call in seen)
+    started=mcp._tools(None,cfg,'support_media_campaign_start',{
+        'campaign_id':campaign_id,'expected_version':7,'snapshot_hash':snapshot,'confirm_external_processing':True})
+    assert started['campaign']['status']=='running'
+    assert seen[-1][3]['max_cost_microusd']==10_000_000
+    assert seen[-1][3]['all_cases_snapshot_hash']==snapshot
+
+
+def test_mcp_dialog_assignment_uses_pinned_channel_and_existing_guarded_service(db,monkeypatch):
+    _setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+mcp.DIALOG_ASSIGN_SCOPE)
+    import tenant_operator_assignment as assignment
+    profile={'tenant_id':A,'telegram_id':11}
+    options={'conversation_id':'synthetic-customer-5101','lead_id':5101}
+    seen=[]
+    monkeypatch.setattr(assignment,'options',lambda p,data:(seen.append(('read',p,data.copy())) or
+        {'allowed':True,'revision':7,'state':'paused','agents':[{'id':AGENT,'name':'Night'}]}))
+    monkeypatch.setattr(assignment,'assign',lambda p,data:(seen.append(('write',p,data.copy())) or
+        {'agent_id':data['agent_id'],'state':'paused','revision':8,'automatic_replies_enabled':False}))
+    cfg={'AI_LEARNING_MCP_TENANT_ID':A,'AI_LEARNING_MCP_CHANNEL_ID':CA,'actor_id':11,
+         'granted_scopes':[mcp.TOOL_SCOPE,mcp.DIALOG_ASSIGN_SCOPE]}
+    with db.cursor() as cur:
+        preview=mcp._tools(cur,cfg,'support_dialog_agent_options',options)
+        assert preview['revision']==7 and preview['agents'][0]['id']==AGENT
+    result=mcp._tools(None,cfg,'support_dialog_agent_assign',{
+        **options,'agent_id':AGENT,'expected_revision':7,'request_id':str(uuid.uuid4())})
+    assert result['state']=='paused' and result['automatic_replies_enabled'] is False
+    assert seen[0][2]=={'provider':'connect','channel_id':CA,**options,'manage':True}
+    assert seen[1][2]['expected_revision']==7 and seen[1][2]['channel_id']==CA
+    with pytest.raises(Exception):
+        mcp._tools(None,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'support_dialog_agent_assign',{
+            **options,'agent_id':AGENT,'expected_revision':7,'request_id':str(uuid.uuid4())})
+
+
+def test_mcp_support_case_tools_reuse_existing_owner_mutations_and_confirm_exact_delete(db,monkeypatch):
+    _setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+mcp.SUPPORT_CASE_SCOPE)
+    import tenant_knowledge_candidates_store as cases
+    candidate=str(uuid.uuid4());source_agent=AGENT
+    cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,
+         'granted_scopes':[mcp.TOOL_SCOPE,mcp.SUPPORT_CASE_SCOPE]}
+    profile={'tenant_id':A,'telegram_id':11};calls=[]
+    monkeypatch.setattr(cases,'listing',lambda p,args:(calls.append(('list',p,args.copy())) or {'candidates':[],'next_before':None}))
+    monkeypatch.setattr(cases,'detail',lambda p,cid:(calls.append(('detail',p,cid)) or {'id':cid,'outcome':{'status':'unknown'}}))
+    monkeypatch.setattr(cases,'mutate',lambda p,cid,data,action:(calls.append((action,p,cid,data.copy())) or {'candidate':{'id':cid}}))
+    with db.cursor() as cur:
+        assert mcp._tools(cur,cfg,'support_cases_list',{'limit':10})['candidates']==[]
+        assert mcp._tools(cur,cfg,'support_case_detail',{'candidate_id':candidate})['outcome']['status']=='unknown'
+    mcp._tools(None,cfg,'support_case_edit_publish',{'candidate_id':candidate,'expected_version':3,
+        'agent_ids':[source_agent],'fields':{'owner_additions':'Verified owner guidance'}})
+    assert calls[-1]==('publish_guidance',profile,candidate,{'expected_version':3,'agent_ids':[source_agent],'owner_additions':'Verified owner guidance'})
+    start_message,end_message=str(uuid.uuid4()),str(uuid.uuid4())
+    mcp._tools(None,cfg,'support_case_edit_boundaries',{'candidate_id':candidate,'expected_version':4,
+        'start_message_id':start_message,'end_message_id':end_message})
+    assert calls[-1]==('boundaries',profile,candidate,{'expected_version':4,
+        'start_message_id':start_message,'end_message_id':end_message})
+    with pytest.raises(Exception):
+        mcp._tools(None,cfg,'support_case_edit_boundaries',{'candidate_id':candidate,'expected_version':4,
+            'start_message_id':start_message,'end_message_id':end_message,'allow_outside_tenant':True})
+    mcp._tools(None,cfg,'support_case_confirm_publish',{'candidate_id':candidate,'expected_version':3,'agent_ids':[source_agent]})
+    assert calls[-1][0]=='approve'
+    mcp._tools(None,cfg,'support_case_reject_delete',{'candidate_id':candidate,'confirm_candidate_id':candidate,
+        'expected_version':3,'linked_knowledge_action':'retain'})
+    assert calls[-1][0]=='delete' and calls[-1][3]['confirm_candidate_id']==candidate
+    with pytest.raises(Exception):
+        mcp._tools(None,cfg,'support_case_edit_publish',{'candidate_id':candidate,'expected_version':3,
+            'agent_ids':[source_agent],'fields':{'product':'not an editable primary field'}})
+    with pytest.raises(Exception):
+        mcp._tools(None,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'support_cases_list',{})
+
+
+def test_mcp_support_case_delete_status_reads_only_exact_audit_receipt(db,monkeypatch):
+    _setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+mcp.SUPPORT_CASE_SCOPE)
+    target=str(uuid.uuid4());mcp._audit(db.cursor(),A,11,'knowledge_candidate_deleted','knowledge_candidate',target,{'linked_knowledge_action':'none'})
+    db.commit()
+    cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.TOOL_SCOPE,mcp.SUPPORT_CASE_SCOPE]}
+    with db.cursor() as cur:
+        status=mcp._tools(cur,cfg,'support_case_delete_status',{'candidate_id':target})
+    assert status['candidate_id']==target and status['deleted'] is True and status['deleted_at']
+
+
+def test_support_case_mcp_consent_discloses_chatgpt_content_transfer_and_combined_assignment():
+    text,button=mcp._consent_text({mcp.SUPPORT_CASE_SCOPE,mcp.DIALOG_ASSIGN_SCOPE,mcp.AGENT_MANAGE_SCOPE})
+    assert 'sent to ChatGPT' in text and 'leaves it paused' in text and 'permanently remove one exact agent' in text
+    media_text,_=mcp._consent_text({mcp.TOOL_SCOPE,mcp.SUPPORT_MEDIA_SCOPE})
+    assert '$10' in media_text and 'exact snapshot' in media_text and 'external providers' in media_text
+    assert mcp.SUPPORT_MEDIA_SCOPE in mcp._requested_scopes(mcp.TOOL_SCOPE+' '+mcp.SUPPORT_MEDIA_SCOPE)
+    assert button=='Allow support-case management'
+
+
+def test_mcp_case_delete_unknown_result_is_reported_without_retry_permission(monkeypatch):
+    monkeypatch.setattr(mcp,'_authorize_token',lambda request:{'actor_id':11})
+    monkeypatch.setattr(mcp,'_tools',lambda *args:(_ for _ in ()).throw(RuntimeError('synthetic post-commit transport failure')))
+    app=web.Application();app.router.add_post('/mcp/ai-learning',mcp.mcp)
+    async def check():
+        async with TestClient(TestServer(app)) as client:
+            response=await client.post('/mcp/ai-learning',json={'jsonrpc':'2.0','id':4,'method':'tools/call',
+                'params':{'name':'support_case_reject_delete','arguments':{}}})
+            payload=await response.json();result=payload['result']
+            error=json.loads(result['content'][0]['text'])['error']
+            assert result['isError'] is True and error['retry_safety']=='outcome_unknown'
+    asyncio.run(check())
+
+
+def test_mcp_agent_archive_tools_use_scoped_store_and_omit_prompts(db,monkeypatch):
+    _setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+mcp.AGENT_MANAGE_SCOPE)
+    import tenant_ai_agents_store as store
+    profile={'tenant_id':A,'telegram_id':11};calls=[]
+    monkeypatch.setattr(store,'list_agents',lambda p:(calls.append(('list',p)) or [
+        {'id':AGENT,'name':'Night','role':'primary','enabled':False,'mode':'manual','model':'gpt-4.1','version':4,'assigned_dialog_count':2,'instructions':'private prompt','scopes':[{'provider':'connect','channel_id':CA,'allow_groups':False}]}]))
+    monkeypatch.setattr(store,'delete_agent',lambda p,agent_id,**kwargs:(calls.append(('archive',p,agent_id,kwargs)) or
+        {'archived':True,'replacement_agent_id':kwargs['replacement_agent_id'],'transferred_dialogs':2}))
+    cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.TOOL_SCOPE,mcp.AGENT_MANAGE_SCOPE]}
+    with db.cursor() as cur:
+        listed=mcp._tools(cur,cfg,'support_agents_list',{})
+        assert listed['agents']==[{'id':AGENT,'name':'Night','role':'primary','enabled':False,'mode':'manual','model':'gpt-4.1','version':4,'assigned_dialog_count':2,
+            'scopes':[{'provider':'connect','channel_id':CA,'allow_groups':False}]}]
+        assert 'instructions' not in listed['agents'][0]
+    replacement=str(uuid.uuid4())
+    result=mcp._tools(None,cfg,'support_agent_archive_transfer',{'agent_id':AGENT,'replacement_agent_id':replacement,'expected_version':4})
+    assert result['archived'] and result['transferred_dialogs']==2
+    assert calls[-1]==('archive',profile,AGENT,{'replacement_agent_id':replacement,'expected_version':4})
+    with pytest.raises(Exception):
+        mcp._tools(None,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'support_agent_archive_transfer',
+            {'agent_id':AGENT,'replacement_agent_id':replacement,'expected_version':4})
+
+
+def test_mcp_agent_permanent_delete_requires_preview_version_and_exact_target(db,monkeypatch):
+    _setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+mcp.AGENT_MANAGE_SCOPE)
+    import tenant_ai_agents_store as store
+    profile={'tenant_id':A,'telegram_id':11};calls=[]
+    monkeypatch.setattr(store,'preview_agent_deletion',lambda p,agent_id:(calls.append(('preview',p,agent_id)) or {
+        'agent_id':agent_id,'version':7,'confirmation_required':True,'irreversible':True,
+        'impact':{'assigned_dialogs':2,'runs':3,'knowledge_sources':1}}))
+    monkeypatch.setattr(store,'permanently_delete_agent',lambda p,agent_id,**kwargs:(calls.append(('delete',p,agent_id,kwargs)) or {
+        'deleted':True,'agent_id':agent_id,'replayed':False}))
+    cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.TOOL_SCOPE,mcp.AGENT_MANAGE_SCOPE]}
+    preview=mcp._tools(None,cfg,'support_agent_delete_preview',{'agent_id':AGENT})
+    assert preview['irreversible'] and preview['impact']['runs']==3
+    result=mcp._tools(None,cfg,'support_agent_permanent_delete',{
+        'agent_id':AGENT,'expected_version':7,'confirm_agent_id':AGENT})
+    assert result['deleted']
+    assert calls[-1]==('delete',profile,AGENT,{'expected_version':7,'confirm_agent_id':AGENT})
+    with pytest.raises(Exception):mcp._tools(None,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},
+        'support_agent_permanent_delete',{'agent_id':AGENT,'expected_version':7,'confirm_agent_id':AGENT})
 
 
 def test_owner_mcp_knowledge_duplicate_preview_archive_rollback_is_scoped_and_idempotent(db, monkeypatch):

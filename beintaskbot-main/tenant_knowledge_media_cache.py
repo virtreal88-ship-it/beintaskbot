@@ -50,10 +50,18 @@ def observe_once(profile,item,ref,content,mime,origin,invoke,check_before_ai=Non
         if len(OBSERVATION_PROMPT.encode())+len(envelope.encode())+85+256>INPUT_UPPER:
             raise TenantLinearError('Photo input exceeds its approved token bound.',409)
     check_active(profile,item)
+    # Cache the reusable observation by its actual analysis inputs. Source
+    # message, channel and frame/page coordinates are provenance for the
+    # caller, not part of the model result; each caller attaches its own
+    # attribution after the shared result returns.
+    content_hash=hashlib.sha256(content).hexdigest()
     meta={'kind':'vision','version':'observations-v1','model':item['model'],'detail':'low',
-          'channel_id':ref['channel_id'],'mime':mime,'origin':origin,
-          'sha256':hashlib.sha256(content).hexdigest()}
-    fingerprint=store.digest(meta);tenant=item['tenant'];token=str(uuid.uuid4())
+          'channel_id':ref['channel_id'],'mime':mime,'origin':origin,'sha256':content_hash}
+    artifact_key={key:meta[key] for key in ('kind','version','model','detail','mime','sha256')}
+    # Explicit retry consents are bound to the original source-scoped cache
+    # fingerprint; ordinary analysis uses the reusable artifact identity.
+    fingerprint=store.digest(meta if item.get('_owner_retry_id') else artifact_key)
+    tenant=item['tenant'];token=str(uuid.uuid4())
     with _connect() as conn:
         with conn.cursor() as cur:
             checked,_,_=store.authorize(cur,profile)

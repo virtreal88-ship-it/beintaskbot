@@ -22,13 +22,14 @@ class PublicResolver(aiohttp.resolver.DefaultResolver):
 
 
 VIDEO_TYPES={'video/mp4','video/webm'}
-DOCUMENT_TYPES={'application/pdf','text/plain','application/vnd.openxmlformats-officedocument.wordprocessingml.document'}
+DOCUMENT_TYPES={'application/pdf','text/plain','application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}
 IMAGE_MAX_BYTES=20*1024*1024
 AUDIO_MAX_BYTES=10*1024*1024
 VIDEO_MAX_BYTES=100*1024*1024
 DOCUMENT_MAX_BYTES=5*1024*1024
 # The interactive attachment viewer may safely deliver these original formats;
-# AI document extraction intentionally remains limited to DOCUMENT_TYPES above.
+# AI document extraction supports only DOCUMENT_TYPES above.
 DOCUMENT_PREVIEW_TYPES=DOCUMENT_TYPES | {
     'application/msword', 'application/vnd.ms-excel',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

@@ -267,8 +267,10 @@ def knowledge_context(tenant_id, query, *, limit=6, agent_id=None):
                   JOIN saas_knowledge_candidate_sources ks ON ks.tenant_id=k.tenant_id AND ks.candidate_id=k.id
                     AND ks.source_id=s.id AND (ks.agent_id=s.agent_id OR s.agent_id IS NULL)
                   WHERE k.tenant_id=s.tenant_id AND k.id::text=s.provenance->>'candidate_id'
-                    AND k.status='approved' AND k.reviewed_by IS NOT NULL
-                    AND k.reviewed_by::text=s.provenance->>'approved_by'))
+                    AND k.reviewed_by IS NOT NULL
+                    AND k.reviewed_by::text=s.provenance->>'approved_by'
+                    AND (k.status='approved' OR (k.status='knowledge_published'
+                      AND s.provenance->>'review_status'='owner_reviewed_guidance'))))
               ''' + instruction_guard + '''
               AND (c.search_vector @@ to_tsquery('simple',%s) OR c.content ILIKE ANY(%s))
               ORDER BY rank DESC,s.updated_at DESC,c.chunk_no LIMIT %s''',

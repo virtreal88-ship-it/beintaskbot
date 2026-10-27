@@ -85,6 +85,20 @@ def test_vision_reuses_across_fragments_and_retains_usage(vision):
     assert item['vision_usage']==[{'total_tokens':20}]
 
 
+def test_identical_vision_bytes_reuse_across_messages_in_same_tenant(vision):
+    cache,item,first=vision
+    second={**first,'id':'source-2','channel_id':str(uuid.uuid4()),'external_id':'connect:source-2'}
+    item['refs']=[first,second]
+    item['route']['approved_channel_ids']=[first['channel_id'],second['channel_id']]
+    invoke=Mock(return_value=('Synthetic visible fact',{'total_tokens':12}))
+    assert cache.observe_once(PROFILE,item,first,b'same synthetic bytes','image/png',{'page':1},invoke)[2]
+    assert not cache.observe_once(PROFILE,item,second,b'same synthetic bytes','image/png',{'page':2},invoke)[2]
+    assert invoke.call_count==1
+    # The artifact shares only the model observation; source coordinates stay
+    # with each message's caller-owned receipt.
+    assert first['channel_id'] != second['channel_id']
+
+
 def test_unknown_vision_never_retries_or_becomes_success(vision):
     cache,item,ref=vision;invoke=Mock(side_effect=TimeoutError())
     with pytest.raises(TimeoutError):cache.observe_once(PROFILE,item,ref,b'image','image/png',{},invoke)

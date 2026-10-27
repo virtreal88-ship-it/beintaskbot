@@ -7,7 +7,7 @@ MAX_TOKENS=16000
 MAX_DAILY_EXTRACTIONS=10
 MAX_CARDS=5
 BASE_FIELDS={'title','symptoms','cause','resolution_steps','outcome','source_message_ids','product','product_version'}
-FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','operator_action_evidence','cause_evidence','case_kind','content_language','clarification_note','work_status','start_message_id','end_message_id','case_relation'}
+FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','operator_action_evidence','cause_evidence','case_kind','content_language','clarification_note','work_status','start_message_id','end_message_id','case_relation','owner_additions'}
 
 def language(value=None,profile=None):
     # AI-created case content has a fixed Azerbaijani language contract. Keep
@@ -64,7 +64,8 @@ def card(data,allowed_ids,allow_boundary_outside_sources=False):
     if work_status not in {'resolved','unresolved','no_response','awaiting_information','in_progress','unknown'}: raise TenantLinearError('Некорректный результат обращения.')
     if not isinstance(clarification_note,str): raise TenantLinearError('Комментарий уточнения должен быть текстом.')
     result={'resolution_method':method,'case_kind':kind,'operator_actions':[text(v,800,True) for v in actions],'content_language':content_language,
-      'clarification_note':text(clarification_note,2000),'work_status':work_status,'case_relation':case_relation}
+      'clarification_note':text(clarification_note,2000),'work_status':work_status,'case_relation':case_relation,
+      'owner_additions':text(data.get('owner_additions',''),4000)}
     result.update({key:text(data[key],180 if key=='title' else 120, key=='title') for key in ('title','product','product_version')})
     for key in ('symptoms','resolution_steps'):
         values=data[key]

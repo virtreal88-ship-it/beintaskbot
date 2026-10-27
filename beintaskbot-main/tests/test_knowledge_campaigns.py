@@ -222,7 +222,11 @@ def test_published_knowledge_uses_virtual_test_and_shared_budget(campaign,monkey
     approve_fixture(d,key);worker.tick();worker.tick()
     card=candidates.listing(PROFILE,{})['candidates'][0]
     assert quality.tick(PROFILE,key) is False
-    candidates.mutate(PROFILE,card['id'],{'expected_version':card['version'],'agent_ids':[AGENT]},'approve')
+    edited=candidates.mutate(PROFILE,card['id'],{'expected_version':card['version'],
+        'work_status':'resolved','outcome':{'status':'confirmed','text':'Клиент подтвердил, что всё работает.',
+            'message_ids':[card['end_message_id']]}},'edit')['candidate']
+    assert edited['outcome']['status']=='confirmed'
+    candidates.mutate(PROFILE,card['id'],{'expected_version':edited['version'],'agent_ids':[AGENT]},'approve')
     assert quality.tick(PROFILE,key)
     assert not quality.tick(PROFILE,key)
     assert generation.call_count==1

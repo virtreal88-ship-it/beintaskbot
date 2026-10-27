@@ -724,15 +724,20 @@ def enforce_confirmation(value,items):
     return value
 
 
-def publication_text(value):
-    return '\n'.join([value['title'],'Тип кейса: '+value.get('case_kind','technical'),'Симптомы: '+ '; '.join(value['symptoms']),
+def publication_text(value,media_warning=False):
+    parts=['РУКОВОДСТВО ВЛАДЕЛЬЦА — не подтверждение исхода клиента',value['title'],'Тип кейса: '+value.get('case_kind','technical'),'Симптомы: '+ '; '.join(value['symptoms']),
       'Причина ('+value['cause']['status']+'): '+value['cause']['text'],
       'Решение:\n'+'\n'.join(str(i+1)+'. '+s for i,s in enumerate(value['resolution_steps'])),
       'Состояние работы: '+value.get('work_status','unknown'),
-      'Результат подтверждён в исходной переписке: '+value['outcome']['text'],
+      'Статус результата в исходной переписке: '+value['outcome']['status']+'. '+value['outcome']['text'],
       'Способ решения: '+value.get('resolution_method','unknown'),
        'Действия сотрудника: '+'; '.join(value.get('operator_actions',[])),
-       'Продукт и версия из карточки (не являются отдельным доказательством): '+value['product']+'; '+value['product_version']])
+       'Продукт и версия из карточки (не являются отдельным доказательством): '+value['product']+'; '+value['product_version']]
+    if media_warning:
+        parts.insert(1,'Вложения не проверены для этой публикации; сохранённые наблюдения вложений не подтверждают приведённые инструкции.')
+    if value.get('owner_additions'):
+        parts.append('Дополнение владельца (знание владельца; не подтверждает исход клиента): '+value['owner_additions'])
+    return '\n'.join(parts)
 
 
 def mutate(profile,candidate_id,data,action='edit',*,connection=None):
@@ -765,6 +770,81 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                     cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,candidate_id))
                     return {'candidate':public_card(cur,cur.fetchone())}
                 return detail(profile,candidate_id)
+            if action=='delete':
+                if policy.profile.get('role')!='owner':
+                    raise TenantLinearError('Только владелец может безвозвратно удалить кейс.',403)
+                if set(data)!={'expected_version','confirm_candidate_id','linked_knowledge_action'}:
+                    raise TenantLinearError('Некорректное подтверждение удаления.')
+                if str(identifier(data.get('confirm_candidate_id')))!=str(row['id']):
+                    raise TenantLinearError('Подтвердите удаление именно этой карточки.',409)
+                if type(data.get('expected_version')) is not int or data['expected_version']!=row['version']:
+                    raise TenantLinearError('Карточка изменилась. Обновите страницу.',409)
+                cur.execute('''SELECT source_id::text AS source_id FROM saas_knowledge_candidate_sources
+                  WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid
+                  UNION SELECT source_id::text AS source_id FROM saas_knowledge_candidate_knowledge_reviews
+                  WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid
+                  UNION SELECT id::text AS source_id FROM saas_ai_knowledge_sources
+                  WHERE tenant_id=%s::uuid AND provenance->>'candidate_id'=%s ORDER BY source_id''',
+                  (tenant,row['id'],tenant,row['id'],tenant,str(row['id'])))
+                linked_ids=[str(value['source_id']) for value in cur.fetchall()]
+                linked_action=data.get('linked_knowledge_action')
+                if linked_ids and linked_action not in {'retain','deactivate'}:
+                    raise TenantLinearError('Выберите, сохранить ли связанную базу знаний активной или отключить её.',409)
+                if not linked_ids and linked_action!='none':
+                    raise TenantLinearError('У карточки нет связанной публикации знаний.',409)
+                for source_id in linked_ids:
+                    cur.execute('SELECT provenance FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,source_id))
+                    source=cur.fetchone()
+                    if not source:raise TenantLinearError('Связанная база знаний изменилась. Обновите карточку.',409)
+                    cur.execute('''SELECT 1 FROM saas_knowledge_candidate_sources WHERE tenant_id=%s::uuid AND source_id=%s::uuid AND candidate_id<>%s::uuid
+                      UNION SELECT 1 FROM saas_knowledge_candidate_knowledge_reviews WHERE tenant_id=%s::uuid AND source_id=%s::uuid AND candidate_id<>%s::uuid LIMIT 1''',
+                      (tenant,source_id,row['id'],tenant,source_id,row['id']))
+                    shared_elsewhere=bool(cur.fetchone())
+                    if shared_elsewhere and linked_action=='deactivate':
+                        raise TenantLinearError('Связанное знание используется другим кейсом; отключите его отдельно в центре знаний.',409)
+                    provenance=source.get('provenance') if isinstance(source.get('provenance'),dict) else {}
+                    # An explicit keep/deactivate choice detaches the source
+                    # from the soon-to-be-deleted case and removes case claims.
+                    provenance={key:value for key,value in provenance.items()
+                                if key not in {'candidate_id','extraction_id','source_message_ids','media_source_review','request_hash'}}
+                    provenance['retained_after_case_deletion']=True
+                    provenance['review_status']='owner_retained_independent'
+                    cur.execute('UPDATE saas_ai_knowledge_sources SET active=CASE WHEN %s=%s THEN FALSE ELSE active END,provenance=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+                      (linked_action,'deactivate',_json(provenance),tenant,source_id))
+                extraction_id=str(row['extraction_id'])
+                cur.execute('SELECT content FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND extraction_id=%s::uuid AND id<>%s::uuid FOR UPDATE',(tenant,extraction_id,row['id']))
+                siblings=cur.fetchall()
+                cur.execute('DELETE FROM saas_knowledge_candidate_knowledge_reviews WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid',(tenant,row['id']))
+                cur.execute('DELETE FROM saas_knowledge_case_source_reviews WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid',(tenant,row['id']))
+                cur.execute('DELETE FROM saas_knowledge_candidate_sources WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid',(tenant,row['id']))
+                cur.execute('DELETE FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid AND version=%s RETURNING id',(tenant,row['id'],row['version']))
+                if not cur.fetchone():raise TenantLinearError('Карточка изменилась. Обновите страницу.',409)
+                keep_ids=set()
+                for sibling in siblings:
+                    content=sibling.get('content') if isinstance(sibling.get('content'),dict) else {}
+                    keep_ids.update(str(value) for value in content.get('source_message_ids',[]) if value)
+                    keep_ids.update(str(content.get(key)) for key in ('start_message_id','end_message_id') if content.get(key))
+                    keep_ids.update(str(value.get('message_id')) for field in ('outcome','cause')
+                      for value in (content.get(field,{}).get('message_ids',[]) if field=='outcome' else content.get('cause_evidence',[]))
+                      if isinstance(value,dict) and value.get('message_id'))
+                cur.execute('SELECT source_refs,route FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,extraction_id))
+                extraction=cur.fetchone()
+                if extraction:
+                    refs=extraction.get('source_refs') if isinstance(extraction.get('source_refs'),list) else []
+                    refs=[ref for ref in refs if str(ref.get('id') or '') in keep_ids]
+                    cur.execute('''UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb,
+                      media_results=COALESCE((SELECT jsonb_agg(item) FROM jsonb_array_elements(media_results) item
+                        WHERE item->>'id'=ANY(%s::text[])),'[]'::jsonb),source_digest=%s,
+                      route=CASE WHEN %s THEN '{}'::jsonb ELSE route END WHERE tenant_id=%s::uuid AND id=%s::uuid''',
+                      (_json(refs),list(keep_ids),digest(refs),not siblings,tenant,extraction_id))
+                # Raw model proposal may include the deleted candidate. Current
+                # candidate rows are the durable review records; usage/spend
+                # ledgers and the AI run itself remain untouched.
+                cur.execute('UPDATE saas_ai_agent_runs SET result=NULL WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,extraction_id))
+                _audit(cur,tenant,actor,'knowledge_candidate_deleted','knowledge_candidate',row['id'],
+                  {'linked_knowledge_action':linked_action,'linked_source_ids':linked_ids,'sibling_cases_retained':len(siblings)})
+                if connection is None:conn.commit()
+                return {'deleted':True,'candidate_id':str(row['id']),'linked_knowledge_action':linked_action}
             if action=='source_review':
                 if policy.profile.get('role')!='owner': raise TenantLinearError('Только владелец может проверить новую provenance вложения.',403)
                 if set(data)!={'expected_version','message_id','review_note','acknowledge_new_source'}:
@@ -884,6 +964,86 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                 result={'candidate':public_card(cur,cur.fetchone())}
                 if connection is None: conn.commit()
                 return result
+            if action=='publish_guidance':
+                if policy.profile.get('role')!='owner':
+                    raise TenantLinearError('Публиковать знание по кейсу может только владелец компании.',403)
+                from tenant_knowledge_candidates_policy import FIELDS
+                required={'expected_version','agent_ids'}
+                if not required<=set(data) or set(data)-required-FIELDS:
+                    raise TenantLinearError('Некорректные поля публикации знания.')
+                agents=data.get('agent_ids')
+                if not isinstance(agents,list) or not 1<=len(agents)<=20:
+                    raise TenantLinearError('Выберите от 1 до 20 агентов.')
+                normalized_agents=[identifier(v) for v in agents]
+                agents=sorted(set(normalized_agents))
+                if not agents or len(agents)!=len(normalized_agents):
+                    raise TenantLinearError('Выберите агентов без повторов.',409)
+                request_hash=digest({k:v for k,v in data.items() if k!='expected_version'})
+                if row['status']=='knowledge_published':
+                    current=public_card(cur,row)
+                    source_ref=(current.get('knowledge_publication') or {}).get('source_id')
+                    provenance=None
+                    if source_ref:
+                        cur.execute("SELECT provenance->>'review_status' AS state,provenance->>'request_hash' AS request_hash FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,source_ref))
+                        provenance=cur.fetchone()
+                    if (type(data.get('expected_version')) is int and data['expected_version']==row['version']-1
+                        and provenance and provenance.get('state')=='owner_reviewed_guidance'
+                        and provenance.get('request_hash')==request_hash
+                        and agents==sorted(v['agent_id'] for v in current['publications'])):
+                        return {'candidate':current}
+                    raise TenantLinearError('Кейс уже опубликован; повторный набор адресатов запрещён.',409)
+                if type(data.get('expected_version')) is not int or data['expected_version']!=row['version']:
+                    raise TenantLinearError('Карточка изменилась. Обновите страницу.',409)
+                if row['status'] not in {'pending_review','needs_clarification'}:
+                    raise TenantLinearError('Кейс больше не ожидает решения владельца.',409)
+                run=extraction_row(cur,tenant,row['extraction_id']);run['_candidate_id']=str(row['id'])
+                run['_candidate_source_ids']={identifier(v) for v in row['content'].get('source_message_ids',[])}
+                items=evidence(cur,profile,run,owner_diagnostics=True)
+                if not any(item.get('role')=='customer' and item.get('id') in run['_candidate_source_ids'] for item in items):
+                    raise TenantLinearError('original_customer_unproven',409)
+                value=card({**row['content'],**{k:v for k,v in data.items() if k in FIELDS}},
+                  [item['id'] for item in items],allow_boundary_outside_sources=True)
+                value=enforce_confirmation(value,items)
+                if not any(value.get(key) for key in ('symptoms','resolution_steps','operator_actions','owner_additions')):
+                    raise TenantLinearError('Добавьте хотя бы одно полезное описание или инструкцию перед публикацией.',409)
+                for agent_id in agents:
+                    cur.execute('SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',(tenant,agent_id))
+                    if not cur.fetchone():raise TenantLinearError('Агент недоступен в этой компании.',404)
+                media_warning=bool(run.get('_owner_media_diagnostics'))
+                content=publication_text(value,media_warning=media_warning)
+                for agent_id in agents:
+                    source=save_knowledge(profile,{'title':value['title'],'kind':'text','content':content,
+                      'active':True,'agent_id':agent_id,'setup_key':'candidate_'+str(row['id']).replace('-','')},connection=conn)
+                    provenance={'candidate_id':str(row['id']),'extraction_id':str(run['id']),
+                      'route':run['route'],'source_message_ids':value['source_message_ids'],
+                      'approved_by':str(actor),'review_status':'owner_reviewed_guidance',
+                      'customer_outcome_status':value['outcome']['status'],
+                      'cause_status':value['cause']['status'],
+                      'request_hash':request_hash,
+                      'media_review_warning':media_warning}
+                    cur.execute('UPDATE saas_ai_knowledge_sources SET provenance=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+                      (_json(provenance),tenant,source['id']))
+                    cur.execute('''INSERT INTO saas_knowledge_candidate_sources(tenant_id,candidate_id,agent_id,source_id)
+                      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid) ON CONFLICT DO NOTHING''',(tenant,row['id'],agent_id,source['id']))
+                    cur.execute('''INSERT INTO saas_knowledge_candidate_knowledge_reviews
+                      (tenant_id,candidate_id,source_id,source_title,source_hash,reviewed_by)
+                      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s)
+                      ON CONFLICT(tenant_id,candidate_id) DO UPDATE SET source_id=EXCLUDED.source_id,
+                       source_title=EXCLUDED.source_title,source_hash=EXCLUDED.source_hash,
+                       reviewed_by=EXCLUDED.reviewed_by,created_at=now()''',
+                      (tenant,row['id'],source['id'],value['title'],source['content_hash'],actor))
+                cur.execute('''UPDATE saas_knowledge_candidates SET content=%s::jsonb,status='knowledge_published',
+                  version=version+1,reviewed_by=%s,reviewed_at=now(),updated_at=now()
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND version=%s''',
+                  (_json(value),actor,tenant,row['id'],row['version']))
+                _audit(cur,tenant,actor,'knowledge_candidate_guidance_published','knowledge_candidate',row['id'],
+                  {'agent_ids':agents,'outcome_status':value['outcome']['status'],'cause_status':value['cause']['status'],
+                   'media_review_warning':media_warning})
+                if connection is not None:
+                    cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,row['id']))
+                    return {'candidate':public_card(cur,cur.fetchone())}
+                conn.commit()
+                return detail(profile,candidate_id)
             run=extraction_row(cur,tenant,row['extraction_id']);run['_candidate_id']=str(row['id'])
             # An extraction can contain media for several candidate cards.
             # Validate only the messages this candidate currently claims (or
@@ -937,6 +1097,8 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                 patch={k:v for k,v in data.items() if k!='expected_version'}
                 from tenant_knowledge_candidates_policy import FIELDS
                 if set(patch)-FIELDS: raise TenantLinearError('Неизвестное поле карточки.')
+                if 'owner_additions' in patch and policy.profile.get('role')!='owner':
+                    raise TenantLinearError('Дополнение владельца может изменить только владелец компании.',403)
                 for key in ('start_message_id','end_message_id'):
                     if key in patch and str(patch[key])!=str(row['content'].get(key) or ''):
                         raise TenantLinearError('Границы меняются только в настройках кейса.',403)

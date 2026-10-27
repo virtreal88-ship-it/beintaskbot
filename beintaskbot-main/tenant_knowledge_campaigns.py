@@ -36,7 +36,9 @@ def prepare(profile, data):
     with _connect() as conn:
         store.schema(conn);create_schema(conn)
         with conn.cursor() as cur:
-            tenant,actor,_=store.authorize(cur,profile)
+            tenant,actor,access=store.authorize(cur,profile)
+            if all_cases and access.profile.get('role')!='owner':
+                raise TenantLinearError('Only the company owner can prepare the one-time current-case media grant.',403)
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('knowledge-campaign:'+tenant,))
             case_plan=None;batch_plan=None
             if all_cases:
@@ -90,7 +92,7 @@ def prepare(profile, data):
             for channel in channels:
                 cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid',(tenant,channel))
                 if not cur.fetchone(): raise TenantLinearError('Источник недоступен.',404)
-            cur.execute('SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,agent))
+            cur.execute("SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR SHARE",(tenant,agent))
             if not cur.fetchone(): raise TenantLinearError('Агент недоступен.',404)
             cur.execute("SELECT 1 FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND status<>'stopped'",(tenant,))
             if cur.fetchone(): raise TenantLinearError('Процесс уже подготовлен.',409)
@@ -121,7 +123,7 @@ def control(profile, campaign_id, expected_version, action):
         raise TenantLinearError('Некорректное действие.')
     with _connect() as conn:
         with conn.cursor() as cur:
-            tenant,actor,_=store.authorize(cur,profile)
+            tenant,actor,access=store.authorize(cur,profile)
             cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,identifier(campaign_id)))
             row=cur.fetchone()
             if not row: raise TenantLinearError('Процесс не найден.',404)
@@ -443,7 +445,7 @@ def approve(profile,campaign_id,data):
         raise TenantLinearError('Подтвердите источники и бюджет внешней обработки.')
     with _connect() as conn:
         with conn.cursor() as cur:
-            tenant,actor,_=store.authorize(cur,profile)
+            tenant,actor,access=store.authorize(cur,profile)
             cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,identifier(campaign_id)))
             row=cur.fetchone()
             if not row:raise TenantLinearError('Процесс не найден.',404)
@@ -471,6 +473,8 @@ def approve(profile,campaign_id,data):
             if not fits(new_policy,row['reserved_kinds'],amount) or calls<amount['calls'] or tokens<amount['tokens']:raise TenantLinearError('Бюджет не покрывает фрагмент.')
             case_mode=(row.get('progress') or {}).get('mode')=='case_media'
             batch_mode=(row.get('progress') or {}).get('mode')=='case_media_batch'
+            if batch_mode and access.profile.get('role')!='owner':
+                raise TenantLinearError('Only the company owner can approve the current-case media grant.',403)
             if batch_mode and row['status']=='budget_exhausted':
                 raise TenantLinearError('The approved fixed $10 grant cannot be topped up or renewed.',409)
             case_plan=None;batch_plan=None;batch_routes=[]

@@ -329,6 +329,8 @@ def ensure_schema(conn):
             permit_schema(cur)
         from tenant_ai_group_coordination import create_schema as create_group_schema
         create_group_schema(conn)
+        from tenant_ai_agent_deletion_schema import create_schema as create_deletion_schema
+        create_deletion_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_compat_migrations(
               version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())''')

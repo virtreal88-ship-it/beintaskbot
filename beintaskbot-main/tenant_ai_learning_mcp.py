@@ -23,7 +23,7 @@ from tenant_ai_dashboard import _connect, _iso, _json_value
 from tenant_ai_learning import findings, reply_quality
 from tenant_ai_simulation_schema import ensure_schema
 from tenant_ai_simulation_engine import context_author_type
-from tenant_linear_policy import TenantLinearError
+from tenant_linear_policy import TenantLinearError, identifier
 import tenant_ai_administrator_read as administrator_read
 import tenant_ai_administrator_drafts as administrator_drafts
 import tenant_ai_administrator_approvals as administrator_approvals
@@ -42,6 +42,10 @@ KNOWLEDGE_DEDUP_SCOPE = 'ai_learning.knowledge_dedup'
 APPLY_SCOPE = 'ai_learning.apply'
 PUBLISH_SCOPE = administrator_approvals.PUBLISH_SCOPE
 DIALOGUE_MERGE_SCOPE = dialogue_merge.MERGE_SCOPE
+DIALOG_ASSIGN_SCOPE = 'ai_learning.dialogs.assign'
+SUPPORT_CASE_SCOPE = 'ai_learning.support_cases'
+SUPPORT_MEDIA_SCOPE = 'ai_learning.support_media'
+AGENT_MANAGE_SCOPE = 'ai_learning.agents.manage'
 OFFLINE_SCOPE = 'offline_access'
 MAX_PAGE = 25
 CHATGPT_CLIENT_ID = 'https://chatgpt.com/oauth/client.json'
@@ -241,7 +245,7 @@ def _authorize_token(request):
             cfg['oauth_connection_id']=str(row['oauth_connection_id'])
             cfg['oauth_token_id']=str(row['id'])
             cfg['oauth_token_hash']=row['token_hash']
-            if TOOL_SCOPE in cfg['granted_scopes'] or DRAFT_SCOPE in cfg['granted_scopes'] or KNOWLEDGE_DEDUP_SCOPE in cfg['granted_scopes'] or APPLY_SCOPE in cfg['granted_scopes'] or DIALOGUE_MERGE_SCOPE in cfg['granted_scopes'] or administrator_read.READ_SCOPE in cfg['granted_scopes']:
+            if TOOL_SCOPE in cfg['granted_scopes'] or DRAFT_SCOPE in cfg['granted_scopes'] or KNOWLEDGE_DEDUP_SCOPE in cfg['granted_scopes'] or APPLY_SCOPE in cfg['granted_scopes'] or DIALOGUE_MERGE_SCOPE in cfg['granted_scopes'] or DIALOG_ASSIGN_SCOPE in cfg['granted_scopes'] or SUPPORT_CASE_SCOPE in cfg['granted_scopes'] or SUPPORT_MEDIA_SCOPE in cfg['granted_scopes'] or AGENT_MANAGE_SCOPE in cfg['granted_scopes'] or administrator_read.READ_SCOPE in cfg['granted_scopes']:
                 _authorize(cur,{'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':row['created_by']})
                 cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',
                             (cfg['AI_LEARNING_MCP_TENANT_ID'],row['created_by']))
@@ -266,6 +270,166 @@ def _company_model_list(cfg,args):
 
 
 def _tools(cur,cfg,name,args):
+    if name.startswith('support_agent_') or name=='support_agents_list':
+        if AGENT_MANAGE_SCOPE not in set(cfg.get('granted_scopes') or []):
+            raise TenantLinearError('Additional OAuth scope required.',403)
+        if not isinstance(args,dict): raise TenantLinearError('Invalid agent management request.',400)
+        profile={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']}
+        import tenant_ai_agents_store as agent_store
+        if name=='support_agents_list':
+            if args: raise TenantLinearError('Invalid agent list request.',400)
+            items=agent_store.list_agents(profile)
+            safe=[]
+            for item in items:
+                safe.append({**{key:item.get(key) for key in ('id','name','role','enabled','mode','model','version','assigned_dialog_count')},
+                  'scopes':[{'provider':str(scope.get('provider') or ''),'channel_id':str(scope.get('channel_id') or ''),
+                             'allow_groups':scope.get('allow_groups') is True}
+                            for scope in item.get('scopes',[]) if isinstance(scope,dict)]})
+            _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_support_agents_list','ai_agent','',{'count':len(safe)})
+            return {'agents':safe}
+        if name=='support_agent_archive_transfer':
+            if set(args)!={'agent_id','replacement_agent_id','expected_version'}:
+                raise TenantLinearError('Invalid agent transfer request.',400)
+            return agent_store.delete_agent(profile,args['agent_id'],
+                replacement_agent_id=args['replacement_agent_id'],expected_version=args['expected_version'])
+        if name=='support_agent_archive_status':
+            if set(args)!={'agent_id'}: raise TenantLinearError('Invalid archive status request.',400)
+            target=str(identifier(args['agent_id']))
+            cur.execute('SELECT archived_at,archived_replaced_by FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',
+                        (cfg['AI_LEARNING_MCP_TENANT_ID'],target))
+            row=cur.fetchone()
+            if not row: raise TenantLinearError('Agent not found in this company.',404)
+            _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_support_agent_archive_status','ai_agent',target,{'archived':bool(row.get('archived_at'))})
+            return {'agent_id':target,'archived':bool(row.get('archived_at')),
+                    'replacement_agent_id':str(row['archived_replaced_by']) if row.get('archived_replaced_by') else None}
+        if name=='support_agent_delete_preview':
+            if set(args)!={'agent_id'}: raise TenantLinearError('Select one exact agent to preview deletion.',400)
+            return agent_store.preview_agent_deletion(profile,args['agent_id'])
+        if name=='support_agent_permanent_delete':
+            if set(args)!={'agent_id','expected_version','confirm_agent_id'}:
+                raise TenantLinearError('Confirm deletion of this exact agent.',400)
+            return agent_store.permanently_delete_agent(profile,args['agent_id'],
+                expected_version=args['expected_version'],confirm_agent_id=args['confirm_agent_id'])
+        raise TenantLinearError('Unsupported agent action.',404)
+    if name.startswith('support_media_'):
+        if SUPPORT_MEDIA_SCOPE not in set(cfg.get('granted_scopes') or []):
+            raise TenantLinearError('Additional OAuth scope required.',403)
+        if not isinstance(args,dict): raise TenantLinearError('Invalid support-media request.',400)
+        profile={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']}
+        import tenant_knowledge_campaigns as campaigns
+        def media_audit(action,entity_type,entity_id,details=None):
+            if cur is not None:
+                _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],action,entity_type,entity_id,details or {})
+                return
+            with _connect() as audit_conn:
+                with audit_conn.cursor() as audit_cur:
+                    _audit(audit_cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],action,entity_type,entity_id,details or {})
+                audit_conn.commit()
+        if name=='support_media_snapshot_preview':
+            if args: raise TenantLinearError('Invalid media snapshot preview request.',400)
+            result=campaigns.preview_existing_cases(profile)
+            media_audit('mcp_support_media_snapshot_preview','support_media_snapshot','',
+                        {'case_count':int(result.get('case_count') or 0),'eligible_count':int(result.get('eligible_count') or 0)})
+            return result
+        if name=='support_media_campaign_prepare':
+            required={'request_id','channel_ids','analysis_agent_id','max_calls','max_tokens','media_policy','video_model'}
+            if set(args)!=required or not isinstance(args.get('media_policy'),dict):
+                raise TenantLinearError('Invalid current-case campaign plan.',400)
+            data={**args,'all_existing_cases':True,'max_cost_microusd':10_000_000}
+            campaign_id=campaigns.prepare(profile,data)
+            return {'campaign_id':campaign_id,'status':'awaiting_budget','cap_microusd':10_000_000,
+                    'approval_required':True,'provider_calls_started':False}
+        if name=='support_media_campaign_read':
+            if set(args)!={'campaign_id'}: raise TenantLinearError('Invalid campaign read request.',400)
+            result=campaigns.get(profile,identifier(args['campaign_id']))
+            media_audit('mcp_support_media_campaign_read','knowledge_campaign',str(args['campaign_id']))
+            return result
+        if name=='support_media_campaign_start':
+            required={'campaign_id','expected_version','snapshot_hash','confirm_external_processing'}
+            if set(args)!=required or args.get('confirm_external_processing') is not True or type(args.get('expected_version')) is not int:
+                raise TenantLinearError('Confirm this exact $10 case snapshot before starting.',400)
+            campaign_id=str(identifier(args['campaign_id']))
+            current=campaigns.get(profile,campaign_id).get('campaign')
+            if (not current or (current.get('progress') or {}).get('mode')!='case_media_batch'
+                or (current.get('progress') or {}).get('snapshot_hash')!=args['snapshot_hash']
+                or current.get('max_cost_microusd')!=10_000_000
+                or current.get('version')!=args['expected_version']):
+                raise TenantLinearError('Refresh the case snapshot or campaign version before starting.',409)
+            return campaigns.approve(profile,campaign_id,{
+                'expected_version':current['version'],'channel_ids':current['channel_ids'],
+                'max_calls':current['max_calls'],'max_tokens':current['max_tokens'],
+                'confirm_external_processing':True,'media_policy':current['media_policy'],
+                'all_cases_snapshot_hash':args['snapshot_hash'],'max_cost_microusd':10_000_000,
+                'video_model':current.get('video_model')})
+        if name=='support_media_campaign_control':
+            if set(args)!={'campaign_id','expected_version','action'} or args.get('action') not in {'pause','resume','stop'}:
+                raise TenantLinearError('Only pause, resume or stop is available for this media grant.',400)
+            campaigns.control(profile,identifier(args['campaign_id']),args['expected_version'],args['action'])
+            return campaigns.get(profile,identifier(args['campaign_id']))
+        raise TenantLinearError('Unsupported support-media action.',404)
+    if name.startswith('support_case') or name=='support_cases_list':
+        if SUPPORT_CASE_SCOPE not in set(cfg.get('granted_scopes') or []):
+            raise TenantLinearError('Additional OAuth scope required.',403)
+        if not isinstance(args,dict): raise TenantLinearError('Invalid support-case request.',400)
+        profile={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']}
+        import tenant_knowledge_candidates_store as cases
+        if name=='support_cases_list':
+            if set(args)-{'status','channel_id','limit','before'}: raise TenantLinearError('Invalid case-list filter.',400)
+            result=cases.listing(profile,args)
+            _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_support_cases_list','support_cases','',{'count':len(result.get('candidates',[])),'status':args.get('status','default')})
+            return result
+        if name=='support_case_detail':
+            if set(args)!={'candidate_id'}: raise TenantLinearError('Invalid case detail request.',400)
+            result=cases.detail(profile,args['candidate_id'])
+            _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_support_case_read','knowledge_candidate',str(args['candidate_id']))
+            return result
+        if name=='support_case_confirm_publish':
+            if set(args)!={'candidate_id','expected_version','agent_ids'}: raise TenantLinearError('Invalid case publication request.',400)
+            return cases.mutate(profile,args['candidate_id'],{'expected_version':args['expected_version'],'agent_ids':args['agent_ids']},'approve')
+        if name=='support_case_edit_publish':
+            if set(args)!={'candidate_id','expected_version','agent_ids','fields'} or not isinstance(args.get('fields'),dict):
+                raise TenantLinearError('Invalid case edit and publication request.',400)
+            if set(args['fields'])-{'title','symptoms','cause','resolution_steps','owner_additions'}:
+                raise TenantLinearError('Unsupported case field.',400)
+            return cases.mutate(profile,args['candidate_id'],{'expected_version':args['expected_version'],'agent_ids':args['agent_ids'],**args['fields']},'publish_guidance')
+        if name=='support_case_edit_boundaries':
+            if set(args)!={'candidate_id','expected_version','start_message_id','end_message_id'}:
+                raise TenantLinearError('Invalid case-boundary edit request.',400)
+            return cases.mutate(profile,args['candidate_id'],{
+                'expected_version':args['expected_version'],
+                'start_message_id':args['start_message_id'],
+                'end_message_id':args['end_message_id']},'boundaries')
+        if name=='support_case_reject_delete':
+            if set(args)!={'candidate_id','expected_version','confirm_candidate_id','linked_knowledge_action'}:
+                raise TenantLinearError('Invalid case deletion confirmation.',400)
+            return cases.mutate(profile,args['candidate_id'],{
+                'expected_version':args['expected_version'],'confirm_candidate_id':args['confirm_candidate_id'],
+                'linked_knowledge_action':args['linked_knowledge_action']},'delete')
+        if name=='support_case_delete_status':
+            if set(args)!={'candidate_id'}: raise TenantLinearError('Invalid deletion status request.',400)
+            target=str(identifier(args['candidate_id']))
+            cur.execute("SELECT created_at FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND actor_telegram_id=%s AND action='knowledge_candidate_deleted' AND entity_type='knowledge_candidate' AND entity_id=%s ORDER BY created_at DESC LIMIT 1",
+                        (cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],target))
+            row=cur.fetchone()
+            _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_support_case_delete_status','knowledge_candidate',target,{'deleted':bool(row)})
+            return {'candidate_id':target,'deleted':bool(row),'deleted_at':str(row['created_at']) if row else None}
+        raise TenantLinearError('Unsupported support-case action.',404)
+    if name in {'support_dialog_agent_options','support_dialog_agent_assign'}:
+        if DIALOG_ASSIGN_SCOPE not in set(cfg.get('granted_scopes') or []):
+            raise TenantLinearError('Additional OAuth scope required.',403)
+        if not isinstance(args,dict): raise TenantLinearError('Invalid dialog assignment request.',400)
+        profile={'tenant_id':cfg['AI_LEARNING_MCP_TENANT_ID'],'telegram_id':cfg['actor_id']}
+        import tenant_operator_assignment as assignment
+        if name=='support_dialog_agent_options':
+            if set(args)!={'conversation_id','lead_id'}: raise TenantLinearError('Invalid dialog assignment preview.',400)
+            result=assignment.options(profile,{'provider':'connect','channel_id':cfg['AI_LEARNING_MCP_CHANNEL_ID'],**args,'manage':True})
+            _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_dialog_agent_options','conversation',str(args['conversation_id'])[:160],{'channel_id':cfg['AI_LEARNING_MCP_CHANNEL_ID'],'allowed':bool(result.get('allowed')),'reason':result.get('reason','')})
+            return result
+        if set(args)!={'conversation_id','lead_id','agent_id','expected_revision','request_id'}:
+            raise TenantLinearError('Invalid dialog assignment.',400)
+        if args['agent_id'] is not None and not isinstance(args['agent_id'],str):
+            raise TenantLinearError('Invalid dialog assignment.',400)
+        return assignment.assign(profile,{'provider':'connect','channel_id':cfg['AI_LEARNING_MCP_CHANNEL_ID'],**args})
     if name == knowledge_extraction_preflight.NAME:
         if TOOL_SCOPE not in set(cfg.get('granted_scopes') or []):
             raise TenantLinearError('Additional OAuth scope required.',403)
@@ -546,6 +710,79 @@ def _owner_publish_component_definitions():
     ]
 
 
+def _dialog_assignment_definitions():
+    security=[{'type':'oauth2','scopes':[DIALOG_ASSIGN_SCOPE]}]
+    read_schema={'type':'object','properties':{'conversation_id':{'type':'string','minLength':1,'maxLength':160},
+        'lead_id':{'type':'integer','minimum':1}},'required':['conversation_id','lead_id'],'additionalProperties':False}
+    write_schema={'type':'object','properties':{'conversation_id':{'type':'string','minLength':1,'maxLength':160},
+        'lead_id':{'type':'integer','minimum':1},'agent_id':{'type':['string','null']},
+        'expected_revision':{'type':'integer','minimum':0},'request_id':{'type':'string','format':'uuid'}},
+        'required':['conversation_id','lead_id','agent_id','expected_revision','request_id'],'additionalProperties':False}
+    return [
+      {'name':'support_dialog_agent_options','description':'Read eligible agents for one exact direct Connect dialog in the configured channel. Returns current revision and a reason if assignment is unavailable. Does not change the dialog or activate replies.',
+       'inputSchema':read_schema,'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_dialog_agent_assign','description':'Assign or unassign an agent on one exact direct Connect dialog. Provide the revision from a fresh options read and a unique request_id. The existing service rechecks tenant, channel, dialog identity and agent scope. It leaves the dialog paused and never sends a message or activates automatic replies.',
+       'inputSchema':write_schema,'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+    ]
+
+
+def _support_case_definitions():
+    security=[{'type':'oauth2','scopes':[SUPPORT_CASE_SCOPE]}]
+    ids={'candidate_id':{'type':'string','format':'uuid'}}
+    list_schema={'type':'object','properties':{'status':{'type':'string','enum':['pending_review','needs_clarification','approved','knowledge_published','rejected','archived','all']},
+        'channel_id':{'type':'string','format':'uuid'},'limit':{'type':'integer','minimum':1,'maximum':50},'before':{'type':'string','format':'uuid'}},'additionalProperties':False}
+    details=[
+      {'name':'support_cases_list','description':'List owner-accessible support cases. By default, rejected, archived and knowledge-published cases are hidden; request an explicit status to view those recoverable records. Uses bounded pagination.',
+       'inputSchema':list_schema,'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_case_detail','description':'Read one exact owner-accessible case, its conclusion, evidence provenance and media coverage.',
+       'inputSchema':{'type':'object','properties':ids,'required':['candidate_id'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_case_confirm_publish','description':'Publish a case as a confirmed resolution only when existing customer-outcome, cause, source and agent-scope checks pass. This cannot convert an unknown outcome into confirmed.',
+       'inputSchema':{'type':'object','properties':{**ids,'expected_version':{'type':'integer','minimum':1},'agent_ids':{'type':'array','minItems':1,'maxItems':20,'uniqueItems':True,'items':{'type':'string','format':'uuid'}}},'required':['candidate_id','expected_version','agent_ids'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_case_edit_publish','description':'Edit useful owner guidance and publish it in one operation while preserving unknown outcome/cause as unknown. Existing evidence, tenant, source-version, owner and agent checks remain mandatory.',
+       'inputSchema':{'type':'object','properties':{**ids,'expected_version':{'type':'integer','minimum':1},'agent_ids':{'type':'array','minItems':1,'maxItems':20,'uniqueItems':True,'items':{'type':'string','format':'uuid'}},'fields':{'type':'object','properties':{'title':{'type':'string','maxLength':180},'symptoms':{'type':'array','items':{'type':'string','maxLength':1000}},'cause':{'type':'object'},'resolution_steps':{'type':'array','items':{'type':'string','maxLength':2000}},'owner_additions':{'type':'string','maxLength':6000}},'additionalProperties':False}},'required':['candidate_id','expected_version','agent_ids','fields'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_case_edit_boundaries','description':'Edit the exact start and end messages for one case. The existing server service rechecks owner role, tenant, source channel, case version, message interval and that required outcome/cause evidence remains inside; it does not start analysis.',
+       'inputSchema':{'type':'object','properties':{**ids,'expected_version':{'type':'integer','minimum':1},'start_message_id':{'type':'string','format':'uuid'},'end_message_id':{'type':'string','format':'uuid'}},'required':['candidate_id','expected_version','start_message_id','end_message_id'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_case_reject_delete','description':'Permanently delete one exact case after matching candidate ID and current version. Choose retain or deactivate for linked knowledge; use none only when no knowledge is linked. Does not delete the CRM conversation.',
+       'inputSchema':{'type':'object','properties':{**ids,'confirm_candidate_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1},'linked_knowledge_action':{'type':'string','enum':['none','retain','deactivate']}},'required':['candidate_id','confirm_candidate_id','expected_version','linked_knowledge_action'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':True,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_case_delete_status','description':'Read-only check whether an earlier exact-target case deletion was recorded in the owner audit log. Use this after an unknown tool result; do not retry deletion until its outcome is checked.',
+       'inputSchema':{'type':'object','properties':ids,'required':['candidate_id'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+    ]
+    return details
+
+
+def _support_media_definitions():
+    security=[{'type':'oauth2','scopes':[SUPPORT_MEDIA_SCOPE]}]
+    campaign_id={'campaign_id':{'type':'string','format':'uuid'}}
+    return [
+      {'name':'support_media_snapshot_preview','description':'Read a bounded snapshot of existing support cases and their attachment readiness, reuse, historical unknowns and boundary-review reasons. Does not download media, prepare a grant or call a provider.',
+       'inputSchema':{'type':'object','properties':{},'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_media_campaign_prepare','description':'Prepare exactly one current-existing-cases snapshot with the fixed $10 total prospective cap. This creates a pending plan only; it does not approve external processing or start provider calls. The campaign ID equals request_id and can be read if the tool result is unknown. A fresh separate start call is required.',
+       'inputSchema':{'type':'object','properties':{'request_id':{'type':'string','format':'uuid'},'channel_ids':{'type':'array','items':{'type':'string','format':'uuid'},'maxItems':100},'analysis_agent_id':{'type':'string','format':'uuid'},'max_calls':{'type':'integer','minimum':1,'maximum':10000},'max_tokens':{'type':'integer','minimum':24000,'maximum':160000000},'media_policy':{'type':'object','properties':{'allow_external_media':{'type':'boolean'},'allow_paid_asr':{'type':'boolean'},'max_main_calls':{'type':'integer','minimum':0,'maximum':10000},'max_asr_calls':{'type':'integer','minimum':0,'maximum':10000},'max_vision_calls':{'type':'integer','minimum':0,'maximum':10000}},'required':['allow_external_media','allow_paid_asr','max_main_calls','max_asr_calls','max_vision_calls'],'additionalProperties':False},'video_model':{'type':['string','null']}},'required':['request_id','channel_ids','analysis_agent_id','max_calls','max_tokens','media_policy','video_model'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_media_campaign_read','description':'Read the current state of one exact current-case media plan, including progress, remaining cap, prior holds and partial results. Does not process media.',
+       'inputSchema':{'type':'object','properties':campaign_id,'required':['campaign_id'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_media_campaign_start','description':'Start one prepared exact current-case snapshot after an explicit owner confirmation. Requires the current campaign version and snapshot hash; server rechecks the fixed $10 cap, source snapshot, tenant cap, model tariffs and attachment eligibility before any provider call.',
+       'inputSchema':{'type':'object','properties':{**campaign_id,'expected_version':{'type':'integer','minimum':1},'snapshot_hash':{'type':'string','minLength':32,'maxLength':128},'confirm_external_processing':{'type':'boolean','const':True}},'required':['campaign_id','expected_version','snapshot_hash','confirm_external_processing'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':True,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_media_campaign_control','description':'Pause, resume or stop one exact media campaign. Resume does not automatically retry unknown case-media results; stopping revokes the pending/active grant. Requests already sent to a provider cannot be recalled.',
+       'inputSchema':{'type':'object','properties':{**campaign_id,'expected_version':{'type':'integer','minimum':1},'action':{'type':'string','enum':['pause','resume','stop']}},'required':['campaign_id','expected_version','action'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':True,'openWorldHint':False},'securitySchemes':security},
+    ]
+
+
+def _agent_management_definitions():
+    security=[{'type':'oauth2','scopes':[AGENT_MANAGE_SCOPE]}]
+    return [
+      {'name':'support_agents_list','description':'List active company agents with identity, role, enabled state, mode, model, version, assigned-dialog count and provider/channel scope summaries. Prompts, credentials and private configuration are omitted.',
+       'inputSchema':{'type':'object','properties':{},'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_agent_archive_transfer','description':'Archive one exact agent and transfer its existing dialogs to a compatible replacement. The server rechecks both versions/scopes, stops queued work and preserves history; transferred dialogs remain paused. This does not permanently erase historical runs or activate the replacement.',
+       'inputSchema':{'type':'object','properties':{'agent_id':{'type':'string','format':'uuid'},'replacement_agent_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1}},'required':['agent_id','replacement_agent_id','expected_version'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':True,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_agent_archive_status','description':'Check whether an earlier exact agent archive/transfer completed. Use after an unknown result before considering a retry.',
+       'inputSchema':{'type':'object','properties':{'agent_id':{'type':'string','format':'uuid'}},'required':['agent_id'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_agent_delete_preview','description':'Show the exact irreversible-delete impact for one company agent. Lists affected paused dialogs, pending work, active analyses and preserved history counts without exposing instructions or credentials.',
+       'inputSchema':{'type':'object','properties':{'agent_id':{'type':'string','format':'uuid'}},'required':['agent_id'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_agent_permanent_delete','description':'Permanently remove one exact agent configuration after preview. Requires the current version and repeating the exact agent ID as confirmation. Dialogs are paused and unassigned; queued work is stopped. Running work or an active media campaign blocks deletion. Run history, published knowledge, spending records and a minimal non-secret history identity are preserved. Never enables a replacement or sends a customer message.',
+       'inputSchema':{'type':'object','properties':{'agent_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1},'confirm_agent_id':{'type':'string','format':'uuid'}},'required':['agent_id','expected_version','confirm_agent_id'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':True,'openWorldHint':False},'securitySchemes':security},
+    ]
+
+
 async def mcp(request):
     method=None; request_id=None; tool_name=''; commit_attempted=False
     try:
@@ -578,7 +815,7 @@ async def mcp(request):
                     component_tools.append(_owner_component_completion_definition())
                     component_tools.extend(_owner_publish_component_definitions())
                     single_message_tools=single_message_extraction.definitions()
-            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type': 'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+knowledge_extraction_preflight.definitions(TOOL_SCOPE)+single_message_tools+direct_reconcile.definitions()+dialogue_merge.definitions()+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+component_tools+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
+            return _jsonrpc({'tools':[{'name':'simulation_runs','description':'Read new scoped simulation runs. Context is optional and redacted.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'},'limit':{'type': 'integer'},'include_context':{'type':'boolean'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'learning_issues','description':'Read evidence-based Learning Loop issues for the scoped agent and channel.','inputSchema':{'type':'object','properties':{'cursor':{'type':'string'}}},'annotations':{'readOnlyHint':True},'securitySchemes':auth}, {'name':'usage_summary','description':'Read scoped Simulation token usage.','inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True},'securitySchemes':auth}]+knowledge_extraction_preflight.definitions(TOOL_SCOPE)+single_message_tools+direct_reconcile.definitions()+dialogue_merge.definitions()+_dialog_assignment_definitions()+_support_case_definitions()+_support_media_definitions()+_agent_management_definitions()+_knowledge_dedup_definitions()+administrator_read.definitions()+administrator_drafts.definitions()+administrator_approvals.definitions()+component_tools+_administrator_apply_definitions()+administrator_approvals.publication_definitions()+administrator_approvals.training_definitions()},request_id=request_id)
         if method=='tools/call':
             cfg=_authorize_token(request)
             tool_name=str(data.get('params',{}).get('name',''))
@@ -596,6 +833,25 @@ async def mcp(request):
             if tool_name=='company_ai_settings_read' and isinstance(arguments,dict) and arguments.get('list_provider_models') is True:
                 output=await asyncio.to_thread(_company_model_list,cfg,arguments)
                 return _tool_response(output,request_id)
+            if tool_name=='support_dialog_agent_assign':
+                # The shared assignment service owns its transaction. Once
+                # called, an unexpected transport failure must be reported as
+                # an unknown outcome so clients inspect/replay the same
+                # request_id instead of inventing a second assignment.
+                commit_attempted=True
+                output=await asyncio.to_thread(_tools,None,cfg,tool_name,arguments)
+                return _tool_response(output,request_id)
+            if tool_name in {'support_case_confirm_publish','support_case_edit_publish','support_case_edit_boundaries','support_case_reject_delete','support_media_campaign_prepare','support_media_campaign_start','support_media_campaign_control','support_agent_permanent_delete'}:
+                # Case services commit in their own transaction; report any
+                # unexpected post-dispatch failure as unknown, never as a
+                # safe-to-repeat action.
+                commit_attempted=True
+                output=await asyncio.to_thread(_tools,None,cfg,tool_name,arguments)
+                return _tool_response(output,request_id)
+            if tool_name in {'support_agent_archive_transfer','support_agent_permanent_delete'}:
+                commit_attempted=True
+                output=await asyncio.to_thread(_tools,None,cfg,tool_name,arguments)
+                return _tool_response(output,request_id)
             with _connect() as conn:
                 with conn.cursor() as cur: output=_tools(cur,cfg,tool_name,arguments)
                 # Serialize the whole response before any write is committed.
@@ -604,7 +860,7 @@ async def mcp(request):
                 if tool_name.startswith(direct_reconcile.PREFIX):
                     commit_attempted=True
                     conn.commit()
-                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('administrator_single_message_extraction_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge':
+                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('administrator_single_message_extraction_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge' or data.get('params',{}).get('name','')=='support_dialog_agent_options' or data.get('params',{}).get('name','') in {'support_cases_list','support_case_detail','support_case_delete_status','support_agents_list','support_agent_archive_status','support_agent_delete_preview','support_media_snapshot_preview','support_media_campaign_read'}:
                     commit_attempted=True
                     conn.commit()
             return response
@@ -615,13 +871,13 @@ async def mcp(request):
         # client can request the additional scope. Every other authenticated
         # tool error is encoded as a normal MCP result and never tears down the
         # session. Its transaction was not committed by this handler.
-        if method=='tools/call' and tool_name.startswith('administrator_training_') and exc.status!=401 and not (exc.status==403 and 'OAuth scope required' in str(exc)):
+        if method=='tools/call' and (tool_name.startswith('administrator_training_') or tool_name.startswith('support_dialog_agent_') or tool_name.startswith('support_case') or tool_name.startswith('support_media_') or tool_name.startswith('support_agent_')) and exc.status!=401 and not (exc.status==403 and 'OAuth scope required' in str(exc)):
             return _tool_error(exc,status=exc.status,request_id=request_id)
         return web.json_response({'error':str(exc),**({'details':exc.details} if hasattr(exc,'details') else {})},status=exc.status,headers=headers)
     except Exception:
         incident_id=secrets.token_hex(8)
         log.exception('AI Learning MCP tool failure incident=%s method=%s',incident_id,method)
-        if method=='tools/call' and tool_name.startswith('administrator_training_'):
+        if method=='tools/call' and (tool_name.startswith('administrator_training_') or tool_name in {'support_dialog_agent_assign','support_agent_archive_transfer','support_agent_permanent_delete','support_case_confirm_publish','support_case_edit_publish','support_case_edit_boundaries','support_case_reject_delete','support_media_campaign_prepare','support_media_campaign_start','support_media_campaign_control'}):
             # A failed commit can have an unknown network outcome. Make that
             # explicit and require the caller to inspect the policy/request
             # receipt before retrying the same idempotency key.
@@ -654,7 +910,7 @@ def _oauth_resource(value, cfg):
 
 def _requested_scopes(value):
     requested={part for part in str(value or TOOL_SCOPE).split() if part}
-    if not requested or TOOL_SCOPE not in requested or requested-{TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE}:
+    if not requested or TOOL_SCOPE not in requested or requested-{TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,DIALOG_ASSIGN_SCOPE,SUPPORT_CASE_SCOPE,SUPPORT_MEDIA_SCOPE,AGENT_MANAGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE}:
         raise TenantLinearError('Unsupported OAuth scope.',400)
     return requested
 
@@ -666,6 +922,24 @@ def _consent_text(scopes):
     is still a write operation.  The consent page must make that distinction so
     an existing read token is not mistaken for a token that can manage drafts.
     """
+    if SUPPORT_CASE_SCOPE in scopes:
+        text='Owner-authorized access to support-case content and decisions across this company. Selected case text, source references and attachment metadata are sent to ChatGPT for the requested operation. The plugin can list/read cases, publish guidance while preserving unknown outcomes, use existing evidence-guarded confirmed publication, or permanently delete one exact case after version and target confirmation with a linked-knowledge choice. It cannot call analysis providers, change budgets, send customer messages or bypass publication guards.'
+        if SUPPORT_MEDIA_SCOPE in scopes:
+            text+=' It can also preview current-case attachment readiness, prepare one fixed $10 current-case media grant, and start it only after a separate explicit confirmation of the exact snapshot; the server enforces the tenant budget and saved historical holds.'
+        if DIALOG_ASSIGN_SCOPE in scopes:
+            text+=' It can also preview and assign one exact direct dialog in the configured channel; assignment leaves it paused.'
+        if AGENT_MANAGE_SCOPE in scopes:
+            text+=' It can list company agents, archive and transfer one through the pause-safe flow, or preview and permanently remove one exact agent. Permanent removal pauses and unassigns its dialogs, stops queued work, and preserves a minimal non-secret history identity; running work or active media plans block deletion.'
+        return text, 'Allow support-case management'
+    if SUPPORT_MEDIA_SCOPE in scopes:
+        return ('Owner-authorized current-case media analysis. The plugin can inspect a fixed snapshot, prepare one prospective $10 grant, and start it only after explicit confirmation of that exact snapshot. Starting may send eligible attachment content to configured external providers; server checks source versions, tariffs, tenant limits, existing holds and saved-result reuse. The scope cannot alter those safeguards or expand to future cases.'), 'Allow current-case media analysis'
+    if AGENT_MANAGE_SCOPE in scopes:
+        text='Owner-authorized company agent management. The plugin can list agents, archive and transfer one through the current version/scoped replacement flow, or permanently remove one exact agent after preview and versioned confirmation. Removal pauses and unassigns dialogs, stops queued work and preserves non-secret history identity; active processing/analysis blocks deletion. The plugin cannot enable agents or send customer messages.'
+        if DIALOG_ASSIGN_SCOPE in scopes:
+            text+=' It can also preview and assign one exact direct dialog in the configured channel; assignment leaves it paused.'
+        return text, 'Allow agent management'
+    if DIALOG_ASSIGN_SCOPE in scopes:
+        return ('Owner-authorized assignment for one configured WhatsApp channel. The plugin can preview eligible agents and assign or unassign one exact direct dialog using its current revision. The existing service checks tenant, channel and agent scope; assignment leaves the dialog paused and never activates automatic replies or sends a message.'), 'Allow dialog assignment'
     if direct_reconcile.WRITE_SCOPE in scopes:
         return ('Owner-delegated PHYSICAL reconciliation of provider-proven direct WhatsApp duplicates in the configured company/channel. Moves CRM messages and supported dependencies with a backup, preserves media/history and stopped AI states. Each exact pair requires fresh preview, explicit confirmation and an idempotent request. Includes guarded rollback. No customer sends or WhatsApp session changes.'), 'Allow physical dialogue reconciliation'
     if DIALOGUE_MERGE_SCOPE in scopes:
@@ -824,12 +1098,12 @@ def routes(member_from_request):
     async def protected(request):
         try:
             cfg=_require_cfg()
-            return web.json_response({'resource':cfg['issuer']+'/mcp/ai-learning','authorization_servers':[cfg['issuer']], 'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE]})
+            return web.json_response({'resource':cfg['issuer']+'/mcp/ai-learning','authorization_servers':[cfg['issuer']], 'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,DIALOG_ASSIGN_SCOPE,SUPPORT_CASE_SCOPE,SUPPORT_MEDIA_SCOPE,AGENT_MANAGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE]})
         except TenantLinearError as exc: return web.json_response({'error':str(exc)},status=exc.status)
     async def metadata(request):
         try:
             cfg=_require_cfg(); base=cfg['issuer']
-            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','revocation_endpoint':base+'/oauth/revoke','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code','refresh_token'],'token_endpoint_auth_methods_supported':['none'],'client_id_metadata_document_supported':True})
+            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','revocation_endpoint':base+'/oauth/revoke','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,DIALOG_ASSIGN_SCOPE,SUPPORT_CASE_SCOPE,SUPPORT_MEDIA_SCOPE,AGENT_MANAGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code','refresh_token'],'token_endpoint_auth_methods_supported':['none'],'client_id_metadata_document_supported':True})
         except TenantLinearError as exc: return web.json_response({'error':str(exc)},status=exc.status)
     return [('POST','/mcp/ai-learning',mcp),('GET','/mcp/ai-learning',mcp),('GET','/.well-known/oauth-protected-resource/mcp/ai-learning',protected),('GET','/.well-known/oauth-authorization-server',metadata),('GET','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/token',token),('POST','/oauth/revoke',revoke)]
 

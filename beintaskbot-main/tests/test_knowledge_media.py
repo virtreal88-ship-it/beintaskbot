@@ -75,7 +75,8 @@ def test_count_limit_unsupported_and_pending(context):
     item,add,download=context
     for _ in range(5):add('sticker')
     _,results=media.collect({},item)
-    assert [r['status'] for r in results]==['unsupported']*4+['pending_processing']
+    assert [r['status'] for r in results]==['unsupported']*4+['partial']
+    assert results[-1]['code']=='file_count_limit'
     download.assert_not_called()
 
 def test_plain_document_extracts_redacts_and_preserves_caption(context):
@@ -85,6 +86,17 @@ def test_plain_document_extracts_redacts_and_preserves_caption(context):
     assert not images and results[0]['status']=='processed'
     assert 'Synthetic caption' in item['messages'][0]['text']
     assert 'demo@example.com' not in item['messages'][0]['text'] and 'fake-secret' not in item['messages'][0]['text']
+
+
+def test_document_text_truncation_is_reported_as_partial(context,monkeypatch):
+    item,add,download=context;add('document')
+    monkeypatch.setattr(media,'extract',lambda *a:('txt',None,'x'*4001))
+    download.return_value=(b'x'*4001,'text/plain')
+    _,results=media.collect({},item)
+    assert results[0]['status']=='partial'
+    assert results[0]['code']=='document_text_truncated'
+    assert results[0]['truncated'] is True
+    assert len(results[0]['observation'])==4000
 
 @pytest.mark.parametrize('kind',['audio','voice'])
 @pytest.mark.parametrize('language,text',[('az','Miqdarı yoxlayın'),('ru','Проверьте количество'),('en','Check quantity')])
@@ -124,6 +136,27 @@ def test_docx_extractor_uses_no_external_relationships(context):
     download.return_value=(out.getvalue(),'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
     assert media.collect({},item)[1][0]['code']=='document_text'
     assert 'Synthetic solution' in item['messages'][0]['text']
+
+def test_xlsx_extractor_keeps_sheet_and_cell_provenance(context):
+    import zipfile
+    item,add,download=context;add('document')
+    out=io.BytesIO()
+    with zipfile.ZipFile(out,'w') as archive:
+        archive.writestr('xl/worksheets/sheet1.xml',
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Printer model</t></is></c><c r="B1"><v>42</v></c></row></sheetData></worksheet>')
+    download.return_value=(out.getvalue(),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    _,results=media.collect({},item)
+    assert results[0]['status']=='processed'
+    assert '[Sheet 1, cell A1] Printer model' in results[0]['observation']
+    assert '[Sheet 1, cell B1] 42' in results[0]['observation']
+    assert '[Sheet 1, cell A1]' in item['messages'][0]['text']
+
+def test_xlsx_rejects_corrupt_container_with_explicit_error(context):
+    item,add,download=context;add('document')
+    download.return_value=(b'PK not a zip archive','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    _,results=media.collect({},item)
+    assert results[0]['status']=='error'
+    assert results[0]['code']=='media_unavailable'
 
 def test_scanned_pdf_is_not_claimed_as_read_without_consent(context):
     from pypdf import PdfWriter

@@ -210,6 +210,101 @@ def test_archive_rejects_recipient_without_channel_scope(old_dialog):
     assert db.execute("SELECT archived_at FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]['archived_at'] is None
 
 
+def test_permanent_delete_removes_agent_config_but_preserves_history_and_pauses_dialog(old_dialog,monkeypatch):
+    f=old_dialog;db=f['db']
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=%s::uuid,state='human',reason='manager_replied' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s",(AGENT,A,CA));db.commit()
+    db.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,chat_id,channel_id,lead_id,event_fingerprint,talk_id,due_at) VALUES(%s::uuid,%s::uuid,'connect','client','client',%s,41,'evt','',now())",(A,AGENT,CA));db.commit()
+    # Use a real completed run and a published company source as preserved dependents.
+    run_id=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,result) VALUES(%s::uuid,%s::uuid,%s::uuid,'evt',1,'test-model','completed','{\"answer\":\"kept\"}'::jsonb)",(A,run_id,AGENT));db.commit()
+    usage_id=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_ai_agent_token_usage(tenant_id,id,run_id,agent_id,model,input_tokens,output_tokens,total_tokens) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'test-model',2,3,5)",(A,usage_id,run_id,AGENT));db.commit()
+    draft_id=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_ai_agent_drafts(tenant_id,id,agent_id,run_id,lead_id,talk_id,chat_id,source_message_id,source_fingerprint,draft) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,41,'','client','m1','evt','Preserved draft')",(A,draft_id,AGENT,run_id));db.commit()
+    session_id=str(uuid.uuid4());turn_id=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_ai_test_sessions(tenant_id,id,agent_id,created_by,state) VALUES(%s::uuid,%s::uuid,%s::uuid,11,'paused')",(A,session_id,AGENT));db.commit()
+    db.execute("INSERT INTO saas_ai_test_turns(tenant_id,id,session_id,input_hash,client_text,response,state) VALUES(%s::uuid,%s::uuid,%s::uuid,'fixture','question','answer','completed')",(A,turn_id,session_id));db.commit()
+    source=agents.save_knowledge(PROFILE,{'title':'Shared guide','kind':'text','content':'Reusable verified guidance.','active':True,'agent_id':AGENT})
+    db.commit()
+    campaign_id=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_knowledge_campaigns(tenant_id,id,created_by,sources,analysis_agent_id,status,
+      approved_by,approved_at,max_calls,max_tokens,progress,media_policy,max_cost_microusd)
+      VALUES(%s::uuid,%s::uuid,11,'[]'::jsonb,%s::uuid,'stopped',11,now(),1,24000,'{}'::jsonb,'{}'::jsonb,10000000)''',(A,campaign_id,AGENT));db.commit()
+    current=db.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))[0]['version'];db.commit()
+    preview=agents.preview_agent_deletion(PROFILE,AGENT)
+    assert preview['confirmation_required'] and preview['irreversible']
+    assert preview['impact']['assigned_dialogs']==1 and preview['impact']['runs']==1
+    assert preview['impact']['knowledge_sources']==1
+    with pytest.raises(TenantLinearError):
+        agents.permanently_delete_agent(PROFILE,AGENT,expected_version=current+1,confirm_agent_id=AGENT)
+    with pytest.raises(TenantLinearError):
+        agents.permanently_delete_agent(PROFILE,AGENT,expected_version=current,confirm_agent_id=AGENT2)
+    db.rollback()
+    result=agents.permanently_delete_agent(PROFILE,AGENT,expected_version=current,confirm_agent_id=AGENT)
+    assert result['deleted'] and result['paused_dialogs']==1
+    db.commit()
+    assert not db.execute('SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))
+    assert db.execute('SELECT state FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid',(A,AGENT))[0]['state']=='skipped'
+    assert db.execute('SELECT result FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,run_id))[0]['result']=={'answer':'kept'}
+    assert db.execute('SELECT total_tokens FROM saas_ai_agent_token_usage WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(A,run_id))[0]['total_tokens']==5
+    assert db.execute('SELECT draft,state FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,draft_id))[0]=={'draft':'Preserved draft','state':'rejected'}
+    assert db.execute('SELECT status,analysis_agent_id FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,campaign_id))[0]=={'status':'stopped','analysis_agent_id':AGENT}
+    assert db.execute('SELECT id FROM saas_ai_test_sessions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,session_id))
+    import tenant_ai_testing_store as testing
+    monkeypatch.setattr(testing,'_connect',lambda:db)
+    historical=testing.read(PROFILE,session_id)
+    assert historical['session']['agent_name']=='Night support' and historical['session']['block_reason']=='agent_deleted'
+    assert historical['turns'][0]['response']=='answer'
+    assert db.execute('SELECT content,active FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,source['id']))[0]=={'content':'Reusable verified guidance.','active':True}
+    identity=db.execute('SELECT display_name,deleted_at,deleted_by FROM saas_ai_agent_history_identities WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))[0]
+    assert identity['display_name']=='Night support' and identity['deleted_at'] and identity['deleted_by']==11
+    knowledge=agents.list_knowledge(PROFILE,source['id'])
+    assert knowledge['agent_name']=='Night support' and knowledge['content']=='Reusable verified guidance.'
+    state=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s",(A,CA))[0]
+    assert state['agent_id'] is None and state['state']=='human' and state['reason']=='agent_permanently_deleted'
+    assert agents.permanently_delete_agent(PROFILE,AGENT,expected_version=current,confirm_agent_id=AGENT)['replayed'] is True
+
+
+def test_permanent_delete_blocks_while_provider_work_is_processing(old_dialog):
+    f=old_dialog;db=f['db']
+    db.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,chat_id,channel_id,lead_id,event_fingerprint,talk_id,due_at,state,lease_until) VALUES(%s::uuid,%s::uuid,'connect','client','client',%s,41,'evt','',now(),'processing',now()+interval '1 minute')",(A,AGENT,CA));db.commit()
+    version=db.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))[0]['version'];db.commit()
+    preview=agents.preview_agent_deletion(PROFILE,AGENT)
+    assert preview['impact']['processing_jobs']==1
+    with pytest.raises(TenantLinearError,match='выполняется задача'):
+        agents.permanently_delete_agent(PROFILE,AGENT,expected_version=version,confirm_agent_id=AGENT)
+    db.rollback()
+    assert db.execute('SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))
+    assert db.execute("SELECT state FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",(A,AGENT))[0]['state']=='processing'
+
+
+def test_permanent_delete_blocks_while_case_media_campaign_is_active(old_dialog):
+    f=old_dialog;db=f['db'];campaign_id=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_knowledge_campaigns(tenant_id,id,created_by,sources,analysis_agent_id,status,
+      approved_by,approved_at,max_calls,max_tokens,progress,media_policy,max_cost_microusd)
+      VALUES(%s::uuid,%s::uuid,11,'[]'::jsonb,%s::uuid,'running',11,now(),1,24000,'{"mode":"case_media_batch"}'::jsonb,'{}'::jsonb,10000000)''',(A,campaign_id,AGENT));db.commit()
+    version=db.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))[0]['version'];db.commit()
+    preview=agents.preview_agent_deletion(PROFILE,AGENT)
+    assert preview['impact']['active_campaigns']==1
+    with pytest.raises(TenantLinearError,match='анализ'):
+        agents.permanently_delete_agent(PROFILE,AGENT,expected_version=version,confirm_agent_id=AGENT)
+    db.rollback()
+    assert db.execute('SELECT status FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,campaign_id))[0]['status']=='running'
+    assert db.execute('SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))
+
+
+def test_permanent_delete_blocks_while_direct_ai_run_is_generating(old_dialog):
+    f=old_dialog;db=f['db'];run_id=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state) VALUES(%s::uuid,%s::uuid,%s::uuid,'evt',1,'fixture','generating')",(A,run_id,AGENT));db.commit()
+    version=db.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))[0]['version'];db.commit()
+    preview=agents.preview_agent_deletion(PROFILE,AGENT)
+    assert preview['impact']['active_runs']==1 and preview['impact']['active_executions']==1
+    with pytest.raises(TenantLinearError,match='AI-анализ'):
+        agents.permanently_delete_agent(PROFILE,AGENT,expected_version=version,confirm_agent_id=AGENT)
+    db.rollback()
+    assert db.execute('SELECT state FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,run_id))[0]['state']=='generating'
+
+
 def test_additive_migration_preserves_legacy_and_other_provider_states(old_dialog):
     import tenant_ai_agents_schema as schema
     db=old_dialog['db']
