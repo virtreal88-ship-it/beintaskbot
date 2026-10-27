@@ -84,6 +84,38 @@ def test_stale_attachment_diagnostics_remain_tenant_scoped(ready):
         store.detail({'tenant_id':B,'telegram_id':22},value['id'])
 
 
+def test_owner_source_review_diagnostic_uses_only_case_claim_message_ids(ready):
+    import tenant_media_evidence as media_evidence
+    db,generation,_=ready;value=candidate(ready)
+    run=db.execute('SELECT * FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['extraction_id']))[0]
+    refs=run['source_refs'];assert len(refs)>=2
+    unrelated,target=refs[:2]
+    old_facts={key:None for key in store._MEDIA_IDENTITY_FIELDS};old_facts.update({'mediaId':'old','fileLength':10})
+    current_facts={**old_facts,'mediaId':'current','fileLength':16}
+    for ref in (unrelated,target):
+        ref.update(media_kind='image',media_version=store.digest(old_facts))
+        db.execute("UPDATE saas_crm_messages SET message_type='image',raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+          (json.dumps(current_facts),A,ref['id']))
+    db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps(refs),A,value['extraction_id']))
+    content=db.execute('SELECT content FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['id']))[0]['content']
+    content['source_message_ids']=[target['id']];content['start_message_id']=target['id'];content['end_message_id']=target['id']
+    db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps(content),A,value['id']));db.commit()
+
+    opened=store.detail(PROFILE,value['id'])
+    assert [item['id'] for item in opened['candidate']['media_source_diagnostics']]==[target['id']]
+    assert target['id'] in opened['candidate']['source_message_ids']
+    assert unrelated['id'] not in opened['candidate']['media_source_diagnostics']
+    with pytest.raises(TenantLinearError,match='Вложение не входит в доказательства этого кейса'):
+        store.mutate(PROFILE,value['id'],{'expected_version':1,'message_id':unrelated['id'],'review_note':'Reviewed the current attachment as a separate source.','acknowledge_new_source':True},'source_review')
+    reviewed=store.mutate(PROFILE,value['id'],{'expected_version':1,'message_id':opened['candidate']['media_source_diagnostics'][0]['id'],
+      'review_note':'Reviewed the current attachment as a separate source.','acknowledge_new_source':True},'source_review')
+    assert reviewed['candidate']['media_source_review']['message_id']==target['id']
+    assert reviewed['candidate']['media_source_review']['revision']==1
+    assert generation.call_count==1
+
+
 @pytest.mark.parametrize('has_current_receipt',[True,False])
 def test_owner_reviews_changed_media_as_new_version_without_rewriting_extraction_or_carrying_claims(ready,has_current_receipt):
     import tenant_media_evidence as media_evidence
