@@ -44,7 +44,10 @@ def public(row):
         'copilot_daily_limit': metadata.get('copilot_daily_limit', 50),
         'copilot_employee_permission': 'chat_ai',
         'provider': 'OpenAI',
+        'photo_model': metadata.get('photo_model') or '',
     })
+    from tenant_ai_photo_model import MODELS, tariff_status
+    result['photo_model_tariffs'] = {model: tariff_status(model) for model in MODELS}
     return result
 
 
@@ -111,6 +114,22 @@ def save(session, data):
             # Older settings clients do not submit the Copilot subsection.
             # Preserve its values so legacy Chat AI edits cannot couple models.
             old_metadata = previous.get('metadata') if isinstance(previous.get('metadata'), dict) else {}
+            # Photo selection is a separate owner setting, never the text-model
+            # allowlist. Old clients preserve it and cannot add model grants.
+            if 'photo_model' not in data and 'photo_model' in old_metadata:
+                config['photo_model'] = old_metadata['photo_model']
+            if 'models' in old_metadata:
+                config['models'] = old_metadata['models']
+            if config.get('photo_model', '') != old_metadata.get('photo_model', ''):
+                cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE',
+                            (tenant, int(session['telegram_id'])))
+                if (cur.fetchone() or {}).get('role') != 'owner':
+                    raise TenantLinearError('Company owner access required for photo model selection.', 403)
+                if config.get('photo_model'):
+                    from tenant_ai_photo_model import quote
+                    quote(config['photo_model'])
+                    if not previous.get('secrets') or not config['enabled'] or not config['consent']:
+                        raise TenantLinearError('photo_model_company_configuration_required', 409)
             if 'copilot_model' not in data:
                 config['copilot_model'] = old_metadata.get('copilot_model') or old_metadata.get('model') or config['model']
             if 'copilot_enabled' not in data:
@@ -129,5 +148,10 @@ def save(session, data):
               SET secrets=EXCLUDED.secrets,metadata=EXCLUDED.metadata,status='configured',updated_at=now()
               RETURNING secrets,metadata,updated_at''', (tenant, encrypted, json.dumps(config)))
             result = public(cur.fetchone())
+            if config.get('photo_model', '') != old_metadata.get('photo_model', ''):
+                from tenant_ai_agents_store import _audit
+                _audit(cur,tenant,int(session['telegram_id']),'chat_ai_photo_model_changed','chat_ai',tenant,
+                       {'previous_photo_model':old_metadata.get('photo_model') or '',
+                        'photo_model':config.get('photo_model') or ''})
         conn.commit()
     return result

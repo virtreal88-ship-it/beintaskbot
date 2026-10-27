@@ -24,6 +24,14 @@ def quote(model):
       'max_main_calls':0,'max_vision_calls':1,'max_asr_calls':0,'photo_only':True}
 
 
+def tariff_status(model):
+    """Non-secret, read-only quote; missing/mismatched prices never get defaults."""
+    try:
+        return {'ready': True, **quote(model)}
+    except TenantLinearError:
+        return {'ready': False, 'model': model, 'reason_code': 'photo_model_tariff_required'}
+
+
 def budget(cur,tenant,model):
     from tenant_ai_spend_budget import limit_microusd
     amount=quote(model);cap=limit_microusd(tenant)
@@ -47,7 +55,7 @@ def select(cur,cfg,model):
     row=cur.fetchone() or {};meta=row.get('metadata') or {}
     if (not row.get('enabled') or not row.get('settings_enabled') or row.get('emergency_stop')
         or not row.get('credential_present') or meta.get('enabled') is not True or meta.get('consent') is not True
-        or model not in list(meta.get('models') or [])+[meta.get('model')]):
+        or model not in list(meta.get('models') or [])+[meta.get('model'),meta.get('photo_model')]):
         raise TenantLinearError('photo_model_company_configuration_required',409)
     from tenant_connect_images import supports_images
     if not supports_images(model):raise TenantLinearError('photo_model_vision_not_allowed',409)
