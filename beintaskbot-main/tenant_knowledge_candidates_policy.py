@@ -118,8 +118,10 @@ def card(data,allowed_ids,allow_boundary_outside_sources=False):
 
 def positive_confirmation(value,informational=False):
     if any(mark in value for mark in ('?','؟','？')) or re.search(
-        r'\b(?:не|нет|not|never|yox|işləmir|islemir|düzəlməyib|duzelmeyib|həll olunmayıb|hell olunmayib|'
-        r'problem\s+(?:(?:hələ\s+də|hele\s+de|still|gələcəkdə|gelecekde)\s+)?'
+        r'\b(?:не|нет|not|never|yox|işləmir|islemir|düzəlməyib|duzelmeyib|'
+        r'həll\s+(?:olunmayıb|edilməyib|olunmayacaq|edilməyəcək)|'
+        r'hell\s+(?:olunmayib|edilmeyib|olunmayacaq|edilmeyecek)|'
+        r'problem\s+(?:(?:hələ\s+də|hele\s+de|yenə\s+də|yene\s+de|still|gələcəkdə|gelecekde)\s+)?'
         r'(?:qalır|qalir|qalıb|qalib|qaldı|qaldi|qalacaq|davam\s+(?:edir|edəcək|edecek)|var|olacaq|remains?|persists?|continues?)|'
         r'issue\s+(?:remains?|persists?|continues?)|'
         r'если|возможно|кажется|попробуйте|проверьте|if|check|maybe|should|might|бы|должно|может|наверное|'
