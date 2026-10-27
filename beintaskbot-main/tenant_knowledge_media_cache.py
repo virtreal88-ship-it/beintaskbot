@@ -1,7 +1,7 @@
 """Tenant-scoped ASR receipt cache. Unknown calls are never automatically retried."""
 import hashlib
 import uuid
-from tenant_platform import _connect
+from tenant_platform import _connect, _json
 from tenant_knowledge_candidates_policy import redact
 from tenant_linear_policy import TenantLinearError
 import tenant_knowledge_candidates_store as store

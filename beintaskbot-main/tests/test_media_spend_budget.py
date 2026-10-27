@@ -4,7 +4,7 @@ import json
 import pytest
 
 pytest_plugins = ('test_tenant_support_inbox',)
-from test_tenant_support_inbox import A, db
+from test_tenant_support_inbox import A, AGENT, db
 from tenant_linear_policy import TenantLinearError
 import tenant_ai_spend_budget as budget
 
@@ -81,3 +81,35 @@ def test_media_settlement_uses_tariff_pinned_at_reservation(priced,monkeypatch):
     budget.settle_media(A,'media:pinned',operation='asr',attempted_units=1,reserved_units=1)
     row=priced.execute("SELECT state,actual_microusd FROM saas_ai_spend_reservations WHERE call_key='media:pinned'")[0]
     assert row=={'state':'settled','actual_microusd':300}
+
+
+def test_fixed_grant_cap_counts_unknown_calls_and_cannot_be_recreated(priced,monkeypatch):
+    import uuid
+    import tenant_knowledge_campaign_schema as campaigns
+    monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD','{}')
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({
+        'grant-model': {'vision_low': 9_999_951},
+    }))
+    campaigns.create_schema(priced)
+    campaign=str(uuid.uuid4())
+    priced.execute('''INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,model)
+      VALUES(%s::uuid,%s::uuid,'Grant test agent',11,'grant-model') ON CONFLICT DO NOTHING''',(A,AGENT))
+    priced.execute('''INSERT INTO saas_knowledge_campaigns
+      (tenant_id,id,created_by,sources,analysis_agent_id,status,version,max_calls,max_tokens,
+       max_cost_microusd,approved_by,approved_at)
+      VALUES(%s::uuid,%s::uuid,11,'[]'::jsonb,%s::uuid,'running',2,10,100000,10000000,11,now())''',
+      (A,campaign,AGENT))
+    priced.execute('''INSERT INTO saas_ai_media_grants
+      (tenant_id,id,campaign_id,created_by,cap_microusd,status,approved_by,approved_at)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,11,10000000,'active',11,now())''',(A,campaign,campaign))
+    priced.commit()
+    with priced.cursor() as cur:
+        budget.reserve_media(cur,A,'grant:uncertain','knowledge_vision','grant-model','vision_low',1,campaign_id=campaign)
+    priced.commit()
+    budget.settle_media(A,'grant:uncertain',operation='vision_low',attempted_units=1,unknown=True)
+    with priced.cursor() as cur:
+        with pytest.raises(TenantLinearError,match='ai_media_grant_budget_exhausted'):
+            budget.reserve_media(cur,A,'grant:over-cap','knowledge_vision','grant-model','vision_low',1,campaign_id=campaign)
+    priced.rollback()
+    held=priced.execute("SELECT state,reserved_microusd,grant_id FROM saas_ai_spend_reservations WHERE call_key='grant:uncertain'")[0]
+    assert held=={'state':'unknown','reserved_microusd':9_999_951,'grant_id':campaign}

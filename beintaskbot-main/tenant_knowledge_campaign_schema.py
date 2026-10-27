@@ -41,4 +41,19 @@ def create_schema(conn):
 
         cur.execute("ALTER TABLE saas_knowledge_campaigns ADD COLUMN IF NOT EXISTS media_policy JSONB NOT NULL DEFAULT '{}'")
         cur.execute("ALTER TABLE saas_knowledge_campaigns ADD COLUMN IF NOT EXISTS reserved_kinds JSONB NOT NULL DEFAULT '{}'")
+        # Optional, immutable prospective currency cap for an explicitly
+        # approved current-case media grant. Existing campaigns remain uncapped
+        # here and continue to use the tenant-wide ledger policy.
+        cur.execute('ALTER TABLE saas_knowledge_campaigns ADD COLUMN IF NOT EXISTS max_cost_microusd BIGINT')
+        cur.execute('ALTER TABLE saas_knowledge_campaigns ADD COLUMN IF NOT EXISTS video_model TEXT')
         cur.execute("ALTER TABLE saas_knowledge_campaign_fragments ADD COLUMN IF NOT EXISTS reservation JSONB NOT NULL DEFAULT '{}'")
+        cur.execute("""CREATE TABLE IF NOT EXISTS saas_ai_media_grants(
+          tenant_id UUID NOT NULL REFERENCES saas_tenants(id), id UUID NOT NULL UNIQUE,
+          campaign_id UUID NOT NULL UNIQUE, created_by BIGINT NOT NULL,
+          cap_microusd BIGINT NOT NULL CHECK(cap_microusd=10000000),
+          status TEXT NOT NULL CHECK(status IN ('pending','active','revoked','completed')),
+          approved_by BIGINT, approved_at TIMESTAMPTZ, revoked_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id),
+          FOREIGN KEY(tenant_id,campaign_id) REFERENCES saas_knowledge_campaigns(tenant_id,id))""")
+        cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS saas_ai_media_grants_once_idx ON saas_ai_media_grants(tenant_id) WHERE approved_at IS NOT NULL')

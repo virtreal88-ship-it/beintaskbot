@@ -60,6 +60,10 @@ def route(cur,profile,data):
         if flag in data: binding[flag]=data[flag]
     if data.get('retry_of'):binding['retry_of']=identifier(data['retry_of'])
     if data.get('photo_model'):binding['photo_model']=data['photo_model']
+    # These fields are set only by an approved fixed-snapshot media campaign;
+    # service-level fragment validation binds them to the stored campaign row.
+    if data.get('video_model'):binding['video_model']=str(data['video_model'])[:100]
+    if data.get('media_grant_id'):binding['media_grant_id']=identifier(data['media_grant_id'])
     if start: binding.update(period_start=start,period_end=end)
     return tenant,actor,policy,chosen,binding,ticket
 

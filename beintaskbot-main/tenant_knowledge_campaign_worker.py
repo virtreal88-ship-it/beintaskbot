@@ -32,6 +32,20 @@ def check_fence(cur, tenant, extraction_id):
                            and item['source_version']==row['route'].get('source_version')
                            for item in checked['media'])):
                 raise TenantLinearError('Case boundary or media source changed.',409)
+        if isinstance(row.get('progress'),dict) and row['progress'].get('mode')=='case_media_batch':
+            from tenant_case_media_admission import plan
+            profile={'tenant_id':tenant,'telegram_id':row['approved_by']}
+            expected=row['progress']
+            case_id=str(row['route'].get('case_id'))
+            case=next((item for item in expected.get('case_plans',[]) if item.get('case_id')==case_id),None)
+            checked_case=plan(cur,profile,case_id)
+            if (checked_case.get('status')!='pending_consent' or not case
+                or checked_case.get('plan_hash')!=case.get('plan_hash')
+                or checked_case.get('case_version')!=row['route'].get('case_version')
+                or row['route'].get('case_plan_hash')!=checked_case.get('plan_hash')
+                or not any(item['id'] in row['route'].get('message_ids',[])
+                    and item['source_version']==row['route'].get('source_version') for item in checked_case.get('media',[]))):
+                raise TenantLinearError('Current case snapshot or media source changed.',409)
         # Durable progress heartbeat without unbounded lease extension. The 360s
         # lease remains strictly above the 240s extraction hard deadline.
         cur.execute("UPDATE saas_knowledge_campaign_fragments SET updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND status='running' AND lease_until>now()",(tenant,extraction_id))
@@ -53,7 +67,7 @@ def tick():
                 conn.commit();return False
             mode=campaign.get('progress',{}).get('mode')
             single_message=mode=='single_message'
-            scoped=mode in {'single_message','case_media'}
+            scoped=mode in {'single_message','case_media','case_media_batch'}
             if not scoped:
                 try:discovery.discover(cur,profile,campaign)
                 except TenantLinearError:
