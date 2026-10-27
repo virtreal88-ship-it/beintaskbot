@@ -215,6 +215,10 @@ def test_owner_reviews_changed_media_as_new_version_without_rewriting_extraction
     ('Duzelib amma problem yenə də qalacaq.',False),
     ('Duzelib amma problem gələcəkdə həll olunmayacaq.',False),
     ('Duzelib amma problem həll edilməyib.',False),
+    ('Duzelib amma problem duzelmedi.',False),
+    ('Duzelib amma problem duzelmir.',False),
+    ('Duzelib amma problem duzelmeyecek.',False),
+    ('Duzelib amma problem həll edilmədi.',False),
     ('Duzelib ola biler.',False),
 ])
 def test_recovered_candidate_scopes_stale_media_and_requires_unambiguous_customer_confirmation(
@@ -616,6 +620,12 @@ def test_hypotheses_and_questions_not_confirmation(value):
     ('Düzəlib, amma problem gələcəkdə həll olunmayacaq',False),
     ('Düzəlib, amma problem həll edilməyib',False),
     ('Duzelib amma problem hell edilmeyib',False),
+    ('Duzelib amma problem duzelmedi',False),
+    ('Düzəlib, amma problem düzəlmədi',False),
+    ('Duzelib amma problem duzelmir',False),
+    ('Duzelib amma problem duzelmeyecek',False),
+    ('Duzelib amma problem həll edilmədi',False),
+    ('Duzelib amma problem hell edilmedi',False),
     ('Duzelib, amma internet islemir',False),
     ('Duzelib, əgər internet geri qayıtsa',False),
     ('Duzelib ola biler',False),
