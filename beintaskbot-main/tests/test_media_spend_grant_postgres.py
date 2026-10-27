@@ -109,6 +109,11 @@ def test_parallel_grant_reservations_hold_unknown_and_reject_after_revoke(databa
     assert 'ai_media_grant_budget_exhausted' in next(value[1] for value in outcomes if value[0] == 'denied')
     reservations = db.execute('''SELECT call_key,state,reserved_microusd,grant_id FROM saas_ai_spend_reservations
       WHERE tenant_id=%s::uuid AND grant_id=%s::uuid''', (tenant_id, campaign_id))
+    # Release the read transaction before workers run their settlement path.
+    # That path ensures the schema (including ALTER TABLE IF NOT EXISTS), so
+    # keeping an ACCESS SHARE lock here would block DDL while this process
+    # waits for child results: a test-harness deadlock, not ledger contention.
+    db.commit()
     assert len(reservations) == 1
     assert reservations[0]['call_key'] == admitted[2]
     assert reservations[0]['state'] == 'unknown'
@@ -124,6 +129,7 @@ def test_parallel_grant_reservations_hold_unknown_and_reject_after_revoke(databa
     assert {value[1] for value in duplicate} == {admitted[1]}, duplicate
     assert db.execute('''SELECT count(*) AS n FROM saas_ai_spend_reservations
       WHERE tenant_id=%s::uuid AND grant_id=%s::uuid''', (tenant_id, campaign_id))[0]['n'] == 1
+    db.commit()
 
     # A restarted worker replaying the identical key is idempotent; it does not
     # create another reservation or release the unknown hold.
@@ -131,6 +137,7 @@ def test_parallel_grant_reservations_hold_unknown_and_reject_after_revoke(databa
     assert replayed[0][0] == 'ok' and replayed[0][1] == admitted[1], replayed
     assert db.execute('''SELECT count(*) AS n FROM saas_ai_spend_reservations
       WHERE tenant_id=%s::uuid AND grant_id=%s::uuid''', (tenant_id, campaign_id))[0]['n'] == 1
+    db.commit()
 
     # Revocation blocks a fresh call key even though the campaign row remains
     # present and approved. Existing unknown spend remains untouched.
