@@ -34,7 +34,7 @@ class LiveExtractionDisabled(Exception):
 
 
 def prepare(profile,data,review=None):
-    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','photo_model'}
+    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','photo_model','video_model','media_grant_id'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректные параметры анализа.')
     for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
         if flag in data and type(data[flag]) is not bool: raise TenantLinearError('Некорректное разрешение медиа.')
@@ -64,11 +64,18 @@ def prepare(profile,data,review=None):
                     if explicit_language or replay['request_key']!=store.digest(legacy_shape):
                         raise TenantLinearError('request_id уже использован для другого запроса.',409)
                 return {'existing':request_id}
-            cur.execute('''SELECT c.sources,f.route FROM saas_knowledge_campaign_fragments f
+            cur.execute('''SELECT c.sources,f.route,c.max_cost_microusd FROM saas_knowledge_campaign_fragments f
               JOIN saas_knowledge_campaigns c ON c.tenant_id=f.tenant_id AND c.id=f.campaign_id
               WHERE f.tenant_id=%s::uuid AND f.id=%s::uuid''',(tenant,request_id))
             campaign_source=cur.fetchone()
+            grant_id=(campaign_source or {}).get('route',{}).get('media_grant_id')
+            if data.get('media_grant_id') and not campaign_source:
+                raise TenantLinearError('A media grant can be used only by its server-created campaign fragment.',403)
+            if grant_id and not campaign_source.get('max_cost_microusd'):
+                raise TenantLinearError('ai_media_grant_inactive',409)
             if campaign_source:
+                if data.get('media_grant_id')!=campaign_source['route'].get('media_grant_id') or data.get('video_model')!=campaign_source['route'].get('video_model'):
+                    raise TenantLinearError('Разрешение кампании изменилось.',409)
                 expected=sorted(campaign_source['sources'])
                 for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
                     if data.get(flag,False)!=campaign_source['route'].get(flag,False):raise TenantLinearError('Разрешения кампании изменились.',409)
@@ -83,6 +90,14 @@ def prepare(profile,data,review=None):
                 if any(data.get(k)!=photo_consent['route'].get(k) for k in ('message_ids','channel_id','conversation_id','source_version','analysis_agent_id','retry_of','allow_external_media','allow_paid_asr','allow_vision')):
                     raise TenantLinearError('Exact photo selection changed.',409)
             item=review['snapshot'] if review else store.snapshot(cur,profile,data)
+            media_grant_id=data.get('media_grant_id')
+            if any(ref.get('media_kind') for ref in item['refs']):
+                from tenant_case_media_admission import grant_for_message
+                for ref in item['refs']:
+                    if not ref.get('media_kind'):continue
+                    grant=grant_for_message(cur,tenant,ref['id'])
+                    if grant and (not media_grant_id or str(media_grant_id)!=grant['id']):
+                        raise TenantLinearError('This media source is fenced to its existing all-case grant.',409)
             if photo_only and (len(item['refs'])!=1 or item['refs'][0].get('media_kind')!='image'):
                 raise TenantLinearError('Exact image required.',409)
             # The owner single-message path carries a one-way safe media
@@ -188,23 +203,25 @@ def prepare(profile,data,review=None):
             # monetary authorization for ASR or vision.
             event='knowledge_extraction:'+request_id
             from tenant_ai_spend_budget import reserve as reserve_spend
-            if not photo_only:reserve_spend(cur,tenant,'extraction:'+request_id,'live_case_extraction',model,MAX_TOKENS,1800)
+            if not photo_only:reserve_spend(cur,tenant,'extraction:'+request_id,'live_case_extraction',model,MAX_TOKENS,1800,campaign_id=grant_id)
             media_spend={}
-            if limit_microusd(tenant) and data.get('allow_paid_asr'):
+            grant_priced=bool(grant_id)
+            if (limit_microusd(tenant) or grant_priced) and data.get('allow_paid_asr'):
                 from tenant_connect_voice import transcription_model
                 asr_model=transcription_model({'credential_source':source,'config':meta})
                 if not asr_model: raise TenantLinearError('ai_spend_media_price_unknown',409)
                 key_name='extraction:'+request_id+':asr'
-                reserve_media(cur,tenant,key_name,'knowledge_asr',asr_model,'asr',1)
+                reserve_media(cur,tenant,key_name,'knowledge_asr',asr_model,'asr',1,campaign_id=grant_id)
                 media_spend['asr']={'key':key_name,'model':asr_model,'operation':'asr','units':1}
-            if limit_microusd(tenant) and monetary_vision_calls:
+            if (limit_microusd(tenant) or grant_priced) and monetary_vision_calls:
                 key_name='extraction:'+request_id+':vision'
+                vision_model=(data.get('video_model') if any(ref.get('media_kind')=='video' for ref in item['refs']) else model) or model
                 if photo_only:
                     from tenant_ai_photo_model import budget,INPUT_UPPER,OUTPUT_UPPER
                     budget(cur,tenant,model)
                     reserve_spend(cur,tenant,key_name,'knowledge_photo_observation',model,INPUT_UPPER,OUTPUT_UPPER)
-                else:reserve_media(cur,tenant,key_name,'knowledge_vision',model,'vision_low',monetary_vision_calls)
-                media_spend['vision']={'key':key_name,'model':model,'operation':'vision_low','units':monetary_vision_calls,**({'token_priced':True,'reserved_prices':(2_000_000,8_000_000)} if photo_only else {})}
+                else:reserve_media(cur,tenant,key_name,'knowledge_vision',vision_model,'vision_low',monetary_vision_calls,campaign_id=grant_id)
+                media_spend['vision']={'key':key_name,'model':vision_model,'operation':'vision_low','units':monetary_vision_calls,**({'token_priced':True,'reserved_prices':(2_000_000,8_000_000)} if photo_only else {})}
             cur.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,state) VALUES(%s::uuid,%s,'connect','knowledge_extraction','completed')",(tenant,event))
             cur.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,reserved_calls) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,%s,'generating',1)",(tenant,request_id,agent['id'],event,model))
             cur.execute("INSERT INTO saas_ai_agent_token_usage(tenant_id,id,run_id,agent_id,model,reserved_tokens) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s)",(tenant,str(uuid.uuid4()),request_id,agent['id'],model,MAX_TOKENS))
@@ -360,12 +377,13 @@ def finish(profile,item,values,usage,error,attempted,proposal=None,accounting_us
                 ('completed' if status=='completed' else ('unknown' if attempted else 'skipped'),error,bool(usage),tenant,request_id))
         conn.commit()
     from tenant_ai_spend_budget import settle as settle_spend, release as release_spend, settle_media
+    grant_id=item.get('route',{}).get('media_grant_id')
     # Media-only work is prepaid and settled separately.  A text-model
     # reservation is releasable until the extraction generation itself begins.
     if not item.get('generation_attempted'):
-        release_spend(item['tenant'],'extraction:'+str(item['id']))
+        release_spend(item['tenant'],'extraction:'+str(item['id']),campaign_id=grant_id)
     else:
-        settle_spend(item['tenant'],'extraction:'+str(item['id']),usage or {},unknown=(status=='unknown'))
+        settle_spend(item['tenant'],'extraction:'+str(item['id']),usage or {},unknown=(status=='unknown'),campaign_id=grant_id)
     for name, plan in (item.get('media_spend') or {}).items():
         if name=='asr':
             attempted=1 if item.get('asr_attempted') else 0

@@ -25,5 +25,27 @@ const script=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant
   assert.equal(requests[1].data.media_policy.allow_paid_asr,false);assert.equal(requests[1].data.media_policy.allow_external_media,false);assert.equal(requests[1].data.media_policy.max_main_calls,4);assert.equal(requests[1].data.confirm_external_processing,true);assert.equal(requests[1].data.expected_version,1);
   await host.querySelector('[data-actions] button').onclick();assert.equal(requests[2].data.action,'pause');
   assert.equal(requests[2].data.expected_version,2);assert.ok(!host.innerHTML.includes('undefined'));
+  const batchRequests=[];let batchState=null;
+  const batchCtx={...ctx,api:async(url,options)=>{
+    if(options){const data=JSON.parse(options.body);batchRequests.push({url,data});
+      if(url.endsWith('/campaigns'))batchState={id:'batch',version:1,status:'awaiting_budget',channel_ids:['channel-a'],
+        max_calls:data.max_calls,max_tokens:data.max_tokens,media_policy:{allow_external_media:data.allow_external_media,
+          allow_paid_asr:data.allow_paid_asr,max_main_calls:data.max_main_calls,max_asr_calls:data.max_asr_calls,
+          max_vision_calls:data.max_vision_calls},progress:{mode:'case_media_batch',case_count:3,eligible_count:2,
+          reused_count:1,review_count:0,unknown_media_count:0,unavailable_media_count:0,case_plans:[]},
+        max_cost_microusd:data.max_cost_microusd,video_model:data.video_model,grant_used_microusd:0,
+        prior_unknown_holds_microusd:0,prior_settled_microusd:0,analysis_model:'text-model',asr_model:'asr-model',
+        grant_approved:false,fragments:{},reserved_calls:0,reserved_tokens:0,used_tokens:0,cards:0};
+    }return {campaign:batchState};}};
+  await w.TenantKnowledgeCampaigns.mount(host,batchCtx);
+  const all=host.querySelector('[data-all-existing]');all.checked=true;all.onchange();
+  assert.equal(host.querySelector('[data-source]').disabled,true);
+  host.querySelector('[data-video-model]').value='gpt-4.1';
+  await host.querySelector('[data-prepare]').onclick();
+  assert.equal(batchRequests.length,1);assert.equal(batchRequests[0].data.all_existing_cases,true);
+  assert.equal(batchRequests[0].data.max_cost_microusd,10000000);assert.equal(batchRequests[0].data.video_model,'gpt-4.1');
+  assert.deepEqual(batchRequests[0].data.channel_ids,[]);
+  assert.ok(host.querySelector('.campaign-run-notice').textContent.includes('$10.00'));
+  assert.ok(host.querySelector('.campaign-run-notice').textContent.includes('text-model'));
   dom.window.close();
 }console.log('Campaign controls: RU/AZ/EN, explicit consent, sources, versioned pause passed');})().catch(e=>{console.error(e);process.exitCode=1;});

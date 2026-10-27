@@ -190,7 +190,8 @@ def collect(profile,item,check_before_ai=None):
                 visuals=[(data,mime,{})]
             if not consent: receipt.update(status='unavailable',code='external_media_permission_required');continue
             if item['route'].get('allow_vision') is False: receipt.update(status='unavailable',code='vision_not_approved');continue
-            if not supports_images(item['model']): receipt.update(status='unsupported',code='model_has_no_vision');continue
+            observation_model=(item['route'].get('video_model') if kind=='video' else item['model']) or item['model']
+            if not supports_images(observation_model): receipt.update(status='unsupported',code='model_has_no_vision');continue
             if visual_count+len(visuals)>MAX_VISUALS: receipt.update(status='partial',code='visual_budget');continue
             if not visuals: raise ValueError('empty_visuals')
             visual_count+=len(visuals)
@@ -198,9 +199,10 @@ def collect(profile,item,check_before_ai=None):
                 stage='visual_analysis'
                 from tenant_knowledge_media_cache import observe_once
                 from tenant_chat_ai_provider import generate
+                observation_item=({**item,'model':observation_model} if observation_model!=item['model'] else item)
                 for content,content_type,origin in visuals:
                     if check_before_ai: check_before_ai()
-                    text,_,_=observe_once(profile,item,ref,content,content_type,origin,generate,check_before_ai=check_before_ai)
+                    text,_,_=observe_once(profile,observation_item,ref,content,content_type,origin,generate,check_before_ai=check_before_ai)
                     message['text']+='\n[Untrusted visual observation; not a confirmed solution] '+text
                     receipt.setdefault('observations',[]).append({'origin':origin,'text':text})
                 receipt.update(status='partial' if kind=='video' else 'processed',code='vision_observation',visuals=[origin for _,_,origin in visuals])

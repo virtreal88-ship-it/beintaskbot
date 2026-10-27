@@ -63,6 +63,7 @@ def ensure_schema(conn):
           tenant_id UUID NOT NULL, id UUID NOT NULL, call_key TEXT NOT NULL, model TEXT NOT NULL,
           kind TEXT NOT NULL, reserved_microusd BIGINT NOT NULL CHECK(reserved_microusd >= 0),
           media_operation TEXT, media_unit_microusd BIGINT, media_units INTEGER,
+          campaign_id UUID, grant_id UUID,
           actual_microusd BIGINT, state TEXT NOT NULL CHECK(state IN ('reserved','settled','unknown','released')),
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(), completed_at TIMESTAMPTZ,
           PRIMARY KEY(tenant_id,id), UNIQUE(tenant_id,call_key))''')
@@ -71,7 +72,10 @@ def ensure_schema(conn):
         cur.execute('ALTER TABLE saas_ai_spend_reservations ADD COLUMN IF NOT EXISTS media_operation TEXT')
         cur.execute('ALTER TABLE saas_ai_spend_reservations ADD COLUMN IF NOT EXISTS media_unit_microusd BIGINT')
         cur.execute('ALTER TABLE saas_ai_spend_reservations ADD COLUMN IF NOT EXISTS media_units INTEGER')
+        cur.execute('ALTER TABLE saas_ai_spend_reservations ADD COLUMN IF NOT EXISTS campaign_id UUID')
+        cur.execute('ALTER TABLE saas_ai_spend_reservations ADD COLUMN IF NOT EXISTS grant_id UUID')
         cur.execute('CREATE INDEX IF NOT EXISTS saas_ai_spend_reservations_tenant_idx ON saas_ai_spend_reservations(tenant_id,state)')
+        cur.execute('CREATE INDEX IF NOT EXISTS saas_ai_spend_reservations_grant_idx ON saas_ai_spend_reservations(tenant_id,grant_id,state)')
 
 
 def _cost(prices, input_tokens, output_tokens):
@@ -84,7 +88,25 @@ def _total_cost_upper(prices, total_tokens):
     return int(math.ceil(max(0, int(total_tokens)) * max(prices) / MICRO))
 
 
-def reserve(cur, tenant_id, call_key, kind, model, input_upper=0, output_upper=0, *, total_upper=0):
+def _grant_admit(cur, tenant_id, campaign_id, amount):
+    if not campaign_id:
+        return
+    cur.execute('''SELECT g.id,g.status,g.cap_microusd FROM saas_ai_media_grants g
+      JOIN saas_knowledge_campaigns c ON c.tenant_id=g.tenant_id AND c.id=g.campaign_id
+      WHERE g.tenant_id=%s::uuid AND g.campaign_id=%s::uuid AND g.id=%s::uuid
+        AND g.status='active' AND c.status='running' AND c.approved_at IS NOT NULL
+      FOR UPDATE OF g''',(tenant_id,campaign_id,campaign_id))
+    grant=cur.fetchone()
+    if not grant:
+        raise TenantLinearError('ai_media_grant_inactive',409)
+    cur.execute('''SELECT COALESCE(sum(CASE WHEN state IN ('reserved','unknown') THEN reserved_microusd
+      ELSE COALESCE(actual_microusd,reserved_microusd) END),0) AS used FROM saas_ai_spend_reservations
+      WHERE tenant_id=%s::uuid AND grant_id=%s::uuid''',(tenant_id,grant['id']))
+    if int((cur.fetchone() or {}).get('used') or 0)+int(amount)>int(grant['cap_microusd']):
+        raise TenantLinearError('ai_media_grant_budget_exhausted',429)
+
+
+def reserve(cur, tenant_id, call_key, kind, model, input_upper=0, output_upper=0, *, total_upper=0, campaign_id=None):
     """Atomically reserve a conservative upper bound before a provider call.
 
     The per-tenant advisory lock serializes all four call paths. An existing
@@ -92,37 +114,40 @@ def reserve(cur, tenant_id, call_key, kind, model, input_upper=0, output_upper=0
     again. Unknown model price is fail-closed whenever a tenant cap exists.
     """
     cap = limit_microusd(tenant_id)
-    if not cap:
+    if not cap and not campaign_id:
         return None
     prices = price(model)
     if not prices:
         raise TenantLinearError('ai_spend_price_unknown', 409)
     amount = _total_cost_upper(prices, total_upper) if total_upper else _cost(prices, input_upper, output_upper)
     cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ('tenant-ai-spend:' + str(tenant_id),))
-    cur.execute('SELECT id,state FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key=%s FOR UPDATE',
+    cur.execute('SELECT id,state,campaign_id,grant_id FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key=%s FOR UPDATE',
                 (tenant_id, str(call_key)[:200]))
     old = cur.fetchone()
     if old:
+        if campaign_id and (str(old.get('campaign_id') or '')!=str(campaign_id) or str(old.get('grant_id') or '')!=str(campaign_id)):
+            raise TenantLinearError('ai_spend_reservation_scope_mismatch',409)
         if old['state'] in {'reserved', 'unknown', 'settled'}:
             return str(old['id'])
         raise TenantLinearError('ai_spend_reservation_released', 409)
     cur.execute('''SELECT COALESCE(sum(CASE WHEN state IN ('reserved','unknown') THEN reserved_microusd
                     ELSE COALESCE(actual_microusd,reserved_microusd) END),0) AS used
                    FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid''', (tenant_id,))
-    if int((cur.fetchone() or {}).get('used') or 0) + amount > cap:
+    if cap and int((cur.fetchone() or {}).get('used') or 0) + amount > cap:
         raise TenantLinearError('ai_spend_budget_exhausted', 429)
+    _grant_admit(cur,tenant_id,campaign_id,amount)
     reservation_id = str(uuid.uuid4())
     cur.execute('''INSERT INTO saas_ai_spend_reservations
-                  (tenant_id,id,call_key,model,kind,reserved_microusd,state)
-                  VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,'reserved')''',
-                (tenant_id, reservation_id, str(call_key)[:200], str(model)[:100], str(kind)[:40], amount))
+                  (tenant_id,id,call_key,model,kind,reserved_microusd,campaign_id,grant_id,state)
+                  VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s::uuid,%s::uuid,'reserved')''',
+                (tenant_id, reservation_id, str(call_key)[:200], str(model)[:100], str(kind)[:40], amount,campaign_id,campaign_id))
     return reservation_id
 
 
-def reserve_media(cur, tenant_id, call_key, kind, model, operation, units):
+def reserve_media(cur, tenant_id, call_key, kind, model, operation, units, *, campaign_id=None):
     """Reserve a fixed, configured upper bound before a media provider call."""
     cap = limit_microusd(tenant_id)
-    if not cap:
+    if not cap and not campaign_id:
         return None
     if type(units) is not int or units < 1:
         raise TenantLinearError('ai_spend_media_units_invalid', 409)
@@ -131,24 +156,27 @@ def reserve_media(cur, tenant_id, call_key, kind, model, operation, units):
         raise TenantLinearError('ai_spend_media_price_unknown', 409)
     amount = unit * units
     cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ('tenant-ai-spend:' + str(tenant_id),))
-    cur.execute('SELECT id,state FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key=%s FOR UPDATE',
+    cur.execute('SELECT id,state,campaign_id,grant_id FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key=%s FOR UPDATE',
                 (tenant_id, str(call_key)[:200]))
     old = cur.fetchone()
     if old:
+        if campaign_id and (str(old.get('campaign_id') or '')!=str(campaign_id) or str(old.get('grant_id') or '')!=str(campaign_id)):
+            raise TenantLinearError('ai_spend_reservation_scope_mismatch',409)
         if old['state'] in {'reserved', 'unknown', 'settled'}:
             return str(old['id'])
         raise TenantLinearError('ai_spend_reservation_released', 409)
     cur.execute('''SELECT COALESCE(sum(CASE WHEN state IN ('reserved','unknown') THEN reserved_microusd
                     ELSE COALESCE(actual_microusd,reserved_microusd) END),0) AS used
                    FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid''', (tenant_id,))
-    if int((cur.fetchone() or {}).get('used') or 0) + amount > cap:
+    if cap and int((cur.fetchone() or {}).get('used') or 0) + amount > cap:
         raise TenantLinearError('ai_spend_budget_exhausted', 429)
+    _grant_admit(cur,tenant_id,campaign_id,amount)
     reservation_id = str(uuid.uuid4())
     cur.execute('''INSERT INTO saas_ai_spend_reservations
-                  (tenant_id,id,call_key,model,kind,reserved_microusd,media_operation,media_unit_microusd,media_units,state)
-                  VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,'reserved')''',
+                  (tenant_id,id,call_key,model,kind,reserved_microusd,media_operation,media_unit_microusd,media_units,campaign_id,grant_id,state)
+                  VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s::uuid,%s::uuid,'reserved')''',
                 (tenant_id, reservation_id, str(call_key)[:200], str(model)[:100], str(kind)[:40], amount,
-                 operation, unit, units))
+                 operation, unit, units,campaign_id,campaign_id))
     return reservation_id
 
 
@@ -189,18 +217,19 @@ def settle_media(tenant_id, call_key, *, operation, attempted_units=0, reserved_
         conn.commit()
 
 
-def settle(tenant_id, call_key, usage, unknown=False, *, reserved_prices=None):
+def settle(tenant_id, call_key, usage, unknown=False, *, reserved_prices=None, campaign_id=None):
     """Settle confirmed tokens; ambiguity retains the entire reservation."""
-    if not limit_microusd(tenant_id):
+    if not limit_microusd(tenant_id) and not campaign_id:
         return
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ('tenant-ai-spend:' + str(tenant_id),))
-            cur.execute('SELECT model,reserved_microusd,state FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key=%s FOR UPDATE',
+            cur.execute('SELECT model,reserved_microusd,state,campaign_id FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key=%s FOR UPDATE',
                         (tenant_id, str(call_key)[:200]))
             row = cur.fetchone()
-            if not row or row['state'] != 'reserved':
+            if (not row or row['state'] != 'reserved'
+                or campaign_id and str(row.get('campaign_id') or '')!=str(campaign_id)):
                 conn.commit()
                 return
             prices = reserved_prices if reserved_prices is not None else price(row['model'])
@@ -228,14 +257,14 @@ def settle(tenant_id, call_key, usage, unknown=False, *, reserved_prices=None):
         conn.commit()
 
 
-def release(tenant_id, call_key):
+def release(tenant_id, call_key, *, campaign_id=None):
     """Release only a confirmed pre-provider cancellation."""
-    if not limit_microusd(tenant_id):
+    if not limit_microusd(tenant_id) and not campaign_id:
         return
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ('tenant-ai-spend:' + str(tenant_id),))
-            cur.execute("UPDATE saas_ai_spend_reservations SET state='released',actual_microusd=0,completed_at=now() WHERE tenant_id=%s::uuid AND call_key=%s AND state='reserved'",
-                        (tenant_id, str(call_key)[:200]))
+            cur.execute("UPDATE saas_ai_spend_reservations SET state='released',actual_microusd=0,completed_at=now() WHERE tenant_id=%s::uuid AND call_key=%s AND state='reserved' AND (%s OR campaign_id=%s::uuid)",
+                        (tenant_id, str(call_key)[:200],bool(limit_microusd(tenant_id)),campaign_id))
         conn.commit()

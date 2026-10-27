@@ -14,12 +14,18 @@ from tenant_knowledge_campaign_policy import FIELDS, validate, reservation, fits
 
 
 def prepare(profile, data):
-    allowed={'request_id','channel_ids','analysis_agent_id','max_calls','max_tokens','case_id'} | FIELDS
+    allowed={'request_id','channel_ids','analysis_agent_id','max_calls','max_tokens','case_id',
+      'all_existing_cases','max_cost_microusd','video_model'} | FIELDS
     if not isinstance(data,dict) or set(data)-allowed:
         raise TenantLinearError('Некорректные параметры.')
     key=identifier(data.get('request_id'))
+    all_cases=data.get('all_existing_cases') is True
+    if not all_cases and any(k in data for k in ('max_cost_microusd','video_model')):
+        raise TenantLinearError('Monetary grant settings are available only for the fixed current-case snapshot.',400)
+    if 'all_existing_cases' in data and type(data['all_existing_cases']) is not bool:
+        raise TenantLinearError('Некорректный охват кейсов.')
     channels=data.get('channel_ids')
-    if not isinstance(channels,list) or not 1<=len(channels)<=100:
+    if not isinstance(channels,list) or (not all_cases and not 1<=len(channels)<=100) or (all_cases and len(channels)>100):
         raise TenantLinearError('Выберите источники.')
     channels=sorted(set(identifier(value) for value in channels))
     agent=identifier(data.get('analysis_agent_id'))
@@ -32,7 +38,32 @@ def prepare(profile, data):
         with conn.cursor() as cur:
             tenant,actor,_=store.authorize(cur,profile)
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('knowledge-campaign:'+tenant,))
-            case_plan=None
+            case_plan=None;batch_plan=None
+            if all_cases:
+                if type(data.get('max_cost_microusd')) is not int or data['max_cost_microusd']!=10_000_000:
+                    raise TenantLinearError('Общий лимит новых расходов должен быть ровно 10 USD.',409)
+                # The grant is a tenant-wide, one-time authorization. Check it
+                # before re-planning current sources so edits or exhausted
+                # budgets cannot turn a second prepare into an apparent reset.
+                cur.execute('SELECT id FROM saas_ai_media_grants WHERE tenant_id=%s::uuid AND approved_at IS NOT NULL FOR UPDATE',(tenant,))
+                if cur.fetchone():
+                    raise TenantLinearError('A current-case media grant already exists and cannot be reset or topped up.',409)
+                from tenant_case_media_admission import plan_existing_cases,existing_routes
+                batch_plan=plan_existing_cases(cur,profile)
+                if channels and channels!=batch_plan['channel_ids']:
+                    raise TenantLinearError('Снимок каналов изменился.',409)
+                channels=batch_plan['channel_ids']
+                if not batch_plan['eligible_count']:
+                    raise TenantLinearError('В текущем снимке нет доступных вложений.',409)
+                if batch_plan['case_count'] and not data.get('video_model'):
+                    if any(item.get('status')=='pending_consent' and any(m['kind']=='video' and not m['complete'] for m in item.get('media',[])) for item in batch_plan['cases']):
+                        raise TenantLinearError('Для видео выберите отдельную модель с доступным тарифом.',409)
+                if data.get('video_model'):
+                    from tenant_ai_video_model import MODELS
+                    from tenant_ai_spend_budget import media_price
+                    pending_video=any(item.get('status')=='pending_consent' and any(m['kind']=='video' and not m['complete'] for m in item.get('media',[])) for item in batch_plan['cases'])
+                    if data['video_model'] not in MODELS or pending_video and media_price(data['video_model'],'vision_low') is None:
+                        raise TenantLinearError('video_model_tariff_required',409)
             if data.get('case_id'):
                 from tenant_case_media_admission import plan, routes
                 case_plan=plan(cur,profile,data['case_id'])
@@ -43,11 +74,17 @@ def prepare(profile, data):
                 eligible_count=len(list(routes(case_plan,agent)))
                 if not eligible_count:
                     raise TenantLinearError('No unprocessed eligible attachments; inspect saved case media status.',409)
+            if not all_cases and (case_plan or data.get('allow_external_media') or data.get('allow_paid_asr')):
+                cur.execute('SELECT 1 FROM saas_ai_media_grants WHERE tenant_id=%s::uuid LIMIT 1',(tenant,))
+                if cur.fetchone():
+                    raise TenantLinearError('Use the single current-case media grant; per-case campaign grants cannot bypass it.',409)
             cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,key))
             old=cur.fetchone()
             if old:
                 old_case=(old.get('progress') or {}).get('case_id')
-                if old['media_policy']!=policy or old['sources']!=channels or str(old['analysis_agent_id'])!=agent or old['max_calls']!=calls or old['max_tokens']!=tokens or old_case!=(case_plan or {}).get('case_id') or (case_plan and old['progress'].get('plan_hash')!=case_plan['plan_hash']):
+                batch_mismatch=bool(batch_plan and ((old.get('progress') or {}).get('snapshot_hash')!=batch_plan['snapshot_hash']
+                    or old.get('max_cost_microusd')!=10_000_000 or old.get('video_model')!=data.get('video_model')))
+                if old['media_policy']!=policy or old['sources']!=channels or str(old['analysis_agent_id'])!=agent or old['max_calls']!=calls or old['max_tokens']!=tokens or old_case!=(case_plan or {}).get('case_id') or (case_plan and old['progress'].get('plan_hash')!=case_plan['plan_hash']) or batch_mismatch:
                     raise TenantLinearError('request_id уже используется.',409)
                 return key
             for channel in channels:
@@ -61,10 +98,19 @@ def prepare(profile, data):
               'plan_hash':case_plan['plan_hash'],'case_version':case_plan['case_version'],
               'attachment_count':len(case_plan['media']), 'eligible_count':eligible_count,
               'unavailable_count':sum(not item['complete'] for item in case_plan['media'])-eligible_count} if case_plan else {}
+            if batch_plan:
+                progress={'mode':'case_media_batch','snapshot_hash':batch_plan['snapshot_hash'],
+                  'case_plans':batch_plan['cases'],'case_count':batch_plan['case_count'],
+                  'eligible_count':batch_plan['eligible_count'],'reused_count':batch_plan['reused_count'],
+                  'review_count':batch_plan['review_count'],'unknown_media_count':batch_plan['unknown_media_count'],
+                  'unavailable_media_count':batch_plan['unavailable_media_count'],'all_existing_cases':True}
             cur.execute('''INSERT INTO saas_knowledge_campaigns
-              (tenant_id,id,created_by,sources,analysis_agent_id,max_calls,max_tokens,media_policy,progress)
-              VALUES(%s::uuid,%s::uuid,%s,%s::jsonb,%s::uuid,%s,%s,%s::jsonb,%s::jsonb)''',
-              (tenant,key,actor,_json(channels),agent,calls,tokens,_json(policy),_json(progress)))
+              (tenant_id,id,created_by,sources,analysis_agent_id,max_calls,max_tokens,media_policy,progress,max_cost_microusd,video_model)
+              VALUES(%s::uuid,%s::uuid,%s,%s::jsonb,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s,%s)''',
+              (tenant,key,actor,_json(channels),agent,calls,tokens,_json(policy),_json(progress),10_000_000 if batch_plan else None,data.get('video_model')))
+            if batch_plan:
+                cur.execute('''INSERT INTO saas_ai_media_grants(tenant_id,id,campaign_id,created_by,cap_microusd,status)
+                  VALUES(%s::uuid,%s::uuid,%s::uuid,%s,10000000,'pending')''',(tenant,key,key,actor))
             store._audit(cur,tenant,actor,'knowledge_campaign_prepared','knowledge_campaign',key)
         conn.commit()
     return key
@@ -88,7 +134,7 @@ def control(profile, campaign_id, expected_version, action):
                 cur.execute('''UPDATE saas_knowledge_campaign_fragments f SET status='pending',error_code=''
                   WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='blocked' AND error_code='limit_exceeded'
                   AND NOT EXISTS(SELECT 1 FROM saas_knowledge_extractions e WHERE e.tenant_id=f.tenant_id AND e.id=f.id)''',(tenant,campaign_id))
-                if (row.get('progress') or {}).get('mode') not in {'case_media','single_message'}:
+                if (row.get('progress') or {}).get('mode') not in {'case_media','case_media_batch','single_message'}:
                     cur.execute('''SELECT f.* FROM saas_knowledge_campaign_fragments f JOIN saas_knowledge_extractions e
                   ON e.tenant_id=f.tenant_id AND e.id=f.extraction_id WHERE f.tenant_id=%s::uuid AND f.campaign_id=%s::uuid
                   AND f.status IN ('partial','failed') AND NOT f.result ? 'retry_fragment_id' AND e.status IN ('completed','failed')
@@ -99,6 +145,8 @@ def control(profile, campaign_id, expected_version, action):
                         cur.execute("UPDATE saas_knowledge_campaign_fragments SET result=result||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(_json({'retry_fragment_id':retry}),tenant,failed['id']))
             state={'pause':'paused','resume':'running','stop':'stopped'}[action]
             cur.execute('UPDATE saas_knowledge_campaigns SET status=%s,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(state,tenant,campaign_id))
+            if action=='stop' and (row.get('progress') or {}).get('mode')=='case_media_batch':
+                cur.execute("UPDATE saas_ai_media_grants SET status='revoked',revoked_at=now() WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status IN ('pending','active')",(tenant,campaign_id))
             store._audit(cur,tenant,actor,'knowledge_campaign_'+action,'knowledge_campaign',campaign_id)
         conn.commit()
 
@@ -112,6 +160,10 @@ def enqueue(cur, profile, campaign, route):
         raise TenantLinearError('Источник не утверждён.',403)
     route={**route,'approved_channel_ids':sorted(campaign['sources']),
       **{k:campaign['media_policy'].get(k,False) for k in ('allow_external_media','allow_paid_asr')}}
+    if campaign.get('max_cost_microusd'):
+        route['media_grant_id']=str(campaign['id'])
+        if campaign.get('video_model'):
+            route['video_model']=campaign['video_model']
     route['allow_paid_asr']=bool(route['allow_paid_asr'] and campaign['media_policy'].get('max_asr_calls',0)>0)
     route['allow_vision']=bool(campaign['media_policy'].get('max_vision_calls',0) and route['allow_external_media'])
     key=store.digest(route);fragment=str(uuid.uuid5(uuid.UUID(str(campaign['id'])),key))
@@ -159,7 +211,7 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
     ids=route.get('message_ids')
     channel=scoped_id(route.get('channel_id'))
     version=route.get('source_version')
-    if ((campaign.get('progress') or {}).get('mode') not in {'single_message','case_media'}
+    if ((campaign.get('progress') or {}).get('mode') not in {'single_message','case_media','case_media_batch'}
         or not isinstance(ids,list) or len(ids)!=1 or not scoped_id(ids[0]) or not channel
         or not isinstance(version,str) or len(version)!=64 or any(c not in '0123456789abcdef' for c in version.lower())):
         return True
@@ -246,7 +298,7 @@ def get(profile, campaign_id=None):
             cur.execute("SELECT count(*) AS n FROM saas_knowledge_campaign_sources WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='pending'",(tenant,row['id']))
             sources_pending=cur.fetchone()['n']
             progress=dict(row['progress'])
-            if progress.get('mode')=='case_media':
+            if progress.get('mode') in {'case_media','case_media_batch'}:
                 cur.execute("""SELECT count(*) AS n FROM saas_knowledge_campaign_fragments
                   WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='completed'
                     AND extraction_id IS NOT NULL AND error_code=''""",(tenant,row['id']))
@@ -254,7 +306,7 @@ def get(profile, campaign_id=None):
                 eligible=int(progress.get('eligible_count') or 0)
                 if row['status']=='stopped' and (counts.get('pending') or counts.get('running')):
                     progress['phase']='cancelled'
-                elif (progress.get('unavailable_count') or any(counts.get(state) for state in ('unknown','blocked','failed','partial'))
+                elif (progress.get('unavailable_count') or progress.get('review_count') or any(counts.get(state) for state in ('unknown','blocked','failed','partial'))
                       or row['status']=='stopped' and (eligible==0 or succeeded!=eligible)):
                     progress['phase']='incomplete'
                 elif row['status']=='stopped':progress['phase']='completed'
@@ -293,6 +345,36 @@ def get(profile, campaign_id=None):
               WHERE tenant_id=%s::uuid AND id IN (SELECT id FROM saas_knowledge_quality_checks
               WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid)''',(tenant,tenant,row['id']))
             tokens=int(tokens)+int(cur.fetchone()['tokens'])
+            grant_used=0;old_unknown=0;prior_settled=0;grant_status=None;grant_approved=False
+            if row.get('max_cost_microusd'):
+                from tenant_ai_spend_budget import ensure_schema as spend_schema
+                spend_schema(conn)
+                cur.execute('''SELECT COALESCE(sum(CASE WHEN state IN ('reserved','unknown') THEN reserved_microusd
+                   ELSE COALESCE(actual_microusd,reserved_microusd) END),0) AS used FROM saas_ai_spend_reservations
+                   WHERE tenant_id=%s::uuid AND grant_id=%s::uuid''',(tenant,row['id']))
+                grant_used=int(cur.fetchone()['used'])
+                cur.execute("SELECT COALESCE(sum(reserved_microusd) FILTER(WHERE state IN ('unknown','reserved')),0) AS held,COALESCE(sum(actual_microusd) FILTER(WHERE state='settled'),0) AS settled FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND grant_id IS NULL",(tenant,))
+                prior=cur.fetchone();old_unknown=int(prior['held']);prior_settled=int(prior['settled'])
+                cur.execute('SELECT status,approved_at FROM saas_ai_media_grants WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid',(tenant,row['id']))
+                grant=cur.fetchone();grant_status=grant['status'] if grant else 'missing'
+                grant_approved=bool(grant and grant.get('approved_at'))
+            analysis_model='';asr_model=''
+            if row.get('max_cost_microusd'):
+                from tenant_ai_agent_key_policy import platform_model,choose_api_credential
+                from tenant_connect_voice import transcription_model
+                from tenant_platform import _fernet
+                cur.execute('''SELECT a.model,i.secrets,i.metadata FROM saas_ai_agents a LEFT JOIN saas_tenant_integrations i
+                  ON i.tenant_id=a.tenant_id AND i.provider='chat_ai' WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid''',(tenant,row['analysis_agent_id']))
+                agent=cur.fetchone() or {};metadata=agent.get('metadata') or {};company_key=''
+                analysis_model=agent.get('model') or metadata.get('model') or platform_model()
+                if agent.get('secrets'):
+                    try:
+                        secret=json.loads(_fernet().decrypt(bytes(agent['secrets'])))
+                        if secret.get('tenant_id')==tenant and secret.get('provider')=='chat_ai':company_key=str(secret.get('api_key') or '')
+                    except Exception:company_key=''
+                _,credential_source=choose_api_credential(tenant,str(row['analysis_agent_id']),'connect',company_key,analysis_model)
+                try:asr_model=transcription_model({'credential_source':credential_source,'config':metadata})
+                except Exception:asr_model=''
 
 
     return {'campaign':{'id':str(row['id']),'version':row['version'],'status':row['status'],
@@ -300,7 +382,12 @@ def get(profile, campaign_id=None):
       'reserved_calls':row['reserved_calls'],'reserved_tokens':row['reserved_tokens'],
       'media_policy':row['media_policy'],'reserved_kinds':row['reserved_kinds'],
       'used_tokens':int(tokens),'cost':None,'max_calls':row['max_calls'],'max_tokens':row['max_tokens'],
-      'progress':progress,'media_processed':media['processed'],'media_unavailable':media['unavailable'],'processed_messages':messages,'reviews':reviews,'quality_checks':quality}}
+      'progress':progress,'media_processed':media['processed'],'media_unavailable':media['unavailable'],'processed_messages':messages,'reviews':reviews,'quality_checks':quality,
+      'max_cost_microusd':row.get('max_cost_microusd'),'video_model':row.get('video_model'),
+      'grant_used_microusd':grant_used,'prior_unknown_holds_microusd':old_unknown,
+      'prior_settled_microusd':prior_settled,'grant_status':grant_status,
+      'grant_approved':grant_approved,
+      'analysis_model':analysis_model,'asr_model':asr_model}}
 
 
 def complete(claimed, response):
@@ -329,13 +416,15 @@ def complete(claimed, response):
                 # follow-up pages or quality work.  Terminal result remains
                 # stored on the fragment; the campaign itself is closed.
                 cur.execute("UPDATE saas_knowledge_campaigns SET status='stopped',version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,claimed['campaign_id']))
-            elif mode=='case_media':
+            elif mode in {'case_media','case_media_batch'}:
                 cur.execute("SELECT 1 FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status IN ('pending','running','unknown') LIMIT 1",(tenant,claimed['campaign_id']))
                 if not cur.fetchone():
                     cur.execute("UPDATE saas_knowledge_campaigns SET status='stopped',version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,claimed['campaign_id']))
+                    if mode=='case_media_batch':
+                        cur.execute("UPDATE saas_ai_media_grants SET status='completed' WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='active'",(tenant,claimed['campaign_id']))
             # Completed text can advance while unavailable attachments remain a
             # durable partial fragment for an explicit, budgeted later retry.
-            if mode not in {'single_message','case_media'} and request.get('next_before') and state in {'completed','partial'}:
+            if mode not in {'single_message','case_media','case_media_batch'} and request.get('next_before') and state in {'completed','partial'}:
                 cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,claimed['campaign_id']))
                 campaign=cur.fetchone()
                 route={**claimed['route'],'before':identifier(request['next_before'])}
@@ -348,7 +437,9 @@ def complete(claimed, response):
 def approve(profile,campaign_id,data):
     """Explicit source/budget confirmation, never called by deployment/startup."""
     required={'expected_version','channel_ids','max_calls','max_tokens','confirm_external_processing','media_policy'}
-    if not isinstance(data,dict) or set(data) not in (required,required|{'case_id','case_plan_hash'}) or data['confirm_external_processing'] is not True:
+    valid_shapes=(required,required|{'case_id','case_plan_hash'},
+      required|{'all_cases_snapshot_hash','max_cost_microusd','video_model'})
+    if not isinstance(data,dict) or set(data) not in valid_shapes or data['confirm_external_processing'] is not True:
         raise TenantLinearError('Подтвердите источники и бюджет внешней обработки.')
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -379,7 +470,10 @@ def approve(profile,campaign_id,data):
             amount=reservation(new_policy)
             if not fits(new_policy,row['reserved_kinds'],amount) or calls<amount['calls'] or tokens<amount['tokens']:raise TenantLinearError('Бюджет не покрывает фрагмент.')
             case_mode=(row.get('progress') or {}).get('mode')=='case_media'
-            case_plan=None
+            batch_mode=(row.get('progress') or {}).get('mode')=='case_media_batch'
+            if batch_mode and row['status']=='budget_exhausted':
+                raise TenantLinearError('The approved fixed $10 grant cannot be topped up or renewed.',409)
+            case_plan=None;batch_plan=None;batch_routes=[]
             if case_mode:
                 if (set(data)!=required|{'case_id','case_plan_hash'}
                     or data['case_id']!=row['progress']['case_id']
@@ -404,14 +498,76 @@ def approve(profile,campaign_id,data):
                            for kind in ('main','asr','vision'))
                     or calls<len(pending)*amount['calls'] or tokens<len(pending)*amount['tokens']):
                     raise TenantLinearError('Budget does not cover all case attachments.',409)
+            elif batch_mode:
+                if (set(data)!=required|{'all_cases_snapshot_hash','max_cost_microusd','video_model'}
+                    or data['all_cases_snapshot_hash']!=row['progress'].get('snapshot_hash')
+                    or data['max_cost_microusd']!=10_000_000
+                    or data.get('video_model')!=row.get('video_model')):
+                    raise TenantLinearError('Confirm this exact current-case snapshot and USD 10 limit.',409)
+                from tenant_case_media_admission import plan_existing_cases,existing_routes
+                batch_plan=plan_existing_cases(cur,profile)
+                if batch_plan['snapshot_hash']!=row['progress']['snapshot_hash']:
+                    raise TenantLinearError('Current case snapshot changed; prepare a new plan.',409)
+                batch_routes=list(existing_routes(batch_plan,row['analysis_agent_id'],row.get('video_model')))
+                if not batch_routes or not new_policy['allow_external_media']:
+                    raise TenantLinearError('No eligible case attachments or media permission.',409)
+                pending_ids={route['message_ids'][0] for route in batch_routes}
+                media_by_id={media['id']:media for case in batch_plan['cases'] for media in case.get('media',[])}
+                visual=any(media_by_id[i]['kind'] in {'image','video','document'} for i in pending_ids)
+                audio=any(media_by_id[i]['kind'] in {'audio','voice','video'} for i in pending_ids)
+                count=len(batch_routes)
+                if (new_policy['max_main_calls']<count or visual and not amount['vision']
+                    or audio and not amount['asr']
+                    or any(new_policy['max_'+kind+'_calls']<count*amount[kind] for kind in ('main','asr','vision'))
+                    or calls<count*amount['calls'] or tokens<count*amount['tokens']):
+                    raise TenantLinearError('Campaign call/token limits do not cover this snapshot.',409)
+                if any(media_by_id[i]['kind']=='video' for i in pending_ids) and not row.get('video_model'):
+                    raise TenantLinearError('A separate video model must be selected.',409)
+                # Model and per-operation tariffs are immutable prerequisites;
+                # unknown pricing blocks consent and no provider call starts.
+                from tenant_ai_spend_budget import price,media_price
+                from tenant_ai_agent_key_policy import platform_model,choose_api_credential
+                from tenant_platform import _fernet
+                from tenant_connect_voice import transcription_model
+                agent_model=None;agent_meta={}
+                cur.execute('''SELECT a.model,i.secrets,i.metadata FROM saas_ai_agents a
+                  LEFT JOIN saas_tenant_integrations i ON i.tenant_id=a.tenant_id AND i.provider='chat_ai'
+                  WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid''',(tenant,row['analysis_agent_id']))
+                agent_row=cur.fetchone()
+                agent_meta=(agent_row or {}).get('metadata') or {};company_key=''
+                if (agent_row or {}).get('secrets'):
+                    try:
+                        secret=json.loads(_fernet().decrypt(bytes(agent_row['secrets'])))
+                        if secret.get('tenant_id')==tenant and secret.get('provider')=='chat_ai':company_key=str(secret.get('api_key') or '')
+                    except Exception:
+                        company_key=''
+                agent_model=(agent_row or {}).get('model') or agent_meta.get('model') or platform_model()
+                if not agent_model or not price(agent_model):
+                    raise TenantLinearError('ai_spend_price_unknown',409)
+                if any(media_by_id[i]['kind'] in {'image','document'} for i in pending_ids) and media_price(agent_model,'vision_low') is None:
+                    raise TenantLinearError('ai_spend_media_price_unknown',409)
+                if any(media_by_id[i]['kind']=='video' for i in pending_ids) and media_price(row.get('video_model') or '', 'vision_low') is None:
+                    raise TenantLinearError('ai_spend_media_price_unknown',409)
+                if audio and new_policy.get('allow_paid_asr'):
+                    _,credential_source=choose_api_credential(tenant,str(row['analysis_agent_id']),'connect',company_key,agent_model)
+                    try:asr_model=transcription_model({'credential_source':credential_source,'config':agent_meta})
+                    except Exception:asr_model=''
+                    if not asr_model or not media_price(asr_model,'asr'):
+                        raise TenantLinearError('ai_spend_media_price_unknown',409)
             else:
                 if set(data)!=required:raise TenantLinearError('Некорректные параметры.',400)
                 from tenant_knowledge_campaign_discovery import seed
                 if row['status']=='awaiting_budget':seed(cur,profile,row)
             cur.execute("UPDATE saas_knowledge_campaigns SET status='running',max_calls=%s,max_tokens=%s,media_policy=%s::jsonb,approved_by=%s,approved_at=now(),version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid",(calls,tokens,_json(new_policy),actor,tenant,campaign_id))
-            if case_plan:
+            if batch_mode:
+                cur.execute('''UPDATE saas_ai_media_grants SET status='active',approved_by=%s,approved_at=now()
+                  WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND id=%s::uuid
+                    AND status='pending' AND cap_microusd=10000000 RETURNING id''',(actor,tenant,campaign_id,campaign_id))
+                if not cur.fetchone():raise TenantLinearError('Media grant is no longer available.',409)
+            if case_plan or batch_plan:
                 approved={**row,'media_policy':new_policy}
-                for fragment_route in pending:enqueue(cur,profile,approved,fragment_route)
+                selected_routes=pending if case_plan else batch_routes
+                for fragment_route in selected_routes:enqueue(cur,profile,approved,fragment_route)
             from tenant_knowledge_quality import schema as quality_schema
             quality_schema(cur)
             cur.execute('''UPDATE saas_knowledge_quality_checks q SET state='pending' WHERE tenant_id=%s::uuid

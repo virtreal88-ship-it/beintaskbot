@@ -1,5 +1,6 @@
 """Campaign reservations against disposable PostgreSQL; no provider calls."""
 import uuid
+import json
 import pytest
 from test_tenant_support_inbox import database,db,A,B,CA,CB,AGENT,PROFILE
 from test_knowledge_candidates import ready
@@ -38,6 +39,27 @@ def test_prepare_is_unapproved_and_idempotent(campaign):
     assert row(d,key)['reserved_calls']==0
     provider.assert_not_called()
     with pytest.raises(TenantLinearError):campaigns.control(PROFILE,key,1,'resume')
+
+
+def test_fixed_money_grant_hard_cap_and_unknown_hold(campaign,monkeypatch):
+    import tenant_ai_spend_budget as money
+    d,_,_,key=campaign
+    monkeypatch.setattr(money,'_connect',lambda:d)
+    monkeypatch.delenv('AI_TENANT_SPEND_LIMITS_MICROUSD',raising=False)
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'priced-model':{'input':12,'output':12}}))
+    money.ensure_schema(d)
+    d.execute("UPDATE saas_knowledge_campaigns SET status='running',approved_at=now(),approved_by=11,max_cost_microusd=10000000 WHERE id=%s::uuid",(key,));d.commit()
+    d.execute("INSERT INTO saas_ai_media_grants(tenant_id,id,campaign_id,created_by,cap_microusd,status,approved_by,approved_at) VALUES(%s::uuid,%s::uuid,%s::uuid,11,10000000,'active',11,now())",(A,key,key));d.commit()
+    with d.cursor() as cur:
+        first=money.reserve(cur,A,'grant:first','fixture','priced-model',total_upper=833_329_166_667,campaign_id=key)
+        assert money.reserve(cur,A,'grant:first','fixture','priced-model',total_upper=833_329_166_667,campaign_id=key)==first
+    d.commit()
+    money.settle(A,'grant:first',{},unknown=True,campaign_id=key)
+    with d.cursor() as cur:
+        with pytest.raises(TenantLinearError,match='ai_media_grant_budget_exhausted'):
+            money.reserve(cur,A,'grant:second','fixture','priced-model',total_upper=5_000_000,campaign_id=key)
+    d.rollback()
+    assert d.execute("SELECT state,reserved_microusd FROM saas_ai_spend_reservations WHERE call_key='grant:first'")[0]=={'state':'unknown','reserved_microusd':9_999_951}
 
 def test_conflicting_prepare_and_cross_tenant_sources(campaign):
     _,_,data,_=campaign

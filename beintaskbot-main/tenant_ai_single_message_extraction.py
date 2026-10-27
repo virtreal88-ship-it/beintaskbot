@@ -87,6 +87,12 @@ def prepare(cur,cfg,data):
     model,credential_source,ready,reason=_selection(cur,cfg,photo_model)
     if not ready: raise TenantLinearError('Extraction configuration is unavailable: '+reason,409)
     tenant,owner,connection=_connection_profile(cur,cfg,required_scopes=(DRAFT_SCOPE,))
+    # Once an owner prepares the single all-current-cases snapshot, its media
+    # are handled by that one grant. Do not create duplicate per-file consent
+    # cards for attachments already inside that exact snapshot.
+    from tenant_case_media_admission import grant_for_message
+    if grant_for_message(cur,tenant,source['message_id']):
+        raise TenantLinearError('This attachment is covered by the current-case media grant.',409)
     from tenant_ai_photo_model import POLICY as PHOTO_POLICY,budget as photo_budget
     policy=dict(PHOTO_POLICY) if photo_model else preflight.policy_for(source['kind'])
     voice_model=preflight.asr_model(cur,cfg,credential_source)
@@ -237,6 +243,9 @@ def complete(cur,cfg,*,consent_id,capability,action,acknowledge_prior_unknown=Fa
       (tenant,consent_id,owner,connection,_hash(capability),action))
     row=cur.fetchone()
     if not row: raise TenantLinearError('Owner extraction consent is unavailable, expired, or already used.',409)
+    from tenant_case_media_admission import grant_for_message
+    if grant_for_message(cur,tenant,row['message_id']):
+        raise TenantLinearError('This attachment is covered by the current-case media grant.',409)
     if row.get('retry_of') and action=='approve' and acknowledge_prior_unknown is not True:
         raise TenantLinearError('Acknowledge the unknown prior charge and this one additional attempt.',400)
     source=preflight._source(cur,cfg,{'message_id':str(row['message_id']),'channel_id':str(row['channel_id']),'lead_id':row['lead_id']})
