@@ -361,12 +361,16 @@ def decorate(row):
     return public(item)
 
 
-def apply_group_view(cur,tenant,dialog):
+def apply_group_view(cur,tenant,dialog,*,snapshot=None):
     from tenant_ai_group_coordination import view
     from tenant_ai_agent_access import tenant_status_allows_ai
-    g=view(cur,tenant,dialog['conversation_id']);dialog['group_coordination']=g
-    cur.execute('SELECT name,mode,enabled,scopes,schedule FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,g['primary_agent_id']))
-    primary_agent=dict(cur.fetchone() or {});name=primary_agent.get('name');g['primary_agent_name']=name
+    g=snapshot.group_view(dialog['conversation_id']) if snapshot is not None else view(cur,tenant,dialog['conversation_id']);dialog['group_coordination']=g
+    if snapshot is not None:
+        primary_agent=snapshot.agents.get(str(g['primary_agent_id']),{})
+    else:
+        cur.execute('SELECT name,mode,enabled,scopes,schedule FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,g['primary_agent_id']))
+        primary_agent=dict(cur.fetchone() or {})
+    name=primary_agent.get('name');g['primary_agent_name']=name
     dialog.update(agent_mode=primary_agent.get('mode'),agent_enabled=primary_agent.get('enabled'),agent_scopes=primary_agent.get('scopes'))
     dialog['agent_available']=_agent_scope_available(dialog)
     dialog['handoff_active']=g['state']=='human' and (bool(g.get('group_event_key')) or str(g.get('reason') or '') in _HANDOFF_REASONS)
@@ -375,8 +379,11 @@ def apply_group_view(cur,tenant,dialog):
         dialog['handoff_at']=g.get('updated_at')
         dialog['handoff_event_id']=g.get('group_event_key') or ''
     dialog.pop('agent_scopes',None)
-    cur.execute('SELECT display_name FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',(tenant,g['assigned_to']))
-    assignee=(cur.fetchone() or {}).get('display_name')
+    if snapshot is not None:
+        assignee=snapshot.groups.get(dialog['conversation_id'],{}).get('assignee_name')
+    else:
+        cur.execute('SELECT display_name FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',(tenant,g['assigned_to']))
+        assignee=(cur.fetchone() or {}).get('display_name')
     usable=bool(g['primary_agent_id'] and dialog.get('controls_allowed') and dialog.get('company_enabled') and not dialog.get('company_emergency_stop') and dialog.get('connected') and runtime_flag('AI_AGENTS_ENABLED') and tenant_status_allows_ai(dialog.get('tenant_status'),'connect') and (primary_agent.get('mode')!='automatic' or (dialog.get('company_auto_send_enabled') is True and runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'))))
     state=g['state'];display=state if state!='active' or usable else 'blocked'
     dialog.update(agent_id=g['primary_agent_id'],agent_name=name,assignee_name=assignee,
@@ -464,21 +471,33 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
         with conn.cursor() as cur:
             tenant,_,policy=access(cur,profile,'dialogs')
             sql,scopes=projection(policy);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
-            cur.execute(sql+"SELECT count(DISTINCT CASE WHEN provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$' THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END) FILTER(WHERE display_state IN ('human','paused','blocked','error')) AS attention_count FROM visible",params)
-            count=int(cur.fetchone()['attention_count'])
-            cur.execute(sql+"SELECT DISTINCT provider||':'||channel_id AS id,channel_name AS name FROM visible ORDER BY name",params)
-            channels=[dict(r) for r in cur.fetchall()]
-            cur.execute(sql+'SELECT DISTINCT agent_id::text AS id,agent_name AS name FROM visible WHERE agent_id IS NOT NULL ORDER BY name',params)
-            agents=[dict(r) for r in cur.fetchall()]
-            cur.execute(sql+"SELECT * FROM (SELECT visible.*,row_number() OVER(PARTITION BY CASE WHEN provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$' THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END ORDER BY last_message_at DESC NULLS LAST,lead_id) AS logical_rank FROM visible) folded WHERE logical_rank=1 ORDER BY last_message_at DESC NULLS LAST,provider,lead_id",params)
-            rows=cur.fetchall()
-            from tenant_ai_group_coordination import group_jid,view as group_view
+            # All metadata and logical routes share one materialized, authorized projection.
+            sql=sql.replace('visible AS (','visible AS MATERIALIZED (')
+            cur.execute(sql+""", folded AS (
+              SELECT visible.*,row_number() OVER(PARTITION BY CASE
+                WHEN provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$'
+                THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END
+                ORDER BY last_message_at DESC NULLS LAST,lead_id) AS logical_rank FROM visible)
+              SELECT (SELECT count(DISTINCT CASE
+                WHEN provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$'
+                THEN provider||':'||conversation_id ELSE provider||':'||channel_id||':'||lead_id END)
+                FILTER(WHERE display_state IN ('human','paused','blocked','error')) FROM visible) AS attention_count,
+              (SELECT COALESCE(jsonb_agg(x ORDER BY name),'[]'::jsonb) FROM
+                (SELECT DISTINCT provider||':'||channel_id AS id,channel_name AS name FROM visible) x) AS channels,
+              (SELECT COALESCE(jsonb_agg(x ORDER BY name),'[]'::jsonb) FROM
+                (SELECT DISTINCT agent_id::text AS id,agent_name AS name FROM visible WHERE agent_id IS NOT NULL) x) AS agents,
+              (SELECT COALESCE(jsonb_agg(folded ORDER BY last_message_at DESC NULLS LAST,provider,lead_id),'[]'::jsonb)
+                FROM folded WHERE logical_rank=1) AS dialogs""",params)
+            snapshot=cur.fetchone()
+            count=int(snapshot['attention_count']);channels=snapshot['channels'];agents=snapshot['agents'];rows=snapshot['dialogs']
+            from tenant_operator_list_snapshot import ListSnapshot
+            enrichment=ListSnapshot(cur,tenant,rows)
+            from tenant_ai_group_coordination import group_jid
             rows=[decorate(r) for r in rows]
             for r in rows:
                 if r['provider']=='connect' and group_jid(r['conversation_id']):
-                    apply_group_view(cur,tenant,r)
-                    from tenant_operator_assignment import group_options_in_transaction
-                    r['group_assignment_preview']=group_options_in_transaction(cur,tenant,r['channel_id'],r['conversation_id'])
+                    apply_group_view(cur,tenant,r,snapshot=enrichment)
+                    r['group_assignment_preview']=enrichment.group_options(r)
                     if not r.get('agent_id') and not r.get('group_coordination',{}).get('assignments'):
                         candidates=r['group_assignment_preview'].get('agents') or []
                         r['agent_status']='needs_assignment' if candidates else 'no_agent'
@@ -487,10 +506,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
                     # Surface the same read-only candidate choices used by the
                     # card for every page of existing dialogues. Never bind or
                     # resume an agent while listing conversations.
-                    from tenant_operator_assignment import options_in_transaction
-                    r['agent_assignment']=options_in_transaction(cur,profile,{
-                        'provider':'connect','lead_id':r['lead_id'],'channel_id':r['channel_id'],
-                        'conversation_id':r['conversation_id']})
+                    r['agent_assignment']=enrichment.direct_options(r)
                     r['agent_status']='needs_assignment' if r['agent_assignment'].get('agents') else 'no_agent'
                     r['agent_status_reason']=('assignment_required' if len(r['agent_assignment'].get('agents') or [])==1 else
                       'agent_selection_required' if len(r['agent_assignment'].get('agents') or [])>1 else r['agent_assignment'].get('reason') or '')

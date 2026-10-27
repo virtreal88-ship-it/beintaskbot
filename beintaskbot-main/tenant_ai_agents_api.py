@@ -88,6 +88,9 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 raise TenantLinearError('İcazə yoxdur.', 403)
             method = request.method
             if method == 'GET':
+                # Optional identity binding; older clients retain their existing authorization.
+                if 'X-Tenant-Id' in request.headers or 'X-User-Id' in request.headers:
+                    _expected({'expected_tenant_id': request.headers.get('X-Tenant-Id'), 'expected_user_id': request.headers.get('X-User-Id')}, profile)
                 if resource == 'settings':
                     result = await asyncio.to_thread(read_settings, profile)
                     result = _attach_runtime_status(result)
