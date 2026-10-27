@@ -75,6 +75,7 @@ jobs:
           tests/test_tenant_ai_testing.py
           tests/test_tenant_ai_testing_api.py
           tests/test_media_spend_budget.py
+          tests/test_media_spend_grant_postgres.py
           tests/test_tenant_ai_testing_spend.py
           tests/test_tenant_knowledge_search.py
           tests/test_tenant_ai_testing_retrieval.py
