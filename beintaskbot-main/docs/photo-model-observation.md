@@ -17,8 +17,25 @@ resolved. An operator/administrator can then review the case using that evidence
 ## Model access and prices
 
 Only the saved company credential is used, under its existing enabled/consent
-and configured model allowlist. No platform-key fallback or model substitution.
+and configured model allowlist or explicit owner photo selection. No platform-key fallback or model substitution.
 `GET /v1/models` listing alone does not verify Responses/image generation access.
+
+The existing company Chat AI settings panel now has a separate **Photo analysis
+model** selector. `GET/POST /api/platform/chat/ai/settings` returns/saves
+`photo_model` (empty, `gpt-4.1`, or its dated snapshot) with the existing session,
+origin, company identity and optimistic version checks. Only the active company
+owner may change this field. Old settings clients preserve the selection; the
+general model allowlist, text/Copilot/ASR models and key stay unchanged. The
+selection never starts analysis or replaces the exact per-image owner consent.
+
+Before opening a card, `administrator_knowledge_extraction_preflight` accepts
+an optional `photo_model` and reports separate `photo_tariff` and `photo_budget` readiness, including a
+missing/mismatched price even when company selection is not yet configured.
+`company_ai_settings_read(include_content=true)` exposes `photo_configuration`
+(selected model and both exact token tariff readiness results) without a new
+tool argument. Neither read calls a provider, decrypts a key, reserves money or
+creates consent. Missing tariff blocks saving a new photo choice. A setting
+change is audited and invalidates previously prepared/inflight consent fences.
 
 The exact model must have an explicit server-owned token tariff in the existing
 `AI_MODEL_PRICES_MICROUSD_PER_MILLION` mapping: input **2000000**, output

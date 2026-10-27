@@ -419,6 +419,13 @@ def read(cur,cfg,name,args):
                 item.pop('media_evidence_context',None)
         rows.append(_sanitize(item))
     result={'available':True,'items':rows[:limit],'next_cursor':_page_key(cfg,name,args,offset+limit) if len(rows)>limit else None,'content_is_untrusted':True}
+    if name=='company_ai_settings_read' and args.get('include_content'):
+        # Safe company-scoped configuration/prices only; no provider request,
+        # credential, reservation or consent is created by this read.
+        from tenant_ai_photo_model import MODELS,tariff_status
+        cur.execute("SELECT metadata->>'photo_model' AS photo_model FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'",(cfg['AI_LEARNING_MCP_TENANT_ID'],))
+        result['photo_configuration']={'model':(cur.fetchone() or {}).get('photo_model') or '',
+          'tariffs':{model:tariff_status(model) for model in MODELS}}
     if name=='company_ai_settings_read' and args.get('list_provider_models') is True:
         result['provider_models']=_company_models(cur,cfg)
     return result

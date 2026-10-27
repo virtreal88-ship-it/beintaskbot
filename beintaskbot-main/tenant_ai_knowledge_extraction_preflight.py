@@ -17,7 +17,7 @@ def _digest(value):
 
 
 def _source(cur,cfg,args):
-    allowed={'message_id','channel_id','lead_id','consent_id'}
+    allowed={'message_id','channel_id','lead_id','consent_id','photo_model'}
     if not isinstance(args,dict) or set(args)-allowed or not {'message_id','channel_id','lead_id'}<=set(args):
         raise TenantLinearError('Invalid knowledge extraction preflight.',400)
     tenant=cfg['AI_LEARNING_MCP_TENANT_ID']; channel=identifier(args['channel_id']); message=identifier(args['message_id'])
@@ -86,7 +86,8 @@ def config_hash(cur,cfg,credential_source,voice_model=''):
       'emergency_stop':row.get('emergency_stop'),'credential_source':credential_source,
       'tenant_credential_present':bool(row.get('tenant_credential_present')),
       'metadata':{'model':meta.get('model'),'models':meta.get('models'),'enabled':meta.get('enabled'),'consent':meta.get('consent'),
-        'audio_enabled':meta.get('audio_enabled'),'transcription_model':meta.get('transcription_model')},'asr_model':voice_model})
+        'audio_enabled':meta.get('audio_enabled'),'transcription_model':meta.get('transcription_model'),
+        **({'photo_model':meta['photo_model']} if meta.get('photo_model') else {})},'asr_model':voice_model})
 
 
 def asr_model(cur,cfg,credential_source):
@@ -222,7 +223,11 @@ def _consent_execution(cur,cfg,source,consent_id):
 
 def preflight(cur,cfg,args):
     """Safe readiness facts only: never attachment bytes, URLs, keys or writes."""
-    source=_source(cur,cfg,args); photo_model=''
+    source=_source(cur,cfg,args); photo_model=args.get('photo_model') or ''
+    if photo_model:
+        from tenant_ai_photo_model import MODELS
+        if photo_model not in MODELS or source['kind']!='image':
+            raise TenantLinearError('Photo model requires one image and a supported model.',400)
     if args.get('consent_id'):
         cur.execute("SELECT to_regclass('saas_ai_single_message_extraction_consents') AS relation")
         if (cur.fetchone() or {}).get('relation'):
@@ -231,21 +236,33 @@ def preflight(cur,cfg,args):
                 AND message_id=%s::uuid AND channel_id=%s::uuid AND lead_id=%s AND agent_id=%s::uuid''',
               (cfg['AI_LEARNING_MCP_TENANT_ID'],identifier(args['consent_id']),cfg.get('actor_id'),cfg.get('oauth_connection_id'),
                source['message_id'],source['channel_id'],source['lead_id'],cfg['AI_LEARNING_MCP_AGENT_ID']))
-            photo_model=(cur.fetchone() or {}).get('photo_model') or ''
+            consent_model=(cur.fetchone() or {}).get('photo_model') or ''
+            if photo_model and photo_model!=consent_model:
+                raise TenantLinearError('Photo model does not match exact consent.',409)
+            photo_model=consent_model
     if photo_model:
-        from tenant_ai_photo_model import select
-        model,credential_source,configured,reason=select(cur,cfg,photo_model)
+        from tenant_ai_photo_model import select,tariff_status,budget
+        photo_tariff=tariff_status(photo_model)
+        try:
+            budget(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],photo_model)
+            photo_budget={'ready':True}
+        except TenantLinearError as error:
+            photo_budget={'ready':False,'reason_code':str(error)}
+        try:model,credential_source,configured,reason=select(cur,cfg,photo_model)
+        except TenantLinearError as error:
+            return {'ready':False,'reason_code':str(error),'message_id':source['message_id'],
+              'attachment_kind':source['kind'],'model_id':photo_model,'photo_tariff':photo_tariff,'photo_budget':photo_budget}
     else:model,credential_source,configured,reason=_model(cur,cfg)
     execution=_consent_execution(cur,cfg,source,args.get('consent_id'))
     status={'consent_execution':execution} if execution else {}
+    if photo_model:status.update(photo_tariff=photo_tariff,photo_budget=photo_budget)
     if reason: return {'ready':False,'reason_code':reason,'message_id':source['message_id'],'attachment_kind':source['kind'],**status}
     voice_model=asr_model(cur,cfg,credential_source)
     policy=policy_for(source['kind'])
     if photo_model:
-        from tenant_ai_photo_model import POLICY,budget
+        from tenant_ai_photo_model import POLICY
         policy=dict(POLICY);tariffs={'text':True,'vision_low':True,'asr':True}
-        try:budget(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],photo_model);budget_ready=True
-        except TenantLinearError:budget_ready=False
+        budget_ready=photo_budget['ready']
     else:tariffs,budget_ready=_budget(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],model,voice_model,policy)
     if policy['max_asr_calls'] and not voice_model:
         return {'ready':False,'reason_code':'asr_model_unavailable','message_id':source['message_id'],
@@ -262,6 +279,6 @@ def preflight(cur,cfg,args):
 
 
 def definitions(scope):
-    return [{'name':NAME,'description':'Owner-only read-only preflight for one attachment. An exact consent also returns its campaign and fragment states, counts, and safe error code. Ready requires unchanged media version, matching source/agent/policy, a live fragment lease and combined configured tariff/budget readiness. It never reads content, starts analysis, creates campaigns, reserves budget, or calls a provider.',
-      'inputSchema':{'type':'object','properties':{'message_id':{'type':'string','format':'uuid'},'channel_id':{'type':'string','format':'uuid'},'lead_id':{'type':'integer','minimum':1},'consent_id':{'type':'string','format':'uuid'}},'required':['message_id','channel_id','lead_id'],'additionalProperties':False},
+    return [{'name':NAME,'description':'Owner-only read-only preflight for one attachment. Optional photo_model checks GPT-4.1 photo configuration and its exact token tariff before a consent card is created. An exact consent also returns its campaign and fragment states, counts, and safe error code. Ready requires unchanged media version, matching source/agent/policy, a live fragment lease and combined configured tariff/budget readiness. It never reads content, starts analysis, creates campaigns, reserves budget, or calls a provider.',
+      'inputSchema':{'type':'object','properties':{'message_id':{'type':'string','format':'uuid'},'channel_id':{'type':'string','format':'uuid'},'lead_id':{'type':'integer','minimum':1},'consent_id':{'type':'string','format':'uuid'},'photo_model':{'type':'string','enum':['gpt-4.1','gpt-4.1-2025-04-14']}},'required':['message_id','channel_id','lead_id'],'additionalProperties':False},
       'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[scope]}]}]

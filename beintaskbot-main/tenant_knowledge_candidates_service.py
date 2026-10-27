@@ -125,7 +125,9 @@ def prepare(profile,data,review=None):
                 company_key=str(secret.get('api_key') or '')
             model=str(data['photo_model'] if photo_only else agent['model'] or meta.get('model') or platform_model())
             key,source=(company_key,'company') if photo_only else choose_api_credential(tenant,str(agent['id']),'connect',company_key,model)
-            if not key or (source=='platform' and not platform_model_allowed(model)) or (source!='platform' and (meta.get('enabled') is not True or meta.get('consent') is not True or model not in list(meta.get('models') or [])+[meta.get('model')])):
+            allowed_models=list(meta.get('models') or [])+[meta.get('model')]
+            if photo_only:allowed_models.append(meta.get('photo_model'))
+            if not key or (source=='platform' and not platform_model_allowed(model)) or (source!='platform' and (meta.get('enabled') is not True or meta.get('consent') is not True or model not in allowed_models)):
                 raise TenantLinearError('Модель компании недоступна.',409)
             while len((_json(item['messages'])+PROMPT+_json(review['context'] if review else {})).encode())+512>MAX_TOKENS-2000:
                 if review: raise TenantLinearError('Контекст улучшения не помещается в лимит.',413)

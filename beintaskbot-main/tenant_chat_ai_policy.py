@@ -8,6 +8,11 @@ from tenant_linear_policy import TenantLinearError, identifier
 
 def configuration(data):
     result = {}
+    if 'photo_model' in data:
+        from tenant_ai_photo_model import MODELS
+        if data['photo_model'] not in ('', *MODELS):
+            raise TenantLinearError('Unsupported photo model.', 400)
+        result['photo_model'] = data['photo_model']
     for flag in ('enabled', 'consent', 'audio_enabled'):
         if type(data.get(flag)) is not bool:
             raise TenantLinearError('AI ayarları düzgün deyil.')
