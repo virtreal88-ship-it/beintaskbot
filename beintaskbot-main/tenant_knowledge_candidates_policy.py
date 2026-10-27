@@ -117,9 +117,17 @@ def card(data,allowed_ids,allow_boundary_outside_sources=False):
 
 
 def positive_confirmation(value,informational=False):
-    if '?' in value or re.search(r'\b(?:не|нет|not|never|yox|işləmir|если|возможно|кажется|попробуйте|проверьте|if|check|maybe|should|might|бы|должно|может|наверное)\b',value,re.I): return False
+    if any(mark in value for mark in ('?','؟','？')) or re.search(
+        r'\b(?:не|нет|not|never|yox|işləmir|islemir|düzəlməyib|duzelmeyib|həll olunmayıb|hell olunmayib|'
+        r'problem\s+(?:(?:hələ\s+də|hele\s+de|still)\s+)?(?:qalır|qalir|davam\s+edir|var|remains?|persists?|continues?)|'
+        r'issue\s+(?:remains?|persists?|continues?)|'
+        r'если|возможно|кажется|попробуйте|проверьте|if|check|maybe|should|might|бы|должно|может|наверное|'
+        r'əgər|eger|bəlkə|belke|olsa|olsaydı|olsaydi|ola\s+bilər|ola\s+biler)\b',value,re.I): return False
     if informational and re.search(r'понятно|спасибо.{0,40}информац|thank.{0,20}information|aydındır|məlumat.{0,40}təşəkkür',value,re.I): return True
-    return bool(re.search(r'(?:исправлен[оа]?|həll olundu|aradan qaldırıldı|заработал[оа]?|вс[её] работает|теперь работает|проблема решена|помогло|it works|working now|\bresolved\b|\bfixed\b|\bdüzəldi\b|\bişləyir\b)',value,re.I))
+    return bool(re.search(
+        r'\b(?:исправлен[оа]?|həll\s+olundu|aradan\s+qaldırıldı|заработал[оа]?|вс[её]\s+работает|'
+        r'теперь\s+работает|проблема\s+решена|помогло|it\s+works|working\s+now|resolved|fixed|'
+        r'düzəldi|düzəlib|duzelib|işləyir)\b',value,re.I))
 
 
 

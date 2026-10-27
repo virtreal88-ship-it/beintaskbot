@@ -212,7 +212,7 @@ def test_recovered_candidate_scopes_stale_media_to_its_claims_and_still_fails_cl
     import tenant_media_evidence as media_evidence
     db,generation,_=ready
     customer_confirmation=str(uuid.uuid4())
-    db.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'customer-confirmation',%s,'incoming','Client','It works now; the fix is fixed.','text',now()+(20 * interval '1 second'))",
+    db.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'customer-confirmation',%s,'incoming','Client','Duzelib chox sagolun, internet duzelib.','text',now()+(20 * interval '1 second'))",
       (A,customer_confirmation,'connect:'+CA));db.commit()
     value=candidate(ready)
     run=db.execute('SELECT * FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['extraction_id']))[0]
@@ -579,6 +579,24 @@ def test_approval_publication_is_one_transaction(ready,monkeypatch):
 @pytest.mark.parametrize('value',['Проверьте, теперь работает?','Check if it works','Возможно, помогло','if fixed','unresolved','заработало бы'])
 def test_hypotheses_and_questions_not_confirmation(value):
     assert not policy.positive_confirmation(value)
+
+@pytest.mark.parametrize(('value','expected'),[
+    ('Duzelib chox sagolun',True),
+    ('DÜZƏLİB, ÇOX SAĞ OLUN',True),
+    ('Düzəlib, internet yenə işləyir',True),
+    ('Düzəldi, çox sağ olun',True),
+    ('duzelmeyib',False),
+    ('düzəlməyib',False),
+    ('duzelib?',False),
+    ('Duzelib amma problem qalir',False),
+    ('Düzəlib, amma problem hələ də qalır',False),
+    ('Duzelib, amma internet islemir',False),
+    ('Duzelib, əgər internet geri qayıtsa',False),
+    ('Duzelib ola biler',False),
+    ('Düzəlib olsaydı, yaxşı olardı',False),
+])
+def test_azerbaijani_completed_fix_forms_preserve_negative_and_uncertain_meaning(value,expected):
+    assert policy.positive_confirmation(value) is expected
 
 def test_extraction_daily_cap_and_concurrency(ready):
     db,generation,data=ready
