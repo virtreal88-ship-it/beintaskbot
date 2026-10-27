@@ -78,6 +78,11 @@ def extract(filename, data):
                 if any(info.flag_bits & 0x1 for info in infos):
                     raise TenantLinearError('Şifrələnmiş XLSX faylı açıla bilməz.')
                 names = {info.filename for info in infos}
+                unsupported_prefixes=('xl/drawings/','xl/charts/','xl/media/','xl/embeddings/',
+                    'xl/externalLinks/','xl/pivotTables/','xl/slicers/','xl/model/',
+                    'xl/comments','xl/threadedComments/')
+                if any(name.startswith(unsupported_prefixes) for name in names):
+                    raise TenantLinearError('XLSX faylında analiz edilməyən qrafik, şəkil və ya daxil edilmiş məlumat var.',415)
                 shared = []
                 if 'xl/sharedStrings.xml' in names:
                     xml = archive.read('xl/sharedStrings.xml')
@@ -105,6 +110,8 @@ def extract(filename, data):
                         cell_count += 1
                         if cell_count > 20000:
                             raise TenantLinearError('XLSX xanasının sayı həddən artıqdır.')
+                        if cell.find(ns + 'f') is not None:
+                            raise TenantLinearError('XLSX düsturları dəstəklənmir; hesablanmış dəyərləri ixrac edin.',415)
                         value_node = cell.find(ns + 'v')
                         value = value_node.text if value_node is not None else ''
                         if cell.attrib.get('t') == 's' and value:

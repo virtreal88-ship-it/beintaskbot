@@ -235,7 +235,9 @@ def collect(profile,item,check_before_ai=None):
             _failure_detail(receipt,error)
             if getattr(error,'media_outcome_unknown',False):
                 receipt.update(status='unknown',code='media_result_unknown',failure_stage=stage);continue
-            code='video_size_limit' if kind=='video' and error.status==413 else 'media_size_limit' if error.status==413 else 'media_unavailable'
+            code=('unsupported_document_feature' if kind=='document' and error.status==415 else
+                'video_size_limit' if kind=='video' and error.status==413 else
+                'media_size_limit' if error.status==413 else 'media_unavailable')
             receipt.update(status='unavailable' if error.status in {403,404,410,413} else 'unsupported' if error.status==415 else 'error',code=code,failure_stage=stage)
         except ValueError as error:
             _failure_detail(receipt,error)

@@ -194,6 +194,25 @@ def test_xlsx_rejects_corrupt_container_with_explicit_error(context):
     assert results[0]['status']=='error'
     assert results[0]['code']=='media_unavailable'
 
+@pytest.mark.parametrize('feature,xml',[
+    ('chart',None),
+    ('formula','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><f>1+1</f><v>2</v></c></row></sheetData></worksheet>'),
+])
+def test_xlsx_with_unanalyzed_content_is_explicitly_unsupported(context,feature,xml):
+    import zipfile
+    item,add,download=context;add('document')
+    out=io.BytesIO()
+    with zipfile.ZipFile(out,'w') as archive:
+        archive.writestr('xl/worksheets/sheet1.xml',xml or
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Visible cells</t></is></c></row></sheetData></worksheet>')
+        if feature=='chart':
+            archive.writestr('xl/charts/chart1.xml','<chartSpace/>')
+    download.return_value=(out.getvalue(),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    _,results=media.collect({},item)
+    assert results[0]['status']=='unsupported'
+    assert results[0]['code']=='unsupported_document_feature'
+    assert 'Visible cells' not in item['messages'][0]['text']
+
 def test_scanned_pdf_is_not_claimed_as_read_without_consent(context):
     from pypdf import PdfWriter
     item,add,download=context;add('document')
