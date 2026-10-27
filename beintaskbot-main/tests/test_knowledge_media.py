@@ -194,6 +194,20 @@ def test_xlsx_rejects_corrupt_container_with_explicit_error(context):
     assert results[0]['status']=='error'
     assert results[0]['code']=='media_unavailable'
 
+def test_encrypted_xlsx_is_reported_unsupported(context,monkeypatch):
+    from types import SimpleNamespace
+    import tenant_ai_knowledge_files as files
+    class EncryptedArchive:
+        def __enter__(self):return self
+        def __exit__(self,*_args):return False
+        def infolist(self):return [SimpleNamespace(flag_bits=1,file_size=128)]
+    item,add,download=context;add('document')
+    download.return_value=(b'PK encrypted','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    monkeypatch.setattr(files.zipfile,'ZipFile',lambda _stream:EncryptedArchive())
+    _,results=media.collect({},item)
+    assert results[0]['status']=='unsupported'
+    assert results[0]['code']=='unsupported_document_feature'
+
 @pytest.mark.parametrize('feature,xml',[
     ('chart',None),
     ('formula','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><f>1+1</f><v>2</v></c></row></sheetData></worksheet>'),

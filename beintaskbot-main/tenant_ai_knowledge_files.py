@@ -76,7 +76,7 @@ def extract(filename, data):
                 if len(infos) > 2000 or sum(i.file_size for i in infos) > 20 * 1024 * 1024:
                     raise TenantLinearError('XLSX faylı açıldıqdan sonra həddən artıq böyükdür.')
                 if any(info.flag_bits & 0x1 for info in infos):
-                    raise TenantLinearError('Şifrələnmiş XLSX faylı açıla bilməz.')
+                    raise TenantLinearError('Şifrələnmiş XLSX faylı dəstəklənmir.',415)
                 names = {info.filename for info in infos}
                 unsupported_prefixes=('xl/drawings/','xl/charts/','xl/media/','xl/embeddings/',
                     'xl/externalLinks/','xl/pivotTables/','xl/slicers/','xl/model/',

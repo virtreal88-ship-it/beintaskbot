@@ -2,13 +2,42 @@
 
 This audit is a desktop-only map and implementation plan. It does not change live data, grant, agent configuration, or model settings.
 
+## Finite `/app` navigation inventory
+
+Inventory source: the `data-view` controls in `docs/tenant-app.html` plus the `night_report` link. “Changed and tested” refers to the current branch's local deterministic regression coverage, not a production smoke. Hidden items are capability-gated or statically hidden in the base navigation.
+
+| `/app` section | State | Finite finding |
+|---|---|---|
+| Tasks (`tasks`) | No change needed | Existing CRM task workflow; this audit found no duplicated action to remove. |
+| Customers (`customers`) | No change needed | Existing CRM contact workflow; no case-review controls are duplicated here. |
+| Companies (`companies`) | No change needed | Existing company records and integration settings remain distinct. |
+| Deals (`deals`) | No change needed | Existing deal workflow; synchronization and record actions were outside the reviewed case changes. |
+| Dialogs (`dialogs`) | Changed and tested | Scoped direct assignment remains available; owner bulk preview/apply covers eligible Connect groups too, with paused state and no sending. Other providers/channels remain unsupported. |
+| Support inbox (`support`) | Conditional; no change | Hidden in the base navigation. It is distinct from Support Cases; no concrete redundant flow was identified. |
+| Support Cases (`support_cases`) | Changed and tested | One-action publish of owner guidance, exact rejection/deletion, case filters, media coverage, and bounded analysis controls have desktop/API regressions. |
+| AI Agents (`ai_agents`) | Changed and tested | Editor workflow and exact-confirmed permanent removal are covered by UI/API tests; PostgreSQL referential/race tests still require CI. |
+| AI Dashboard (`ai_dashboard`) | Conditional; no change | Owner/admin view gated by capabilities; no redundant action was established in this pass. |
+| AI Administrator (`ai_administrator`) | No change needed | Review/apply/publication steps remain separate where they change active configuration or audience. |
+| AI Teams (`ai_teams`) | Conditional; no change | Capability-gated section; no specific duplicated control was found. |
+| Knowledge Center (`knowledge_center`) | Conditional; no change | Knowledge-source lifecycle is separate from case intake; publication and rollback controls remain intentional. |
+| AI Testing (`ai_testing`) | Conditional; no change | Testing/simulation actions remain separate from production agent changes. |
+| Hot Orders (`hot_orders`) | Hidden; no change | Statically hidden in the base navigation. |
+| Approvals (`approvals`) | Hidden; no change | Statically hidden and capability-gated. |
+| Finance (`finance`) | Hidden; no change | Statically hidden and capability-gated. |
+| Integrations (`integrations`) | Hidden; no change | Statically hidden in the base navigation. |
+| Settings (`settings`) | No change needed; keep advanced controls | General settings remain separate; case analysis has its own Support Cases workspace. Model, provider, OAuth and budget controls stay out of the case card. No duplicate case action was found in Settings. |
+| Profile (`profile`) | No change needed | Account/profile section; unrelated to case workflow. |
+| Night Report (`night_report` link) | Conditional; no change | Separate report link, hidden unless the capability is present. |
+
+This is a finite navigation-level audit, not a claim that every CRM form or conditional submenu has undergone a complete usability study. No further edit was justified by the inspected sections; the remaining PostgreSQL and live-owner checks are listed below.
+
 ## Current user-facing paths
 
 | Work | Current UI / API | Current constraint that creates extra steps |
 |---|---|---|
 | Support conversations | Dialogs workspace; `/api/platform/ai/dialogs`, `/dialogs/history`, `/dialogs/agent-assignment`, `/dialogs/agent-assignment-bulk` | Assignment is a separate operation from conversation review. The backend returns allowed agents, route scopes, revision, and a reason when no exact assignment is valid; the UI must surface that reason rather than imply a generic failure. Group coordination uses a separate registry. |
-| Support cases and knowledge | Support Cases workspace; `/knowledge-candidates`, `/boundaries`, `/source-review`, `PATCH /{candidate_id}`, `/approve`, `/reject`, `/archive`, `/restore`, `/mark-knowledge-published` | Owner edits, result confirmation, knowledge publication, case status and existing published knowledge are separate paths. The case list is keyset-paginated (50/page); rejected, archived, and knowledge-published are hidden by default and filterable. A separate campaign panel is being moved from Settings into this workspace. |
-| Case media analysis | Case attachment admission opens the existing campaign flow; campaigns preview, prepare, owner-approve, start, pause/resume, and spend ledger use separate APIs | Eligibility, scope, model/tariff, source-version and unknown-attempt guards are backend enforced. The owner sees overly technical steps. The one-time grant is limited to an existing-case snapshot; a $10 total prospective cap does not clear old unknown holds or authorize future cases. |
+| Support cases and knowledge | Support Cases workspace; `/knowledge-candidates`, `/boundaries`, `/source-review`, `PATCH /{candidate_id}`, `/approve`, `/reject`, `/archive`, `/restore`, `/mark-knowledge-published` | The card now supports one-action edited guidance publication while preserving outcome uncertainty, and exposes sources by disclosure. The case list is keyset-paginated (50/page); rejected, archived, and knowledge-published are hidden by default and filterable. The all-cases media panel is in this workspace rather than Settings. |
+| Case media analysis | Support Cases workspace uses the existing campaign service for preview, prepare, owner approval, start, pause/resume, and spend reads | Snapshot, version, eligibility, tariff, tenant cap, fixed $10 cap, and unknown-hold checks are backend enforced. Preparing and starting remain separate from the explicit external-processing grant; this is a budget consent boundary, not a duplicate case-card save. The grant covers an existing-case snapshot only and does not clear old unknown holds or authorize future cases. |
 | AI agent create/edit | AI Agents workspace; `/agents` and `/agents/{agent_id}` | The workspace and settings are split. Changes that affect active behavior must retain their current approval/version guards and preview impact in one clear confirmation. |
 | Agent removal | `GET /agents/{agent_id}/delete-preview` and exact-confirmed `DELETE /agents/{agent_id}` remove the selected agent configuration. | The preview reports paused/unassigned dialogs, stopped queued jobs, active work and retained history. Processing jobs and active campaigns block removal. Published knowledge, CRM messages, spend/audit receipts and AI history remain under a minimal non-secret identity record. The legacy archive/transfer service remains a separate explicit operation. |
 | AI configuration/training | Agent settings, knowledge center, instruction library, administrator review and MCP administrator tools | Draft, owner review, apply, post-apply publication, and rollback are deliberately distinct for sensitive material. Keep that distinction where it changes active behavior; collapse redundant navigation and show the next valid action/status on the same screen. |
@@ -20,7 +49,7 @@ The existing MCP service (`tenant_ai_learning_mcp.py`) has scoped read, case-med
 
 | Owner action in the desktop app | Existing plugin coverage | Gap for a complete plugin workflow |
 |---|---|---|
-| Read cases, status/history, source boundaries | `support_cases_list`, `support_case_detail`, and `support_case_delete_status` provide tenant-owner case reads, bounded keyset pagination, explicit status filters and exact deletion-receipt checks under `ai_learning.support_cases`. `support_case_edit_boundaries` uses the same versioned owner mutation as desktop. | Broader extraction history remains available only through the desktop workflow; plugin reads are not yet a full case-analysis ledger view. |
+| Read cases, status/history, source boundaries | `support_cases_list`, `support_case_detail`, `support_case_extraction_status`, and `support_case_delete_status` provide tenant-owner case reads, safe attachment-status projection, bounded keyset pagination, explicit status filters and exact deletion-receipt checks under `ai_learning.support_cases`. `support_case_edit_boundaries` uses the same versioned owner mutation as desktop. | Broader extraction history remains available only through the desktop workflow; plugin reads are not yet a full case-analysis ledger view. |
 | Suggest or change case boundaries | `support_case_edit_boundaries` now forwards the exact candidate/version/start/end IDs to the existing owner-only boundary mutation; the server revalidates the route, interval and retained outcome/cause evidence, then audits the change. | Plugin boundary discovery remains read-only case detail; proposal UX can select known IDs from that detail, and existing service rejects stale versions or evidence loss. |
 | Analyze all media under one budget | Typed MCP tools expose the bounded current-case snapshot, fixed $10 prepare, exact-version/hash confirmed start, read, pause and revoke through the existing campaign service under a separate `ai_learning.support_media` OAuth scope. Existing tokens do not receive this scope automatically. | Provider execution is not invoked during development. Current snapshot and historical receipt eligibility still depend on server-side admission; a prepared or blocked plan is not an analysis result. |
 | Edit, reject/delete, publish confirmed case, publish owner guidance | `support_case_confirm_publish`, `support_case_edit_publish`, `support_case_edit_boundaries`, and `support_case_reject_delete` call existing versioned owner mutations; exact-target delete status is auditable and linked-knowledge action is required | Confirmed approval keeps all existing evidence checks. Full extraction-history detail remains desktop-only. |
@@ -58,7 +87,7 @@ The checked-in FK dependency map is explicit: jobs, runs, token usage, drafts, a
 
 - UI → API → storage journey for a mixed printer case with a customer photo caption, a reused completed photo, stale/unknown prior attachments, suspected cause, and unknown result. Guidance can be published without upgrading uncertainty; ordinary resolution approval still rejects it.
 - Text-only owner-provided guidance can publish while outcome remains unknown. Rejection hides the card and restore recovers it; no history/source row is deleted.
-- Snapshot contains every in-boundary media item; partial/unsupported/encrypted/truncated/media-access/model/budget failures are visible with a next step. Test PDF text and rendered-page references, DOCX, bounded XLSX sheet/cell references, corrupt workbooks, and chart/cell-formula/defined-name-formula workbooks that must report unsupported rather than appear complete, plus supported image/audio/video. Encrypted XLSX rejection is implemented but does not yet have a dedicated regression fixture.
+- Snapshot contains every in-boundary media item; partial/unsupported/encrypted/truncated/media-access/model/budget failures are visible with a next step. Test PDF text and rendered-page references, DOCX, bounded XLSX sheet/cell references, corrupt and encrypted workbooks, and chart/cell-formula/defined-name-formula workbooks that must report unsupported rather than appear complete, plus supported image/audio/video.
 - Exact receipt reuse has no provider call or second reservation; one explicit current-version retry keeps prior unknown hold; changed hash, channel, tenant, or candidate boundary blocks before provider; concurrent claims cannot exceed $10 or tenant cap.
 - The same file in two messages/cases reuses one tenant-authorized artifact while preserving separate provenance; changed bytes or model/config cause a new component; concurrent work is single-flight; crash recovery resumes only missing components; partial completion, unknown attempts and retries do not duplicate completed work.
 - Publishing twice and editing/rebinding a case do not re-run extraction; changed case input/instructions display the exact reason for a new extraction. Report cache hits and avoided calls without claiming invented dollar savings.
