@@ -116,6 +116,42 @@ def test_owner_source_review_diagnostic_uses_only_case_claim_message_ids(ready):
     assert generation.call_count==1
 
 
+def test_owner_source_review_preflight_is_read_only_and_shares_mutation_membership_predicate(ready,monkeypatch):
+    db,generation,_=ready;value=candidate(ready)
+    run=db.execute('SELECT * FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['extraction_id']))[0]
+    target,unclaimed=run['source_refs'][:2];target['media_kind']='image';unclaimed['media_kind']='image'
+    db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps(run['source_refs']),A,value['extraction_id']))
+    content=db.execute('SELECT content FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['id']))[0]['content']
+    content['source_message_ids']=[target['id']]
+    db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(json.dumps(content),A,value['id']))
+    db.commit()
+    before=db.execute('SELECT version,status FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['id']))[0]
+    audit_before=db.execute('SELECT count(*) AS n FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND entity_id=%s',(A,value['id']))[0]['n']
+    reviews_before=db.execute('SELECT count(*) AS n FROM saas_knowledge_case_source_reviews WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid',(A,value['id']))[0]['n']
+
+    ready_check=store.source_review_preflight(PROFILE,value['id'],target['id'],1)
+    assert ready_check=={'build_marker':'source-review-preflight-v1','candidate_id':value['id'],'extraction_id':value['extraction_id'],'candidate_version':1,
+      'expected_version':1,'message_id':target['id'],'in_case_evidence':True,'in_extraction_media':True,
+      'version_matches':True,'case_reviewable':True,'status':'eligible','reason':'membership_and_version_match'}
+    blocked=store.source_review_preflight(PROFILE,value['id'],unclaimed['id'],1)
+    assert blocked['status']=='blocked' and blocked['reason']=='not_case_evidence' and blocked['in_extraction_media'] is True
+    stale=store.source_review_preflight(PROFILE,value['id'],target['id'],2)
+    assert stale['reason']=='stale_version' and stale['candidate_version']==1
+    with pytest.raises(TenantLinearError):
+        store.source_review_preflight({'tenant_id':B,'telegram_id':22,'role':'owner'},value['id'],target['id'],1)
+    from types import SimpleNamespace
+    monkeypatch.setattr(store,'authorize',lambda *args:(A,11,SimpleNamespace(profile={'role':'admin'})))
+    with pytest.raises(TenantLinearError,match='Только владелец'):
+        store.source_review_preflight(PROFILE,value['id'],target['id'],1)
+
+    after=db.execute('SELECT version,status FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['id']))[0]
+    assert after==before
+    assert db.execute('SELECT count(*) AS n FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND entity_id=%s',(A,value['id']))[0]['n']==audit_before
+    assert db.execute('SELECT count(*) AS n FROM saas_knowledge_case_source_reviews WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid',(A,value['id']))[0]['n']==reviews_before
+    assert generation.call_count==1
+
+
 @pytest.mark.parametrize('has_current_receipt',[True,False])
 def test_owner_reviews_changed_media_as_new_version_without_rewriting_extraction_or_carrying_claims(ready,has_current_receipt):
     import tenant_media_evidence as media_evidence

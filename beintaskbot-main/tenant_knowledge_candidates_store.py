@@ -472,6 +472,55 @@ def detail(profile,candidate_id):
     return {'candidate':value,'evidence':items,'route':run['route']}
 
 
+def _source_review_membership(content,source_refs,message_id):
+    """One canonical membership predicate shared by source-review reads and writes."""
+    case_ids=set()
+    for source_id in (content or {}).get('source_message_ids',[]):
+        try: case_ids.add(identifier(source_id))
+        except TenantLinearError: continue
+    extraction_refs=[]
+    for ref in source_refs or []:
+        try: ref_id=identifier(ref.get('id'))
+        except (TenantLinearError,AttributeError): continue
+        if ref_id==message_id and ref.get('media_kind'):
+            extraction_refs.append(ref)
+    return message_id in case_ids, extraction_refs
+
+
+def source_review_preflight(profile,candidate_id,message_id,expected_version):
+    """Owner-only, read-only diagnostic immediately before source-review POST."""
+    if type(expected_version) is not int or expected_version<1:
+        raise TenantLinearError('Некорректная версия карточки.')
+    normalized_message_id=identifier(message_id)
+    with _connect() as conn:
+        # _connect returns a fresh connection in production.  Roll back any
+        # wrapper/test transaction before this function's SELECT-only reads.
+        conn.rollback()
+        with conn.cursor() as cur:
+            tenant,_,policy=authorize(cur,profile)
+            if policy.profile.get('role')!='owner':
+                raise TenantLinearError('Только владелец может проверять новую provenance вложения.',403)
+            key=identifier(candidate_id)
+            cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,key))
+            row=cur.fetchone()
+            if not row: raise TenantLinearError('Карточка не найдена.',404)
+            run=extraction_row(cur,tenant,row['extraction_id'])
+            in_case,matching_refs=_source_review_membership(row.get('content'),run.get('source_refs'),normalized_message_id)
+            in_extraction=bool(matching_refs)
+            version_matches=expected_version==row['version']
+            reviewable=row['status'] in {'pending_review','needs_clarification'}
+            reason=('stale_version' if not version_matches else
+                    'not_case_evidence' if not in_case else
+                    'not_extraction_media' if not in_extraction else
+                    'case_not_reviewable' if not reviewable else 'membership_and_version_match')
+            return {'build_marker':'source-review-preflight-v1','candidate_id':str(row['id']),
+              'extraction_id':str(row['extraction_id']),
+              'candidate_version':row['version'],'expected_version':expected_version,
+              'message_id':normalized_message_id,'in_case_evidence':in_case,
+              'in_extraction_media':in_extraction,'version_matches':version_matches,
+              'case_reviewable':reviewable,'status':'eligible' if reason=='membership_and_version_match' else 'blocked','reason':reason}
+
+
 def conversation_link(profile,candidate_id,message_id=None,review_run_id=None):
     """Resolve one case evidence message to an authorized dialog route.
 
@@ -714,9 +763,10 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                     raise TenantLinearError('Рассматривать источник можно только до публикации.',409)
                 run=extraction_row(cur,tenant,row['extraction_id']);binding=run['route']
                 media_id=identifier(data['message_id'])
-                if media_id not in {str(value) for value in (row.get('content') or {}).get('source_message_ids',[])}:
+                in_case,matching_refs=_source_review_membership(row.get('content'),run.get('source_refs'),media_id)
+                if not in_case:
                     raise TenantLinearError('Вложение не входит в доказательства этого кейса.',403)
-                prior=next((ref for ref in run.get('source_refs') or [] if str(ref.get('id'))==media_id and ref.get('media_kind')),None)
+                prior=matching_refs[0] if matching_refs else None
                 if not prior: raise TenantLinearError('Вложение не входит в исходную extraction этого кейса.',404)
                 if 'approved_channel_ids' in binding and prior['channel_id'] not in binding['approved_channel_ids']:
                     raise TenantLinearError('Источник не утверждён.',403)
