@@ -8,8 +8,8 @@ const settle=async()=>{for(let i=0;i<25;i++)await new Promise(r=>setImmediate(r)
    const u=new URL(url,w.location),body=opts.body?JSON.parse(opts.body):null;calls.push({path:u.pathname,method:opts.method||'GET',body});
    let payload;
    if(u.pathname==='/api/platform/me')payload={member:{tenant_id:'tenant-1',telegram_id:7,role:'owner'}};
-   else if(u.pathname==='/api/platform/chat/ai/settings'&&body)payload={success:true,configured:true,updated_at:'v2',copilot_model:body.copilot_model,model:'agent-model'};
-   else if(u.pathname==='/api/platform/chat/ai/settings')payload={success:true,configured:true,enabled:true,consent:true,copilot_enabled:true,copilot_model:'gpt-4o-mini',copilot_daily_limit:50,model:'agent-model',daily_limit:50,media_hosts:[],updated_at:'v1'};
+   else if(u.pathname==='/api/platform/chat/ai/settings'&&body)payload={success:true,configured:true,updated_at:'v2',copilot_model:body.copilot_model,model:'agent-model',video_model:body.video_model,video_enabled:body.video_enabled};
+   else if(u.pathname==='/api/platform/chat/ai/settings')payload={success:true,configured:true,enabled:true,consent:true,audio_enabled:false,copilot_enabled:true,copilot_model:'gpt-4o-mini',copilot_daily_limit:50,model:'agent-model',daily_limit:50,media_hosts:[],video_model:'',video_enabled:false,video_model_tariffs:{'gpt-4.1-mini':{ready:true,max_microusd:25000}},updated_at:'v1'};
    else if(u.pathname==='/api/platform/chat/ai/models')payload={success:true,models:['gpt-4.1-mini','gpt-4o-mini']};
    else payload={success:false,error:'unexpected request'};
    return{ok:true,status:200,json:async()=>payload};
@@ -19,6 +19,14 @@ const settle=async()=>{for(let i=0;i<25;i++)await new Promise(r=>setImmediate(r)
  d.querySelector('#tcCopilotListModels').click();await settle();assert.deepEqual([...picker.options].map(x=>x.value),['','gpt-4.1-mini','gpt-4o-mini']);
  picker.value='gpt-4.1-mini';d.querySelector('#tcAiSave').click();await settle();
  const save=calls.find(call=>call.path==='/api/platform/chat/ai/settings'&&call.method==='POST');assert.equal(save.body.copilot_model,'gpt-4.1-mini');assert.equal(save.body.model,'agent-model','Copilot choice does not overwrite agent model');
+ assert.equal(save.body.video_model,'');assert.equal(save.body.video_enabled,false,'video remains disabled and separate');
  assert.match(d.querySelector('#tcAiNotice').textContent,/gpt-4.1-mini/);assert.equal(calls.some(call=>call.path.includes('/chat/send')),false);
+ d.querySelector('#tcVideoListModels').click();await settle();const videoPicker=d.querySelector('#tcVideoModel');
+ assert.deepEqual([...videoPicker.options].map(x=>x.value),['','gpt-4.1-mini','gpt-4o-mini']);videoPicker.value='gpt-4.1-mini';
+ d.querySelector('#tcVideoEnabled').checked=true;d.querySelector('#tcVideoEnabled').onchange();d.querySelector('#tcAiSave').click();await settle();
+ const videoSave=[...calls].reverse().find(call=>call.path==='/api/platform/chat/ai/settings'&&call.method==='POST');
+ assert.equal(videoSave.body.video_model,'gpt-4.1-mini');assert.equal(videoSave.body.video_enabled,true);
+ assert.equal(videoSave.body.model,'agent-model');assert.equal(videoSave.body.photo_model,'');
+ assert.equal(videoSave.body.copilot_model,'gpt-4.1-mini');assert.equal(calls.some(call=>call.path.includes('/chat/send')),false);
  dom.window.close();console.log('PASS: Copilot model picker lists models, persists the independent model, verifies the returned selection, and never sends a customer message.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
