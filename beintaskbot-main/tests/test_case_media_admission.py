@@ -425,6 +425,96 @@ def test_all_cases_reuses_exact_completed_media_and_routes_only_remaining(ready)
     assert [route['message_ids'] for route in admission.existing_routes(snapshot,AGENT)]==[[ids[1]]]
 
 
+def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished_photo(ready,monkeypatch):
+    """End-to-end owner snapshot→$10 approval→worker, with providers mocked."""
+    import tenant_media_evidence as evidence
+    import tenant_knowledge_candidates_store as candidate_store
+    import tenant_knowledge_candidates_service as service
+    import tenant_knowledge_campaign_worker as campaign_worker
+    import tenant_knowledge_media as media_service
+    import tenant_ai_spend_budget as spend
+    from unittest.mock import Mock
+
+    db,card,ids=_case(ready,(3,4,5,6))
+    _mark_pending_consent(db,card['id'],ids)
+    extraction_id=db.execute('SELECT extraction_id FROM saas_knowledge_candidates WHERE id=%s::uuid',(card['id'],))[0]['extraction_id']
+    refs=db.execute('SELECT source_refs FROM saas_knowledge_extractions WHERE id=%s::uuid',(extraction_id,))[0]['source_refs']
+    # One prior attempt is genuinely unknown for the exact recorded version.
+    results=[{'id':ids[0],'status':'unknown','code':'provider_timeout'}]
+    results.extend({'id':message_id,'status':'unavailable','code':'vision_not_approved'} for message_id in ids[1:])
+    db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(results),extraction_id))
+    # The fourth photo already has a completed receipt and must be reused.
+    evidence.create_schema(db)
+    finished=db.execute('SELECT external_id,body,raw FROM saas_crm_messages WHERE id=%s::uuid',(ids[3],))[0]
+    finished_ref={'id':ids[3],'channel_id':CA,'external_id':finished['external_id'],'media_kind':'image',
+      'media_version':evidence.media_version(finished['raw']),'body_hash':candidate_store.digest(finished['body'])}
+    with db.cursor() as cur:evidence.persist(cur,A,[finished_ref],[{'id':ids[3],'status':'processed','code':'vision_observation','observation':'Synthetic saved label observation'}])
+
+    monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    monkeypatch.setattr(campaign_worker,'_connect',lambda:db)
+    monkeypatch.setattr(service,'_connect',lambda:db)
+    monkeypatch.setattr(spend,'_connect',lambda:db)
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_DEFAULT_MODEL','test-model')
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_MODELS','["test-model"]')
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'test-model':{'input':10,'output':10}}))
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'test-model':{'vision_low':2500}}))
+    monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD',json.dumps({A:10000000}))
+    import tenant_ai_agent_key_policy as key_policy
+    monkeypatch.setattr(key_policy,'platform_model',lambda:'test-model')
+    monkeypatch.setattr(key_policy,'choose_api_credential',lambda *args:('synthetic-key','platform'))
+    monkeypatch.setattr(service,'platform_model_allowed',lambda _model:True)
+
+    spend.ensure_schema(db)
+    with db.cursor() as cur:
+        spend.reserve_media(cur,A,'legacy-printer-unknown','knowledge_vision','test-model','vision_low',1)
+    db.commit()
+    spend.settle_media(A,'legacy-printer-unknown',operation='vision_low',attempted_units=1,reserved_units=1,unknown=True)
+    old_hold=db.execute("SELECT id,reserved_microusd,state FROM saas_ai_spend_reservations WHERE call_key='legacy-printer-unknown'")[0]
+    with db.cursor() as cur:default=admission.plan_existing_cases(cur,PROFILE)
+    assert default['eligible_count']==2 and default['reused_count']==1 and default['unknown_media_count']==1
+    with db.cursor() as cur:acknowledged=admission.plan_existing_cases(cur,PROFILE,acknowledge_prior_unknown=True)
+    assert acknowledged['eligible_count']==3 and acknowledged['retry_unknown_count']==1 and acknowledged['reused_count']==1
+    retry_media=next(m for m in acknowledged['cases'][0]['media'] if m['id']==ids[0])
+    assert retry_media['source_version_verified'] and retry_media['retry_authorized']
+    assert len({route['message_ids'][0] for route in admission.existing_routes(acknowledged,AGENT)})==3
+
+    generation=Mock(return_value=(json.dumps({'cards':[]}),{'input_tokens':20,'output_tokens':10,'total_tokens':30}))
+    monkeypatch.setattr(service,'generate',generation)
+    dispatched=[];collect_entries=[]
+    def collect(_profile,item,check_before_ai=None):
+        collect_entries.append(item)
+        route=item['route'];message_id=item['refs'][0]['id']
+        expected=next(m['source_version'] for m in acknowledged['cases'][0]['media'] if m['id']==message_id)
+        dispatched.append((message_id,route.get('owner_retry_unknown') is True,item['refs'][0].get('media_version'),expected))
+        return [],[]
+    monkeypatch.setattr(media_service,'collect',collect)
+    campaign_id=str(uuid.uuid4())
+    data={'request_id':campaign_id,'all_existing_cases':True,'channel_ids':[],
+      'analysis_agent_id':AGENT,'max_calls':10000,'max_tokens':160000000,'max_cost_microusd':10000000,
+      'video_model':None,'acknowledge_prior_unknown':True,'allow_external_media':True,'allow_paid_asr':False,
+      'max_main_calls':10000,'max_asr_calls':0,'max_vision_calls':10000}
+    assert campaigns.prepare(PROFILE,data)==campaign_id
+    prepared=db.execute('SELECT * FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign_id,))[0]
+    assert prepared['progress']['retry_unknown_count']==1
+    approved=campaigns.approve(PROFILE,campaign_id,{'expected_version':prepared['version'],'channel_ids':prepared['sources'],
+      'max_calls':prepared['max_calls'],'max_tokens':prepared['max_tokens'],'confirm_external_processing':True,
+      'media_policy':prepared['media_policy'],'all_cases_snapshot_hash':prepared['progress']['snapshot_hash'],
+      'max_cost_microusd':10000000,'video_model':None,'acknowledge_prior_unknown':True})
+    assert approved['campaign']['status']=='running'
+    assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid',(campaign_id,))[0]['n']==3
+    for _ in range(3):assert campaign_worker.tick() is True
+    assert {message_id for message_id,*_ in dispatched}==set(ids[:3]), db.execute('SELECT status,error_code FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid',(campaign_id,))
+    assert all(actual==expected for _,_,actual,expected in dispatched)
+    assert sum(retry for _,retry,_,_ in dispatched)==1 and any(message_id==ids[0] and retry for message_id,retry,_,_ in dispatched)
+    assert generation.call_count==3
+    hold_after=db.execute("SELECT id,reserved_microusd,state FROM saas_ai_spend_reservations WHERE call_key='legacy-printer-unknown'")[0]
+    assert hold_after==old_hold and hold_after['state']=='unknown'
+    grant_reservations=db.execute('SELECT kind,state FROM saas_ai_spend_reservations WHERE grant_id=%s::uuid',(campaign_id,))
+    assert len(grant_reservations)==6 and {r['kind'] for r in grant_reservations}=={'live_case_extraction','knowledge_vision'}
+    with pytest.raises(TenantLinearError,match='cannot be reset or topped up'):
+        campaigns.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4())})
+
+
 def test_fixed_grant_over_cap_blocks_before_any_provider_call(ready,monkeypatch):
     db,card,media=_case(ready,(3,))
     db.execute("UPDATE saas_crm_messages SET message_type='video' WHERE id=%s::uuid",(media[0],));db.commit()

@@ -59,7 +59,7 @@ jobs:
       - name: Install Python and isolated SQL test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest
+          python -m pip install -r requirements.txt pytest imageio-ffmpeg
           npm install --prefix .support-test-deps @electric-sql/pglite
       - name: Run desktop and API regression journeys
         run: |

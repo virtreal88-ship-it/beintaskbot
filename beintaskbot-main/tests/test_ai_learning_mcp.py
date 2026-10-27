@@ -172,7 +172,7 @@ def test_mcp_current_case_media_tools_use_fixed_grant_and_exact_start_confirmati
     campaign_id=str(uuid.uuid4());snapshot='a'*64;agent=str(uuid.uuid4());channel=str(uuid.uuid4())
     cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.TOOL_SCOPE,mcp.SUPPORT_MEDIA_SCOPE]}
     profile={'tenant_id':A,'telegram_id':11};seen=[]
-    monkeypatch.setattr(campaigns,'preview_existing_cases',lambda p:(seen.append(('preview',p)) or {'case_count':4,'eligible_count':2}))
+    monkeypatch.setattr(campaigns,'preview_existing_cases',lambda p,acknowledge_prior_unknown=False:(seen.append(('preview',p,acknowledge_prior_unknown)) or {'case_count':4,'eligible_count':2,'retry_unknown_count':int(acknowledge_prior_unknown)}))
     monkeypatch.setattr(campaigns,'prepare',lambda p,data:(seen.append(('prepare',p,data.copy())) or campaign_id))
     current={'id':campaign_id,'version':7,'status':'awaiting_budget','channel_ids':[channel],
         'max_calls':8,'max_tokens':80000,'media_policy':{'allow_external_media':True,'allow_paid_asr':False,
@@ -183,6 +183,7 @@ def test_mcp_current_case_media_tools_use_fixed_grant_and_exact_start_confirmati
     monkeypatch.setattr(campaigns,'approve',lambda p,cid,data:(seen.append(('start',p,str(cid),data.copy())) or {'campaign':{'id':cid,'status':'running'}}))
     with db.cursor() as cur:
         assert mcp._tools(cur,cfg,'support_media_snapshot_preview',{})['eligible_count']==2
+        assert mcp._tools(cur,cfg,'support_media_snapshot_preview',{'acknowledge_prior_unknown':True})['retry_unknown_count']==1
         with pytest.raises(Exception):mcp._tools(cur,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'support_media_snapshot_preview',{})
     prepared=mcp._tools(None,cfg,'support_media_campaign_prepare',{'request_id':campaign_id,
         'channel_ids':[channel],'analysis_agent_id':agent,'max_calls':8,'max_tokens':80000,
@@ -192,10 +193,10 @@ def test_mcp_current_case_media_tools_use_fixed_grant_and_exact_start_confirmati
     with pytest.raises(Exception):mcp._tools(None,cfg,'support_media_campaign_start',{
         'campaign_id':campaign_id,'expected_version':7,'snapshot_hash':'b'*64,'confirm_external_processing':True})
     with pytest.raises(Exception):mcp._tools(None,cfg,'support_media_campaign_start',{
-        'campaign_id':campaign_id,'expected_version':7,'snapshot_hash':snapshot,'confirm_external_processing':False})
+        'campaign_id':campaign_id,'expected_version':7,'snapshot_hash':snapshot,'confirm_external_processing':False,'acknowledge_prior_unknown':False})
     assert not any(call[0]=='start' for call in seen)
     started=mcp._tools(None,cfg,'support_media_campaign_start',{
-        'campaign_id':campaign_id,'expected_version':7,'snapshot_hash':snapshot,'confirm_external_processing':True})
+        'campaign_id':campaign_id,'expected_version':7,'snapshot_hash':snapshot,'confirm_external_processing':True,'acknowledge_prior_unknown':False})
     assert started['campaign']['status']=='running'
     assert seen[-1][3]['max_cost_microusd']==10_000_000
     assert seen[-1][3]['all_cases_snapshot_hash']==snapshot
@@ -224,6 +225,41 @@ def test_mcp_dialog_assignment_uses_pinned_channel_and_existing_guarded_service(
     with pytest.raises(Exception):
         mcp._tools(None,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'support_dialog_agent_assign',{
             **options,'agent_id':AGENT,'expected_revision':7,'request_id':str(uuid.uuid4())})
+
+
+def test_mcp_group_assignment_parity_uses_owner_preview_and_fresh_confirmation(db,monkeypatch):
+    _setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+mcp.DIALOG_ASSIGN_SCOPE)
+    import tenant_operator_assignment as assignment
+    cfg={'AI_LEARNING_MCP_TENANT_ID':A,'AI_LEARNING_MCP_CHANNEL_ID':CA,'actor_id':11,
+      'granted_scopes':[mcp.TOOL_SCOPE,mcp.DIALOG_ASSIGN_SCOPE]}
+    preview={'preview_token':'a'*64,'eligible':[{'kind':'group'}],
+      'summary':{'group_eligible':1},'requires_owner_confirmation':True,'automatic_replies_enabled':False}
+    seen=[]
+    monkeypatch.setattr(assignment,'bulk_preview',lambda profile,channel,agent:(seen.append(('preview',profile,channel,agent)) or preview))
+    monkeypatch.setattr(assignment,'bulk_apply',lambda profile,data:(seen.append(('apply',profile,data.copy())) or {'total':1,'assigned':1,'skipped':0}))
+    with db.cursor() as cur:
+        result=mcp._tools(cur,cfg,'support_dialog_agent_bulk_preview',{'channel_id':CA,'agent_id':AGENT})
+        assert result['summary']['group_eligible']==1
+        with pytest.raises(Exception):mcp._tools(cur,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'support_dialog_agent_bulk_preview',{'channel_id':CA,'agent_id':AGENT})
+        applied=mcp._tools(cur,cfg,'support_dialog_agent_bulk_assign',{'channel_id':CA,'agent_id':AGENT,
+          'preview_token':'a'*64,'batch_id':str(uuid.uuid4()),'confirm_exact_preview':True})
+    assert applied['assigned']==1 and seen[0][2:]==(CA,AGENT)
+    assert seen[1][2]['confirmed'] is True and seen[1][2]['preview_token']=='a'*64
+
+
+def test_mcp_case_extraction_status_exposes_only_safe_processing_fields(db,monkeypatch):
+    _setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+mcp.SUPPORT_CASE_SCOPE)
+    import tenant_knowledge_candidates_store as cases
+    candidate_id=str(uuid.uuid4());secret='https://example.invalid/private?token=secret'
+    monkeypatch.setattr(cases,'detail',lambda profile,key:{'candidate':{'id':key,'extraction_id':str(uuid.uuid4()),
+      'status':'needs_clarification','version':3,'media_analysis_status':'partial','media_coverage':{'complete':False},
+      'media_processing':[{'id':'message-a','status':'partial','code':'video_observation','extraction_status':'completed','complete':False,'url':secret,'observation':'private'}]},'evidence':[]})
+    cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.TOOL_SCOPE,mcp.SUPPORT_CASE_SCOPE]}
+    with db.cursor() as cur:
+        status=mcp._tools(cur,cfg,'support_case_extraction_status',{'candidate_id':candidate_id})
+    assert status['extraction_status']=='completed' and status['media_processing']==[
+      {'id':'message-a','status':'partial','code':'video_observation','extraction_status':'completed','complete':False}]
+    assert secret not in json.dumps(status) and 'private' not in json.dumps(status)
 
 
 def test_mcp_support_case_tools_reuse_existing_owner_mutations_and_confirm_exact_delete(db,monkeypatch):

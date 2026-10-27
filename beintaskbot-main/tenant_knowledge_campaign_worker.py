@@ -38,13 +38,17 @@ def check_fence(cur, tenant, extraction_id):
             expected=row['progress']
             case_id=str(row['route'].get('case_id'))
             case=next((item for item in expected.get('case_plans',[]) if item.get('case_id')==case_id),None)
-            checked_case=plan(cur,profile,case_id)
+            retry_ack=expected.get('acknowledge_prior_unknown') is True
+            checked_case=plan(cur,profile,case_id,allow_unknown_retry=retry_ack)
+            retry_media=next((item for item in checked_case.get('media',[])
+                if item.get('id') in row['route'].get('message_ids',[])
+                and item.get('source_version')==row['route'].get('source_version')),None)
             if (checked_case.get('status')!='pending_consent' or not case
                 or checked_case.get('plan_hash')!=case.get('plan_hash')
                 or checked_case.get('case_version')!=row['route'].get('case_version')
                 or row['route'].get('case_plan_hash')!=checked_case.get('plan_hash')
-                or not any(item['id'] in row['route'].get('message_ids',[])
-                    and item['source_version']==row['route'].get('source_version') for item in checked_case.get('media',[]))):
+                or not retry_media
+                or bool(row['route'].get('owner_retry_unknown')) is not bool(retry_media.get('retry_authorized'))):
                 raise TenantLinearError('Current case snapshot or media source changed.',409)
         # Durable progress heartbeat without unbounded lease extension. The 360s
         # lease remains strictly above the 240s extraction hard deadline.

@@ -64,6 +64,7 @@ def route(cur,profile,data):
     # service-level fragment validation binds them to the stored campaign row.
     if data.get('video_model'):binding['video_model']=str(data['video_model'])[:100]
     if data.get('media_grant_id'):binding['media_grant_id']=identifier(data['media_grant_id'])
+    if data.get('owner_retry_unknown') is True:binding['owner_retry_unknown']=True
     if start: binding.update(period_start=start,period_end=end)
     return tenant,actor,policy,chosen,binding,ticket
 

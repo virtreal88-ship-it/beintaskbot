@@ -14,6 +14,11 @@ from tenant_media_evidence import media_version, source_hash
 
 _NO_CALL_CONSENT_CODES = {'external_media_permission_required', 'asr_authorization_required', 'vision_not_approved'}
 
+def _has_current_media_version(raw):
+    """Use the same source-identity fields as saved-evidence verification."""
+    raw=raw if isinstance(raw,dict) else {}
+    return any(raw.get(key) is not None for key in store._MEDIA_IDENTITY_FIELDS)
+
 
 def _explicit_no_media_call(ref, result):
     """Recognize the extractor's persisted refusal shape, not its UI projection."""
@@ -86,7 +91,7 @@ def _historical_attempt_reconciliation(cur, tenant, message_id, current_source_h
     return {'state':'unknown','reason':'attempt_history_incomplete','matching_runs':len(runs)}
 
 
-def plan(cur, profile, candidate_id):
+def plan(cur, profile, candidate_id, *, allow_unknown_retry=False):
     tenant, _, policy = store.authorize(cur, profile)
     if policy.profile.get('role')!='owner':
         raise TenantLinearError('Owner media consent required.',403)
@@ -132,9 +137,11 @@ def plan(cur, profile, candidate_id):
         if at.tzinfo is None:
             raise TenantLinearError('Case message time unavailable.', 409)
         item = by_id.get(str(row['id']), {})
-        version=media_version(row.get('raw'))
+        raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
+        version=media_version(raw)
         media.append({'id': str(row['id']), 'kind': kind,
             'source_version': version,
+            'source_version_verified':_has_current_media_version(raw),
             'source_hash': source_hash({'external_id': row.get('external_id'),
               'body_hash': store.digest(str(row.get('body') or '')),
               'media_kind': kind, 'media_version': version}),
@@ -150,6 +157,15 @@ def plan(cur, profile, candidate_id):
                 # the historical extraction or its claims.
                 media[-1]['status']='pending_consent'
                 media[-1]['code']='verified_not_attempted'
+        if (not media[-1]['complete'] and media[-1]['status']=='unknown' and allow_unknown_retry
+                and kind in SUPPORTED and media[-1]['source_version_verified']):
+            # This authorizes one NEW attempt against the current bounded
+            # source. It does not assert that old bytes match, clear old holds,
+            # or rewrite historical extraction evidence.
+            media[-1]['prior_attempt_code']=media[-1]['code']
+            media[-1]['status']='pending_retry'
+            media[-1]['code']='owner_acknowledged_new_attempt'
+            media[-1]['retry_authorized']=True
     return {'status': 'pending_consent', 'case_id': key, 'case_version': case['version'],
         'channel_id': channel, 'conversation_id': binding['conversation_id'],
         'start_message_id': start, 'end_message_id': end, 'media': media,
@@ -161,7 +177,8 @@ def routes(planned, agent_id, *, allow_legacy_unknown=True):
     """One source per fragment avoids the collector's four-file/two-visual cap."""
     for item in planned['media']:
         if (item['complete'] or item['kind'] not in SUPPORTED
-            or item['status'] not in {'pending_processing','pending_consent','unknown'}
+            or item['status'] not in {'pending_processing','pending_consent','pending_retry','unknown'}
+            or item['status']=='pending_retry' and item.get('retry_authorized') is not True
             or item['status']=='unknown' and (not allow_legacy_unknown or item['code'] not in {'status_not_recorded','source_version_unverified'})):
             continue
         yield {'provider':'connect', 'channel_id':planned['channel_id'],
@@ -169,10 +186,11 @@ def routes(planned, agent_id, *, allow_legacy_unknown=True):
             'message_ids':[item['id']], 'period_start':item['at'],
             'period_end':item['period_end'], 'analysis_agent_id':str(agent_id),
             'source_version':item['source_version'], 'case_id':planned['case_id'],
-            'case_version':planned['case_version'], 'case_plan_hash':planned['plan_hash']}
+            'case_version':planned['case_version'], 'case_plan_hash':planned['plan_hash'],
+            **({'owner_retry_unknown':True} if item.get('retry_authorized') is True else {})}
 
 
-def plan_existing_cases(cur, profile, *, limit=500):
+def plan_existing_cases(cur, profile, *, limit=500, acknowledge_prior_unknown=False):
     """Build a fail-closed, versioned snapshot of current support cases.
 
     Only already-created, non-rejected/non-archived candidates are included.
@@ -192,7 +210,7 @@ def plan_existing_cases(cur, profile, *, limit=500):
     for candidate in candidates:
         case_id=str(candidate['id'])
         try:
-            item=plan(cur,profile,case_id)
+            item=plan(cur,profile,case_id,allow_unknown_retry=acknowledge_prior_unknown)
         except TenantLinearError as error:
             # Cases disappearing or crossing tenant scope invalidate the
             # snapshot rather than being silently omitted.
@@ -222,10 +240,12 @@ def plan_existing_cases(cur, profile, *, limit=500):
         plans.append(item)
     if len(channels)>100:
         raise TenantLinearError('Current case snapshot spans too many channels.',409)
+    retry_unknown_count=sum(1 for item in plans for media in item.get('media',[]) if media.get('retry_authorized') is True)
     return {'status':'pending_consent','cases':plans,'channel_ids':sorted(channels),
       'case_count':len(candidates),'eligible_count':eligible,'reused_count':reused,
+      'retry_unknown_count':retry_unknown_count,
       'review_count':review,'unknown_media_count':unknown,'unavailable_media_count':unavailable,
-      'snapshot_hash':store.digest(rows)}
+      'acknowledge_prior_unknown':bool(acknowledge_prior_unknown),'snapshot_hash':store.digest([rows,bool(acknowledge_prior_unknown)])}
 
 
 def existing_routes(snapshot, agent_id, video_model=None):

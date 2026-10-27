@@ -326,15 +326,19 @@ def _tools(cur,cfg,name,args):
                     _audit(audit_cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],action,entity_type,entity_id,details or {})
                 audit_conn.commit()
         if name=='support_media_snapshot_preview':
-            if args: raise TenantLinearError('Invalid media snapshot preview request.',400)
-            result=campaigns.preview_existing_cases(profile)
+            if set(args)-{'acknowledge_prior_unknown'} or ('acknowledge_prior_unknown' in args and type(args['acknowledge_prior_unknown']) is not bool):
+                raise TenantLinearError('Invalid media snapshot preview request.',400)
+            result=campaigns.preview_existing_cases(profile,acknowledge_prior_unknown=args.get('acknowledge_prior_unknown',False))
             media_audit('mcp_support_media_snapshot_preview','support_media_snapshot','',
-                        {'case_count':int(result.get('case_count') or 0),'eligible_count':int(result.get('eligible_count') or 0)})
+                        {'case_count':int(result.get('case_count') or 0),'eligible_count':int(result.get('eligible_count') or 0),
+                         'retry_unknown_count':int(result.get('retry_unknown_count') or 0)})
             return result
         if name=='support_media_campaign_prepare':
             required={'request_id','channel_ids','analysis_agent_id','max_calls','max_tokens','media_policy','video_model'}
-            if set(args)!=required or not isinstance(args.get('media_policy'),dict):
+            if set(args) not in (required,required|{'acknowledge_prior_unknown'}) or not isinstance(args.get('media_policy'),dict):
                 raise TenantLinearError('Invalid current-case campaign plan.',400)
+            if 'acknowledge_prior_unknown' in args and type(args['acknowledge_prior_unknown']) is not bool:
+                raise TenantLinearError('Invalid prior-unknown retry acknowledgement.',400)
             data={**args,'all_existing_cases':True,'max_cost_microusd':10_000_000}
             campaign_id=campaigns.prepare(profile,data)
             return {'campaign_id':campaign_id,'status':'awaiting_budget','cap_microusd':10_000_000,
@@ -345,8 +349,9 @@ def _tools(cur,cfg,name,args):
             media_audit('mcp_support_media_campaign_read','knowledge_campaign',str(args['campaign_id']))
             return result
         if name=='support_media_campaign_start':
-            required={'campaign_id','expected_version','snapshot_hash','confirm_external_processing'}
-            if set(args)!=required or args.get('confirm_external_processing') is not True or type(args.get('expected_version')) is not int:
+            required={'campaign_id','expected_version','snapshot_hash','confirm_external_processing','acknowledge_prior_unknown'}
+            if (set(args)!=required or args.get('confirm_external_processing') is not True
+                or type(args.get('expected_version')) is not int or type(args.get('acknowledge_prior_unknown')) is not bool):
                 raise TenantLinearError('Confirm this exact $10 case snapshot before starting.',400)
             campaign_id=str(identifier(args['campaign_id']))
             current=campaigns.get(profile,campaign_id).get('campaign')
@@ -360,7 +365,8 @@ def _tools(cur,cfg,name,args):
                 'max_calls':current['max_calls'],'max_tokens':current['max_tokens'],
                 'confirm_external_processing':True,'media_policy':current['media_policy'],
                 'all_cases_snapshot_hash':args['snapshot_hash'],'max_cost_microusd':10_000_000,
-                'video_model':current.get('video_model')})
+                'video_model':current.get('video_model'),
+                'acknowledge_prior_unknown':args['acknowledge_prior_unknown']})
         if name=='support_media_campaign_control':
             if set(args)!={'campaign_id','expected_version','action'} or args.get('action') not in {'pause','resume','stop'}:
                 raise TenantLinearError('Only pause, resume or stop is available for this media grant.',400)
@@ -383,6 +389,20 @@ def _tools(cur,cfg,name,args):
             result=cases.detail(profile,args['candidate_id'])
             _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_support_case_read','knowledge_candidate',str(args['candidate_id']))
             return result
+        if name=='support_case_extraction_status':
+            if set(args)!={'candidate_id'}: raise TenantLinearError('Invalid extraction status request.',400)
+            result=cases.detail(profile,args['candidate_id']);candidate=result.get('candidate') or {}
+            media=[]
+            for item in candidate.get('media_processing') or []:
+                if not isinstance(item,dict):continue
+                media.append({key:item.get(key) for key in ('id','status','code','extraction_status','complete') if key in item})
+            status=(media[0].get('extraction_status') if media else candidate.get('media_analysis_status'))
+            target=str(identifier(args['candidate_id']))
+            _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_support_case_extraction_status','knowledge_candidate',target,{'media_count':len(media),'status':status or ''})
+            return {'candidate_id':target,'extraction_id':candidate.get('extraction_id'),
+              'case_status':candidate.get('status'),'case_version':candidate.get('version'),
+              'extraction_status':status,'media_coverage':candidate.get('media_coverage'),
+              'media_processing':media}
         if name=='support_case_confirm_publish':
             if set(args)!={'candidate_id','expected_version','agent_ids'}: raise TenantLinearError('Invalid case publication request.',400)
             return cases.mutate(profile,args['candidate_id'],{'expected_version':args['expected_version'],'agent_ids':args['agent_ids']},'approve')
@@ -414,7 +434,7 @@ def _tools(cur,cfg,name,args):
             _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_support_case_delete_status','knowledge_candidate',target,{'deleted':bool(row)})
             return {'candidate_id':target,'deleted':bool(row),'deleted_at':str(row['created_at']) if row else None}
         raise TenantLinearError('Unsupported support-case action.',404)
-    if name in {'support_dialog_agent_options','support_dialog_agent_assign'}:
+    if name in {'support_dialog_agent_options','support_dialog_agent_assign','support_dialog_agent_bulk_preview','support_dialog_agent_bulk_assign'}:
         if DIALOG_ASSIGN_SCOPE not in set(cfg.get('granted_scopes') or []):
             raise TenantLinearError('Additional OAuth scope required.',403)
         if not isinstance(args,dict): raise TenantLinearError('Invalid dialog assignment request.',400)
@@ -424,6 +444,18 @@ def _tools(cur,cfg,name,args):
             if set(args)!={'conversation_id','lead_id'}: raise TenantLinearError('Invalid dialog assignment preview.',400)
             result=assignment.options(profile,{'provider':'connect','channel_id':cfg['AI_LEARNING_MCP_CHANNEL_ID'],**args,'manage':True})
             _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_dialog_agent_options','conversation',str(args['conversation_id'])[:160],{'channel_id':cfg['AI_LEARNING_MCP_CHANNEL_ID'],'allowed':bool(result.get('allowed')),'reason':result.get('reason','')})
+            return result
+        if name=='support_dialog_agent_bulk_preview':
+            if set(args)!={'channel_id','agent_id'}:raise TenantLinearError('Select one channel and agent for a scoped assignment preview.',400)
+            result=assignment.bulk_preview(profile,args['channel_id'],args['agent_id'])
+            _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_dialog_agent_bulk_preview','channel',str(args['channel_id']),{'eligible':len(result.get('eligible',[])),'groups':result.get('summary',{}).get('group_eligible',0)})
+            return result
+        if name=='support_dialog_agent_bulk_assign':
+            if set(args)!={'channel_id','agent_id','preview_token','batch_id','confirm_exact_preview'} or args.get('confirm_exact_preview') is not True:
+                raise TenantLinearError('Confirm the exact preview before assigning agents.',400)
+            result=assignment.bulk_apply(profile,{'channel_id':args['channel_id'],'agent_id':args['agent_id'],
+              'preview_token':args['preview_token'],'batch_id':args['batch_id'],'confirmed':True})
+            _audit(cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],'mcp_dialog_agent_bulk_assign','channel',str(args['channel_id']),{'assigned':result.get('assigned',0),'skipped':result.get('skipped',0)})
             return result
         if set(args)!={'conversation_id','lead_id','agent_id','expected_revision','request_id'}:
             raise TenantLinearError('Invalid dialog assignment.',400)
@@ -723,6 +755,10 @@ def _dialog_assignment_definitions():
        'inputSchema':read_schema,'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_dialog_agent_assign','description':'Assign or unassign an agent on one exact direct Connect dialog. Provide the revision from a fresh options read and a unique request_id. The existing service rechecks tenant, channel, dialog identity and agent scope. It leaves the dialog paused and never sends a message or activates automatic replies.',
        'inputSchema':write_schema,'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_dialog_agent_bulk_preview','description':'Preview exact direct and group dialogs in one company channel that can be assigned to one selected agent. Uses the existing owner-only assignment preview and group-scope checks; no assignments or replies are changed.',
+       'inputSchema':{'type':'object','properties':{'channel_id':{'type':'string','format':'uuid'},'agent_id':{'type':'string','format':'uuid'}},'required':['channel_id','agent_id'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_dialog_agent_bulk_assign','description':'Apply one fresh exact owner-reviewed preview of direct and eligible group dialog assignments. The server rechecks the preview token and per-dialog revision/scope; all assigned dialogs remain paused and no message is sent.',
+       'inputSchema':{'type':'object','properties':{'channel_id':{'type':'string','format':'uuid'},'agent_id':{'type':'string','format':'uuid'},'preview_token':{'type':'string','pattern':'^[0-9a-f]{64}$'},'batch_id':{'type':'string','format':'uuid'},'confirm_exact_preview':{'type':'boolean','const':True}},'required':['channel_id','agent_id','preview_token','batch_id','confirm_exact_preview'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':True,'openWorldHint':False},'securitySchemes':security},
     ]
 
 
@@ -735,6 +771,8 @@ def _support_case_definitions():
       {'name':'support_cases_list','description':'List owner-accessible support cases. By default, rejected, archived and knowledge-published cases are hidden; request an explicit status to view those recoverable records. Uses bounded pagination.',
        'inputSchema':list_schema,'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_case_detail','description':'Read one exact owner-accessible case, its conclusion, evidence provenance and media coverage.',
+       'inputSchema':{'type':'object','properties':ids,'required':['candidate_id'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_case_extraction_status','description':'Read the processing state and safe per-attachment status for one exact case. Returns no source text, URLs, media keys or content hashes.',
        'inputSchema':{'type':'object','properties':ids,'required':['candidate_id'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_case_confirm_publish','description':'Publish a case as a confirmed resolution only when existing customer-outcome, cause, source and agent-scope checks pass. This cannot convert an unknown outcome into confirmed.',
        'inputSchema':{'type':'object','properties':{**ids,'expected_version':{'type':'integer','minimum':1},'agent_ids':{'type':'array','minItems':1,'maxItems':20,'uniqueItems':True,'items':{'type':'string','format':'uuid'}}},'required':['candidate_id','expected_version','agent_ids'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
@@ -754,14 +792,14 @@ def _support_media_definitions():
     security=[{'type':'oauth2','scopes':[SUPPORT_MEDIA_SCOPE]}]
     campaign_id={'campaign_id':{'type':'string','format':'uuid'}}
     return [
-      {'name':'support_media_snapshot_preview','description':'Read a bounded snapshot of existing support cases and their attachment readiness, reuse, historical unknowns and boundary-review reasons. Does not download media, prepare a grant or call a provider.',
-       'inputSchema':{'type':'object','properties':{},'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
-      {'name':'support_media_campaign_prepare','description':'Prepare exactly one current-existing-cases snapshot with the fixed $10 total prospective cap. This creates a pending plan only; it does not approve external processing or start provider calls. The campaign ID equals request_id and can be read if the tool result is unknown. A fresh separate start call is required.',
-       'inputSchema':{'type':'object','properties':{'request_id':{'type':'string','format':'uuid'},'channel_ids':{'type':'array','items':{'type':'string','format':'uuid'},'maxItems':100},'analysis_agent_id':{'type':'string','format':'uuid'},'max_calls':{'type':'integer','minimum':1,'maximum':10000},'max_tokens':{'type':'integer','minimum':24000,'maximum':160000000},'media_policy':{'type':'object','properties':{'allow_external_media':{'type':'boolean'},'allow_paid_asr':{'type':'boolean'},'max_main_calls':{'type':'integer','minimum':0,'maximum':10000},'max_asr_calls':{'type':'integer','minimum':0,'maximum':10000},'max_vision_calls':{'type':'integer','minimum':0,'maximum':10000}},'required':['allow_external_media','allow_paid_asr','max_main_calls','max_asr_calls','max_vision_calls'],'additionalProperties':False},'video_model':{'type':['string','null']}},'required':['request_id','channel_ids','analysis_agent_id','max_calls','max_tokens','media_policy','video_model'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_media_snapshot_preview','description':'Read a bounded case snapshot. Set acknowledge_prior_unknown=true to include one new attempt against each eligible exact current source whose earlier attempt is unknown. This does not clear old holds, download media, prepare a grant or call a provider.',
+       'inputSchema':{'type':'object','properties':{'acknowledge_prior_unknown':{'type':'boolean'}},'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_media_campaign_prepare','description':'Prepare one current-existing-cases snapshot with a fixed $10 prospective cap. Set acknowledge_prior_unknown=true to include one new current-source attempt for eligible old unknowns; old holds remain and a second unknown result is not retried. Preparation never starts provider calls.',
+       'inputSchema':{'type':'object','properties':{'request_id':{'type':'string','format':'uuid'},'channel_ids':{'type':'array','items':{'type':'string','format':'uuid'},'maxItems':100},'analysis_agent_id':{'type':'string','format':'uuid'},'max_calls':{'type':'integer','minimum':1,'maximum':10000},'max_tokens':{'type':'integer','minimum':24000,'maximum':160000000},'media_policy':{'type':'object','properties':{'allow_external_media':{'type':'boolean'},'allow_paid_asr':{'type':'boolean'},'max_main_calls':{'type':'integer','minimum':0,'maximum':10000},'max_asr_calls':{'type':'integer','minimum':0,'maximum':10000},'max_vision_calls':{'type':'integer','minimum':0,'maximum':10000}},'required':['allow_external_media','allow_paid_asr','max_main_calls','max_asr_calls','max_vision_calls'],'additionalProperties':False},'video_model':{'type':['string','null']},'acknowledge_prior_unknown':{'type':'boolean'}},'required':['request_id','channel_ids','analysis_agent_id','max_calls','max_tokens','media_policy','video_model'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_media_campaign_read','description':'Read the current state of one exact current-case media plan, including progress, remaining cap, prior holds and partial results. Does not process media.',
        'inputSchema':{'type':'object','properties':campaign_id,'required':['campaign_id'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
-      {'name':'support_media_campaign_start','description':'Start one prepared exact current-case snapshot after an explicit owner confirmation. Requires the current campaign version and snapshot hash; server rechecks the fixed $10 cap, source snapshot, tenant cap, model tariffs and attachment eligibility before any provider call.',
-       'inputSchema':{'type':'object','properties':{**campaign_id,'expected_version':{'type':'integer','minimum':1},'snapshot_hash':{'type':'string','minLength':32,'maxLength':128},'confirm_external_processing':{'type':'boolean','const':True}},'required':['campaign_id','expected_version','snapshot_hash','confirm_external_processing'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':True,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_media_campaign_start','description':'Start one prepared exact current-case snapshot after explicit owner confirmation. acknowledge_prior_unknown must match the prepared plan; old holds remain and each admitted unknown has at most one new attempt. The server rechecks the fixed $10 cap, source snapshot, tenant cap and tariffs.',
+       'inputSchema':{'type':'object','properties':{**campaign_id,'expected_version':{'type':'integer','minimum':1},'snapshot_hash':{'type':'string','minLength':32,'maxLength':128},'confirm_external_processing':{'type':'boolean','const':True},'acknowledge_prior_unknown':{'type':'boolean'}},'required':['campaign_id','expected_version','snapshot_hash','confirm_external_processing','acknowledge_prior_unknown'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':True,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_media_campaign_control','description':'Pause, resume or stop one exact media campaign. Resume does not automatically retry unknown case-media results; stopping revokes the pending/active grant. Requests already sent to a provider cannot be recalled.',
        'inputSchema':{'type':'object','properties':{**campaign_id,'expected_version':{'type':'integer','minimum':1},'action':{'type':'string','enum':['pause','resume','stop']}},'required':['campaign_id','expected_version','action'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':True,'openWorldHint':False},'securitySchemes':security},
     ]
@@ -833,7 +871,7 @@ async def mcp(request):
             if tool_name=='company_ai_settings_read' and isinstance(arguments,dict) and arguments.get('list_provider_models') is True:
                 output=await asyncio.to_thread(_company_model_list,cfg,arguments)
                 return _tool_response(output,request_id)
-            if tool_name=='support_dialog_agent_assign':
+            if tool_name in {'support_dialog_agent_assign','support_dialog_agent_bulk_assign'}:
                 # The shared assignment service owns its transaction. Once
                 # called, an unexpected transport failure must be reported as
                 # an unknown outcome so clients inspect/replay the same
@@ -860,7 +898,7 @@ async def mcp(request):
                 if tool_name.startswith(direct_reconcile.PREFIX):
                     commit_attempted=True
                     conn.commit()
-                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('administrator_single_message_extraction_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge' or data.get('params',{}).get('name','')=='support_dialog_agent_options' or data.get('params',{}).get('name','') in {'support_cases_list','support_case_detail','support_case_delete_status','support_agents_list','support_agent_archive_status','support_agent_delete_preview','support_media_snapshot_preview','support_media_campaign_read'}:
+                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('administrator_single_message_extraction_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge' or data.get('params',{}).get('name','') in {'support_dialog_agent_options','support_dialog_agent_bulk_preview','support_cases_list','support_case_detail','support_case_extraction_status','support_case_delete_status','support_agents_list','support_agent_archive_status','support_agent_delete_preview','support_media_snapshot_preview','support_media_campaign_read'}:
                     commit_attempted=True
                     conn.commit()
             return response

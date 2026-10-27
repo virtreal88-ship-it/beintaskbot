@@ -71,7 +71,9 @@ def collect(profile,item,check_before_ai=None):
         # again; partial video remains explicitly partial.
         from tenant_media_evidence import reusable, apply_reusable
         prior=reusable(profile,ref)
-        if prior:
+        retry_unknown=(item.get('route') or {}).get('owner_retry_unknown') is True
+        reusable_failure=prior and prior.get('status') in {'unavailable','error'}
+        if prior and not (retry_unknown and reusable_failure):
             reused=apply_reusable(message,prior)
             receipt={k:ref[k] for k in ('id','channel_id','lead_id','role','happened_at') if k in ref}
             receipt.update(kind=kind,**reused)

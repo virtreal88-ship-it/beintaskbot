@@ -12,6 +12,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 import pytest
 import tenant_knowledge_media as media
+from test_knowledge_candidates import ready
+from test_tenant_support_inbox import A,PROFILE
 from tenant_linear_policy import TenantLinearError
 from test_connect_images import PNG
 
@@ -78,6 +80,40 @@ def test_count_limit_unsupported_and_pending(context):
     assert [r['status'] for r in results]==['unsupported']*4+['partial']
     assert results[-1]['code']=='file_count_limit'
     download.assert_not_called()
+
+
+def test_owner_batch_retry_cache_is_single_attempt_and_shared_by_same_artifact(ready,monkeypatch):
+    import uuid
+    from unittest.mock import Mock
+    import tenant_knowledge_candidates_service as service
+    import tenant_knowledge_media_cache as cache
+    db,_,_=ready
+    monkeypatch.setattr(cache,'_connect',lambda:db)
+    monkeypatch.setattr(service,'_connect',lambda:db)
+    monkeypatch.setattr(service,'check_active',lambda *_:None)
+    message_id=str(uuid.uuid4());grant_id=str(uuid.uuid4());content=b'synthetic printer image bytes'
+    ref={'id':message_id,'channel_id':'00000000-0000-0000-0000-0000000000c9'}
+    route={'owner_retry_unknown':True,'media_grant_id':grant_id,'message_ids':[message_id],
+      'source_version':'a'*64,'allow_external_media':True,'allow_vision':True}
+    item={'tenant':A,'model':'gpt-4.1','route':route,'refs':[ref],'key':'mock-key','vision_attempts':0}
+    provider=Mock(return_value=('A synthetic label observation.',{'input_tokens':20,'output_tokens':8,'total_tokens':28}))
+    result=cache.observe_once(PROFILE,item,ref,content,'image/png',{},provider)
+    assert result==('A synthetic label observation.',{'input_tokens':20,'output_tokens':8,'total_tokens':28},True)
+    provider.assert_called_once()
+    # A second current-source route under the same grant cannot call again;
+    # its completed artifact is reusable even when this copy has no old hold.
+    ordinary={**item,'route':{**route,'owner_retry_unknown':False}}
+    reused=cache.observe_once(PROFILE,ordinary,ref,content,'image/png',{},provider)
+    assert reused==('A synthetic label observation.',{},False)
+    provider.assert_called_once()
+    rows=db.execute("SELECT state,metadata FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND metadata->>'owner_retry_grant'=%s",(A,grant_id))
+    assert len(rows)==1 and rows[0]['state']=='completed'
+    uncertain_provider=Mock(side_effect=RuntimeError('synthetic timeout'))
+    uncertain_content=b'a different synthetic image with unknown outcome'
+    with pytest.raises(RuntimeError):cache.observe_once(PROFILE,item,ref,uncertain_content,'image/png',{},uncertain_provider)
+    with pytest.raises(TenantLinearError,match='неизвестен или ещё обрабатывается'):
+        cache.observe_once(PROFILE,item,ref,uncertain_content,'image/png',{},uncertain_provider)
+    uncertain_provider.assert_called_once()
 
 def test_plain_document_extracts_redacts_and_preserves_caption(context):
     item,add,download=context;add('document')
