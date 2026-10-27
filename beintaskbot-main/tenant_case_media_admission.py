@@ -3,6 +3,7 @@
 Planning is read-only.  The owner must approve the resulting campaign before any
 fragment is queued.  No conversation history discovery is used for this mode.
 """
+import json
 from datetime import timedelta
 
 from tenant_linear_policy import TenantLinearError, identifier
@@ -10,6 +11,79 @@ from tenant_knowledge_candidates_policy import MAX_MESSAGES, moment
 from tenant_knowledge_media_coverage import SUPPORTED
 import tenant_knowledge_candidates_store as store
 from tenant_media_evidence import media_version, source_hash
+
+_NO_CALL_CONSENT_CODES = {'external_media_permission_required', 'asr_authorization_required', 'vision_not_approved'}
+
+
+def _explicit_no_media_call(ref, result):
+    """Recognize the extractor's persisted refusal shape, not its UI projection."""
+    status=str(result.get('status') or '')
+    code=str(result.get('code') or '')
+    if status!='unavailable' or code not in _NO_CALL_CONSENT_CODES:
+        return False
+    if any(isinstance(result.get(field),str) and result[field].strip()
+           for field in ('transcript','observation')) or result.get('observations') or result.get('visuals'):
+        return False
+    if str(ref.get('media_kind') or result.get('kind') or '')=='video':
+        # Video consent may be refused only after ASR has already run. The
+        # saved receipt must explicitly say audio was not requested, and it
+        # must contain no transcript/visual output, before it proves no call.
+        if code=='vision_not_approved' and result.get('audio_status')!='not_requested':
+            return False
+        if result.get('audio_status') not in (None,'not_requested'):
+            return False
+    return True
+
+
+def _historical_attempt_reconciliation(cur, tenant, message_id, current_source_hash):
+    """Read exact-source extraction history without inferring from missing rows.
+
+    Only a saved explicit consent refusal for the same source hash, with no
+    media reservation and no other matching history, proves that the media
+    provider was not called. A missing/partial legacy record stays unknown.
+    """
+    cur.execute('''SELECT id::text AS id,status,source_refs,media_results
+      FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid
+        AND (source_refs @> %s::jsonb OR media_results @> %s::jsonb)''',
+      (tenant, json.dumps([{'id':str(message_id)}]), json.dumps([{'id':str(message_id)}])))
+    runs=cur.fetchall()
+    if not runs:
+        return {'state':'unknown','reason':'attempt_history_not_recorded','matching_runs':0}
+    explicit_no_call=False
+    for run in runs:
+        refs=[ref for ref in (run.get('source_refs') or [])
+              if isinstance(ref,dict) and str(ref.get('id'))==str(message_id)]
+        results=[result for result in (run.get('media_results') or [])
+                 if isinstance(result,dict) and str(result.get('id'))==str(message_id)]
+        if not refs or not results:
+            return {'state':'unknown','reason':'attempt_history_incomplete','matching_runs':len(runs)}
+        # A current message may have historical records for multiple versions.
+        # Any different or unparseable version keeps the historical relation
+        # uncertain; it must not be silently treated as the current bytes.
+        exact_refs=[ref for ref in refs if source_hash(ref)==current_source_hash]
+        if len(exact_refs)!=len(refs):
+            return {'state':'unknown','reason':'historical_source_version_unverified','matching_runs':len(runs)}
+        if len(results)!=len(refs):
+            return {'state':'unknown','reason':'attempt_history_incomplete','matching_runs':len(runs)}
+        for result in results:
+            if not _explicit_no_media_call(exact_refs[0],result):
+                return {'state':'unknown','reason':'prior_attempt_or_unresolved_result','matching_runs':len(runs)}
+        explicit_no_call=True
+        # The media reservations are extraction-scoped. Their presence cannot
+        # identify which attachment was sent, so any such reservation blocks
+        # a claim that this message was never attempted.
+        cur.execute("SELECT to_regclass('public.saas_ai_spend_reservations') AS table_name")
+        if not cur.fetchone().get('table_name'):
+            return {'state':'unknown','reason':'spend_ledger_unavailable','matching_runs':len(runs)}
+        cur.execute('''SELECT 1 FROM saas_ai_spend_reservations
+          WHERE tenant_id=%s::uuid AND (call_key=%s OR call_key=%s OR call_key=%s) LIMIT 1''',
+          (tenant,'extraction:'+str(run['id'])+':asr','extraction:'+str(run['id'])+':vision',
+           'extraction:'+str(run['id'])+':photo'))
+        if cur.fetchone():
+            return {'state':'unknown','reason':'media_reservation_present','matching_runs':len(runs)}
+    if explicit_no_call:
+        return {'state':'known_not_attempted','reason':'exact_version_explicit_consent_block','matching_runs':len(runs)}
+    return {'state':'unknown','reason':'attempt_history_incomplete','matching_runs':len(runs)}
 
 
 def plan(cur, profile, candidate_id):
@@ -67,6 +141,15 @@ def plan(cur, profile, candidate_id):
             'at': at.isoformat(), 'period_end': (at+timedelta(microseconds=1)).isoformat(),
             'status': item.get('status', 'unknown'), 'code': item.get('code', 'status_not_recorded'),
             'complete': item.get('complete') is True})
+        if not media[-1]['complete'] and media[-1]['status']=='unknown' and media[-1]['code'] in {'status_not_recorded','source_version_unverified'}:
+            reconciliation=_historical_attempt_reconciliation(cur,tenant,str(row['id']),media[-1]['source_hash'])
+            media[-1]['reconciliation']=reconciliation
+            if reconciliation['state']=='known_not_attempted':
+                # Route through the ordinary owner-grant consent path only
+                # after an exact-version explicit no-call record. Do not alter
+                # the historical extraction or its claims.
+                media[-1]['status']='pending_consent'
+                media[-1]['code']='verified_not_attempted'
     return {'status': 'pending_consent', 'case_id': key, 'case_version': case['version'],
         'channel_id': channel, 'conversation_id': binding['conversation_id'],
         'start_message_id': start, 'end_message_id': end, 'media': media,
@@ -122,7 +205,7 @@ def plan_existing_cases(cur, profile, *, limit=500):
         # source identity. Receipt/state changes between preview and approval
         # can add or remove billable calls and must invalidate that preview.
         media_scope=sorted([[m.get('id'),m.get('kind'),m.get('source_version'),m.get('status'),
-          m.get('code'),bool(m.get('complete'))] for m in item.get('media',[])],key=lambda row:str(row[0]))
+          m.get('code'),bool(m.get('complete')),m.get('reconciliation')] for m in item.get('media',[])],key=lambda row:str(row[0]))
         rows.append([case_id,int(candidate['version']),candidate['status'],item.get('plan_hash',''),
           item.get('reason',''),media_scope])
         if item.get('status')!='pending_consent':

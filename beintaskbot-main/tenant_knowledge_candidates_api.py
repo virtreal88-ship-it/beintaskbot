@@ -25,7 +25,13 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
             if not profile: raise TenantLinearError('Нет доступа.',403)
             if request.method=='GET':
                 _expected(request.query,profile)
-                if resource=='campaign_preview': result=await asyncio.to_thread(campaigns.preview,profile,request.query.getall('channel_id',[]))
+                if resource=='campaign_preview':
+                    if request.query.get('all_existing_cases')=='true':
+                        if set(request.query)-{'all_existing_cases','expected_tenant_id','expected_user_id'}:
+                            raise TenantLinearError('Некорректные параметры предварительного просмотра.')
+                        result=await asyncio.to_thread(campaigns.preview_existing_cases,profile)
+                    else:
+                        result=await asyncio.to_thread(campaigns.preview,profile,request.query.getall('channel_id',[]))
                 elif resource=='campaigns': result=await asyncio.to_thread(campaigns.get,profile)
                 elif resource=='campaign': result=await asyncio.to_thread(campaigns.get,profile,request.match_info['campaign_id'])
                 elif resource=='batch': result=await asyncio.to_thread(batches.get,profile,request.match_info['batch_id'])

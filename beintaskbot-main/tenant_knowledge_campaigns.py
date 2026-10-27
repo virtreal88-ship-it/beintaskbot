@@ -594,3 +594,12 @@ def preview(profile,channels):
     return {'sources':sources,'message_types':types,'counts_include_channel_copies':True,
       'media_availability':'not_probed','currency_estimate':None,'calls_per_fragment_max':2,'reserved_tokens_per_fragment':24000,
       'messages_per_fragment_max':80,'warning':'Actual availability, unique group events and fragment counts require bounded discovery; no external media has been accessed.'}
+
+
+def preview_existing_cases(profile):
+    """Read-only owner preview for the exact bounded current-case media set."""
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            from tenant_case_media_admission import plan_existing_cases
+            snapshot=plan_existing_cases(cur,profile)
+    return snapshot
