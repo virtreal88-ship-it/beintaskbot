@@ -208,12 +208,18 @@ def test_owner_reviews_changed_media_as_new_version_without_rewriting_extraction
 
 
 @pytest.mark.parametrize('sibling_claimed',[False,True])
-def test_recovered_candidate_scopes_stale_media_to_its_claims_and_still_fails_closed(ready,sibling_claimed):
+@pytest.mark.parametrize(('confirmation_text','should_publish'),[
+    ('Duzelib chox sagolun, internet duzelib.',True),
+    ('Duzelib amma problem qalıb.',False),
+    ('Duzelib ola biler.',False),
+])
+def test_recovered_candidate_scopes_stale_media_and_requires_unambiguous_customer_confirmation(
+        ready,sibling_claimed,confirmation_text,should_publish):
     import tenant_media_evidence as media_evidence
     db,generation,_=ready
     customer_confirmation=str(uuid.uuid4())
-    db.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'customer-confirmation',%s,'incoming','Client','Duzelib chox sagolun, internet duzelib.','text',now()+(20 * interval '1 second'))",
-      (A,customer_confirmation,'connect:'+CA));db.commit()
+    db.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'customer-confirmation',%s,'incoming','Client',%s,'text',now()+(20 * interval '1 second'))",
+      (A,customer_confirmation,'connect:'+CA,confirmation_text));db.commit()
     value=candidate(ready)
     run=db.execute('SELECT * FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['extraction_id']))[0]
     refs=run['source_refs'];assert len(refs)>=2
@@ -262,15 +268,20 @@ def test_recovered_candidate_scopes_stale_media_to_its_claims_and_still_fails_cl
           'outcome':{'status':'confirmed','text':'Customer confirmed the fix works.','message_ids':[confirmation['id']]},
           'work_status':'resolved'},'edit')['candidate']
         assert saved['version']==3 and saved['title']=='Reviewed current support request'
-        assert saved['cause']=={'status':'unknown','text':''} and saved['outcome']['status']=='confirmed'
+        assert saved['cause']=={'status':'unknown','text':''}
+        assert saved['outcome']['status']==('confirmed' if should_publish else 'unconfirmed')
         saved_refs=db.execute('SELECT source_refs FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['extraction_id']))[0]['source_refs']
         assert saved_refs==refs and saved_refs[0]['media_version']==store.digest(old_facts)
-        published=store.mutate(PROFILE,value['id'],{'expected_version':3,'agent_ids':[EXPERT]},'approve')['candidate']
-        assert published['status']=='approved' and [item['agent_id'] for item in published['publications']]==[EXPERT]
-        provenance=db.execute("SELECT provenance FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND provenance->>'candidate_id'=%s",(A,value['id']))[0]['provenance']
-        assert provenance['media_source_review']['revision']==1
+        if should_publish:
+            published=store.mutate(PROFILE,value['id'],{'expected_version':3,'agent_ids':[EXPERT]},'approve')['candidate']
+            assert published['status']=='approved' and [item['agent_id'] for item in published['publications']]==[EXPERT]
+            provenance=db.execute("SELECT provenance FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND provenance->>'candidate_id'=%s",(A,value['id']))[0]['provenance']
+            assert provenance['media_source_review']['revision']==1
+        else:
+            with pytest.raises(TenantLinearError,match='confirmation_required'):
+                store.mutate(PROFILE,value['id'],{'expected_version':3,'agent_ids':[EXPERT]},'approve')
     after=db.execute('SELECT count(*) AS n FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid',(A,))[0]['n']
-    assert after==before+(0 if sibling_claimed else 1)
+    assert after==before+(1 if should_publish and not sibling_claimed else 0)
     assert generation.call_count==1
 
 
@@ -589,7 +600,10 @@ def test_hypotheses_and_questions_not_confirmation(value):
     ('düzəlməyib',False),
     ('duzelib?',False),
     ('Duzelib amma problem qalir',False),
+    ('Duzelib amma problem qalıb',False),
+    ('Duzelib amma problem qalib',False),
     ('Düzəlib, amma problem hələ də qalır',False),
+    ('Düzəlib, amma problem hələ də qalıb',False),
     ('Duzelib, amma internet islemir',False),
     ('Duzelib, əgər internet geri qayıtsa',False),
     ('Duzelib ola biler',False),
