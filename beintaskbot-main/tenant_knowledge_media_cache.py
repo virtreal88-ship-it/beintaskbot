@@ -118,8 +118,8 @@ def observe_once(profile,item,ref,content,mime,origin,invoke,check_before_ai=Non
         raise
 
 
-def transcribe_once(profile,item,model,media,invoke,check_before_ai=None):
-    fingerprint=store.digest({'sha256':hashlib.sha256(media[0]).hexdigest(),'model':model,'format':media[2]})
+def transcribe_once(profile,item,model,media,invoke,check_before_ai=None,*,return_diagnostics=False):
+    fingerprint=transcription_fingerprint(item,model,media,return_diagnostics=return_diagnostics)
     token=str(uuid.uuid4());tenant=item['tenant']
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -132,7 +132,11 @@ def transcribe_once(profile,item,model,media,invoke,check_before_ai=None):
             if not fresh:
                 cur.execute('SELECT state,transcript,metadata FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND fingerprint=%s',(tenant,fingerprint))
                 receipt=cur.fetchone()
-                if receipt['state']=='completed':return redact(receipt['transcript'],item.get('redaction_names',[])),{},False
+                if receipt['state']=='completed':
+                    metadata=receipt.get('metadata') if isinstance(receipt.get('metadata'),dict) else {}
+                    details={key:metadata[key] for key in ('speech_state','speech_language','speech_reason') if key in metadata}
+                    result=(redact(receipt['transcript'],item.get('redaction_names',[])),{},False)
+                    return (*result,details) if return_diagnostics else result
                 error=TenantLinearError('Результат предыдущего ASR неизвестен или ещё обрабатывается.',409)
                 error.media_outcome_unknown=True
                 code=(receipt.get('metadata') or {}).get('failure_code')
@@ -145,14 +149,40 @@ def transcribe_once(profile,item,model,media,invoke,check_before_ai=None):
         if check_before_ai: check_before_ai()
         item['asr_attempted']=True
         dispatched=True
-        text,usage=invoke(item['key'],model,*media,with_usage=True,request_timeout=45)
+        response=invoke(item['key'],model,*media,with_usage=True,request_timeout=45)
+        diagnostics={}
+        if return_diagnostics:
+            if not isinstance(response,(tuple,list)) or len(response)!=3:
+                raise ValueError('Invalid video transcription result')
+            text,usage,diagnostics=response
+            diagnostics=diagnostics if isinstance(diagnostics,dict) else {}
+        else:
+            text,usage=response
         item['asr_usage']=usage or {}
-        text=redact(text,item.get('redaction_names',[]))[:4000]
+        text=redact(text,item.get('redaction_names',[]))[:4000] if isinstance(text,str) else ''
+        if return_diagnostics and diagnostics.get('speech_state')!='confident':text=''
+        detail_meta=({
+            'speech_state':str(diagnostics.get('speech_state') or 'uncertain')[:32],
+            'speech_language':str(diagnostics.get('language') or '')[:24],
+            'speech_reason':str(diagnostics.get('reason') or '')[:48],
+        } if return_diagnostics else {})
         with _connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("UPDATE saas_knowledge_media_cache SET state='completed',transcript=%s WHERE tenant_id=%s::uuid AND fingerprint=%s AND token=%s::uuid AND state='running'",(text,tenant,fingerprint,token))
+                cur.execute("UPDATE saas_knowledge_media_cache SET state='completed',transcript=%s,metadata=metadata||%s::jsonb WHERE tenant_id=%s::uuid AND fingerprint=%s AND token=%s::uuid AND state='running'",(text,_json(detail_meta),tenant,fingerprint,token))
             conn.commit()
-        return text,usage,True
+        result=(text,usage,True)
+        return (*result,detail_meta) if return_diagnostics else result
     except Exception as error:
         _failed_claim(tenant,fingerprint,token,error,dispatched)
         raise
+
+
+def transcription_fingerprint(item,model,media,*,return_diagnostics=False):
+    fingerprint_data={'sha256':hashlib.sha256(media[0]).hexdigest(),'model':model,'format':media[2]}
+    if return_diagnostics:
+        route=item.get('route') if isinstance(item.get('route'),dict) else {}
+        # Speech confidence and language mismatch are evaluated against the
+        # authorized route. Do not reuse a transcript receipt from a route
+        # with a different expected language.
+        fingerprint_data['expected_language']=str(route.get('language') or '')[:24].casefold()
+    return store.digest(fingerprint_data)

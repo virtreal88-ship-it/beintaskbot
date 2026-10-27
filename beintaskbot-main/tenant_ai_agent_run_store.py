@@ -277,7 +277,22 @@ def knowledge_context(tenant_id, query, *, limit=6, agent_id=None):
                      'content':str(row['content'])[:1800]} for row in cur.fetchall()]
 
 
-def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
+def video_reserved_calls(base_calls, *, response_policy_enabled, audio_enabled,
+                         transcription_model, asr_tariff_available):
+    """Bound a video run's daily reservation to its maximum call path."""
+    if type(base_calls) is not int or not 1 <= base_calls <= 4:
+        raise ValueError('Invalid AI call reservation')
+    if response_policy_enabled:
+        # The policy may issue a second reply generation; ASR is skipped for
+        # this path so main + two frames + fallback remain capped at four.
+        return max(base_calls, 4)
+    calls=max(base_calls,3)  # main reply plus at most two sampled frames
+    if audio_enabled and transcription_model=='whisper-1' and asr_tariff_available:
+        calls=max(calls,4)
+    return calls
+
+
+def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1, video_requested=False):
     """Reserve shared Chat AI calls before contacting the provider."""
     if type(reserved_calls) is not int or not 1 <= reserved_calls <= 4:
         raise ValueError("Invalid AI call reservation")
@@ -329,6 +344,27 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
                     raise TenantLinearError('AI təhlükəsizlik ayarlarını yoxlayın.', 503) from None
             api_key, credential_source = choose_api_credential(tenant, job['agent_id'], job.get('provider'), company_key, selected_model)
             use_platform_key = credential_source == 'platform'
+            video_model='';video_api_key=''
+            if (video_requested is True and job.get('provider')=='connect'
+                    and config.get('video_enabled') is True and config.get('video_model')
+                    and config.get('enabled') is True and config.get('consent') is True
+                    and company_key and row.get('settings_enabled') is True):
+                from tenant_ai_video_model import quote as video_quote
+                from tenant_connect_images import supports_images
+                candidate_video_model=str(config.get('video_model') or '')
+                try:
+                    video_quote(candidate_video_model,tenant)
+                    if supports_images(candidate_video_model):
+                        video_model=candidate_video_model
+                        video_api_key=company_key
+                        from tenant_ai_spend_budget import media_price
+                        reserved_calls=video_reserved_calls(reserved_calls,
+                            response_policy_enabled=(row.get('response_policy') or {}).get('enabled') is True,
+                            audio_enabled=config.get('audio_enabled') is True,
+                            transcription_model=config.get('transcription_model'),
+                            asr_tariff_available=(media_price('whisper-1','asr') is not None))
+                except TenantLinearError:
+                    video_model='';video_api_key=''
             if (not tenant_status_allows_ai(row['tenant_status'],job.get('provider')) or row['settings_enabled'] is not True or row.get('operating_mode') not in (None,'active') or row.get('emergency_stop') is True or row['agent_enabled'] is not True or row.get('role','primary')!='primary'
                     or row.get('mode')=='manual'
                     or row['conversation_state'] in {'human','paused'}
@@ -404,7 +440,8 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1):
               'mode':row['mode'],'auto_send_enabled':row['auto_send_enabled'],'crm_actions_enabled':row['crm_actions_enabled'],
               'max_replies_per_chat':row['max_replies_per_chat'],
               'source_message_id':str((job.get('payload') or {}).get('message_id') or ''),
-              'model':selected_model,'credential_source':credential_source,'pipeline_id':str(pipeline_id),'stage_id':str(stage_id)}
+              'model':selected_model,'credential_source':credential_source,'pipeline_id':str(pipeline_id),'stage_id':str(stage_id),
+              'video_model':video_model,'video_api_key':video_api_key}
             result['spend_call_key']=spend_key
         conn.commit()
     return result

@@ -64,6 +64,7 @@ class SettingsAuthorization(unittest.TestCase):
         self.assertFalse(result['copilot_enabled'])
         self.assertEqual(result['copilot_daily_limit'],9)
         self.assertEqual(result['provider'],'OpenAI')
+        self.assertFalse(result['video_enabled']);self.assertEqual(result['video_model'],'')
         self.assertNotIn('secrets',result);self.assertNotIn('api_key',result)
 
     @classmethod
@@ -162,7 +163,8 @@ class Storage(unittest.TestCase):
         self.cur.fetchone.side_effect=[None,{'used':0}]
 
     def test_legacy_settings_update_preserves_a_separate_copilot_model(self):
-        previous={**CONNECTION,'metadata':{**CONFIG,'copilot_model':'copilot-only','copilot_enabled':True,'copilot_daily_limit':7}}
+        previous={**CONNECTION,'metadata':{**CONFIG,'copilot_model':'copilot-only','copilot_enabled':True,
+            'copilot_daily_limit':7,'video_model':'gpt-4.1','video_enabled':True}}
         connect=MagicMock();cur=connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
         cur.fetchone.side_effect=[previous,previous]
         service=loaders.load('tenant_chat_ai_settings',{'_connect':connect,'_fernet':lambda:Mock(),
@@ -174,6 +176,20 @@ class Storage(unittest.TestCase):
         self.assertEqual(saved['model'],'text-model')
         self.assertEqual(saved['copilot_model'],'copilot-only')
         self.assertEqual(saved['copilot_daily_limit'],7)
+        self.assertEqual(saved['video_model'],'gpt-4.1');self.assertTrue(saved['video_enabled'])
+
+    def test_nonowner_video_change_is_denied_before_settings_write(self):
+        connect=MagicMock();cur=connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cur.fetchone.side_effect=[CONNECTION,{'role':'admin'}]
+        service=loaders.load('tenant_chat_ai_settings',{'_connect':connect,'_fernet':lambda:Mock(),
+            'authorize':Mock(return_value=(TENANT,20)),'ensure_schema':Mock()},
+            {'tenant_platform','tenant_news_ai_settings','tenant_chat_ai_schema'})
+        payload={**CONFIG,'api_key':'','expected_updated_at':'version-1',
+            'video_model':'gpt-4.1','video_enabled':True}
+        with self.assertRaises(TenantLinearError) as error:service.save(SESSION,payload)
+        self.assertEqual(error.exception.status,403)
+        sql=' '.join(call.args[0] for call in cur.execute.call_args_list)
+        self.assertNotIn('INSERT INTO saas_tenant_integrations',sql)
 
     def test_receipt_and_quota_committed_before_provider(self):
         item=self.service.reserve(SESSION,COMMAND)

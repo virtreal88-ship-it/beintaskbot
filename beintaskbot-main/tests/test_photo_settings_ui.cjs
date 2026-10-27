@@ -4,12 +4,14 @@ const script=fs.readFileSync(path.join(__dirname,'../docs/tenant-chat-ai-setting
 const settle=async()=>{for(let i=0;i<20;i++)await new Promise(r=>setImmediate(r));};
 (async()=>{
  for(const lang of ['ru','az','en']){
+  const videoTitle={ru:'Понимание видео',az:'Video anlama',en:'Video understanding'}[lang];
   const dom=new JSDOM('<div id="view-settings"></div>',{url:'https://crm.test/app',runScripts:'outside-only'});
   const w=dom.window,d=w.document,calls=[];w.tenantI18n={language:lang};
   const original={success:true,configured:true,enabled:true,consent:true,audio_enabled:true,
    model:'old-text',transcription_model:'old-asr',copilot_model:'old-copilot',copilot_enabled:true,
    daily_limit:50,copilot_daily_limit:50,media_hosts:['media.example.test'],updated_at:'v1',photo_model:'',
-   photo_model_tariffs:{'gpt-4.1':{ready:true,max_microusd:8896}}};
+   photo_model_tariffs:{'gpt-4.1':{ready:true,max_microusd:8896}},video_model:'',video_enabled:false,
+   video_model_tariffs:{'gpt-4.1':{ready:true,max_microusd:15000}}};
   let state={...original};
   w.fetch=async(url,options={})=>{
    const body=options.body?JSON.parse(options.body):null;calls.push({url,body});
@@ -20,10 +22,13 @@ const settle=async()=>{for(let i=0;i<20;i++)await new Promise(r=>setImmediate(r)
   };
   w.eval(script);await settle();
   const select=d.getElementById('tcPhotoModel');assert.equal(select.value,'');assert.equal(select.disabled,false);
+  assert.equal(d.getElementById('tcVideoModel').value,'');assert.equal(d.getElementById('tcVideoEnabled').checked,false);
+  assert.equal(d.getElementById('tcVideoTitle').textContent,videoTitle);
   select.value='gpt-4.1';select.onchange();assert.match(d.getElementById('tcPhotoStatus').textContent,/0\.008896/);
   d.getElementById('tcAiSave').click();await settle();
   const saved=calls.find(x=>x.body).body;
   assert.equal(saved.photo_model,'gpt-4.1');assert.equal(saved.api_key,'');assert.equal(saved.remove_key,false);
+  assert.equal(saved.video_model,'');assert.equal(saved.video_enabled,false,'video remains opted out independently of photo');
   for(const field of ['model','transcription_model','copilot_model','daily_limit','copilot_daily_limit','audio_enabled'])assert.equal(saved[field],original[field]);
   assert.equal(saved.expected_tenant_id,'a');assert.equal(saved.expected_user_id,11);assert.equal(saved.expected_updated_at,'v1');
   state={...state,photo_model:'',photo_model_tariffs:{}};d.getElementById('tcAiLoad').click();await settle();
@@ -31,6 +36,7 @@ const settle=async()=>{for(let i=0;i<20;i++)await new Promise(r=>setImmediate(r)
   assert.equal(calls.filter(x=>x.body).length,1);assert.match(d.getElementById('tcAiNotice').textContent,/photo_model_tariff_required/);
   d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{member:{tenant_id:'b',telegram_id:22,role:'admin'}}}));await settle();
   assert.equal(d.getElementById('tcPhotoModel').disabled,true);assert.equal(d.getElementById('tcPhotoModel').value,'');
+  assert.equal(d.getElementById('tcVideoModel').disabled,true);assert.equal(d.getElementById('tcVideoEnabled').disabled,true);
   assert(calls.every(x=>!x.url.includes('probe')&&!x.url.includes('send')&&!x.url.includes('consent')));
   dom.window.close();
  }

@@ -31,7 +31,7 @@ def authorize(cur, session):
     return tenant, user
 
 
-def public(row):
+def public(row, tenant_id=None):
     row = row or {}
     metadata = row.get('metadata') or {}
     result = {'configured': bool(row.get('secrets')), 'updated_at': str(row.get('updated_at') or ''),
@@ -45,9 +45,14 @@ def public(row):
         'copilot_employee_permission': 'chat_ai',
         'provider': 'OpenAI',
         'photo_model': metadata.get('photo_model') or '',
+        'video_enabled': metadata.get('video_enabled') is True,
+        'video_model': metadata.get('video_model') or '',
     })
     from tenant_ai_photo_model import MODELS, tariff_status
     result['photo_model_tariffs'] = {model: tariff_status(model) for model in MODELS}
+    from tenant_ai_video_model import MODELS as VIDEO_MODELS, tariff_status as video_tariff_status
+    result['video_model_tariffs'] = ({model: video_tariff_status(model, str(tenant_id))
+        for model in VIDEO_MODELS} if tenant_id else {})
     return result
 
 
@@ -57,7 +62,7 @@ def read(session):
         with conn.cursor() as cur:
             tenant, _ = authorize(cur, session)
             cur.execute("SELECT secrets,metadata,updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
-            return public(cur.fetchone())
+            return public(cur.fetchone(), tenant)
 
 
 def _company_key(session):
@@ -118,8 +123,25 @@ def save(session, data):
             # allowlist. Old clients preserve it and cannot add model grants.
             if 'photo_model' not in data and 'photo_model' in old_metadata:
                 config['photo_model'] = old_metadata['photo_model']
+            # Older settings clients never opt in to video; preserve the
+            # separate owner-only selection without coupling it to photo/text.
+            for field in ('video_model', 'video_enabled'):
+                if field not in data and field in old_metadata:
+                    config[field] = old_metadata[field]
             if 'models' in old_metadata:
                 config['models'] = old_metadata['models']
+            video_changed = (config.get('video_model', '') != old_metadata.get('video_model', '')
+                or config.get('video_enabled') is not (old_metadata.get('video_enabled') is True))
+            if video_changed:
+                cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE',
+                            (tenant, int(session['telegram_id'])))
+                if (cur.fetchone() or {}).get('role') != 'owner':
+                    raise TenantLinearError('Only the company owner can configure video analysis.', 403)
+                if config.get('video_enabled') or config.get('video_model'):
+                    if not previous.get('secrets') or not config['enabled'] or not config['consent']:
+                        raise TenantLinearError('video_model_company_configuration_required', 409)
+                    from tenant_ai_video_model import quote as video_quote
+                    video_quote(config['video_model'], tenant)
             if config.get('photo_model', '') != old_metadata.get('photo_model', ''):
                 cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE',
                             (tenant, int(session['telegram_id'])))
@@ -147,11 +169,17 @@ def save(session, data):
               VALUES(%s::uuid,'chat_ai','configured',%s,%s::jsonb) ON CONFLICT(tenant_id,provider) DO UPDATE
               SET secrets=EXCLUDED.secrets,metadata=EXCLUDED.metadata,status='configured',updated_at=now()
               RETURNING secrets,metadata,updated_at''', (tenant, encrypted, json.dumps(config)))
-            result = public(cur.fetchone())
+            result = public(cur.fetchone(), tenant)
             if config.get('photo_model', '') != old_metadata.get('photo_model', ''):
                 from tenant_ai_agents_store import _audit
                 _audit(cur,tenant,int(session['telegram_id']),'chat_ai_photo_model_changed','chat_ai',tenant,
                        {'previous_photo_model':old_metadata.get('photo_model') or '',
                         'photo_model':config.get('photo_model') or ''})
+            if video_changed:
+                from tenant_ai_agents_store import _audit
+                _audit(cur,tenant,int(session['telegram_id']),'chat_ai_video_model_changed','chat_ai',tenant,
+                       {'previous_video_model':old_metadata.get('video_model') or '',
+                        'video_model':config.get('video_model') or '',
+                        'video_enabled':config.get('video_enabled') is True})
         conn.commit()
     return result

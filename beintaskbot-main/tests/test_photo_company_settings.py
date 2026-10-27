@@ -53,7 +53,8 @@ def test_real_settings_readback_exact_consent_worker_and_shared_budget(company,m
     assert settings.read(PROFILE)['photo_model']=='gpt-4.1'
     after=database.execute("SELECT secrets,metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'",(A,))[0]
     assert after['secrets']==old['secrets']
-    assert after['metadata']=={**old['metadata'],'photo_model':'gpt-4.1'}
+    assert after['metadata']=={**old['metadata'],'photo_model':'gpt-4.1',
+        'video_enabled':False,'video_model':''}
     visible=admin.read(database.cursor(),{**cfg,'granted_scopes':[admin.READ_SCOPE,admin.CONTENT_SCOPE]},
       'company_ai_settings_read',{'include_content':True})['photo_configuration']
     assert visible['model']=='gpt-4.1' and visible['tariffs']['gpt-4.1']['max_microusd']==8896

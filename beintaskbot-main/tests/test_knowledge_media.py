@@ -18,10 +18,16 @@ from test_connect_images import PNG
 @pytest.fixture
 def context(monkeypatch):
     import tenant_knowledge_media_cache as cache
-    def unit_asr(profile,item,model,media,invoke,check_before_ai=None):
+    def unit_asr(profile,item,model,media,invoke,check_before_ai=None,*,return_diagnostics=False):
         item['asr_attempted']=True
         if check_before_ai: check_before_ai()
-        text,usage=invoke(item['key'],model,*media,with_usage=True)
+        response=invoke(item['key'],model,*media,with_usage=True)
+        if return_diagnostics:
+            text,usage,diagnostics=response
+            details={'speech_state':diagnostics.get('speech_state','uncertain'),
+                'speech_language':diagnostics.get('language',''),'speech_reason':diagnostics.get('reason','')}
+            return text,usage,True,details
+        text,usage=response
         return text,usage,True
     monkeypatch.setattr(cache,'transcribe_once',unit_asr)
     item={'tenant':'tenant','model':'gpt-4.1-2025-04-14','route':{'conversation_id':'demo@g.us'},'refs':[], 'messages':[]}
@@ -191,7 +197,8 @@ def test_video_audio_uses_single_authorized_asr_and_preserves_frames(context,mon
     monkeypatch.setattr(media,'video_frames',lambda *a:[(PNG,'image/png',{'second':0})])
     monkeypatch.setattr(media,'video_audio',lambda *a:(b'RIFFsynthetic','wav','audio/wav'))
     monkeypatch.setattr(service,'check_active',lambda *a:None)
-    monkeypatch.setattr(provider,'transcribe',lambda *a,**kw:('Synthetic explanation',{'total_tokens':25}))
+    monkeypatch.setattr(provider,'transcribe_video',lambda *a,**kw:('Synthetic explanation',
+        {'total_tokens':25},{'speech_state':'confident','language':'az'}))
     images,results=media.collect({},item)
     assert len(images)==1 and results[0]['audio_status']=='processed'
     assert 'Synthetic explanation' in item['messages'][0]['text']

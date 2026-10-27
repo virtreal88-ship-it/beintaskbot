@@ -8,6 +8,17 @@ from tenant_linear_policy import TenantLinearError, identifier
 
 def configuration(data):
     result = {}
+    video_enabled = data.get('video_enabled', False)
+    if type(video_enabled) is not bool:
+        raise TenantLinearError('Video analysis setting is invalid.')
+    result['video_enabled'] = video_enabled
+    video_model = data.get('video_model', '')
+    from tenant_ai_video_model import MODELS as VIDEO_MODELS
+    if not isinstance(video_model, str) or (video_model and video_model not in VIDEO_MODELS):
+        raise TenantLinearError('Unsupported video model.', 400)
+    result['video_model'] = video_model
+    if video_enabled and not video_model:
+        raise TenantLinearError('Choose a video model before enabling video analysis.', 409)
     if 'photo_model' in data:
         from tenant_ai_photo_model import MODELS
         if data['photo_model'] not in ('', *MODELS):
@@ -93,10 +104,14 @@ def media_address(url, hosts):
     return parsed
 
 
-def history(rows, transcripts, *, analyzed_media=None, focus_media_ids=None, documents=None):
+def history(rows, transcripts, *, analyzed_media=None, focus_media_ids=None, documents=None,
+            video_observations=None, video_statuses=None, video_transcripts=None):
     lines, missing = [], 0
     analyzed_media=set(analyzed_media or [])
     documents = documents if isinstance(documents, dict) else {}
+    video_observations=video_observations if isinstance(video_observations,dict) else {}
+    video_statuses=video_statuses if isinstance(video_statuses,dict) else {}
+    video_transcripts=video_transcripts if isinstance(video_transcripts,dict) else {}
     for row in rows[-30:]:
         role = {'incoming': 'CLIENT', 'outgoing': 'SALES MANAGER'}.get(row.get('direction'), 'UNKNOWN SPEAKER')
         raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}
@@ -111,6 +126,42 @@ def history(rows, transcripts, *, analyzed_media=None, focus_media_ids=None, doc
             else:
                 missing += 1
                 text += '\n[Audio unavailable: do not infer its contents]'
+        elif str(row.get('message_type') or '').lower()=='video':
+            external_id=str(row.get('external_id') or '')
+            visual=video_observations.get(external_id) or []
+            status=video_statuses.get(external_id) if isinstance(video_statuses.get(external_id),dict) else {}
+            video_missing=False
+            if visual:
+                for frame in visual[:2]:
+                    second=max(0,min(120,float(frame.get('second') or 0)))
+                    text+='\n[Untrusted sampled video observation at '+str(round(second,2))+'s; not a diagnosis; frame only] '
+                    text+=json.dumps(str(frame.get('text') or '')[:2400],ensure_ascii=False)
+                if status.get('visual')=='partial':
+                    video_missing=True
+                    text+='\n[Only part of the video was analyzed; ask for clarification before concluding.]'
+            else:
+                video_missing=True
+                text+='\n[Video was not analyzed; do not infer its contents. Tell the customer and ask for a description or a clearer upload.]'
+            transcript=video_transcripts.get(external_id)
+            if transcript:
+                text+='\n[Unverified video speech transcript; confirm before relying on it] '
+                text+=json.dumps(str(transcript)[:4000],ensure_ascii=False)
+            elif status.get('audio') in {'uncertain','unknown','blocked','unavailable'}:
+                video_missing=True
+                text+='\n[Video audio could not be confidently transcribed; do not invent speech.]'
+            elif status.get('audio')=='not_analyzed_due_to_call_budget':
+                video_missing=True
+                text+='\n[Video audio was not analyzed within the reserved call budget; do not infer speech.]'
+            elif status.get('audio')=='not_enabled':
+                video_missing=True
+                text+='\n[Video audio was not analyzed because transcription is not enabled; do not infer speech.]'
+            elif status.get('audio')=='no_audio':
+                video_missing=True
+                text+='\n[No readable audio track was available; do not infer speech.]'
+            if video_missing:
+                missing+=1
+            elif status.get('audio')=='no_speech_detected':
+                text+='\n[ASR did not detect confident speech; this does not prove the video is silent.]'
         elif row.get('media_url') or row.get('has_attachment') or str(row.get('message_type') or 'text').lower() not in {'','text'}:
             external_id = str(row.get('external_id') or '')
             if str(row.get('message_type') or '').lower() == 'document' and external_id in documents:

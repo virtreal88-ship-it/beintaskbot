@@ -148,18 +148,48 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
     return result, {'input_tokens': input_tokens, 'output_tokens': output_tokens, 'total_tokens': total_tokens}
 
 
-def transcribe(key, model, content, extension, content_type, *, with_usage=False, request_timeout=90):
+def transcribe(key, model, content, extension, content_type, *, with_usage=False, request_timeout=90,
+               response_format='json', with_diagnostics=False):
+    if response_format not in {'json', 'verbose_json'}:
+        raise ValueError('Unsupported transcription response format')
     response = requests.post('https://api.openai.com/v1/audio/transcriptions',
-        headers={'Authorization': 'Bearer ' + key}, data={'model': model, 'response_format': 'json'},
+        headers={'Authorization': 'Bearer ' + key}, data={'model': model, 'response_format': response_format},
         files={'file': ('recording.' + extension, content, content_type)}, timeout=(5, min(90,max(1,request_timeout))), allow_redirects=False)
     if response.status_code != 200:
         raise ChatAIProviderError(response.status_code, _provider_error_category(response))
     payload = response.json()
     result = payload.get('text')
-    if not isinstance(result, str) or not result.strip() or len(result) > 60000:
+    if (not isinstance(result, str) or len(result) > 60000
+            or (not result.strip() and not with_diagnostics)):
         raise ValueError('Invalid transcription')
+    diagnostics = {}
+    if with_diagnostics:
+        if response_format != 'verbose_json' or model != 'whisper-1':
+            raise ValueError('Video speech confidence is unavailable for this ASR model')
+        segments = payload.get('segments') if isinstance(payload.get('segments'), list) else []
+        confidences = []
+        for segment in segments:
+            if not isinstance(segment, dict) or not str(segment.get('text') or '').strip():
+                continue
+            try:
+                no_speech = float(segment['no_speech_prob'])
+                average_logprob = float(segment['avg_logprob'])
+            except (KeyError, TypeError, ValueError):
+                confidences.append(None)
+                continue
+            confidences.append((no_speech, average_logprob))
+        language = str(payload.get('language') or '').strip().casefold()[:24]
+        diagnostics = {'language': language, 'segments': len(confidences)}
+        if not confidences:
+            diagnostics['speech_state'] = 'no_speech_detected'
+        elif all(item is not None and item[0] >= 0.65 for item in confidences):
+            diagnostics['speech_state'] = 'no_speech_detected'
+        elif any(item is None or item[0] > 0.35 or item[1] < -0.8 for item in confidences):
+            diagnostics['speech_state'] = 'uncertain'
+        else:
+            diagnostics['speech_state'] = 'confident'
     if not with_usage:
-        return result.strip()
+        return (result.strip(), diagnostics) if with_diagnostics else result.strip()
     usage = payload.get('usage') if isinstance(payload.get('usage'), dict) else {}
     try:
         incoming = max(0, int(usage.get('input_tokens') or 0))
@@ -167,4 +197,37 @@ def transcribe(key, model, content, extension, content_type, *, with_usage=False
         total = max(incoming + outgoing, int(usage.get('total_tokens') or 0))
     except (TypeError, ValueError):
         incoming = outgoing = total = 0
-    return result.strip(), {'input_tokens': incoming, 'output_tokens': outgoing, 'total_tokens': total}
+    usage = {'input_tokens': incoming, 'output_tokens': outgoing, 'total_tokens': total}
+    if with_diagnostics:
+        return result.strip(), usage, diagnostics
+    return result.strip(), usage
+
+
+def transcribe_video(key, model, content, extension, content_type, *, expected_language='',
+                     request_timeout=45, with_usage=True):
+    """Video-only ASR path: withhold text unless Whisper reports confident speech.
+
+    Other ASR APIs do not expose compatible no-speech confidence, so they are
+    left uncalled instead of treating an unverifiable nonempty string as speech.
+    A language mismatch downgrades to uncertain; it never discards the visual
+    analysis or is interpreted as proof that the customer did not speak.
+    """
+    if model != 'whisper-1':
+        return '', {}, {'speech_state': 'uncertain', 'reason': 'confidence_unavailable', 'language': ''}
+    text, usage, diagnostics = transcribe(
+        key, model, content, extension, content_type, with_usage=True,
+        request_timeout=request_timeout, response_format='verbose_json', with_diagnostics=True)
+    state = diagnostics.get('speech_state')
+    expected = str(expected_language or '').strip().casefold()
+    actual = str(diagnostics.get('language') or '').strip().casefold()
+    language_aliases = {
+        'az': {'az', 'azerbaijani'}, 'ru': {'ru', 'russian'}, 'en': {'en', 'english'},
+        'tr': {'tr', 'turkish'}, 'ja': {'ja', 'japanese'},
+    }
+    expected_codes = language_aliases.get(expected, {expected} if expected else set())
+    actual_codes = language_aliases.get(actual, {actual} if actual else set())
+    if state == 'confident' and expected_codes and actual_codes and not expected_codes.intersection(actual_codes):
+        state = 'uncertain'
+        diagnostics['reason'] = 'language_mismatch'
+    diagnostics['speech_state'] = state
+    return (text.strip() if state == 'confident' else ''), usage, diagnostics
