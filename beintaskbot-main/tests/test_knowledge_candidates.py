@@ -1097,6 +1097,58 @@ def test_listing_hides_rejected_by_default_and_supports_explicit_filters(ready):
     assert [item['id'] for item in included]==[value['id']]
 
 
+def test_owner_marks_separately_published_knowledge_without_confirming_case_outcome(ready,monkeypatch):
+    db,generation,_=ready;value=candidate(ready)
+    content=db.execute('SELECT content FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['id']))[0]['content']
+    content['cause']={'status':'suspected','text':'Owner-provided suspected cause'}
+    content['outcome']={'status':'unknown','text':'','message_ids':[]}
+    db.execute("UPDATE saas_knowledge_candidates SET content=%s::jsonb,status='needs_clarification' WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps(content),A,value['id']))
+    db.commit()
+    monkeypatch.setattr(agents,'_connect',lambda:db)
+    source=agents.save_knowledge(PROFILE,{'title':'Existing owner knowledge','kind':'text','content':'Separately reviewed guidance','active':True})
+    before=json.loads(json.dumps(content))
+
+    marked=store.mutate(PROFILE,value['id'],{'expected_version':1,'source_id':str(source['id'])},'mark_knowledge_published')['candidate']
+    assert marked['status']=='knowledge_published'
+    assert marked['outcome']['status']=='unknown' and marked['result_confirmed'] is False
+    assert marked['cause']['status']=='suspected'
+    assert marked['knowledge_publication']['source_id']==str(source['id'])
+    assert marked['knowledge_publication']['title']=='Existing owner knowledge'
+    assert marked['knowledge_publication']['current'] is True
+    assert marked['knowledge_publication']['source_hash']==source['content_hash']
+    assert db.execute('SELECT content FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['id']))[0]['content']==before
+    assert db.execute('SELECT active FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,source['id']))[0]['active'] is True
+    assert db.execute('SELECT content,content_hash FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,source['id']))[0]['content']==source['content']
+    assert generation.call_count==1
+    assert store.listing(PROFILE,{'limit':25})['candidates']==[]
+    assert store.listing(PROFILE,{'limit':25,'status':'knowledge_published'})['candidates'][0]['id']==value['id']
+    assert store.listing(PROFILE,{'limit':25,'status':'all'})['candidates'][0]['id']==value['id']
+    assert db.execute("SELECT action,payload FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND entity_id=%s ORDER BY created_at DESC LIMIT 1",(A,value['id']))[0]['action']=='knowledge_candidate_knowledge_published'
+    agents.save_knowledge(PROFILE,{'title':'Changed owner source','kind':'text','content':'Revised guidance','active':True},source_id=source['id'])
+    assert store.detail(PROFILE,value['id'])['candidate']['knowledge_publication']['current'] is False
+
+
+@pytest.mark.parametrize('role,expected_version,source_state',[
+    ('admin',1,'active'),('owner',0,'active'),('owner',1,'inactive'),('owner',1,'foreign'),('owner',1,'case_derived')])
+def test_knowledge_published_transition_fails_closed(ready,monkeypatch,role,expected_version,source_state):
+    db,_,_=ready;value=candidate(ready);monkeypatch.setattr(agents,'_connect',lambda:db)
+    source=agents.save_knowledge(PROFILE,{'title':'Source','kind':'text','content':'Published guidance','active':source_state!='inactive'})
+    if source_state=='case_derived':
+        db.execute("UPDATE saas_ai_knowledge_sources SET provenance=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps({'candidate_id':value['id']}),A,source['id']));db.commit()
+    if source_state=='foreign':
+        foreign=str(uuid.uuid4())
+        db.execute("INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,active,content_hash,created_by) VALUES(%s,%s::uuid,'Foreign','text','foreign',TRUE,'foreign-hash',22)",(foreign,B));db.commit();source_id=foreign
+    else: source_id=str(source['id'])
+    if role!='owner':
+        db.execute('UPDATE saas_tenant_members SET role=%s WHERE tenant_id=%s::uuid AND telegram_id=11',(role,A));db.commit()
+    before=db.execute('SELECT version,status,content FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['id']))[0]
+    with pytest.raises(TenantLinearError):
+        store.mutate(PROFILE,value['id'],{'expected_version':expected_version,'source_id':source_id},'mark_knowledge_published')
+    after=db.execute('SELECT version,status,content FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['id']))[0]
+    assert after==before
+    assert db.execute('SELECT count(*) AS n FROM saas_knowledge_candidate_knowledge_reviews WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid',(A,value['id']))[0]['n']==0
+
+
 def test_owner_can_archive_and_restore_case_without_losing_knowledge(ready):
     ready=confirmed_case(ready)
     db,_,_=ready

@@ -390,6 +390,18 @@ def public_card(cur,row,content_language='az',source_route=None,tenant=None,dial
     value['extraction_id']=str(row['extraction_id'])
     cur.execute('SELECT agent_id,source_id FROM saas_knowledge_candidate_sources WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid ORDER BY agent_id',(row['tenant_id'],row['id']))
     value['publications']=[{k:str(v) for k,v in item.items()} for item in cur.fetchall()]
+    cur.execute('''SELECT r.source_id,r.source_title,r.source_hash,s.title AS current_title,s.content_hash AS current_hash,s.active,r.reviewed_by,r.created_at
+      FROM saas_knowledge_candidate_knowledge_reviews r
+      JOIN saas_ai_knowledge_sources s ON s.tenant_id=r.tenant_id AND s.id=r.source_id
+      WHERE r.tenant_id=%s::uuid AND r.candidate_id=%s::uuid''',(row['tenant_id'],row['id']))
+    knowledge_review=cur.fetchone()
+    value['knowledge_publication']={
+      'source_id':str(knowledge_review['source_id']),'title':knowledge_review['source_title'],
+      'source_hash':knowledge_review['source_hash'],
+      'active':bool(knowledge_review['active']),'reviewed_by':knowledge_review['reviewed_by'],
+      'current':knowledge_review['source_hash']==knowledge_review['current_hash'] and knowledge_review['source_title']==knowledge_review['current_title'],
+      'created_at':knowledge_review['created_at'].isoformat() if knowledge_review.get('created_at') else None
+    } if knowledge_review else None
     value.setdefault('resolution_method','unknown');value.setdefault('operator_actions',[]);value.setdefault('operator_action_evidence',[]);value.setdefault('cause_evidence',[]);value.setdefault('case_kind','technical')
     value.setdefault('clarification_note','');value.setdefault('work_status','unknown')
     sources=value.get('source_message_ids') or []
@@ -652,10 +664,10 @@ def listing(profile,data):
                 clauses.append("e.route->>'conversation_id'=%s");args.append(data['conversation_id'])
             status=data.get('status')
             if status:
-                if status not in {'pending_review','needs_clarification','approved','rejected','archived','all'}: raise TenantLinearError('Некорректный статус.')
+                if status not in {'pending_review','needs_clarification','approved','knowledge_published','rejected','archived','all'}: raise TenantLinearError('Некорректный статус.')
                 if status!='all': clauses.append('c.status=%s');args.append(status)
             else:
-                clauses.append("c.status NOT IN ('rejected','archived')")
+                clauses.append("c.status NOT IN ('rejected','archived','knowledge_published')")
             if data.get('batch_id'):
                 clauses.append('EXISTS(SELECT 1 FROM saas_knowledge_batch_items bi WHERE bi.tenant_id=c.tenant_id AND bi.extraction_id=c.extraction_id AND bi.batch_id=%s::uuid)')
                 args.append(identifier(data['batch_id']))
@@ -739,7 +751,7 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                       archived_from_status=status,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid""",(actor,tenant,row['id']))
                 else:
                     if row['status']!='archived': raise TenantLinearError('Восстановить можно только архивный кейс.',409)
-                    restored=row.get('archived_from_status') if row.get('archived_from_status') in {'pending_review','needs_clarification','approved','rejected'} else 'pending_review'
+                    restored=row.get('archived_from_status') if row.get('archived_from_status') in {'pending_review','needs_clarification','approved','knowledge_published','rejected'} else 'pending_review'
                     cur.execute("""UPDATE saas_knowledge_candidates SET status=%s,archived_at=NULL,archived_by=NULL,archived_from_status=NULL,
                       version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid""",(restored,tenant,row['id']))
                     if restored=='approved': cur.execute("UPDATE saas_ai_knowledge_sources SET active=TRUE WHERE tenant_id=%s::uuid AND provenance->>'candidate_id'=%s",(tenant,str(row['id'])))
@@ -834,6 +846,39 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                 cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,row['id']))
                 result={'candidate':public_card(cur,cur.fetchone())}
                 result['source_review_revision']=revision
+                return result
+            if action=='mark_knowledge_published':
+                if policy.profile.get('role')!='owner':
+                    raise TenantLinearError('Отметить публикацию знания может только владелец компании.',403)
+                if set(data)!={'expected_version','source_id'}:
+                    raise TenantLinearError('Некорректные параметры публикации знания.')
+                if type(data.get('expected_version')) is not int or data['expected_version']!=row['version']:
+                    raise TenantLinearError('Карточка изменилась. Обновите страницу.',409)
+                if row['status'] not in {'pending_review','needs_clarification'}:
+                    raise TenantLinearError('Этот статус доступен только для кейса, который ещё не опубликован как подтверждённое решение.',409)
+                source_id=identifier(data['source_id'])
+                cur.execute('''SELECT id,title,content_hash FROM saas_ai_knowledge_sources
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND active=TRUE
+                    AND NOT (COALESCE(provenance,'{}'::jsonb) ? 'candidate_id')
+                    AND NOT (COALESCE(provenance,'{}'::jsonb) ? 'instruction_id') FOR SHARE''',(tenant,source_id))
+                published_source=cur.fetchone()
+                if not published_source:
+                    raise TenantLinearError('Активный опубликованный источник знания не найден в этой компании.',409)
+                cur.execute('''INSERT INTO saas_knowledge_candidate_knowledge_reviews
+                  (tenant_id,candidate_id,source_id,source_title,source_hash,reviewed_by)
+                  VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s)
+                  ON CONFLICT(tenant_id,candidate_id) DO UPDATE SET source_id=EXCLUDED.source_id,
+                    source_title=EXCLUDED.source_title,source_hash=EXCLUDED.source_hash,
+                    reviewed_by=EXCLUDED.reviewed_by,created_at=now()''',
+                  (tenant,row['id'],source_id,published_source['title'],published_source['content_hash'],actor))
+                cur.execute('''UPDATE saas_knowledge_candidates SET status='knowledge_published',version=version+1,
+                  reviewed_by=%s,reviewed_at=now(),updated_at=now()
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND version=%s''',(actor,tenant,row['id'],row['version']))
+                _audit(cur,tenant,actor,'knowledge_candidate_knowledge_published','knowledge_candidate',row['id'],
+                  {'source_id':str(published_source['id']),'source_title':published_source['title'],'source_hash':published_source['content_hash'],'historical_outcome':(row.get('content') or {}).get('outcome',{}).get('status','unknown')})
+                cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,row['id']))
+                result={'candidate':public_card(cur,cur.fetchone())}
+                if connection is None: conn.commit()
                 return result
             run=extraction_row(cur,tenant,row['extraction_id']);run['_candidate_id']=str(row['id'])
             # An extraction can contain media for several candidate cards.
