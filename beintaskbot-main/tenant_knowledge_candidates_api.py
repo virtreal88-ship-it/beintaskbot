@@ -13,7 +13,7 @@ from tenant_ai_agents_api import _expected, _origin
 from tenant_linear_policy import TenantLinearError
 from tenant_knowledge_candidates_service import analyze
 from tenant_knowledge_improve import improve
-from tenant_knowledge_candidates_store import conversation_link, detail, listing, mutate, request_detail
+from tenant_knowledge_candidates_store import conversation_link, detail, listing, mutate, request_detail, source_review_preflight
 
 def handler(member_from_request,canonical_origin,logger,resource='collection'):
     async def handle(request):
@@ -29,6 +29,12 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                 elif resource=='batch': result=await asyncio.to_thread(batches.get,profile,request.match_info['batch_id'])
                 elif resource=='request': result=await asyncio.to_thread(request_detail,profile,request.match_info['request_id'])
                 elif resource=='candidate': result=await asyncio.to_thread(detail,profile,request.match_info['candidate_id'])
+                elif resource=='source_review_preflight':
+                    if set(request.query)-{'message_id','expected_version','expected_tenant_id','expected_user_id'}:
+                        raise TenantLinearError('Некорректные параметры диагностики источника.')
+                    try: expected_version=int(request.query.get('expected_version',''))
+                    except ValueError: raise TenantLinearError('Некорректная версия карточки.') from None
+                    result=await asyncio.to_thread(source_review_preflight,profile,request.match_info['candidate_id'],request.query.get('message_id'),expected_version)
                 elif resource=='conversation':
                     if set(request.query)-{'message_id','review_run_id','expected_tenant_id','expected_user_id'}:
                         raise TenantLinearError('Invalid conversation selection.',400)
