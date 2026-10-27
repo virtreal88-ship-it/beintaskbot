@@ -219,6 +219,7 @@ def test_owner_reviews_changed_media_as_new_version_without_rewriting_extraction
     ('Duzelib amma problem duzelmir.',False),
     ('Duzelib amma problem duzelmeyecek.',False),
     ('Duzelib amma problem həll edilmədi.',False),
+    ('Duzelib amma problem yenə var.',False),
     ('Duzelib ola biler.',False),
 ])
 def test_recovered_candidate_scopes_stale_media_and_requires_unambiguous_customer_confirmation(
@@ -617,6 +618,10 @@ def test_hypotheses_and_questions_not_confirmation(value):
     ('Düzəlib, amma problem davam edəcək',False),
     ('Duzelib, amma problem davam edecek',False),
     ('Duzelib amma problem yenə də qalacaq',False),
+    ('Duzelib amma problem yenə var',False),
+    ('Duzelib amma problem hələ qalır',False),
+    ('Duzelib amma problem hele qalir',False),
+    ('Duzelib amma problem yenə qalır',False),
     ('Düzəlib, amma problem gələcəkdə həll olunmayacaq',False),
     ('Düzəlib, amma problem həll edilməyib',False),
     ('Duzelib amma problem hell edilmeyib',False),

@@ -122,7 +122,7 @@ def positive_confirmation(value,informational=False):
         r'düzəlmir|duzelmir|düzəlməyəcək|duzelmeyecek|'
         r'həll\s+(?:olunmayıb|edilməyib|olunmayacaq|edilməyəcək|olunmadı|edilmədi)|'
         r'hell\s+(?:olunmayib|edilmeyib|olunmayacaq|edilmeyecek|olunmadi|edilmedi)|'
-        r'problem\s+(?:(?:hələ\s+də|hele\s+de|yenə\s+də|yene\s+de|still|gələcəkdə|gelecekde)\s+)?'
+        r'problem\s+(?:(?:(?:hələ|hele|yenə|yene)(?:\s+(?:də|de))?|still|gələcəkdə|gelecekde)\s+)?'
         r'(?:qalır|qalir|qalıb|qalib|qaldı|qaldi|qalacaq|davam\s+(?:edir|edəcək|edecek)|var|olacaq|remains?|persists?|continues?)|'
         r'issue\s+(?:remains?|persists?|continues?)|'
         r'если|возможно|кажется|попробуйте|проверьте|if|check|maybe|should|might|бы|должно|может|наверное|'
