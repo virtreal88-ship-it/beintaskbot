@@ -10,6 +10,7 @@ from tenant_linear_policy import TenantLinearError
 import tenant_case_media_admission as admission
 import tenant_knowledge_campaigns as campaigns
 import tenant_knowledge_campaign_worker as worker
+from tenant_media_evidence import source_hash
 
 
 def _image(db, day):
@@ -45,7 +46,9 @@ def _mark_pending_consent(db, candidate_id, ids):
         refs.append({'id':message_id,'channel_id':CA,'external_id':row['external_id'],
           'media_kind':row['message_type'],'media_version':evidence.media_version(row['raw']),
           'body_hash':store.digest(row['body']),'role':'customer'})
-        results.append({'id':message_id,'status':'pending_consent','code':'vision_not_approved'})
+        # Persisted extractor format is unavailable+consent code; coverage
+        # projects that to pending_consent for the owner UI.
+        results.append({'id':message_id,'status':'unavailable','code':'vision_not_approved'})
     db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb,media_results=%s::jsonb WHERE id=%s::uuid',
       (json.dumps(refs),json.dumps(results),extraction_id))
     db.commit()
@@ -134,6 +137,8 @@ def test_missing_bounds_tenant_and_source_change_fail_closed(ready,monkeypatch):
 
 def test_existing_case_snapshot_is_bounded_and_excludes_rejected(ready):
     db,card,media=_case(ready,(3,))
+    with db.cursor() as cur:unknown=admission.plan_existing_cases(cur,PROFILE)
+    assert unknown['eligible_count']==0 and unknown['unknown_media_count']==1
     _mark_pending_consent(db,card['id'],media)
     with db.cursor() as cur,pytest.raises(TenantLinearError):
         admission.plan_existing_cases(cur,{'tenant_id':A,'telegram_id':22})
@@ -141,6 +146,7 @@ def test_existing_case_snapshot_is_bounded_and_excludes_rejected(ready):
         snapshot=admission.plan_existing_cases(cur,PROFILE)
     assert snapshot['case_count']==1
     assert snapshot['eligible_count']==1
+    assert snapshot['snapshot_hash']!=unknown['snapshot_hash']
     assert snapshot['channel_ids']==[CA]
     assert any(x['id']==media[0] for x in snapshot['cases'][0]['media'])
     db.execute("UPDATE saas_knowledge_candidates SET status='rejected' WHERE id=%s::uuid",(card['id'],));db.commit()
@@ -157,6 +163,29 @@ def test_existing_case_snapshot_reports_ambiguous_boundaries_without_routing(rea
     with db.cursor() as cur:snapshot=admission.plan_existing_cases(cur,PROFILE)
     assert snapshot['case_count']==1 and snapshot['review_count']==1
     assert snapshot['eligible_count']==0 and snapshot['cases'][0]['status']=='pending_boundaries'
+
+
+def test_case_interval_media_without_history_is_exposed_but_stays_unknown(ready):
+    db,card,ids=_case(ready,(3,))
+    with db.cursor() as cur:plan=admission.plan(cur,PROFILE,card['id'])
+    item=next(media for media in plan['media'] if media['id']==ids[0])
+    assert item['status']=='unknown'
+    assert item['reconciliation']=={'state':'unknown','reason':'attempt_history_not_recorded','matching_runs':0}
+    assert not list(admission.routes(plan,AGENT,allow_legacy_unknown=False))
+
+
+def test_read_only_all_cases_preview_reports_zero_eligible_reconciliation(ready,monkeypatch):
+    db,card,ids=_case(ready,(3,))
+    monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    provider=ready[1];calls=provider.call_count
+    audit_before=db.execute('SELECT count(*) AS n FROM saas_tenant_audit_events')[0]['n']
+    preview=campaigns.preview_existing_cases(PROFILE)
+    item=next(m for m in preview['cases'][0]['media'] if m['id']==ids[0])
+    assert preview['eligible_count']==0 and preview['unknown_media_count']==1
+    assert item['reconciliation']['reason']=='attempt_history_not_recorded'
+    assert db.execute('SELECT count(*) AS n FROM saas_tenant_audit_events')[0]['n']==audit_before
+    assert provider.call_count==calls
+    with pytest.raises(TenantLinearError):campaigns.preview_existing_cases({'tenant_id':A,'telegram_id':22})
 
 
 @pytest.mark.parametrize('unknown_kind',['provider_timeout','legacy_source_mismatch'])
@@ -177,6 +206,57 @@ def test_batch_never_routes_provider_unknown_or_unverified_legacy_source(ready,u
     with db.cursor() as cur:snapshot=admission.plan_existing_cases(cur,PROFILE)
     assert snapshot['eligible_count']==0 and snapshot['unknown_media_count']==1
     assert not list(admission.existing_routes(snapshot,AGENT,'gpt-4.1'))
+
+
+class _ReconciliationCursor:
+    def __init__(self,runs,*,reservation=False,ledger=True):
+        self.runs=runs;self.reservation=reservation;self.ledger=ledger;self.result=None
+    def execute(self,query,params=None):
+        if 'SELECT id::text AS id,status,source_refs,media_results' in query:self.result=self.runs
+        elif 'to_regclass' in query:self.result={'table_name':'saas_ai_spend_reservations' if self.ledger else None}
+        elif 'SELECT 1 FROM saas_ai_spend_reservations' in query:self.result={'found':1} if self.reservation else None
+        else:raise AssertionError('unexpected reconciliation query: '+query)
+    def fetchall(self):return self.result
+    def fetchone(self):return self.result
+
+
+def test_historical_reconciliation_only_accepts_exact_version_explicit_no_call():
+    msg='00000000-0000-0000-0000-000000000111'
+    ref={'id':msg,'external_id':'media-exact','body_hash':'b'*64,'media_kind':'image','media_version':'v1'}
+    digest=source_hash(ref)
+    run={'id':'00000000-0000-0000-0000-000000000222','status':'completed',
+      'source_refs':[ref],'media_results':[{'id':msg,'status':'unavailable','code':'vision_not_approved'}]}
+    result=admission._historical_attempt_reconciliation(_ReconciliationCursor([run]),A,msg,digest)
+    assert result=={'state':'known_not_attempted','reason':'exact_version_explicit_consent_block','matching_runs':1}
+    assert list(admission.routes({'media':[{'id':msg,'kind':'image','source_version':'v1','source_hash':digest,
+      'at':'2024-01-01T00:00:00+00:00','period_end':'2024-01-01T00:00:00.000001+00:00',
+      'status':'pending_consent','code':'verified_not_attempted','complete':False}],
+      'channel_id':CA,'conversation_id':'client','case_id':'case','case_version':1,'plan_hash':'a'*64},AGENT))
+
+
+def test_persisted_video_consent_receipt_does_not_hide_prior_asr_attempt():
+    video={'media_kind':'video'}
+    assert admission._explicit_no_media_call(video,{'status':'unavailable','code':'vision_not_approved','audio_status':'not_requested'})
+    assert not admission._explicit_no_media_call(video,{'status':'unavailable','code':'vision_not_approved','audio_status':'processed','transcript':'sample'})
+    assert not admission._explicit_no_media_call(video,{'status':'unavailable','code':'vision_not_approved'})
+    assert not admission._explicit_no_media_call({'media_kind':'image'},{'status':'pending_consent','code':'vision_not_approved'})
+
+
+@pytest.mark.parametrize(('runs','reservation','ledger','reason'),[
+    ([],False,True,'attempt_history_not_recorded'),
+    ([{'id':'run','status':'unknown','source_refs':[{'id':'m','external_id':'e','body_hash':'b'*64,'media_kind':'image','media_version':'v1'}],
+       'media_results':[{'id':'m','status':'unknown','code':'provider_timeout'}]}],False,True,'prior_attempt_or_unresolved_result'),
+    ([{'id':'run','status':'completed','source_refs':[{'id':'m','external_id':'e','body_hash':'b'*64,'media_kind':'image','media_version':'old'}],
+       'media_results':[{'id':'m','status':'unavailable','code':'vision_not_approved'}]}],False,True,'historical_source_version_unverified'),
+    ([{'id':'run','status':'completed','source_refs':[{'id':'m','external_id':'e','body_hash':'b'*64,'media_kind':'image','media_version':'v1'}],
+       'media_results':[{'id':'m','status':'unavailable','code':'vision_not_approved'}]}],True,True,'media_reservation_present'),
+    ([{'id':'run','status':'completed','source_refs':[{'id':'m','external_id':'e','body_hash':'b'*64,'media_kind':'image','media_version':'v1'}],
+       'media_results':[{'id':'m','status':'unavailable','code':'vision_not_approved'}]}],False,False,'spend_ledger_unavailable'),
+])
+def test_historical_reconciliation_fail_closed_on_unknowns(runs,reservation,ledger,reason):
+    ref={'id':'m','external_id':'e','body_hash':'b'*64,'media_kind':'image','media_version':'v1'}
+    result=admission._historical_attempt_reconciliation(_ReconciliationCursor(runs,reservation=reservation,ledger=ledger),A,'m',source_hash(ref))
+    assert result['state']=='unknown' and result['reason']==reason
 
 
 def test_all_cases_campaign_is_unapproved_until_explicit_fixed_cap_grant(ready,monkeypatch):
