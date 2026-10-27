@@ -449,7 +449,9 @@ def detail(profile,candidate_id):
             chosen=route(cur,profile,run['route'])[3]
             value=public_card(cur,row,run.get('route',{}).get('language') or 'az',run['route'],tenant,chosen,run.get('media_results') or [],run.get('status'),run.get('source_refs'),include_media_content=True)
             if owner_diagnostics:
-                diagnostics=run.pop('_owner_media_diagnostics',[])
+                claim_source_ids={str(value) for value in value.get('source_message_ids',[])}
+                diagnostics=[item for item in run.pop('_owner_media_diagnostics',[])
+                             if str(item.get('id')) in claim_source_ids]
                 if diagnostics:
                     value['media_source_diagnostics']=diagnostics
                     value['source_claims_unverified']=True
