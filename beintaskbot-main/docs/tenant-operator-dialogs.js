@@ -10,7 +10,7 @@
   document.addEventListener('tenant-chat-attachments-ready',bindNativeAudioErrors);
   let member=null,capabilities={},epoch=0,listRevision=0,openRevision=0,diagnosticRevision=0,groupSettingsRevision=0,rows=[],nextOffset=null,currentDialog=null,currentPage=null,diagnosticScroll=null,timer,bulkPreviewData=null,listScrollTop=0,autoRefreshTimer=null,autoRefreshBusy=false,pullRefreshBusy=false,pullStartY=null,hasInitialDialogSnapshot=false,lastDialogSnapshotAt=0;
   const latestMessageIds=new Map(),AUTO_REFRESH_MS=30000;
-  let listFlight=null,lastListKey='',lastListAt=0,permissionScope='',pendingDialogRoute=null;
+  let listFlight=null,lastListKey='',lastListAt=0,permissionScope='',pendingDialogRoute=null,caseLinkRevision=0,caseLinkPending=false;
   const readMarkers=new Map(),readInFlight=new Set(),readSyncKey=()=>`tenant.operator.read.${identity(member)}`;
   let soundEnabled=true,soundUnlocked=false,soundContext=null;
   const soundPrefKey=()=>`tenant.operator.message-sound.${member?.tenant_id||''}.${member?.telegram_id||''}`;
@@ -252,6 +252,7 @@
 
   async function openDialog(route){
     if(!hasRight('dialogs')){notice(t('noAccess'));return;}
+    cancelCaseLink();
     closeDialogDiagnostics();
     if(currentDialog&&!sameDialog(currentDialog,route))closeDialog(false);
     const revision=++openRevision,version=epoch;pendingDialogRoute=route;
@@ -463,7 +464,7 @@
     await refresh();document.dispatchEvent(new CustomEvent('tenant-dialog-state',{detail:{route,result}}));if(action==='handoff')document.dispatchEvent(new CustomEvent('tenant-support-changed'));return result;
   }
   function assignmentReason(reason){return ['no_eligible_agent','agent_already_assigned'].includes(reason)?t(reason):i18n.reason(reason);}
-  function closeDialog(forget=true){pendingDialogRoute=null;if(forget===true)sessionStorage.removeItem(contextKey('route'));closeDialogDiagnostics();closeGroupSettings();document.dispatchEvent(new CustomEvent('tenant-chat-close'));openRevision++;currentDialog=null;currentPage=null;const workspace=$('operatorWorkspace');if(workspace)workspace.dataset.selected='false';const host=$('operatorDialogs');if(host)host.dataset.conversationOpen='false';const header=$('operatorConversationHeader'),content=$('operatorConversationContent');if(header)header.innerHTML=`<div class="operator-conversation-empty">${t('chooseDialog')}</div>`;if(content)content.innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorRows'))renderRows();}
+  function closeDialog(forget=true){cancelCaseLink();pendingDialogRoute=null;if(forget===true)sessionStorage.removeItem(contextKey('route'));closeDialogDiagnostics();closeGroupSettings();document.dispatchEvent(new CustomEvent('tenant-chat-close'));openRevision++;currentDialog=null;currentPage=null;const workspace=$('operatorWorkspace');if(workspace)workspace.dataset.selected='false';const host=$('operatorDialogs');if(host)host.dataset.conversationOpen='false';const header=$('operatorConversationHeader'),content=$('operatorConversationContent');if(header)header.innerHTML=`<div class="operator-conversation-empty">${t('chooseDialog')}</div>`;if(content)content.innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorRows'))renderRows();}
   let notificationRouteHandled=false;
   function notificationDialogRoute(){
     try{
@@ -483,64 +484,76 @@
     permissionScope=JSON.stringify(data.role_permissions);
     member=next;capabilities=data.capabilities||{};loadSoundPreference();
     if($('operatorBulkAssignment')){$('operatorBulkAssignment').hidden=member?.role!=='owner';$('operatorBulkAssignment').textContent=bulkText('preview');}
-    if(changed){readMarkers.clear();readInFlight.clear();avatarAttempts.clear();avatarReady.clear();avatarQueue.length=0;listFlight=null;lastListKey='';lastListAt=0;stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
-    if(hasRight('dialogs')){if(!changed&&pendingDialogRoute)void openDialog(pendingDialogRoute);refresh(false,true);if($('view-dialogs')?.classList.contains('active'))scheduleAutoRefresh();const fromNotification=!notificationRouteHandled?notificationDialogRoute():null;if(fromNotification){notificationRouteHandled=true;clearNotificationDialogRoute();const version=epoch;setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(fromNotification);},0);return;}openLocationCaseLink();const saved=sessionStorage.getItem(contextKey('route'));if(saved&&!currentDialog&&!pendingDialogRoute)try{const version=epoch,route=JSON.parse(saved);if(route.channel_id&&route.conversation_id)setTimeout(()=>{if(version===epoch&&!currentDialog&&!pendingDialogRoute&&hasRight('dialogs'))openDialog(route);},0);}catch(_){sessionStorage.removeItem(contextKey('route'));}}else stopAutoRefresh();
+    if(changed){readMarkers.clear();readInFlight.clear();avatarAttempts.clear();avatarReady.clear();avatarQueue.length=0;listFlight=null;lastListKey='';lastListAt=0;stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);caseLinkKey='';rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
+    if(hasRight('dialogs')){if(!changed&&pendingDialogRoute)void openDialog(pendingDialogRoute);refresh(false,true);if($('view-dialogs')?.classList.contains('active'))scheduleAutoRefresh();const fromNotification=!notificationRouteHandled?notificationDialogRoute():null;if(fromNotification){notificationRouteHandled=true;clearNotificationDialogRoute();const version=epoch;setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(fromNotification);},0);return;}if(openLocationCaseLink())return;const saved=sessionStorage.getItem(contextKey('route'));if(saved&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending)try{const version=epoch,route=JSON.parse(saved);if(route.channel_id&&route.conversation_id)setTimeout(()=>{if(version===epoch&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending&&hasRight('dialogs'))openDialog(route);},0);}catch(_){sessionStorage.removeItem(contextKey('route'));}}else stopAutoRefresh();
   }
   window.addEventListener('storage',event=>{if(event.key===soundPrefKey())loadSoundPreference();if(event.key===readSyncKey()&&!document.hidden&&$('view-dialogs')?.classList.contains('active'))void refresh();});
   document.addEventListener('tenant-profile',event=>profileChanged(event.detail));
   document.addEventListener('tenant-auth-invalid',()=>profileChanged({}));
-  document.addEventListener('tenant-auth-pending',()=>{listFlight=null;listRevision++;lastListAt=0;if($('operatorDialogs'))$('operatorDialogs').style.visibility='hidden';});
-  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){refresh(false,true);scheduleAutoRefresh();}else stopAutoRefresh();});
+  document.addEventListener('tenant-auth-pending',()=>{if(caseLinkPending){cancelCaseLink();caseLinkKey='';}listFlight=null;listRevision++;lastListAt=0;if($('operatorDialogs'))$('operatorDialogs').style.visibility='hidden';});
+  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){refresh(false,true);scheduleAutoRefresh();}else{stopAutoRefresh();cancelCaseLink();}});
   document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAutoRefresh();else if($('view-dialogs')?.classList.contains('active')){refresh();scheduleAutoRefresh();}});
   window.addEventListener('beforeunload',stopAutoRefresh);
-  window.addEventListener('popstate',()=>{caseLinkKey='';openLocationCaseLink();});
+  window.addEventListener('popstate',()=>{cancelCaseLink();caseLinkKey='';openLocationCaseLink();});
   document.addEventListener('tenant-language',()=>{updateSoundButton();if($('operatorRows')){setStates();refresh();}if($('operatorBulkAssignment'))$('operatorBulkAssignment').textContent=bulkText('preview');if(currentDialog&&currentPage){const diagnosticsOpen=$('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden,settingsOpen=$('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden;renderDialog(currentPage);if(diagnosticsOpen)openDialogDiagnostics(currentDialog);if(settingsOpen)openGroupSettings(currentDialog);}});
-  document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;if($('operatorCopilot')&&!$('operatorCopilot').hidden){$('operatorCopilotClose')?.click();return;}if($('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden){closeGroupSettings();return;}if($('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden){closeDialogDiagnostics();return;}if(currentDialog)closeDialog();});
+  document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;if($('operatorCopilot')&&!$('operatorCopilot').hidden){$('operatorCopilotClose')?.click();return;}if($('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden){closeGroupSettings();return;}if($('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden){closeDialogDiagnostics();return;}if(currentDialog||caseLinkPending)closeDialog();});
   let caseLinkKey='';
   const caseLinkText=key=>({opening:{ru:'Открываем исходный диалог кейса…',az:'Halın ilkin dialoqu açılır…',en:'Opening the case conversation…'},invalid:{ru:'Ссылка на кейс неполная или некорректна.',az:'Hal keçidi natamam və ya yanlışdır.',en:'The case link is incomplete or invalid.'},unavailable:{ru:'Исходное сообщение кейса недоступно или у вас нет доступа к нему.',az:'Halın ilkin mesajı əlçatan deyil və ya ona girişiniz yoxdur.',en:'The original case message is unavailable or you do not have access to it.'}}[key]?.[i18n.language]||'The case conversation is unavailable.');
   const uuid=value=>/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value||''));
+  function cancelCaseLink(){caseLinkRevision++;caseLinkPending=false;}
+  async function resolveCaseLink(resolve){
+    closeDialog(false);
+    window.tenantAppNavigate?.('dialogs',false);
+    const revision=++caseLinkRevision,version=epoch;
+    const current=()=>revision===caseLinkRevision&&version===epoch&&hasRight('dialogs');
+    caseLinkPending=true;notice(caseLinkText('opening'));
+    try{
+      const route=await resolve();
+      if(!current())return false;
+      caseLinkPending=false;
+      window.tenantAppNavigate?.('dialogs',false);
+      await openDialog(route);
+      return true;
+    }catch(error){
+      if(!current())return false;
+      caseLinkPending=false;
+      notice(error?.message||caseLinkText('unavailable'));
+      document.dispatchEvent(new CustomEvent('tenant-learning-deep-link-error',{detail:{message:error?.message||caseLinkText('unavailable')}}));
+      return false;
+    }finally{if(revision===caseLinkRevision)caseLinkPending=false;}
+  }
   async function openCaseLink(data){
     if(!hasRight('dialogs')){notice(t('noAccess'));return false;}
     const caseId=String(data?.case_id||''),messageId=String(data?.message_id||''),reviewId=data?.review_run_id?String(data.review_run_id):'';
-    if(!uuid(caseId)||(messageId&&!uuid(messageId))||(reviewId&&!uuid(reviewId))){notice(caseLinkText('invalid'));return false;}
-    notice(caseLinkText('opening'));
-    try{
+    if(!uuid(caseId)||(messageId&&!uuid(messageId))||(reviewId&&!uuid(reviewId))){cancelCaseLink();notice(caseLinkText('invalid'));return false;}
+    return resolveCaseLink(async()=>{
       const query=new URLSearchParams({expected_tenant_id:String(member?.tenant_id||''),expected_user_id:String(member?.telegram_id||'')});
       if(messageId)query.set('message_id',messageId);
       if(reviewId)query.set('review_run_id',reviewId);
       const resolved=(await rawApi(endpoint+'knowledge-candidates/'+encodeURIComponent(caseId)+'/conversation?'+query)).result;
       if(!resolved?.route||String(resolved.case_id)!==caseId||!uuid(resolved.message_id)||(messageId&&String(resolved.message_id)!==messageId))throw Error(caseLinkText('unavailable'));
-      window.tenantAppNavigate?.('dialogs',false);
-      await openDialog({...resolved.route,source_message_id:resolved.message_id});
-      notice('');return true;
-    }catch(error){
-      window.tenantAppNavigate?.('dialogs',false);
-      notice(error?.message||caseLinkText('unavailable'));
-      document.dispatchEvent(new CustomEvent('tenant-learning-deep-link-error',{detail:{message:error?.message||caseLinkText('unavailable')}}));
-      return false;
-    }
+      return {...resolved.route,source_message_id:resolved.message_id};
+    });
   }
   async function openLearningReviewLink(data){
     if(!hasRight('dialogs')){notice(t('noAccess'));return false;}
     const reviewId=String(data?.review_run_id||''),messageId=String(data?.message_id||'');
-    if(!uuid(reviewId)||!uuid(messageId)){notice(caseLinkText('invalid'));return false;}
-    notice(caseLinkText('opening'));
-    try{
+    if(!uuid(reviewId)||!uuid(messageId)){cancelCaseLink();notice(caseLinkText('invalid'));return false;}
+    return resolveCaseLink(async()=>{
       const resolved=(await rawApi(endpoint+'administrator/approvals?'+new URLSearchParams({review_run_id:reviewId})).result);
       if(!resolved?.route||String(resolved.source_message_id)!==messageId)throw Error(caseLinkText('unavailable'));
-      window.tenantAppNavigate?.('dialogs',false);
-      await openDialog({...resolved.route,source_message_id:resolved.source_message_id});
-      notice('');return true;
-    }catch(error){window.tenantAppNavigate?.('dialogs',false);notice(error?.message||caseLinkText('unavailable'));document.dispatchEvent(new CustomEvent('tenant-learning-deep-link-error',{detail:{message:error?.message||caseLinkText('unavailable')}}));return false;}
+      return {...resolved.route,source_message_id:resolved.source_message_id};
+    });
   }
   function openLocationCaseLink(){
     let query;try{query=new URLSearchParams(location.search);}catch{return;}
     const caseId=query.get('case_id'),messageId=query.get('message_id'),reviewId=query.get('review_run_id')||'';
     if(!caseId&&!messageId&&!reviewId)return;
     const key=[caseId||'',messageId||'',reviewId].join(':');
-    if(key===caseLinkKey)return;caseLinkKey=key;
+    if(key===caseLinkKey)return true;caseLinkKey=key;
     if(caseId)void openCaseLink({case_id:caseId,message_id:messageId,review_run_id:reviewId});
     else void openLearningReviewLink({review_run_id:reviewId,message_id:messageId});
+    return true;
   }
   window.tenantOperator={messageMarkup,openDialog,openCaseLink,openLearningReviewLink,openLocationCaseLink,closeDialog,changeState,refresh,hasRight,get member(){return member}};
   if(window.tenantProfileSnapshot)profileChanged(window.tenantProfileSnapshot);else fetch(window.TENANT_AI_AGENTS_CONFIG?.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(!member&&data?.member)profileChanged(data);}).catch(()=>{});
