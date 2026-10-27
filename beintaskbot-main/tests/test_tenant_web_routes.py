@@ -81,6 +81,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('knowledge-candidates/{candidate_id}/reject', ('POST',)),
     ('knowledge-candidates/{candidate_id}/archive', ('POST',)),
     ('knowledge-candidates/{candidate_id}/restore', ('POST',)),
+    ('knowledge-candidates/{candidate_id}/mark-knowledge-published', ('POST',)),
     ('knowledge', ('GET','POST')), ('knowledge/upload', ('POST',)),
     ('knowledge/{source_id}', ('PATCH','DELETE')),
     ('knowledge/{source_id}/restore', ('POST',)),

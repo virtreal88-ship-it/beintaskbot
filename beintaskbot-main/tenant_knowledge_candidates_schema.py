@@ -24,10 +24,18 @@ def create_schema(conn):
           FOREIGN KEY(tenant_id,extraction_id) REFERENCES saas_knowledge_extractions(tenant_id,id) ON DELETE CASCADE)""")
         cur.execute("ALTER TABLE saas_knowledge_candidates ADD COLUMN IF NOT EXISTS quality_flags JSONB NOT NULL DEFAULT '[]'::jsonb")
         cur.execute("ALTER TABLE saas_knowledge_candidates DROP CONSTRAINT IF EXISTS saas_knowledge_candidates_status_check")
-        cur.execute("ALTER TABLE saas_knowledge_candidates ADD CONSTRAINT saas_knowledge_candidates_status_check CHECK(status IN ('pending_review','needs_clarification','approved','rejected','archived'))")
+        cur.execute("ALTER TABLE saas_knowledge_candidates ADD CONSTRAINT saas_knowledge_candidates_status_check CHECK(status IN ('pending_review','needs_clarification','approved','knowledge_published','rejected','archived'))")
         cur.execute("ALTER TABLE saas_knowledge_candidates ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ")
         cur.execute("ALTER TABLE saas_knowledge_candidates ADD COLUMN IF NOT EXISTS archived_by BIGINT")
         cur.execute("ALTER TABLE saas_knowledge_candidates ADD COLUMN IF NOT EXISTS archived_from_status TEXT")
+        cur.execute("""CREATE TABLE IF NOT EXISTS saas_knowledge_candidate_knowledge_reviews(
+          tenant_id UUID NOT NULL,candidate_id UUID NOT NULL,source_id UUID NOT NULL,
+          source_title TEXT NOT NULL,source_hash TEXT NOT NULL,
+          reviewed_by BIGINT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,candidate_id),
+          FOREIGN KEY(tenant_id,candidate_id) REFERENCES saas_knowledge_candidates(tenant_id,id),
+          FOREIGN KEY(tenant_id,source_id) REFERENCES saas_ai_knowledge_sources(tenant_id,id),
+          FOREIGN KEY(tenant_id,reviewed_by) REFERENCES saas_tenant_members(tenant_id,telegram_id))""")
         cur.execute("""CREATE TABLE IF NOT EXISTS saas_knowledge_case_source_reviews(
           tenant_id UUID NOT NULL,candidate_id UUID NOT NULL,revision INTEGER NOT NULL,
           extraction_id UUID NOT NULL,message_id UUID NOT NULL,prior_ref JSONB NOT NULL,
