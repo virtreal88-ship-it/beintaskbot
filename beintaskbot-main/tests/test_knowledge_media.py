@@ -208,6 +208,14 @@ def test_encrypted_xlsx_is_reported_unsupported(context,monkeypatch):
     assert results[0]['status']=='unsupported'
     assert results[0]['code']=='unsupported_document_feature'
 
+def test_password_protected_ole_workbook_with_xlsx_mime_is_reported_unsupported(context):
+    item,add,download=context;add('document')
+    download.return_value=(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'+b'protected-office-data',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    _,results=media.collect({},item)
+    assert results[0]['status']=='unsupported'
+    assert results[0]['code']=='unsupported_document_feature'
+
 @pytest.mark.parametrize('feature,xml',[
     ('chart',None),
     ('formula','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><f>1+1</f><v>2</v></c></row></sheetData></worksheet>'),

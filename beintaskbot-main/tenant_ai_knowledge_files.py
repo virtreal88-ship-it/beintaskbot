@@ -68,6 +68,10 @@ def extract(filename, data):
         # XLSX is a ZIP container. Read only its local workbook XML; external
         # links/macros are never followed or executed. Keep sheet/cell refs so
         # downstream summaries can point back to the exact source location.
+        if raw.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'):
+            # Password-protected Office workbooks use the OLE/CFB container;
+            # do not misreport them as a generic corrupt ZIP attachment.
+            raise TenantLinearError('Şifrələnmiş və ya köhnə Office cədvəli dəstəklənmir.',415)
         if not raw.startswith(b'PK'):
             raise TenantLinearError('XLSX faylı düzgün deyil.')
         try:
