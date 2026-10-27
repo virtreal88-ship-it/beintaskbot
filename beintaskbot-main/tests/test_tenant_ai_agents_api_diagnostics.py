@@ -159,7 +159,7 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
         handler, namespace = load_handler()
         profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
         member = Mock(return_value=profile)
-        request = SimpleNamespace(method='GET', query={'limit': '10', 'tenant_id': 'client-controlled-tenant'})
+        request = SimpleNamespace(method='GET', headers={}, query={'limit': '10', 'tenant_id': 'client-controlled-tenant'})
 
         response = run_without_event_loop(handler(member, 'https://crm.pro.az', Mock(), 'diagnostics')(request))
 
@@ -191,7 +191,7 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
             registry_snapshot=Mock(return_value=[{'id': 'system_status', 'status': 'integration_unavailable',
                 'registered': True, 'read_only': True, 'customer_send_allowed': False}]),
         )
-        request = SimpleNamespace(method='GET', query={'view': 'teams', 'tenant_id': 'attacker-tenant'})
+        request = SimpleNamespace(method='GET', headers={}, query={'view': 'teams', 'tenant_id': 'attacker-tenant'})
 
         response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
             Mock(), 'agents')(request))
@@ -220,7 +220,7 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
             _expected=lambda *_args: None)
         with patch('tenant_ai_pilot.preflight', return_value={'ready':False,'blockers':['exact_pilot_scope_missing']}) as preflight:
             response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
-                Mock(), 'pilot_preflight')(SimpleNamespace(method='GET', query={})))
+                Mock(), 'pilot_preflight')(SimpleNamespace(method='GET', headers={}, query={})))
         self.assertEqual(response.status, 200)
         preflight.assert_called_once_with(profile)
 
@@ -264,7 +264,7 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
         profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
         remote = Mock(side_effect=AssertionError('Connect must not require Kommo'))
         response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
-            Mock(), 'options', request_provider=remote)(SimpleNamespace(method='GET', query={'cached': '1'})))
+            Mock(), 'options', request_provider=remote)(SimpleNamespace(method='GET', headers={}, query={'cached': '1'})))
         self.assertEqual(response.status, 200)
         self.assertEqual(json.loads(response.text)['result']['connect_channels'][0]['id'], 'tenant-channel')
         catalog.assert_called_once_with(profile)
@@ -273,7 +273,7 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
     def test_missing_verified_session_is_an_authorization_error_not_empty_state(self):
         handler, namespace = load_handler()
         member = Mock(return_value=None)
-        request = SimpleNamespace(method='GET', query={'limit': '10'})
+        request = SimpleNamespace(method='GET', headers={}, query={'limit': '10'})
 
         response = run_without_event_loop(handler(member, 'https://crm.pro.az', Mock(), 'diagnostics')(request))
 

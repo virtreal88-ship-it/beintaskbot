@@ -21,6 +21,9 @@ def handler(member_from_request,origin,logger,resource):
             if not profile:raise TenantLinearError('Нет доступа.',403)
             query=request.query
             if request.method=='GET':
+                # Optional identity binding for newer clients; authorization remains unchanged.
+                if 'X-Tenant-Id' in request.headers or 'X-User-Id' in request.headers:
+                    _expected({'expected_tenant_id':request.headers.get('X-Tenant-Id'),'expected_user_id':request.headers.get('X-User-Id')},profile)
                 if resource=='avatar':
                     content,mime=await get_avatar(profile,dict(query))
                     return web.Response(body=content,content_type=mime,headers={

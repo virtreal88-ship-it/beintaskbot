@@ -10,6 +10,7 @@
   document.addEventListener('tenant-chat-attachments-ready',bindNativeAudioErrors);
   let member=null,capabilities={},epoch=0,listRevision=0,openRevision=0,diagnosticRevision=0,groupSettingsRevision=0,rows=[],nextOffset=null,currentDialog=null,currentPage=null,diagnosticScroll=null,timer,bulkPreviewData=null,listScrollTop=0,autoRefreshTimer=null,autoRefreshBusy=false,pullRefreshBusy=false,pullStartY=null,hasInitialDialogSnapshot=false,lastDialogSnapshotAt=0;
   const latestMessageIds=new Map(),AUTO_REFRESH_MS=30000;
+  let listFlight=null,lastListKey='',lastListAt=0,permissionScope='',pendingDialogRoute=null;
   const readMarkers=new Map(),readInFlight=new Set(),readSyncKey=()=>`tenant.operator.read.${identity(member)}`;
   let soundEnabled=true,soundUnlocked=false,soundContext=null;
   const soundPrefKey=()=>`tenant.operator.message-sound.${member?.tenant_id||''}.${member?.telegram_id||''}`;
@@ -30,7 +31,7 @@
   function scheduleAutoRefresh(delay=AUTO_REFRESH_MS){stopAutoRefresh();if(document.hidden||!hasRight('dialogs')||!$('view-dialogs')?.classList.contains('active'))return;autoRefreshTimer=setTimeout(async()=>{if(autoRefreshBusy){scheduleAutoRefresh();return;}autoRefreshBusy=true;try{await refresh();}finally{autoRefreshBusy=false;scheduleAutoRefresh();}},delay);}
   const contextKey=(kind,route=currentDialog)=>`tenant.operator.${kind}.${member?.tenant_id||''}.${member?.telegram_id||''}.${kind==='route'?'':(route?.provider||'connect')+'.'+(route?.channel_id||'')+'.'+(route?.conversation_id||'')}`;
   const atBottom=node=>!node||node.scrollHeight-node.scrollTop-node.clientHeight<28;
-  const hasRight=right=>!!member&&(capabilities.modules?.[right]??(member.role==='owner'||(member.permissions||[]).includes(right)));
+  const hasRight=right=>!!member&&member.active!==false&&(capabilities.modules?.[right]??(member.role==='owner'||(member.permissions||[]).includes(right)));
   function syncMobileViewport(){
     const height=window.visualViewport?.height||window.innerHeight;
     if(height>0)document.documentElement.style.setProperty('--operator-visual-height',`${Math.round(height)}px`);
@@ -68,9 +69,11 @@
   }
   async function rawApi(url,options={}){
     const version=epoch,who=identity(member);
-    const response=await fetch(url,{...options,credentials:'same-origin',cache:'no-store',headers:{...(options.body?{'Content-Type':'application/json'}:{}),...options.headers}});
+    const response=await fetch(url,{...options,credentials:'same-origin',cache:'no-store',headers:{...(options.body?{'Content-Type':'application/json'}:{}),...((options.method||'GET')==='GET'?{'X-Tenant-Id':String(member?.tenant_id||''),'X-User-Id':String(member?.telegram_id||'')}:{ }),...options.headers}});
     const payload=await response.json();
     if(!document?.body||version!==epoch||who!==identity(member))throw new Error(t('companyChanged'));
+    if(response.status===401||response.status===403||((options.method||'GET')==='GET'&&response.status===409)){profileChanged({});if(response.status===409)void window.tenantRequestCoordinator?.revalidateProfile().catch(()=>{});}
+    if((options.method||'GET')!=='GET'){listFlight=null;lastListAt=0;}
     if(!response.ok||!payload.success){const error=new Error(payload.error||t('error'));error.status=response.status;error.keepRequest=payload.keep_request!==false;throw error;}
     return payload;
   }
@@ -155,10 +158,21 @@
     if(selected?.last_message_id&&String(selected.last_message_id)!==String(currentPage?.dialog?.last_message_id||''))selectedChanged=true;
     if(!hasInitialDialogSnapshot){hasInitialDialogSnapshot=true;lastDialogSnapshotAt=snapshotTime;}return selectedChanged;
   }
-  async function refresh(append=false){
-    if(!hasRight('dialogs'))return;install();const revision=++listRevision,version=epoch;
-    try{const result=await api('dialogs?'+new URLSearchParams({search:$('operatorSearch').value,channel:$('operatorChannel').value,agent:$('operatorAgent').value,state:$('operatorState').value,offset:append?nextOffset||0:0}));if(revision!==listRevision)return;const selectedChanged=observeLatestMessages(result.dialogs);rows=append?rows.concat(result.dialogs):result.dialogs;nextOffset=result.next_offset;$('operatorResultsCount').textContent=t('dialogResultCount').replace('{count}',String(result.total_count||0));badge(result.unread_count);setOptions('operatorChannel',result.channels,'allChannels');setOptions('operatorAgent',result.agents,'allAgents');renderRows();notice('');if(selectedChanged&&currentDialog)await appendNewMessages(currentDialog);}
-    catch(error){if(version===epoch&&revision===listRevision)notice(error.message);}
+  function refresh(append=false,reuse=false){
+    if(!hasRight('dialogs'))return Promise.resolve();install();
+    const key='dialogs?'+new URLSearchParams({search:$('operatorSearch').value,channel:$('operatorChannel').value,agent:$('operatorAgent').value,state:$('operatorState').value,offset:append?nextOffset||0:0});
+    if(listFlight?.key===key)return listFlight.promise;
+    if(reuse&&!append&&key===lastListKey&&Date.now()-lastListAt<5000){renderRows();return Promise.resolve();}
+    const revision=++listRevision,version=epoch;
+    $('operatorRows').setAttribute('aria-busy','true');if(!rows.length)notice(t('loading'));
+    const promise=(async()=>{try{
+      const result=await api(key);if(version!==epoch||revision!==listRevision)return;
+      const selectedChanged=observeLatestMessages(result.dialogs);rows=append?rows.concat(result.dialogs):result.dialogs;nextOffset=result.next_offset;
+      lastListKey=key;lastListAt=Date.now();
+      $('operatorResultsCount').textContent=t('dialogResultCount').replace('{count}',String(result.total_count||0));badge(result.unread_count);setOptions('operatorChannel',result.channels,'allChannels');setOptions('operatorAgent',result.agents,'allAgents');renderRows();notice('');if(selectedChanged&&currentDialog)await appendNewMessages(currentDialog);
+    }catch(error){if(version===epoch&&revision===listRevision)notice(error.message);}
+    finally{if(version===epoch&&revision===listRevision){listFlight=null;$('operatorRows').setAttribute('aria-busy','false');}}})();
+    listFlight={key,promise};return promise;
   }
   async function appendNewMessages(route){
     const chat=$('chatRows');if(!chat||!currentPage||!sameDialog(route,currentDialog))return;
@@ -209,7 +223,7 @@
     if(!route||!last?.id||!chat?.isConnected||document.hidden||!$('view-dialogs')?.classList.contains('active')||!sameDialog(route,currentDialog))return;
     if(!atBottom(chat))return;
     if(page.anchor_message_id&&String(page.anchor_message_id)!==String(last.id))return;
-    const owner=identity(member),key=owner+':'+dialogKey(route);if(readMarkers.get(key)===last.id||readInFlight.has(key))return;readInFlight.add(key);
+    const owner=identity(member),key=owner+':'+epoch+':'+dialogKey(route);if(readMarkers.get(key)===last.id||readInFlight.has(key))return;readInFlight.add(key);
     try{await api('dialogs/read','POST',{provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id||'',conversation_id:route.conversation_id||'',message_id:last.id});readMarkers.set(key,last.id);if(owner===identity(member)&&sameDialog(route,currentDialog)){rows.forEach(row=>{if(sameDialog(row,route))row.unread_count=0;});renderRows();try{localStorage.setItem(readSyncKey(),String(Date.now())+':'+crypto.randomUUID());}catch{}void refresh();}}
     catch(error){const status=$('operatorChatError');if(status&&owner===identity(member)&&sameDialog(route,currentDialog))status.textContent=error.message;}
     finally{readInFlight.delete(key);if(readMarkers.get(key)===last.id&&owner===identity(member)&&sameDialog(route,currentDialog)&&currentPage?.messages?.at(-1)?.id!==last.id)void markDialogReadIfVisible(currentPage);}
@@ -239,9 +253,12 @@
   async function openDialog(route){
     if(!hasRight('dialogs')){notice(t('noAccess'));return;}
     closeDialogDiagnostics();
-    const revision=++openRevision,version=epoch;
-    try{const page=await api('dialogs/history?'+historyQuery(route));if(revision!==openRevision)return;currentDialog=page.dialog;currentPage=page;sessionStorage.setItem(contextKey('route',page.dialog),JSON.stringify({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id}));const workspace=$('operatorWorkspace');if(workspace)workspace.dataset.selected='true';const host=$('operatorDialogs');if(host)host.dataset.conversationOpen='true';renderRows();renderDialog(page);void markDialogReadIfVisible(page);}
-    catch(error){if(version===epoch){notice(error.message);document.dispatchEvent(new CustomEvent('tenant-operator-error',{detail:{message:error.message}}));}}
+    if(currentDialog&&!sameDialog(currentDialog,route))closeDialog(false);
+    const revision=++openRevision,version=epoch;pendingDialogRoute=route;
+    $('operatorConversationContent')?.setAttribute('aria-busy','true');notice(t('loading'));
+    try{const page=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||revision!==openRevision)return;pendingDialogRoute=null;currentDialog=page.dialog;currentPage=page;sessionStorage.setItem(contextKey('route',page.dialog),JSON.stringify({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id}));const workspace=$('operatorWorkspace');if(workspace)workspace.dataset.selected='true';const host=$('operatorDialogs');if(host)host.dataset.conversationOpen='true';renderRows();renderDialog(page);notice('');void markDialogReadIfVisible(page);}
+    catch(error){if(version===epoch&&revision===openRevision){if(error.message!=='Request scope changed')pendingDialogRoute=null;notice(error.message);document.dispatchEvent(new CustomEvent('tenant-operator-error',{detail:{message:error.message}}));}}
+    finally{if(version===epoch&&revision===openRevision)$('operatorConversationContent')?.setAttribute('aria-busy','false');}
   }
   function configureDialogHead(route,saveDisplayName){
     const head=$('operatorConversationHeader');if(!head)return;
@@ -446,7 +463,7 @@
     await refresh();document.dispatchEvent(new CustomEvent('tenant-dialog-state',{detail:{route,result}}));if(action==='handoff')document.dispatchEvent(new CustomEvent('tenant-support-changed'));return result;
   }
   function assignmentReason(reason){return ['no_eligible_agent','agent_already_assigned'].includes(reason)?t(reason):i18n.reason(reason);}
-  function closeDialog(forget=true){if(forget===true)sessionStorage.removeItem(contextKey('route'));closeDialogDiagnostics();closeGroupSettings();document.dispatchEvent(new CustomEvent('tenant-chat-close'));openRevision++;currentDialog=null;currentPage=null;const workspace=$('operatorWorkspace');if(workspace)workspace.dataset.selected='false';const host=$('operatorDialogs');if(host)host.dataset.conversationOpen='false';const header=$('operatorConversationHeader'),content=$('operatorConversationContent');if(header)header.innerHTML=`<div class="operator-conversation-empty">${t('chooseDialog')}</div>`;if(content)content.innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorRows'))renderRows();}
+  function closeDialog(forget=true){pendingDialogRoute=null;if(forget===true)sessionStorage.removeItem(contextKey('route'));closeDialogDiagnostics();closeGroupSettings();document.dispatchEvent(new CustomEvent('tenant-chat-close'));openRevision++;currentDialog=null;currentPage=null;const workspace=$('operatorWorkspace');if(workspace)workspace.dataset.selected='false';const host=$('operatorDialogs');if(host)host.dataset.conversationOpen='false';const header=$('operatorConversationHeader'),content=$('operatorConversationContent');if(header)header.innerHTML=`<div class="operator-conversation-empty">${t('chooseDialog')}</div>`;if(content)content.innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorRows'))renderRows();}
   let notificationRouteHandled=false;
   function notificationDialogRoute(){
     try{
@@ -461,15 +478,19 @@
     try{const url=new URL(window.location.href);for(const key of ['open_dialog','provider','lead_id','channel_id','conversation_id'])url.searchParams.delete(key);window.history.replaceState(window.history.state,'',url.pathname+url.search+url.hash);}catch{}
   }
   function profileChanged(data){
-    const next=data.member||null,changed=identity(next)!==identity(member)||JSON.stringify(next?.permissions)!==JSON.stringify(member?.permissions)||next?.role!==member?.role||next?.active!==member?.active||JSON.stringify(data.capabilities?.modules)!==JSON.stringify(capabilities.modules);
+    if($('operatorDialogs'))$('operatorDialogs').style.visibility='';
+    const next=data.member||null,changed=identity(next)!==identity(member)||JSON.stringify(next?.permissions)!==JSON.stringify(member?.permissions)||next?.role!==member?.role||next?.active!==member?.active||JSON.stringify(data.capabilities)!==JSON.stringify(capabilities)||JSON.stringify(data.role_permissions)!==permissionScope;
+    permissionScope=JSON.stringify(data.role_permissions);
     member=next;capabilities=data.capabilities||{};loadSoundPreference();
     if($('operatorBulkAssignment')){$('operatorBulkAssignment').hidden=member?.role!=='owner';$('operatorBulkAssignment').textContent=bulkText('preview');}
-    if(changed){stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
-    if(hasRight('dialogs')){refresh();if($('view-dialogs')?.classList.contains('active'))scheduleAutoRefresh();const fromNotification=!notificationRouteHandled?notificationDialogRoute():null;if(fromNotification){notificationRouteHandled=true;clearNotificationDialogRoute();const version=epoch;setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(fromNotification);},0);return;}openLocationCaseLink();const saved=sessionStorage.getItem(contextKey('route'));if(saved&&!currentDialog)try{const version=epoch,route=JSON.parse(saved);if(route.channel_id&&route.conversation_id)setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(route);},0);}catch(_){sessionStorage.removeItem(contextKey('route'));}}else stopAutoRefresh();
+    if(changed){readMarkers.clear();readInFlight.clear();avatarAttempts.clear();avatarReady.clear();avatarQueue.length=0;listFlight=null;lastListKey='';lastListAt=0;stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
+    if(hasRight('dialogs')){if(!changed&&pendingDialogRoute)void openDialog(pendingDialogRoute);refresh(false,true);if($('view-dialogs')?.classList.contains('active'))scheduleAutoRefresh();const fromNotification=!notificationRouteHandled?notificationDialogRoute():null;if(fromNotification){notificationRouteHandled=true;clearNotificationDialogRoute();const version=epoch;setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(fromNotification);},0);return;}openLocationCaseLink();const saved=sessionStorage.getItem(contextKey('route'));if(saved&&!currentDialog&&!pendingDialogRoute)try{const version=epoch,route=JSON.parse(saved);if(route.channel_id&&route.conversation_id)setTimeout(()=>{if(version===epoch&&!currentDialog&&!pendingDialogRoute&&hasRight('dialogs'))openDialog(route);},0);}catch(_){sessionStorage.removeItem(contextKey('route'));}}else stopAutoRefresh();
   }
   window.addEventListener('storage',event=>{if(event.key===soundPrefKey())loadSoundPreference();if(event.key===readSyncKey()&&!document.hidden&&$('view-dialogs')?.classList.contains('active'))void refresh();});
   document.addEventListener('tenant-profile',event=>profileChanged(event.detail));
-  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){refresh();scheduleAutoRefresh();}else stopAutoRefresh();});
+  document.addEventListener('tenant-auth-invalid',()=>profileChanged({}));
+  document.addEventListener('tenant-auth-pending',()=>{listFlight=null;listRevision++;lastListAt=0;if($('operatorDialogs'))$('operatorDialogs').style.visibility='hidden';});
+  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){refresh(false,true);scheduleAutoRefresh();}else stopAutoRefresh();});
   document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAutoRefresh();else if($('view-dialogs')?.classList.contains('active')){refresh();scheduleAutoRefresh();}});
   window.addEventListener('beforeunload',stopAutoRefresh);
   window.addEventListener('popstate',()=>{caseLinkKey='';openLocationCaseLink();});

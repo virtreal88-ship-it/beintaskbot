@@ -46,7 +46,7 @@ async function setup(previous=false,group=false,shared=false){
  assert.ok(shared.mediaBytes>=pic.length);assert.ok(shared.calls.every(c=>c.method==='GET'));assert.ok(shared.calls.some(c=>c.url.includes('channel_id='+C)&&c.url.includes('conversation_id=')));shared.dom.window.close();
  const before=await setup(true,true);assert.equal(before.mediaBytes,0);assert.equal(before.w.document.querySelectorAll('[data-chat-attachment]').length,0);
  const after=await setup(false,true),{w}=after;
- assert.equal(after.mediaBytes,pic.length);assert.equal(after.listCalls,before.listCalls);assert.equal(after.listBytes,before.listBytes);
+ assert.equal(after.mediaBytes,pic.length);assert.ok(after.listCalls<before.listCalls,'startup profile/list triggers now coalesce');assert.ok(after.listBytes<before.listBytes,'deduplication avoids a repeated list payload');
   assert.equal(w.document.querySelectorAll('[data-chat-attachment]').length,1);
  assert.match(w.document.getElementById('chatRows').textContent,/Alice/);assert.match(w.document.getElementById('chatRows').textContent,/0:42/);assert.equal(w.document.querySelectorAll('[data-direction="outgoing"]').length,1);
  const details=w.document.querySelector('#chatRows details');const n=after.calls.length;details.open=true;await settle();assert.equal(after.calls.length,n);assert.match(details.textContent,/Salam! Привет!/);

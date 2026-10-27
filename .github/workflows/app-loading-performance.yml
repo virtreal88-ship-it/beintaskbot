@@ -1,0 +1,48 @@
+name: App loading and dialog query regressions
+
+on:
+  pull_request:
+  push:
+    branches:
+      - perf/app-loading-dialog-queries
+
+permissions:
+  contents: read
+
+jobs:
+  app-loading:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated test dependencies
+        run: |
+          python -m pip install -r requirements.txt pytest
+          npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0
+      - name: Check loading, scope isolation, and navigation
+        env:
+          NODE_PATH: ./.support-test-deps/node_modules
+        run: |
+          node tests/test_app_loading_performance.cjs
+          node tests/test_tenant_app_syntax.cjs
+          node tests/test_tenant_dialog_avatar_queue.cjs
+          node tests/test_tenant_operator_auto_refresh_ui.cjs
+      - name: Check dialog SQL and authorization regressions
+        run: >-
+          python -m pytest -q --tb=short
+          tests/test_operator_list_performance.py
+          tests/test_tenant_operator_workspace.py
+          tests/test_tenant_operator_assignment.py
+          tests/test_tenant_operator_copilot.py
+          tests/test_tenant_support_inbox.py
+          tests/test_tenant_web_routes.py
+          tests/test_tenant_ai_agents_api_diagnostics.py

@@ -68,7 +68,7 @@ def context(cur, profile, data, *, writing=False):
     return tenant, actor, channel, conversation, route, state, has_job, config
 
 
-def candidates(cur, tenant, channel, conversation, route, state, has_job, config, *, allow_current=False):
+def candidates(cur, tenant, channel, conversation, route, state, has_job, config, *, allow_current=False, agent_rows=None):
     if config.get('identity_conflict'):
         return [], 'conversation_identity_conflict'
     if has_job:
@@ -82,10 +82,12 @@ def candidates(cur, tenant, channel, conversation, route, state, has_job, config
     reason = _resume_block_reason({**config, 'agent_id': 'candidate', 'agent_enabled': True}, 'connect')
     if reason:
         return [], reason
-    cur.execute('''SELECT id,name,mode,scopes,enabled FROM saas_ai_agents
-      WHERE tenant_id=%s::uuid AND role='primary' ORDER BY name,id FOR SHARE''', (tenant,))
+    if agent_rows is None:
+        cur.execute("""SELECT id,name,mode,scopes,enabled FROM saas_ai_agents
+          WHERE tenant_id=%s::uuid AND role='primary' ORDER BY name,id FOR SHARE""", (tenant,))
+        agent_rows=cur.fetchall()
     is_group = route.get('conversation_kind') == 'group' or conversation.endswith('@g.us')
-    scoped = [dict(a) for a in cur.fetchall() if scope_matches(a.get('scopes'), channel)]
+    scoped = [dict(a) for a in agent_rows if scope_matches(a.get('scopes'), channel)]
     if not scoped:
         return [], 'no_connect_scope'
     agents = [a for a in scoped if a.get('enabled') is True]
@@ -118,33 +120,39 @@ def options(profile, data):
             return options_in_transaction(cur, profile, data)
 
 
-def group_options_in_transaction(cur, tenant, channel, conversation):
+def group_options_in_transaction(cur, tenant, channel, conversation, *, snapshot=None):
     """Read-only, channel-bound group candidates for preview only."""
     from tenant_ai_group_coordination import group_jid, read as read_group
     if not group_jid(conversation):
         return {'allowed':False,'reason':'invalid_group','agents':[],'revision':0}
-    state=read_group(cur,tenant,conversation)
+    state=snapshot['state'] if snapshot is not None else read_group(cur,tenant,conversation)
     revision=int(state.get('revision') or 0)
     if state.get('assignments'):
         return {'allowed':False,'reason':'group_already_assigned','agents':[],'revision':revision}
     if state.get('state') in {'human','active'}:
         return {'allowed':False,'reason':'group_stopped_or_active','agents':[],'revision':revision}
-    cur.execute('''SELECT t.status,s.enabled,s.emergency_stop,ch.active,
-        EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=t.id
-          AND i.provider='connect' AND i.status='connected') AS connected,
-        NOT ai_legacy_blocked(t.id,ch.connect_channel_id::text,%s) AS unambiguous
-      FROM saas_tenants t JOIN saas_connect_channels ch ON ch.tenant_id=t.id
-        AND ch.connect_channel_id=%s::uuid LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=t.id
-      WHERE t.id=%s::uuid''',(conversation,channel,tenant))
-    gate=cur.fetchone() or {}
+    if snapshot is None:
+        cur.execute('''SELECT t.status,s.enabled,s.emergency_stop,ch.active,
+            EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=t.id
+              AND i.provider='connect' AND i.status='connected') AS connected,
+            NOT ai_legacy_blocked(t.id,ch.connect_channel_id::text,%s) AS unambiguous
+          FROM saas_tenants t JOIN saas_connect_channels ch ON ch.tenant_id=t.id
+            AND ch.connect_channel_id=%s::uuid LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=t.id
+          WHERE t.id=%s::uuid''',(conversation,channel,tenant))
+        gate=cur.fetchone() or {}
+    else:
+        gate=snapshot['gate']
     from tenant_ai_agent_access import tenant_status_allows_ai
     from tenant_ai_agent_runtime_flags import enabled as runtime_flag
     if (not runtime_flag('AI_AGENTS_ENABLED') or not gate.get('active') or not gate.get('connected') or not gate.get('unambiguous')
             or gate.get('enabled') is not True or gate.get('emergency_stop') is True
             or not tenant_status_allows_ai(gate.get('status'),'connect')):
         return {'allowed':False,'reason':'connect_admission_blocked','agents':[],'revision':revision}
-    cur.execute("SELECT id,name,enabled,mode,scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND role='primary' ORDER BY name,id",(tenant,))
-    rows=[dict(row) for row in cur.fetchall()]
+    if snapshot is None:
+        cur.execute("SELECT id,name,enabled,mode,scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND role='primary' ORDER BY name,id",(tenant,))
+        rows=[dict(row) for row in cur.fetchall()]
+    else:
+        rows=snapshot['agents']
     from tenant_ai_agent_connect import scope_matches
     scoped=[row for row in rows if scope_matches(row.get('scopes'),channel,is_group=True)]
     candidates=[row for row in scoped if row.get('enabled') is True]

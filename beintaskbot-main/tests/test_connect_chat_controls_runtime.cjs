@@ -10,7 +10,7 @@ const fn=source.slice(start,end);
  w.api=async path=>{calls.push(path);return path.includes('for-lead')?{conversation_id:'client@s.whatsapp.net',provider:'connect',channel_id:'channel-a'}:{state:'active',agent_name:'Agent'}};
  w.setConversationAction=async(...args)=>actions.push(args);w.loadHandoffs=async()=>{};
  w.dialogStateMeta=state=>({state,label:state});w.dialogReason=()=>'';w.dialogTime=String;
- w.eval("let chatControlInput=null,chatControlLead='',chatControlAttempt=0,chatControlEpoch=0,testMode=null;const $=id=>document.getElementById(id);"+fn+';window.runSync=syncChatAgentControl;');
+ w.eval("let profile={tenant_id:'synthetic',telegram_id:11},aiAllowed=true;let chatControlInput=null,chatControlLead='',chatControlAttempt=0,chatControlEpoch=0,testMode=null;const $=id=>document.getElementById(id);"+fn+';window.runSync=syncChatAgentControl;');
  await w.runSync();
  assert.match(calls[1],/provider=connect/);assert.match(calls[1],/channel_id=channel-a/);
  await w.document.querySelector('button').onclick();
