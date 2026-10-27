@@ -105,6 +105,7 @@ def test_audio_can_succeed_when_visual_sampling_fails_and_transcript_is_unverifi
     observations,statuses,transcripts=asyncio.run(videos.prepare(JOB,reservation,[row],Mock()))
     assert observations=={} and statuses[row['external_id']]['audio']=='confident'
     assert transcripts[row['external_id']]=='The printer is showing a blank label.'
+    assert videos._claim.call_args.args[-1]=='asr:az'
     lines,missing=history([row],{},video_statuses=statuses,video_transcripts=transcripts)
     assert missing==1 and 'Unverified video speech transcript' in lines[0]['text']
     assert 'was not analyzed' in lines[0]['text']
@@ -158,6 +159,16 @@ def test_video_history_fails_closed_without_observation_or_confident_speech():
     assert 'do not infer' in lines[0]['text']
 
 
+def test_video_observation_redacts_personal_and_secret_text_before_cache_reuse():
+    result=videos.redact_observation(
+        'Blank label; customer name: Aysel Aliyeva; email: demo@example.test; '
+        'phone: +994 50 1234567; api_key=sk-12345678901234567890')
+    assert 'Blank label' in result
+    for sensitive in ('Aysel Aliyeva','demo@example.test','1234567','sk-12345678901234567890'):
+        assert sensitive not in result
+    assert '[PERSONAL DATA]' in result and '[EMAIL]' in result and '[NUMBER]' in result and '[SECRET]' in result
+
+
 def test_video_asr_cache_is_scoped_to_expected_language():
     from tenant_knowledge_media_cache import transcription_fingerprint
     media=(b'synthetic-audio','wav','audio/wav')
@@ -199,6 +210,30 @@ def test_video_setting_requires_model_when_enabled():
         'video_model':'','media_hosts':[]}
     with pytest.raises(TenantLinearError,match='Choose a video model'):
         configuration(payload)
+
+
+def test_video_call_reservation_counts_policy_fallback_and_skips_asr():
+    from tenant_ai_agent_run_store import video_reserved_calls
+    assert video_reserved_calls(1,response_policy_enabled=True,audio_enabled=False,
+        transcription_model='whisper-1',asr_tariff_available=True)==4
+    assert video_reserved_calls(1,response_policy_enabled=True,audio_enabled=True,
+        transcription_model='whisper-1',asr_tariff_available=True)==4
+    assert video_reserved_calls(1,response_policy_enabled=False,audio_enabled=False,
+        transcription_model='whisper-1',asr_tariff_available=True)==3
+    assert video_reserved_calls(1,response_policy_enabled=False,audio_enabled=True,
+        transcription_model='whisper-1',asr_tariff_available=True)==4
+
+
+def test_video_daily_call_reservation_covers_policy_fallback_without_asr():
+    from tenant_ai_agent_run_store import video_reserved_calls
+    assert video_reserved_calls(1,response_policy_enabled=True,audio_enabled=False,
+        transcription_model='whisper-1',asr_tariff_available=True)==4
+    assert video_reserved_calls(1,response_policy_enabled=True,audio_enabled=True,
+        transcription_model='whisper-1',asr_tariff_available=True)==4
+    assert video_reserved_calls(1,response_policy_enabled=False,audio_enabled=False,
+        transcription_model='whisper-1',asr_tariff_available=True)==3
+    assert video_reserved_calls(1,response_policy_enabled=False,audio_enabled=True,
+        transcription_model='whisper-1',asr_tariff_available=True)==4
 
 
 def test_video_reservation_is_bounded_and_requires_explicit_tariff_and_cap(monkeypatch):
@@ -247,6 +282,8 @@ def test_video_cache_identity_pins_tenant_source_bytes_model_component_and_times
         (item,'video-hash','frame-hash',1.0,'gpt-4.1','vision-v2'),
     ]
     assert all(videos._call_key(*args)!=base for args in variants)
+    assert videos._call_key(item,'video-hash','audio-hash',-1.0,'whisper-1',videos._asr_component('az')) != \
+        videos._call_key(item,'video-hash','audio-hash',-1.0,'whisper-1',videos._asr_component('ru'))
 
 
 def test_synthetic_silent_printer_video_keeps_visual_fact_and_withholds_asr_guess(tmp_path,monkeypatch):

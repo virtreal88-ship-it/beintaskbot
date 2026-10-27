@@ -277,6 +277,21 @@ def knowledge_context(tenant_id, query, *, limit=6, agent_id=None):
                      'content':str(row['content'])[:1800]} for row in cur.fetchall()]
 
 
+def video_reserved_calls(base_calls, *, response_policy_enabled, audio_enabled,
+                         transcription_model, asr_tariff_available):
+    """Bound a video run's daily reservation to its maximum call path."""
+    if type(base_calls) is not int or not 1 <= base_calls <= 4:
+        raise ValueError('Invalid AI call reservation')
+    if response_policy_enabled:
+        # The policy may issue a second reply generation; ASR is skipped for
+        # this path so main + two frames + fallback remain capped at four.
+        return max(base_calls, 4)
+    calls=max(base_calls,3)  # main reply plus at most two sampled frames
+    if audio_enabled and transcription_model=='whisper-1' and asr_tariff_available:
+        calls=max(calls,4)
+    return calls
+
+
 def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1, video_requested=False):
     """Reserve shared Chat AI calls before contacting the provider."""
     if type(reserved_calls) is not int or not 1 <= reserved_calls <= 4:
@@ -342,16 +357,12 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1, video_re
                     if supports_images(candidate_video_model):
                         video_model=candidate_video_model
                         video_api_key=company_key
-                        # Count the main reply plus the two bounded sampled
-                        # frame calls. ASR is included only when this run has
-                        # no policy-driven second reply, keeping the total at 4.
-                        reserved_calls=max(reserved_calls,3)
-                        if (not (row.get('response_policy') or {}).get('enabled')
-                                and config.get('audio_enabled') is True
-                                and config.get('transcription_model')=='whisper-1'):
-                            from tenant_ai_spend_budget import media_price
-                            if media_price('whisper-1','asr') is not None:
-                                reserved_calls=max(reserved_calls,4)
+                        from tenant_ai_spend_budget import media_price
+                        reserved_calls=video_reserved_calls(reserved_calls,
+                            response_policy_enabled=(row.get('response_policy') or {}).get('enabled') is True,
+                            audio_enabled=config.get('audio_enabled') is True,
+                            transcription_model=config.get('transcription_model'),
+                            asr_tariff_available=(media_price('whisper-1','asr') is not None))
                 except TenantLinearError:
                     video_model='';video_api_key=''
             if (not tenant_status_allows_ai(row['tenant_status'],job.get('provider')) or row['settings_enabled'] is not True or row.get('operating_mode') not in (None,'active') or row.get('emergency_stop') is True or row['agent_enabled'] is not True or row.get('role','primary')!='primary'
