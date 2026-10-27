@@ -35,6 +35,7 @@ def redact_observation(value):
     text=re.sub(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}','[EMAIL]',text)
     text=re.sub(r'(?i)\b(?:sk-[\w-]{8,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b','[SECRET]',text)
     text=re.sub(r'(?i)\b[A-F0-9]{24,}\b','[SECRET]',text)
+    text=re.sub(r'(?i)\b(?:my name is|меня зовут|adım|soyadım)\s+[^,;\n]+','[PERSONAL DATA]',text)
     text=re.sub(r'(?i)(?:customer|contact|recipient|name|full name|ad soyad|ad|soyad|имя|фамилия)\s*[:=—-]\s*[^,;\n]+','[PERSONAL DATA]',text)
     text=re.sub(r'(?<!\w)(?:\+?\d[\d ()-]{5,}\d)(?!\w)','[NUMBER]',text)
     return text[:2400]
@@ -304,12 +305,13 @@ async def prepare(job, reservation, rows, logger):
                                     transcribe_video, reservation['video_api_key'], asr_model, *track,
                                     expected_language=reservation.get('agent_language') or '', request_timeout=45)
                                 audio_status = str(diag.get('speech_state') or 'uncertain')
+                                safe_text=(redact_observation(text) if audio_status=='confident' else '')
                                 _finish(item, video_hash, audio_hash, -1.0, asr_model, asr_component,
                                     claim['token'], claim['call_key'],
-                                    text=(text if audio_status=='confident' else ''),
+                                    text=safe_text,
                                     speech_state=audio_status)
-                                if audio_status == 'confident' and text:
-                                    transcripts[message_id] = text[:4000]
+                                if audio_status == 'confident' and safe_text:
+                                    transcripts[message_id] = safe_text[:2400]
                             except Exception as error:
                                 code = _safe_failure(error)
                                 _finish(item, video_hash, audio_hash, -1.0, asr_model, asr_component,

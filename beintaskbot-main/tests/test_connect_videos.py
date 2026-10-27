@@ -100,11 +100,14 @@ def test_audio_can_succeed_when_visual_sampling_fails_and_transcript_is_unverifi
     monkeypatch.setattr('tenant_video_frames.extract_audio',lambda *_:(b'RIFFsynthetic','wav','audio/wav'))
     monkeypatch.setattr(videos,'_claim',Mock(return_value={'state':'running','token':'asr-token','call_key':'asr-key'}))
     monkeypatch.setattr(videos,'_finish',Mock())
+    safe_text='The printer is showing a blank label; email [EMAIL]; phone [NUMBER]; [SECRET]'
     monkeypatch.setattr('tenant_chat_ai_provider.transcribe_video',Mock(return_value=(
-        'The printer is showing a blank label.',{}, {'speech_state':'confident','language':'az'})))
+        'The printer is showing a blank label; email demo@example.test; phone +994 50 1234567; api_key=sk-12345678901234567890',
+        {}, {'speech_state':'confident','language':'az'})))
     observations,statuses,transcripts=asyncio.run(videos.prepare(JOB,reservation,[row],Mock()))
     assert observations=={} and statuses[row['external_id']]['audio']=='confident'
-    assert transcripts[row['external_id']]=='The printer is showing a blank label.'
+    assert transcripts[row['external_id']]==safe_text
+    assert videos._finish.call_args.kwargs['text']==safe_text
     assert videos._claim.call_args.args[-1]=='asr:az'
     lines,missing=history([row],{},video_statuses=statuses,video_transcripts=transcripts)
     assert missing==1 and 'Unverified video speech transcript' in lines[0]['text']
@@ -213,18 +216,6 @@ def test_video_setting_requires_model_when_enabled():
 
 
 def test_video_call_reservation_counts_policy_fallback_and_skips_asr():
-    from tenant_ai_agent_run_store import video_reserved_calls
-    assert video_reserved_calls(1,response_policy_enabled=True,audio_enabled=False,
-        transcription_model='whisper-1',asr_tariff_available=True)==4
-    assert video_reserved_calls(1,response_policy_enabled=True,audio_enabled=True,
-        transcription_model='whisper-1',asr_tariff_available=True)==4
-    assert video_reserved_calls(1,response_policy_enabled=False,audio_enabled=False,
-        transcription_model='whisper-1',asr_tariff_available=True)==3
-    assert video_reserved_calls(1,response_policy_enabled=False,audio_enabled=True,
-        transcription_model='whisper-1',asr_tariff_available=True)==4
-
-
-def test_video_daily_call_reservation_covers_policy_fallback_without_asr():
     from tenant_ai_agent_run_store import video_reserved_calls
     assert video_reserved_calls(1,response_policy_enabled=True,audio_enabled=False,
         transcription_model='whisper-1',asr_tariff_available=True)==4
