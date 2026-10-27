@@ -28,7 +28,7 @@ const route={provider:'connect',channel_id:'channel-a',conversation_id:'customer
      if(path.includes('/source-review')&&opt.method==='POST'){
       const body=JSON.parse(opt.body);result={candidate:{...candidate,version:2,media_source_diagnostics:[],media_source_review:{revision:1,message_id:body.message_id}},evidence,route};
      } else if(path.includes('/source-review?')){
-      const query=new URL(path,'https://example.test').searchParams;result={build_marker:'source-review-preflight-v1',candidate_id:id,extraction_id:'extract-1',candidate_version:1,expected_version:Number(query.get('expected_version')),message_id:query.get('message_id'),in_case_evidence:true,in_extraction_media:true,version_matches:true,case_reviewable:true,status:'eligible',reason:'membership_and_version_match'};
+      const query=new URL(path,'https://example.test').searchParams;result={build_marker:'source-review-preflight-v1',candidate_id:candidate.id,extraction_id:'extract-1',candidate_version:1,expected_version:Number(query.get('expected_version')),message_id:query.get('message_id'),in_case_evidence:true,in_extraction_media:true,version_matches:true,case_reviewable:true,status:'eligible',reason:'membership_and_version_match'};
      } else if(path.includes('/knowledge-candidates/'))result={candidate,evidence,route};
      else if(path.includes('/knowledge-candidates'))result={candidates:[candidate],next_before:null};
      else if(path.includes('/ai/channels'))result={channels:[]};else if(path.includes('/ai/agents'))result={agents:[]};
@@ -43,6 +43,7 @@ const route={provider:'connect',channel_id:'channel-a',conversation_id:'customer
    assert.equal(await form.locator('[data-source-review-message] option').count(),1,`${viewport.name}: excludes extraction media outside case claims`);
    assert.equal(await form.locator('[data-source-review-message]').inputValue(),target,`${viewport.name}: defaults to the case attachment`);
    assert.equal(await page.locator('[data-case-media-stale]').evaluate(node=>node.parentElement.classList.contains('case-content-column')),true,`${viewport.name}: stale warning is in the scrollable case column`);
+   await form.locator('[data-source-review-preflight][data-status]').waitFor();assert.equal(await form.locator('[data-source-review-preflight]').getAttribute('data-status'),'eligible',`${viewport.name}: ${await form.locator('[data-source-review-preflight]').textContent()}`);
    await page.locator('[data-source-review-note]').fill('Reviewed this current photo as a separate source.');
    if(viewport.name==='desktop'){
     await form.locator('[data-source-review-ack]').locator('xpath=..').click();
