@@ -1,5 +1,6 @@
 """Same-origin APIs for manual knowledge extraction and employee review."""
 import asyncio
+from tenant_read_timing import ReadTiming
 from aiohttp import web
 import tenant_knowledge_batches as batches
 import tenant_knowledge_campaigns as campaigns
@@ -18,8 +19,9 @@ from tenant_knowledge_candidates_store import conversation_link, detail, listing
 def handler(member_from_request,canonical_origin,logger,resource='collection'):
     async def handle(request):
         headers={'Cache-Control':'no-store'}
+        timing=ReadTiming(3,logger) if request.method=='GET' and resource=='conversation' else None
         try:
-            profile=member_from_request(request)
+            profile=timing.authenticate(member_from_request,request) if timing else member_from_request(request)
             if not profile: raise TenantLinearError('Нет доступа.',403)
             if request.method=='GET':
                 _expected(request.query,profile)
@@ -38,7 +40,7 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                 elif resource=='conversation':
                     if set(request.query)-{'message_id','review_run_id','expected_tenant_id','expected_user_id'}:
                         raise TenantLinearError('Invalid conversation selection.',400)
-                    result=await asyncio.to_thread(conversation_link,profile,request.match_info['candidate_id'],request.query.get('message_id'),request.query.get('review_run_id'))
+                    result=await timing.run(conversation_link,profile,request.match_info['candidate_id'],request.query.get('message_id'),request.query.get('review_run_id'))
                 else: result=await asyncio.to_thread(listing,profile,dict(request.query))
             else:
                 _origin(request,canonical_origin)
@@ -75,4 +77,6 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
         except Exception:
             logger.error('Knowledge candidate operation unavailable')
             return web.json_response({'success':False,'error':'Операция временно недоступна.'},status=503,headers=headers)
+        finally:
+            if timing: timing.finish()
     return handle

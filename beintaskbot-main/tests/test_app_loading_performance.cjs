@@ -219,4 +219,59 @@ async function sameScopePendingFocusTests(){
  console.log('PASS same-scope focus: obsolete list/history/agent flights cannot suppress replacement loads');
 }
 
-(async()=>{await requestTests();await agentTests();await dialogTests();await bootstrapTests();await focusTests();await deepLinkReadPollTests();await hiddenChatActionTests();await sameScopePendingFocusTests();})().catch(error=>{console.error(error);process.exitCode=1;});
+
+async function caseResolverNavigationTests(){
+ const caseId='00000000-0000-4000-8000-000000000777',messageId='00000000-0000-4000-8000-000000000778',target=row(7);
+ const link=`&case_id=${caseId}&message_id=${messageId}`;
+ function setup(query=link){
+  const b=browser('dialogs',query),{w}=b;
+  w.sessionStorage.setItem(`tenant.operator.route.${profile.member.tenant_id}.${profile.member.telegram_id}.`,JSON.stringify(row(3)));
+  w.tenantProfileSnapshot=profile;w.tenantAppNavigate=(view)=>b.emit('tenant-view',{view});
+  w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));
+  b.histories=()=>b.requests.filter(r=>r.url.includes('/history?'));
+  b.resolvers=()=>b.requests.filter(r=>r.url.includes('/conversation?'));
+  b.resolve=(request=b.resolvers().at(-1))=>b.reply(request,{case_id:caseId,message_id:messageId,route:target});
+  return b;
+ }
+ const tick=async()=>{await new Promise(r=>setTimeout(r,5));await settle();};
+ for(const outcome of ['success','failure','invalid']){
+  const b=setup(outcome==='invalid'?'&case_id=invalid':link);
+  try{
+   await tick();assert.equal(b.histories().length,0,'explicit links suppress saved route while resolving, including invalid links');
+   if(outcome==='invalid'){assert.equal(b.resolvers().length,0);continue;}
+   if(outcome==='failure')b.reply(b.resolvers()[0],{},500);else b.resolve();
+   await settle();assert.equal(b.histories().length,outcome==='success'?1:0,'failed resolver cannot silently show a different saved conversation');
+   if(outcome==='success'){
+    const req=b.histories()[0],query=new URL(req.url,'https://fixture.test').searchParams;
+    assert.equal(query.get('lead_id'),'7');assert.equal(query.get('anchor'),messageId);
+    b.reply(req,{dialog:target,messages:[],has_more:false});await settle();
+    b.emit('tenant-profile',profile);await tick();assert.equal(b.histories().length,1,'repeated profile does not replay a resolved case');
+   }
+  }finally{b.w.close();}
+ }
+ const ordinary=setup('');try{await tick();assert.equal(ordinary.histories().length,1);assert.match(ordinary.histories()[0].url,/lead_id=3/,'ordinary navigation still restores saved route');}finally{ordinary.w.close();}
+ for(const cancel of ['close','escape','leave','select','revoke','switch']){
+  const b=setup();try{
+   await tick();const pending=b.resolvers()[0];
+   if(cancel==='close')b.w.tenantOperator.closeDialog();
+   if(cancel==='escape')b.w.document.dispatchEvent(new b.w.KeyboardEvent('keydown',{key:'Escape'}));
+   if(cancel==='leave')b.emit('tenant-view',{view:'tasks'});
+   if(cancel==='select')void b.w.tenantOperator.openDialog(row(9));
+   if(cancel==='revoke')b.emit('tenant-profile',{...profile,capabilities:{modules:{dialogs:false}}});
+   if(cancel==='switch')b.emit('tenant-profile',{...profile,member:{...profile.member,tenant_id:'00000000-0000-0000-0000-000000000102'}});
+   const count=b.histories().length;b.resolve(pending);await settle();assert.equal(b.histories().length,count,`late case resolver must not override ${cancel}`);
+  }finally{b.w.close();}
+ }
+ const back=setup();try{
+  await tick();const first=back.resolvers()[0];
+  back.w.history.pushState({},'','/app?view=tasks');back.w.dispatchEvent(new back.w.PopStateEvent('popstate'));back.resolve(first);await settle();assert.equal(back.histories().length,0);
+  back.w.history.pushState({},'','/app?view=dialogs'+link);back.w.dispatchEvent(new back.w.PopStateEvent('popstate'));assert.equal(back.resolvers().length,2);back.resolve();await settle();assert.equal(back.histories().length,1);
+ }finally{back.w.close();}
+ const focus=setup();try{
+  await tick();const old=focus.resolvers()[0];focus.w.dispatchEvent(new focus.w.Event('focus'));focus.resolve(old);await settle();assert.equal(focus.histories().length,0);
+  focus.requests.find(r=>r.url==='/api/platform/me').resolve(response(profile));await settle();assert.equal(focus.resolvers().length,2,'pending case restarts only after fresh authorization');focus.resolve();await settle();assert.equal(focus.histories().length,1);
+ }finally{focus.w.close();}
+ console.log('PASS case resolver: saved-route suppression, anchor, errors, ordinary restore, cancellation, navigation, scope changes and focus retry');
+}
+
+(async()=>{await requestTests();await agentTests();await dialogTests();await bootstrapTests();await focusTests();await deepLinkReadPollTests();await hiddenChatActionTests();await sameScopePendingFocusTests();await caseResolverNavigationTests();})().catch(error=>{console.error(error);process.exitCode=1;});

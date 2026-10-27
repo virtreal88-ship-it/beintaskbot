@@ -39,6 +39,7 @@ jobs:
       - name: Check dialog SQL and authorization regressions
         run: >-
           python -m pytest -q --tb=short
+          tests/test_read_timing.py
           tests/test_operator_list_performance.py
           tests/test_tenant_operator_workspace.py
           tests/test_tenant_operator_assignment.py

@@ -11,13 +11,15 @@ from tenant_operator_continuation import options as continuation_options, grant 
 from tenant_operator_legacy import options as legacy_options, recover as recover_legacy
 from tenant_operator_copilot import run as run_copilot
 from tenant_connect_avatars import get_avatar
+from tenant_read_timing import ReadTiming
 
 
 def handler(member_from_request,origin,logger,resource):
     async def handle(request):
         headers={'Cache-Control':'no-store'}
+        timing=ReadTiming(1 if resource=='dialogs' else 2,logger) if request.method=='GET' and resource in {'dialogs','history'} else None
         try:
-            profile=member_from_request(request)
+            profile=timing.authenticate(member_from_request,request) if timing else member_from_request(request)
             if not profile:raise TenantLinearError('Нет доступа.',403)
             query=request.query
             if request.method=='GET':
@@ -30,9 +32,9 @@ def handler(member_from_request,origin,logger,resource):
                         'Cache-Control':'private, max-age=3600',
                         'X-Content-Type-Options':'nosniff','Vary':'Cookie'})
                 elif resource=='dialogs':
-                    result=await asyncio.to_thread(listing,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
+                    result=await timing.run(listing,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
                 elif resource=='history':
-                    result=await asyncio.to_thread(history,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),query.get('before'),query.get('anchor'))
+                    result=await timing.run(history,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),query.get('before'),query.get('anchor'))
                 elif resource=='agent_assignment':
                     result=await asyncio.to_thread(assignment_options,profile,dict(query))
                 elif resource=='agent_assignment_bulk':
@@ -63,4 +65,6 @@ def handler(member_from_request,origin,logger,resource):
         except Exception:
             logger.exception('Operator dialog read failed')
             return web.json_response({'success':False,'error':'Диалоги временно недоступны.'},status=503,headers=headers)
+        finally:
+            if timing: timing.finish()
     return handle
