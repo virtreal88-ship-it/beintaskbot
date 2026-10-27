@@ -5,7 +5,7 @@ assert.match(app,/data-view="support_cases"/);assert.match(app,/id="view-support
 assert.match(ui,/\/api\/platform\/ai\/knowledge-candidates/);assert.match(ui,/expected_tenant_id/);assert.match(ui,/expected_user_id/);assert.match(ui,/expected_version/);
 assert.match(ui,/pending_review/);assert.match(ui,/needs_clarification/);assert.match(ui,/approved/);assert.match(ui,/rejected/);
 assert.match(ui,/data-case-archive/,'owners and admins can move a case to the reversible trash');assert.match(ui,/data-case-restore/,'archived cases can be restored');assert.match(ui,/archiveOrRestoreCase\('archive'\)/);assert.match(ui,/archiveOrRestoreCase\('restore'\)/);assert.match(ui,/expected_version:selected\.version/,'trash actions retain optimistic locking');
-assert.match(ui,/analysisUnavailable/);assert.match(ui,/No fabricated results/);assert.match(ui,/tenant-support-open/);
+assert.match(ui,/analysisUnavailable/);assert.match(ui,/No fabricated results/);assert.match(app,/tenant-support-open/,'support-case route integration is handled by the host application');
 assert.match(ui,/window\.tenantI18n\?\.language/,'support-case labels follow the selected application language');assert.match(ui,/caseCopy\.az/,'case labels include Azerbaijani copy');
 assert.match(app,/\.case-modal-body\{display:grid;grid-template-columns:minmax\(0,\.98fr\) minmax\(0,1\.02fr\);gap:0;min-height:0;overflow:hidden!important/,'modal body remains fixed while columns scroll independently');
 assert.match(app,/\.case-content-column\{min-width:0;min-height:0;overflow-y:auto/);assert.match(app,/\.case-conversation-messages\{display:flex;flex-direction:column;gap:12px;min-height:0;overflow-y:auto/,'long conversations remain in the independently scrolling right column');

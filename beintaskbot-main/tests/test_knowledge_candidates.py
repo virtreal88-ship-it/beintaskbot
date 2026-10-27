@@ -42,6 +42,103 @@ def candidate(ready):
     return service.analyze(PROFILE,data)['candidates'][0]
 
 
+@pytest.mark.parametrize('legacy_format,changed',[(False,True),(True,False)])
+def test_owner_can_read_stale_attachment_diagnostics_without_reattributing_saved_analysis(ready,monkeypatch,legacy_format,changed):
+    db,generation,_=ready;value=candidate(ready)
+    run=db.execute('SELECT * FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['extraction_id']))[0]
+    refs=run['source_refs'];ref=refs[0]
+    facts={key:None for key in store._MEDIA_IDENTITY_FIELDS};facts.update({'mediaId':'old','fileLength':10})
+    if legacy_format:
+        import hashlib
+        old_version=hashlib.sha256(json.dumps(facts,sort_keys=True).encode()).hexdigest()
+        current=facts
+    else:
+        old_version=store.digest(facts);current={**facts,'mediaId':'replacement','fileLength':14} if changed else facts
+    ref.update(media_kind='image',media_version=old_version)
+    db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb,media_results=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps(refs),json.dumps([{'id':ref['id'],'status':'processed','code':'vision_observation','observation':'OLD_ATTACHMENT_SECRET_OBSERVATION'}]),A,value['extraction_id']))
+    db.execute('UPDATE saas_crm_messages SET message_type=\'image\',raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps({**current,'mediaKey':'SECRET_MEDIA_KEY','url':'https://example.invalid/?token=SECRET'}),A,ref['id']))
+    db.commit()
+    opened=store.detail(PROFILE,value['id'])
+    diagnostic=opened['candidate']['media_source_diagnostics'][0]
+    assert diagnostic['saved_version']==old_version and diagnostic['current_version']==store.digest(current)
+    assert diagnostic['current_kind']=='image' and diagnostic['identity_fields']['mediaId']=={'original_value_retained':False,'current_present':True}
+    assert opened['evidence'][0]['attachment_evidence_status']=='stale_unverified'
+    assert 'OLD_ATTACHMENT_SECRET_OBSERVATION' not in opened['evidence'][0]['text']
+    assert 'SECRET_MEDIA_KEY' not in json.dumps(opened) and 'example.invalid' not in json.dumps(opened)
+    assert opened['candidate']['can_approve'] is False
+    assert opened['candidate']['source_claims_unverified'] is True
+    assert opened['candidate']['approval_block_reason']=='source_attachment_changed_review_required'
+    assert generation.call_count==1
+    db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps({**current,'mediaId':'changed_after_read','mediaKey':'SECRET_MEDIA_KEY'}),A,ref['id']))
+    db.commit()
+    with pytest.raises(TenantLinearError,match='Вложение исходного сообщения изменилось'):
+        store.mutate(PROFILE,value['id'],{'expected_version':1,'agent_ids':[EXPERT]},'approve')
+
+
+def test_stale_attachment_diagnostics_remain_tenant_scoped(ready):
+    db,_,_=ready;value=candidate(ready)
+    with pytest.raises(TenantLinearError):
+        store.detail({'tenant_id':B,'telegram_id':22},value['id'])
+
+
+@pytest.mark.parametrize('has_current_receipt',[True,False])
+def test_owner_reviews_changed_media_as_new_version_without_rewriting_extraction_or_carrying_claims(ready,has_current_receipt):
+    import tenant_media_evidence as media_evidence
+    db,generation,_=ready;value=candidate(ready)
+    run=db.execute('SELECT * FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['extraction_id']))[0]
+    old_refs=run['source_refs'];prior=old_refs[0]
+    old_facts={key:None for key in store._MEDIA_IDENTITY_FIELDS};old_facts.update({'mediaId':'old-media','fileLength':10})
+    new_facts={**old_facts,'mediaId':'new-media','fileLength':15}
+    new_external='review-'+str(uuid.uuid4())
+    prior.update(media_kind='image',media_version=store.digest(old_facts))
+    current_ref={**prior,'external_id':new_external,
+      'media_kind':'image','media_version':media_evidence.media_version(new_facts)}
+    source_digest=media_evidence.source_hash(current_ref)
+    db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb,media_results=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps(old_refs),json.dumps([{'id':prior['id'],'status':'processed','code':'vision_observation','observation':'OLD OBSERVATION'}]),A,value['extraction_id']))
+    db.execute('UPDATE saas_crm_messages SET message_type=\'image\',raw=%s::jsonb,external_id=%s WHERE id=%s::uuid',(json.dumps(new_facts),new_external,prior['id']))
+    db.execute('''INSERT INTO saas_media_evidence_receipts(tenant_id,channel_id,external_id,source_hash,media_kind,direction,status,code,result)
+      VALUES(%s::uuid,%s::uuid,%s,%s,'image','incoming','processed','vision_observation',%s::jsonb)''',
+      (A,CA,current_ref['external_id'],media_evidence.source_hash(prior),json.dumps({'observation':'OLD RECEIPT OBSERVATION'})))
+    if has_current_receipt:
+        db.execute('''INSERT INTO saas_media_evidence_receipts(tenant_id,channel_id,external_id,source_hash,media_kind,direction,status,code,result)
+          VALUES(%s::uuid,%s::uuid,%s,%s,'image','incoming','processed','vision_observation',%s::jsonb)''',
+          (A,CA,current_ref['external_id'],source_digest,json.dumps({'observation':'CURRENT OBSERVATION'})))
+    db.commit()
+    with pytest.raises(TenantLinearError,match='изменилась'):
+        store.mutate(PROFILE,value['id'],{'expected_version':0,'message_id':prior['id'],'review_note':'Reviewed owner@example.com as a separate source.','acknowledge_new_source':True},'source_review')
+    reviewed=store.mutate(PROFILE,value['id'],{'expected_version':1,'message_id':prior['id'],'review_note':'Reviewed owner@example.com as a separate source.','acknowledge_new_source':True},'source_review')
+    card=reviewed['candidate']
+    assert card['version']==2 and card['status']=='needs_clarification' and card['media_source_review']['revision']==1
+    assert card['media_source_review']['receipt_reused'] is has_current_receipt and card['can_approve'] is False
+    assert card['title']=='Review the current support request' and card['symptoms']==['Review the current customer request before saving']
+    assert card['cause']=={'status':'unknown','text':''} and card['outcome']['status']=='unconfirmed'
+    assert card['resolution_steps']==[] and card['operator_actions']==[]
+    evidence_text=next(item['text'] for item in reviewed['evidence'] if item['id']==prior['id'])
+    assert ('CURRENT OBSERVATION' in evidence_text) is has_current_receipt
+    assert 'OLD OBSERVATION' not in json.dumps(reviewed)
+    assert 'OLD RECEIPT OBSERVATION' not in json.dumps(reviewed)
+    saved_refs=db.execute('SELECT source_refs FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['extraction_id']))[0]['source_refs']
+    assert saved_refs==run['source_refs'] and saved_refs[0]['media_version']==store.digest(old_facts)
+    revision=db.execute('SELECT * FROM saas_knowledge_case_source_reviews WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid',(A,value['id']))[0]
+    assert revision['claims_snapshot']['outcome']==value['outcome']
+    assert revision['reviewed_ref']['media_version']==media_evidence.media_version(new_facts)
+    assert '@' not in revision['review_note'] and '[EMAIL]' in revision['review_note']
+    assert db.execute("SELECT action FROM saas_tenant_audit_events WHERE entity_id=%s ORDER BY created_at DESC LIMIT 1",(value['id'],))[0]['action']=='knowledge_candidate_source_reviewed'
+    assert generation.call_count==1
+    with pytest.raises(TenantLinearError,match='Карточка изменилась'):
+        store.mutate(PROFILE,value['id'],{'expected_version':1,'message_id':prior['id'],'review_note':'Reviewed owner@example.com as a separate source.','acknowledge_new_source':True},'source_review')
+    with pytest.raises(TenantLinearError,match='confirmation_required'):
+        store.mutate(PROFILE,value['id'],{'expected_version':2,'agent_ids':[EXPERT]},'approve')
+    changed_raw={**new_facts,'mediaId':'changed-again'}
+    db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',(json.dumps(changed_raw),prior['id']));db.commit()
+    with pytest.raises(TenantLinearError,match='review it again'):
+        store.mutate(PROFILE,value['id'],{'expected_version':2,'title':'New reviewed title'},'edit')
+
+
 def confirmed_case(ready):
     db,generation,data=ready;ticket_id=str(uuid.uuid4())
     db.execute("INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,status,completion_outcome,completion_note,created_by) VALUES(%s::uuid,%s::uuid,%s::uuid,'client','manual','resolved','resolved_confirmed','Customer confirmed the fix',11)",(A,ticket_id,CA));db.commit()

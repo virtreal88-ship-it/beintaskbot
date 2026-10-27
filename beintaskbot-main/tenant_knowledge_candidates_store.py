@@ -139,28 +139,60 @@ def snapshot(cur,profile,data):
     return {'tenant':tenant,'actor':actor,'route':binding,'refs':refs,'messages':messages,'source_digest':digest(messages),'next_before':next_before,'ticket':{'status':ticket['status'],'completion_outcome':ticket.get('completion_outcome') or '','completion_note':ticket.get('completion_note') or ''} if ticket else None}
 
 
-def evidence(cur,profile,extraction,names_out=None):
+_MEDIA_IDENTITY_FIELDS=('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')
+
+
+def evidence(cur,profile,extraction,names_out=None,*,owner_diagnostics=False):
     tenant,_,policy,_,_,_=route(cur,profile,extraction['route'])
-    items=[];names=[]
+    reviewed_refs={};review_rows={}
+    if extraction.get('_candidate_id'):
+        cur.execute('''SELECT DISTINCT ON (message_id) revision,reviewed_ref,source_hash,receipt_source_hash
+          FROM saas_knowledge_case_source_reviews WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid
+          ORDER BY message_id,revision DESC''',(tenant,extraction['_candidate_id']))
+        for review in cur.fetchall():
+            reviewed_refs[str(review['reviewed_ref']['id'])]=review['reviewed_ref'];review_rows[str(review['reviewed_ref']['id'])]=review
+    items=[];names=[];stale_media=[]
     for ref in extraction['source_refs']:
         if 'approved_channel_ids' in extraction['route'] and ref['channel_id'] not in extraction['route']['approved_channel_ids']:
             raise TenantLinearError('Источник не утверждён.',403)
         source=assert_route(cur,tenant,policy,'connect',extraction['route']['conversation_id'],ref['channel_id'])
-        cur.execute('SELECT id,body,direction,author_name,raw,message_type,happened_at FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s',
+        cur.execute('SELECT id,body,direction,author_name,raw,message_type,happened_at,external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s FOR SHARE',
             (tenant,ref['id'],source['lead_id'],'connect:'+ref['channel_id']))
         row=cur.fetchone()
         if not row or digest(str(row.get('body') or ''))!=ref['body_hash']:
             raise TenantLinearError('Исходное сообщение изменилось или больше недоступно.',409)
+        used_review=reviewed_refs.get(str(ref['id']))
+        effective_ref=ref
         if ref.get('media_kind'):
             raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
-            version=digest({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')})
-            if row.get('message_type')!=ref.get('media_kind') or version!=ref.get('media_version'):
-                raise TenantLinearError('Вложение исходного сообщения изменилось или больше недоступно.',409)
+            current_facts={key:raw.get(key) for key in _MEDIA_IDENTITY_FIELDS}
+            version=digest(current_facts)
+            current_ref={**ref,'external_id':row.get('external_id'),'media_kind':str(row.get('message_type') or ''),'media_version':version}
+            changed_original=row.get('message_type')!=ref.get('media_kind') or version!=ref.get('media_version')
+            if used_review:
+                from tenant_media_evidence import source_hash
+                current_hash=source_hash(current_ref)
+                if (current_ref['media_kind']==used_review['media_kind'] and version==used_review['media_version']
+                    and current_hash==review_rows[str(ref['id'])]['source_hash']):
+                    effective_ref=current_ref
+                else:
+                    if not owner_diagnostics: raise TenantLinearError('Reviewed attachment source changed; review it again.',409)
+                    stale_media.append({'id':str(ref['id']),'channel_id':str(ref['channel_id']),'saved_kind':used_review['media_kind'],
+                      'current_kind':current_ref['media_kind'],'saved_version':used_review['media_version'],'current_version':version,'review_expired':True})
+            elif changed_original:
+                if not owner_diagnostics: raise TenantLinearError('Вложение исходного сообщения изменилось или больше недоступно.',409)
+                stale_media.append({'id':str(ref['id']),'channel_id':str(ref['channel_id']),
+                  'saved_kind':str(ref.get('media_kind') or ''),'current_kind':str(row.get('message_type') or ''),
+                  'saved_version':str(ref.get('media_version') or ''),'current_version':version,
+                  'identity_fields':{key:{'original_value_retained':False,'current_present':current_facts.get(key) is not None}
+                    for key in _MEDIA_IDENTITY_FIELDS}})
         names.extend([source.get('contact_name'),source.get('phone'),row.get('author_name')])
         raw=row.get('raw') or {};names.extend(raw.get(k) for k in ('participantName','pushName','senderName','contactName'))
-        items.append((ref,row,source))
+        items.append((effective_ref,row,source))
     if names_out is not None: names_out.extend(names)
-    transcripts={r['id']:r.get('transcript','') for r in extraction.get('media_results',[]) if (r.get('status')=='processed' and r.get('code')=='transcribed') or r.get('audio_status')=='processed'}
+    stale_ids={item['id'] for item in stale_media}
+    reviewed_ids=set(reviewed_refs)
+    transcripts={r['id']:r.get('transcript','') for r in extraction.get('media_results',[]) if r['id'] not in stale_ids|reviewed_ids and ((r.get('status')=='processed' and r.get('code')=='transcribed') or r.get('audio_status')=='processed')}
     conversation=extraction['route']['conversation_id'];is_group=bool(group_jid(conversation))
     from tenant_operator_dialogs import _message,_participant_fields
     participant_ids=[]
@@ -209,6 +241,22 @@ def evidence(cur,profile,extraction,names_out=None):
           'text':redact(row['body'],names)[:ref['text_limit']]+('\n[Transcript] '+redact(transcripts[ref['id']],names)[:4000] if ref['id'] in transcripts else ''),
           'role':role,'sender_name':display_name(author,source,row,role),
           'happened_at':row['happened_at'].isoformat() if row.get('happened_at') else None})
+        if ref['id'] in review_rows and ref['id'] not in stale_ids:
+            review=review_rows[ref['id']]
+            result[-1]['attachment_evidence_status']='owner_reviewed_new_source'
+            result[-1]['source_review_revision']=review['revision']
+            if review.get('receipt_source_hash'):
+                cur.execute('''SELECT result FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
+                  AND external_id=%s AND source_hash=%s FOR SHARE''',(tenant,ref['channel_id'],str(row.get('external_id') or ''),review['receipt_source_hash']))
+                saved=cur.fetchone();media_result=(saved or {}).get('result') or {}
+                current_observation=media_result.get('observation') or media_result.get('transcript')
+                if isinstance(current_observation,str) and current_observation.strip():
+                    result[-1]['text']+='\n[Saved observation for owner-reviewed current attachment; untrusted] '+redact(current_observation,names)[:4000]
+        if ref['id'] in stale_ids:
+            result[-1]['attachment_evidence_status']='stale_unverified'
+            result[-1]['text']+='\n[Saved attachment analysis is not attributed to the current attachment.]'
+    if owner_diagnostics:
+        extraction['_owner_media_diagnostics']=stale_media
     return result
 
 
@@ -391,13 +439,33 @@ def detail(profile,candidate_id):
     with _connect() as conn:
         schema(conn)
         with conn.cursor() as cur:
-            tenant,_,_=authorize(cur,profile)
+            tenant,_,policy=authorize(cur,profile)
             cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,identifier(candidate_id)))
             row=cur.fetchone()
             if not row: raise TenantLinearError('Карточка не найдена.',404)
-            run=extraction_row(cur,tenant,row['extraction_id']);items=evidence(cur,profile,run)
+            run=extraction_row(cur,tenant,row['extraction_id']);run['_candidate_id']=str(row['id'])
+            owner_diagnostics=policy.profile.get('role')=='owner'
+            items=evidence(cur,profile,run,owner_diagnostics=owner_diagnostics)
             chosen=route(cur,profile,run['route'])[3]
             value=public_card(cur,row,run.get('route',{}).get('language') or 'az',run['route'],tenant,chosen,run.get('media_results') or [],run.get('status'),run.get('source_refs'),include_media_content=True)
+            if owner_diagnostics:
+                diagnostics=run.pop('_owner_media_diagnostics',[])
+                if diagnostics:
+                    value['media_source_diagnostics']=diagnostics
+                    value['source_claims_unverified']=True
+                    value['can_approve']=False
+                    value['approval_block_reason']='source_attachment_changed_review_required'
+            cur.execute('''SELECT revision,message_id,reviewed_ref,source_hash,receipt_source_hash,reviewed_by,review_note,created_at
+              FROM saas_knowledge_case_source_reviews WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid
+              ORDER BY revision DESC LIMIT 20''',(tenant,row['id']))
+            reviews=cur.fetchall()
+            if reviews:
+                newest=reviews[0]
+                value['media_source_review']={'revision':newest['revision'],'message_id':str(newest['message_id']),
+                  'current_kind':newest['reviewed_ref']['media_kind'],'current_version':newest['reviewed_ref']['media_version'],
+                  'receipt_reused':bool(newest.get('receipt_source_hash')),'reviewed_at':newest['created_at'].isoformat() if newest.get('created_at') else None,
+                  'review_note':newest['review_note']}
+                value['source_claims_unverified']=bool(approval_reason(value))
             value['boundary_summary']=boundary_summary(cur,tenant,run['route'],chosen,value)
     return {'candidate':value,'evidence':items,'route':run['route']}
 
@@ -626,7 +694,92 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                     cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,candidate_id))
                     return {'candidate':public_card(cur,cur.fetchone())}
                 return detail(profile,candidate_id)
-            run=extraction_row(cur,tenant,row['extraction_id']);items=evidence(cur,profile,run)
+            if action=='source_review':
+                if policy.profile.get('role')!='owner': raise TenantLinearError('Только владелец может проверить новую provenance вложения.',403)
+                if set(data)!={'expected_version','message_id','review_note','acknowledge_new_source'}:
+                    raise TenantLinearError('Некорректный запрос проверки источника.')
+                if type(data.get('expected_version')) is not int or data['expected_version']!=row['version']:
+                    raise TenantLinearError('Карточка изменилась. Обновите страницу.',409)
+                if data.get('acknowledge_new_source') is not True:
+                    raise TenantLinearError('Подтвердите, что текущая версия рассматривается как новый источник без доказанной эквивалентности.',409)
+                note=data.get('review_note')
+                if not isinstance(note,str) or not 20<=len(note.strip())<=1000:
+                    raise TenantLinearError('Опишите проверку нового источника (20–1000 символов).')
+                safe_note=redact(note.strip())[:1000]
+                if len(safe_note)<20:
+                    raise TenantLinearError('Добавьте достаточно подробностей без контактных данных или секретов.')
+                if row['status'] not in {'pending_review','needs_clarification'}:
+                    raise TenantLinearError('Рассматривать источник можно только до публикации.',409)
+                run=extraction_row(cur,tenant,row['extraction_id']);binding=run['route']
+                media_id=identifier(data['message_id'])
+                if media_id not in {str(value) for value in (row.get('content') or {}).get('source_message_ids',[])}:
+                    raise TenantLinearError('Вложение не входит в доказательства этого кейса.',403)
+                prior=next((ref for ref in run.get('source_refs') or [] if str(ref.get('id'))==media_id and ref.get('media_kind')),None)
+                if not prior: raise TenantLinearError('Вложение не входит в исходную extraction этого кейса.',404)
+                if 'approved_channel_ids' in binding and prior['channel_id'] not in binding['approved_channel_ids']:
+                    raise TenantLinearError('Источник не утверждён.',403)
+                chosen=assert_route(cur,tenant,policy,'connect',binding['conversation_id'],prior['channel_id'])
+                cur.execute('''SELECT id,body,direction,author_name,external_id,raw,message_type FROM saas_crm_messages
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s FOR SHARE''',
+                  (tenant,media_id,chosen['lead_id'],'connect:'+str(prior['channel_id'])))
+                source=cur.fetchone()
+                if not source or digest(str(source.get('body') or ''))!=prior.get('body_hash'):
+                    raise TenantLinearError('Текст исходного сообщения изменился или больше недоступен.',409)
+                if author_role(source)!=prior.get('role'):
+                    raise TenantLinearError('Автор исходного сообщения изменился или больше не подтверждён.',409)
+                kind=str(source.get('message_type') or '')
+                from tenant_media_evidence import media_version,source_hash
+                raw=source.get('raw') if isinstance(source.get('raw'),dict) else {}
+                if not any(raw.get(key) is not None for key in _MEDIA_IDENTITY_FIELDS):
+                    raise TenantLinearError('Текущая версия вложения не имеет проверяемых метаданных.',409)
+                current_ref={**prior,'id':media_id,'channel_id':str(prior['channel_id']),
+                  'external_id':source.get('external_id'),'body_hash':digest(str(source.get('body') or '')),
+                  'media_kind':kind,'media_version':media_version(source.get('raw'))}
+                if kind not in {'image','video','audio','voice','document'}:
+                    raise TenantLinearError('Текущий тип вложения не поддерживается для новой provenance.',409)
+                current_hash=source_hash(current_ref)
+                if kind==prior.get('media_kind') and current_ref['media_version']==prior.get('media_version'):
+                    raise TenantLinearError('Источник не отличается от сохранённой версии.',409)
+                cur.execute('SELECT revision,source_hash FROM saas_knowledge_case_source_reviews WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid ORDER BY revision DESC LIMIT 1',(tenant,row['id']))
+                latest_review=cur.fetchone() or {}
+                if latest_review.get('source_hash')==current_hash:
+                    raise TenantLinearError('Эта версия вложения уже проверена владельцем.',409)
+                revision=int(latest_review.get('revision') or 0)+1
+                receipt_hash=None
+                cur.execute("SELECT to_regclass('public.saas_media_evidence_receipts') AS relation")
+                if cur.fetchone().get('relation'):
+                    cur.execute('''SELECT status,result FROM saas_media_evidence_receipts
+                      WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s AND source_hash=%s AND media_kind=%s FOR SHARE''',
+                      (tenant,current_ref['channel_id'],str(current_ref['external_id'] or ''),current_hash,kind))
+                    saved=cur.fetchone();saved_result=(saved or {}).get('result') or {}
+                    if saved and saved.get('status') in {'processed','partial'} and any(isinstance(saved_result.get(k),str) and saved_result[k].strip() for k in ('observation','transcript')):
+                        receipt_hash=current_hash
+                snapshot=dict(row['content']);revised=dict(snapshot)
+                revised['title']='Review the current support request'
+                revised['symptoms']=['Review the current customer request before saving']
+                revised['product']='';revised['product_version']='';revised['case_relation']='unknown'
+                revised['resolution_method']='unknown'
+                revised['cause']={'status':'unknown','text':''};revised['cause_evidence']=[]
+                revised['outcome']={'status':'unconfirmed','text':'','message_ids':[]}
+                revised['operator_actions']=[];revised['operator_action_evidence']=[];revised['resolution_steps']=[]
+                revised['work_status']='unknown'
+                revised['clarification_note']='A new attachment source version was reviewed. Reconfirm the cause and outcome from current evidence.'
+                cur.execute('''INSERT INTO saas_knowledge_case_source_reviews
+                  (tenant_id,candidate_id,revision,extraction_id,message_id,prior_ref,reviewed_ref,source_hash,receipt_source_hash,claims_snapshot,review_note,reviewed_by)
+                  VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,%s::jsonb,%s::jsonb,%s,%s,%s::jsonb,%s,%s)''',
+                  (tenant,row['id'],revision,row['extraction_id'],media_id,_json(prior),_json(current_ref),current_hash,receipt_hash,_json(snapshot),safe_note,actor))
+                cur.execute('''UPDATE saas_knowledge_candidates SET content=%s::jsonb,status='needs_clarification',version=version+1,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND version=%s''',(_json(revised),tenant,row['id'],row['version']))
+                _audit(cur,tenant,actor,'knowledge_candidate_source_reviewed','knowledge_candidate',row['id'],
+                  {'revision':revision,'message_id':media_id,'source_hash':current_hash,'receipt_reused':bool(receipt_hash)})
+                if connection is None:
+                    conn.commit()
+                    return detail(profile,candidate_id)
+                cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,row['id']))
+                result={'candidate':public_card(cur,cur.fetchone())}
+                result['source_review_revision']=revision
+                return result
+            run=extraction_row(cur,tenant,row['extraction_id']);run['_candidate_id']=str(row['id']);items=evidence(cur,profile,run)
             if action in {'approve','delegated_approve'}:
                 ids=data.get('agent_ids')
                 if not isinstance(ids,list) or not 1<=len(ids)<=20: raise TenantLinearError('Выберите от 1 до 20 агентов.')
@@ -713,9 +866,13 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                         from tenant_ai_administrator_approvals import _publication_agent_scope
                         if not _publication_agent_scope(target['scopes'],channel_id):raise TenantLinearError('Agent scope changed.',403)
                 content=publication_text(value)
+                cur.execute('''SELECT revision,source_hash FROM saas_knowledge_case_source_reviews
+                  WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid ORDER BY revision DESC LIMIT 1''',(tenant,row['id']))
+                reviewed_source=cur.fetchone()
                 for agent_id in agents:
                     source=save_knowledge(profile,{'title':value['title'],'kind':'text','content':content,'active':True,'agent_id':agent_id,'setup_key':'candidate_'+str(row['id']).replace('-','')},connection=conn)
                     provenance={'candidate_id':str(row['id']),'extraction_id':str(run['id']),'route':run['route'],'source_message_ids':value['source_message_ids']}
+                    if reviewed_source: provenance['media_source_review']={'revision':reviewed_source['revision'],'source_hash':reviewed_source['source_hash']}
                     if delegation is None: provenance['approved_by']=actor
                     else: provenance.update({'authorization_mode':'owner_delegated_policy','delegation_policy_id':str(delegation['id']),'review_status':'policy_delegated_case'})
                     cur.execute('UPDATE saas_ai_knowledge_sources SET provenance=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(provenance),tenant,source['id']))
