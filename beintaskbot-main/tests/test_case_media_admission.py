@@ -54,6 +54,17 @@ def _mark_pending_consent(db, candidate_id, ids):
     db.commit()
 
 
+@pytest.mark.parametrize('raw,verified',[
+    ({'mediaId':'stable-file-id','fileLength':14},True),
+    ({'file_uuid':'stable-file-id','file_size':14},True),
+    ({'fileLength':14},False),
+    ({'file_size':14,'timestamp':1700000000},False),
+    ({'mediaId':'  ','fileLength':14},False),
+])
+def test_current_source_retry_requires_stable_media_identity(raw,verified):
+    assert admission._has_current_media_version(raw) is verified
+
+
 def test_two_appeals_same_dialog_and_fourteen_bounded_attachments(ready):
     db,card,inside=_case(ready,tuple(range(2,16)))
     before=_image(db,1)
@@ -206,6 +217,24 @@ def test_batch_never_routes_provider_unknown_or_unverified_legacy_source(ready,u
     with db.cursor() as cur:snapshot=admission.plan_existing_cases(cur,PROFILE)
     assert snapshot['eligible_count']==0 and snapshot['unknown_media_count']==1
     assert not list(admission.existing_routes(snapshot,AGENT,'gpt-4.1'))
+
+
+def test_owner_unknown_retry_fails_closed_when_only_size_metadata_is_available(ready):
+    db,card,media=_case(ready,(3,))
+    _mark_pending_consent(db,card['id'],media)
+    extraction_id=db.execute('SELECT extraction_id FROM saas_knowledge_candidates WHERE id=%s::uuid',(card['id'],))[0]['extraction_id']
+    db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps([{'id':media[0],'status':'unknown','code':'provider_timeout'}]),extraction_id))
+    db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps({'fileLength':1024}),media[0]))
+    db.commit()
+    with db.cursor() as cur:
+        snapshot=admission.plan_existing_cases(cur,PROFILE,acknowledge_prior_unknown=True)
+    item=next(m for c in snapshot['cases'] for m in c.get('media',[]) if m['id']==media[0])
+    assert item['source_version_verified'] is False
+    assert item.get('retry_authorized') is not True
+    assert snapshot['retry_unknown_count']==0
+    assert not any(route['message_ids']==[media[0]] for route in admission.existing_routes(snapshot,AGENT,'gpt-4.1'))
 
 
 class _ReconciliationCursor:

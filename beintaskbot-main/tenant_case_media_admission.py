@@ -15,9 +15,15 @@ from tenant_media_evidence import media_version, source_hash
 _NO_CALL_CONSENT_CODES = {'external_media_permission_required', 'asr_authorization_required', 'vision_not_approved'}
 
 def _has_current_media_version(raw):
-    """Use the same source-identity fields as saved-evidence verification."""
+    """Require a stable attachment identity, not just mutable size metadata."""
     raw=raw if isinstance(raw,dict) else {}
-    return any(raw.get(key) is not None for key in store._MEDIA_IDENTITY_FIELDS)
+    for key in ('mediaId','media_id','file_uuid','fileUuid'):
+        value=raw.get(key)
+        if isinstance(value,str) and value.strip():
+            return True
+        if isinstance(value,int) and not isinstance(value,bool) and value>0:
+            return True
+    return False
 
 
 def _explicit_no_media_call(ref, result):
