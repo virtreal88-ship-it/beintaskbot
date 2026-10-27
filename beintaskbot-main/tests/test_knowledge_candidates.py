@@ -208,12 +208,72 @@ def test_owner_reviews_changed_media_as_new_version_without_rewriting_extraction
 
 
 @pytest.mark.parametrize('sibling_claimed',[False,True])
-def test_recovered_candidate_scopes_stale_media_to_its_claims_and_still_fails_closed(ready,sibling_claimed):
+@pytest.mark.parametrize(('confirmation_text','should_publish'),[
+    ('Duzelib chox sagolun, internet duzelib.',True),
+    ('Duzelib amma problem qalıb.',False),
+    ('Duzelib amma problem qalacaq.',False),
+    ('Duzelib amma problem yenə də qalacaq.',False),
+    ('Duzelib amma problem gələcəkdə həll olunmayacaq.',False),
+    ('Duzelib amma problem həll edilməyib.',False),
+    ('Duzelib amma problem duzelmedi.',False),
+    ('Duzelib amma problem duzelmir.',False),
+    ('Duzelib amma problem duzelmeyecek.',False),
+    ('Duzelib amma problem həll edilmədi.',False),
+    ('Duzelib amma problem qayıtdı.',False),
+    ('Duzelib amma problem yenidən başladı.',False),
+    ('Duzelib amma problem yenidən qayıtdı.',False),
+    ('Duzelib amma problem geri qayıtdı.',False),
+    ('Duzelib amma problem təkrarlanıb.',False),
+    ('Duzelib amma problem yenə baş verir.',False),
+    ('Duzelib amma problem yenə yaranır.',False),
+    ('Duzelib amma problem yenə ortaya çıxır.',False),
+    ('Duzelib amma problem yenidən baş verdi.',False),
+    ('Duzelib amma problem təkrar baş verib.',False),
+    ('Duzelib amma problem yenidən yarandı.',False),
+    ('Duzelib amma problem yenidən ortaya çıxdı.',False),
+    ('Duzelib amma problem yenə gələcək.',False),
+    ('Duzelib amma problem yenidən çıxa bilər.',False),
+    ('Duzelib amma problem təkrarlana bilər.',False),
+    ('Duzelib amma problem təkrar edə bilər.',False),
+    ('Duzelib amma problem yenə qayıda bilər.',False),
+    ('Duzelib amma problem yeniden cixa biler.',False),
+    ('Duzelib amma problem tekrar ede biler.',False),
+    ('Duzelib amma problem gələcək.',False),
+    ('Duzelib amma problem çıxacaq.',False),
+    ('Duzelib amma problem cixacaq.',False),
+    ('Duzelib amma problem çıxa bilər.',False),
+    ('Duzelib amma problem cixa biler.',False),
+    ('Duzelib amma problem qayıdacaq.',False),
+    ('Duzelib amma problem qayidacaq.',False),
+    ('Duzelib amma problem yenidən ortaya çıxacaq.',False),
+    ('Duzelib amma problem yeniden ortaya cixacaq.',False),
+    ('Duzelib amma problem yenidən baş verəcək.',False),
+    ('Duzelib amma problem təkrar baş verəcək.',False),
+    ('Duzelib amma problem yenidən yaranacaq.',False),
+    ('Duzelib amma problem təkrar qayıdacaq.',False),
+    ('Duzelib amma problem təkrar çıxacaq.',False),
+    ('Duzelib amma problem bir də qayıdacaq.',False),
+    ('Duzelib amma problem yenidən gələcəkdə qalacaq.',False),
+    ('Duzelib amma problem bir daha qayıdacaq.',False),
+    ('Duzelib amma problem bir daha baş verəcək.',False),
+    ('Duzelib amma problem təkrar geri qayıdacaq.',False),
+    ('Duzelib amma problem yenidən geri qayıdacaq.',False),
+    ('Duzelib amma problem qayıdır.',False),
+    ('Duzelib amma problem yenidən qayıdır.',False),
+    ('Duzelib amma problem geri qayıdır.',False),
+    ('Duzelib amma problem yenə başladı.',False),
+    ('Duzelib amma problem yenə başlayıb.',False),
+    ('Duzelib amma problem təkrar başladı.',False),
+    ('Duzelib amma problem yenə var.',False),
+    ('Duzelib ola biler.',False),
+])
+def test_recovered_candidate_scopes_stale_media_and_requires_unambiguous_customer_confirmation(
+        ready,sibling_claimed,confirmation_text,should_publish):
     import tenant_media_evidence as media_evidence
     db,generation,_=ready
     customer_confirmation=str(uuid.uuid4())
-    db.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'customer-confirmation',%s,'incoming','Client','It works now; the fix is fixed.','text',now()+(20 * interval '1 second'))",
-      (A,customer_confirmation,'connect:'+CA));db.commit()
+    db.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'customer-confirmation',%s,'incoming','Client',%s,'text',now()+(20 * interval '1 second'))",
+      (A,customer_confirmation,'connect:'+CA,confirmation_text));db.commit()
     value=candidate(ready)
     run=db.execute('SELECT * FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['extraction_id']))[0]
     refs=run['source_refs'];assert len(refs)>=2
@@ -262,15 +322,20 @@ def test_recovered_candidate_scopes_stale_media_to_its_claims_and_still_fails_cl
           'outcome':{'status':'confirmed','text':'Customer confirmed the fix works.','message_ids':[confirmation['id']]},
           'work_status':'resolved'},'edit')['candidate']
         assert saved['version']==3 and saved['title']=='Reviewed current support request'
-        assert saved['cause']=={'status':'unknown','text':''} and saved['outcome']['status']=='confirmed'
+        assert saved['cause']=={'status':'unknown','text':''}
+        assert saved['outcome']['status']==('confirmed' if should_publish else 'unconfirmed')
         saved_refs=db.execute('SELECT source_refs FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['extraction_id']))[0]['source_refs']
         assert saved_refs==refs and saved_refs[0]['media_version']==store.digest(old_facts)
-        published=store.mutate(PROFILE,value['id'],{'expected_version':3,'agent_ids':[EXPERT]},'approve')['candidate']
-        assert published['status']=='approved' and [item['agent_id'] for item in published['publications']]==[EXPERT]
-        provenance=db.execute("SELECT provenance FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND provenance->>'candidate_id'=%s",(A,value['id']))[0]['provenance']
-        assert provenance['media_source_review']['revision']==1
+        if should_publish:
+            published=store.mutate(PROFILE,value['id'],{'expected_version':3,'agent_ids':[EXPERT]},'approve')['candidate']
+            assert published['status']=='approved' and [item['agent_id'] for item in published['publications']]==[EXPERT]
+            provenance=db.execute("SELECT provenance FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND provenance->>'candidate_id'=%s",(A,value['id']))[0]['provenance']
+            assert provenance['media_source_review']['revision']==1
+        else:
+            with pytest.raises(TenantLinearError,match='confirmation_required'):
+                store.mutate(PROFILE,value['id'],{'expected_version':3,'agent_ids':[EXPERT]},'approve')
     after=db.execute('SELECT count(*) AS n FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid',(A,))[0]['n']
-    assert after==before+(0 if sibling_claimed else 1)
+    assert after==before+(1 if should_publish and not sibling_claimed else 0)
     assert generation.call_count==1
 
 
@@ -579,6 +644,91 @@ def test_approval_publication_is_one_transaction(ready,monkeypatch):
 @pytest.mark.parametrize('value',['Проверьте, теперь работает?','Check if it works','Возможно, помогло','if fixed','unresolved','заработало бы'])
 def test_hypotheses_and_questions_not_confirmation(value):
     assert not policy.positive_confirmation(value)
+
+@pytest.mark.parametrize(('value','expected'),[
+    ('Duzelib chox sagolun',True),
+    ('DÜZƏLİB, ÇOX SAĞ OLUN',True),
+    ('Düzəlib, internet yenə işləyir',True),
+    ('Düzəldi, çox sağ olun',True),
+    ('duzelmeyib',False),
+    ('düzəlməyib',False),
+    ('duzelib?',False),
+    ('Duzelib amma problem qalir',False),
+    ('Duzelib amma problem qalıb',False),
+    ('Duzelib amma problem qalib',False),
+    ('Düzəlib, amma problem hələ də qalır',False),
+    ('Düzəlib, amma problem hələ də qalıb',False),
+    ('Duzelib amma problem qalacaq',False),
+    ('Düzəlib, amma problem gələcəkdə qalacaq',False),
+    ('Düzəlib, amma problem davam edəcək',False),
+    ('Duzelib, amma problem davam edecek',False),
+    ('Duzelib amma problem yenə də qalacaq',False),
+    ('Duzelib amma problem yenə var',False),
+    ('Duzelib amma problem hələ qalır',False),
+    ('Duzelib amma problem hele qalir',False),
+    ('Duzelib amma problem yenə qalır',False),
+    ('Düzəlib, amma problem gələcəkdə həll olunmayacaq',False),
+    ('Düzəlib, amma problem həll edilməyib',False),
+    ('Duzelib amma problem hell edilmeyib',False),
+    ('Duzelib amma problem duzelmedi',False),
+    ('Düzəlib, amma problem düzəlmədi',False),
+    ('Duzelib amma problem duzelmir',False),
+    ('Duzelib amma problem duzelmeyecek',False),
+    ('Duzelib amma problem həll edilmədi',False),
+    ('Duzelib amma problem hell edilmedi',False),
+    ('Duzelib amma problem qayıtdı',False),
+    ('Duzelib amma problem qayitdi',False),
+    ('Duzelib amma problem qayıdır',False),
+    ('Duzelib amma problem qayidir',False),
+    ('Duzelib amma problem yenidən qayıdır',False),
+    ('Duzelib amma problem yeniden qayidir',False),
+    ('Duzelib amma problem geri qayidir',False),
+    ('Duzelib amma problem yenə başladı',False),
+    ('Duzelib amma problem yene basladi',False),
+    ('Duzelib amma problem yenə başlayıb',False),
+    ('Duzelib amma problem yene baslayib',False),
+    ('Duzelib amma problem təkrar başladı',False),
+    ('Duzelib amma problem tekrar baslayib',False),
+    ('Duzelib amma problem yene bas verir',False),
+    ('Duzelib amma problem yeniden yaranir',False),
+    ('Duzelib amma problem yene ortaya cixir',False),
+    ('Duzelib amma problem yeniden bas verib',False),
+    ('Duzelib amma problem tekrar bas verib',False),
+    ('Duzelib amma problem yeniden yaranib',False),
+    ('Duzelib amma problem yeniden ortaya cixib',False),
+    ('Duzelib amma problem yene gelecek',False),
+    ('Duzelib amma problem yeniden cixa biler',False),
+    ('Duzelib amma problem tekrarlana biler',False),
+    ('Duzelib amma problem tekrar ede biler',False),
+    ('Duzelib amma problem yene qayida biler',False),
+    ('Duzelib amma problem gelecek',False),
+    ('Duzelib amma problem cixacaq',False),
+    ('Duzelib amma problem cixa biler',False),
+    ('Duzelib amma problem qayidacaq',False),
+    ('Duzelib amma problem yeniden ortaya cixacaq',False),
+    ('Duzelib amma problem yeniden bas verecek',False),
+    ('Duzelib amma problem tekrar bas verecek',False),
+    ('Duzelib amma problem yeniden yaranacaq',False),
+    ('Duzelib amma problem tekrar qayidacaq',False),
+    ('Duzelib amma problem tekrar cixacaq',False),
+    ('Duzelib amma problem birde qayidacaq',False),
+    ('Duzelib amma problem yeniden gelecekde qalacaq',False),
+    ('Duzelib amma problem birdaha qayidacaq',False),
+    ('Duzelib amma problem birdaha bas verecek',False),
+    ('Duzelib amma problem tekrar geri qayidacaq',False),
+    ('Duzelib amma problem yeniden geri qayidacaq',False),
+    ('Duzelib amma problem yenidən başladı',False),
+    ('Duzelib amma problem yeniden basladi',False),
+    ('Duzelib amma problem yeniden qayitdi',False),
+    ('Duzelib amma problem geri qayitdi',False),
+    ('Duzelib amma problem tekrarlandi',False),
+    ('Duzelib, amma internet islemir',False),
+    ('Duzelib, əgər internet geri qayıtsa',False),
+    ('Duzelib ola biler',False),
+    ('Düzəlib olsaydı, yaxşı olardı',False),
+])
+def test_azerbaijani_completed_fix_forms_preserve_negative_and_uncertain_meaning(value,expected):
+    assert policy.positive_confirmation(value) is expected
 
 def test_extraction_daily_cap_and_concurrency(ready):
     db,generation,data=ready

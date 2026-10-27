@@ -117,9 +117,34 @@ def card(data,allowed_ids,allow_boundary_outside_sources=False):
 
 
 def positive_confirmation(value,informational=False):
-    if '?' in value or re.search(r'\b(?:не|нет|not|never|yox|işləmir|если|возможно|кажется|попробуйте|проверьте|if|check|maybe|should|might|бы|должно|может|наверное)\b',value,re.I): return False
+    if any(mark in value for mark in ('?','؟','？')) or re.search(
+        r'\b(?:не|нет|not|never|yox|işləmir|islemir|düzəlməyib|duzelmeyib|düzəlmədi|duzelmedi|'
+        r'düzəlmir|duzelmir|düzəlməyəcək|duzelmeyecek|'
+        r'həll\s+(?:olunmayıb|edilməyib|olunmayacaq|edilməyəcək|olunmadı|edilmədi)|'
+        r'hell\s+(?:olunmayib|edilmeyib|olunmayacaq|edilmeyecek|olunmadi|edilmedi)|'
+        r'problem\s+(?:(?:(?:hələ|hele|yenə|yene|yenidən|yeniden)(?:\s+(?:də|de))?|still|gələcəkdə|gelecekde)\s+){0,2}'
+        r'(?:qalır|qalir|qalıb|qalib|qaldı|qaldi|qalacaq|qayıdır|qayidir|qayıtdı|qayitdi|qayıdıb|qayidib|'
+        r'(?:yenidən|yeniden|yenə|yene|təkrar|tekrar|bir\s+də|birde|bir\s+daha|birdaha)\s+'
+        r'(?:gələcək|gelecek|çıxa\s+bilər|cixa\s+biler|çıxacaq|cixacaq|(?:geri\s+)?qayıdacaq|(?:geri\s+)?qayidacaq|'
+        r'başladı|basladi|başlayıb|baslayib|baş\s+verdi|bas\s+verdi|baş\s+verib|bas\s+verib|'
+        r'baş\s+verəcək|bas\s+verecek|yarandı|yarandi|yaranıb|yaranib|yaranacaq|yaranacaq|'
+        r'ortaya\s+çıxdı|ortaya\s+cixdi|ortaya\s+çıxıb|ortaya\s+cixib|ortaya\s+çıxacaq|ortaya\s+cixacaq)|'
+        r'(?:yenidən|yeniden)\s+(?:qayıdır|qayidir|qayıtdı|qayitdi|qayıdıb|qayidib)|'
+        r'geri\s+(?:qayıdır|qayidir|qayıtdı|qayitdi|qayıdıb|qayidib|qayıdacaq|qayidacaq)|təkrarlan(?:ıb|dı|ır)|tekrarlan(?:ib|di|ir)|'
+        r'baş\s+verir|bas\s+verir|baş\s+verdi|bas\s+verdi|baş\s+verib|bas\s+verib|'
+        r'yaranır|yaranir|yarandı|yarandi|yaranıb|yaranib|'
+        r'ortaya\s+çıxır|ortaya\s+cixir|ortaya\s+çıxdı|ortaya\s+cixdi|ortaya\s+çıxıb|ortaya\s+cixib|'
+        r'təkrarlana\s+bilər|tekrarlana\s+biler|təkrar\s+edə\s+bilər|tekrar\s+ede\s+biler|'
+        r'qayıda\s+bilər|qayida\s+biler|çıxa\s+bilər|cixa\s+biler|qayıdacaq|qayidacaq|çıxacaq|cixacaq|gələcək|gelecek|'
+        r'gələ\s+bilər|gele\s+biler|davam\s+(?:edir|edəcək|edecek)|var|olacaq|remains?|persists?|continues?)|'
+        r'issue\s+(?:remains?|persists?|continues?)|'
+        r'если|возможно|кажется|попробуйте|проверьте|if|check|maybe|should|might|бы|должно|может|наверное|'
+        r'əgər|eger|bəlkə|belke|olsa|olsaydı|olsaydi|ola\s+bilər|ola\s+biler)\b',value,re.I): return False
     if informational and re.search(r'понятно|спасибо.{0,40}информац|thank.{0,20}information|aydındır|məlumat.{0,40}təşəkkür',value,re.I): return True
-    return bool(re.search(r'(?:исправлен[оа]?|həll olundu|aradan qaldırıldı|заработал[оа]?|вс[её] работает|теперь работает|проблема решена|помогло|it works|working now|\bresolved\b|\bfixed\b|\bdüzəldi\b|\bişləyir\b)',value,re.I))
+    return bool(re.search(
+        r'\b(?:исправлен[оа]?|həll\s+olundu|aradan\s+qaldırıldı|заработал[оа]?|вс[её]\s+работает|'
+        r'теперь\s+работает|проблема\s+решена|помогло|it\s+works|working\s+now|resolved|fixed|'
+        r'düzəldi|düzəlib|duzelib|işləyir)\b',value,re.I))
 
 
 
