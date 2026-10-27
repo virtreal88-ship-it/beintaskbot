@@ -15,7 +15,7 @@ console.log('PASS case media UI: partial audio/video, consent, unknown, errors, 
 // unrelated legacy layout selectors later in that suite.
 let fixture=fs.readFileSync('tests/test_tenant_knowledge_candidates_card_ui.cjs','utf8');
 fixture=fixture.slice(0,fixture.indexOf(" assert.equal(d.getElementById('caseMethod')"));
-fixture=fixture.replace("clarification_note:'Please confirm the result'}", "clarification_note:'Please confirm the result',media_coverage:{complete:false,total:2,boundary_status:'verified',scope:'case_interval'}}");
+fixture=fixture.replace("clarification_note:'Please confirm the result',", "clarification_note:'Please confirm the result',media_coverage:{complete:false,total:2,boundary_status:'verified',scope:'case_interval'},");
 fixture=fixture.replace('(async()=>','return (async()=>');
 fixture+="assert(d.querySelector('[data-case-media-coverage]'),'partial banner rendered in real case modal');assert(!requests.some(r=>r.opt.method==='POST'),'opening coverage cannot start media processing');dom.window.close();}})();";
 new Function('require',fixture)(require).then(()=>console.log('PASS case modal coverage in RU/AZ/EN; no analysis requests')).catch(e=>{console.error(e);process.exitCode=1;});
