@@ -42,6 +42,48 @@ def candidate(ready):
     return service.analyze(PROFILE,data)['candidates'][0]
 
 
+@pytest.mark.parametrize('legacy_format,changed',[(False,True),(True,False)])
+def test_owner_can_read_stale_attachment_diagnostics_without_reattributing_saved_analysis(ready,monkeypatch,legacy_format,changed):
+    db,generation,_=ready;value=candidate(ready)
+    run=db.execute('SELECT * FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['extraction_id']))[0]
+    refs=run['source_refs'];ref=refs[0]
+    facts={key:None for key in store._MEDIA_IDENTITY_FIELDS};facts.update({'mediaId':'old','fileLength':10})
+    if legacy_format:
+        import hashlib
+        old_version=hashlib.sha256(json.dumps(facts,sort_keys=True).encode()).hexdigest()
+        current=facts
+    else:
+        old_version=store.digest(facts);current={**facts,'mediaId':'replacement','fileLength':14} if changed else facts
+    ref.update(media_kind='image',media_version=old_version)
+    db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb,media_results=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps(refs),json.dumps([{'id':ref['id'],'status':'processed','code':'vision_observation','observation':'OLD_ATTACHMENT_SECRET_OBSERVATION'}]),A,value['extraction_id']))
+    db.execute('UPDATE saas_crm_messages SET message_type=\'image\',raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps({**current,'mediaKey':'SECRET_MEDIA_KEY','url':'https://example.invalid/?token=SECRET'}),A,ref['id']))
+    db.commit()
+    opened=store.detail(PROFILE,value['id'])
+    diagnostic=opened['candidate']['media_source_diagnostics'][0]
+    assert diagnostic['saved_version']==old_version and diagnostic['current_version']==store.digest(current)
+    assert diagnostic['current_kind']=='image' and diagnostic['identity_fields']['mediaId']=={'original_value_retained':False,'current_present':True}
+    assert opened['evidence'][0]['attachment_evidence_status']=='stale_unverified'
+    assert 'OLD_ATTACHMENT_SECRET_OBSERVATION' not in opened['evidence'][0]['text']
+    assert 'SECRET_MEDIA_KEY' not in json.dumps(opened) and 'example.invalid' not in json.dumps(opened)
+    assert opened['candidate']['can_approve'] is False
+    assert opened['candidate']['source_claims_unverified'] is True
+    assert opened['candidate']['approval_block_reason']=='source_attachment_changed_review_required'
+    assert generation.call_count==1
+    db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps({**current,'mediaId':'changed_after_read','mediaKey':'SECRET_MEDIA_KEY'}),A,ref['id']))
+    db.commit()
+    with pytest.raises(TenantLinearError,match='Вложение исходного сообщения изменилось'):
+        store.mutate(PROFILE,value['id'],{'expected_version':1,'agent_ids':[EXPERT]},'approve')
+
+
+def test_stale_attachment_diagnostics_remain_tenant_scoped(ready):
+    db,_,_=ready;value=candidate(ready)
+    with pytest.raises(TenantLinearError):
+        store.detail({'tenant_id':B,'telegram_id':22},value['id'])
+
+
 def confirmed_case(ready):
     db,generation,data=ready;ticket_id=str(uuid.uuid4())
     db.execute("INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,status,completion_outcome,completion_note,created_by) VALUES(%s::uuid,%s::uuid,%s::uuid,'client','manual','resolved','resolved_confirmed','Customer confirmed the fix',11)",(A,ticket_id,CA));db.commit()

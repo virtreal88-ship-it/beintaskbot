@@ -139,28 +139,39 @@ def snapshot(cur,profile,data):
     return {'tenant':tenant,'actor':actor,'route':binding,'refs':refs,'messages':messages,'source_digest':digest(messages),'next_before':next_before,'ticket':{'status':ticket['status'],'completion_outcome':ticket.get('completion_outcome') or '','completion_note':ticket.get('completion_note') or ''} if ticket else None}
 
 
-def evidence(cur,profile,extraction,names_out=None):
+_MEDIA_IDENTITY_FIELDS=('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')
+
+
+def evidence(cur,profile,extraction,names_out=None,*,owner_diagnostics=False):
     tenant,_,policy,_,_,_=route(cur,profile,extraction['route'])
-    items=[];names=[]
+    items=[];names=[];stale_media=[]
     for ref in extraction['source_refs']:
         if 'approved_channel_ids' in extraction['route'] and ref['channel_id'] not in extraction['route']['approved_channel_ids']:
             raise TenantLinearError('Источник не утверждён.',403)
         source=assert_route(cur,tenant,policy,'connect',extraction['route']['conversation_id'],ref['channel_id'])
-        cur.execute('SELECT id,body,direction,author_name,raw,message_type,happened_at FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s',
+        cur.execute('SELECT id,body,direction,author_name,raw,message_type,happened_at,external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s',
             (tenant,ref['id'],source['lead_id'],'connect:'+ref['channel_id']))
         row=cur.fetchone()
         if not row or digest(str(row.get('body') or ''))!=ref['body_hash']:
             raise TenantLinearError('Исходное сообщение изменилось или больше недоступно.',409)
         if ref.get('media_kind'):
             raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
-            version=digest({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')})
+            current_facts={key:raw.get(key) for key in _MEDIA_IDENTITY_FIELDS}
+            version=digest(current_facts)
             if row.get('message_type')!=ref.get('media_kind') or version!=ref.get('media_version'):
-                raise TenantLinearError('Вложение исходного сообщения изменилось или больше недоступно.',409)
+                if not owner_diagnostics:
+                    raise TenantLinearError('Вложение исходного сообщения изменилось или больше недоступно.',409)
+                stale_media.append({'id':str(ref['id']),'channel_id':str(ref['channel_id']),
+                  'saved_kind':str(ref.get('media_kind') or ''),'current_kind':str(row.get('message_type') or ''),
+                  'saved_version':str(ref.get('media_version') or ''),'current_version':version,
+                  'identity_fields':{key:{'original_value_retained':False,'current_present':current_facts.get(key) is not None}
+                    for key in _MEDIA_IDENTITY_FIELDS}})
         names.extend([source.get('contact_name'),source.get('phone'),row.get('author_name')])
         raw=row.get('raw') or {};names.extend(raw.get(k) for k in ('participantName','pushName','senderName','contactName'))
         items.append((ref,row,source))
     if names_out is not None: names_out.extend(names)
-    transcripts={r['id']:r.get('transcript','') for r in extraction.get('media_results',[]) if (r.get('status')=='processed' and r.get('code')=='transcribed') or r.get('audio_status')=='processed'}
+    stale_ids={item['id'] for item in stale_media}
+    transcripts={r['id']:r.get('transcript','') for r in extraction.get('media_results',[]) if r['id'] not in stale_ids and ((r.get('status')=='processed' and r.get('code')=='transcribed') or r.get('audio_status')=='processed')}
     conversation=extraction['route']['conversation_id'];is_group=bool(group_jid(conversation))
     from tenant_operator_dialogs import _message,_participant_fields
     participant_ids=[]
@@ -209,6 +220,11 @@ def evidence(cur,profile,extraction,names_out=None):
           'text':redact(row['body'],names)[:ref['text_limit']]+('\n[Transcript] '+redact(transcripts[ref['id']],names)[:4000] if ref['id'] in transcripts else ''),
           'role':role,'sender_name':display_name(author,source,row,role),
           'happened_at':row['happened_at'].isoformat() if row.get('happened_at') else None})
+        if ref['id'] in stale_ids:
+            result[-1]['attachment_evidence_status']='stale_unverified'
+            result[-1]['text']+='\n[Saved attachment analysis is not attributed to the current attachment.]'
+    if owner_diagnostics:
+        extraction['_owner_media_diagnostics']=stale_media
     return result
 
 
@@ -391,13 +407,22 @@ def detail(profile,candidate_id):
     with _connect() as conn:
         schema(conn)
         with conn.cursor() as cur:
-            tenant,_,_=authorize(cur,profile)
+            tenant,_,policy=authorize(cur,profile)
             cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,identifier(candidate_id)))
             row=cur.fetchone()
             if not row: raise TenantLinearError('Карточка не найдена.',404)
-            run=extraction_row(cur,tenant,row['extraction_id']);items=evidence(cur,profile,run)
+            run=extraction_row(cur,tenant,row['extraction_id'])
+            owner_diagnostics=policy.profile.get('role')=='owner'
+            items=evidence(cur,profile,run,owner_diagnostics=owner_diagnostics)
             chosen=route(cur,profile,run['route'])[3]
             value=public_card(cur,row,run.get('route',{}).get('language') or 'az',run['route'],tenant,chosen,run.get('media_results') or [],run.get('status'),run.get('source_refs'),include_media_content=True)
+            if owner_diagnostics:
+                diagnostics=run.pop('_owner_media_diagnostics',[])
+                if diagnostics:
+                    value['media_source_diagnostics']=diagnostics
+                    value['source_claims_unverified']=True
+                    value['can_approve']=False
+                    value['approval_block_reason']='source_attachment_changed_review_required'
             value['boundary_summary']=boundary_summary(cur,tenant,run['route'],chosen,value)
     return {'candidate':value,'evidence':items,'route':run['route']}
 
