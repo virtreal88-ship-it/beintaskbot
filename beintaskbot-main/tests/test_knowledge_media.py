@@ -197,6 +197,7 @@ def test_xlsx_rejects_corrupt_container_with_explicit_error(context):
 @pytest.mark.parametrize('feature,xml',[
     ('chart',None),
     ('formula','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><f>1+1</f><v>2</v></c></row></sheetData></worksheet>'),
+    ('defined_name',None),
 ])
 def test_xlsx_with_unanalyzed_content_is_explicitly_unsupported(context,feature,xml):
     import zipfile
@@ -207,6 +208,8 @@ def test_xlsx_with_unanalyzed_content_is_explicitly_unsupported(context,feature,
             '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Visible cells</t></is></c></row></sheetData></worksheet>')
         if feature=='chart':
             archive.writestr('xl/charts/chart1.xml','<chartSpace/>')
+        elif feature=='defined_name':
+            archive.writestr('xl/workbook.xml','<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><definedNames><definedName name="Total">SUM(Sheet1!A1:A4)</definedName></definedNames></workbook>')
     download.return_value=(out.getvalue(),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     _,results=media.collect({},item)
     assert results[0]['status']=='unsupported'

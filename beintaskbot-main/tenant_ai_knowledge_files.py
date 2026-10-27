@@ -83,6 +83,14 @@ def extract(filename, data):
                     'xl/comments','xl/threadedComments/')
                 if any(name.startswith(unsupported_prefixes) for name in names):
                     raise TenantLinearError('XLSX faylında analiz edilməyən qrafik, şəkil və ya daxil edilmiş məlumat var.',415)
+                if 'xl/workbook.xml' in names:
+                    workbook_xml=archive.read('xl/workbook.xml')
+                    if b'<!DOCTYPE' in workbook_xml.upper() or b'<!ENTITY' in workbook_xml.upper():
+                        raise TenantLinearError('XLSX XML faylı təhlükəsiz deyil.')
+                    workbook=ElementTree.fromstring(workbook_xml)
+                    if any((node.text or '').strip() for node in workbook.iter(
+                            '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}definedName')):
+                        raise TenantLinearError('XLSX adlı düsturlar və diapazonlar dəstəklənmir; hesablanmış dəyərləri ixrac edin.',415)
                 shared = []
                 if 'xl/sharedStrings.xml' in names:
                     xml = archive.read('xl/sharedStrings.xml')
