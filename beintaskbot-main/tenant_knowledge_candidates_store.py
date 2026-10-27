@@ -152,7 +152,11 @@ def evidence(cur,profile,extraction,names_out=None,*,owner_diagnostics=False):
         for review in cur.fetchall():
             reviewed_refs[str(review['reviewed_ref']['id'])]=review['reviewed_ref'];review_rows[str(review['reviewed_ref']['id'])]=review
     items=[];names=[];stale_media=[]
-    for ref in extraction['source_refs']:
+    source_refs=extraction['source_refs']
+    candidate_source_ids=extraction.get('_candidate_source_ids')
+    if candidate_source_ids is not None:
+        source_refs=[ref for ref in source_refs if str(ref.get('id')) in candidate_source_ids]
+    for ref in source_refs:
         if 'approved_channel_ids' in extraction['route'] and ref['channel_id'] not in extraction['route']['approved_channel_ids']:
             raise TenantLinearError('Источник не утверждён.',403)
         source=assert_route(cur,tenant,policy,'connect',extraction['route']['conversation_id'],ref['channel_id'])
@@ -831,7 +835,18 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                 result={'candidate':public_card(cur,cur.fetchone())}
                 result['source_review_revision']=revision
                 return result
-            run=extraction_row(cur,tenant,row['extraction_id']);run['_candidate_id']=str(row['id']);items=evidence(cur,profile,run)
+            run=extraction_row(cur,tenant,row['extraction_id']);run['_candidate_id']=str(row['id'])
+            # An extraction can contain media for several candidate cards.
+            # Validate only the messages this candidate currently claims (or
+            # the proposed source set for an edit); stale, unclaimed media in
+            # a sibling fragment must not make this case unsaveable. Any stale
+            # media that remains in this candidate's evidence still fails in
+            # evidence(), including during publication.
+            claimed_source_ids=(row.get('content') or {}).get('source_message_ids',[])
+            if action=='edit' and isinstance(data.get('source_message_ids'),list):
+                claimed_source_ids=data['source_message_ids']
+            run['_candidate_source_ids']={identifier(value) for value in claimed_source_ids}
+            items=evidence(cur,profile,run)
             if action in {'approve','delegated_approve'}:
                 ids=data.get('agent_ids')
                 if not isinstance(ids,list) or not 1<=len(ids)<=20: raise TenantLinearError('Выберите от 1 до 20 агентов.')
