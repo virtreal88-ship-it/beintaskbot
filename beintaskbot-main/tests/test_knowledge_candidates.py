@@ -207,6 +207,73 @@ def test_owner_reviews_changed_media_as_new_version_without_rewriting_extraction
         store.mutate(PROFILE,value['id'],{'expected_version':2,'title':'New reviewed title'},'edit')
 
 
+@pytest.mark.parametrize('sibling_claimed',[False,True])
+def test_recovered_candidate_scopes_stale_media_to_its_claims_and_still_fails_closed(ready,sibling_claimed):
+    import tenant_media_evidence as media_evidence
+    db,generation,_=ready
+    customer_confirmation=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,author_name,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'customer-confirmation',%s,'incoming','Client','It works now; the fix is fixed.','text',now()+(20 * interval '1 second'))",
+      (A,customer_confirmation,'connect:'+CA));db.commit()
+    value=candidate(ready)
+    run=db.execute('SELECT * FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['extraction_id']))[0]
+    refs=run['source_refs'];assert len(refs)>=2
+    target,sibling=refs[:2]
+    confirmation=next(ref for ref in refs if ref['id']==customer_confirmation)
+    content=db.execute('SELECT content FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['id']))[0]['content']
+    source_ids=[target['id'],sibling['id'],confirmation['id']] if sibling_claimed else [target['id'],confirmation['id']]
+    content.update(source_message_ids=source_ids,start_message_id=target['id'],end_message_id=confirmation['id'])
+    old_facts={key:None for key in store._MEDIA_IDENTITY_FIELDS};old_facts.update({'mediaId':'old','fileLength':10})
+    current_facts={**old_facts,'mediaId':'current','fileLength':15}
+    current_ref=None
+    for ref in (target,sibling):
+        ref.update(media_kind='image',media_version=store.digest(old_facts))
+        external_id='current-'+str(uuid.uuid4())
+        db.execute("UPDATE saas_crm_messages SET message_type='image',raw=%s::jsonb,external_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid",
+          (json.dumps(current_facts),external_id,A,ref['id']))
+        if ref is target:
+            current_ref={**ref,'external_id':external_id,'media_kind':'image','media_version':media_evidence.media_version(current_facts)}
+    db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps(refs),A,value['extraction_id']))
+    db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps(content),A,value['id']))
+    current_hash=media_evidence.source_hash(current_ref)
+    db.execute('''INSERT INTO saas_media_evidence_receipts(tenant_id,channel_id,external_id,source_hash,media_kind,direction,status,code,result)
+      VALUES(%s::uuid,%s::uuid,%s,%s,'image','incoming','processed','vision_observation',%s::jsonb)''',
+      (A,CA,current_ref['external_id'],current_hash,json.dumps({'observation':'CURRENT OBSERVATION'})))
+    db.commit()
+
+    reviewed=store.mutate(PROFILE,value['id'],{'expected_version':1,'message_id':target['id'],
+      'review_note':'Reviewed the changed attachment as a separate source.','acknowledge_new_source':True},'source_review')['candidate']
+    assert reviewed['version']==2 and reviewed['media_source_review']['message_id']==target['id']
+    assert [item['id'] for item in reviewed.get('media_source_diagnostics',[])]==([sibling['id']] if sibling_claimed else [])
+    assert reviewed['source_message_ids']==source_ids
+
+    before=db.execute('SELECT count(*) AS n FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid',(A,))[0]['n']
+    if sibling_claimed:
+        with pytest.raises(TenantLinearError,match='Вложение исходного сообщения изменилось'):
+            store.mutate(PROFILE,value['id'],{'expected_version':2,'title':'Reviewed current support request'},'edit')
+        with pytest.raises(TenantLinearError,match='Вложение исходного сообщения изменилось'):
+            store.mutate(PROFILE,value['id'],{'expected_version':2,'agent_ids':[EXPERT]},'approve')
+        unchanged=db.execute('SELECT version,content FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['id']))[0]
+        assert unchanged['version']==2 and unchanged['content']['title']=='Review the current support request'
+    else:
+        saved=store.mutate(PROFILE,value['id'],{'expected_version':2,'title':'Reviewed current support request',
+          'symptoms':['Customer reported an attachment issue'],'resolution_steps':['Applied the reviewed fix'],
+          'outcome':{'status':'confirmed','text':'Customer confirmed the fix works.','message_ids':[confirmation['id']]},
+          'work_status':'resolved'},'edit')['candidate']
+        assert saved['version']==3 and saved['title']=='Reviewed current support request'
+        assert saved['cause']=={'status':'unknown','text':''} and saved['outcome']['status']=='confirmed'
+        saved_refs=db.execute('SELECT source_refs FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,value['extraction_id']))[0]['source_refs']
+        assert saved_refs==refs and saved_refs[0]['media_version']==store.digest(old_facts)
+        published=store.mutate(PROFILE,value['id'],{'expected_version':3,'agent_ids':[EXPERT]},'approve')['candidate']
+        assert published['status']=='approved' and [item['agent_id'] for item in published['publications']]==[EXPERT]
+        provenance=db.execute("SELECT provenance FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND provenance->>'candidate_id'=%s",(A,value['id']))[0]['provenance']
+        assert provenance['media_source_review']['revision']==1
+    after=db.execute('SELECT count(*) AS n FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid',(A,))[0]['n']
+    assert after==before+(0 if sibling_claimed else 1)
+    assert generation.call_count==1
+
+
 def confirmed_case(ready):
     db,generation,data=ready;ticket_id=str(uuid.uuid4())
     db.execute("INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,status,completion_outcome,completion_note,created_by) VALUES(%s::uuid,%s::uuid,%s::uuid,'client','manual','resolved','resolved_confirmed','Customer confirmed the fix',11)",(A,ticket_id,CA));db.commit()
