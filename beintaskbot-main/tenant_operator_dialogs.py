@@ -186,7 +186,7 @@ def projection(policy):
     kommo_scope='TRUE' if policy.profile.get('role')=='owner' else '('+' OR '.join(scope)+')' if scope else 'FALSE'
     sql='''WITH routes AS (
       SELECT 'connect'::text AS provider,c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
-        COALESCE(NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
+        COALESCE(NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(names.customer_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
         CASE WHEN (c.avatar_checked_at IS NULL AND c.avatar_status IN ('unavailable','loading'))
           OR c.avatar_checked_at<now()-interval '7 days'
           OR (c.avatar_status='loading' AND c.avatar_checked_at<now()-interval '3 minutes') THEN '' ELSE c.avatar_status END AS avatar_status,
@@ -214,10 +214,16 @@ def projection(policy):
       LEFT JOIN LATERAL(SELECT COALESCE(m.happened_at,m.created_at) AS last_message_at,m.id::text AS last_message_id,
           m.direction AS last_message_direction,m.message_type AS last_message_type,left(COALESCE(m.body,''),240) AS last_message_text
         FROM saas_crm_messages m
-        WHERE m.tenant_id=c.tenant_id AND m.kommo_lead_id=c.lead_id AND m.channel='connect:'||c.connect_channel_id::text
+        WHERE m.tenant_id=c.tenant_id AND m.kommo_lead_id=ANY(ARRAY(SELECT c.lead_id UNION ALL
+          SELECT dl.source_lead FROM saas_connect_dialog_links dl WHERE dl.tenant_id=c.tenant_id
+            AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active)) AND m.channel='connect:'||c.connect_channel_id::text
         ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1) lm ON TRUE
-      LEFT JOIN saas_support_tickets ticket ON ticket.tenant_id=c.tenant_id AND ticket.channel_id=c.connect_channel_id
-        AND ticket.conversation_id=c.conversation_id AND ticket.status<>'resolved'
+      LEFT JOIN LATERAL(SELECT st.* FROM saas_support_tickets st WHERE st.tenant_id=c.tenant_id
+        AND st.channel_id=c.connect_channel_id AND st.status<>'resolved'
+        AND (st.conversation_id=c.conversation_id OR EXISTS(SELECT 1 FROM saas_connect_dialog_links dl
+          WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.connect_channel_id
+            AND dl.canonical_id=c.conversation_id AND dl.source_id=st.conversation_id AND dl.active))
+        ORDER BY st.created_at DESC,st.id LIMIT 1) ticket ON TRUE
       LEFT JOIN saas_tenant_members tm ON tm.tenant_id=c.tenant_id AND tm.telegram_id=ticket.assigned_to
       LEFT JOIN LATERAL(SELECT CASE WHEN he.event_key LIKE 'manual-handoff:%%' OR he.event_key LIKE 'group-handoff:%%' THEN 'manual' ELSE 'ai_handoff' END AS source,ht.reason,ht.created_at,he.event_key,hm.display_name AS assigned_name
         FROM saas_support_tickets ht JOIN saas_support_events he ON he.tenant_id=ht.tenant_id AND he.ticket_id=ht.id
@@ -225,7 +231,13 @@ def projection(policy):
         WHERE ht.tenant_id=c.tenant_id AND ht.channel_id=c.connect_channel_id AND ht.conversation_id=c.conversation_id
           AND (he.event_key LIKE 'handoff:%%' OR he.event_key LIKE 'manual-handoff:%%' OR he.event_key LIKE 'group-handoff:%%')
         ORDER BY ht.created_at DESC,he.event_key DESC LIMIT 1) h ON TRUE
-      WHERE c.tenant_id=%s::uuid
+      LEFT JOIN LATERAL(SELECT COALESCE(NULLIF(sc.manual_display_name,''),NULLIF(sc.contact_name,''),NULLIF(sc.display_name,'')) AS customer_name
+        FROM saas_connect_dialog_links dl JOIN saas_connect_conversations sc
+          ON sc.tenant_id=dl.tenant_id AND sc.connect_channel_id=dl.channel_id AND sc.conversation_id=dl.source_id
+        WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active
+        ORDER BY sc.created_at,sc.lead_id LIMIT 1) names ON TRUE
+      WHERE c.tenant_id=%s::uuid AND NOT EXISTS(SELECT 1 FROM saas_connect_dialog_links dl
+        WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.connect_channel_id AND dl.source_id=c.conversation_id AND dl.active)
       UNION ALL
       SELECT 'kommo',COALESCE(j.channel_id,lm.channel,''),COALESCE(j.conversation_id,''),d.kommo_lead_id,
         COALESCE(NULLIF(d.contact_name,''),NULLIF(d.name,''),d.kommo_lead_id::text),''::text AS manual_display_name,COALESCE(d.phone,''),''::text AS conversation_kind,''::text AS avatar_status,
@@ -430,6 +442,17 @@ def _unread_counts(cur,tenant,telegram_id,rows):
             continue
     if not routes:return 0
     routes=list({tuple(route[:4]):route for route in routes}.values())
+    equivalences={}
+    cur.execute('''SELECT channel_id::text,canonical_id,canonical_lead,source_id,source_lead
+      FROM saas_connect_dialog_links WHERE tenant_id=%s::uuid AND active
+        AND channel_id::text=ANY(%s::text[])''',(tenant,list({r[1] for r in routes if r[0]=='connect'})))
+    original=set(routes)
+    for link in cur.fetchall():
+        key=('connect',link['channel_id'],link['canonical_id'],int(link['canonical_lead']))
+        if key not in original: continue
+        source=('connect',link['channel_id'],link['source_id'],int(link['source_lead']))
+        equivalences.setdefault(key,[key]).append(source)
+        if source not in routes: routes.append(source)
     cur.execute('''WITH routes(provider,channel_id,conversation_id,lead_id) AS (
         SELECT * FROM unnest(%s::text[],%s::text[],%s::text[],%s::bigint[]))
       INSERT INTO saas_operator_dialog_reads(tenant_id,telegram_id,provider,channel_id,conversation_id,lead_id,last_read_at,last_read_message_id)
@@ -457,7 +480,7 @@ def _unread_counts(cur,tenant,telegram_id,rows):
     for row in rows:
         try:key=(str(row.get('provider') or ''),str(row.get('channel_id') or ''),str(row.get('conversation_id') or ''),int(row.get('lead_id')))
         except (TypeError,ValueError):continue
-        row['unread_count']=counts.get(key,0)
+        row['unread_count']=sum(counts.get(k,0) for k in equivalences.get(key,[key]))
     return sum(counts.values())
 
 
@@ -532,33 +555,45 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
 
 
 def mark_read(profile,payload):
-    """Advance one authorized dialogue cursor through a message actually stored on that route."""
+    """Advance each retained source cursor only through messages on that source."""
     if not isinstance(payload,dict):raise TenantLinearError('Некорректный запрос.')
     provider=str(payload.get('provider') or '')
     if provider not in {'connect','kommo'}:raise TenantLinearError('Некорректный канал.')
-    message_id=identifier(payload.get('message_id'))
-    lead_id=int(payload.get('lead_id'))
+    message_id=identifier(payload.get('message_id'));lead_id=int(payload.get('lead_id'))
     channel=str(payload.get('channel_id') or '')[:250]
     conversation=str(payload.get('conversation_id') or '')[:250]
     with _connect() as conn:
         ensure_schema(conn)
+        from tenant_connect_transport import _schema
+        _schema(conn)
         with conn.cursor() as cur:
             tenant,_,policy=access(cur,profile,'dialogs')
-            route=assert_route(cur,tenant,policy,provider,conversation,channel,lead_id)
-            channel=str(route.get('connect_channel_id') or channel) if provider=='connect' else channel
+            route=assert_route(cur,tenant,policy,provider,conversation,channel,lead_id,allow_merged=True)
+            members={conversation:lead_id}
+            if provider=='connect':
+                channel=str(route['connect_channel_id']);conversation=route['conversation_id']
+                from tenant_connect_dialog_equivalence import members as read_members
+                members=read_members(cur,tenant,channel,conversation)
             history_channel='connect:'+channel if provider=='connect' else str(route.get('history_channel') or channel)
-            cur.execute('''SELECT id,created_at AS at FROM saas_crm_messages
-              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid
-                AND direction IN ('incoming','outgoing')''',(tenant,lead_id,history_channel,message_id))
+            cur.execute("""SELECT id,created_at AS at FROM saas_crm_messages
+              WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s AND id=%s::uuid
+                AND direction IN ('incoming','outgoing')""",(tenant,list(members.values()),history_channel,message_id))
             message=cur.fetchone()
             if not message:raise TenantLinearError('Сообщение не найдено в этом диалоге.',404)
-            cur.execute('''INSERT INTO saas_operator_dialog_reads(tenant_id,telegram_id,provider,channel_id,conversation_id,lead_id,last_read_at,last_read_message_id,updated_at)
-              VALUES(%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,clock_timestamp())
-              ON CONFLICT(tenant_id,telegram_id,provider,channel_id,conversation_id,lead_id) DO UPDATE SET
-                last_read_at=EXCLUDED.last_read_at,last_read_message_id=EXCLUDED.last_read_message_id,updated_at=clock_timestamp()
-              WHERE (EXCLUDED.last_read_at,COALESCE(EXCLUDED.last_read_message_id,'00000000-0000-0000-0000-000000000000'::uuid))>
-                    (saas_operator_dialog_reads.last_read_at,COALESCE(saas_operator_dialog_reads.last_read_message_id,'00000000-0000-0000-0000-000000000000'::uuid))''',
-              (tenant,int(profile['telegram_id']),provider,channel,conversation,lead_id,message['at'],str(message['id'])))
+            for identity,lead in members.items():
+                cur.execute("""SELECT id,created_at AS at FROM saas_crm_messages WHERE tenant_id=%s::uuid
+                  AND kommo_lead_id=%s AND channel=%s AND (created_at,id)<=(%s,%s::uuid)
+                  AND direction IN ('incoming','outgoing') ORDER BY created_at DESC,id DESC LIMIT 1""",
+                  (tenant,lead,history_channel,message['at'],str(message['id'])))
+                last=cur.fetchone()
+                if not last: continue
+                cur.execute("""INSERT INTO saas_operator_dialog_reads(tenant_id,telegram_id,provider,channel_id,conversation_id,lead_id,last_read_at,last_read_message_id,updated_at)
+                  VALUES(%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,clock_timestamp())
+                  ON CONFLICT(tenant_id,telegram_id,provider,channel_id,conversation_id,lead_id) DO UPDATE SET
+                    last_read_at=EXCLUDED.last_read_at,last_read_message_id=EXCLUDED.last_read_message_id,updated_at=clock_timestamp()
+                  WHERE (EXCLUDED.last_read_at,COALESCE(EXCLUDED.last_read_message_id,'00000000-0000-0000-0000-000000000000'::uuid))>
+                        (saas_operator_dialog_reads.last_read_at,COALESCE(saas_operator_dialog_reads.last_read_message_id,'00000000-0000-0000-0000-000000000000'::uuid))""",
+                  (tenant,int(profile['telegram_id']),provider,channel,identity,lead,last['at'],str(last['id'])))
     return {'read_through_message_id':str(message_id),'updated':True}
 
 
@@ -573,6 +608,11 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             selected=assert_route(cur,tenant,policy,provider,conversation,str(channel),lead_id,allow_merged=True)
             if provider=='connect':
                 channel=str(selected['connect_channel_id']);conversation=selected['conversation_id'];lead_id=int(selected['lead_id'])
+            history_members={conversation:lead_id}
+            if provider=='connect':
+                from tenant_connect_dialog_equivalence import members
+                history_members=members(cur,tenant,channel,conversation)
+            history_leads=list(history_members.values())
             sql,scopes=projection(policy)
             cur.execute(sql+'SELECT * FROM visible WHERE provider=%s AND lead_id=%s AND channel_id=%s AND conversation_id=%s',
                 (tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'),provider,lead_id,str(channel),str(conversation)))
@@ -627,10 +667,10 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             if anchor and not before:
                 # Resolve anchor only within the authorized route / exact tenant group.
                 cur.execute('''SELECT m.id,m.external_id,COALESCE(m.happened_at,m.created_at) AS at FROM saas_crm_messages m
-                  WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid AND ((m.kommo_lead_id=%s AND m.channel=%s)
+                  WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid AND ((m.kommo_lead_id=ANY(%s::bigint[]) AND m.channel=%s)
                     OR (%s AND EXISTS(SELECT 1 FROM saas_connect_conversations c WHERE c.tenant_id=m.tenant_id
                       AND c.conversation_id=%s AND c.lead_id=m.kommo_lead_id AND m.channel='connect:'||c.connect_channel_id::text)))''',
-                  (tenant,identifier(anchor),lead_id,row['history_channel'],bool(provider=='connect' and group_jid(conversation)),conversation))
+                  (tenant,identifier(anchor),history_leads,row['history_channel'],bool(provider=='connect' and group_jid(conversation)),conversation))
                 anchor_row=dict(cur.fetchone() or {});anchor_at=anchor_row.get('at')
                 if not anchor_row:
                     raise TenantLinearError('The requested message is unavailable or outside the permitted conversation.',404)
@@ -638,18 +678,23 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 from tenant_connect_group_history import page as group_history
                 messages=group_history(cur,tenant,conversation,before=identifier(before) if before else None,through=anchor_at)
             else:
-                args=[tenant,lead_id,row['history_channel']];clause=''
+                args=[tenant,history_leads,row['history_channel']];clause=''
                 if anchor_at:
                     clause=' AND (COALESCE(happened_at,created_at),id)<=(%s,%s::uuid)'
                     args.extend((anchor_at,str(anchor_row['id'])))
                 if before:
                     clause=''' AND (COALESCE(happened_at,created_at),id)<(SELECT COALESCE(happened_at,created_at),id FROM saas_crm_messages
-                      WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid)'''
-                    args += [tenant,lead_id,row['history_channel'],identifier(before)]
-                cur.execute('''SELECT id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,created_at,raw FROM saas_crm_messages
-                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s'''+clause+'''
+                      WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s AND id=%s::uuid)'''
+                    args += [tenant,history_leads,row['history_channel'],identifier(before)]
+                cur.execute('''SELECT id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,created_at,raw,kommo_lead_id AS source_lead_id FROM saas_crm_messages
+                  WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s'''+clause+'''
                   ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 51''',tuple(args))
                 messages=cur.fetchall()
+                if provider=='connect':
+                    by_lead={v:k for k,v in history_members.items()}
+                    for message in messages:
+                        message['source_conversation_id']=by_lead[int(message['source_lead_id'])]
+                        message['source_channel_id']=channel
             participant_names={};employee_participants=set()
             if provider == 'connect' and dialog.get('customer_kind') == 'group':
                 # The override's primary key includes the tenant, exact Connect

@@ -9,9 +9,12 @@ on:
       - 'beintaskbot-main/tenant_ai_group_coordination.py'
       - 'beintaskbot-main/tenant_crm_native_contacts.py'
       - 'beintaskbot-main/tenant_operator_list_snapshot.py'
+      - 'beintaskbot-main/tenant_operator_dialogs.py'
+      - 'beintaskbot-main/tenant_operator_access.py'
+      - 'beintaskbot-main/tenant_ai_dialog*.py'
       - 'beintaskbot-main/tests/test_connect_*.py'
   push:
-    branches: [fix/connect-direct-identity-replay]
+    branches: [fix/connect-direct-identity-replay, fix/verified-phone-dialog-reconcile]
 
 permissions:
   contents: read
@@ -49,6 +52,9 @@ jobs:
       - name: Exercise ingestion, retries, concurrency, history and scope isolation
         run: >-
           python -m pytest -q --tb=short
+          tests/test_connect_phone_evidence.py
+          tests/test_connect_retained_media.py
+          tests/test_connect_dialog_equivalence.py
           tests/test_connect_identity_ingestion_postgres.py
           tests/test_connect_direct_canonical.py
           tests/test_connect_direct_identity.py

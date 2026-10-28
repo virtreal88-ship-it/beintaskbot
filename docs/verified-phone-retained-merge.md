@@ -1,0 +1,13 @@
+# Verified phone dialogue reconciliation
+
+Two historical WhatsApp routes may represent one person: a phone JID and a privacy LID, or the same phone under the legacy `@c.us` domain. Direct receipts alone missed identity facts preserved in signed group participant events. Editable names, avatars and contact phone labels cannot establish that equivalence.
+
+The owner inventory now evaluates phone JIDs, validated direct/participant identity receipts, durable provider aliases and native contact identity links with matching first-message provenance. Its public result exposes lead IDs, source types, message references and equality/presence flags for an owner-supplied phone search, not phone numbers or JIDs. Contradictory phone/LID components remain blocked.
+
+An eligible owner merge writes `saas_connect_dialog_links` and canonical provider aliases in one transaction. Every conversation, message, attachment, original raw receipt, AI result and CRM dependency retains its original key. The operator list, paginated/anchored history, unread counts and AI history read that equivalence; original media and support-case routes remain accessible. New events go to the canonical dialogue. Source controls cannot run independently. Stops and existing assignments are preserved; the merge does not enqueue AI or send messages.
+
+Alias locks precede dialogue locks; a channel-scoped merge lock serializes competing owner requests. A fresh dependency/evidence digest prevents stale application, and request UUIDs make retries idempotent. The existing alias primary key is the durable uniqueness boundary for provider-confirmed identities within one tenant and channel. Unknown LIDs cannot safely be equated with a phone by their numeric prefix. This does not promise identity knowledge that the provider has never supplied.
+
+Rollback deactivates the retained mapping, restores prior alias targets and existing canonical control fields after checking for intervening control changes, and keeps all later messages. No rows are hard-deleted. Conservative stops created by the merge remain stopped on rollback. New conflict observations are append-only: resolving an old split cannot conceal a later contradictory replay behind the first conflict receipt.
+
+Regression coverage uses disposable PostgreSQL and mocked network transport: same-phone domains, LID proof, tenant/channel isolation, duplicate/replayed events, concurrent merge requests, atomic failure, full list/history/anchor/media/case/read-cursor journey, later-message preservation and rollback. No test uses customer messaging or paid AI. Production merge results are recorded separately after release and a fresh owner preview; shipping this code alone does not merge any production record.

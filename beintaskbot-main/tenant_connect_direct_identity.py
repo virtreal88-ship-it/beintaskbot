@@ -76,7 +76,9 @@ def canonical_conversation(cur, tenant, channel, conversation, data, metadata):
     # historical alias row. Preserve its established routing on unpaired events;
     # a new pair must not silently reconcile two independently owned histories.
     if len(routes) > 1 and (verified or not targets):
-        return fallback, True
+        from tenant_connect_dialog_equivalence import same_routes
+        if not same_routes(cur,tenant,channel,routes):
+            return fallback, True
     canonical = next(iter(targets or routes), phone_jid(jid) if verified and not conflict else conversation)
     cur.execute('''SELECT identity_key FROM saas_connect_direct_identities
       WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND canonical_conversation_id=%s''',
@@ -134,3 +136,9 @@ def record_conflict(cur, tenant, channel, canonical, original, data, event_id):
           VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)
           ON CONFLICT(tenant_id,connect_channel_id,conversation_id) DO NOTHING''',
           (tenant, channel, identity, event_id, evidence))
+
+        cur.execute('''INSERT INTO saas_connect_identity_conflict_events
+          (tenant_id,connect_channel_id,conversation_id,event_id,evidence)
+          VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)
+          ON CONFLICT(tenant_id,connect_channel_id,conversation_id,event_id) DO NOTHING''',
+          (tenant,channel,identity,event_id,evidence))

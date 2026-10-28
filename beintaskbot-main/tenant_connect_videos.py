@@ -80,13 +80,14 @@ def _resolve(job, reservation, message_id):
             route = connect_route(cur, str(job['tenant_id']), int(job['lead_id']))
             if not route or route['channel_id'] != channel or route['conversation_id'] != job['conversation_id']:
                 raise TenantLinearError('video_scope_mismatch', 403)
-            cur.execute('''SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
+            cur.execute('''SELECT raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
               AND channel=%s AND external_id=%s AND direction='incoming' AND message_type='video' ''',
               (job['tenant_id'], int(job['lead_id']), 'connect:' + channel, 'connect:' + key))
-            if not cur.fetchone():
+            row = cur.fetchone()
+            if not row:
                 raise TenantLinearError('video_scope_mismatch', 403)
     return {'tenant_id': str(job['tenant_id']), 'channel_id': channel, 'message_id': key,
-            'lead_id': int(job['lead_id']), 'route': route, 'row': {'message_type': 'video'}}
+            'lead_id': int(job['lead_id']), 'route': route, 'row': {'message_type': 'video', 'raw': row.get('raw') or {}}}
 
 
 def _call_key(item, video_hash, frame_hash, second, model, component):

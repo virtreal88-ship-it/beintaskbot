@@ -54,6 +54,10 @@ class ListSnapshot:
                 AND cs.channel_id=r.channel_id AND cs.conversation_id=r.conversation_id''',
               ([row['channel_id'] for row in direct], [row['conversation_id'] for row in direct], tenant, tenant, tenant, tenant))
             self.direct = {(row['channel_id'], row['conversation_id']): dict(row) for row in cur.fetchall()}
+            from tenant_connect_identity import conflicted
+            for (channel,conversation),state in self.direct.items():
+                if state.get('identity_conflict'):
+                    state['identity_conflict']=conflicted(cur,tenant,channel,conversation)
 
     @property
     def primary_agents(self):

@@ -37,11 +37,12 @@ def resolve(job,reservation,message):
         with conn.cursor() as cur:
             route=connect_route(cur,str(job['tenant_id']),int(job['lead_id']))
             if not route or route['channel_id']!=channel or route['conversation_id']!=job['conversation_id']:raise ValueError('image_scope_mismatch')
-            cur.execute("""SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
+            cur.execute("""SELECT raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
               AND channel=%s AND external_id=%s AND direction='incoming' AND message_type='image'""",
               (job['tenant_id'],int(job['lead_id']),'connect:'+channel,'connect:'+key))
-            if not cur.fetchone():raise ValueError('image_scope_mismatch')
-    return {'route':route,'message_id':key,'row':{'message_type':'image'}}
+            row=cur.fetchone()
+            if not row:raise ValueError('image_scope_mismatch')
+    return {'route':route,'message_id':key,'row':{'message_type':'image','raw':row.get('raw') or {}}}
 
 def signature(data,mime):
     return {'image/jpeg':data.startswith(b'\xff\xd8\xff'),'image/png':data.startswith(b'\x89PNG\r\n\x1a\n'),

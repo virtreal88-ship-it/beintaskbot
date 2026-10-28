@@ -35,6 +35,9 @@ def lock_dialog(cur, tenant, provider, channel, conversation):
 
 def assert_resolved(cur, tenant, channel, conversation, fingerprint=None):
     channel_scope('connect', channel)
-    cur.execute("SELECT 1 WHERE ai_legacy_blocked(%s::uuid,%s,%s,%s)", (tenant, channel, conversation, fingerprint))
+    cur.execute("""SELECT 1 WHERE ai_legacy_blocked(%s::uuid,%s,%s,%s)
+      OR EXISTS(SELECT 1 FROM saas_connect_dialog_links WHERE tenant_id=%s::uuid
+        AND channel_id=%s::uuid AND source_id=%s AND active)""",
+      (tenant,channel,conversation,fingerprint,tenant,channel,conversation))
     if cur.fetchone():
         raise TenantLinearError('Legacy dialogue channel is ambiguous; manual resolution is required.', 409)
