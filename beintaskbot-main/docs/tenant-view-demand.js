@@ -3,7 +3,7 @@
   const subscriptions = new Set(), inertNodes = new Map();
   let profile = window.tenantProfileSnapshot || null, identity = '', generation = 0, bootstrap;
   let integration = '', paused = false;
-  const binding = data => (data?.integrations || []).find(row => row.provider === 'linear')
+  const binding = data => (Array.isArray(data?.integrations) ? data.integrations : []).find(row => row?.provider === 'linear')
     ?.metadata?.settings?.members?.[String(data?.member?.telegram_id)];
   // Display names, timestamps and integration status are freshness, not identity.
   const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ?

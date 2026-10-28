@@ -26,6 +26,10 @@ function fixture({view='dialogs',profile=owner,ref,core=false,workspace=false,ho
  return {w,requests,errors,emit,show,advance:ms=>clock+=ms,profile:data=>{current=data;emit('tenant-profile',data);},nonProfile:()=>requests.filter(r=>r.url!=='/api/platform/me'),close:()=>{w.close();assert.deepEqual(errors,[]);}};
 }
 async function measurement(ref){const b=fixture({ref});try{await tick();await tick();const urls=b.nonProfile().map(r=>r.url);assert.equal(urls.length,ref?12:0);console.log(JSON.stringify({ref:ref||'working-tree',hiddenDataGets:urls.length,urls}));}finally{b.close();}}
+async function profileShape(){
+ const b=fixture({profile:{...owner,integrations:{}}});try{await tick();assert.equal(b.nonProfile().length,0);assert.equal(b.w.document.getElementById('tnNav').hidden,false);}finally{b.close();}
+ console.log('PASS profile compatibility: legacy object-shaped integration summary does not break authorization');
+}
 async function delayedBootstrap(){
  const b=fixture({core:true,hold:r=>r.url==='/api/platform/me'});try{
   await tick();assert.equal(b.requests.length,1);assert.equal(b.w.document.getElementById('tnNav').hidden,true);
@@ -154,4 +158,4 @@ async function isolation(){
  const focus=fixture({view:'integrations',core:true});try{for(let i=0;i<10&&focus.nonProfile().length<5;i++)await tick();const before=focus.nonProfile().length;assert.equal(before,5);const search=focus.w.document.querySelector('#chakra-integrations-root input');search.value='OpenAI';search.dispatchEvent(new focus.w.Event('input',{bubbles:true}));focus.w.dispatchEvent(new focus.w.Event('focus'));await tick();await tick();assert.equal(focus.nonProfile().length,before+5,'same-scope reauthorization reloads visible integration status');focus.profile({...owner,member:{...owner.member,tenant_id:'tenant-b'},account:{first_name:'Synthetic B'}});await tick();assert.ok(!focus.w.document.body.textContent.includes('Synthetic A'));}finally{focus.close();}
  console.log('PASS tenant/user switch, delayed responses, logout, Linear-bound worker visibility/revocation, same-scope focus');
 }
-(async()=>{const index=process.argv.indexOf('--baseline-ref');if(index>=0)return measurement(process.argv[index+1]);await measurement();await delayedBootstrap();await navigation();await integrations();await marketplaceModal();await dirtyReauthorization();await isolation();})().catch(e=>{console.error(e);process.exitCode=1;});
+(async()=>{const index=process.argv.indexOf('--baseline-ref');if(index>=0)return measurement(process.argv[index+1]);await measurement();await profileShape();await delayedBootstrap();await navigation();await integrations();await marketplaceModal();await dirtyReauthorization();await isolation();})().catch(e=>{console.error(e);process.exitCode=1;});
