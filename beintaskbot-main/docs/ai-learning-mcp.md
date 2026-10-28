@@ -54,6 +54,11 @@ existing tenant audit log as `ai_learning_mcp_read`.
 
 ## Available tools and privacy
 
+The extraction service permits at most 100 knowledge extractions per company
+per UTC day. This is a service-wide default applied separately to each tenant,
+not a company-specific setting. Existing company AI-call limits, tenant spend
+limits, campaign grant caps and uncertain-call holds remain in force.
+
 The owner has authorized expansion of the existing `ai_learning.read`
 connection to company-wide reading. Existing read access and refresh tokens
 work for these read tools; no new consent or client credentials are required.

@@ -749,13 +749,16 @@ def test_extraction_daily_cap_and_concurrency(ready):
     with pytest.raises(TenantLinearError,match='завершения'):service.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4())})
     db.execute("UPDATE saas_knowledge_extractions SET status='unknown'");db.commit()
     # Unknown paid attempts still consume daily extraction capacity.
-    for n in range(9):
+    for n in range(98):
         rid=str(uuid.uuid4());event='test-cap-'+str(n)
         db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider) VALUES(%s::uuid,%s,'connect')",(A,event))
-        db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,'test','unknown')",(A,rid,AGENT,event))
+        db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,'test','skipped')",(A,rid,AGENT,event))
         db.execute("INSERT INTO saas_knowledge_extractions(tenant_id,id,created_by,route,source_refs,source_digest,fingerprint,request_key,status,deadline) VALUES(%s::uuid,%s::uuid,11,'{}','[]','hash',%s,'test-request-key','unknown',now())",(A,rid,event))
     db.commit()
-    with pytest.raises(TenantLinearError,match='10 в сутки'):service.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4())})
+    service.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4())})
+    db.execute("UPDATE saas_knowledge_extractions SET status='unknown' WHERE status='running'");db.commit()
+    db.execute("UPDATE saas_crm_messages SET body='Another changed fragment' WHERE external_id='m1' AND tenant_id=%s::uuid",(A,));db.commit()
+    with pytest.raises(TenantLinearError,match='100 в сутки'):service.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4())})
     generation.assert_not_called()
 
 def test_live_queue_is_idempotent_and_channel_scoped(ready,monkeypatch):
