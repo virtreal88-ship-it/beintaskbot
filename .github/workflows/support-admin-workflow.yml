@@ -12,11 +12,13 @@ on:
       - 'beintaskbot-main/tenant_ai_agents_store.py'
       - 'beintaskbot-main/tenant_knowledge_*.py'
       - 'beintaskbot-main/tenant_case_media_admission.py'
+      - 'beintaskbot-main/tenant_case_media_recovery.py'
       - 'beintaskbot-main/tenant_connect_documents.py'
       - 'beintaskbot-main/tenant_connect_media.py'
       - 'beintaskbot-main/tests/test_ai_learning_mcp.py'
       - 'beintaskbot-main/tests/test_ai_agent_deletion_postgres.py'
       - 'beintaskbot-main/tests/test_case_media_admission.py'
+      - 'beintaskbot-main/tests/test_case_media_recovery.py'
       - 'beintaskbot-main/tests/test_connect_documents.py'
       - 'beintaskbot-main/tests/test_knowledge_campaign*.py'
       - 'beintaskbot-main/tests/test_knowledge_candidates.py'
@@ -37,11 +39,13 @@ on:
       - 'beintaskbot-main/tenant_ai_agents_store.py'
       - 'beintaskbot-main/tenant_knowledge_*.py'
       - 'beintaskbot-main/tenant_case_media_admission.py'
+      - 'beintaskbot-main/tenant_case_media_recovery.py'
       - 'beintaskbot-main/tenant_connect_documents.py'
       - 'beintaskbot-main/tenant_connect_media.py'
       - 'beintaskbot-main/tests/test_ai_learning_mcp.py'
       - 'beintaskbot-main/tests/test_ai_agent_deletion_postgres.py'
       - 'beintaskbot-main/tests/test_case_media_admission.py'
+      - 'beintaskbot-main/tests/test_case_media_recovery.py'
       - 'beintaskbot-main/tests/test_connect_documents.py'
       - 'beintaskbot-main/tests/test_knowledge_campaign*.py'
       - 'beintaskbot-main/tests/test_knowledge_candidates.py'
@@ -97,6 +101,7 @@ jobs:
             tests/test_ai_learning_mcp.py \
             tests/test_ai_agent_deletion_postgres.py \
             tests/test_case_media_admission.py \
+            tests/test_case_media_recovery.py \
             tests/test_connect_documents.py \
             tests/test_knowledge_campaigns.py \
             tests/test_knowledge_campaign_multiprocess.py \

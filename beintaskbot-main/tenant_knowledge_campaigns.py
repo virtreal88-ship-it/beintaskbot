@@ -228,6 +228,70 @@ def control(profile, campaign_id, expected_version, action):
         conn.commit()
 
 
+def recover_failed_media(profile, campaign_id, expected_version, request_id):
+    """Requeue proven pre-dispatch failures under the original fixed grant.
+
+    This explicit owner action never creates a grant, resets spending or retries
+    an uncertain media call. Replaying the same request never queues more work.
+    """
+    campaign_id=identifier(campaign_id);request_id=identifier(request_id)
+    if type(expected_version) is not int:raise TenantLinearError('Invalid campaign version.',400)
+    from tenant_case_media_admission import plan
+    from tenant_case_media_recovery import approved_parent
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            tenant,actor,policy=store.authorize(cur,profile)
+            if policy.profile.get('role')!='owner':raise TenantLinearError('Owner required.',403)
+            cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('knowledge-campaign:'+tenant,))
+            cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,campaign_id))
+            campaign=cur.fetchone()
+            if not campaign:raise TenantLinearError('Campaign not found.',404)
+            progress=dict(campaign.get('progress') or {})
+            previous=progress.get('failed_media_recovery')
+            if previous and previous.get('request_id')==request_id:return {'replayed':True}
+            if previous or campaign['version']!=expected_version:
+                raise TenantLinearError('Campaign changed or recovery already used.',409)
+            if campaign['status']!='stopped' or not campaign.get('approved_at') or progress.get('mode')!='case_media_batch':
+                raise TenantLinearError('Completed approved case campaign required.',409)
+            cur.execute('''SELECT status,approved_at,cap_microusd FROM saas_ai_media_grants
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND campaign_id=%s::uuid FOR UPDATE''',
+              (tenant,campaign_id,campaign_id))
+            grant=cur.fetchone()
+            if not grant or grant['status']!='completed' or not grant['approved_at'] or grant['cap_microusd']!=campaign.get('max_cost_microusd'):
+                raise TenantLinearError('Original completed grant required.',409)
+            cur.execute("SELECT 1 FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND status<>'stopped'",(tenant,))
+            if cur.fetchone():raise TenantLinearError('Another campaign is active.',409)
+            cur.execute('''SELECT id FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid
+              AND campaign_id=%s::uuid AND status='partial' ORDER BY id FOR UPDATE''',(tenant,campaign_id))
+            parent_ids=[str(row['id']) for row in cur.fetchall()]
+            recoveries={}
+            for parent_id in parent_ids:
+                parent=approved_parent(cur,tenant,campaign_id,parent_id)
+                if not parent:continue
+                route=dict(parent['route']);case_id=str(route.get('case_id') or '')
+                approved=next((p for p in progress.get('case_plans',[]) if p.get('case_id')==case_id),None)
+                current=plan(cur,profile,case_id,allow_unknown_retry=True)
+                selected=next((m for m in current.get('media',[]) if route.get('message_ids')==[m.get('id')]),None)
+                prior=next((m for m in (approved or {}).get('media',[]) if route.get('message_ids')==[m.get('id')]),None)
+                if (not approved or not selected or not prior or current.get('status')!='pending_consent'
+                    or current.get('plan_hash')!=approved.get('plan_hash') or selected.get('complete')
+                    or selected.get('source_version')!=route.get('source_version')
+                    or selected.get('source_hash')!=prior.get('source_hash')
+                    or not selected.get('current_source_addressable')):
+                    raise TenantLinearError('Approved case source changed.',409)
+                route['retry_of']=str(parent['extraction_id'])
+                route['campaign_media_kind']=prior['kind']
+                child=enqueue(cur,profile,campaign,route)
+                recoveries[str(child)]=parent_id
+            if not recoveries:raise TenantLinearError('No proven pre-dispatch media failures.',409)
+            progress['failed_media_recovery']={'request_id':request_id,'parents':recoveries}
+            cur.execute("UPDATE saas_ai_media_grants SET status='active' WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,campaign_id))
+            cur.execute("UPDATE saas_knowledge_campaigns SET status='running',version=version+1,updated_at=now(),progress=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(_json(progress),tenant,campaign_id))
+            store._audit(cur,tenant,actor,'knowledge_campaign_failed_media_recovery','knowledge_campaign',campaign_id,{'count':len(recoveries)})
+        conn.commit()
+    return {'replayed':False,'count':len(recoveries)}
+
+
 def enqueue(cur, profile, campaign, route):
     """Internal discovery adapter only; route always re-authorized, no browser IDs trusted."""
     tenant,_,_,_,binding,_=store.route(cur,profile,route)
@@ -275,19 +339,22 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
         return False
     retry_parents=set()
     if route.get('retry_of'):
-        from tenant_ai_single_photo_retry import authority
-        try:
-            consent=authority(cur,tenant,fragment['id'])
-        except TenantLinearError:
-            return True
-        if str(consent['retry_of'])!=str(route['retry_of']):return True
-        retry_parents.add(str(consent['retry_of']))
-        if consent.get('photo_model'):
-            from tenant_ai_single_photo_retry import validate
-            from tenant_ai_single_message_extraction import _source_for_row
-            cfg={'AI_LEARNING_MCP_TENANT_ID':tenant,'AI_LEARNING_MCP_CHANNEL_ID':str(consent['channel_id'])}
-            checked=validate(cur,consent,_source_for_row(cur,cfg,consent))
-            retry_parents.update(checked['ancestors'])
+        from tenant_case_media_recovery import verified_recovery_parent
+        recovery=verified_recovery_parent(cur,tenant,campaign['id'],campaign.get('progress'),fragment['id'],route)
+        if not recovery:
+            from tenant_ai_single_photo_retry import authority
+            try:
+                consent=authority(cur,tenant,fragment['id'])
+            except TenantLinearError:
+                return True
+            if str(consent['retry_of'])!=str(route['retry_of']):return True
+            retry_parents.add(str(consent['retry_of']))
+            if consent.get('photo_model'):
+                from tenant_ai_single_photo_retry import validate
+                from tenant_ai_single_message_extraction import _source_for_row
+                cfg={'AI_LEARNING_MCP_TENANT_ID':tenant,'AI_LEARNING_MCP_CHANNEL_ID':str(consent['channel_id'])}
+                checked=validate(cur,consent,_source_for_row(cur,cfg,consent))
+                retry_parents.update(checked['ancestors'])
     def scoped_id(value):
         try:
             return str(uuid.UUID(value)) if isinstance(value,str) else None
@@ -306,6 +373,9 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
         and (campaign.get('progress') or {}).get('mode')=='case_media_batch'
         and (campaign.get('progress') or {}).get('acknowledge_prior_unknown') is True
         and str(route.get('media_grant_id') or '')==str(campaign.get('id') or ''))
+    # A recovery is never allowed to bypass an unknown competing fragment.
+    if route.get('retry_of') and (campaign.get('progress') or {}).get('failed_media_recovery'):
+        batch_retry=False
     for old in unknown:
         if str(old['id']) in retry_parents:
             continue  # Only this exact, owner-acknowledged parent; its hold stays.

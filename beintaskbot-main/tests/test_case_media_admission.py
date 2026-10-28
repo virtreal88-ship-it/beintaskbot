@@ -565,7 +565,8 @@ def test_campaign_photo_model_migration_adds_column_to_existing_schema(ready):
     assert db.execute("SELECT column_name FROM information_schema.columns WHERE table_name='saas_knowledge_campaigns' AND column_name='photo_model'")
 
 
-def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished_photo(ready,monkeypatch):
+@pytest.mark.parametrize('scenario',['normal','recover','cap_exhausted','cancel'])
+def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished_photo(ready,monkeypatch,scenario):
     """End-to-end owner snapshot→$10 approval→worker, with providers mocked."""
     import tenant_media_evidence as evidence
     import tenant_knowledge_candidates_store as candidate_store
@@ -652,9 +653,15 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
     downloaded=AsyncMock(return_value=(PNG,'image/png'))
     monkeypatch.setattr(media_service,'download_media',downloaded)
     monkeypatch.setattr(media_service,'load',lambda *_:{'provider':'connect','route':{'channel_id':CA,'conversation_id':'client'},'row':{'message_type':'image'}})
+    recover_failure=scenario!='normal'
+    fail_first=[recover_failure]
     def synthetic_observe(profile,item,ref,content,mime,origin,*args,**kwargs):
         assert content==PNG and mime=='image/png'
         assert media_cache._batch_retry_fingerprint(item,'a'*64,'vision',ref)[2]['message_id']==ref['id']
+        if fail_first[0]:
+            fail_first[0]=False
+            item['vision_attempts']=0;item['vision_usage']=[]
+            raise TenantLinearError('Synthetic pre-dispatch failure',409)
         item['vision_attempts']=1
         item['vision_usage']=[{'input_tokens':100,'output_tokens':20,'total_tokens':120}]
         return 'Synthetic observation',item['vision_usage'][0],True
@@ -722,6 +729,61 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
     grant_reservations=db.execute('SELECT kind,state FROM saas_ai_spend_reservations WHERE grant_id=%s::uuid',(campaign_id,))
     assert len(grant_reservations)==6 and {r['kind'] for r in grant_reservations}=={
       'live_case_extraction','knowledge_photo_observation'}
+    if recover_failure:
+        original=db.execute('SELECT version,progress FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign_id,))[0]
+        with pytest.raises(TenantLinearError):
+            campaigns.recover_failed_media({'tenant_id':B,'telegram_id':22},campaign_id,original['version'],str(uuid.uuid4()))
+        failed=db.execute("SELECT f.extraction_id FROM saas_knowledge_campaign_fragments f WHERE f.campaign_id=%s::uuid AND f.status='partial'",(campaign_id,))[0]['extraction_id']
+        media_key='extraction:'+str(failed)+':vision'
+        db.execute("UPDATE saas_ai_spend_reservations SET state='unknown',actual_microusd=NULL WHERE call_key=%s",(media_key,));db.commit()
+        with pytest.raises(TenantLinearError,match='No proven'):
+            campaigns.recover_failed_media(PROFILE,campaign_id,original['version'],str(uuid.uuid4()))
+        db.execute("UPDATE saas_ai_spend_reservations SET state='released',actual_microusd=0 WHERE call_key=%s",(media_key,));db.commit()
+        db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',
+          (json.dumps({**sparse_connect_raw,'mediaId':'changed-source'}),ids[0]));db.commit()
+        with pytest.raises(TenantLinearError,match='source changed'):
+            campaigns.recover_failed_media(PROFILE,campaign_id,original['version'],str(uuid.uuid4()))
+        assert db.execute('SELECT status FROM saas_ai_media_grants WHERE id=%s::uuid',(campaign_id,))[0]['status']=='completed'
+        db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',(json.dumps(sparse_connect_raw),ids[0]));db.commit()
+        if scenario=='cap_exhausted':
+            monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD',json.dumps({A:100000000}))
+            db.execute('''INSERT INTO saas_ai_spend_reservations(tenant_id,id,call_key,kind,model,reserved_microusd,actual_microusd,state,campaign_id,grant_id)
+              VALUES(%s::uuid,%s::uuid,'synthetic-prior-charge','test','test-model',9999999,9999999,'settled',%s::uuid,%s::uuid)''',
+              (A,str(uuid.uuid4()),campaign_id,campaign_id));db.commit()
+        request_id=str(uuid.uuid4())
+        result=campaigns.recover_failed_media(PROFILE,campaign_id,original['version'],request_id)
+        assert result=={'replayed':False,'count':1}
+        assert campaigns.recover_failed_media(PROFILE,campaign_id,original['version'],request_id)=={'replayed':True}
+        if scenario=='cancel':
+            campaigns.control(PROFILE,campaign_id,original['version']+1,'stop')
+            assert campaign_worker.tick() is False
+            assert db.execute('SELECT status FROM saas_ai_media_grants WHERE id=%s::uuid',(campaign_id,))[0]['status']=='revoked'
+            assert campaigns.recover_failed_media(PROFILE,campaign_id,original['version'],request_id)=={'replayed':True}
+            assert downloaded.await_count==1
+            return
+        assert campaign_worker.tick() is True
+        assert generation.call_count==3, 'recovery must not repeat the completed text call'
+        if scenario=='cap_exhausted':
+            assert downloaded.await_count==1, 'exhausted original cap blocks the retry before download or provider'
+            return
+        assert downloaded.await_count==2
+        recovery=db.execute('SELECT progress FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign_id,))[0]['progress']['failed_media_recovery']
+        child=next(iter(recovery['parents']))
+        receipt=db.execute('SELECT status,media_results FROM saas_knowledge_extractions WHERE id=%s::uuid',(child,))[0]
+        assert receipt['status']=='completed'
+        assert receipt['media_results'][0]['observations'][0]['text']=='Synthetic observation'
+        import tenant_ai_administrator_read as admin_read
+        cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[admin_read.READ_SCOPE,admin_read.CONTENT_SCOPE]}
+        with db.cursor() as cur:
+            exposed=admin_read.read(cur,cfg,'case_evidence_read',{'id':child,'include_content':True})
+        assert exposed['items'][0]['media_results'][0]['result']['observations'][0]['text']=='Synthetic observation'
+        hold_after=db.execute("SELECT id,reserved_microusd,state FROM saas_ai_spend_reservations WHERE call_key='legacy-printer-unknown'")[0]
+        assert hold_after==old_hold
+        grant=db.execute('SELECT status,cap_microusd FROM saas_ai_media_grants WHERE id=%s::uuid',(campaign_id,))[0]
+        assert grant=={'status':'completed','cap_microusd':10000000}
+        assert campaigns.recover_failed_media(PROFILE,campaign_id,original['version'],request_id)=={'replayed':True}
+        with pytest.raises(TenantLinearError,match='recovery already used'):
+            campaigns.recover_failed_media(PROFILE,campaign_id,original['version'],str(uuid.uuid4()))
     with pytest.raises(TenantLinearError,match='cannot be reset or topped up'):
         campaigns.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4())})
 

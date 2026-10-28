@@ -10,6 +10,53 @@ from tenant_knowledge_candidates_policy import MAX_TOKENS
 from tenant_linear_policy import TenantLinearError
 
 
+def recovery_child(dsn,key,request,parent_id,source_id,case_id,barrier,out):
+    import json
+    import tenant_knowledge_campaigns as campaigns
+    import tenant_case_media_admission as admission
+    import tenant_case_media_recovery as recovery
+    factory=lambda:psycopg.connect(dsn,row_factory=dict_row)
+    campaigns._connect=factory
+    route={'case_id':case_id,'message_ids':[source_id],'source_version':'a'*64}
+    recovery.approved_parent=lambda *a:{'id':parent_id,'extraction_id':parent_id,'route':route}
+    admission.plan=lambda *a,**k:{'status':'pending_consent','plan_hash':'plan',
+      'media':[{'id':source_id,'kind':'image','source_version':'a'*64,'source_hash':'hash',
+                'complete':False,'current_source_addressable':True}]}
+    def enqueue(cur,profile,campaign,route):
+        child=str(uuid.uuid5(uuid.UUID(key),parent_id))
+        cur.execute('''INSERT INTO saas_knowledge_campaign_fragments(tenant_id,campaign_id,id,source_key,route)
+          VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::jsonb) ON CONFLICT DO NOTHING''',
+          (A,key,child,'child',json.dumps(route)))
+        return child
+    campaigns.enqueue=enqueue
+    try:
+        barrier.wait(15)
+        out.put(('ok',campaigns.recover_failed_media(PROFILE,key,1,request)))
+    except Exception as error:out.put(('error',type(error).__name__,str(error)))
+
+
+def test_recovery_replay_is_single_flight_under_concurrency(campaign):
+    import json
+    d,_,_,key=campaign
+    parent_id,source_id,case_id,request=[str(uuid.uuid4()) for _ in range(4)]
+    progress={'mode':'case_media_batch','case_plans':[{'case_id':case_id,'plan_hash':'plan',
+      'media':[{'id':source_id,'kind':'image','source_hash':'hash'}]}]}
+    d.execute("UPDATE saas_knowledge_campaigns SET status='stopped',version=1,approved_at=now(),approved_by=11,max_cost_microusd=10000000,progress=%s::jsonb WHERE id=%s::uuid",(json.dumps(progress),key))
+    d.execute("INSERT INTO saas_ai_media_grants(tenant_id,id,campaign_id,created_by,cap_microusd,status,approved_by,approved_at) VALUES(%s::uuid,%s::uuid,%s::uuid,11,10000000,'completed',11,now())",(A,key,key))
+    d.execute("INSERT INTO saas_knowledge_campaign_fragments(tenant_id,campaign_id,id,source_key,route,status) VALUES(%s::uuid,%s::uuid,%s::uuid,'parent','{}'::jsonb,'partial')",(A,key,parent_id));d.commit()
+    ctx=multiprocessing.get_context('spawn');barrier=ctx.Barrier(2);out=ctx.Queue()
+    children=[ctx.Process(target=recovery_child,args=(d.dsn,key,request,parent_id,source_id,case_id,barrier,out)) for _ in range(2)]
+    for child in children:child.start()
+    for child in children:
+        child.join(30)
+        if child.is_alive():child.terminate();child.join();raise AssertionError('Recovery race timed out')
+        assert child.exitcode==0
+    results=[out.get(timeout=3) for _ in children]
+    assert all(r[0]=='ok' for r in results),results
+    assert sorted(r[1]['replayed'] for r in results)==[False,True]
+    assert d.execute("SELECT count(*) AS n FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid AND status='pending'",(key,))[0]['n']==1
+
+
 @pytest.fixture
 def campaign(database,monkeypatch):
     """Build a campaign in the disposable real PostgreSQL database used by the race tests."""
