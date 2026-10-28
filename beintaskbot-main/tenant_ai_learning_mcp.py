@@ -397,6 +397,11 @@ def _tools(cur,cfg,name,args):
                 'all_cases_snapshot_hash':args['snapshot_hash'],'max_cost_microusd':10_000_000,
                 'video_model':current.get('video_model'),'photo_model':current.get('photo_model'),
                 'acknowledge_prior_unknown':args['acknowledge_prior_unknown']})
+        if name=='support_media_campaign_recover_failed':
+            if set(args)!={'campaign_id','expected_version','request_id'}:
+                raise TenantLinearError('Invalid failed media recovery.',400)
+            result=campaigns.recover_failed_media(profile,args['campaign_id'],args['expected_version'],args['request_id'])
+            return {**result,'campaign_id':identifier(args['campaign_id'])}
         if name=='support_media_campaign_control':
             if set(args)!={'campaign_id','expected_version','action'} or args.get('action') not in {'pause','resume','stop'}:
                 raise TenantLinearError('Only pause, resume or stop is available for this media grant.',400)
@@ -822,6 +827,8 @@ def _support_media_definitions():
     security=[{'type':'oauth2','scopes':[SUPPORT_MEDIA_SCOPE]}]
     campaign_id={'campaign_id':{'type':'string','format':'uuid'}}
     return [
+      {'name':'support_media_campaign_recover_failed','description':'Explicitly continue proven pre-dispatch media failures from one completed approved campaign under the original cap. Does not retry unknown outcomes. This may start paid processing.',
+       'inputSchema':{'type':'object','properties':{**campaign_id,'expected_version':{'type':'integer','minimum':1},'request_id':{'type':'string','format':'uuid'}},'required':['campaign_id','expected_version','request_id'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':True,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_media_campaign_list','description':'List existing company campaigns and minimal approval, cap and reservation facts; use a returned ID with support_media_campaign_read. Does not start or prepare analysis.',
        'inputSchema':{'type':'object','properties':{'limit':{'type':'integer','minimum':1,'maximum':100},'before':{'type':'string','format':'uuid'}},'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_media_snapshot_preview','description':'Read a bounded case snapshot. Set acknowledge_prior_unknown=true to include one new attempt against each eligible exact current source whose earlier attempt is unknown. This does not clear old holds, download media, prepare a grant or call a provider.',
@@ -911,7 +918,7 @@ async def mcp(request):
                 commit_attempted=True
                 output=await asyncio.to_thread(_tools,None,cfg,tool_name,arguments)
                 return _tool_response(output,request_id)
-            if tool_name in {'support_case_confirm_publish','support_case_edit_publish','support_case_edit_boundaries','support_case_reject_delete','support_media_campaign_prepare','support_media_campaign_start','support_media_campaign_control','support_agent_permanent_delete'}:
+            if tool_name in {'support_case_confirm_publish','support_case_edit_publish','support_case_edit_boundaries','support_case_reject_delete','support_media_campaign_prepare','support_media_campaign_start','support_media_campaign_control','support_media_campaign_recover_failed','support_agent_permanent_delete'}:
                 # Case services commit in their own transaction; report any
                 # unexpected post-dispatch failure as unknown, never as a
                 # safe-to-repeat action.
@@ -947,7 +954,7 @@ async def mcp(request):
     except Exception:
         incident_id=secrets.token_hex(8)
         log.exception('AI Learning MCP tool failure incident=%s method=%s',incident_id,method)
-        if method=='tools/call' and (tool_name.startswith('administrator_training_') or tool_name in {'support_dialog_agent_assign','support_agent_archive_transfer','support_agent_permanent_delete','support_case_confirm_publish','support_case_edit_publish','support_case_edit_boundaries','support_case_reject_delete','support_media_campaign_prepare','support_media_campaign_start','support_media_campaign_control'}):
+        if method=='tools/call' and (tool_name.startswith('administrator_training_') or tool_name in {'support_dialog_agent_assign','support_agent_archive_transfer','support_agent_permanent_delete','support_case_confirm_publish','support_case_edit_publish','support_case_edit_boundaries','support_case_reject_delete','support_media_campaign_prepare','support_media_campaign_start','support_media_campaign_control','support_media_campaign_recover_failed'}):
             # A failed commit can have an unknown network outcome. Make that
             # explicit and require the caller to inspect the policy/request
             # receipt before retrying the same idempotency key.

@@ -10,7 +10,7 @@ from tenant_knowledge_candidates_service import analyze
 
 
 def check_fence(cur, tenant, extraction_id):
-    cur.execute('''SELECT f.status,c.status AS campaign_status,f.lease_until>now() AS live,c.sources,c.progress,c.created_by,c.approved_by,c.photo_model,f.route,e.source_refs
+    cur.execute('''SELECT f.status,c.id AS campaign_id,c.status AS campaign_status,f.lease_until>now() AS live,c.sources,c.progress,c.created_by,c.approved_by,c.photo_model,f.route,e.source_refs
       FROM saas_knowledge_campaign_fragments f JOIN saas_knowledge_campaigns c
       ON c.tenant_id=f.tenant_id AND c.id=f.campaign_id LEFT JOIN saas_knowledge_extractions e ON e.tenant_id=f.tenant_id AND e.id=f.id WHERE f.tenant_id=%s::uuid AND f.id=%s::uuid''',(tenant,extraction_id))
     row=cur.fetchone()
@@ -40,6 +40,10 @@ def check_fence(cur, tenant, extraction_id):
             case=next((item for item in expected.get('case_plans',[]) if item.get('case_id')==case_id),None)
             retry_ack=expected.get('acknowledge_prior_unknown') is True
             checked_case=plan(cur,profile,case_id,allow_unknown_retry=retry_ack)
+            from tenant_case_media_recovery import verified_recovery_parent
+            recovery=verified_recovery_parent(cur,tenant,row['campaign_id'],expected,extraction_id,row['route'])
+            if row['route'].get('retry_of') and not recovery:
+                raise TenantLinearError('Invalid failed media recovery.',409)
             retry_media=next((item for item in checked_case.get('media',[])
                 if item.get('id') in row['route'].get('message_ids',[])
                 and item.get('source_version')==row['route'].get('source_version')),None)
@@ -48,8 +52,8 @@ def check_fence(cur, tenant, extraction_id):
                 or checked_case.get('case_version')!=row['route'].get('case_version')
                 or row['route'].get('case_plan_hash')!=checked_case.get('plan_hash')
                 or not retry_media
-                or bool(row['route'].get('owner_retry_unknown')) is not bool(retry_media.get('retry_authorized'))
-                or row['route'].get('owner_retry_basis') is not None
+                or not recovery and bool(row['route'].get('owner_retry_unknown')) is not bool(retry_media.get('retry_authorized'))
+                or not recovery and row['route'].get('owner_retry_basis') is not None
                    and row['route'].get('owner_retry_basis')!=retry_media.get('retry_source_basis')):
                 raise TenantLinearError('Current case snapshot or media source changed.',409)
             expected_photo=row.get('photo_model') if retry_media and retry_media.get('kind')=='image' else None

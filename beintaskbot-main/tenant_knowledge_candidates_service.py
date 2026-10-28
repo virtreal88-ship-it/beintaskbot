@@ -68,6 +68,7 @@ def prepare(profile,data,review=None):
               JOIN saas_knowledge_campaigns c ON c.tenant_id=f.tenant_id AND c.id=f.campaign_id
               WHERE f.tenant_id=%s::uuid AND f.id=%s::uuid''',(tenant,request_id))
             campaign_source=cur.fetchone()
+            failed_media_recovery=False
             grant_id=(campaign_source or {}).get('route',{}).get('media_grant_id')
             if data.get('owner_retry_basis') and not campaign_source:
                 raise TenantLinearError('A retry basis is valid only for its server-created case campaign fragment.',403)
@@ -89,6 +90,10 @@ def prepare(profile,data,review=None):
                     raise TenantLinearError('Источники кампании изменились.',409)
                 from tenant_knowledge_campaign_worker import check_fence
                 check_fence(cur,tenant,request_id)
+                if data.get('retry_of') and (campaign_source.get('progress') or {}).get('failed_media_recovery'):
+                    from tenant_case_media_recovery import verified_recovery_parent
+                    failed_media_recovery=bool(verified_recovery_parent(cur,tenant,campaign_source['campaign_id'],campaign_source['progress'],request_id,campaign_source['route']))
+                    if not failed_media_recovery:raise TenantLinearError('Invalid failed media recovery.',409)
                 if data.get('owner_retry_unknown'):
                     progress=campaign_source.get('progress') or {}
                     grant_id=(campaign_source.get('route') or {}).get('media_grant_id')
@@ -106,6 +111,7 @@ def prepare(profile,data,review=None):
                 if any(data.get(k)!=photo_consent['route'].get(k) for k in ('message_ids','channel_id','conversation_id','source_version','analysis_agent_id','retry_of','allow_external_media','allow_paid_asr','allow_vision')):
                     raise TenantLinearError('Exact photo selection changed.',409)
             item=review['snapshot'] if review else store.snapshot(cur,profile,data)
+            item['_failed_media_recovery']=failed_media_recovery
             media_grant_id=data.get('media_grant_id')
             if any(ref.get('media_kind') for ref in item['refs']):
                 from tenant_case_media_admission import grant_for_message
@@ -245,7 +251,7 @@ def prepare(profile,data,review=None):
             # monetary authorization for ASR or vision.
             event='knowledge_extraction:'+request_id
             from tenant_ai_spend_budget import reserve as reserve_spend
-            if not photo_only:reserve_spend(cur,tenant,'extraction:'+request_id,'live_case_extraction',model,MAX_TOKENS,1800,campaign_id=grant_id)
+            if not photo_only and not failed_media_recovery:reserve_spend(cur,tenant,'extraction:'+request_id,'live_case_extraction',model,MAX_TOKENS,1800,campaign_id=grant_id)
             media_spend={}
             grant_priced=bool(grant_id)
             if (limit_microusd(tenant) or grant_priced) and data.get('allow_paid_asr'):
@@ -498,7 +504,12 @@ def analyze(profile,data,*,before_provider=None):
             from tenant_knowledge_media import collect
             stage='media'
             images,item['media_results']=collect(profile,item,check_before_ai=check_live_enabled if live_enabled is not None else None)
-        if item['route'].get('photo_model'):
+        if item.get('_failed_media_recovery'):
+            # The previous text extraction already completed. Keep only the
+            # new attachment receipt; do not call the text model a second time.
+            check_active(profile,item);check_live_enabled()
+            values=[];error=''
+        elif item['route'].get('photo_model'):
             complete_photo=(len(item.get('media_results',[]))==1 and item['media_results'][0].get('status')=='processed'
               and bool(item['media_results'][0].get('observation') or item['media_results'][0].get('observations')))
             if not complete_photo:raise TenantLinearError('Photo observation unavailable.',409)

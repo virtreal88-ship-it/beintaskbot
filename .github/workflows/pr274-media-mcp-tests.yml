@@ -82,6 +82,7 @@ jobs:
           tests/test_knowledge_candidates.py
           tests/test_case_media_coverage.py
           tests/test_case_media_admission.py
+          tests/test_case_media_recovery.py
           tests/test_knowledge_extraction_preflight.py
           tests/test_single_photo_retry.py
           tests/test_single_photo_retry_postgres.py
