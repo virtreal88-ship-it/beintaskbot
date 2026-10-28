@@ -163,8 +163,10 @@ def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id
         # explicit operator decisions and existing nonautomatic state remain
         # untouched. A later verified resolution may retry this managed state.
         if (not state or (state.get('agent_assignment_id') is None
-                and (state.get('agent_id') is None
-                     or str(state.get('reason') or '').startswith('automatic_assignment_')))):
+                and (str(state.get('reason') or '').startswith('automatic_assignment_')
+                     or state.get('reason') == 'conversation_identity_conflict'
+                     or (state.get('agent_id') is None and state.get('state') == 'active'
+                         and not state.get('reason'))))):
             cur.execute('''INSERT INTO saas_ai_conversation_state
               (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason)
               VALUES(%s::uuid,'connect',%s,%s,NULL,'paused','conversation_identity_conflict')
@@ -172,8 +174,11 @@ def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id
                 SET state='paused',reason='conversation_identity_conflict',
                     revision=saas_ai_conversation_state.revision+1,updated_at=now()
               WHERE saas_ai_conversation_state.agent_assignment_id IS NULL
-                AND (saas_ai_conversation_state.agent_id IS NULL
-                     OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%')''',
+                AND (saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%'
+                     OR saas_ai_conversation_state.reason='conversation_identity_conflict'
+                     OR (saas_ai_conversation_state.agent_id IS NULL
+                       AND saas_ai_conversation_state.state='active'
+                       AND COALESCE(saas_ai_conversation_state.reason,'')=''))''',
               (tenant,channel_id,conversation_id))
         return None, 'conversation_identity_conflict'
     cur.execute('''SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid

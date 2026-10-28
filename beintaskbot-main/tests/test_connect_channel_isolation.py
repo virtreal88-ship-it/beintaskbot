@@ -373,6 +373,16 @@ def test_operator_manual_pause_is_not_reassigned_or_resumed(channels):
     f['send'].assert_not_called();f['generate'].assert_not_called()
 
 
+def test_identity_conflict_preserves_operator_no_agent_reason(channels):
+    f=channels;db=f['db']
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='paused',reason='operator_manual_pause',agent_assignment_id=NULL WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA));db.commit()
+    from tenant_connect_direct_identity import record_conflict
+    with db.cursor() as cur:record_conflict(cur,A,CA,'client','client',{},'identity-conflict-event')
+    db.commit()
+    state=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert state=={'agent_id':None,'state':'paused','reason':'operator_manual_pause'}
+
+
 def test_assignment_reconciler_retries_no_candidate_and_preserves_manual_no_agent(channels):
     f=channels;db=f['db']
     db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,'later',44)",(A,CA))

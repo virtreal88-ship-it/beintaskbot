@@ -166,6 +166,9 @@ def record_conflict(cur, tenant, channel, canonical, original, data, event_id):
             SET state='paused',reason='conversation_identity_conflict',
                 revision=saas_ai_conversation_state.revision+1,updated_at=now()
           WHERE saas_ai_conversation_state.agent_assignment_id IS NULL
-            AND (saas_ai_conversation_state.agent_id IS NULL
-              OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%')''',
+            AND (saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%'
+              OR saas_ai_conversation_state.reason='conversation_identity_conflict'
+              OR (saas_ai_conversation_state.agent_id IS NULL
+                AND saas_ai_conversation_state.state='active'
+                AND COALESCE(saas_ai_conversation_state.reason,'')=''))''',
           (tenant,channel,identity,tenant,channel,identity))
