@@ -20,8 +20,34 @@
     audio.addEventListener?.('ended',()=>{sync();range.value='0';});range.oninput=()=>{if(Number.isFinite(audio.duration)&&audio.duration>0)audio.currentTime=Number(range.value)/1000*audio.duration;};
     wrap.append(play,range,clock,audio);return {node:wrap,media:audio};
   }
+  let photoViewer=null;
+  function closePhotoViewer(fromNavigation=false){
+    const viewer=photoViewer;if(!viewer)return;if(!fromNavigation&&history.state?.operatorPhotoViewer===viewer.token){history.back();return;}photoViewer=null;
+    window.removeEventListener('popstate',viewer.pop);document.removeEventListener('keydown',viewer.key,true);
+    viewer.dialog.remove();if(viewer.origin.isConnected)viewer.origin.focus();
+  }
+  function openPhotoViewer(origin){
+    closePhotoViewer(true);
+    const dialog=document.createElement('div'),stage=document.createElement('div'),image=document.createElement('img'),close=document.createElement('button');
+    const lang=window.tenantI18n?.language||'ru',labels={ru:['Закрыть фото','Увеличить фото','Уменьшить фото'],az:['Şəkli bağla','Şəkli böyüt','Şəkli kiçilt'],en:['Close photo','Zoom in','Zoom out']}[lang]||['Close photo','Zoom in','Zoom out'];
+    dialog.className='operator-photo-viewer';dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-label',text('photo','Chat photo'));
+    stage.className='operator-photo-stage';image.className='operator-photo-image';image.src=origin.src;image.alt=origin.alt;image.tabIndex=0;image.setAttribute('role','button');image.setAttribute('aria-label',labels[1]);
+    close.type='button';close.className='operator-photo-close';close.textContent='×';close.setAttribute('aria-label',labels[0]);
+    stage.append(image);dialog.append(stage,close);document.body.append(dialog);
+    let zoomed=false,drag=null,suppress=false;
+    const toggle=()=>{if(suppress){suppress=false;return;}if(!zoomed){const rect=image.getBoundingClientRect();image.style.width=`${Math.max(1,rect.width)*2}px`;image.style.height=`${Math.max(1,rect.height)*2}px`;stage.classList.add('is-zoomed');zoomed=true;stage.scrollLeft=(stage.scrollWidth-stage.clientWidth)/2;stage.scrollTop=(stage.scrollHeight-stage.clientHeight)/2;}else{image.style.width='';image.style.height='';stage.classList.remove('is-zoomed');zoomed=false;stage.scrollLeft=stage.scrollTop=0;}image.setAttribute('aria-label',labels[zoomed?2:1]);};
+    image.addEventListener('click',toggle);image.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();toggle();}});
+    stage.addEventListener('pointerdown',event=>{if(!zoomed||event.target!==image||event.pointerType==='touch'||event.button!==0)return;drag={x:event.clientX,y:event.clientY,left:stage.scrollLeft,top:stage.scrollTop,moved:false};image.setPointerCapture?.(event.pointerId);});
+    stage.addEventListener('pointermove',event=>{if(!drag)return;const dx=event.clientX-drag.x,dy=event.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>5)drag.moved=true;if(drag.moved){stage.scrollLeft=drag.left-dx;stage.scrollTop=drag.top-dy;event.preventDefault();}});
+    const finish=()=>{if(drag?.moved){suppress=true;setTimeout(()=>{suppress=false;},0);}drag=null;};stage.addEventListener('pointerup',finish);stage.addEventListener('pointercancel',finish);
+    const token=String(Date.now())+Math.random();const pop=()=>closePhotoViewer(true),key=event=>{if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();closePhotoViewer();}else if(event.key==='Tab'){event.preventDefault();event.stopImmediatePropagation();(document.activeElement===close?image:close).focus();}};
+    photoViewer={dialog,origin,token,pop,key};history.pushState({...history.state,operatorPhotoViewer:token},'',location.href);window.addEventListener('popstate',pop);document.addEventListener('keydown',key,true);
+    close.onclick=()=>closePhotoViewer();stage.onclick=event=>{if(event.target===stage)closePhotoViewer();};close.focus();
+  }
+  const viewerStyle=document.createElement('style');viewerStyle.textContent=`.operator-photo-viewer{position:fixed;inset:0;z-index:25000;background:#000e;display:flex;align-items:stretch;justify-content:stretch;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}.operator-photo-stage{width:100%;height:100%;overflow:auto;display:flex;align-items:center;justify-content:center;touch-action:pan-x pan-y pinch-zoom;overscroll-behavior:contain}.operator-photo-stage.is-zoomed{display:block;cursor:grab}.operator-photo-stage.is-zoomed:active{cursor:grabbing}.operator-photo-image{display:block;max-width:100%;max-height:100%;object-fit:contain;cursor:zoom-in}.operator-photo-stage.is-zoomed .operator-photo-image{max-width:none;max-height:none;margin:auto;cursor:zoom-out}.operator-photo-image:focus-visible,.operator-photo-close:focus-visible{outline:3px solid white;outline-offset:3px}.operator-photo-close{position:absolute;right:max(8px,env(safe-area-inset-right));top:max(8px,env(safe-area-inset-top));width:44px;height:44px;border:0;border-radius:50%;background:#222c;color:white;font-size:28px;line-height:1}`;document.head?.append(viewerStyle);
   const stop=media=>{if(media&&['AUDIO','VIDEO'].includes(media.tagName))media.pause?.();};
   function clear(dropCache=false){
+    if(photoViewer){if(history.state?.operatorPhotoViewer===photoViewer.token){const state={...history.state};delete state.operatorPhotoViewer;history.replaceState(state,'',location.href);}closePhotoViewer(true);}
     epoch++;
     active.forEach(controller=>controller.abort());active.clear();
     urls.forEach(url=>URL.revokeObjectURL(url));urls.clear();previews.forEach(preview=>stop(preview.media));previews.clear();
@@ -80,7 +106,7 @@
           blobUrl=URL.createObjectURL(blob);urls.add(blobUrl);
           const type=blob.type.split(';')[0],expected=host.dataset.mediaKind;if(expected==='image'&&!type.startsWith('image/'))throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));if(expected==='audio'&&!type.startsWith('audio/')&&type!=='application/ogg')throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));if(expected==='video'&&!type.startsWith('video/'))throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));let node,media;
           if(['image/jpeg','image/png','image/webp','image/gif'].includes(type)){
-            node=document.createElement('img');if(node.dataset)node.dataset.mediaPreview='image';node.className='operator-media-preview';node.alt=text('photo','Chat photo');node.title=text('openOriginal','Open original');node.onclick=()=>node.classList?.toggle('is-expanded');media=node;
+            node=document.createElement('img');if(node.dataset)node.dataset.mediaPreview='image';node.className='operator-media-preview';node.alt=text('photo','Chat photo');node.title=text('openOriginal','Open original');node.tabIndex=0;node.setAttribute?.('role','button');node.onclick=()=>openPhotoViewer(node);node.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();openPhotoViewer(node);}};media=node;
           }else if(type.startsWith('audio/')||type==='application/ogg'){
             ({node,media}=audioPlayer(blobUrl,host.dataset.mediaDuration));
           }else if(['video/mp4','video/webm'].includes(type)){

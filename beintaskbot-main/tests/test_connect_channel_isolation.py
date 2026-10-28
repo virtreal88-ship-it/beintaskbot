@@ -82,6 +82,26 @@ def test_dialog_unread_counts_are_persistent_route_scoped_and_inbound_only(chann
         dialogs.mark_read({'tenant_id':B,'telegram_id':22},{'provider':'connect','lead_id':41,'channel_id':CA,'conversation_id':'client','message_id':latest})
 
 
+def test_read_snapshot_uses_insertion_order_and_keeps_later_arrivals_unread(channels):
+    f=channels;db=f['db']
+    f['incoming'](CA,'baseline')
+    dialogs.listing(PROFILE)
+    f['incoming'](CA,'newer provider time')
+    f['incoming'](CA,'late import')
+    db.execute("UPDATE saas_crm_messages SET happened_at=clock_timestamp()-interval '1 day' WHERE tenant_id=%s::uuid AND body='late import'",(A,))
+    db.commit()
+    page=dialogs.history(PROFILE,'connect',41,CA,'client')
+    late=db.execute("SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND body='late import'",(A,))[0]['id']
+    assert page['read_through_message_id']==late
+    assert page['messages'][-1]['id']!=late
+    f['incoming'](CA,'arrived after snapshot')
+    dialogs.mark_read(PROFILE,{'provider':'connect','lead_id':41,'channel_id':CA,'conversation_id':'client','message_id':page['read_through_message_id']})
+    assert dialogs.listing(PROFILE,channel='connect:'+CA)['unread_count']==1
+    # Delayed older read responses cannot rewind a cursor.
+    dialogs.mark_read(PROFILE,{'provider':'connect','lead_id':41,'channel_id':CA,'conversation_id':'client','message_id':page['messages'][-1]['id']})
+    assert dialogs.listing(PROFILE,channel='connect:'+CA)['unread_count']==1
+
+
 def test_unread_isolated_by_channel_and_filter_does_not_change_sidebar_total(channels):
     f=channels;f['incoming'](CA,'first');f['incoming'](CB,'second')
     dialogs.listing(PROFILE)
