@@ -153,3 +153,19 @@ def record_conflict(cur, tenant, channel, canonical, original, data, event_id):
           VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)
           ON CONFLICT(tenant_id,connect_channel_id,conversation_id,event_id) DO NOTHING''',
           (tenant,channel,identity,event_id,evidence))
+        # A dialog may already have received an automatic ownership
+        # placeholder before a later provider assertion proves its identity
+        # ambiguous. Surface the quarantine on that managed placeholder as
+        # well. Explicit operator decisions remain untouched.
+        cur.execute('''INSERT INTO saas_ai_conversation_state
+          (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason)
+          SELECT %s::uuid,'connect',%s,%s,NULL,'paused','conversation_identity_conflict'
+          WHERE EXISTS(SELECT 1 FROM saas_connect_conversations
+            WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s)
+          ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE
+            SET state='paused',reason='conversation_identity_conflict',
+                revision=saas_ai_conversation_state.revision+1,updated_at=now()
+          WHERE saas_ai_conversation_state.agent_assignment_id IS NULL
+            AND (saas_ai_conversation_state.agent_id IS NULL
+              OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%')''',
+          (tenant,channel,identity,tenant,channel,identity))
