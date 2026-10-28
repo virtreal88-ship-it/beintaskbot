@@ -153,22 +153,31 @@ def record_conflict(cur, tenant, channel, canonical, original, data, event_id):
           VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)
           ON CONFLICT(tenant_id,connect_channel_id,conversation_id,event_id) DO NOTHING''',
           (tenant,channel,identity,event_id,evidence))
-        # A dialog may already have received an automatic ownership
-        # placeholder before a later provider assertion proves its identity
-        # ambiguous. Surface the quarantine on that managed placeholder as
-        # well. Explicit operator decisions remain untouched.
-        cur.execute('''INSERT INTO saas_ai_conversation_state
-          (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason)
-          SELECT %s::uuid,'connect',%s,%s,NULL,'paused','conversation_identity_conflict'
-          WHERE EXISTS(SELECT 1 FROM saas_connect_conversations
-            WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s)
-          ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE
-            SET state='paused',reason='conversation_identity_conflict',
-                revision=saas_ai_conversation_state.revision+1,updated_at=now()
-          WHERE saas_ai_conversation_state.agent_assignment_id IS NULL
-            AND (saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%'
-              OR saas_ai_conversation_state.reason='conversation_identity_conflict'
-              OR (saas_ai_conversation_state.agent_id IS NULL
-                AND saas_ai_conversation_state.state='active'
-                AND COALESCE(saas_ai_conversation_state.reason,'')=''))''',
-          (tenant,channel,identity,tenant,channel,identity))
+        state_ids={identity}
+        # An explicit owner merge overlays the source identity onto a
+        # canonical conversation. Fence both state rows when either side is
+        # contradicted, while keeping the alias/evidence ledger unchanged.
+        from tenant_connect_owner_identity import active_link
+        owner_link=active_link(cur,tenant,channel,identity)
+        if owner_link:
+            state_ids.update((owner_link.get('canonical_id'),owner_link.get('source_id')))
+        for state_id in sorted(str(value) for value in state_ids if value):
+            # A dialog may already have received an automatic ownership
+            # placeholder before a later provider assertion proves its identity
+            # ambiguous. Surface the quarantine on that managed placeholder as
+            # well. Explicit operator decisions remain untouched.
+            cur.execute('''INSERT INTO saas_ai_conversation_state
+              (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason)
+              SELECT %s::uuid,'connect',%s,%s,NULL,'paused','conversation_identity_conflict'
+              WHERE EXISTS(SELECT 1 FROM saas_connect_conversations
+                WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s)
+              ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE
+                SET state='paused',reason='conversation_identity_conflict',
+                    revision=saas_ai_conversation_state.revision+1,updated_at=now()
+              WHERE saas_ai_conversation_state.agent_assignment_id IS NULL
+                AND (saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%'
+                  OR saas_ai_conversation_state.reason='conversation_identity_conflict'
+                  OR (saas_ai_conversation_state.agent_id IS NULL
+                    AND saas_ai_conversation_state.state='active'
+                    AND COALESCE(saas_ai_conversation_state.reason,'')=''))''',
+              (tenant,channel,state_id,tenant,channel,state_id))
