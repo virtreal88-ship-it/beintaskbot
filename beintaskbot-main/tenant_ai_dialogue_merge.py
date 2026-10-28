@@ -25,6 +25,8 @@ def ensure_schema(conn):
     from tenant_connect_transport import _schema
     _schema(conn)
     with conn.cursor() as cur:
+        from tenant_connect_owner_identity import schema as owner_identity_schema
+        owner_identity_schema(cur)
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_dialogue_merges(
           id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
           pair_id TEXT NOT NULL, channel_id UUID NOT NULL,
@@ -77,8 +79,12 @@ def _pairs(cur,cfg):
     tenant,actor=_owner(cur,cfg); channel=str(uuid.UUID(str(cfg['AI_LEARNING_MCP_CHANNEL_ID'])))
     from tenant_connect_identity import inventory
     scanned=inventory(cur,tenant,channel);routes=scanned['routes']
+    from tenant_connect_owner_identity import merge_proofs
+    owner_proofs=merge_proofs(cur,tenant,channel)
+    owner_keys={(p['canonical_id'],p['split_id']) for p in owner_proofs}
+    proofs=[p for p in scanned['pairs'] if (p['canonical_id'],p['split_id']) not in owner_keys]+owner_proofs
     items=[]
-    for proof in scanned['pairs']:
+    for proof in proofs:
         jid,lid=proof['canonical_id'],proof['split_id'];receipts=proof['receipts']
         left,right=routes.get(jid),routes.get(lid)
         reasons=list(proof['conflicts'])
@@ -122,6 +128,10 @@ def _pairs(cur,cfg):
               'canonical_lead_id':int(left['lead_id']) if left else None,
               'split_lead_id':int(right['lead_id']) if right else None,
               'dependency_counts':dependency_counts,'retains_source_rows':True}
+        if proof.get('owner_assertion_id'):
+            item['identity_source']='owner_assertion'
+            item['assertion_id']=proof['owner_assertion_id']
+            item['eligible']=False  # Re-merge requires a fresh explicit assertion.
         item['precondition']=_token(cfg,'dialogue-precondition',pair_id,state,identity_digest,
                                     item['canonical']['n'],item['split']['n'],snapshot_digest)
         if state=='merged':
@@ -204,7 +214,8 @@ def execute(cur,cfg,args):
     from tenant_connect_dialog_equivalence import lock as lock_equivalence
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('dialogue-merge:'+tenant+':'+channel,))
     scan=inventory(cur,tenant,channel)
-    proof=next((p for p in scan['pairs'] if hmac.compare_digest(_token(cfg,'dialogue-pair',tenant,channel,p['canonical_id'],p['split_id']),pair_id)),None)
+    from tenant_connect_owner_identity import merge_proofs
+    proof=next((p for p in scan['pairs']+merge_proofs(cur,tenant,channel) if hmac.compare_digest(_token(cfg,'dialogue-pair',tenant,channel,p['canonical_id'],p['split_id']),pair_id)),None)
     if proof: lock_equivalence(cur,tenant,channel,[proof['canonical_id'],proof['split_id']])
     tenant,actor,channel,items=_pairs(cur,cfg)
     replay=_request(cur,tenant,request_id,operation,pair_id,precondition)
@@ -260,6 +271,10 @@ def execute(cur,cfg,args):
         if existing['snapshot'].get('route_equivalence_version')==1:
             from tenant_connect_dialog_equivalence import rollback
             rollback(cur,tenant,channel,pair_id)
+        if existing['snapshot'].get('identity_source')=='owner_assertion':
+            cur.execute('''UPDATE saas_connect_owner_identity_assertions SET revoked_by=%s,revoked_at=now()
+              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND id=%s::uuid AND revoked_at IS NULL''',
+              (actor,tenant,channel,existing['snapshot']['assertion_id']))
         cur.execute('''UPDATE saas_ai_dialogue_merges SET state='rolled_back',rolled_back_by=%s,rolled_back_at=now()
           WHERE tenant_id=%s::uuid AND pair_id=%s''',(actor,tenant,pair_id))
         result={'pair_id':pair_id,'state':'rolled_back','logical_only':True,'preserved_message_ids':True,'idempotent_replay':False}
@@ -273,7 +288,8 @@ def execute(cur,cfg,args):
 def definitions():
     read={'type':'object','properties':{'pair_id':{'type':'string','pattern':'^[0-9a-f]{64}$'},'search':{'type':'string','maxLength':100}},'additionalProperties':False}
     write={'type':'object','properties':{'operation':{'type':'string','enum':['merge','rollback']},'pair_id':{'type':'string','pattern':'^[0-9a-f]{64}$'},'precondition':{'type':'string','pattern':'^[0-9a-f]{64}$'},'request_id':{'type':'string','format':'uuid'}},'required':['operation','pair_id','precondition','request_id'],'additionalProperties':False}
+    from tenant_connect_owner_identity import definitions as owner_definitions
     return [
       {'name':'whatsapp_dialogue_duplicate_candidates','description':'Owner-scoped full-channel direct WhatsApp identity inventory with optional search. Reports provider-confirmed aliases and blocked heuristic candidates, route/lead IDs, aggregate counts and conflicts; never phone/JID/LID, text, names, or media. Only eligible provider-proven pairs may be merged.', 'inputSchema':read,'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':['ai_learning.read']}]},
       {'name':'whatsapp_dialogue_merge','description':'Owner-delegated reversible logical merge for one freshly previewed, provider-proven direct pair. It never rewrites messages, attachments, timestamps, attribution, cases, CRM or WhatsApp; groups and ambiguous identities fail closed.', 'inputSchema':write,'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[MERGE_SCOPE]}]},
-    ]
+    ]+owner_definitions(MERGE_SCOPE)

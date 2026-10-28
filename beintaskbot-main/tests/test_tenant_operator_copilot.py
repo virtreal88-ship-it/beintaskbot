@@ -9,12 +9,40 @@ from tenant_operator_copilot import INSTRUCTIONS, _bounded_conversation, _clean,
 from tenant_chat_ai_provider import ChatAIProviderError
 
 
+@pytest.fixture(autouse=True)
+def identity_policy_boundary(monkeypatch):
+    # These are Copilot unit tests with positional SQL mocks. Identity policy
+    # has its own real-PostgreSQL coverage; its internal reads must not consume
+    # the mocked integration/usage rows intended for Copilot.
+    monkeypatch.setattr('tenant_connect_identity.conflicted',Mock(return_value=False))
+
+
 def request(**overrides):
     value={'provider':'connect','lead_id':17,'channel_id':str(uuid.uuid4()),
            'conversation_id':'dialog-1','mode':'reply','prompt':'',
            'request_id':str(uuid.uuid4())}
     value.update(overrides)
     return value
+
+
+def test_identity_conflict_blocks_copilot_before_settings_media_or_generation(monkeypatch):
+    tenant=str(uuid.uuid4());actor=22
+    conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
+    cur=conn.cursor.return_value.__enter__.return_value
+    monkeypatch.setattr(copilot,'_connect',lambda:conn)
+    monkeypatch.setattr(copilot,'ensure_schema',Mock())
+    monkeypatch.setattr(copilot,'access',Mock(return_value=(tenant,actor,SimpleNamespace(can_use_chat_ai=lambda:True))))
+    monkeypatch.setattr(copilot,'assert_route',Mock(return_value={'lead_id':17}))
+    conflict=Mock(return_value=True)
+    monkeypatch.setattr('tenant_connect_identity.conflicted',conflict)
+    generated=Mock();media=Mock()
+    monkeypatch.setattr(copilot,'generate',generated)
+    monkeypatch.setattr(copilot,'_prepare_copilot_media',media)
+    command=request()
+    with pytest.raises(TenantLinearError) as caught:copilot.run({'tenant_id':tenant,'telegram_id':actor},command)
+    assert caught.value.status==409
+    conflict.assert_called_once_with(cur,tenant,command['channel_id'],command['conversation_id'])
+    generated.assert_not_called();media.assert_not_called();cur.execute.assert_not_called()
 
 
 def test_copilot_accepts_only_explicit_connect_actions_and_bounded_prompt():
@@ -43,7 +71,7 @@ def test_reply_context_resolves_open_customer_question_instead_of_closing_conver
         'copilot_enabled':True,'copilot_model':'dedicated-copilot-model','daily_limit':100,'copilot_daily_limit':8},'updated_at':'v1'}
     conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
     cur=conn.cursor.return_value.__enter__.return_value
-    cur.fetchone.side_effect=[None,connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
+    cur.fetchone.side_effect=[connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
     transcript=[
         {'external_id':'m1','direction':'incoming','body':'Sifariş hazır olacaq?','message_type':'text','happened_at':'1'},
         {'external_id':'m2','direction':'outgoing','body':'Yoxlayıb məlumat verəcəyəm.','message_type':'text','happened_at':'2'},
@@ -100,7 +128,7 @@ def test_copilot_uses_its_own_model_and_never_sends_a_message(monkeypatch):
         'updated_at':'v1'}
     conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
     cur=conn.cursor.return_value.__enter__.return_value
-    cur.fetchone.side_effect=[None,connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
+    cur.fetchone.side_effect=[connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
     cur.fetchall.side_effect=[[
         {'external_id':'m1','direction':'incoming','body':'Salam','message_type':'text','happened_at':'now'}
     ],[]]
@@ -127,7 +155,7 @@ def test_provider_failure_logs_only_allowlisted_metadata(monkeypatch):
         'copilot_enabled':True,'copilot_model':'gpt-4o-mini','daily_limit':100,'copilot_daily_limit':8},'updated_at':'v1'}
     conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
     cur=conn.cursor.return_value.__enter__.return_value
-    cur.fetchone.side_effect=[None,connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
+    cur.fetchone.side_effect=[connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
     cur.fetchall.side_effect=[[{'external_id':'m1','direction':'incoming','body':'private customer text','message_type':'text','happened_at':'now'}],[]]
     monkeypatch.setattr(copilot,'_connect',lambda:conn);monkeypatch.setattr(copilot,'ensure_schema',Mock())
     monkeypatch.setattr(copilot,'access',Mock(return_value=(tenant,actor,SimpleNamespace(can_use_chat_ai=lambda:True))))
@@ -236,7 +264,7 @@ def test_reply_with_voice_photo_and_open_question_passes_confirmed_media_to_one_
         'copilot_model':'vision-model','daily_limit':100,'copilot_daily_limit':8},'updated_at':'v1'}
     conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
     cur=conn.cursor.return_value.__enter__.return_value
-    cur.fetchone.side_effect=[None,connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
+    cur.fetchone.side_effect=[connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
     transcript=[
         {'external_id':'voice-1','direction':'incoming','body':'Printer label does not print; error appears.',
          'message_type':'voice','raw':{'voice_transcription':{'status':'completed'}},'happened_at':'1'},

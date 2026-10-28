@@ -533,6 +533,12 @@ def _tools(cur,cfg,name,args):
     if name=='whatsapp_dialogue_merge':
         if DIALOGUE_MERGE_SCOPE not in set(cfg.get('granted_scopes') or []): raise TenantLinearError('Additional OAuth scope required.',403)
         return dialogue_merge.execute(cur,cfg,args)
+    if name in {'whatsapp_dialogue_owner_merge_preview','whatsapp_dialogue_owner_merge'}:
+        from tenant_connect_owner_identity import preview as owner_preview,execute as owner_execute
+        required=TOOL_SCOPE if name.endswith('_preview') else DIALOGUE_MERGE_SCOPE
+        if required not in set(cfg.get('granted_scopes') or []):
+            raise TenantLinearError('Additional OAuth scope required.',403)
+        return (owner_preview if name.endswith('_preview') else owner_execute)(cur,cfg,args)
     if name=='administrator_training_sources':
         return administrator_approvals.training_sources(cur,cfg,args)
     if name=='administrator_training_owner_drafts':
@@ -934,6 +940,9 @@ async def mcp(request):
                 # Serialize the whole response before any write is committed.
                 # An encoder exception therefore remains rollback-safe.
                 response=_tool_response(output,request_id)
+                if tool_name=='whatsapp_dialogue_owner_merge':
+                    commit_attempted=True
+                    conn.commit()
                 if tool_name.startswith(direct_reconcile.PREFIX):
                     commit_attempted=True
                     conn.commit()

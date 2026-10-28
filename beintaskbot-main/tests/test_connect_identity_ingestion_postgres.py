@@ -459,3 +459,158 @@ def test_crm_outbound_record_retry_does_not_repeat_takeover(ingest,channels,monk
     for _ in range(2):
         transport.record_outbound(A,route['lead_id'],transport_route,'same reply','stable-client-message-id')
     mark.assert_called_once()
+
+
+def owner_merge_fixture(ingest,channels):
+    import tenant_connect_owner_identity as owner
+    import tenant_ai_dialogue_merge as merge
+    from test_connect_dialog_equivalence import cfg
+    db=channels['db'];merge.ensure_schema(db);db.commit()
+    originals=[event(JID),event(LID)]
+    for payload in originals:assert ingest(payload)
+    routes={r['conversation_id']:r for r in direct_routes(db)}
+    db.execute('''UPDATE saas_connect_conversations SET manual_hold=TRUE,ai_enabled=FALSE
+      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=ANY(%s::text[])''',(A,CA,[JID,LID]))
+    db.commit()
+    arguments={'canonical_lead_id':routes[JID]['lead_id'],'source_lead_id':routes[LID]['lead_id'],
+               'phone':'+'+JID.split('@')[0],'evidence_ref':'test:exact-owner-confirmation-ingestion'}
+    with db.cursor() as cur:
+        item=owner.preview(cur,cfg(),arguments)
+        assert item['eligible'],item
+        result=owner.execute(cur,cfg(),{**arguments,'precondition':item['precondition'],
+                    'confirm':True,'request_id':str(uuid.uuid4())})
+    db.commit()
+    return routes,result,originals
+
+
+def test_owner_redirect_never_becomes_provider_phone_or_employee_proof(ingest,channels):
+    from tenant_connect_phone_evidence import collect
+    from test_connect_dialog_equivalence import cfg
+    import tenant_ai_dialogue_merge as merge
+    db=channels['db'];routes,result,originals=owner_merge_fixture(ingest,channels)
+    aliases=db.execute('SELECT * FROM saas_connect_direct_identities ORDER BY identity_key');db.commit()
+    db.execute('''INSERT INTO saas_tenant_member_whatsapp_numbers
+      (tenant_id,telegram_id,phone_digits,recognition_enabled,created_by)
+      VALUES(%s::uuid,11,%s,TRUE,11)''',(A,JID.split('@')[0]));db.commit()
+    later=event(LID,type='image',_crm_provider_conversation_id=JID,
+                _crm_owner_assertion_id='forged-owner-assertion')
+    assert ingest(later) and ingest(later)
+    for original in originals:assert ingest(original)
+    stored=db.execute('SELECT * FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',
+                      (A,'connect:'+later['data']['id']))[0]
+    assert stored['kommo_lead_id']==routes[JID]['lead_id']
+    assert stored['raw']['_crm_provider_conversation_id']==LID
+    assert stored['raw']['_crm_owner_assertion_id']==result['assertion_id']
+    assert 'verified_employee_id' not in stored['raw']
+    deal=db.execute('SELECT phone FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s',
+                    (A,routes[JID]['lead_id']))[0]
+    assert deal['phone']==JID.split('@')[0]  # Missing LID phone cannot erase the canonical contact's phone.
+    assert not db.execute('''SELECT 1 FROM saas_crm_native_contact_conversations WHERE tenant_id=%s::uuid
+      AND channel_id=%s::uuid AND conversation_id=%s''',(A,CA,LID))
+    with db.cursor() as cur:
+        assert collect(cur,A,CA)['phones_by_identity'][LID]==set()
+        source=next(r for r in merge.preview(cur,cfg(),{})['routes'] if r['lead_id']==routes[LID]['lead_id'])
+        assert source['provider_phone_proven'] is False
+    assert db.execute('SELECT * FROM saas_connect_direct_identities ORDER BY identity_key')==aliases
+    db.commit()
+    listed=[r for r in dialogs.listing(PROFILE)['dialogs'] if r['lead_id'] in {x['lead_id'] for x in routes.values()}]
+    assert len(listed)==1
+    history=dialogs.history(PROFILE,'connect',routes[LID]['lead_id'],CA,LID)['messages']
+    assert len(history)==3
+    image=next(m for m in history if m['external_id']=='connect:'+later['data']['id'])
+    assert image['source_conversation_id']==JID  # authorised CRM route; provider media route remains in raw
+    # Resolver coverage below is exercised by the retained-media suite; the
+    # server-owned provider marker is asserted here at the ingestion boundary.
+
+
+def test_owner_merge_genuine_pair_then_rollback_keeps_provider_evidence_and_late_history(ingest,channels):
+    import tenant_ai_dialogue_merge as merge
+    from tenant_connect_phone_evidence import collect
+    from test_connect_dialog_equivalence import cfg,command
+    db=channels['db'];routes,result,originals=owner_merge_fixture(ingest,channels)
+    later=event(LID,pair=PAIR)
+    assert ingest(later)
+    assert ingest(later)
+    with db.cursor() as cur:
+        assert collect(cur,A,CA)['phones_by_identity'][LID]=={JID.split('@')[0]}
+        item=merge.preview(cur,cfg(),{'pair_id':result['pair_id']})['items'][0]
+    aliases=db.execute('SELECT * FROM saas_connect_direct_identities ORDER BY identity_key')
+    messages=db.execute('SELECT * FROM saas_crm_messages ORDER BY id');db.commit()
+    with db.cursor() as cur:rolled=merge.execute(cur,cfg(),command(item,'rollback'))
+    db.commit()
+    assert rolled['state']=='rolled_back'
+    assert db.execute('SELECT * FROM saas_connect_direct_identities ORDER BY identity_key')==aliases
+    assert db.execute('SELECT * FROM saas_crm_messages ORDER BY id')==messages
+    with db.cursor() as cur:assert collect(cur,A,CA)['phones_by_identity'][LID]=={JID.split('@')[0]}
+    db.commit()
+
+
+def test_retained_source_history_prevents_repeated_first_inquiry(ingest,channels,monkeypatch):
+    db=channels['db'];routes,result,originals=owner_merge_fixture(ingest,channels)
+    # Explicit local synthetic resume. A merge itself must never resume AI.
+    db.execute("UPDATE saas_crm_messages SET direction='outgoing' WHERE tenant_id=%s::uuid AND kommo_lead_id=%s",(A,routes[JID]['lead_id']))
+    db.execute('''UPDATE saas_connect_conversations SET manual_hold=FALSE,ai_enabled=TRUE
+      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s''',(A,CA,JID))
+    db.commit();monkeypatch.setenv('AI_AGENTS_ENABLED','true')
+    later=event(LID)
+    assert ingest(later)
+    saved=db.execute("SELECT payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND payload->>'message_id'=%s",(A,later['data']['id']))
+    assert len(saved)==1
+    assert saved[0]['payload']['first_inquiry'] is False
+    assert not channels['send'].called and not channels['generate'].called
+    db.commit()
+
+
+@pytest.mark.parametrize('replay',[False,True])
+def test_owner_merge_new_provider_contradiction_quarantines_both_routes(ingest,channels,replay):
+    from tenant_connect_identity import conflicted
+    db=channels['db'];routes,result,originals=owner_merge_fixture(ingest,channels)
+    bad=event(LID,pair={'jid':'994700000092@s.whatsapp.net','lid':LID})
+    if replay:bad['data']['id']=originals[1]['data']['id'];bad['id']=originals[1]['id']
+    assert ingest(bad) and ingest(bad)
+    with db.cursor() as cur:
+        assert conflicted(cur,A,CA,JID) and conflicted(cur,A,CA,LID)
+    db.commit()
+    listed=[r for r in dialogs.listing(PROFILE)['dialogs'] if r['lead_id']==routes[JID]['lead_id']]
+    assert len(listed)==1 and listed[0]['agent_status_reason']=='conversation_identity_conflict'
+    assert not channels['send'].called and not channels['generate'].called
+
+
+@pytest.mark.parametrize('scenario',['lid_first','phone_first'])
+def test_actual_connect_dispatcher_signed_fixtures_reach_one_worker_dialogue(channels,monkeypatch,scenario):
+    """Fixture produced by Connect normalizer/store/WebhookDispatcher, not a
+    handwritten approximation of the cross-repository protocol."""
+    from pathlib import Path
+    from tenant_connect_api import webhook_handler
+    from tenant_connect_phone_evidence import collect
+    fixture=json.loads((Path(__file__).parent/'fixtures/connect_identity_signed.json').read_text())
+    journey=next(f for f in fixture['fixtures'] if f['scenario']==scenario)
+    db=channels['db'];channel=journey['channelId'];pair=fixture['pair']
+    db.execute('INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,%s)',
+               (A,channel,'Synthetic Connect fixture'))
+    secret=transport._fernet().encrypt(json.dumps({'api_key':'synthetic','webhook_secret':'synthetic-fixture-secret'}).encode())
+    db.execute("UPDATE saas_tenant_integrations SET secrets=%s WHERE tenant_id=%s::uuid AND provider='connect'",(secret,A));db.commit()
+    monkeypatch.setenv('AI_AGENTS_ENABLED','false');monkeypatch.setenv('AI_SIMULATION_ENABLED','false')
+    handler=webhook_handler(Mock())
+    class Request:
+        def __init__(self,signed):
+            self.body=signed['body'].encode();self.headers={'x-connect-signature-256':signed['signature']}
+        async def read(self):return self.body
+    for signed in journey['signed']:
+        assert asyncio.run(handler(Request(signed))).status==200
+    routes=db.execute('''SELECT conversation_id,lead_id FROM saas_connect_conversations
+      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid''',(A,channel))
+    assert len(routes)==1 and routes[0]['conversation_id']==journey['canonical']
+    with db.cursor() as cur:assert collect(cur,A,channel)['phones_by_identity'][journey['canonical']]=={pair['jid'].split('@')[0]}
+    db.commit()
+    listed=[r for r in dialogs.listing(PROFILE)['dialogs'] if r['channel_id']==channel]
+    assert len(listed)==1
+    history=dialogs.history(PROFILE,'connect',routes[0]['lead_id'],channel,journey['canonical'])['messages']
+    unique={s['event']['data']['id'] for s in journey['signed']}
+    assert len(history)==len(unique)==4
+    assert {m['external_id'] for m in history}=={'connect:'+i for i in unique}
+    rows=db.execute('SELECT raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND channel=%s',(A,'connect:'+channel))
+    assert any(r['raw'].get('directIdentitySource')=='persisted_provider_alias' for r in rows)
+    assert all(not r['raw'].get('conversationIdentityConflict') for r in rows)
+    assert not channels['send'].called and not channels['generate'].called
+    db.commit()

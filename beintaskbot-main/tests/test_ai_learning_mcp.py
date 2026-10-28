@@ -153,6 +153,7 @@ def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, 
             listed=await client.post('/mcp/ai-learning',json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
             definitions={item['name']:item for item in (await listed.json())['result']['tools']}
             assert {'whatsapp_dialogue_duplicate_candidates','whatsapp_dialogue_merge',
+                    'whatsapp_dialogue_owner_merge_preview','whatsapp_dialogue_owner_merge',
                     'support_dialog_agent_options','support_dialog_agent_assign','support_cases_list',
                     'support_case_detail','support_case_confirm_publish','support_case_edit_publish',
                     'support_case_edit_boundaries','support_case_reject_delete','support_case_delete_status','support_agents_list',
@@ -160,6 +161,8 @@ def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, 
             assert {'support_media_snapshot_preview','support_media_campaign_prepare','support_media_campaign_read','support_media_campaign_list',
                     'support_media_campaign_start','support_media_campaign_control'} <= set(definitions)
             assert definitions['support_media_campaign_list']['securitySchemes']==[{'type':'oauth2','scopes':[mcp.SUPPORT_MEDIA_SCOPE]}]
+            assert definitions['whatsapp_dialogue_owner_merge']['securitySchemes']==[{'type':'oauth2','scopes':[mcp.DIALOGUE_MERGE_SCOPE]}]
+            assert definitions['whatsapp_dialogue_owner_merge_preview']['annotations']['readOnlyHint'] is True
             assert definitions['support_media_campaign_list']['annotations']['readOnlyHint'] is True
             assert definitions['support_media_campaign_recover_failed']['securitySchemes']==[{'type':'oauth2','scopes':[mcp.SUPPORT_MEDIA_SCOPE]}]
             assert definitions['support_media_campaign_recover_failed']['annotations']['destructiveHint'] is True

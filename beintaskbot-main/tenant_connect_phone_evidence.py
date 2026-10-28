@@ -133,7 +133,7 @@ def collect(cur, tenant, channel, routes=None):
         route = str(row['conversation_id'])
         if raw.get('channelId') not in (None, channel):
             continue
-        current = raw.get('originalConversationId') or raw.get('conversationId')
+        current = raw.get('_crm_provider_conversation_id') or raw.get('originalConversationId') or raw.get('conversationId')
         route_matches = raw.get('conversationId') == route or current == route
         if not route_matches:
             continue
@@ -167,7 +167,10 @@ def collect(cur, tenant, channel, routes=None):
             link(*pair, 'signed_direct_identity', reference,
                  conflict=raw.get('conversationIdentityConflict') is True)
             receipt_phones.add(normalize_phone_jid(pair[0]))
-        for identity in (raw.get('conversationId'), current):
+        # conversationId may be a CRM redirect chosen by the owner. Only the
+        # original provider identity is a signed fact for such receipts.
+        identities=(current,) if raw.get('_crm_provider_conversation_id') else (raw.get('conversationId'),current)
+        for identity in identities:
             if normalize_phone_jid(identity):
                 add(identity, 'signed_phone_jid', reference)
                 receipt_phones.add(normalize_phone_jid(identity))
