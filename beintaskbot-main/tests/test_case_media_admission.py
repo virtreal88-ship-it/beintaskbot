@@ -645,6 +645,20 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
 
     generation=Mock(return_value=(json.dumps({'cards':[]}),{'input_tokens':20,'output_tokens':10,'total_tokens':30}))
     monkeypatch.setattr(service,'generate',generation)
+    from unittest.mock import AsyncMock
+    from test_connect_images import PNG
+    import tenant_knowledge_media_cache as media_cache
+    actual_collect=media_service.collect
+    downloaded=AsyncMock(return_value=(PNG,'image/png'))
+    monkeypatch.setattr(media_service,'download_media',downloaded)
+    monkeypatch.setattr(media_service,'load',lambda *_:{'provider':'connect','route':{'channel_id':CA,'conversation_id':'client'},'row':{'message_type':'image'}})
+    def synthetic_observe(profile,item,ref,content,mime,origin,*args,**kwargs):
+        assert content==PNG and mime=='image/png'
+        assert media_cache._batch_retry_fingerprint(item,'a'*64,'vision',ref)[2]['message_id']==ref['id']
+        item['vision_attempts']=1
+        item['vision_usage']=[{'input_tokens':100,'output_tokens':20,'total_tokens':120}]
+        return 'Synthetic observation',item['vision_usage'][0],True
+    monkeypatch.setattr(media_cache,'observe_once',synthetic_observe)
     dispatched=[];collect_entries=[]
     def collect(_profile,item,check_before_ai=None):
         collect_entries.append(item)
@@ -672,6 +686,8 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
         item['vision_usage']=[usage for _ in range(calls)]
         expected=next(m['source_version'] for m in acknowledged['cases'][0]['media'] if m['id']==message_id)
         dispatched.append((message_id,route.get('owner_retry_unknown') is True,item['refs'][0].get('media_version'),expected))
+        if route.get('owner_retry_unknown'):
+            return actual_collect(_profile,item,check_before_ai=check_before_ai)
         return [],[{'id':message_id,'kind':media_kind,'status':'partial' if media_kind=='video' else 'processed',
           'code':'vision_observation','observation':'Synthetic observation'}]
     monkeypatch.setattr(media_service,'collect',collect)
@@ -695,6 +711,7 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
     assert all(actual==expected for _,_,actual,expected in dispatched)
     assert sum(retry for _,retry,_,_ in dispatched)==1 and any(message_id==ids[0] and retry for message_id,retry,_,_ in dispatched)
     assert generation.call_count==3
+    assert downloaded.await_count==1
     configured=db.execute("SELECT metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'",(A,))[0]['metadata']
     assert configured['model']=='test-model' and configured['photo_model']==photo_model
     assert db.execute('SELECT model FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))[0]['model']=='test-model'
