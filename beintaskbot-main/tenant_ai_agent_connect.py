@@ -68,7 +68,9 @@ def _bind_unique_connect_candidate(cur, tenant, channel_id, conversation_id, row
         # but its default/previous paused or human state is never resumed.
         lock_group(cur, tenant, conversation_id)
         existing = read_group(cur, tenant, conversation_id)
-        if existing.get('assignments') or existing.get('state') == 'human':
+        if (existing.get('assignments') or existing.get('state') == 'human'
+                or (existing and existing.get('reason') not in {
+                    'group_assignment_required', 'automatic_assignment_pending'})):
             return None, 'group_assignment_preserved'
         agent, reason = unique_connect_candidate(rows, channel_id, is_group=True)
         if not agent:
@@ -82,12 +84,13 @@ def _bind_unique_connect_candidate(cur, tenant, channel_id, conversation_id, row
         from tenant_platform import _json
         assignment = [{'agent_id': str(agent['id']), 'channel_id': str(channel_id), 'priority': 0}]
         cur.execute('''INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,assignments,reason)
-          VALUES(%s::uuid,%s,%s::jsonb,'operator_agent_assigned') ON CONFLICT(tenant_id,provider,group_jid) DO NOTHING''',
+          VALUES(%s::uuid,%s,%s::jsonb,'automatic_assignment_pending') ON CONFLICT(tenant_id,provider,group_jid) DO NOTHING''',
           (tenant, conversation_id, _json(assignment)))
-        cur.execute('''UPDATE saas_ai_group_coordination SET assignments=%s::jsonb,reason='operator_agent_assigned',
+        cur.execute('''UPDATE saas_ai_group_coordination SET assignments=%s::jsonb,reason='automatic_assignment_pending',
           revision=revision+1,updated_at=now()
           WHERE tenant_id=%s::uuid AND provider='connect' AND group_jid=%s
-            AND state='paused' AND assignments='[]'::jsonb RETURNING revision''',
+            AND state='paused' AND assignments='[]'::jsonb
+            AND reason IN ('group_assignment_required','automatic_assignment_pending') RETURNING revision''',
           (_json(assignment), tenant, conversation_id))
         return (agent, '') if cur.fetchone() else (None, 'group_assignment_preserved')
 
@@ -118,13 +121,147 @@ def _bind_unique_connect_candidate(cur, tenant, channel_id, conversation_id, row
     return (agent, '') if cur.fetchone() else (None, 'existing_agent_preserved')
 
 
+def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id):
+    """Bind one eligible direct dialog without enabling AI execution.
+
+    This reconciliation is deliberately independent of company AI/send flags,
+    the server execution flag, agent mode and schedule. Those decide whether a
+    job may run; enabled + exact channel scope decide who owns a dialog.
+    Explicit operator assignments (including an explicit no-agent choice),
+    Human/Pause, identity quarantine and inactive routes are immutable here.
+    """
+    from tenant_ai_dialog_scope import lock_dialog
+    from tenant_ai_agent_access import tenant_status_allows_ai
+    from tenant_connect_identity import conflicted
+
+    channel_id = channel_scope('connect', channel_id)
+    conversation_id = str(conversation_id or '')
+    if not conversation_id:
+        return None, 'invalid_conversation'
+    from tenant_ai_group_coordination import group_jid
+    if group_jid(conversation_id):
+        return None, 'group_requires_coordinator'
+    lock_dialog(cur, tenant, 'connect', channel_id, conversation_id)
+    cur.execute('''SELECT t.status,ch.active,
+        EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=t.id
+          AND i.provider='connect' AND i.status='connected') AS connected,
+        NOT ai_legacy_blocked(t.id,ch.connect_channel_id::text,%s) AS unambiguous
+      FROM saas_tenants t JOIN saas_connect_channels ch ON ch.tenant_id=t.id
+        AND ch.connect_channel_id=%s::uuid
+      WHERE t.id=%s::uuid''', (conversation_id, channel_id, tenant))
+    route = cur.fetchone() or {}
+    if (not route.get('active') or not route.get('connected') or not route.get('unambiguous')
+            or not tenant_status_allows_ai(route.get('status'), 'connect')):
+        return None, 'connect_assignment_route_blocked'
+    cur.execute('''SELECT agent_id,state,reason,agent_assignment_id FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+        AND conversation_id=%s FOR UPDATE''', (tenant, channel_id, conversation_id))
+    state = cur.fetchone()
+    if conflicted(cur, tenant, channel_id, conversation_id):
+        # A late contradiction can invalidate an earlier automatic placeholder.
+        # Retain its binding for audit, pause it and expose the safety reason;
+        # explicit operator decisions and existing nonautomatic state remain
+        # untouched. A later verified resolution may retry this managed state.
+        if (not state or (state.get('agent_assignment_id') is None
+                and (str(state.get('reason') or '').startswith('automatic_assignment_')
+                     or state.get('reason') == 'conversation_identity_conflict'
+                     or (state.get('agent_id') is None and state.get('state') == 'active'
+                         and not state.get('reason'))))):
+            cur.execute('''INSERT INTO saas_ai_conversation_state
+              (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason)
+              VALUES(%s::uuid,'connect',%s,%s,NULL,'paused','conversation_identity_conflict')
+              ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE
+                SET state='paused',reason='conversation_identity_conflict',
+                    revision=saas_ai_conversation_state.revision+1,updated_at=now()
+              WHERE saas_ai_conversation_state.agent_assignment_id IS NULL
+                AND (saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%'
+                     OR saas_ai_conversation_state.reason='conversation_identity_conflict'
+                     OR (saas_ai_conversation_state.agent_id IS NULL
+                       AND saas_ai_conversation_state.state='active'
+                       AND COALESCE(saas_ai_conversation_state.reason,'')=''))''',
+              (tenant,channel_id,conversation_id))
+        return None, 'conversation_identity_conflict'
+    cur.execute('''SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid
+      AND connect_channel_id=%s::uuid AND conversation_id=%s''', (tenant, channel_id, conversation_id))
+    if not cur.fetchone():
+        return None, 'conversation_identity_conflict'
+    if state and (state.get('agent_id') or state.get('agent_assignment_id')
+                  or state.get('state') == 'human'
+                  or (state.get('state') == 'paused'
+                      and str(state.get('reason') or '') != 'conversation_identity_conflict'
+                      and not str(state.get('reason') or '').startswith('automatic_assignment_'))):
+        return None, 'explicit_or_existing_state_preserved'
+
+    cur.execute('''SELECT id,name,role,scopes,enabled,mode,schedule FROM saas_ai_agents
+      WHERE tenant_id=%s::uuid AND archived_at IS NULL AND role='primary'
+      ORDER BY created_at,id''', (tenant,))
+    agents = [dict(row) for row in cur.fetchall()]
+    agent, reason = unique_connect_candidate(agents, channel_id)
+    if not agent:
+        durable_reason = ('automatic_assignment_agent_selection_required'
+                          if reason == 'agent_selection_required'
+                          else 'automatic_assignment_no_eligible_agent')
+        cur.execute('''INSERT INTO saas_ai_conversation_state
+          (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason)
+          VALUES(%s::uuid,'connect',%s,%s,NULL,'paused',%s)
+          ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE
+            SET state='paused',reason=EXCLUDED.reason,revision=saas_ai_conversation_state.revision+1,updated_at=now()
+          WHERE saas_ai_conversation_state.agent_id IS NULL
+            AND saas_ai_conversation_state.agent_assignment_id IS NULL
+            AND (saas_ai_conversation_state.state='active'
+                 OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%'
+                 OR saas_ai_conversation_state.reason='conversation_identity_conflict')
+          ''', (tenant, channel_id, conversation_id, durable_reason))
+        return None, reason
+
+    cur.execute('''INSERT INTO saas_ai_conversation_state
+      (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason)
+      VALUES(%s::uuid,'connect',%s,%s,%s::uuid,'paused','automatic_assignment_pending')
+      ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE
+        SET agent_id=EXCLUDED.agent_id,state='paused',reason='automatic_assignment_pending',
+            revision=saas_ai_conversation_state.revision+1,updated_at=now()
+      WHERE saas_ai_conversation_state.agent_id IS NULL
+        AND saas_ai_conversation_state.agent_assignment_id IS NULL
+        AND (saas_ai_conversation_state.state='active'
+             OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%'
+             OR saas_ai_conversation_state.reason='conversation_identity_conflict')
+      RETURNING agent_id''', (tenant, channel_id, conversation_id, agent['id']))
+    return (agent, '') if cur.fetchone() else (None, 'explicit_or_existing_state_preserved')
+
+
+def reconcile_tenant_connect_assignments(cur, tenant, channel_ids=None):
+    """Retry safe assignment for all current direct Connect routes in scope."""
+    params = [tenant]
+    channel_filter = ''
+    if channel_ids is not None:
+        ids = [str(value) for value in channel_ids if str(value)]
+        if not ids:
+            return {'checked': 0, 'assigned': 0}
+        channel_filter = ' AND c.connect_channel_id::text=ANY(%s::text[])'
+        params.append(ids)
+    cur.execute('''SELECT c.connect_channel_id::text AS channel_id,c.conversation_id
+      FROM saas_connect_conversations c JOIN saas_connect_channels ch
+        ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id
+      JOIN saas_tenant_integrations i ON i.tenant_id=c.tenant_id AND i.provider='connect'
+        AND i.status='connected'
+      WHERE c.tenant_id=%s::uuid AND ch.active=TRUE
+        AND c.conversation_kind IS DISTINCT FROM 'group'
+        AND c.conversation_id NOT LIKE '%%@g.us' ''' + channel_filter +
+      ' ORDER BY c.connect_channel_id,c.conversation_id', tuple(params))
+    rows = cur.fetchall()
+    assigned = 0
+    for row in rows:
+        agent, _reason = reconcile_unassigned_connect_dialog(
+            cur, tenant, row['channel_id'], row['conversation_id'])
+        assigned += int(agent is not None)
+    return {'checked': len(rows), 'assigned': assigned}
+
+
 def _auto_assign_group_from_inbound(cur, tenant, channel_id, conversation_id):
     """Record a unique group primary without activating the group or queueing AI."""
     from tenant_ai_group_coordination import group_jid
     if not group_jid(conversation_id):
         return None, 'invalid_group'
-    if not runtime_flag('AI_AGENTS_ENABLED'):
-        return None, 'ai_agents_server_disabled'
     cur.execute('''SELECT t.status,s.enabled,s.auto_send_enabled,s.emergency_stop,ch.active,
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=t.id
           AND i.provider='connect' AND i.status='connected') AS connected,
@@ -136,7 +273,6 @@ def _auto_assign_group_from_inbound(cur, tenant, channel_id, conversation_id):
     gate = cur.fetchone() or {}
     from tenant_ai_agent_access import tenant_status_allows_ai
     if (not gate.get('active') or not gate.get('connected') or not gate.get('unambiguous')
-            or gate.get('enabled') is not True or gate.get('emergency_stop') is True
             or not tenant_status_allows_ai(gate.get('status'), 'connect')):
         return None, 'connect_admission_blocked'
     cur.execute('''SELECT a.id,a.name,a.role,a.scopes,a.enabled,a.mode,a.schedule
@@ -260,10 +396,21 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 previous = (cur.fetchone() or {}).get('payload') or {}
                 if previous.get('channel_id') != channel_id or previous.get('conversation_id') != conversation_id:
                     raise ValueError('Connect event scope mismatch')
+                if not group_fence:
+                    # Old releases could persist a skipped event before its
+                    # automatic binding. A safe webhook replay is another
+                    # durable reconciliation opportunity, without reopening
+                    # the event or creating a job.
+                    reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id)
                 if connection is None:
                     conn.commit()
                 return 0
             if not allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel_id,'conversation_id':conversation_id,'lead_id':lead_id,'event_fingerprint':fingerprint}, connection=conn):
+                if not group_fence:
+                    # Persist ownership even when runtime/send gates are off.
+                    # The reconciler stores a paused binding and never queues,
+                    # resumes or sends a reply.
+                    reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id)
                 reason = ('ai_agents_server_disabled' if not runtime_flag('AI_AGENTS_ENABLED') else
                           'company_mode_not_active' if settings.get('operating_mode') not in (None,'active') else
                           'company_ai_disabled' if settings.get('enabled') is not True else
@@ -282,7 +429,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             # Existing bindings always win. If this is an unassigned personal
             # dialogue, persist a unique scoped agent before considering the
             # execution mode; binding itself never creates an AI job.
-            cur.execute('''SELECT agent_id,state,agent_assignment_id FROM saas_ai_conversation_state
+            cur.execute('''SELECT agent_id,state,reason,agent_assignment_id FROM saas_ai_conversation_state
               WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
                 AND conversation_id=%s FOR UPDATE''',
                 (tenant, channel_id, conversation_id))
@@ -295,7 +442,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 selected, _selection_reason = unique_connect_candidate(tenant_agents, channel_id)
                 if selected:
                     _bind_unique_connect_candidate(cur, tenant, channel_id, conversation_id, tenant_agents)
-                    cur.execute('''SELECT agent_id,state,agent_assignment_id FROM saas_ai_conversation_state
+                    cur.execute('''SELECT agent_id,state,reason,agent_assignment_id FROM saas_ai_conversation_state
                       WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
                         AND conversation_id=%s''', (tenant,channel_id,conversation_id))
                     bound=cur.fetchone()
@@ -339,6 +486,26 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 if connection is None:
                     conn.commit()
                 return queued
+            # A prior reconciliation may have left a newly resolved binding
+            # paused while company/runtime admission was off. Only this fresh
+            # inbound path, after all company, global, agent-mode and schedule
+            # gates above admit an automatic candidate, may activate that
+            # specific automatic placeholder. Explicit operator Pause/Human
+            # and manual-agent assignments never match this reason.
+            if (bound and str(bound.get('agent_id') or '') == str(agents[0]['id'])
+                    and bound.get('state') == 'paused'
+                    and bound.get('reason') == 'automatic_assignment_pending'):
+                cur.execute('''UPDATE saas_ai_conversation_state SET state='active',reason='',
+                    revision=revision+1,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+                    AND conversation_id=%s AND agent_id=%s::uuid
+                    AND state='paused' AND reason='automatic_assignment_pending'
+                  RETURNING state,reason''', (tenant,channel_id,conversation_id,agents[0]['id']))
+                resumed = cur.fetchone()
+                if not resumed:
+                    if connection is None:
+                        conn.commit()
+                    return 0
             # ``new_inquiry`` must mean the first customer message actually
             # stored for this Connect conversation, not merely the first
             # event received after an agent happened to be configured.  The

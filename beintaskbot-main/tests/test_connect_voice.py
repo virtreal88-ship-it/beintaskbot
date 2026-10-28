@@ -397,11 +397,13 @@ class VoiceBoundaries(unittest.TestCase):
     def test_duplicate_signed_webhook_does_not_queue_again(self):
         conn, cur = self.connection([{'auto_send_enabled':True}, None, {'payload':{'channel_id':CHANNEL,'conversation_id':JOB['conversation_id']}}])
         with patch.object(adapter, '_connect', return_value=conn), patch.object(adapter, 'ensure_schema'), \
-             patch.object(adapter, 'allowed') as allowed:
+             patch.object(adapter, 'allowed') as allowed, \
+             patch.object(adapter, 'reconcile_unassigned_connect_dialog') as reconcile:
             count = adapter.enqueue(TENANT, channel_id=CHANNEL, conversation_id=JOB['conversation_id'],
                                     lead_id=12, message_id=MESSAGE, event_id='event-2', text='', message_type='audio')
         self.assertEqual(count, 0)
         allowed.assert_not_called()
+        reconcile.assert_called_once()
 
 
 @unittest.skipUnless(shutil.which('ffmpeg'), 'ffmpeg required for real decoder tests')

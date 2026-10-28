@@ -518,6 +518,13 @@ def _configure_locked(profile: dict, payload: dict, callback_url: str) -> dict:
                   VALUES(%s::uuid,%s::uuid,%s,%s,TRUE) ON CONFLICT(tenant_id,connect_channel_id) DO UPDATE
                   SET name=EXCLUDED.name,status=EXCLUDED.status,active=TRUE,updated_at=now()''',
                             (tenant, str(channel['id']), str(channel.get('name') or ''), str(channel.get('status') or '')))
+            # Reconnect/configuration is a durable retry point for old imported
+            # conversations. This assigns only unique enabled in-scope agents;
+            # the reconciler leaves every result paused and queues no AI work.
+            cur.execute("SELECT to_regclass('saas_ai_agents') IS NOT NULL AS available")
+            if (cur.fetchone() or {}).get('available'):
+                from tenant_ai_agent_connect import reconcile_tenant_connect_assignments
+                reconcile_tenant_connect_assignments(cur, tenant, requested | already_active)
         conn.commit()
     if old_id and old_id != str(hook.get('id') or '') and old_key:
         try:

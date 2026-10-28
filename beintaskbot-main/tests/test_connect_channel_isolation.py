@@ -1,5 +1,6 @@
 """Channel isolation across the actual SQL queue/worker; no external messages."""
 import asyncio
+import hashlib
 import json
 import uuid
 from unittest.mock import Mock
@@ -318,6 +319,133 @@ def test_ambiguous_agents_are_not_bound_or_queued(channels):
     assert db.execute("SELECT error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND provider='connect' ORDER BY received_at DESC LIMIT 1",(A,))[0]['error_code']=='agent_selection_required'
     assert db.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND channel_id=%s",(A,CB))==[]
     f['send'].assert_not_called()
+
+
+def test_disabled_ai_still_reconciles_one_scoped_agent_without_activation(channels,monkeypatch):
+    f=channels;db=f['db']
+    reconciled=[]
+    original=connect.reconcile_unassigned_connect_dialog
+    def track(*args,**kwargs):
+        result=original(*args,**kwargs);reconciled.append(result);return result
+    monkeypatch.setattr(connect,'reconcile_unassigned_connect_dialog',track)
+    db.execute("UPDATE saas_ai_agent_settings SET enabled=FALSE,auto_send_enabled=FALSE WHERE tenant_id=%s::uuid",(A,));db.commit()
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='active',reason='' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))
+    db.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id='client' AND channel_id=%s",(A,CA));db.commit()
+    assert db.execute("SELECT enabled,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]=={'enabled':False,'auto_send_enabled':False}
+    assert not connect.allowed({'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':'client'})
+    assert not connect.allowed({'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':'client'},connection=db)
+    _mid,queued=f['incoming'](CA,'must not run')
+    assert reconciled and reconciled[0][0]['id']==AGENT
+    assert queued==0
+    state=db.execute("SELECT agent_id,state,reason,agent_assignment_id FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert state=={'agent_id':AGENT,'state':'paused','reason':'automatic_assignment_pending','agent_assignment_id':None}
+    assert not rows(f,'saas_ai_agent_jobs')
+    assert not rows(f,'saas_ai_agent_runs')
+    assert db.execute("SELECT enabled,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]=={'enabled':False,'auto_send_enabled':False}
+    f['send'].assert_not_called();f['generate'].assert_not_called()
+
+
+def test_gated_assignment_joins_existing_active_runtime_on_later_inbound(channels):
+    f=channels;db=f['db']
+    db.execute("UPDATE saas_ai_agent_settings SET enabled=FALSE,auto_send_enabled=FALSE WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='active',reason='' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))
+    db.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s",(A,CA));db.commit()
+    assert f['incoming'](CA,'while disabled')[1]==0
+    pending=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert pending=={'agent_id':AGENT,'state':'paused','reason':'automatic_assignment_pending'}
+    db.execute("UPDATE saas_ai_agent_settings SET enabled=TRUE,auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,));db.commit()
+    assert connect.allowed({'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':'client','lead_id':41},connection=db)
+    assert f['incoming'](CA,'after active gates')[1]==1
+    live=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert live=={'agent_id':AGENT,'state':'active','reason':''}
+    assert len(rows(f,'saas_ai_agent_jobs'))==1
+    f['send'].assert_not_called()
+
+
+def test_operator_manual_pause_is_not_reassigned_or_resumed(channels):
+    f=channels;db=f['db']
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='paused',reason='operator_manual_pause',agent_assignment_id=NULL WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA));db.commit()
+    db.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s",(A,CA));db.commit()
+    assert f['incoming'](CA,'respect manual pause')[1]==0
+    state=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert state=={'agent_id':None,'state':'paused','reason':'operator_manual_pause'}
+    assert not rows(f,'saas_ai_agent_jobs')
+    f['send'].assert_not_called();f['generate'].assert_not_called()
+
+
+def test_identity_conflict_preserves_operator_no_agent_reason(channels):
+    f=channels;db=f['db']
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='paused',reason='operator_manual_pause',agent_assignment_id=NULL WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA));db.commit()
+    from tenant_connect_direct_identity import record_conflict
+    with db.cursor() as cur:record_conflict(cur,A,CA,'client','client',{},'identity-conflict-event')
+    db.commit()
+    state=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert state=={'agent_id':None,'state':'paused','reason':'operator_manual_pause'}
+
+
+def test_assignment_reconciler_retries_no_candidate_and_preserves_manual_no_agent(channels):
+    f=channels;db=f['db']
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,'later',44)",(A,CA))
+    db.execute("UPDATE saas_ai_agents SET scopes='[]'::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));db.commit()
+    assert connect.reconcile_unassigned_connect_dialog(db.cursor(),A,CA,'later')[1]=='no_eligible_agent'
+    missing=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='later'",(A,CA))[0]
+    assert missing=={'agent_id':None,'state':'paused','reason':'automatic_assignment_no_eligible_agent'}
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT))
+    assert connect.reconcile_unassigned_connect_dialog(db.cursor(),A,CA,'later')[0]['id']==AGENT
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,agent_assignment_id=%s::uuid,state='paused',reason='operator_agent_unassigned' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='later'",(str(uuid.uuid4()),A,CA));db.commit()
+    assert connect.reconcile_unassigned_connect_dialog(db.cursor(),A,CA,'later')[1]=='explicit_or_existing_state_preserved'
+    saved=db.execute("SELECT agent_id,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='later'",(A,CA))[0]
+    assert saved=={'agent_id':None,'reason':'operator_agent_unassigned'}
+
+
+def test_company_settings_save_reconciles_old_direct_routes_without_queueing(channels):
+    f=channels;db=f['db']
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='active',reason='' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))
+    db.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s",(A,CA))
+    db.execute("UPDATE saas_ai_agent_settings SET enabled=FALSE,auto_send_enabled=FALSE WHERE tenant_id=%s::uuid",(A,));db.commit()
+    agents.save_settings(PROFILE,{'max_replies_per_chat':60})
+    db.commit()
+    state=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert state=={'agent_id':AGENT,'state':'paused','reason':'automatic_assignment_pending'}
+    assert not rows(f,'saas_ai_agent_jobs')
+    assert db.execute("SELECT enabled,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]=={'enabled':False,'auto_send_enabled':False}
+
+
+def test_agent_save_reconciles_each_channel_under_its_own_scope(channels):
+    f=channels;db=f['db']
+    db.execute("UPDATE saas_ai_agent_settings SET enabled=FALSE,auto_send_enabled=FALSE WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='active',reason='' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))
+    db.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect'",(A,));db.commit()
+    version=db.execute("SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]['version'];db.commit()
+    agents.save_agent(PROFILE,{'name':'Night support updated','expected_version':version},agent_id=AGENT)
+    db.commit()
+    assigned={r['channel_id']:r['agent_id'] for r in db.execute("SELECT channel_id,agent_id FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id IN (%s,%s)",(A,CA,CB))}
+    assert assigned=={CA:AGENT,CB:AGENT2}
+    assert not rows(f,'saas_ai_agent_jobs')
+    assert db.execute("SELECT enabled,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]=={'enabled':False,'auto_send_enabled':False}
+
+
+def test_replayed_old_skipped_event_repairs_binding_without_requeue(channels):
+    f=channels;db=f['db'];mid='legacy-skipped-event'
+    fingerprint=hashlib.sha256(('connect:'+mid).encode()).hexdigest()
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='active',reason='' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))
+    db.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s",(A,CA))
+    db.execute("UPDATE saas_ai_agent_settings SET enabled=FALSE,auto_send_enabled=FALSE WHERE tenant_id=%s::uuid",(A,))
+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,external_id,event_type,payload,state,error_code) VALUES(%s::uuid,%s,'connect',%s,'incoming_message',%s::jsonb,'skipped','company_ai_disabled')",(A,fingerprint,mid,json.dumps({'channel_id':CA,'conversation_id':'client'})))
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type) VALUES(%s::uuid,%s::uuid,41,%s,'incoming',%s,'old','text')",(str(uuid.uuid4()),A,'connect:'+mid,'connect:'+CA));db.commit()
+    assert connect.enqueue(A,channel_id=CA,conversation_id='client',lead_id=41,message_id=mid,event_id=mid,text='old')==0
+    state=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert state=={'agent_id':AGENT,'state':'paused','reason':'automatic_assignment_pending'}
+    assert not rows(f,'saas_ai_agent_jobs')
+
+
+def test_reconcile_ties_do_not_pick_by_order_or_cross_channel(channels):
+    f=channels;db=f['db']
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,'tie',45)",(A,CA))
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT2));db.commit()
+    assert connect.reconcile_unassigned_connect_dialog(db.cursor(),A,CA,'tie')[1]=='agent_selection_required'
+    assert db.execute("SELECT agent_id,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='tie'",(A,CA))[0]=={'agent_id':None,'reason':'automatic_assignment_agent_selection_required'}
+    assert connect.reconcile_unassigned_connect_dialog(db.cursor(),B,CA,'tie')[1]=='connect_assignment_route_blocked'
 
 
 def test_read_only_deployment_audit_counts_ambiguity_and_invalid_provenance(channels):
