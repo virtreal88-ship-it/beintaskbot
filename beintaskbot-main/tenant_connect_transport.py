@@ -201,6 +201,13 @@ def _schema(conn) -> None:
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY(tenant_id,connect_channel_id,conversation_id)
         )''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_identity_conflict_events (
+          tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+          connect_channel_id UUID NOT NULL, conversation_id TEXT NOT NULL,event_id TEXT NOT NULL,
+          evidence JSONB NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,connect_channel_id,conversation_id,event_id))''')
+        from tenant_connect_dialog_equivalence import schema as equivalence_schema
+        equivalence_schema(cur)
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_webhook_events (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE, event_id TEXT NOT NULL,
           received_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,event_id))''')
@@ -721,6 +728,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active=TRUE', (tenant, channel_id))
             if not cur.fetchone():
                 return False
+            data={k:v for k,v in data.items() if k!='_crm_provider_conversation_id'}
             original_conversation = conversation
             conversation, identity_conflict = _canonical_direct_conversation(
                 cur, tenant, channel_id, conversation, data, metadata)
@@ -734,7 +742,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 # Preserve both signed provider facts for recovery/audit while
                 # routing all new inbound and outbound receipts to one route.
                 data = {**data, 'originalConversationId': original_conversation,
-                        'conversationId': conversation}
+                        '_crm_provider_conversation_id':original_conversation,'conversationId': conversation}
             lock_dialog(cur, tenant, 'connect', channel_id, conversation)
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
             inserted_event = bool(cur.fetchone())
@@ -802,7 +810,9 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     cur.execute('''SELECT id,author_name,raw,kommo_lead_id,channel FROM saas_crm_messages
                       WHERE tenant_id=%s::uuid AND external_id=%s''', (tenant,external))
                     stored = cur.fetchone()
-                if stored and (stored.get('kommo_lead_id') != lead_id or stored.get('channel') != 'connect:' + channel_id):
+                from tenant_connect_dialog_equivalence import lead_members
+                if stored and (stored.get('channel') != 'connect:' + channel_id or
+                               stored.get('kommo_lead_id') not in lead_members(cur,tenant,channel_id,lead_id)):
                     raise ConnectWebhookError('message_scope_conflict', 'Connect message scope mismatch.', 409)
                 # A malformed outbound event with ``fromMe:false`` is kept as
                 # an observable outbound record, but cannot take over a chat.
@@ -874,11 +884,17 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             # The CRM copy, dedup receipt and AI admission commit together.
             # A failed queue write rolls back the webhook, so Connect can retry.
             if accepted and queued_payload:
-                cur.execute("SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND kommo_lead_id=%s AND channel=%s AND direction='incoming'",
-                            (tenant, 'connect:' + queued_payload[4], queued_payload[3], 'connect:' + channel_id))
+                from tenant_connect_dialog_equivalence import lead_members
+                cur.execute("SELECT id,kommo_lead_id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s AND direction='incoming'",
+                            (tenant, 'connect:' + queued_payload[4], lead_members(cur,tenant,channel_id,queued_payload[3]), 'connect:' + channel_id))
                 source_message=cur.fetchone()
                 if not source_message:
                     raise ConnectWebhookError('message_scope_conflict', 'Connect message scope mismatch.', 409)
+                if source_message.get('kommo_lead_id',queued_payload[3]) != queued_payload[3]:
+                    # A pre-merge replay retains its original receipt and must
+                    # not create new AI/case work on the canonical route.
+                    conn.commit()
+                    return accepted
             if (not outbound and message_inserted and not ai_origin and employee is None
                     and not uncertain_origin and not control_replayed):
                 # Reuse the existing SaaS CRM notice outbox, push subscriptions and worker.
@@ -932,7 +948,9 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
 
 def connect_route(cur, tenant: str, lead_id: int, *, historical_read: bool = False) -> dict | None:
     active_gate=(" AND (ch.active=TRUE OR ch.status IN ('disconnected','disabled'))"
-                 if historical_read else ' AND ch.active=TRUE')
+                 if historical_read else ''' AND ch.active=TRUE AND NOT EXISTS(SELECT 1 FROM saas_connect_dialog_links dl
+                   WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.connect_channel_id
+                     AND dl.source_id=c.conversation_id AND dl.active)''')
     cur.execute('''SELECT c.connect_channel_id,c.conversation_id,i.secrets FROM saas_connect_conversations c
       JOIN saas_tenant_integrations i ON i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected'
       JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id'''+active_gate+'''

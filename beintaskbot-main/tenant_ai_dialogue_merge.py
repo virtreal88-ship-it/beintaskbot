@@ -3,8 +3,8 @@
 This module deliberately does not rewrite CRM rows.  A merge is an auditable
 overlay between two existing direct WhatsApp routes: message IDs, attachments,
 timestamps, operator attribution and all historical case references therefore
-remain exactly where they were recorded.  A later reader may opt into the
-mapping; normal ingestion, sending and AI admission never do.
+remain exactly where they were recorded.  Canonical routing and timeline readers use an explicit retained-route mapping;
+source messages, media routes and CRM references remain independently addressable.
 """
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ MERGE_SCOPE = 'ai_learning.dialogue_merge'
 
 
 def ensure_schema(conn):
+    from tenant_connect_transport import _schema
+    _schema(conn)
     with conn.cursor() as cur:
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_dialogue_merges(
           id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -63,7 +65,7 @@ def _owner(cur,cfg):
     actor=int(cfg['actor_id'])
     cur.execute('''SELECT m.role,m.active,t.status FROM saas_tenant_members m
       JOIN saas_tenants t ON t.id=m.tenant_id
-      WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR UPDATE OF m,t''',(tenant,actor))
+      WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''',(tenant,actor))
     row=cur.fetchone() or {}
     if row.get('role')!='owner' or row.get('active') is not True or row.get('status')!='active':
         raise TenantLinearError('Company owner access required.',403)
@@ -80,6 +82,8 @@ def _pairs(cur,cfg):
         jid,lid=proof['canonical_id'],proof['split_id'];receipts=proof['receipts']
         left,right=routes.get(jid),routes.get(lid)
         reasons=list(proof['conflicts'])
+        if proof.get('reviewable_conflicts')==['historical_route_split']:
+            reasons=[r for r in reasons if r!='provider_identity_conflict']
         pair_id=_token(cfg,'dialogue-pair',tenant,channel,jid,lid)
         canonical={'n':0,'incoming':0,'outgoing':0};split={'n':0,'incoming':0,'outgoing':0}
         if left:
@@ -94,7 +98,15 @@ def _pairs(cur,cfg):
             split=dict(cur.fetchone() or split)
         cur.execute('''SELECT state FROM saas_ai_dialogue_merges WHERE tenant_id=%s::uuid AND pair_id=%s FOR SHARE''',(tenant,pair_id))
         mapping=cur.fetchone() or {}
-        identity_digest=_token(cfg,'provider-evidence',tenant,channel,jid,lid,receipts,proof['sources'],reasons)
+        identity_digest=_token(cfg,'provider-evidence',tenant,channel,jid,lid,receipts,proof['sources'],reasons,proof.get('message_refs',[]))
+        dependency_counts={}; snapshot_digest=''
+        if left and right and not reasons and mapping.get('state')!='merged':
+            from tenant_connect_dialog_equivalence import snapshot,conflicts
+            before=snapshot(cur,tenant,channel,[jid,lid],[left['lead_id'],right['lead_id']])
+            reasons.extend(conflicts(cur,tenant,channel,[jid,lid],before))
+            dependency_counts={k:len(v) for k,v in before.items() if k not in {'messages','routes','aliases','references'}}
+            dependency_counts['references']=before['references']
+            snapshot_digest=_token(cfg,'retained-dependencies',json.dumps(before,sort_keys=True))
         state=str(mapping.get('state') or 'candidate')
         cur.execute("SELECT to_regclass('saas_connect_direct_merge_backups') AS present")
         if (cur.fetchone() or {}).get('present'):
@@ -106,9 +118,12 @@ def _pairs(cur,cfg):
         item={'pair_id':pair_id,'state':state,'eligible':not reasons and state!='merged','provider_receipts':receipts,
               'canonical':{key:int(canonical.get(key) or 0) for key in ('n','incoming','outgoing')},
               'split':{key:int(split.get(key) or 0) for key in ('n','incoming','outgoing')},
-              'conflicts':reasons, 'identity_digest':identity_digest,'evidence_sources':proof['sources']}
+              'conflicts':sorted(set(reasons)), 'identity_digest':identity_digest,'evidence_sources':proof['sources'],
+              'canonical_lead_id':int(left['lead_id']) if left else None,
+              'split_lead_id':int(right['lead_id']) if right else None,
+              'dependency_counts':dependency_counts,'retains_source_rows':True}
         item['precondition']=_token(cfg,'dialogue-precondition',pair_id,state,identity_digest,
-                                    item['canonical']['n'],item['split']['n'])
+                                    item['canonical']['n'],item['split']['n'],snapshot_digest)
         items.append(item)
     return tenant,actor,channel,items
 
@@ -125,11 +140,20 @@ def preview(cur,cfg,args):
     # customer/contact identifier.  Do not expose them to MCP.
     from tenant_connect_identity import inventory
     scan=inventory(cur,tenant,channel)
+    from tenant_connect_phone_evidence import normalize_phone
+    phone_search=normalize_phone(search)
+    phone_evidence=scan['phone_evidence']
     routes=[]
     for identity,row in sorted(scan['routes'].items()):
-        if search and not any(search.casefold() in str(row.get(field) or '').casefold()
-                              for field in ('conversation_id','contact_name','display_name','manual_display_name','phone')):continue
+        phones=phone_evidence['phones_by_identity'].get(identity,set())
+        stored_match=bool(phone_search and normalize_phone(str(row.get('phone') or ''))==phone_search)
+        proven_match=bool(phone_search and phones=={phone_search})
+        if search and not (stored_match or (phone_search and phone_search in phones)
+                or any(search.casefold() in str(row.get(field) or '').casefold()
+                       for field in ('conversation_id','contact_name','display_name','manual_display_name','phone'))):continue
         reasons=sorted({reason for p in scan['pairs'] if identity in {p['canonical_id'],p['split_id']} for reason in p['conflicts']})
+        reasons=sorted(set(reasons)|set(phone_evidence['conflicts'].get(identity,[])))
+        proof=phone_evidence['evidence_by_identity'].get(identity,{'sources':[],'message_refs':[]})
         cur.execute('''SELECT count(*) AS n FROM saas_crm_messages WHERE tenant_id=%s::uuid
           AND kommo_lead_id=%s AND channel<>%s''',(tenant,row['lead_id'],'connect:'+channel))
         legacy=int(cur.fetchone()['n'])
@@ -138,6 +162,11 @@ def preview(cur,cfg,args):
           'identity_kind':'lid' if identity.endswith('@lid') else 'phone_jid',
           'messages':int(row['messages']),'incoming':int(row['incoming']),'outgoing':int(row['outgoing']),
           'other_channel_messages':legacy,'conflicts':reasons,
+          'stored_phone_present':bool(str(row.get('phone') or '').strip()),
+          'provider_phone_proven':len(phones)==1,
+          'evidence_sources':proof['sources'],'message_refs':proof['message_refs'],
+          **({'normalized_phone_matches_search':stored_match,
+              'verified_phone_matches_search':proven_match} if phone_search else {}),
           'resolution':'review_required' if reasons else 'identity_not_compared'})
     return {'items':[ {key:value for key,value in item.items() if key!='identity_digest'} for item in items],
             'routes':routes,'scan_complete':scan['complete'],'scanned_routes':scan['scanned_routes'],
@@ -166,6 +195,13 @@ def execute(cur,cfg,args):
         raise TenantLinearError('Invalid dialogue merge request.',400)
     try: request_id=str(uuid.UUID(str(args.get('request_id'))))
     except (ValueError,TypeError): raise TenantLinearError('Invalid dialogue merge request.',400) from None
+    tenant,actor=_owner(cur,cfg);channel=str(uuid.UUID(str(cfg['AI_LEARNING_MCP_CHANNEL_ID'])))
+    from tenant_connect_identity import inventory
+    from tenant_connect_dialog_equivalence import lock as lock_equivalence
+    cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('dialogue-merge:'+tenant+':'+channel,))
+    scan=inventory(cur,tenant,channel)
+    proof=next((p for p in scan['pairs'] if hmac.compare_digest(_token(cfg,'dialogue-pair',tenant,channel,p['canonical_id'],p['split_id']),pair_id)),None)
+    if proof: lock_equivalence(cur,tenant,channel,[proof['canonical_id'],proof['split_id']])
     tenant,actor,channel,items=_pairs(cur,cfg)
     replay=_request(cur,tenant,request_id,operation,pair_id,precondition)
     if replay:return replay
@@ -180,7 +216,7 @@ def execute(cur,cfg,args):
         if existing and existing['state']=='merged': raise TenantLinearError('Dialogue pair is already merged.',409)
         snapshot={'canonical_message_count':item['canonical']['n'],'split_message_count':item['split']['n'],
                   'canonical_incoming':item['canonical']['incoming'],'split_incoming':item['split']['incoming'],
-                  'provider_receipts':item['provider_receipts'],'logical_only':True}
+                  'provider_receipts':item['provider_receipts'],'logical_only':True,'route_equivalence_version':1}
         # Identity values are intentionally held only in this private row. MCP
         # receives opaque pair IDs and aggregate counts, not JIDs/LIDs/phones.
         # The item was derived under the same cursor transaction.  Fetch pair
@@ -189,7 +225,7 @@ def execute(cur,cfg,args):
         fresh=inventory(cur,tenant,channel)
         match=None
         for proof in fresh['pairs']:
-            if not proof['conflicts'] and hmac.compare_digest(_token(cfg,'dialogue-pair',tenant,channel,proof['canonical_id'],proof['split_id']),pair_id):
+            if (not proof['conflicts'] or proof.get('reviewable_conflicts')==['historical_route_split']) and hmac.compare_digest(_token(cfg,'dialogue-pair',tenant,channel,proof['canonical_id'],proof['split_id']),pair_id):
                 match=(proof['split_id'],proof['canonical_id']);break
         if not match: raise TenantLinearError('Verified dialogue pair is unavailable.',409)
         lid,jid=match
@@ -197,6 +233,11 @@ def execute(cur,cfg,args):
           AND connect_channel_id=%s::uuid AND conversation_id=ANY(%s::text[]) FOR SHARE''',(tenant,channel,[jid,lid]))
         routes={str(row['conversation_id']):row for row in cur.fetchall()}
         if set(routes)!={jid,lid}: raise TenantLinearError('Dialogue route changed; preview again.',409)
+        from tenant_connect_dialog_equivalence import snapshot as capture_retained,activate,conflicts as merge_conflicts
+        before=capture_retained(cur,tenant,channel,[jid,lid],[routes[jid]['lead_id'],routes[lid]['lead_id']])
+        if merge_conflicts(cur,tenant,channel,[jid,lid],before):
+            raise TenantLinearError('Dialogue dependencies changed; preview again.',409)
+        activate(cur,tenant,channel,pair_id,[jid,lid],[routes[jid]['lead_id'],routes[lid]['lead_id']],before)
         if existing:
             cur.execute('''UPDATE saas_ai_dialogue_merges SET state='merged',snapshot=%s::jsonb,identity_digest=%s,
               merged_by=%s,merged_at=now(),rolled_back_by=NULL,rolled_back_at=NULL WHERE tenant_id=%s::uuid AND pair_id=%s''',
@@ -206,9 +247,15 @@ def execute(cur,cfg,args):
               canonical_lead_id,split_lead_id,identity_digest,snapshot,state,merged_by)
               VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s,%s,%s,%s::jsonb,'merged',%s)''',
               (str(uuid.uuid4()),tenant,pair_id,channel,jid,lid,routes[jid]['lead_id'],routes[lid]['lead_id'],item['identity_digest'],json.dumps(snapshot),actor))
-        result={'pair_id':pair_id,'state':'merged','logical_only':True,'preserved_message_ids':True,'idempotent_replay':False}
+        result={'pair_id':pair_id,'state':'merged','logical_only':True,'retained_route_merge':True,
+                'canonical_lead_id':routes[jid]['lead_id'],'source_lead_id':routes[lid]['lead_id'],
+                'combined_messages':item['canonical']['n']+item['split']['n'],
+                'preserved_message_ids':True,'preserved_source_rows':True,'rollback_available':True,'idempotent_replay':False}
     else:
         if not existing or existing['state']!='merged': raise TenantLinearError('No active dialogue merge to roll back.',409)
+        if existing['snapshot'].get('route_equivalence_version')==1:
+            from tenant_connect_dialog_equivalence import rollback
+            rollback(cur,tenant,channel,pair_id)
         cur.execute('''UPDATE saas_ai_dialogue_merges SET state='rolled_back',rolled_back_by=%s,rolled_back_at=now()
           WHERE tenant_id=%s::uuid AND pair_id=%s''',(actor,tenant,pair_id))
         result={'pair_id':pair_id,'state':'rolled_back','logical_only':True,'preserved_message_ids':True,'idempotent_replay':False}

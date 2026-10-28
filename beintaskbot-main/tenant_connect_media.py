@@ -63,7 +63,12 @@ def retry_after_seconds(value, default=60):
     return max(1, min(3600, seconds))
 
 async def download_media(item, *, max_bytes=None, preview_documents=False):
-    route = item['route']
+    route = dict(item['route'])
+    raw=item.get('row',{}).get('raw') or {}
+    from tenant_connect_direct_identity import direct_identity
+    source=direct_identity(raw.get('_crm_provider_conversation_id')) if isinstance(raw,dict) else ''
+    if source and raw.get('conversationId')==route['conversation_id']:
+        route['conversation_id']=source
     channel, message = str(uuid.UUID(route['channel_id'])), str(uuid.UUID(item['message_id']))
     origin = urlsplit(CONNECT_URL)
     if (origin.scheme != 'https' or not origin.hostname or origin.username or origin.password

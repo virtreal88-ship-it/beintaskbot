@@ -301,7 +301,7 @@ class VoiceBoundaries(unittest.TestCase):
                 https.assert_not_called()
 
     def test_network_is_pinned_bounded_and_checks_response_identity(self):
-        conn, _ = self.connection([])
+        conn, _ = self.connection([{'raw':{}},{'raw':{}}])
         response = Mock(status=200)
         headers = {'X-Connect-Channel-Id': CHANNEL, 'X-Connect-Message-Id': MESSAGE,
                    'Content-Type': 'audio/ogg; codecs=opus'}

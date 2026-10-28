@@ -44,6 +44,15 @@ def assert_route(cur,tenant,policy,provider,conversation='',channel='',lead_id=N
                     AND b.snapshot->>'version'='2' AND (b.snapshot->'leads'->>1)::bigint=%s
                     AND (%s='' OR b.split_conversation_id=%s)''', (tenant,channel,int(lead_id),conversation,conversation))
                 rows=cur.fetchall()
+        if allow_merged and len(rows)==1:
+            from tenant_connect_dialog_equivalence import canonical
+            original=rows[0]
+            target=canonical(cur,tenant,str(original['connect_channel_id']),original['conversation_id'])
+            if target!=original['conversation_id']:
+                cur.execute('''SELECT * FROM saas_connect_conversations WHERE tenant_id=%s::uuid
+                  AND connect_channel_id=%s::uuid AND conversation_id=%s''',
+                  (tenant,str(original['connect_channel_id']),target))
+                rows=cur.fetchall()
         if len(rows)!=1: raise TenantLinearError('Диалог недоступен в этой компании или требуется выбрать канал.',404)
         return dict(rows[0])
     if provider!='kommo': raise TenantLinearError('Некорректный источник.')

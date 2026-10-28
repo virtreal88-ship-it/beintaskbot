@@ -100,7 +100,12 @@ def conflicts(cur, tenant, channel, ids, leads, snapshot):
     # Catch future FK dependencies rather than cascading/deleting unknown data.
     cur.execute("""SELECT conrelid::regclass::text AS source FROM pg_constraint
       WHERE contype='f' AND confrelid=ANY(%s::regclass[])""", ([TABLES[k] for k in ('routes','states','jobs','reads')],))
-    known = {t for t, _ in BLOCKERS} | set(TABLES.values())
+    known = {t for t, _ in BLOCKERS} | set(TABLES.values()) | {'saas_connect_dialog_links'}
+    if present(cur,'saas_connect_dialog_links'):
+        cur.execute('''SELECT 1 FROM saas_connect_dialog_links WHERE tenant_id=%s::uuid
+          AND channel_id=%s::uuid AND (source_id=ANY(%s::text[]) OR canonical_id=ANY(%s::text[])) LIMIT 1''',
+          (tenant,channel,ids,ids))
+        if cur.fetchone(): reasons.append('retained_dialogue_dependency')
     if any(r['source'].split('.')[-1] not in known for r in cur.fetchall()):
         reasons.append('unknown_foreign_key_dependency')
     return sorted(set(reasons))

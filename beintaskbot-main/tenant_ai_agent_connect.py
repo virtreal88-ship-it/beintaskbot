@@ -453,6 +453,8 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            from tenant_connect_dialog_equivalence import lead_members
+            history_leads=lead_members(cur,tenant,channel_id,lead_id)
             cur.execute('''SELECT * FROM (
               SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,m.id,m.channel,m.raw,
                 COALESCE(v.state,'') AS voice_state,
@@ -464,9 +466,9 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
                 CASE WHEN v.state='completed' THEN m.body ELSE '' END AS transcript
               FROM saas_crm_messages m LEFT JOIN saas_connect_voice_receipts v
                 ON v.tenant_id=m.tenant_id AND 'connect:' || v.channel_id::text=m.channel AND v.external_id=m.external_id
-              WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s
+              WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=ANY(%s::bigint[])
                 AND m.channel=%s ORDER BY m.happened_at DESC,m.id DESC LIMIT 80
-              ) recent ORDER BY happened_at,id''', (tenant, int(lead_id), 'connect:' + channel_id))
+              ) recent ORDER BY happened_at,id''', (tenant, history_leads, 'connect:' + channel_id))
             rows = cur.fetchall()
             from tenant_media_evidence import annotate_rows
             annotate_rows(cur, tenant, rows)

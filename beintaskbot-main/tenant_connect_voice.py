@@ -45,10 +45,18 @@ def download_audio(job, message_id):
         raise VoiceError('voice_invalid_reference') from None
     with _connect() as conn:
         with conn.cursor() as cur:
-            route = connect_route(cur, str(job['tenant_id']), int(job['lead_id']))
+            route = connect_route(cur, str(job['tenant_id']), int(job['lead_id']), historical_read=True)
+            cur.execute('''SELECT raw FROM saas_crm_messages WHERE tenant_id=%s::uuid
+              AND channel=%s AND kommo_lead_id=%s AND external_id=%s''',
+              (str(job['tenant_id']),'connect:'+channel,int(job['lead_id']),'connect:'+message))
+            raw=(cur.fetchone() or {}).get('raw') or {}
     if (not route or route['channel_id'] != channel or
             route['conversation_id'] != str(job['conversation_id'])):
         raise VoiceError('voice_scope_mismatch')
+    from tenant_connect_direct_identity import direct_identity
+    source=direct_identity(raw.get('_crm_provider_conversation_id')) if isinstance(raw,dict) else ''
+    if source and raw.get('conversationId')==route['conversation_id']:
+        route={**route,'conversation_id':source}
     host = urlsplit(CONNECT_URL).hostname
     url = (CONNECT_URL + '/v1/channels/' + channel + '/messages/' + message +
            '/audio?' + urlencode({'conversationId': route['conversation_id']}))

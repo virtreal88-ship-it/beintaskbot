@@ -135,6 +135,25 @@ def test_final_preview_limits_are_exact_and_keep_audio_unchanged():
     assert media.media_limit('document') == 5*1024*1024
 
 
+def test_retained_dialog_media_uses_saved_provider_route_without_changing_ui_route(monkeypatch):
+    _,session=transport(monkeypatch)
+    value=item();canonical='994700000008@s.whatsapp.net';source='800000000008@lid'
+    value['route']['conversation_id']=canonical
+    value['row']['raw']={'conversationId':canonical,'_crm_provider_conversation_id':source}
+    assert run(media.download_media(value))==(b'picture','image/png')
+    assert 'conversationId=800000000008%40lid' in session.get.call_args.args[0]
+    assert value['route']['conversation_id']==canonical
+
+
+def test_media_rejects_unrelated_or_group_provider_override(monkeypatch):
+    _,session=transport(monkeypatch)
+    for raw in ({'conversationId':'unrelated','_crm_provider_conversation_id':'800000000008@lid'},
+                {'conversationId':'g@g.us','_crm_provider_conversation_id':'123456@g.us'}):
+        value=item();value['row']['raw']=raw
+        run(media.download_media(value))
+        assert 'conversationId=g%40g.us' in session.get.call_args.args[0]
+
+
 def test_connect_duration_limit_remains_distinct_from_size_limit(monkeypatch):
     transport(monkeypatch,status=413,headers={'X-Connect-Media-Error':'media_duration_limit'})
     with pytest.raises(TenantLinearError) as error:run(media.download_media(item()))
