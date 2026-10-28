@@ -153,10 +153,6 @@ def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id
     if (not route.get('active') or not route.get('connected') or not route.get('unambiguous')
             or not tenant_status_allows_ai(route.get('status'), 'connect')):
         return None, 'connect_assignment_route_blocked'
-    cur.execute('''SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid
-      AND connect_channel_id=%s::uuid AND conversation_id=%s''', (tenant, channel_id, conversation_id))
-    if not cur.fetchone():
-        return None, 'conversation_identity_conflict'
     cur.execute('''SELECT agent_id,state,reason,agent_assignment_id FROM saas_ai_conversation_state
       WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
         AND conversation_id=%s FOR UPDATE''', (tenant, channel_id, conversation_id))
@@ -179,6 +175,10 @@ def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id
                 AND (saas_ai_conversation_state.agent_id IS NULL
                      OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%')''',
               (tenant,channel_id,conversation_id))
+        return None, 'conversation_identity_conflict'
+    cur.execute('''SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid
+      AND connect_channel_id=%s::uuid AND conversation_id=%s''', (tenant, channel_id, conversation_id))
+    if not cur.fetchone():
         return None, 'conversation_identity_conflict'
     if state and (state.get('agent_id') or state.get('agent_assignment_id')
                   or state.get('state') == 'human'
