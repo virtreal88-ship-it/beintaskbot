@@ -269,6 +269,10 @@ def save_settings(profile, data):
                values['operating_mode'],values['support_case_extraction_enabled'],values['support_case_extraction_mode'],_json(values['support_case_extraction_channels']),values['support_case_extraction_started_at'],
                values['max_replies_per_chat'], actor, tenant))
             result = _row(cur.fetchone())
+            cur.execute("SELECT to_regclass('saas_connect_conversations') IS NOT NULL AS available")
+            if (cur.fetchone() or {}).get('available'):
+                from tenant_ai_agent_connect import reconcile_tenant_connect_assignments
+                reconcile_tenant_connect_assignments(cur, tenant)
             if (('operating_mode' in patch and values.get('operating_mode')!='active')
                     or values['emergency_stop'] or not values['enabled']):
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='company_mode_not_active' WHERE tenant_id=%s::uuid AND state IN ('queued','processing') AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND state IN ('queued','processing'))",(tenant,tenant))
@@ -566,6 +570,10 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                   VALUES(%s::uuid,%s::uuid,%s) ON CONFLICT(tenant_id,id) DO UPDATE SET display_name=EXCLUDED.display_name
                   WHERE saas_ai_agent_history_identities.deleted_at IS NULL''', (tenant,agent_uuid,merged['name']))
                 _audit(cur, tenant, actor, 'ai_agent_updated', 'ai_agent', agent_uuid, {'version': result['version']})
+            cur.execute("SELECT to_regclass('saas_connect_conversations') IS NOT NULL AS available")
+            if (cur.fetchone() or {}).get('available'):
+                from tenant_ai_agent_connect import reconcile_tenant_connect_assignments
+                reconcile_tenant_connect_assignments(cur, tenant)
         if connection is None: conn.commit()
     return result
 
