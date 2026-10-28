@@ -749,7 +749,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             if conversation != original_conversation:
                 # Preserve both signed provider facts for recovery/audit while
                 # routing all new inbound and outbound receipts to one route.
-                data = {**data, 'originalConversationId': original_conversation,
+                data = {**data, 'originalConversationId': data.get('originalConversationId') or original_conversation,
                         '_crm_provider_conversation_id':original_conversation,'conversationId': conversation}
             lock_dialog(cur, tenant, 'connect', channel_id, conversation)
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))

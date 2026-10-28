@@ -555,3 +555,43 @@ def test_owner_merge_new_provider_contradiction_quarantines_both_routes(ingest,c
     listed=[r for r in dialogs.listing(PROFILE)['dialogs'] if r['lead_id']==routes[JID]['lead_id']]
     assert len(listed)==1 and listed[0]['agent_status_reason']=='conversation_identity_conflict'
     assert not channels['send'].called and not channels['generate'].called
+
+
+@pytest.mark.parametrize('scenario',['lid_first','phone_first'])
+def test_actual_connect_dispatcher_signed_fixtures_reach_one_worker_dialogue(channels,monkeypatch,scenario):
+    """Fixture produced by Connect normalizer/store/WebhookDispatcher, not a
+    handwritten approximation of the cross-repository protocol."""
+    from pathlib import Path
+    from tenant_connect_api import webhook_handler
+    from tenant_connect_phone_evidence import collect
+    fixture=json.loads((Path(__file__).parent/'fixtures/connect_identity_signed.json').read_text())
+    journey=next(f for f in fixture['fixtures'] if f['scenario']==scenario)
+    db=channels['db'];channel=journey['channelId'];pair=fixture['pair']
+    db.execute('INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,%s)',
+               (A,channel,'Synthetic Connect fixture'))
+    secret=transport._fernet().encrypt(json.dumps({'api_key':'synthetic','webhook_secret':'synthetic-fixture-secret'}).encode())
+    db.execute("UPDATE saas_tenant_integrations SET secrets=%s WHERE tenant_id=%s::uuid AND provider='connect'",(secret,A));db.commit()
+    monkeypatch.setenv('AI_AGENTS_ENABLED','false');monkeypatch.setenv('AI_SIMULATION_ENABLED','false')
+    handler=webhook_handler(Mock())
+    class Request:
+        def __init__(self,signed):
+            self.body=signed['body'].encode();self.headers={'x-connect-signature-256':signed['signature']}
+        async def read(self):return self.body
+    for signed in journey['signed']:
+        assert asyncio.run(handler(Request(signed))).status==200
+    routes=db.execute('''SELECT conversation_id,lead_id FROM saas_connect_conversations
+      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid''',(A,channel))
+    assert len(routes)==1 and routes[0]['conversation_id']==journey['canonical']
+    with db.cursor() as cur:assert collect(cur,A,channel)['phones_by_identity'][journey['canonical']]=={pair['jid'].split('@')[0]}
+    db.commit()
+    listed=[r for r in dialogs.listing(PROFILE)['dialogs'] if r['channel_id']==channel]
+    assert len(listed)==1
+    history=dialogs.history(PROFILE,'connect',routes[0]['lead_id'],channel,journey['canonical'])['messages']
+    unique={s['event']['data']['id'] for s in journey['signed']}
+    assert len(history)==len(unique)==4
+    assert {m['external_id'] for m in history}=={'connect:'+i for i in unique}
+    rows=db.execute('SELECT raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND channel=%s',(A,'connect:'+channel))
+    assert any(r['raw'].get('directIdentitySource')=='persisted_provider_alias' for r in rows)
+    assert all(not r['raw'].get('conversationIdentityConflict') for r in rows)
+    assert not channels['send'].called and not channels['generate'].called
+    db.commit()
