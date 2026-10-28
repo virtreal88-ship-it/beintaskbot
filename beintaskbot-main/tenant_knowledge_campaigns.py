@@ -13,6 +13,21 @@ from tenant_knowledge_campaign_schema import create_schema
 from tenant_knowledge_campaign_policy import FIELDS, validate, reservation, fits
 
 
+def _configured_photo_model(cur, tenant, agent_id):
+    """Use only the company's existing, explicitly selected photo model."""
+    cur.execute("SELECT metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'",(tenant,))
+    metadata=(cur.fetchone() or {}).get('metadata') or {}
+    model=str(metadata.get('photo_model') or '').strip()
+    if not model:
+        return None
+    from tenant_ai_photo_model import MODELS, quote, select
+    if model not in MODELS:
+        raise TenantLinearError('photo_model_company_configuration_required',409)
+    select(cur,{'AI_LEARNING_MCP_TENANT_ID':str(tenant),'AI_LEARNING_MCP_AGENT_ID':str(agent_id)},model)
+    quote(model)
+    return model
+
+
 def prepare(profile, data):
     allowed={'request_id','channel_ids','analysis_agent_id','max_calls','max_tokens','case_id',
       'all_existing_cases','max_cost_microusd','video_model','acknowledge_prior_unknown'} | FIELDS
@@ -45,6 +60,7 @@ def prepare(profile, data):
                 raise TenantLinearError('Only the company owner can prepare the one-time current-case media grant.',403)
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('knowledge-campaign:'+tenant,))
             case_plan=None;batch_plan=None
+            photo_model=None
             if all_cases:
                 if type(data.get('max_cost_microusd')) is not int or data['max_cost_microusd']!=10_000_000:
                     raise TenantLinearError('Общий лимит новых расходов должен быть ровно 10 USD.',409)
@@ -66,11 +82,21 @@ def prepare(profile, data):
                     if any(item.get('status')=='pending_consent' and any(m['kind']=='video' and not m['complete'] for m in item.get('media',[])) for item in batch_plan['cases']):
                         raise TenantLinearError('Для видео выберите отдельную модель с доступным тарифом.',409)
                 if data.get('video_model'):
-                    from tenant_ai_video_model import MODELS
+                    from tenant_ai_video_model import MODELS, require_video_tariff
                     from tenant_ai_spend_budget import media_price
                     pending_video=any(item.get('status')=='pending_consent' and any(m['kind']=='video' and not m['complete'] for m in item.get('media',[])) for item in batch_plan['cases'])
-                    if data['video_model'] not in MODELS or pending_video and media_price(data['video_model'],'vision_low') is None:
+                    if data['video_model'] not in MODELS:
                         raise TenantLinearError('video_model_tariff_required',409)
+                    if pending_video:
+                        require_video_tariff(data['video_model'])
+                        if media_price(data['video_model'],'vision_low') is None:
+                            raise TenantLinearError('video_model_tariff_required',409)
+                pending_image=any(item.get('status')=='pending_consent' and any(
+                    media.get('kind')=='image' and not media.get('complete')
+                    and media.get('status') in {'pending_consent','pending_retry','pending_processing'}
+                    for media in item.get('media',[])) for item in batch_plan['cases'])
+                if pending_image:
+                    photo_model=_configured_photo_model(cur,tenant,agent)
             if data.get('case_id'):
                 from tenant_case_media_admission import plan, routes
                 case_plan=plan(cur,profile,data['case_id'])
@@ -90,7 +116,8 @@ def prepare(profile, data):
             if old:
                 old_case=(old.get('progress') or {}).get('case_id')
                 batch_mismatch=bool(batch_plan and ((old.get('progress') or {}).get('snapshot_hash')!=batch_plan['snapshot_hash']
-                    or old.get('max_cost_microusd')!=10_000_000 or old.get('video_model')!=data.get('video_model')))
+                    or old.get('max_cost_microusd')!=10_000_000 or old.get('video_model')!=data.get('video_model')
+                    or old.get('photo_model')!=photo_model))
                 if old['media_policy']!=policy or old['sources']!=channels or str(old['analysis_agent_id'])!=agent or old['max_calls']!=calls or old['max_tokens']!=tokens or old_case!=(case_plan or {}).get('case_id') or (case_plan and old['progress'].get('plan_hash')!=case_plan['plan_hash']) or batch_mismatch:
                     raise TenantLinearError('request_id уже используется.',409)
                 return key
@@ -114,9 +141,9 @@ def prepare(profile, data):
                   'review_count':batch_plan['review_count'],'unknown_media_count':batch_plan['unknown_media_count'],
                   'unavailable_media_count':batch_plan['unavailable_media_count'],'all_existing_cases':True}
             cur.execute('''INSERT INTO saas_knowledge_campaigns
-              (tenant_id,id,created_by,sources,analysis_agent_id,max_calls,max_tokens,media_policy,progress,max_cost_microusd,video_model)
-              VALUES(%s::uuid,%s::uuid,%s,%s::jsonb,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s,%s)''',
-              (tenant,key,actor,_json(channels),agent,calls,tokens,_json(policy),_json(progress),10_000_000 if batch_plan else None,data.get('video_model')))
+              (tenant_id,id,created_by,sources,analysis_agent_id,max_calls,max_tokens,media_policy,progress,max_cost_microusd,video_model,photo_model)
+              VALUES(%s::uuid,%s::uuid,%s,%s::jsonb,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s)''',
+              (tenant,key,actor,_json(channels),agent,calls,tokens,_json(policy),_json(progress),10_000_000 if batch_plan else None,data.get('video_model'),photo_model))
             if batch_plan:
                 cur.execute('''INSERT INTO saas_ai_media_grants(tenant_id,id,campaign_id,created_by,cap_microusd,status)
                   VALUES(%s::uuid,%s::uuid,%s::uuid,%s,10000000,'pending')''',(tenant,key,key,actor))
@@ -173,6 +200,15 @@ def enqueue(cur, profile, campaign, route):
         route['media_grant_id']=str(campaign['id'])
         if campaign.get('video_model'):
             route['video_model']=campaign['video_model']
+        if campaign.get('photo_model'):
+            media_kind=route.get('campaign_media_kind')
+            if media_kind not in {'image','video','audio','voice','document'}:
+                raise TenantLinearError('Case media kind changed; prepare a new snapshot.',409)
+            if ((media_kind=='image' and route.get('campaign_photo_model')!=campaign.get('photo_model'))
+                or (media_kind!='image' and route.get('campaign_photo_model') is not None)):
+                raise TenantLinearError('Company photo model changed; prepare a new snapshot.',409)
+        # This is only a server-side enqueue assertion, not persisted source data.
+        route.pop('campaign_media_kind',None)
     route['allow_paid_asr']=bool(route['allow_paid_asr'] and campaign['media_policy'].get('max_asr_calls',0)>0)
     route['allow_vision']=bool(campaign['media_policy'].get('max_vision_calls',0) and route['allow_external_media'])
     key=store.digest(route);fragment=str(uuid.uuid5(uuid.UUID(str(campaign['id'])),key))
@@ -403,7 +439,7 @@ def get(profile, campaign_id=None):
       'media_policy':row['media_policy'],'reserved_kinds':row['reserved_kinds'],
       'used_tokens':int(tokens),'cost':None,'max_calls':row['max_calls'],'max_tokens':row['max_tokens'],
       'progress':progress,'media_processed':media['processed'],'media_unavailable':media['unavailable'],'processed_messages':messages,'reviews':reviews,'quality_checks':quality,
-      'max_cost_microusd':row.get('max_cost_microusd'),'video_model':row.get('video_model'),
+      'max_cost_microusd':row.get('max_cost_microusd'),'video_model':row.get('video_model'),'photo_model':row.get('photo_model'),
       'grant_used_microusd':grant_used,'prior_unknown_holds_microusd':old_unknown,
       'prior_settled_microusd':prior_settled,'grant_status':grant_status,
       'grant_approved':grant_approved,
@@ -459,7 +495,9 @@ def approve(profile,campaign_id,data):
     required={'expected_version','channel_ids','max_calls','max_tokens','confirm_external_processing','media_policy'}
     valid_shapes=(required,required|{'case_id','case_plan_hash'},
       required|{'all_cases_snapshot_hash','max_cost_microusd','video_model'},
-      required|{'all_cases_snapshot_hash','max_cost_microusd','video_model','acknowledge_prior_unknown'})
+      required|{'all_cases_snapshot_hash','max_cost_microusd','video_model','acknowledge_prior_unknown'},
+      required|{'all_cases_snapshot_hash','max_cost_microusd','video_model','photo_model'},
+      required|{'all_cases_snapshot_hash','max_cost_microusd','video_model','photo_model','acknowledge_prior_unknown'})
     if not isinstance(data,dict) or set(data) not in valid_shapes or data['confirm_external_processing'] is not True:
         raise TenantLinearError('Подтвердите источники и бюджет внешней обработки.')
     with _connect() as conn:
@@ -523,21 +561,27 @@ def approve(profile,campaign_id,data):
                     raise TenantLinearError('Budget does not cover all case attachments.',409)
             elif batch_mode:
                 if set(data) not in (required|{'all_cases_snapshot_hash','max_cost_microusd','video_model'},
-                    required|{'all_cases_snapshot_hash','max_cost_microusd','video_model','acknowledge_prior_unknown'}):
+                    required|{'all_cases_snapshot_hash','max_cost_microusd','video_model','acknowledge_prior_unknown'},
+                    required|{'all_cases_snapshot_hash','max_cost_microusd','video_model','photo_model'},
+                    required|{'all_cases_snapshot_hash','max_cost_microusd','video_model','photo_model','acknowledge_prior_unknown'}):
                     raise TenantLinearError('Confirm this exact current-case snapshot and USD 10 limit.',409)
                 retry_ack=bool(row['progress'].get('acknowledge_prior_unknown'))
                 if (data.get('acknowledge_prior_unknown',False) is not retry_ack
                     or data['all_cases_snapshot_hash']!=row['progress'].get('snapshot_hash')
                     or data['max_cost_microusd']!=10_000_000
-                    or data.get('video_model')!=row.get('video_model')):
+                    or data.get('video_model')!=row.get('video_model')
+                    or ('photo_model' in data and data.get('photo_model')!=row.get('photo_model'))
+                    or (row.get('photo_model') and data.get('photo_model')!=row.get('photo_model'))):
                     raise TenantLinearError('Confirm this exact current-case snapshot and USD 10 limit.',409)
                 from tenant_case_media_admission import plan_existing_cases,existing_routes
                 batch_plan=plan_existing_cases(cur,profile,acknowledge_prior_unknown=retry_ack)
                 if batch_plan['snapshot_hash']!=row['progress']['snapshot_hash']:
                     raise TenantLinearError('Current case snapshot changed; prepare a new plan.',409)
-                batch_routes=list(existing_routes(batch_plan,row['analysis_agent_id'],row.get('video_model')))
+                batch_routes=list(existing_routes(batch_plan,row['analysis_agent_id'],row.get('video_model'),row.get('photo_model')))
                 if not batch_routes or not new_policy['allow_external_media']:
                     raise TenantLinearError('No eligible case attachments or media permission.',409)
+                if row.get('photo_model') and _configured_photo_model(cur,tenant,row['analysis_agent_id'])!=row['photo_model']:
+                    raise TenantLinearError('Company photo model changed; prepare a new snapshot.',409)
                 pending_ids={route['message_ids'][0] for route in batch_routes}
                 media_by_id={media['id']:media for case in batch_plan['cases'] for media in case.get('media',[])}
                 visual=any(media_by_id[i]['kind'] in {'image','video','document'} for i in pending_ids)
@@ -550,6 +594,9 @@ def approve(profile,campaign_id,data):
                     raise TenantLinearError('Campaign call/token limits do not cover this snapshot.',409)
                 if any(media_by_id[i]['kind']=='video' for i in pending_ids) and not row.get('video_model'):
                     raise TenantLinearError('A separate video model must be selected.',409)
+                if any(media_by_id[i]['kind']=='video' for i in pending_ids):
+                    from tenant_ai_video_model import require_video_tariff
+                    require_video_tariff(row['video_model'])
                 # Model and per-operation tariffs are immutable prerequisites;
                 # unknown pricing blocks consent and no provider call starts.
                 from tenant_ai_spend_budget import price,media_price
@@ -571,7 +618,9 @@ def approve(profile,campaign_id,data):
                 agent_model=(agent_row or {}).get('model') or agent_meta.get('model') or platform_model()
                 if not agent_model or not price(agent_model):
                     raise TenantLinearError('ai_spend_price_unknown',409)
-                if any(media_by_id[i]['kind'] in {'image','document'} for i in pending_ids) and media_price(agent_model,'vision_low') is None:
+                needs_base_vision=any(media_by_id[i]['kind']=='document' or
+                    media_by_id[i]['kind']=='image' and not row.get('photo_model') for i in pending_ids)
+                if needs_base_vision and media_price(agent_model,'vision_low') is None:
                     raise TenantLinearError('ai_spend_media_price_unknown',409)
                 if any(media_by_id[i]['kind']=='video' for i in pending_ids) and media_price(row.get('video_model') or '', 'vision_low') is None:
                     raise TenantLinearError('ai_spend_media_price_unknown',409)

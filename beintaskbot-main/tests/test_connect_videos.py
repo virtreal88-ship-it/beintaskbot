@@ -231,10 +231,11 @@ def test_video_reservation_is_bounded_and_requires_explicit_tariff_and_cap(monke
     from tenant_ai_video_model import quote
     from tenant_linear_policy import TenantLinearError
     monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD',json.dumps({JOB['tenant_id']:50000}))
-    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'gpt-4.1':{'vision_low':1200}}))
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'gpt-4.1':{'vision_low':8896}}))
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'gpt-4.1':{'input':2000000,'output':8000000}}))
     monkeypatch.setenv('AI_AGENTS_VISION_MODELS','gpt-4.1')
     quote_result=quote('gpt-4.1',JOB['tenant_id'])
-    assert quote_result['max_frames']==2 and quote_result['max_microusd']==2400
+    assert quote_result['max_frames']==2 and quote_result['max_microusd']==17792
     monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD','{}')
     with pytest.raises(TenantLinearError,match='tariff'):
         quote('gpt-4.1',JOB['tenant_id'])

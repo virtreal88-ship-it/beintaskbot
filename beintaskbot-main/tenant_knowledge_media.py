@@ -175,6 +175,11 @@ def collect(profile,item,check_before_ai=None):
                     visuals=pdf_pages(data)
             elif kind=='video':
                 if not consent: receipt.update(status='unavailable',code='external_media_permission_required');continue
+                from tenant_ai_video_model import require_video_tariff
+                video_input_model=item['route'].get('video_model') or item['model']
+                # Reject before any optional ASR dispatch; the input ceiling
+                # is a prerequisite for the whole video operation.
+                require_video_tariff(video_input_model)
                 stage='video_decode'
                 visuals=video_frames(data,mime)
                 receipt['audio_status']='not_requested'
@@ -209,7 +214,8 @@ def collect(profile,item,check_before_ai=None):
                 visuals=[(data,mime,{})]
             if not consent: receipt.update(status='unavailable',code='external_media_permission_required');continue
             if item['route'].get('allow_vision') is False: receipt.update(status='unavailable',code='vision_not_approved');continue
-            observation_model=(item['route'].get('video_model') if kind=='video' else item['model']) or item['model']
+            observation_model=((item['route'].get('video_model') if kind=='video' else
+                item['route'].get('campaign_photo_model') if kind=='image' else item['model']) or item['model'])
             if not supports_images(observation_model): receipt.update(status='unsupported',code='model_has_no_vision');continue
             if visual_count+len(visuals)>MAX_VISUALS: receipt.update(status='partial',code='visual_budget');continue
             if not visuals: raise ValueError('empty_visuals')
@@ -218,7 +224,13 @@ def collect(profile,item,check_before_ai=None):
                 stage='visual_analysis'
                 from tenant_knowledge_media_cache import observe_once
                 from tenant_chat_ai_provider import generate
-                observation_item=({**item,'model':observation_model} if observation_model!=item['model'] else item)
+                observation_route={**item['route']}
+                if kind=='video':
+                    observation_route['_video_input_model']=observation_model
+                observation_item={**item,'model':observation_model,'route':observation_route}
+                if kind=='image' and item['route'].get('campaign_photo_model'):
+                    observation_item={**observation_item,'key':item.get('photo_api_key') or item['key'],
+                      'route':{**item['route'],'photo_model':observation_model}}
                 for content,content_type,origin in visuals:
                     if check_before_ai: check_before_ai()
                     text,_,_=observe_once(profile,observation_item,ref,content,content_type,origin,generate,check_before_ai=check_before_ai)
