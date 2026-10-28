@@ -161,6 +161,8 @@ def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, 
                     'support_media_campaign_start','support_media_campaign_control'} <= set(definitions)
             assert definitions['support_media_campaign_list']['securitySchemes']==[{'type':'oauth2','scopes':[mcp.SUPPORT_MEDIA_SCOPE]}]
             assert definitions['support_media_campaign_list']['annotations']['readOnlyHint'] is True
+            assert definitions['support_media_campaign_recover_failed']['securitySchemes']==[{'type':'oauth2','scopes':[mcp.SUPPORT_MEDIA_SCOPE]}]
+            assert definitions['support_media_campaign_recover_failed']['annotations']['destructiveHint'] is True
             assert definitions['support_dialog_agent_assign']['securitySchemes']==[{'type':'oauth2','scopes':[mcp.DIALOG_ASSIGN_SCOPE]}]
             assert definitions['support_case_reject_delete']['annotations']['destructiveHint'] is True
             assert definitions['support_agent_archive_transfer']['annotations']['destructiveHint'] is True
@@ -230,6 +232,7 @@ def test_mcp_current_case_media_tools_use_fixed_grant_and_exact_start_confirmati
         assert mcp._tools(cur,cfg,'support_media_snapshot_preview',{})['eligible_count']==2
         assert mcp._tools(cur,cfg,'support_media_snapshot_preview',{'acknowledge_prior_unknown':True})['retry_unknown_count']==1
         with pytest.raises(Exception):mcp._tools(cur,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'support_media_snapshot_preview',{})
+        with pytest.raises(Exception):mcp._tools(cur,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'support_media_campaign_recover_failed',{'campaign_id':campaign_id,'expected_version':1,'request_id':str(uuid.uuid4())})
     prepared=mcp._tools(None,cfg,'support_media_campaign_prepare',{'request_id':campaign_id,
         'channel_ids':[channel],'analysis_agent_id':agent,'max_calls':8,'max_tokens':80000,
         'media_policy':current['media_policy'],'video_model':'gpt-4.1'})

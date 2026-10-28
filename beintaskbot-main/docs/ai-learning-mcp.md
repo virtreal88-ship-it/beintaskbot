@@ -106,6 +106,21 @@ reads campaign state and writes the usual audit event; it does not prepare,
 approve, start, or retry analysis. The scope also permits guarded write tools,
 so adding it to a connection requires the owner's explicit OAuth consent.
 
+`support_media_campaign_recover_failed` is an explicit action on a completed,
+already approved case-media campaign, using its exact version and a stable
+request UUID. It requeues only original selected sources whose completed
+extraction and released, zero-cost media reservations prove no media provider
+call was dispatched. Changed sources, missing proof and uncertain outcomes are
+not retried. The existing grant and its $10 cap are retained; historical
+unknown holds remain untouched. A replay of the same request is idempotent and
+a second recovery is rejected. The action starts the worker and can cause paid
+media calls; it does not issue a new consent or grant. It preserves the existing
+text extraction and stores a new media extraction receipt without repeating the
+text model call. For unverified legacy attachment metadata the result remains a
+historical receipt; it is not silently promoted to a reusable current-byte
+result. `support_media_campaign_read` exposes recovery extraction IDs in its
+progress, which can be inspected with `case_evidence_read` under its own scope.
+
 `ai_learning.read`, `ai_learning.drafts`, and `ai_learning.knowledge_dedup`
 are separate OAuth scopes.
 `ai_learning.read` is sufficient for all read tools. `ai_learning.drafts` is
