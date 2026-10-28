@@ -535,6 +535,13 @@ def complete(claimed, response):
     return True
 
 
+class CampaignStartReadbackFailed(Exception):
+    """The approval transaction committed, but its result could not be read."""
+    def __init__(self, error_class):
+        super().__init__('campaign start committed; readback failed')
+        self.error_class = error_class
+
+
 def approve(profile,campaign_id,data):
     """Explicit source/budget confirmation, never called by deployment/startup."""
     required={'expected_version','channel_ids','max_calls','max_tokens','confirm_external_processing','media_policy'}
@@ -678,7 +685,10 @@ def approve(profile,campaign_id,data):
               AND campaign_id=%s::uuid AND state='blocked' AND NOT EXISTS(SELECT 1 FROM saas_ai_test_turns t WHERE t.tenant_id=q.tenant_id AND t.id=q.id)''',(tenant,campaign_id))
             store._audit(cur,tenant,actor,'knowledge_campaign_budget_approved','knowledge_campaign',campaign_id)
         conn.commit()
-    return get(profile,campaign_id)
+    try:
+        return get(profile,campaign_id)
+    except Exception as error:
+        raise CampaignStartReadbackFailed(type(error).__name__) from None
 
 def preview(profile,channels):
     if not isinstance(channels,list) or not 1<=len(channels)<=100:raise TenantLinearError('Выберите источники.')
