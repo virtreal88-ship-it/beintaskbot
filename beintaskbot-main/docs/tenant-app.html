@@ -299,7 +299,7 @@
 (()=>{
   const savedView=sessionStorage.getItem('tenant.app.view'),urlView=new URLSearchParams(location.search).get('view');
   const state={me:null,deals:[],tasks:[],view:urlView||savedView||'tasks',capabilities:{},rolePermissions:{}}; const $=id=>document.getElementById(id);
-  const rememberView=view=>{sessionStorage.setItem('tenant.app.view',view);const url=new URL(location.href);url.searchParams.set('view',view);history.replaceState({view},'',url);};
+  const rememberView=view=>{sessionStorage.setItem('tenant.app.view',view);const url=new URL(location.href);url.searchParams.set('view',view);history.replaceState(history.state?.view===view?{...history.state,view}:{view},'',url);};
   const inviteRole=$('inviteRole'); if(inviteRole && ![...inviteRole.options].some(o=>o.value==='master')) inviteRole.insertAdjacentHTML('beforeend','<option value="master">Usta</option>');
   const crmNavCopy={az:{group:'CRM',tasks:'Tapşırıqlar',contacts:'Müştərilər',companies:'Şirkətlər',deals:'Sövdələşmələr'},ru:{group:'CRM',tasks:'Задачи',contacts:'Контакты',companies:'Компании',deals:'Сделки'},en:{group:'CRM',tasks:'Tasks',contacts:'Contacts',companies:'Companies',deals:'Deals'}};
   const translateCrmNav=()=>{const labels=crmNavCopy[window.tenantI18n?.language]||crmNavCopy.az;document.querySelectorAll('[data-crm-nav-label]').forEach(node=>{node.textContent=labels[node.dataset.crmNavLabel]||labels.group})};
