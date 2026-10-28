@@ -50,6 +50,17 @@ def test_only_verified_duplicates_collapsed(history_db):
     assert len(d.execute('SELECT id FROM saas_crm_messages WHERE kommo_lead_id IN (1001,1002)'))==7
 
 
+def test_read_snapshot_selects_the_captured_copy_on_the_open_channel(history_db):
+    d=history_db
+    add(d,1,CA,event='SHARED_EVENT')
+    add(d,2,CB,event='SHARED_EVENT',direction='outgoing')
+    result=dialogs.history(PROFILE,'connect',1001,CA,G)
+    assert len(result['messages'])==1
+    assert result['messages'][0]['source_channel_id']==CB
+    assert result['read_through_message_id']==str(uuid.UUID(int=10001))
+    dialogs.mark_read(PROFILE,{'provider':'connect','lead_id':1001,'channel_id':CA,'conversation_id':G,'message_id':result['read_through_message_id']})
+
+
 def test_names_directions_media_route_and_isolation(history_db):
     d=history_db
     add(d,1,CA);add(d,2,CB,direction='outgoing');add(d,3,CB)

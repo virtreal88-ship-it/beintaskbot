@@ -695,6 +695,19 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     for message in messages:
                         message['source_conversation_id']=by_lead[int(message['source_lead_id'])]
                         message['source_channel_id']=channel
+            captured_group=[]
+            if provider=='connect' and group_jid(conversation):
+                # A displayed group event can be represented by another channel's
+                # copy. Resolve only captured copies belonging to this route.
+                external_ids={str(src.get('external_id')) for m in messages[:50] for src in m.get('sources',[])
+                    if str(src.get('channel_id') or '')==str(channel)
+                    and int(src.get('lead_id') or 0) in history_leads and src.get('external_id')}
+                if external_ids:
+                    cur.execute("""SELECT id,created_at,direction FROM saas_crm_messages
+                      WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s
+                        AND external_id=ANY(%s::text[]) AND direction IN ('incoming','outgoing')""",
+                      (tenant,history_leads,row['history_channel'],list(external_ids)))
+                    captured_group=cur.fetchall()
             participant_names={};employee_participants=set()
             if provider == 'connect' and dialog.get('customer_kind') == 'group':
                 # The override's primary key includes the tenant, exact Connect
@@ -721,8 +734,16 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             if provider == 'connect':
                 from tenant_connect_identity import conflicted
                 dialog['identity_conflict'] = conflicted(cur, tenant, channel, conversation)
+    # Unread cursors use insertion order, while the UI orders history by
+    # provider time. Capture only records in this response and on this route;
+    # a later arrival must never be consumed by this snapshot.
+    eligible=[m for m in messages[:50] if m.get('direction') in ('incoming','outgoing')
+              and m.get('created_at') and str(m.get('channel') or '')==str(row['history_channel'])
+              and int(m.get('source_lead_id') or 0) in history_leads]
+    eligible.extend(captured_group)
+    read_through=max(eligible,key=lambda m:(m['created_at'],m['id'])) if eligible else None
     anchor_target=next((str(m['id']) for m in messages[:50] if anchor_row and (str(m['id'])==str(anchor_row['id']) or any(s.get('external_id')==anchor_row['external_id'] for s in m.get('sources',[])))),None)
-    return {'dialog':dialog,'anchor_message_id':anchor_target,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
+    return {'dialog':dialog,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
                                          contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '')
                                         for r in reversed(messages[:50])],
             'next_before':str(messages[49]['id']) if len(messages)>50 else None}
