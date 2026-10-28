@@ -118,9 +118,18 @@ def upsert_whatsapp_contact(cur, tenant_id: str, channel_id: str, conversation_i
     # Require the number to be encoded in an explicit personal JID.  A caller
     # cannot turn an arbitrary chat ID or group participant name into identity.
     suffix = next((jid for jid in ('@s.whatsapp.net', '@c.us') if conversation.endswith(jid)), '')
-    if (not suffix
-            or conversation.split('@', 1)[0] != number):
-        return None
+    if not suffix or conversation.split('@', 1)[0] != number:
+        # A late provider pair keeps the original LID route and all its
+        # references. Accept its phone only through the durable scoped alias,
+        # including the alias's uniqueness guarantee, never from a label.
+        if not re.fullmatch(r'[1-9][0-9]{5,22}@lid', conversation):
+            return None
+        cur.execute('''SELECT 1 FROM saas_connect_direct_identities
+          WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid
+            AND identity_key=%s AND canonical_conversation_id=%s''',
+          (tenant_id, channel, number + '@s.whatsapp.net', conversation))
+        if not cur.fetchone():
+            return None
     # Serializes first-contact races, including the same person arriving via
     # two channels.  Hashing is database-local and exposes no identity.
     cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",

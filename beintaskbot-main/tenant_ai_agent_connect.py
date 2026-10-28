@@ -374,6 +374,9 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             payload['first_inquiry'] = first_inquiry
             if payload['first_inquiry']:
                 payload['phone'] = _whatsapp_phone(conversation_id)
+                if not payload['phone'] and str(conversation_id).endswith(('@lid', '@c.us')):
+                    from tenant_connect_direct_identity import verified_phone_jid
+                    payload['phone'] = _whatsapp_phone(verified_phone_jid(cur, tenant, channel_id, conversation_id))
             cur.execute('UPDATE saas_tenant_webhook_events SET payload=%s::jsonb WHERE tenant_id=%s::uuid AND fingerprint=%s',
                         (_json(payload), tenant, fingerprint))
             from tenant_ai_pilot import processing_allowed

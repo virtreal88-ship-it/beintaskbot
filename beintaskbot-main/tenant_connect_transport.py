@@ -21,6 +21,10 @@ import requests
 
 from tenant_platform import TenantPlatformError, _connect, _ensure_schema, _fernet, _json
 from tenant_member_store import member
+from tenant_connect_direct_identity import (
+    direct_identity as _direct_identity,
+    canonical_conversation as _canonical_direct_conversation,
+)
 
 CONNECT_URL = str(os.environ.get("CONNECT_PUBLIC_URL") or "https://connect.crm.pro.az").rstrip("/")
 CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed')
@@ -56,7 +60,7 @@ def _conversation_metadata(data, conversation):
     explicit_type = str(data.get('conversationType') or data.get('chatType') or '').strip().casefold()
     if jid.endswith('@g.us') or data.get('isGroup') is True or explicit_type in {'group', 'groupchat'}:
         kind = 'group'
-    elif jid.endswith(('@s.whatsapp.net', '@c.us')) or explicit_type in {'contact', 'personal', 'direct'}:
+    elif jid.endswith(('@s.whatsapp.net', '@c.us', '@lid')) or explicit_type in {'contact', 'personal', 'direct'}:
         kind = 'contact'
     else:
         kind = ''
@@ -93,62 +97,13 @@ def _phone_from_jid(jid):
     return candidate if re.fullmatch(r'[1-9][0-9]{5,18}', candidate) else ''
 
 
-def _direct_identity(value):
-    """A direct WhatsApp identity, never a group or a display label."""
-    value = str(value or '').strip()
-    return value if re.fullmatch(r'[1-9][0-9]{5,22}@(s\.whatsapp\.net|c\.us|lid)', value) else ''
-
-
-def _canonical_direct_conversation(cur, tenant, channel_id, conversation, data, metadata):
-    """Resolve an explicitly provider-confirmed JID/LID pair within one channel.
-
-    A phone number alone is deliberately insufficient, as are groups and
-    unpaired LIDs.  The mapping is tenant + connected account scoped so the
-    same customer can safely have distinct chats on two company numbers.
-    """
-    if metadata.get('kind') == 'group':
-        return conversation, False
-    pair = data.get('directIdentity') if isinstance(data.get('directIdentity'), dict) else {}
-    jid, lid = _direct_identity(pair.get('jid')), _direct_identity(pair.get('lid'))
-    current = _direct_identity(conversation)
-    if current and not pair:
-        # Most subsequent events omit remoteJidAlt. Reuse only the already
-        # verified mapping for this exact connected account after restart.
-        cur.execute('''SELECT canonical_conversation_id FROM saas_connect_direct_identities
-          WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND identity_key=%s FOR SHARE''',
-          (tenant,channel_id,current))
-        known=cur.fetchone()
-        return (str(known['canonical_conversation_id']),False) if known else (conversation,False)
-    if not jid or not lid or jid == lid or not current:
-        return conversation, False
-    if not jid.endswith(('@s.whatsapp.net','@c.us')) or not lid.endswith('@lid') or current not in {jid,lid}:
-        return conversation, True
-    aliases = tuple(dict.fromkeys((jid, lid, current)))
-    cur.execute('''SELECT identity_key,canonical_conversation_id FROM saas_connect_direct_identities
-      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND identity_key=ANY(%s) FOR UPDATE''',
-                (tenant, channel_id, list(aliases)))
-    known = {str(row['canonical_conversation_id']) for row in cur.fetchall()}
-    if len(known) > 1:
-        return conversation, True
-    canonical = next(iter(known), jid)
-    # JID is preferred only for a new pair.  Once a canonical route has been
-    # committed, it is immutable: late or malformed receipts cannot rewrite
-    # message ownership.
-    for identity in aliases:
-        cur.execute('''INSERT INTO saas_connect_direct_identities
-          (tenant_id,connect_channel_id,identity_key,canonical_conversation_id,verified_at)
-          VALUES(%s::uuid,%s::uuid,%s,%s,now()) ON CONFLICT(tenant_id,connect_channel_id,identity_key)
-          DO NOTHING''', (tenant, channel_id, identity, canonical))
-    return canonical, False
-
-
 def _upsert_conversation(cur, tenant, channel_id, conversation, metadata):
     """Persist group metadata separately from an individual contact identity."""
     kind = metadata.get('kind') or ''
     display_name = metadata.get('display_name') or ''
     # Keep the established direct-chat phone fallback intact. A group must
     # never inherit the numeric prefix of its JID as a customer phone.
-    phone = '' if kind == 'group' else _phone_from_jid(conversation)
+    phone = '' if kind == 'group' else _phone_from_jid(metadata.get('phone_jid') or conversation)
     contact_name = display_name if kind == 'contact' else ''
     cur.execute('''INSERT INTO saas_connect_conversations
       (tenant_id,connect_channel_id,conversation_id,contact_name,phone,display_name,conversation_kind,last_message_at)
@@ -225,6 +180,8 @@ def _schema(conn) -> None:
           FOREIGN KEY(tenant_id,connect_channel_id,canonical_conversation_id)
             REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) DEFERRABLE INITIALLY DEFERRED
         )''')
+        cur.execute('''CREATE INDEX IF NOT EXISTS saas_connect_direct_canonical_idx
+          ON saas_connect_direct_identities(tenant_id,connect_channel_id,canonical_conversation_id)''')
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_participant_display_names (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
           connect_channel_id UUID NOT NULL,
@@ -236,6 +193,13 @@ def _schema(conn) -> None:
           PRIMARY KEY(tenant_id,connect_channel_id,conversation_id,participant_jid),
           FOREIGN KEY(tenant_id,connect_channel_id,conversation_id)
             REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) ON DELETE CASCADE
+        )''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_identity_conflicts (
+          tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+          connect_channel_id UUID NOT NULL, conversation_id TEXT NOT NULL,
+          event_id TEXT NOT NULL, evidence JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,connect_channel_id,conversation_id)
         )''')
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_webhook_events (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE, event_id TEXT NOT NULL,
@@ -764,7 +728,9 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 # Keep the receipt readable, but never use an ambiguous pair
                 # to redirect history or admit AI work.
                 data = {**data, 'conversationIdentityConflict': True}
-            elif conversation != original_conversation:
+                from tenant_connect_direct_identity import record_conflict
+                record_conflict(cur, tenant, channel_id, conversation, original_conversation, data, event_id)
+            if conversation != original_conversation:
                 # Preserve both signed provider facts for recovery/audit while
                 # routing all new inbound and outbound receipts to one route.
                 data = {**data, 'originalConversationId': original_conversation,
@@ -778,8 +744,16 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             ai_origin = coordinated and known_ai_origin(cur,tenant,data)
             uncertain_origin = coordinated and data.get('authorshipUncertain') is True and not ai_origin
             employee = verified_employee(cur,tenant,data) if coordinated and not ai_origin and not uncertain_origin else None
-            if not coordinated and not outbound and re.fullmatch(r'[0-9]{5,22}@(s\.whatsapp\.net|lid)', conversation):
-                employee = verified_employee(cur,tenant,{**data,'participantJid':conversation})
+            if not coordinated and not outbound and _direct_identity(conversation):
+                from tenant_ai_group_coordination import EmployeeIdentityConflict
+                try:
+                    employee = verified_employee(cur,tenant,{**data,'participantJid':conversation},
+                        direct_aliases=metadata.get('direct_aliases', ()))
+                except EmployeeIdentityConflict:
+                    identity_conflict = True
+                    data = {**data, 'conversationIdentityConflict': True}
+                    from tenant_connect_direct_identity import record_conflict
+                    record_conflict(cur, tenant, channel_id, conversation, original_conversation, data, event_id)
             data = {key: value for key, value in data.items() if key != 'verified_employee_id'}
             if employee is not None:
                 data['verified_employee_id'] = employee
@@ -819,15 +793,20 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 external = 'connect:' + str(data.get('id') or event_id)
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
                   VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,%s,'',%s::timestamptz,%s::jsonb)
-                  ON CONFLICT(tenant_id,external_id) DO UPDATE SET external_id=saas_crm_messages.external_id
+                  ON CONFLICT(tenant_id,external_id) DO NOTHING
                   RETURNING id,author_name,raw,kommo_lead_id,channel''',
                             (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,_outbound_author(data),str(data.get('text') or ''),str(data.get('type') or 'text'),occurred,_json(data)))
                 stored = cur.fetchone()
+                message_inserted = stored is not None
+                if not message_inserted:
+                    cur.execute('''SELECT id,author_name,raw,kommo_lead_id,channel FROM saas_crm_messages
+                      WHERE tenant_id=%s::uuid AND external_id=%s''', (tenant,external))
+                    stored = cur.fetchone()
                 if stored and (stored.get('kommo_lead_id') != lead_id or stored.get('channel') != 'connect:' + channel_id):
                     raise ConnectWebhookError('message_scope_conflict', 'Connect message scope mismatch.', 409)
                 # A malformed outbound event with ``fromMe:false`` is kept as
                 # an observable outbound record, but cannot take over a chat.
-                if data.get('fromMe') is not False and data.get('source') != 'unknown' and not _outbound_is_ai(data, stored) and not ai_origin and (not coordinated or employee is not None):
+                if message_inserted and data.get('fromMe') is not False and data.get('source') != 'unknown' and not _outbound_is_ai(data, stored) and not ai_origin and (not coordinated or employee is not None):
                     from tenant_ai_agent_connect import mark_operator_reply
                     mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn, actor=employee)
                     if stored and stored.get('id') and data.get('conversationIdentityConflict') is not True:
@@ -864,15 +843,14 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 # identity; group JIDs, names, and unknown IDs never create a
                 # person record.  This shares the webhook transaction so
                 # retries cannot leave a contact without its message.
-                if (metadata.get('kind') == 'contact'
-                        and str(conversation).endswith(('@s.whatsapp.net', '@c.us'))):
+                if metadata.get('kind') == 'contact' and not identity_conflict:
                     from tenant_crm_native_contacts import upsert_whatsapp_contact
                     upsert_whatsapp_contact(cur, tenant, channel_id, conversation,
-                        _phone_from_jid(conversation), metadata.get('display_name') or '',
+                        _phone_from_jid(metadata.get('phone_jid') or conversation), metadata.get('display_name') or '',
                         str(data.get('id') or event_id))
                 occurred = str(event.get('occurred_at') or datetime.now(timezone.utc).isoformat())
                 is_group = metadata.get('kind') == 'group'
-                phone = '' if is_group else _phone_from_jid(conversation)
+                phone = '' if is_group else _phone_from_jid(metadata.get('phone_jid') or conversation)
                 author_name = (metadata.get('participant_name') or _phone_from_jid(metadata.get('participant_jid'))
                                or phone)
                 deal_name = metadata.get('display_name') or author_name
@@ -923,7 +901,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 conn.commit()
                 return True
             from tenant_connect_identity import conflicted
-            if conflicted(cur, tenant, channel_id, conversation):
+            if identity_conflict or conflicted(cur, tenant, channel_id, conversation):
                 # Preserve the signed event and CRM message, but do not feed a
                 # split/contradictory history into any paid AI path.
                 conn.commit()
@@ -1111,7 +1089,7 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING RETURNING id''',
                         (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending'})))
             saved=cur.fetchone()
-            if author != 'AI Agent':
+            if author != 'AI Agent' and saved:
                 from tenant_ai_agent_connect import mark_operator_reply
                 mark_operator_reply(tenant, lead_id, str(route['channel_id']), str(route['conversation_id']), connection=conn, actor=actor)
                 if saved:

@@ -1,0 +1,67 @@
+name: Connect direct identity regressions
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/connect-direct-identity.yml'
+      - 'beintaskbot-main/tenant_connect_*.py'
+      - 'beintaskbot-main/tenant_ai_agent_connect.py'
+      - 'beintaskbot-main/tenant_ai_group_coordination.py'
+      - 'beintaskbot-main/tenant_crm_native_contacts.py'
+      - 'beintaskbot-main/tenant_operator_list_snapshot.py'
+      - 'beintaskbot-main/tests/test_connect_*.py'
+  push:
+    branches: [fix/connect-direct-identity-replay]
+
+permissions:
+  contents: read
+
+jobs:
+  direct-identity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: isolated-identity-fixture
+        ports: ['55439:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=55439 user=postgres password=isolated-identity-fixture dbname=postgres
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated test dependencies
+        run: |
+          python -m pip install -r requirements.txt pytest
+          npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0
+      - name: Exercise ingestion, retries, concurrency, history and scope isolation
+        run: >-
+          python -m pytest -q --tb=short
+          tests/test_connect_identity_ingestion_postgres.py
+          tests/test_connect_direct_canonical.py
+          tests/test_connect_direct_identity.py
+          tests/test_connect_identity_inventory_postgres.py
+          tests/test_connect_dependent_reconcile_postgres.py
+          tests/test_connect_rollback_timestamp_postgres.py
+          tests/test_connect_channel_multiprocess.py
+          tests/test_native_whatsapp_contact.py
+          tests/test_tenant_operator_workspace.py
+          tests/test_operator_list_performance.py
+          tests/test_tenant_connect_api.py
+          tests/test_connect_direct_duplicate_audit.py
+          tests/test_tenant_ai_agent_connect_flow.py
+          tests/test_group_coordination.py::test_employee_phone_is_tenant_scoped_and_requires_explicit_recognition
+          tests/test_group_coordination.py::test_staff_registration_requires_owner_and_observed_company_identity
+          tests/test_group_coordination.py::test_signed_group_authorship

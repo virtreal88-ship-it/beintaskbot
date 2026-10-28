@@ -291,22 +291,30 @@ def view(cur, tenant, conversation):
       'sending_channel_id':selected['sending_channel_id'] if selected else None}
 
 
-def verified_employee(cur, tenant, data):
+class EmployeeIdentityConflict(ValueError):
+    """Verified direct aliases point to different configured employees."""
+
+
+def verified_employee(cur, tenant, data, *, direct_aliases=()):
     """Resolve only an explicitly configured tenant employee identity.
 
-    LIDs are never equated with phone JIDs. Phone matching uses a unique,
-    administrator-configured number on an active employee card.
+    Group LIDs are never inferred from phone JIDs. Direct-chat callers may
+    supply transactionally verified aliases; matching still requires a unique,
+    administrator-configured identity on an active employee card.
     """
     jid = data.get('participantJid')
-    if not isinstance(jid,str) or not re.fullmatch(r'[0-9]{5,22}@(s\.whatsapp\.net|lid)',jid):
+    if not isinstance(jid,str) or not re.fullmatch(r'[0-9]{5,22}@(s\.whatsapp\.net|c\.us|lid)',jid):
         return None
+    identities={jid} | {x for x in direct_aliases if isinstance(x,str)
+        and re.fullmatch(r'[0-9]{5,22}@(s\.whatsapp\.net|c\.us|lid)',x)}
+    phones=sorted({x.split('@',1)[0] for x in identities if x.endswith(('@s.whatsapp.net','@c.us'))})
     matches=set()
-    if jid.endswith('@s.whatsapp.net'):
+    if phones:
       cur.execute('''SELECT DISTINCT m.telegram_id AS member_id
       FROM saas_tenant_members m
       JOIN saas_tenant_member_whatsapp_numbers n ON n.tenant_id=m.tenant_id AND n.telegram_id=m.telegram_id
       WHERE m.tenant_id=%s::uuid AND m.active=TRUE AND n.recognition_enabled=TRUE
-        AND n.phone_digits=%s''',(tenant,jid.split('@',1)[0]))
+        AND n.phone_digits=ANY(%s::text[])''',(tenant,phones))
       matches.update(int(row['member_id']) for row in cur.fetchall())
     channel=data.get('channelId') or data.get('channel_id')
     try:channel=str(uuid.UUID(str(channel)))
@@ -315,8 +323,10 @@ def verified_employee(cur, tenant, data):
       cur.execute('''SELECT DISTINCT m.telegram_id AS member_id FROM saas_ai_group_staff s
         JOIN saas_tenant_members m ON m.tenant_id=s.tenant_id AND m.telegram_id=s.member_id AND m.active=TRUE
         JOIN saas_connect_channels ch ON ch.tenant_id=s.tenant_id AND ch.connect_channel_id=s.channel_id AND ch.active=TRUE
-        WHERE s.tenant_id=%s::uuid AND s.channel_id=%s::uuid AND s.jid=%s''',(tenant,channel,jid))
+        WHERE s.tenant_id=%s::uuid AND s.channel_id=%s::uuid AND s.jid=ANY(%s::text[])''',(tenant,channel,sorted(identities)))
       matches.update(int(row['member_id']) for row in cur.fetchall())
+    if direct_aliases and len(matches)>1:
+        raise EmployeeIdentityConflict('Conflicting configured direct identities')
     return next(iter(matches)) if len(matches)==1 else None
 
 
