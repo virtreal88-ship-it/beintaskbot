@@ -385,8 +385,12 @@ def get(profile, campaign_id=None):
         store.schema(conn);create_schema(conn)
         with conn.cursor() as cur:
             tenant,_,_=store.authorize(cur,profile)
+            # The schema enforces at most one non-stopped campaign per tenant.
+            # Restore that campaign before newer stopped history; an explicit id
+            # remains exact and is never substituted with another campaign.
             cur.execute('''SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid
-              AND (%s::uuid IS NULL OR id=%s::uuid) ORDER BY created_at DESC LIMIT 1''',(tenant,campaign_id,campaign_id))
+              AND (%s::uuid IS NULL OR id=%s::uuid)
+              ORDER BY CASE WHEN status <> 'stopped' THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT 1''',(tenant,campaign_id,campaign_id))
             row=cur.fetchone()
             if not row:return {'campaign':None}
             cur.execute('''SELECT status,count(*) AS n FROM saas_knowledge_campaign_fragments
