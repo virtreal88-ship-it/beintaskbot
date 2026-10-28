@@ -1319,17 +1319,19 @@ function IntegrationMarketplace() {
       hostId: "integrationSettingsHost",
       open: true,
     };
-    requestAnimationFrame(() =>
+    const frame = requestAnimationFrame(() =>
       document.dispatchEvent(
         new CustomEvent("tenant-integration-panel", { detail }),
       ),
     );
-    return () =>
+    return () => {
+      cancelAnimationFrame(frame);
       document.dispatchEvent(
         new CustomEvent("tenant-integration-panel", {
           detail: { ...detail, open: false },
         }),
       );
+    };
   }, [selected?.id, tab, owner]);
 
   const localeCopy = {
@@ -1620,6 +1622,7 @@ function IntegrationMarketplace() {
           <Dialog.Backdrop />
           <Dialog.Positioner>
             <Dialog.Content
+              id="integrationMarketplaceDialog"
               maxH={{ mdDown: "100dvh", md: "88vh" }}
               borderRadius={{ mdDown: 0, md: "3xl" }}
               overflow="hidden"
@@ -2488,7 +2491,16 @@ window.tenantChakraCRM = {
     ),
 };
 mount("aiDashboard", <AIDashboard />);
-mount("chakra-settings-root", <SettingsHub />);
-mount("chakra-integrations-root", <IntegrationMarketplace />);
+for (const [view, host, component] of [
+  ["settings", "chakra-settings-root", <SettingsHub />],
+  ["integrations", "chakra-integrations-root", <IntegrationMarketplace />],
+]) {
+  window.tenantViewDemand.watch({
+    view, host, editable: view === "settings" ? "#chakra-settings-root" : "#integrationMarketplaceDialog",
+    excludeEditable: ".integration-modal-panel", preserveProviderDrafts: view === "integrations",
+    activate: () => mount(host, component),
+    reset: () => { roots.get(host)?.unmount(); roots.delete(host); },
+  });
+}
 document.documentElement.dataset.chakraUi = "ready";
 document.dispatchEvent(new CustomEvent("tenant-chakra-ready"));

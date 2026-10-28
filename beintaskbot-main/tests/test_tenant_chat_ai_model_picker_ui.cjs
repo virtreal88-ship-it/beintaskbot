@@ -14,6 +14,8 @@ const settle=async()=>{for(let i=0;i<25;i++)await new Promise(r=>setImmediate(r)
    else payload={success:false,error:'unexpected request'};
    return{ok:true,status:200,json:async()=>payload};
  };
+  w.eval(read('docs/tenant-view-demand.js'));
+  w.document.dispatchEvent(new w.CustomEvent('tenant-integration-panel',{detail:{provider:'openai',open:true}}));
  w.eval(read('docs/tenant-chat-ai-settings.js'));await settle();
  const picker=d.querySelector('#tcCopilotModel');assert.equal(picker.tagName,'SELECT');assert.equal(d.querySelector('#tcCopilotModels'),null);
  d.querySelector('#tcCopilotListModels').click();await settle();assert.deepEqual([...picker.options].map(x=>x.value),['','gpt-4.1-mini','gpt-4o-mini']);

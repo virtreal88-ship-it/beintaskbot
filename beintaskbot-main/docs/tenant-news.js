@@ -1,7 +1,8 @@
 /* Company review only. Explicit save+publish, scoped responses and exact retries. */
 (() => {
   const $=id=>document.getElementById(id),esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  let profile,epoch=0,rows=[],after=null,loading=false,sending=false,pending=null,channel=null;
+  let initialRoutePending=new URL(location.href).searchParams.get('view')==='news';
+  let profile,allowed=false,epoch=0,rows=[],after=null,loading=false,sending=false,pending=null,channel=null;
   document.head.insertAdjacentHTML('beforeend',`<style>.tn-toolbar,.tn-actions{display:flex;gap:9px;flex-wrap:wrap;margin:14px 0}.tn-card{margin:14px 0;overflow-wrap:anywhere}.tn-card h2{font-weight:750}.tn-card .tn-body{white-space:pre-wrap;margin:12px 0}.tn-meta{font-size:12px;color:var(--muted)}#tnModal .modal-card{max-height:85dvh;overflow:auto;padding-bottom:calc(24px + env(safe-area-inset-bottom))}#tnModal textarea{width:100%;font:inherit;padding:10px;border:1px solid var(--line);border-radius:9px;resize:vertical;min-height:48px}#tnModal .tn-actions{position:sticky;bottom:0;background:white;padding:12px 0}</style>`);
   document.querySelector('.nav').insertAdjacentHTML('beforeend','<button id="tnNav" data-view="news" hidden style="display:none"><span>▤</span> Xəbərlər</button>');
   document.querySelector('main').insertAdjacentHTML('beforeend',`<section class="view" id="view-news"><div class="top"><h1>Xəbərlər</h1></div>
@@ -19,7 +20,7 @@
       <h2>${esc(row.title)}</h2><div class="tn-body">${esc(row.summary)}</div><div class="tn-meta">${esc(row.url)}${row.classification?.category?' · AI: '+esc(row.classification.category):' · Mənbə fraqmenti — əl ilə yoxlayın'}</div><div class="tn-meta">Telegram: ${esc(({pending:'Növbədə',sending:'Göndərilir',sent:'Göndərilib',unknown:'Nəticə naməlum — kanalı yoxlayın, təkrar göndərilmir',blocked:'Bloklanıb',cancelled:'Ləğv edilib',expired:'Müddəti bitib'})[row.telegram_status]||'Göndərilməyib')}</div>
       ${row.status==='pending'?'<div class="tn-actions"><button class="outline" data-edit>Yoxla və dərc et</button><button class="outline danger" data-reject>İmtina</button></div>':row.status==='published'?`<div class="tn-actions">${channel?.enabled&&![ 'sent','sending','unknown','pending','expired' ].includes(row.telegram_status)?'<button class="outline" data-telegram>Telegram-a göndər</button>':''}${['pending','blocked'].includes(row.telegram_status)?'<button class="outline danger" data-cancel-telegram>Növbədən çıxar</button>':''}</div>`:''}</article>`).join('')||'<div class="empty">Xəbər yoxdur.</div>';
   }
-  async function load(more=false){if(!profile||loading)return;const current=epoch;loading=true;$('tnNotice').textContent='Yüklənir…';$('tnMore').disabled=$('tnRefresh').disabled=true;
+  async function load(more=false){if(!profile||!allowed||loading)return;const current=epoch;loading=true;$('tnNotice').textContent='Yüklənir…';$('tnMore').disabled=$('tnRefresh').disabled=true;
     try{const result=await api('?status='+$('tnStatus').value+(more&&after?'&after='+encodeURIComponent(after):''));if(current!==epoch)return;
       if(String(result.tenant_id)!==String(profile.tenant_id)||String(result.user_id)!==String(profile.telegram_id))throw new Error('Kabinet dəyişib.');
       try{const config=await api('/telegram');if(current!==epoch)return;channel=config;}catch{if(current!==epoch)return;channel=null;}
@@ -27,7 +28,7 @@
       if(new URL(location.href).searchParams.get('view')==='news'){document.querySelectorAll('.view').forEach(view=>view.classList.toggle('active',view.id==='view-news'));document.querySelectorAll('.nav button').forEach(button=>button.classList.toggle('active',button.id==='tnNav'));}
     }catch(error){if(current===epoch){rows=[];after=null;render();$('tnNotice').textContent=error.message;if(error.status===403){$('tnNav').hidden=true;$('tnNav').style.display='none';close();}}}
     finally{if(current===epoch){loading=false;$('tnMore').disabled=$('tnRefresh').disabled=false;}}}
-  function close(){if(!sending)$('tnModal').classList.remove('show');}
+  function close(){if(!sending){$('tnModal').classList.remove('show');window.tenantViewDemand.clean('#tnModal');}}
   function grow(input){input.style.height='auto';input.style.height=input.scrollHeight+'px';}
   function recover(){if(!pending)return;const current=epoch;$('tnFields').innerHTML='<p>Eyni məlumat və eyni sorğu ID-si ilə nəticəni yoxlayın. Yeni xəbər yaradılmır.</p>';$('tnMessage').textContent='';$('tnPublish').textContent='Eyni sorğunu yoxla';$('tnPublish').onclick=()=>send(pending,current);$('tnModal').classList.add('show');}
   function edit(row){if(pending){recover();return;}const current=epoch;$('tnFields').innerHTML=`<label>Layihə<input id="tnProject" maxlength="100" value="${esc(row?.project_name||'')}"></label>
@@ -53,11 +54,12 @@
       if(!$('tnTitle')||error.status===403){sending=false;close();}if(error.status===403){rows=[];after=null;$('tnNav').hidden=true;$('tnNav').style.display='none';}}
       else{recover();$('tnMessage').textContent='Nəticə məlum deyil. Eyni sorğunu yoxlayın.';}}}
     finally{if(current===epoch){sending=false;$('tnStatus').disabled=false;$('tnPublish').disabled=false;$('tnPublish').textContent=pending?'Eyni sorğunu yoxla':'Saxla və dərc et';render();}}}
-  function install(data){const next=data.member;const identity=JSON.stringify([next.tenant_id,next.telegram_id,next.role,next.permissions,next.active,data.capabilities]);if(profile?.identity===identity)return;
+  function install(data){const next=data.member;allowed=window.tenantViewDemand.newsAvailable(data);const identity=JSON.stringify([next.tenant_id,next.telegram_id,next.role,next.permissions,next.active,data.capabilities,data.integrations]);if(profile?.identity===identity)return;
     epoch++;profile={...next,identity};rows=[];after=null;channel=null;loading=sending=false;pending=null;$('tnStatus').disabled=$('tnPublish').disabled=false;$('tnModal').classList.remove('show');$('tnNav').hidden=true;$('tnNav').style.display='none';
     try{const value=JSON.parse(sessionStorage.getItem(key())||'null');if(value&&String(value.expected_tenant_id)===String(next.tenant_id)&&String(value.expected_user_id)===String(next.telegram_id))pending=value;}catch{}
-    $('tnPublic').href='/updates/'+encodeURIComponent(next.tenant_id);render();load();}
-  $('tnNav').onclick=()=>{document.querySelectorAll('.view').forEach(view=>view.classList.toggle('active',view.id==='view-news'));document.querySelectorAll('.nav button').forEach(button=>button.classList.toggle('active',button.id==='tnNav'));const url=new URL(location.href);url.searchParams.set('view','news');history.replaceState(null,'',url);load();};
+    $('tnPublic').href='/updates/'+encodeURIComponent(next.tenant_id);render();$('tnNav').hidden=!allowed;$('tnNav').style.display=allowed?'':'none';
+    if(initialRoutePending&&allowed&&window.tenantAppNavigate&&new URL(location.href).searchParams.get('view')==='news'){initialRoutePending=false;window.tenantAppNavigate('news');}}
+  $('tnNav').onclick=()=>window.tenantAppNavigate?.('news',true);
   $('tnRefresh').onclick=()=>load();$('tnMore').onclick=()=>load(true);$('tnCreate').onclick=()=>edit();$('tnRecover').onclick=recover;
   $('tnStatus').onchange=()=>{if(sending)return;close();epoch++;loading=false;rows=[];after=null;render();load();};$('tnClose').onclick=$('tnCancel').onclick=close;
   $('tnRows').onclick=event=>{const card=event.target.closest('[data-news]'),row=rows.find(item=>item.id===card?.dataset.news);if(!row)return;
@@ -67,6 +69,8 @@
     const enqueue=event.target.closest('[data-telegram]'),cancel=event.target.closest('[data-cancel-telegram]');if(!enqueue&&!cancel)return;
     if(confirm(enqueue?`Xəbər «${channel?.title||''}» kanalına göndərilsin?`:'Telegram növbəsindən çıxarılsın?'))send({telegram_operation:true,action:enqueue?'enqueue':'cancel',id:row.id,expected_updated_at:row.updated_at,confirm_telegram:!!enqueue,channel_version:channel?.binding_version,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id});
   });
-  document.addEventListener('tenant-profile',event=>install(event.detail));const initial=epoch;
-  fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(initial===epoch&&data?.member)install(data);}).catch(()=>{});
+  window.tenantViewDemand.watch({view:'news', editable:'#tnModal', prepare:install, activate:()=>load(),
+    reset:()=>{epoch++;profile=null;allowed=false;rows=[];after=null;channel=null;loading=sending=false;pending=null;
+      $('tnModal').classList.remove('show');$('tnFields').replaceChildren();$('tnMessage').textContent='';
+      $('tnNav').hidden=true;$('tnNav').style.display='none';$('tnPublic').removeAttribute('href');render();}});
 })();

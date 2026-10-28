@@ -20,6 +20,8 @@ const settle=async()=>{for(let i=0;i<20;i++)await new Promise(r=>setImmediate(r)
    else {assert.equal(url,'/api/platform/chat/ai/settings');if(body)state={...state,...body,updated_at:'v2'};result=state;}
    return {ok:true,json:async()=>result};
   };
+  w.eval(fs.readFileSync(path.join(__dirname,'../docs/tenant-view-demand.js'),'utf8'));
+  w.document.dispatchEvent(new w.CustomEvent('tenant-integration-panel',{detail:{provider:'openai',open:true}}));
   w.eval(script);await settle();
   const select=d.getElementById('tcPhotoModel');assert.equal(select.value,'');assert.equal(select.disabled,false);
   assert.equal(d.getElementById('tcVideoModel').value,'');assert.equal(d.getElementById('tcVideoEnabled').checked,false);

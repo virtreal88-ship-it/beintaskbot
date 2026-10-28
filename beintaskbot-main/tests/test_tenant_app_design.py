@@ -81,7 +81,7 @@ class AppDesignTests(unittest.TestCase):
         workspace = (ROOT / 'docs/tenant-workspace.js').read_text(encoding='utf-8')
         self.assertIn('closeOnInteractOutside={false}', source)
         self.assertIn('id="integrationSettingsHost"', source)
-        self.assertIn('onClick={()=>setTab("settings")}', source)
+        self.assertIn('onClick={()=>setTab("settings")}', ''.join(source.split()))
         self.assertIn("panel.id === 'chakra-settings-root'", workspace)
 
     def test_ai_agents_is_a_transport_independent_app_module(self):
