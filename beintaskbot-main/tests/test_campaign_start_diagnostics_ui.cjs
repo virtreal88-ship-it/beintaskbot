@@ -13,7 +13,7 @@ const source=fs.readFileSync('docs/tenant-knowledge-campaigns.js','utf8');
  await w.TenantKnowledgeCampaigns.mount(w.document.getElementById('cases'),ctx);
  const host=w.document.getElementById('cases'),box=host.querySelector('[data-consent]');box.checked=true;box.onchange();await host.querySelector('[data-actions] button').onclick();
  const error=host.querySelector('[data-error]').textContent;
- if(scenario==='known_validation'){assert.equal(error,'Plan changed');assert.equal(posts,1);w.close();continue;}
+ if(scenario==='known_validation'){assert.equal(error,'Plan changed');assert.equal(posts,1);assert.equal(host.querySelector('[data-actions] button').disabled,false,'known rejection does not leave uncertain fence');w.close();continue;}
  assert.match(error,scenario==='post_failed'?/outcome is unknown/i:/start was confirmed/i);
  if(scenario==='committed_readback')assert.match(error,/reference-123/);
  const start=[...host.querySelectorAll('[data-actions] button')].find(b=>b.textContent==='Start analysis');assert(start.disabled,'cannot blindly submit again');

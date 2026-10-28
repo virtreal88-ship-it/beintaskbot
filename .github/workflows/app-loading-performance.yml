@@ -32,6 +32,7 @@ jobs:
         env:
           NODE_PATH: ./.support-test-deps/node_modules
         run: |
+          node tests/test_case_processing_races_ui.cjs
           node tests/test_campaign_restore_ui.cjs
           node tests/test_campaign_start_diagnostics_ui.cjs
           node tests/test_case_knowledge_loading.cjs
@@ -45,6 +46,7 @@ jobs:
       - name: Check dialog SQL and authorization regressions
         run: >-
           python -m pytest -q --tb=short
+          tests/test_campaign_restore_selection.py
           tests/test_campaign_start_diagnostics.py
           tests/test_knowledge_center_request_contract.py
           tests/test_read_timing.py
