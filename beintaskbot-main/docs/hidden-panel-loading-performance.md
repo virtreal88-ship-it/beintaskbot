@@ -59,15 +59,19 @@ NODE_PATH=./.support-test-deps/node_modules node tests/test_hidden_panel_loading
 The gate retains rendered state only in the current page, with a 30-second
 reuse window on return. It does not cache HTTP responses or persist API data.
 Explicit Refresh and existing save handlers keep their current reads/writes.
-A changed member, tenant, role, permissions, capabilities, or integration
-snapshot clears the retained UI. Logout, workspace switch, pagehide, and
-pending/failed reauthorization use the existing auth events to reset it.
+A changed tenant/user, role or authorization clears retained UI. Display metadata
+and integration freshness refresh clean panels without discarding edited forms.
+Logout, workspace switch, pagehide and failed reauthorization reset it. Pending
+reauthorization conceals and blocks the affected roots and portals; the same
+authorized identity resumes edited forms and reloads clean panels.
 Late legacy responses are rejected by their existing incremented generation.
 React roots are unmounted before remounting for a new context.
 
-Reauthorization intentionally resets these panels, including unsaved form
-state; a quick ordinary close/reopen retains it. This conservative behavior
-avoids displaying retained data while the session is being checked.
+Edited forms also survive an ordinary return after 30 seconds. Legacy successful
+load/save clears their dirty marker after the existing response-generation guard.
+Marketplace search/category do not mark settings dirty. React account/connection
+forms conservatively retain edits until an authority reset or page reload; this
+can retain their displayed snapshot longer than the clean-panel window.
 
 No new real-time transport is introduced for News or settings. Their local
 save/refresh paths remain live, profile events invalidate changed state, and
@@ -78,7 +82,9 @@ returning after 30 seconds reloads. Dialog real-time updates remain independent.
 - New executable regression suite: delayed auth, 12-to-0 comparison, direct
   News/Settings/Integrations links, real history back/forward, warm/expired
   visits, explicit Refresh, owner and Linear-bound worker access, revocation,
-  company/user switch, logout, delayed responses and same-scope focus.
+  company/user switch, logout, delayed responses and same-scope focus. Follow-up
+  coverage verifies dirty forms across background profile refresh, pending auth,
+  clean sibling replacement in a retained portal, failed auth and expired return.
 - Real React marketplace Settings/Close/reopen flow plus legacy placement
   cancellation. Detached hosts retain their panels; explicitly auth-reset
   panels cannot be resurrected by cleanup.
@@ -94,3 +100,18 @@ returning after 30 seconds reloads. Dialog real-time updates remain independent.
 
 No merge, deployment, agent activation, provider calls, client delivery, model
 configuration, permission changes, or production writes were performed.
+
+## Follow-up independent review
+
+The independent read-only review identified and the follow-up fixes cover:
+background /me metadata destroying drafts; auth-pending destroying same-user
+drafts; TTL destroying edits; a clean sibling panel disappearing from a retained
+React modal; and a marketplace search disabling status freshness. News Cancel
+now clears its draft marker, so it does not suppress later list refreshes.
+
+Known inherited limitation outside the demand subscriptions: the inline legacy
+Connect configuration panel is not context-reset by this gate. A silent same-page
+change to another tenant can retain its old fields in the repository; normal
+workspace switching reloads /app. No new regression or production exposure was
+established, but that legacy panel and its inline async handlers need a separate
+scope-lifecycle review before claiming isolation for every Settings surface.

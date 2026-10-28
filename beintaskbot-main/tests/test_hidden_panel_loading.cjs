@@ -98,6 +98,45 @@ async function marketplaceModal(){
  }finally{b.close();}
  console.log('PASS real React marketplace modal: Settings mounts legacy panels, Close restores them without writes');
 }
+async function dirtyReauthorization(){
+ let holdAuth=false;
+ const b=fixture({view:'integrations',core:true,workspace:true,hold:r=>holdAuth&&r.url==='/api/platform/me'});try{
+  await tick();await tick();
+  let card=[...b.w.document.querySelectorAll('#chakra-integrations-root *')].find(n=>n.childElementCount===0&&n.textContent==='OpenAI');
+  while(card&&!card.querySelector('button'))card=card.parentElement;
+  card.querySelector('button').click();await tick();
+  const tab=[...b.w.document.querySelectorAll('#integrationMarketplaceDialog [role="tab"]')].find(n=>n.textContent==='Settings');tab.click();await tick();await tick();
+  const key=b.w.document.getElementById('tcAiKey');key.value='synthetic-unsaved-key';key.dispatchEvent(new b.w.Event('input',{bubbles:true}));
+  const fresh={...owner,member:{...owner.member,display_name:'Changed display label'},integrations:[{provider:'connect',updated_at:'new-status'}],capabilities:{...owner.capabilities,deal_board:[{name:'Renamed pipeline'}]}};
+  b.profile(fresh);await tick();assert.equal(b.w.document.getElementById('tcAiKey'),key,'background freshness retains edited node');assert.equal(key.value,'synthetic-unsaved-key');
+  holdAuth=true;b.w.dispatchEvent(new b.w.Event('focus'));await tick();
+  assert.ok(b.w.document.documentElement.hasAttribute('data-tenant-panels-pending'));
+  assert.ok(b.w.document.getElementById('integrationMarketplaceDialog').hasAttribute('inert'));
+  const before=b.requests.length;b.w.document.getElementById('tcAiSave').click();await tick();assert.equal(b.requests.length,before,'auth-pending blocks even programmatic DOM click dispatch');
+  b.requests.filter(r=>r.url==='/api/platform/me').at(-1).reply(fresh);await tick();await tick();
+  assert.equal(b.w.document.getElementById('tcAiKey'),key);assert.equal(key.value,'synthetic-unsaved-key');assert.ok(b.w.document.querySelector('#integrationSettingsHost #tnAiPanel'),'clean sibling returns to retained portal');assert.ok(!b.w.document.documentElement.hasAttribute('data-tenant-panels-pending'));
+  [...b.w.document.querySelectorAll('#integrationMarketplaceDialog button')].find(n=>n.textContent==='Close').click();await tick();
+  b.advance(30001);card.querySelector('button').click();await tick();
+  [...b.w.document.querySelectorAll('#integrationMarketplaceDialog [role="tab"]')].find(n=>n.textContent==='Settings').click();await tick();
+  assert.equal(b.w.document.getElementById('tcAiKey'),key,'TTL does not discard dirty modal');assert.equal(key.value,'synthetic-unsaved-key');
+  b.w.dispatchEvent(new b.w.Event('focus'));await tick();b.requests.filter(r=>r.url==='/api/platform/me').at(-1).reply({},401);await tick();
+  assert.equal(b.w.document.getElementById('tcAiKey'),null,'failed reauthorization destroys dirty retained state');
+ }finally{b.close();}
+ const news=fixture({view:'news',core:true});try{
+  await tick();news.w.document.getElementById('tnCreate').click();const title=news.w.document.getElementById('tnTitle');title.value='Unsaved news';title.dispatchEvent(new news.w.Event('input',{bubbles:true}));
+  news.emit('tenant-auth-pending');assert.ok(news.w.document.getElementById('tnModal').hasAttribute('inert'));
+  news.profile({...owner,member:{...owner.member,display_name:'New name'}});await tick();assert.equal(news.w.document.getElementById('tnTitle'),title);assert.equal(title.value,'Unsaved news');
+  news.w.document.getElementById('tnCancel').click();const reads=news.requests.length;news.show('dialogs');news.advance(30001);news.show('news');await tick();assert.equal(news.requests.length,reads+2,'cancelled draft does not disable News refresh');
+  news.w.document.getElementById('tnCreate').click();
+  news.profile({...owner,member:{...owner.member,telegram_id:22}});assert.equal(news.w.document.getElementById('tnTitle'),null,'user change destroys editor');await tick();
+ }finally{news.close();}
+ const loading=fixture({hold:r=>r.url.endsWith('/news/telegram/settings')});try{
+  await tick();loading.emit('tenant-integration-panel',{provider:'telegram',open:true});const old=loading.requests.at(-1);
+  loading.emit('tenant-auth-pending');old.reply({chat_id:'OLD PENDING VALUE'});await tick();assert.ok(loading.w.document.documentElement.hasAttribute('data-tenant-panels-pending'));
+  loading.profile(owner);await tick();const replacement=loading.requests.at(-1);assert.notEqual(replacement,old,'interrupted clean initial load restarts');replacement.reply({chat_id:'FRESH VALUE'});await tick();assert.equal(loading.w.document.getElementById('tnChannelAddress').value,'FRESH VALUE');
+ }finally{loading.close();}
+ console.log('PASS dirty forms: background freshness, same-user reauth, portal/News conceal, blocked actions, TTL retention, failed/changed auth reset, initial-load restart');
+}
 async function isolation(){
  const b=fixture({hold:r=>r.url.includes('/news?')||r.url.endsWith('/news/telegram/settings')});try{
   await tick();b.show('news');await tick();const old=b.requests.find(r=>r.url.includes('/news?'));
@@ -112,7 +151,7 @@ async function isolation(){
   const worker={...owner,member:{...owner.member,role:'worker'},integrations:[{provider:'linear',status:'not_connected',metadata:{settings:{members:{11:{can_review_news:allowed}}}}}]};
   const b=fixture({profile:worker,core:true});try{await tick();assert.equal(b.w.document.getElementById('tnNav').hidden,!allowed);assert.equal(b.nonProfile().length,0);if(allowed){b.show('news');await tick();assert.match(b.w.document.getElementById('tnRows').textContent,/Synthetic/);}b.profile({...worker,integrations:[]});assert.equal(b.w.document.getElementById('tnNav').hidden,true);assert.doesNotMatch(b.w.document.getElementById('tnRows').textContent,/Synthetic/);}finally{b.close();}
  }
- const focus=fixture({view:'integrations',core:true});try{await tick();const before=focus.nonProfile().length;focus.w.dispatchEvent(new focus.w.Event('focus'));await tick();await tick();assert.equal(focus.nonProfile().length,before+5,'same-scope reauthorization reloads visible integration status');focus.profile({...owner,member:{...owner.member,tenant_id:'tenant-b'},account:{first_name:'Synthetic B'}});await tick();assert.ok(!focus.w.document.body.textContent.includes('Synthetic A'));}finally{focus.close();}
+ const focus=fixture({view:'integrations',core:true});try{for(let i=0;i<10&&focus.nonProfile().length<5;i++)await tick();const before=focus.nonProfile().length;assert.equal(before,5);const search=focus.w.document.querySelector('#chakra-integrations-root input');search.value='OpenAI';search.dispatchEvent(new focus.w.Event('input',{bubbles:true}));focus.w.dispatchEvent(new focus.w.Event('focus'));await tick();await tick();assert.equal(focus.nonProfile().length,before+5,'same-scope reauthorization reloads visible integration status');focus.profile({...owner,member:{...owner.member,tenant_id:'tenant-b'},account:{first_name:'Synthetic B'}});await tick();assert.ok(!focus.w.document.body.textContent.includes('Synthetic A'));}finally{focus.close();}
  console.log('PASS tenant/user switch, delayed responses, logout, Linear-bound worker visibility/revocation, same-scope focus');
 }
-(async()=>{const index=process.argv.indexOf('--baseline-ref');if(index>=0)return measurement(process.argv[index+1]);await measurement();await delayedBootstrap();await navigation();await integrations();await marketplaceModal();await isolation();})().catch(e=>{console.error(e);process.exitCode=1;});
+(async()=>{const index=process.argv.indexOf('--baseline-ref');if(index>=0)return measurement(process.argv[index+1]);await measurement();await delayedBootstrap();await navigation();await integrations();await marketplaceModal();await dirtyReauthorization();await isolation();})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -61,7 +61,7 @@
     catalogComplete=!(result.team.states.pageInfo.hasNextPage||result.team.projects.pageInfo.hasNextPage||result.team.members.pageInfo.hasNextPage);
     if(!catalogComplete)$('tlProjects').insertAdjacentHTML('beforeend','<p>İlk 50 seçim göstərilir. Ayarları itirməmək üçün saxlama dayandırılıb: böyük kataloq üçün genişləndirilmiş səhifələmə tələb olunur.</p>');
   }
-  async function load(current){const result=await api();if(current!==generation)return;snapshot=result;$('tlBody').hidden=false;$('tlKey').value='';
+  async function load(current){const result=await api();if(current!==generation)return;snapshot=result;window.tenantViewDemand.clean('#tenantLinearPanel');$('tlBody').hidden=false;$('tlKey').value='';
     $('tlStatus').textContent=result.status==='connected'?(result.runtime_enabled?'Linear tapşırıqları aktivdir':'Linear qoşulub · iş qaydalarını aktiv edin'):'Linear qoşulmayıb';
     const config=result.settings||{};catalogComplete=!config.team_id;$('tlChannel').value=config.news?.channel||'';$('tlNewsEnabled').checked=config.news?.enabled===true;
     $('tlMembers').innerHTML='<h3>Əməkdaşların Linear qaydaları</h3>'+result.members.map(member=>{
@@ -78,6 +78,6 @@
       if(config.team_id){if(![...$('tlTeam').options].some(o=>o.value===config.team_id))$('tlTeam').insertAdjacentHTML('beforeend',`<option value="${esc(config.team_id)}">Saxlanmış komanda</option>`);
         $('tlTeam').value=config.team_id;await teamChoices(current);}}
   }
-  window.tenantViewDemand.watch({provider:'linear', activate:install,
+  window.tenantViewDemand.watch({provider:'linear', editable:'#tenantLinearPanel', activate:install,
     reset:()=>{generation++;profile=null;busy=false;$('tenantLinearPanel')?.remove();}});
 })();

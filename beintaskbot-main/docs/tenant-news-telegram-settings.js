@@ -3,14 +3,14 @@
   const $=id=>document.getElementById(id);let profile,epoch=0,version='',busy=false;
   async function api(data){const response=await fetch('/api/platform/news/telegram/settings',{credentials:'same-origin',cache:'no-store',...(data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{})});const result=await response.json();if(!response.ok||!result.success)throw new Error(result.error||'Kanal ayarları alınmadı.');return result;}
   function disable(on){busy=on;$('tnChannelPanel')?.querySelectorAll('input,button').forEach(input=>input.disabled=on);}
-  async function load(){if(busy)return;const current=epoch;disable(true);try{const result=await api();if(current!==epoch)return;version=result.updated_at;
+  async function load(){if(busy)return;const current=epoch;disable(true);try{const result=await api();if(current!==epoch)return;version=result.updated_at;window.tenantViewDemand.clean('#tnChannelPanel');
     $('tnChannelAddress').value=result.chat_id;$('tnChannelEnabled').checked=result.enabled;$('tnChannelTimezone').value=result.timezone;$('tnChannelStart').value=result.start;$('tnChannelEnd').value=result.end;$('tnChannelInterval').value=result.interval_minutes;$('tnBotName').textContent=result.bot_username||'hazırda əlçatan deyil';
     $('tnChannelNotice').textContent=result.configured?`${result.title} · ${result.enabled?'Aktiv':'Dayandırılıb'}`:'Kanal qoşulmayıb.';
     }catch(error){if(current===epoch)$('tnChannelNotice').textContent=error.message;}finally{if(current===epoch)disable(false);}}
   async function save(verify){if(busy)return;const current=epoch;disable(true);$('tnChannelNotice').textContent=verify?'Kanal yoxlanılır…':'Dayandırılır…';
     try{const result=await api({channel:$('tnChannelAddress').value.trim(),enabled:verify&&$('tnChannelEnabled').checked,verify,
       timezone:$('tnChannelTimezone').value,start:$('tnChannelStart').value,end:$('tnChannelEnd').value,interval_minutes:Number($('tnChannelInterval').value),
-      expected_updated_at:version,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id});if(current!==epoch)return;version=result.updated_at;$('tnChannelAddress').value=result.chat_id;$('tnChannelEnabled').checked=result.enabled;
+      expected_updated_at:version,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id});if(current!==epoch)return;version=result.updated_at;window.tenantViewDemand.clean('#tnChannelPanel');$('tnChannelAddress').value=result.chat_id;$('tnChannelEnabled').checked=result.enabled;
       $('tnChannelNotice').textContent=`${result.title} · Saxlanıldı. Kanal yoxlaması mesaj göndərmədi.`;
     }catch(error){if(current===epoch)$('tnChannelNotice').textContent=error.message;}finally{if(current===epoch)disable(false);}}
   function install(data){const next=data.member,identity=next.tenant_id+':'+next.telegram_id+':'+next.role;if(profile?.identity===identity)return;epoch++;profile={...next,identity};busy=false;version='';$('tnChannelPanel')?.remove();if(next.role!=='owner')return;
@@ -20,6 +20,6 @@
       <button class="outline" id="tnChannelLoad">Yenilə</button><button class="primary" id="tnChannelSave">Yoxla və saxla</button><button class="outline danger" id="tnChannelPause">Göndərişi dayandır</button><p id="tnChannelNotice" role="status"></p></article>`);
     $('tnChannelLoad').onclick=load;$('tnChannelSave').onclick=()=>save(true);$('tnChannelPause').onclick=()=>save(false);load();
   }
-  window.tenantViewDemand.watch({provider:'telegram', activate:install,
+  window.tenantViewDemand.watch({provider:'telegram', editable:'#tnChannelPanel', activate:install,
     reset:()=>{epoch++;profile=null;busy=false;$('tnChannelPanel')?.remove();}});
 })();

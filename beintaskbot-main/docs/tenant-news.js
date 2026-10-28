@@ -28,7 +28,7 @@
       if(new URL(location.href).searchParams.get('view')==='news'){document.querySelectorAll('.view').forEach(view=>view.classList.toggle('active',view.id==='view-news'));document.querySelectorAll('.nav button').forEach(button=>button.classList.toggle('active',button.id==='tnNav'));}
     }catch(error){if(current===epoch){rows=[];after=null;render();$('tnNotice').textContent=error.message;if(error.status===403){$('tnNav').hidden=true;$('tnNav').style.display='none';close();}}}
     finally{if(current===epoch){loading=false;$('tnMore').disabled=$('tnRefresh').disabled=false;}}}
-  function close(){if(!sending)$('tnModal').classList.remove('show');}
+  function close(){if(!sending){$('tnModal').classList.remove('show');window.tenantViewDemand.clean('#tnModal');}}
   function grow(input){input.style.height='auto';input.style.height=input.scrollHeight+'px';}
   function recover(){if(!pending)return;const current=epoch;$('tnFields').innerHTML='<p>Eyni məlumat və eyni sorğu ID-si ilə nəticəni yoxlayın. Yeni xəbər yaradılmır.</p>';$('tnMessage').textContent='';$('tnPublish').textContent='Eyni sorğunu yoxla';$('tnPublish').onclick=()=>send(pending,current);$('tnModal').classList.add('show');}
   function edit(row){if(pending){recover();return;}const current=epoch;$('tnFields').innerHTML=`<label>Layihə<input id="tnProject" maxlength="100" value="${esc(row?.project_name||'')}"></label>
@@ -69,7 +69,7 @@
     const enqueue=event.target.closest('[data-telegram]'),cancel=event.target.closest('[data-cancel-telegram]');if(!enqueue&&!cancel)return;
     if(confirm(enqueue?`Xəbər «${channel?.title||''}» kanalına göndərilsin?`:'Telegram növbəsindən çıxarılsın?'))send({telegram_operation:true,action:enqueue?'enqueue':'cancel',id:row.id,expected_updated_at:row.updated_at,confirm_telegram:!!enqueue,channel_version:channel?.binding_version,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id});
   });
-  window.tenantViewDemand.watch({view:'news', prepare:install, activate:()=>load(),
+  window.tenantViewDemand.watch({view:'news', editable:'#tnModal', prepare:install, activate:()=>load(),
     reset:()=>{epoch++;profile=null;allowed=false;rows=[];after=null;channel=null;loading=sending=false;pending=null;
       $('tnModal').classList.remove('show');$('tnFields').replaceChildren();$('tnMessage').textContent='';
       $('tnNav').hidden=true;$('tnNav').style.display='none';$('tnPublic').removeAttribute('href');render();}});

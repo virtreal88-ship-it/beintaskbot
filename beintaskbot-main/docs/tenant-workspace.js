@@ -168,7 +168,7 @@
     telegram: ['tnChannelPanel'],
     connect: ['connectWhatsAppSettings'],
   };
-  let activeIntegration = '', placementGeneration = 0, placedPanels = [];
+  let activeIntegration = '', placementGeneration = 0, placedPanels = [], activeHostId = '';
   function placeIntegrationPanels(provider, hostId) {
     const host = document.getElementById(hostId);
     if (!host) return false;
@@ -178,7 +178,7 @@
     host.replaceChildren(...panels);
     placedPanels = panels;
     panels.forEach(panel => {panel.hidden=false;panel.removeAttribute('data-settings-section');panel.classList.add('integration-modal-panel');});
-    activeIntegration = provider;
+    activeIntegration = provider; activeHostId = hostId;
     return true;
   }
   function restoreIntegrationPanels() {
@@ -188,8 +188,11 @@
       panel.classList.remove('integration-modal-panel');panel.hidden=true;integrationRepository.append(panel);
     });
     placedPanels = [];
-    activeIntegration = '';
+    activeIntegration = ''; activeHostId = '';
   }
+  document.addEventListener('tenant-integration-panel-ready', event => {
+    if (activeIntegration && activeIntegration === event.detail?.provider) placeIntegrationPanels(activeIntegration, activeHostId);
+  });
   document.addEventListener('tenant-integration-panel', event => {
     const detail = event.detail || {}, current = ++placementGeneration;
     if (!detail.open) { restoreIntegrationPanels(); return; }

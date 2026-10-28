@@ -1622,6 +1622,7 @@ function IntegrationMarketplace() {
           <Dialog.Backdrop />
           <Dialog.Positioner>
             <Dialog.Content
+              id="integrationMarketplaceDialog"
               maxH={{ mdDown: "100dvh", md: "88vh" }}
               borderRadius={{ mdDown: 0, md: "3xl" }}
               overflow="hidden"
@@ -2495,7 +2496,8 @@ for (const [view, host, component] of [
   ["integrations", "chakra-integrations-root", <IntegrationMarketplace />],
 ]) {
   window.tenantViewDemand.watch({
-    view, host,
+    view, host, editable: view === "settings" ? "#chakra-settings-root" : "#integrationMarketplaceDialog",
+    excludeEditable: ".integration-modal-panel", preserveProviderDrafts: view === "integrations",
     activate: () => mount(host, component),
     reset: () => { roots.get(host)?.unmount(); roots.delete(host); },
   });
