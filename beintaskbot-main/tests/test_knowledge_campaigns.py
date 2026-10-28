@@ -32,6 +32,49 @@ def approve_fixture(d,key):
     d.execute("UPDATE saas_knowledge_campaigns SET status='running',approved_at=now(),approved_by=11 WHERE id=%s::uuid",(key,));d.commit()
 
 
+def test_paused_campaign_exposes_safe_current_quota_without_changing_state(campaign,monkeypatch):
+    import tenant_knowledge_campaign_worker as worker
+    d,provider,_,key=campaign;fragment=add(d,key)
+    d.execute("UPDATE saas_knowledge_campaigns SET status='paused' WHERE id=%s::uuid",(key,))
+    d.execute("UPDATE saas_knowledge_campaign_fragments SET status='blocked',error_code='limit_exceeded',result=%s::jsonb WHERE id=%s::uuid",(json.dumps({'safe_limit_reason':'company_daily_ai_call_limit'}),fragment))
+    d.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,metadata) VALUES(%s::uuid,'chat_ai','connected',%s::jsonb)",(A,json.dumps({'daily_limit':1,'api_key':'PRIVATE-DO-NOT-RETURN'})));d.commit()
+    d.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state) VALUES(%s::uuid,%s::uuid,%s::uuid,'evt',1,'test','completed')",(A,str(uuid.uuid4()),AGENT));d.commit()
+    before=row(d,key)
+    diagnostics=campaigns.get(PROFILE,key)['campaign']['limit_diagnostics']
+    assert diagnostics['current_blocker']=='company_daily_ai_call_limit'
+    assert diagnostics['last_limit_error']=='company_daily_ai_call_limit'
+    assert diagnostics['utc_daily_ai_call_limit']==1
+    assert diagnostics['basis']=='current_snapshot_not_historical_error'
+    assert 'PRIVATE-DO-NOT-RETURN' not in json.dumps(diagnostics)
+    assert row(d,key)==before
+    assert campaigns.get({'tenant_id':B,'telegram_id':22},key)['campaign'] is None
+    assert worker._safe_limit_reason(TenantLinearError('private sensitive SQL',429))=='other_limit'
+    assert worker._safe_limit_reason(TenantLinearError('ai_spend_budget_exhausted',429))=='tenant_spend_limit'
+    d.execute("UPDATE saas_tenant_integrations SET metadata=%s::jsonb WHERE tenant_id=%s::uuid AND provider='chat_ai'",(json.dumps({'daily_limit':1000}),A));d.commit()
+    import tenant_ai_agent_key_policy as key_policy
+    monkeypatch.setattr(key_policy,'platform_token_limit',lambda tenant:1)
+    with d.cursor() as cur:token_diagnostic=campaigns._current_limit_diagnostics(cur,A,row(d,key),'platform')
+    assert token_diagnostic['current_blocker']=='tenant_token_limit'
+    assert token_diagnostic['tenant_token_limit']==1
+    provider.assert_not_called()
+
+
+def test_worker_records_allowlisted_limit_reason_without_raw_exception(campaign,monkeypatch):
+    import tenant_knowledge_campaign_worker as worker
+    d,provider,_,key=campaign;fragment=add(d,key);approve_fixture(d,key)
+    d.execute('UPDATE saas_knowledge_campaigns SET progress=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps({'mode':'case_media_batch'}),key));d.commit()
+    monkeypatch.setattr(worker,'_connect',lambda:d)
+    monkeypatch.setattr(worker,'check_fence',lambda *a:None)
+    def fail(*a,**kw):raise TenantLinearError('Дневной лимит AI компании исчерпан.',429)
+    monkeypatch.setattr(worker,'analyze',fail)
+    assert worker.tick() is True
+    saved=d.execute('SELECT status,error_code,result FROM saas_knowledge_campaign_fragments WHERE id=%s::uuid',(fragment,))[0]
+    assert saved=={'status':'blocked','error_code':'limit_exceeded','result':{'safe_limit_reason':'company_daily_ai_call_limit'}}
+    assert row(d,key)['status']=='paused'
+    provider.assert_not_called()
+
+
 def test_recovery_skips_quarantined_head_but_never_retries_unknown(campaign,monkeypatch):
     import tenant_case_media_recovery as recovery
     d,provider,_,key=campaign
