@@ -1,5 +1,7 @@
 """Same-origin APIs for manual knowledge extraction and employee review."""
 import asyncio
+import re
+import uuid
 from tenant_read_timing import ReadTiming
 from aiohttp import web
 import tenant_knowledge_batches as batches
@@ -81,11 +83,23 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                 elif resource=='collection': result=await asyncio.to_thread(analyze,profile,data)
                 else: result=await asyncio.to_thread(mutate,profile,request.match_info['candidate_id'],data,'edit' if resource=='candidate' else resource)
             return web.json_response({'success':True,'result':result},headers=headers)
+        except campaigns.CampaignStartReadbackFailed as error:
+            reference = uuid.uuid4().hex
+            error_class = error.error_class if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,79}', error.error_class) else 'UnknownError'
+            logger.error('campaign_start stage=committed_readback error_class=%s reference=%s', error_class, reference)
+            return web.json_response({'success':True,'result':{'start_committed':True,'readback_pending':True,'reference':reference}},headers=headers)
         except TenantLinearError as error:
             return web.json_response({'success':False,'error':str(error)},status=error.status,headers=headers)
         except (ValueError,TypeError,KeyError):
             return web.json_response({'success':False,'error':'Некорректные параметры.'},status=400,headers=headers)
-        except Exception:
+        except Exception as error:
+            if resource in {'campaign_start','campaigns','campaign'}:
+                reference = uuid.uuid4().hex
+                error_class = type(error).__name__
+                if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,79}', error_class): error_class = 'UnknownError'
+                stage = 'start_unconfirmed' if resource == 'campaign_start' else ('campaign_read' if request.method == 'GET' else 'campaign_prepare')
+                logger.error('campaign_operation stage=%s error_class=%s reference=%s', stage, error_class, reference)
+                return web.json_response({'success':False,'error':f'Операция временно недоступна. Код: {reference}'},status=503,headers=headers)
             logger.error('Knowledge candidate operation unavailable')
             return web.json_response({'success':False,'error':'Операция временно недоступна.'},status=503,headers=headers)
         finally:
