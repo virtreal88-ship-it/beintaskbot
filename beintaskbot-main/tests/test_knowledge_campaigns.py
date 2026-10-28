@@ -32,7 +32,7 @@ def approve_fixture(d,key):
     d.execute("UPDATE saas_knowledge_campaigns SET status='running',approved_at=now(),approved_by=11 WHERE id=%s::uuid",(key,));d.commit()
 
 
-def test_paused_campaign_exposes_safe_current_quota_without_changing_state(campaign):
+def test_paused_campaign_exposes_safe_current_quota_without_changing_state(campaign,monkeypatch):
     import tenant_knowledge_campaign_worker as worker
     d,provider,_,key=campaign;fragment=add(d,key)
     d.execute("UPDATE saas_knowledge_campaigns SET status='paused' WHERE id=%s::uuid",(key,))
@@ -50,6 +50,12 @@ def test_paused_campaign_exposes_safe_current_quota_without_changing_state(campa
     assert campaigns.get({'tenant_id':B,'telegram_id':22},key)['campaign'] is None
     assert worker._safe_limit_reason(TenantLinearError('private sensitive SQL',429))=='other_limit'
     assert worker._safe_limit_reason(TenantLinearError('ai_spend_budget_exhausted',429))=='tenant_spend_limit'
+    d.execute("UPDATE saas_tenant_integrations SET metadata=%s::jsonb WHERE tenant_id=%s::uuid AND provider='chat_ai'",(json.dumps({'daily_limit':1000}),A));d.commit()
+    import tenant_ai_agent_key_policy as key_policy
+    monkeypatch.setattr(key_policy,'platform_token_limit',lambda tenant:1)
+    with d.cursor() as cur:token_diagnostic=campaigns._current_limit_diagnostics(cur,A,row(d,key),'platform')
+    assert token_diagnostic['current_blocker']=='tenant_token_limit'
+    assert token_diagnostic['tenant_token_limit']==1
     provider.assert_not_called()
 
 
