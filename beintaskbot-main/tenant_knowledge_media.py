@@ -71,7 +71,9 @@ def collect(profile,item,check_before_ai=None):
         # again; partial video remains explicitly partial.
         from tenant_media_evidence import reusable, apply_reusable
         prior=reusable(profile,ref)
-        if prior:
+        retry_unknown=(item.get('route') or {}).get('owner_retry_unknown') is True
+        reusable_failure=prior and prior.get('status') in {'unavailable','error'}
+        if prior and not (retry_unknown and reusable_failure):
             reused=apply_reusable(message,prior)
             receipt={k:ref[k] for k in ('id','channel_id','lead_id','role','happened_at') if k in ref}
             receipt.update(kind=kind,**reused)
@@ -80,7 +82,10 @@ def collect(profile,item,check_before_ai=None):
         receipt={k:ref[k] for k in ('id','channel_id','lead_id','role','happened_at') if k in ref}
         receipt.update(kind=kind,status='pending_processing',code='processing_limit')
         results.append(receipt)
-        if len(results)>MAX_FILES or time.monotonic()>deadline: continue
+        if len(results)>MAX_FILES:
+            receipt.update(status='partial',code='file_count_limit');continue
+        if time.monotonic()>deadline:
+            receipt.update(status='partial',code='time_budget');continue
         if kind not in {'image','audio','voice','video','document'}:
             receipt.update(status='unsupported',code='unsupported_format');continue
         stage='source_validation'
@@ -139,12 +144,21 @@ def collect(profile,item,check_before_ai=None):
             seen[digest]=receipt
             visuals=[]
             if kind=='document':
-                suffix={'application/pdf':'pdf','text/plain':'txt','application/vnd.openxmlformats-officedocument.wordprocessingml.document':'docx'}.get(mime)
+                suffix={'application/pdf':'pdf','text/plain':'txt',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document':'docx',
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'xlsx'}.get(mime)
                 if not suffix: receipt.update(status='unsupported',code='unsupported_format');continue
                 try:
                     _,_,text=extract('attachment.'+suffix,data)
-                    message['text']+='\n[Extracted document text] '+redact(text,names)[:4000]
-                    receipt.update(status='processed',code='document_text',observation=redact(text,names)[:4000]);continue
+                    safe_text=redact(text,names)
+                    truncated=len(safe_text)>4000
+                    safe_text=safe_text[:4000]
+                    message['text']+='\n[Extracted document text] '+safe_text
+                    receipt.update(status='partial' if truncated else 'processed',
+                                   code='document_text_truncated' if truncated else 'document_text',
+                                   observation=safe_text)
+                    if truncated:receipt['truncated']=True
+                    continue
                 except TenantLinearError:
                     if suffix!='pdf': raise
                     # Only textless, valid, unencrypted bounded PDFs may enter page rendering.
@@ -221,7 +235,9 @@ def collect(profile,item,check_before_ai=None):
             _failure_detail(receipt,error)
             if getattr(error,'media_outcome_unknown',False):
                 receipt.update(status='unknown',code='media_result_unknown',failure_stage=stage);continue
-            code='video_size_limit' if kind=='video' and error.status==413 else 'media_size_limit' if error.status==413 else 'media_unavailable'
+            code=('unsupported_document_feature' if kind=='document' and error.status==415 else
+                'video_size_limit' if kind=='video' and error.status==413 else
+                'media_size_limit' if error.status==413 else 'media_unavailable')
             receipt.update(status='unavailable' if error.status in {403,404,410,413} else 'unsupported' if error.status==415 else 'error',code=code,failure_stage=stage)
         except ValueError as error:
             _failure_detail(receipt,error)

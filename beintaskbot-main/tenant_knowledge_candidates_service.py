@@ -34,7 +34,7 @@ class LiveExtractionDisabled(Exception):
 
 
 def prepare(profile,data,review=None):
-    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','photo_model','video_model','media_grant_id'}
+    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','photo_model','video_model','media_grant_id','owner_retry_unknown'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректные параметры анализа.')
     for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
         if flag in data and type(data[flag]) is not bool: raise TenantLinearError('Некорректное разрешение медиа.')
@@ -64,7 +64,7 @@ def prepare(profile,data,review=None):
                     if explicit_language or replay['request_key']!=store.digest(legacy_shape):
                         raise TenantLinearError('request_id уже использован для другого запроса.',409)
                 return {'existing':request_id}
-            cur.execute('''SELECT c.sources,f.route,c.max_cost_microusd FROM saas_knowledge_campaign_fragments f
+            cur.execute('''SELECT c.id AS campaign_id,c.sources,f.route,c.max_cost_microusd,c.progress FROM saas_knowledge_campaign_fragments f
               JOIN saas_knowledge_campaigns c ON c.tenant_id=f.tenant_id AND c.id=f.campaign_id
               WHERE f.tenant_id=%s::uuid AND f.id=%s::uuid''',(tenant,request_id))
             campaign_source=cur.fetchone()
@@ -74,7 +74,9 @@ def prepare(profile,data,review=None):
             if grant_id and not campaign_source.get('max_cost_microusd'):
                 raise TenantLinearError('ai_media_grant_inactive',409)
             if campaign_source:
-                if data.get('media_grant_id')!=campaign_source['route'].get('media_grant_id') or data.get('video_model')!=campaign_source['route'].get('video_model'):
+                if (data.get('media_grant_id')!=campaign_source['route'].get('media_grant_id')
+                    or data.get('video_model')!=campaign_source['route'].get('video_model')
+                    or data.get('owner_retry_unknown',False) is not campaign_source['route'].get('owner_retry_unknown',False)):
                     raise TenantLinearError('Разрешение кампании изменилось.',409)
                 expected=sorted(campaign_source['sources'])
                 for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
@@ -83,6 +85,16 @@ def prepare(profile,data,review=None):
                     raise TenantLinearError('Источники кампании изменились.',409)
                 from tenant_knowledge_campaign_worker import check_fence
                 check_fence(cur,tenant,request_id)
+                if data.get('owner_retry_unknown'):
+                    progress=campaign_source.get('progress') or {}
+                    grant_id=(campaign_source.get('route') or {}).get('media_grant_id')
+                    if (progress.get('mode')!='case_media_batch' or progress.get('acknowledge_prior_unknown') is not True
+                        or not grant_id):
+                        raise TenantLinearError('Owner retry authorization is not part of the active fixed grant.',403)
+                    cur.execute('''SELECT 1 FROM saas_ai_media_grants WHERE tenant_id=%s::uuid AND id=%s::uuid
+                      AND campaign_id=%s::uuid AND status='active' AND approved_at IS NOT NULL FOR SHARE''',
+                      (tenant,grant_id,campaign_source['campaign_id']))
+                    if not cur.fetchone():raise TenantLinearError('The bounded media grant is not active.',409)
             photo_only=bool(data.get('photo_model'))
             if photo_only:
                 from tenant_ai_photo_model import authority as photo_authority

@@ -32,20 +32,29 @@ const script=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant
         max_calls:data.max_calls,max_tokens:data.max_tokens,media_policy:{allow_external_media:data.allow_external_media,
           allow_paid_asr:data.allow_paid_asr,max_main_calls:data.max_main_calls,max_asr_calls:data.max_asr_calls,
           max_vision_calls:data.max_vision_calls},progress:{mode:'case_media_batch',case_count:3,eligible_count:2,
-          reused_count:1,review_count:0,unknown_media_count:0,unavailable_media_count:0,case_plans:[]},
+          reused_count:1,review_count:0,unknown_media_count:1,unavailable_media_count:0,retry_unknown_count:data.acknowledge_prior_unknown?1:0,acknowledge_prior_unknown:data.acknowledge_prior_unknown===true,case_plans:[]},
         max_cost_microusd:data.max_cost_microusd,video_model:data.video_model,grant_used_microusd:0,
         prior_unknown_holds_microusd:0,prior_settled_microusd:0,analysis_model:'text-model',asr_model:'asr-model',
         grant_approved:false,fragments:{},reserved_calls:0,reserved_tokens:0,used_tokens:0,cards:0};
-    }return {campaign:batchState};}};
+      if(url.endsWith('/start'))batchState={...batchState,version:2,status:'running',grant_approved:true};
+    }if(url.includes('/preview?'))return {result:{case_count:3,eligible_count:2,reused_count:1,review_count:0,unknown_media_count:1,unavailable_media_count:0,retry_unknown_count:new URL(url).searchParams.get('acknowledge_prior_unknown')==='true'?1:0,cases:[]}};return {campaign:batchState};}};
   await w.TenantKnowledgeCampaigns.mount(host,batchCtx);
   const all=host.querySelector('[data-all-existing]');all.checked=true;all.onchange();
   assert.equal(host.querySelector('[data-source]').disabled,true);
+  assert.equal(host.querySelector('[data-retry-wrap]').hidden,false);
+  host.querySelector('[data-retry-unknown]').checked=true;host.querySelector('[data-retry-unknown]').onchange();
+  assert.ok(batchRequests.length===0,'preview must remain read-only');
   host.querySelector('[data-video-model]').value='gpt-4.1';
   await host.querySelector('[data-prepare]').onclick();
   assert.equal(batchRequests.length,1);assert.equal(batchRequests[0].data.all_existing_cases,true);
   assert.equal(batchRequests[0].data.max_cost_microusd,10000000);assert.equal(batchRequests[0].data.video_model,'gpt-4.1');
+  assert.equal(batchRequests[0].data.acknowledge_prior_unknown,true);
   assert.deepEqual(batchRequests[0].data.channel_ids,[]);
   assert.ok(host.querySelector('.campaign-run-notice').textContent.includes('$10.00'));
   assert.ok(host.querySelector('.campaign-run-notice').textContent.includes('text-model'));
+  const batchConsent=host.querySelector('[data-consent]');assert.ok(batchConsent);batchConsent.checked=true;batchConsent.onchange();
+  const startButton=[...host.querySelectorAll('[data-actions] button')].find(button=>button.textContent===({ru:'Запустить анализ',az:'Analizi başlat',en:'Start analysis'}[language]));
+  assert.ok(startButton);await startButton.onclick();
+  assert.equal(batchRequests[1].data.acknowledge_prior_unknown,true);
   dom.window.close();
 }console.log('Campaign controls: RU/AZ/EN, explicit consent, sources, versioned pause passed');})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -12,6 +12,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 import pytest
 import tenant_knowledge_media as media
+from test_knowledge_candidates import ready
+from test_tenant_support_inbox import A,PROFILE
 from tenant_linear_policy import TenantLinearError
 from test_connect_images import PNG
 
@@ -75,8 +77,43 @@ def test_count_limit_unsupported_and_pending(context):
     item,add,download=context
     for _ in range(5):add('sticker')
     _,results=media.collect({},item)
-    assert [r['status'] for r in results]==['unsupported']*4+['pending_processing']
+    assert [r['status'] for r in results]==['unsupported']*4+['partial']
+    assert results[-1]['code']=='file_count_limit'
     download.assert_not_called()
+
+
+def test_owner_batch_retry_cache_is_single_attempt_and_shared_by_same_artifact(ready,monkeypatch):
+    import uuid
+    from unittest.mock import Mock
+    import tenant_knowledge_candidates_service as service
+    import tenant_knowledge_media_cache as cache
+    db,_,_=ready
+    monkeypatch.setattr(cache,'_connect',lambda:db)
+    monkeypatch.setattr(service,'_connect',lambda:db)
+    monkeypatch.setattr(service,'check_active',lambda *_:None)
+    message_id=str(uuid.uuid4());grant_id=str(uuid.uuid4());content=b'synthetic printer image bytes'
+    ref={'id':message_id,'channel_id':'00000000-0000-0000-0000-0000000000c9'}
+    route={'owner_retry_unknown':True,'media_grant_id':grant_id,'message_ids':[message_id],
+      'source_version':'a'*64,'allow_external_media':True,'allow_vision':True}
+    item={'tenant':A,'model':'gpt-4.1','route':route,'refs':[ref],'key':'mock-key','vision_attempts':0}
+    provider=Mock(return_value=('A synthetic label observation.',{'input_tokens':20,'output_tokens':8,'total_tokens':28}))
+    result=cache.observe_once(PROFILE,item,ref,content,'image/png',{},provider)
+    assert result==('A synthetic label observation.',{'input_tokens':20,'output_tokens':8,'total_tokens':28},True)
+    provider.assert_called_once()
+    # A second current-source route under the same grant cannot call again;
+    # its completed artifact is reusable even when this copy has no old hold.
+    ordinary={**item,'route':{**route,'owner_retry_unknown':False}}
+    reused=cache.observe_once(PROFILE,ordinary,ref,content,'image/png',{},provider)
+    assert reused==('A synthetic label observation.',{},False)
+    provider.assert_called_once()
+    rows=db.execute("SELECT state,metadata FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND metadata->>'owner_retry_grant'=%s",(A,grant_id))
+    assert len(rows)==1 and rows[0]['state']=='completed'
+    uncertain_provider=Mock(side_effect=RuntimeError('synthetic timeout'))
+    uncertain_content=b'a different synthetic image with unknown outcome'
+    with pytest.raises(RuntimeError):cache.observe_once(PROFILE,item,ref,uncertain_content,'image/png',{},uncertain_provider)
+    with pytest.raises(TenantLinearError,match='неизвестен или ещё обрабатывается'):
+        cache.observe_once(PROFILE,item,ref,uncertain_content,'image/png',{},uncertain_provider)
+    uncertain_provider.assert_called_once()
 
 def test_plain_document_extracts_redacts_and_preserves_caption(context):
     item,add,download=context;add('document')
@@ -85,6 +122,17 @@ def test_plain_document_extracts_redacts_and_preserves_caption(context):
     assert not images and results[0]['status']=='processed'
     assert 'Synthetic caption' in item['messages'][0]['text']
     assert 'demo@example.com' not in item['messages'][0]['text'] and 'fake-secret' not in item['messages'][0]['text']
+
+
+def test_document_text_truncation_is_reported_as_partial(context,monkeypatch):
+    item,add,download=context;add('document')
+    monkeypatch.setattr(media,'extract',lambda *a:('txt',None,'x'*4001))
+    download.return_value=(b'x'*4001,'text/plain')
+    _,results=media.collect({},item)
+    assert results[0]['status']=='partial'
+    assert results[0]['code']=='document_text_truncated'
+    assert results[0]['truncated'] is True
+    assert len(results[0]['observation'])==4000
 
 @pytest.mark.parametrize('kind',['audio','voice'])
 @pytest.mark.parametrize('language,text',[('az','Miqdarı yoxlayın'),('ru','Проверьте количество'),('en','Check quantity')])
@@ -124,6 +172,71 @@ def test_docx_extractor_uses_no_external_relationships(context):
     download.return_value=(out.getvalue(),'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
     assert media.collect({},item)[1][0]['code']=='document_text'
     assert 'Synthetic solution' in item['messages'][0]['text']
+
+def test_xlsx_extractor_keeps_sheet_and_cell_provenance(context):
+    import zipfile
+    item,add,download=context;add('document')
+    out=io.BytesIO()
+    with zipfile.ZipFile(out,'w') as archive:
+        archive.writestr('xl/worksheets/sheet1.xml',
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Printer model</t></is></c><c r="B1"><v>42</v></c></row></sheetData></worksheet>')
+    download.return_value=(out.getvalue(),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    _,results=media.collect({},item)
+    assert results[0]['status']=='processed'
+    assert '[Sheet 1, cell A1] Printer model' in results[0]['observation']
+    assert '[Sheet 1, cell B1] 42' in results[0]['observation']
+    assert '[Sheet 1, cell A1]' in item['messages'][0]['text']
+
+def test_xlsx_rejects_corrupt_container_with_explicit_error(context):
+    item,add,download=context;add('document')
+    download.return_value=(b'PK not a zip archive','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    _,results=media.collect({},item)
+    assert results[0]['status']=='error'
+    assert results[0]['code']=='media_unavailable'
+
+def test_encrypted_xlsx_is_reported_unsupported(context,monkeypatch):
+    from types import SimpleNamespace
+    import tenant_ai_knowledge_files as files
+    class EncryptedArchive:
+        def __enter__(self):return self
+        def __exit__(self,*_args):return False
+        def infolist(self):return [SimpleNamespace(flag_bits=1,file_size=128)]
+    item,add,download=context;add('document')
+    download.return_value=(b'PK encrypted','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    monkeypatch.setattr(files.zipfile,'ZipFile',lambda _stream:EncryptedArchive())
+    _,results=media.collect({},item)
+    assert results[0]['status']=='unsupported'
+    assert results[0]['code']=='unsupported_document_feature'
+
+def test_password_protected_ole_workbook_with_xlsx_mime_is_reported_unsupported(context):
+    item,add,download=context;add('document')
+    download.return_value=(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'+b'protected-office-data',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    _,results=media.collect({},item)
+    assert results[0]['status']=='unsupported'
+    assert results[0]['code']=='unsupported_document_feature'
+
+@pytest.mark.parametrize('feature,xml',[
+    ('chart',None),
+    ('formula','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><f>1+1</f><v>2</v></c></row></sheetData></worksheet>'),
+    ('defined_name',None),
+])
+def test_xlsx_with_unanalyzed_content_is_explicitly_unsupported(context,feature,xml):
+    import zipfile
+    item,add,download=context;add('document')
+    out=io.BytesIO()
+    with zipfile.ZipFile(out,'w') as archive:
+        archive.writestr('xl/worksheets/sheet1.xml',xml or
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Visible cells</t></is></c></row></sheetData></worksheet>')
+        if feature=='chart':
+            archive.writestr('xl/charts/chart1.xml','<chartSpace/>')
+        elif feature=='defined_name':
+            archive.writestr('xl/workbook.xml','<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><definedNames><definedName name="Total">SUM(Sheet1!A1:A4)</definedName></definedNames></workbook>')
+    download.return_value=(out.getvalue(),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    _,results=media.collect({},item)
+    assert results[0]['status']=='unsupported'
+    assert results[0]['code']=='unsupported_document_feature'
+    assert 'Visible cells' not in item['messages'][0]['text']
 
 def test_scanned_pdf_is_not_claimed_as_read_without_consent(context):
     from pypdf import PdfWriter

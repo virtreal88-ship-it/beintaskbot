@@ -6,7 +6,9 @@ assert.ok(!html.includes('data-ai-editor-section="stopping"'),'Stop settings are
 assert.match(html,/id="aiStoppingPolicy"[\s\S]*?id="aiResponseManagementDescription"/);
 assert.ok(!expert.includes('id="aiNewExpert"'),'Expert creation is not duplicated inside the editor');
 assert.match(agents,/aiEditorPage/);assert.match(agents,/confirmDiscardEditor/);assert.match(agents,/beforeunload/);assert.match(agents,/returnEditorHome/);
-assert.match(agents,/data-archive-status/,'archive confirmation exposes server validation errors in the dialog');
-assert.match(agents,/opener\?\.focus/,'archive dialog restores focus after close');
+assert.match(agents,/delete-preview/,'agent delete impact is read before the irreversible confirmation');
+assert.match(agents,/data-delete-status/,'delete dialog exposes server validation errors');
+assert.match(agents,/confirm_agent_id:agent\.id/,'the exact selected agent ID is repeated as confirmation');
+assert.match(agents,/opener\?\.focus/,'delete dialog restores focus after close');
 assert.match(knowledge,/String\(x\.agentId\)===agentFilter/,'Knowledge Center honors the selected-agent filter');
 console.log('PASS: full-page editor contract, five tabs, stop policy placement, safe leave guard, no duplicate Expert create, agent-filtered knowledge link');

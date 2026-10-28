@@ -513,6 +513,9 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                    patch['delay_seconds'], _json(patch['schedule']), _json(patch['scopes']), patch['model'], _json(patch['safety']), _json(patch['response_policy']), actor,
                    patch.get('setup_key'),patch['role'],_json(patch['expert_policy'])))
                 result = _row(cur.fetchone())
+                cur.execute('''INSERT INTO saas_ai_agent_history_identities(tenant_id,id,display_name)
+                  VALUES(%s::uuid,%s::uuid,%s) ON CONFLICT(tenant_id,id) DO UPDATE SET display_name=EXCLUDED.display_name,
+                    deleted_at=NULL,deleted_by=NULL''', (tenant,agent_uuid,patch['name']))
                 _audit(cur, tenant, actor, 'ai_agent_created', 'ai_agent', agent_uuid, {'name': patch['name']})
             else:
                 agent_uuid = identifier(agent_id)
@@ -559,6 +562,9 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                   (merged['name'], merged['instructions'], merged['enabled'], merged['mode'], merged['language'], merged['style'], merged['delay_seconds'],
                   _json(merged['schedule']), _json(merged['scopes']), merged['model'], _json(merged['safety']), _json(merged['response_policy']), merged['role'],_json(merged['expert_policy']),tenant, agent_uuid))
                 result = _row(cur.fetchone())
+                cur.execute('''INSERT INTO saas_ai_agent_history_identities(tenant_id,id,display_name)
+                  VALUES(%s::uuid,%s::uuid,%s) ON CONFLICT(tenant_id,id) DO UPDATE SET display_name=EXCLUDED.display_name
+                  WHERE saas_ai_agent_history_identities.deleted_at IS NULL''', (tenant,agent_uuid,merged['name']))
                 _audit(cur, tenant, actor, 'ai_agent_updated', 'ai_agent', agent_uuid, {'version': result['version']})
         if connection is None: conn.commit()
     return result
@@ -569,7 +575,7 @@ def _require_owner(cur, tenant, actor):
     cur.execute('''SELECT role FROM saas_tenant_members
       WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE''', (tenant, actor))
     if (cur.fetchone() or {}).get('role') != 'owner':
-        raise TenantLinearError('Yalnız şirkət sahibi agenti arxivləşdirə bilər.', 403)
+        raise TenantLinearError('Yalnız şirkət sahibi agenti köçürə və ya həmişəlik silə bilər.', 403)
 
 
 def _recipient_covers_dialog(scopes, provider, channel_id, conversation_id):
@@ -691,6 +697,185 @@ def delete_agent(profile, agent_id, *, replacement_agent_id=None, expected_versi
     return {'archived': True, 'replacement_agent_id': str(replacement_uuid), 'transferred_dialogs': len(dialogs)}
 
 
+def preview_agent_deletion(profile, agent_id):
+    """Show exact permanent-delete impact without exposing the agent prompt."""
+    target = identifier(agent_id)
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant, actor = _authorize(cur, profile)
+            _require_owner(cur, tenant, actor)
+            cur.execute('''SELECT id,name,enabled,version,archived_at FROM saas_ai_agents
+              WHERE tenant_id=%s::uuid AND id=%s::uuid''', (tenant,target))
+            agent = cur.fetchone()
+            if not agent:
+                raise TenantLinearError('Agent tapılmadı.',404)
+            counts = {}
+            queries = {
+                'assigned_dialogs': "SELECT count(*) AS n FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",
+                'processing_jobs': "SELECT count(*) AS n FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state='processing'",
+                'queued_jobs': "SELECT count(*) AS n FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state='queued'",
+                'triggers': "SELECT count(*) AS n FROM saas_ai_agent_triggers WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",
+                'runs': "SELECT count(*) AS n FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",
+                'active_runs': "SELECT count(*) AS n FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state='generating'",
+                'drafts': "SELECT count(*) AS n FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",
+                'pending_drafts': "SELECT count(*) AS n FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state='pending'",
+                'sending_drafts': "SELECT count(*) AS n FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state='sending'",
+                'active_test_turns': "SELECT count(*) AS n FROM saas_ai_test_turns t JOIN saas_ai_test_sessions s ON s.tenant_id=t.tenant_id AND s.id=t.session_id WHERE s.tenant_id=%s::uuid AND s.agent_id=%s::uuid AND t.state='generating'",
+                'active_action_runs': "SELECT count(*) AS n FROM saas_ai_agent_action_runs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state='running'",
+                'active_expert_tasks': "SELECT count(*) AS n FROM saas_ai_expert_tasks WHERE tenant_id=%s::uuid AND status='running' AND (principal_agent_id=%s::uuid OR expert_agent_id=%s::uuid)",
+                'knowledge_sources': "SELECT count(*) AS n FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",
+                'published_case_links': "SELECT count(*) AS n FROM saas_knowledge_candidate_sources WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",
+                'analysis_campaigns': "SELECT count(*) AS n FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND analysis_agent_id=%s::uuid",
+                'active_campaigns': "SELECT count(*) AS n FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND analysis_agent_id=%s::uuid AND status IN ('awaiting_budget','running','paused')",
+            }
+            for key, sql in queries.items():
+                params=(tenant,target,target) if key=='active_expert_tasks' else (tenant,target)
+                cur.execute(sql,params);counts[key]=int((cur.fetchone() or {}).get('n') or 0)
+            counts['active_executions']=sum(counts.get(key,0) for key in (
+                'processing_jobs','active_runs','active_test_turns','active_action_runs','active_expert_tasks'))
+            _audit(cur,tenant,actor,'ai_agent_delete_preview','ai_agent',target,counts)
+            return {'agent_id':str(agent['id']),'name':agent['name'],'version':int(agent['version']),
+                'enabled':bool(agent['enabled']),'archived':bool(agent['archived_at']),
+                'impact':counts,'confirmation_required':True,
+                'irreversible':True,'provider_calls_started':False}
+
+
+def permanently_delete_agent(profile, agent_id, *, expected_version, confirm_agent_id):
+    """Delete live agent configuration while retaining minimal identity and history."""
+    target=identifier(agent_id)
+    if identifier(confirm_agent_id)!=target:
+        raise TenantLinearError('Подтвердите удаление именно этого агента.',400)
+    if type(expected_version) is not int or expected_version<1:
+        raise TenantLinearError('Обновите карточку агента перед удалением.',409)
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant,actor=_authorize(cur,profile)
+            _require_owner(cur,tenant,actor)
+            # Use the same per-dialog lock order as assignment/Resume: dialog
+            # locks first, then the agent row. Re-read assignments after the
+            # agent lock so a completed concurrent assignment is also detached.
+            cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,target))
+            exists=cur.fetchone()
+            if not exists:
+                cur.execute('SELECT display_name,deleted_at FROM saas_ai_agent_history_identities WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,target))
+                tombstone=cur.fetchone()
+                if tombstone and tombstone.get('deleted_at'):
+                    return {'deleted':True,'agent_id':str(target),'replayed':True}
+                raise TenantLinearError('Agent tapılmadı.',404)
+            cur.execute('''SELECT provider,channel_id,conversation_id FROM saas_ai_conversation_state
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid ORDER BY provider,channel_id,conversation_id''',(tenant,target))
+            dialog_keys=cur.fetchall()
+            from tenant_ai_dialog_scope import lock_dialog
+            for key in dialog_keys:
+                lock_dialog(cur,tenant,key['provider'],key.get('channel_id') or '',key['conversation_id'])
+            cur.execute("SELECT group_jid,assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND provider='connect' ORDER BY group_jid",(tenant,))
+            groups=cur.fetchall()
+            from tenant_ai_group_coordination import lock_group
+            for group in groups:
+                if any(str((slot or {}).get('agent_id') or '')==str(target) for slot in (group.get('assignments') or [])):
+                    lock_group(cur,tenant,group['group_jid'])
+            cur.execute('SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,target))
+            agent=cur.fetchone()
+            if not agent:
+                cur.execute('SELECT display_name,deleted_at FROM saas_ai_agent_history_identities WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,target))
+                tombstone=cur.fetchone()
+                if tombstone and tombstone.get('deleted_at'):
+                    return {'deleted':True,'agent_id':str(target),'replayed':True}
+                raise TenantLinearError('Agent tapılmadı.',404)
+            if int(agent['version'])!=expected_version:
+                raise TenantLinearError('Agent dəyişib. Обновите страницу перед удалением.',409)
+            # Lock the queue rows before inspecting state. A worker that has
+            # already claimed one makes deletion wait and then fail closed.
+            cur.execute('''SELECT state,lease_until FROM saas_ai_agent_jobs
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid FOR UPDATE''',(tenant,target))
+            jobs=cur.fetchall()
+            if any(row['state']=='processing' for row in jobs):
+                raise TenantLinearError('У агента выполняется задача. Дождитесь её завершения и повторите удаление.',409)
+            cur.execute("SELECT id FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state='generating' FOR UPDATE",(tenant,target))
+            if cur.fetchone():
+                raise TenantLinearError('У агента выполняется AI-анализ. Дождитесь завершения и повторите удаление.',409)
+            cur.execute("SELECT id FROM saas_ai_agent_action_runs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state='running' FOR UPDATE",(tenant,target))
+            if cur.fetchone():
+                raise TenantLinearError('У агента выполняется действие. Дождитесь завершения и повторите удаление.',409)
+            cur.execute("SELECT id FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state='sending' FOR UPDATE",(tenant,target))
+            if cur.fetchone():
+                raise TenantLinearError('Черновик сейчас отправляется. Дождитесь завершения и повторите удаление.',409)
+            cur.execute("SELECT id FROM saas_ai_expert_tasks WHERE tenant_id=%s::uuid AND status='running' AND (principal_agent_id=%s::uuid OR expert_agent_id=%s::uuid) FOR UPDATE",(tenant,target,target))
+            if cur.fetchone():
+                raise TenantLinearError('Агент участвует в активной экспертной задаче. Дождитесь завершения.',409)
+            cur.execute("SELECT t.id FROM saas_ai_test_turns t JOIN saas_ai_test_sessions s ON s.tenant_id=t.tenant_id AND s.id=t.session_id WHERE s.tenant_id=%s::uuid AND s.agent_id=%s::uuid AND t.state='generating' FOR UPDATE OF t",(tenant,target))
+            if cur.fetchone():
+                raise TenantLinearError('Выполняется тестовый запуск. Дождитесь завершения и повторите удаление.',409)
+            cur.execute('''SELECT id FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid
+              AND analysis_agent_id=%s::uuid AND status IN ('awaiting_budget','running','paused') FOR UPDATE''',(tenant,target))
+            if cur.fetchone():
+                raise TenantLinearError('Сначала остановите или отмените активный анализ, связанный с агентом.',409)
+            cur.execute('''SELECT provider,conversation_id,state FROM saas_ai_conversation_state
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid FOR UPDATE''',(tenant,target))
+            dialogs=cur.fetchall()
+            cur.execute('''UPDATE saas_ai_conversation_state SET agent_id=NULL,
+              state=CASE WHEN state='human' THEN 'human' ELSE 'paused' END,
+              reason='agent_permanently_deleted',agent_assignment_id=NULL,
+              revision=revision+1,updated_at=now()
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid''',(tenant,target))
+            cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,
+              lease_token=NULL,lease_until=NULL,error_code='agent_permanently_deleted',updated_at=now()
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state='queued' ''',(tenant,target))
+            cur.execute("UPDATE saas_ai_agent_drafts SET state='rejected' WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND state='pending'",(tenant,target))
+            cur.execute('''UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='agent_permanently_deleted'
+              WHERE tenant_id=%s::uuid AND state IN ('queued','processing') AND fingerprint IN
+                (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND error_code='agent_permanently_deleted')''',(tenant,tenant,target))
+            cur.execute("DELETE FROM saas_ai_agent_triggers WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",(tenant,target))
+            cur.execute("DELETE FROM saas_ai_no_answer_state WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",(tenant,target))
+            cur.execute("SELECT to_regclass('saas_ai_simulation_configs') IS NOT NULL AS available")
+            if (cur.fetchone() or {}).get('available'):
+                cur.execute("UPDATE saas_ai_simulation_configs SET enabled=FALSE,state='stopped',agent_id=NULL,version=version+1,updated_by=%s,updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid",(actor,tenant,target))
+            cur.execute('''SELECT group_jid,assignments FROM saas_ai_group_coordination
+              WHERE tenant_id=%s::uuid AND provider='connect' ORDER BY group_jid FOR UPDATE''',(tenant,))
+            for group in cur.fetchall():
+                slots=group.get('assignments') or []
+                updated=[slot for slot in slots if str((slot or {}).get('agent_id') or '')!=str(target)]
+                if len(updated)!=len(slots):
+                    cur.execute('''UPDATE saas_ai_group_coordination SET assignments=%s::jsonb,
+                      state=CASE WHEN state='human' THEN 'human' ELSE 'paused' END,
+                      reason='agent_permanently_deleted',revision=revision+1,updated_at=now()
+                      WHERE tenant_id=%s::uuid AND provider='connect' AND group_jid=%s''',(_json(updated),tenant,group['group_jid']))
+            cur.execute('''SELECT id,expert_policy FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id<>%s::uuid FOR UPDATE''',(tenant,target))
+            for other in cur.fetchall():
+                policy=dict(other.get('expert_policy') or {})
+                ids=[str(value) for value in policy.get('expert_agent_ids') or [] if str(value)!=str(target)]
+                changed=ids != [str(value) for value in policy.get('expert_agent_ids') or []]
+                if str(policy.get('expert_agent_id') or '')==str(target):policy.pop('expert_agent_id',None);changed=True
+                if changed:
+                    policy['expert_agent_ids']=ids
+                    cur.execute('UPDATE saas_ai_agents SET expert_policy=%s::jsonb,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(policy),tenant,other['id']))
+            cur.execute('''SELECT id,condition,actions FROM saas_ai_agent_triggers
+              WHERE tenant_id=%s::uuid AND agent_id<>%s::uuid FOR UPDATE''',(tenant,target))
+            for trigger in cur.fetchall():
+                condition=dict(trigger.get('condition') or {})
+                before=[str(value) for value in condition.get('expert_agent_ids') or []]
+                ids=[value for value in before if value!=str(target)]
+                if ids!=before:
+                    condition['expert_agent_ids']=ids
+                    actions=trigger.get('actions') or []
+                    cur.execute('''UPDATE saas_ai_agent_triggers SET condition=%s::jsonb,
+                      enabled=CASE WHEN %s THEN FALSE ELSE enabled END,
+                      version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid''',(_json(condition),'call_expert' in actions,tenant,trigger['id']))
+            cur.execute('''UPDATE saas_ai_agent_history_identities SET deleted_at=now(),deleted_by=%s
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND deleted_at IS NULL RETURNING id''',(actor,tenant,target))
+            if not cur.fetchone():
+                raise TenantLinearError('История агента не подготовлена. Обновите страницу и повторите.',409)
+            cur.execute('DELETE FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING id',(tenant,target))
+            if not cur.fetchone():raise TenantLinearError('Agent tapılmadı.',404)
+            _audit(cur,tenant,actor,'ai_agent_permanently_deleted','ai_agent',target,{
+                'paused_dialogs':len(dialogs),'skipped_queued_jobs':sum(row['state']=='queued' for row in jobs),
+                'history_identity_retained':True})
+        conn.commit()
+    return {'deleted':True,'agent_id':str(target),'paused_dialogs':len(dialogs),'replayed':False}
+
+
 def list_knowledge(profile, source_id=None):
     with _connect() as conn:
         ensure_schema(conn)
@@ -698,23 +883,25 @@ def list_knowledge(profile, source_id=None):
             tenant, _ = _authorize(cur, profile)
             if source_id:
                 source = identifier(source_id)
-                cur.execute('''SELECT s.id,s.tenant_id,s.agent_id,a.name AS agent_name,s.title,s.kind,s.content,s.active,s.content_hash,s.created_by,s.provenance,
+                cur.execute('''SELECT s.id,s.tenant_id,s.agent_id,COALESCE(a.name,hi.display_name) AS agent_name,s.title,s.kind,s.content,s.active,s.content_hash,s.created_by,s.provenance,
                     CASE WHEN s.provenance ? 'instruction_id' THEN 'instruction'
                          WHEN s.provenance ? 'candidate_id' THEN 'support_case' ELSE 'knowledge_source' END AS origin_type,
                     COALESCE(s.provenance->>'instruction_id',s.provenance->>'candidate_id') AS origin_id,
                     s.created_at,s.updated_at
                   FROM saas_ai_knowledge_sources s LEFT JOIN saas_ai_agents a ON a.tenant_id=s.tenant_id AND a.id=s.agent_id
+                  LEFT JOIN saas_ai_agent_history_identities hi ON hi.tenant_id=s.tenant_id AND hi.id=s.agent_id
                   WHERE s.tenant_id=%s::uuid AND s.id=%s::uuid''', (tenant, source))
                 row = _row(cur.fetchone())
                 if not row:
                     raise TenantLinearError('Bilik mənbəyi tapılmadı.', 404)
                 return _enrich_knowledge_rows(cur,[row],tenant)[0]
-            cur.execute('''SELECT s.id,s.tenant_id,s.agent_id,a.name AS agent_name,s.title,s.kind,s.active,s.content_hash,s.created_by,s.provenance,
+            cur.execute('''SELECT s.id,s.tenant_id,s.agent_id,COALESCE(a.name,hi.display_name) AS agent_name,s.title,s.kind,s.active,s.content_hash,s.created_by,s.provenance,
               CASE WHEN s.provenance ? 'instruction_id' THEN 'instruction'
                    WHEN s.provenance ? 'candidate_id' THEN 'support_case' ELSE 'knowledge_source' END AS origin_type,
               COALESCE(s.provenance->>'instruction_id',s.provenance->>'candidate_id') AS origin_id,s.created_at,s.updated_at,
               (SELECT count(*) FROM saas_ai_knowledge_chunks c WHERE c.tenant_id=s.tenant_id AND c.source_id=s.id) AS chunks
               FROM saas_ai_knowledge_sources s LEFT JOIN saas_ai_agents a ON a.tenant_id=s.tenant_id AND a.id=s.agent_id
+              LEFT JOIN saas_ai_agent_history_identities hi ON hi.tenant_id=s.tenant_id AND hi.id=s.agent_id
               WHERE s.tenant_id=%s::uuid ORDER BY s.created_at DESC,s.id''', (tenant,))
             rows=[_row(row) for row in cur.fetchall()]
             return _enrich_knowledge_rows(cur,rows,tenant)
@@ -746,8 +933,11 @@ def _enrich_knowledge_rows(cur,rows,tenant):
         review='not_reviewed';published=False;ai_available=False
         if origin_type=='support_case':
             candidate=candidates.get(origin_id) or {};review=str(candidate.get('status') or 'missing')
+            guidance=bool(candidate.get('reviewed_by') is not None and approved_by
+              and str(candidate.get('reviewed_by'))==approved_by and review=='knowledge_published'
+              and provenance.get('review_status')=='owner_reviewed_guidance')
             confirmed=bool(candidate.get('reviewed_by') is not None and approved_by and str(candidate.get('reviewed_by'))==approved_by and review=='approved')
-            published=confirmed and row.get('active') is True
+            published=(confirmed or guidance) and row.get('active') is True
             ai_available=published
         elif origin_type=='instruction':
             lesson=instructions.get(origin_id) or {};review_status=str(provenance.get('review_status') or 'not_reviewed')
@@ -1472,7 +1662,7 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
             # state/error codes; message bodies and external secrets never
             # cross this boundary.
             cur.execute('''SELECT cs.conversation_id,cs.state,cs.reason,cs.assigned_to,
-                COALESCE(cs.agent_id,j.agent_id)::text AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,
+                COALESCE(cs.agent_id,j.agent_id)::text AS agent_id,COALESCE(a.name,hi.display_name) AS agent_name,a.enabled AS agent_enabled,
                 s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,t.status AS tenant_status,
                 cs.last_inbound_message_id,cs.last_agent_message_id,
                 cs.revision,cs.updated_at,m.happened_at AS last_inbound_at,
@@ -1489,6 +1679,7 @@ def read_conversation_state(profile,conversation_id,provider='kommo',channel_id=
                 ORDER BY j0.updated_at DESC,j0.revision DESC LIMIT 1
               ) j ON TRUE
               LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=COALESCE(cs.agent_id,j.agent_id)
+              LEFT JOIN saas_ai_agent_history_identities hi ON hi.tenant_id=cs.tenant_id AND hi.id=COALESCE(cs.agent_id,j.agent_id)
               LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=cs.tenant_id
               LEFT JOIN saas_tenants t ON t.id=cs.tenant_id
               LEFT JOIN LATERAL (
@@ -1603,7 +1794,7 @@ def list_handoffs(profile,limit=50):
             tenant,_=_authorize(cur,profile)
             cur.execute('''SELECT cs.provider,cs.conversation_id,cs.state,cs.reason,cs.updated_at,
                 COALESCE(cs.agent_id,j.agent_id)::text AS agent_id,cs.last_inbound_message_id,cs.last_agent_message_id,
-                a.name AS agent_name,a.enabled AS agent_enabled,
+                COALESCE(a.name,hi.display_name) AS agent_name,a.enabled AS agent_enabled,
                 COALESCE(NULLIF(c.contact_name,''),NULLIF(c.phone,''),NULLIF(d.contact_name,''),NULLIF(d.name,''),cs.conversation_id) AS customer_name,
                 CASE WHEN cs.provider='connect' THEN COALESCE(NULLIF(ch.name,''),j.channel_id,'WhatsApp')
                   ELSE COALESCE(NULLIF(j.channel_id,''),'Kommo') END AS channel_name,
@@ -1617,6 +1808,7 @@ def list_handoffs(profile,limit=50):
                   AND j0.provider=cs.provider AND j0.conversation_id=cs.conversation_id AND j0.scope_channel_id=cs.channel_id
                 ORDER BY j0.updated_at DESC,j0.revision DESC LIMIT 1) j ON TRUE
               LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=COALESCE(cs.agent_id,j.agent_id)
+              LEFT JOIN saas_ai_agent_history_identities hi ON hi.tenant_id=cs.tenant_id AND hi.id=COALESCE(cs.agent_id,j.agent_id)
               LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=cs.tenant_id
               LEFT JOIN saas_tenants t ON t.id=cs.tenant_id
               LEFT JOIN saas_connect_conversations c ON c.tenant_id=cs.tenant_id
@@ -1687,7 +1879,7 @@ def read_connect_diagnostics(cur, tenant, limit=50):
     cur.execute('''SELECT COALESCE(e.received_at,m.happened_at) AS received_at,
         CASE WHEN e.fingerprint IS NULL THEN 'stored_not_queued' ELSE e.state END AS event_state,
         e.error_code AS event_error,SUBSTRING(m.channel FROM 9) AS channel_id,
-        a.name AS agent_name,a.enabled AS agent_enabled,a.mode AS agent_mode,
+        COALESCE(a.name,hi.display_name) AS agent_name,a.enabled AS agent_enabled,a.mode AS agent_mode,
         s.enabled AS company_ai_enabled,s.auto_send_enabled,
         j.state AS job_state,j.error_code AS job_error,j.attempts,
         r.state AS run_state,r.updated_at AS run_updated_at
@@ -1696,6 +1888,7 @@ def read_connect_diagnostics(cur, tenant, limit=50):
         AND e.external_id=SUBSTRING(m.external_id FROM 9)
       LEFT JOIN saas_ai_agent_jobs j ON j.tenant_id=e.tenant_id AND j.event_fingerprint=e.fingerprint
       LEFT JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
+      LEFT JOIN saas_ai_agent_history_identities hi ON hi.tenant_id=j.tenant_id AND hi.id=j.agent_id
       LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=m.tenant_id
       LEFT JOIN LATERAL (SELECT state,updated_at FROM saas_ai_agent_runs r0
         WHERE r0.tenant_id=e.tenant_id AND r0.agent_id=j.agent_id

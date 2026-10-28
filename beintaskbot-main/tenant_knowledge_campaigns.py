@@ -15,7 +15,7 @@ from tenant_knowledge_campaign_policy import FIELDS, validate, reservation, fits
 
 def prepare(profile, data):
     allowed={'request_id','channel_ids','analysis_agent_id','max_calls','max_tokens','case_id',
-      'all_existing_cases','max_cost_microusd','video_model'} | FIELDS
+      'all_existing_cases','max_cost_microusd','video_model','acknowledge_prior_unknown'} | FIELDS
     if not isinstance(data,dict) or set(data)-allowed:
         raise TenantLinearError('Некорректные параметры.')
     key=identifier(data.get('request_id'))
@@ -24,6 +24,10 @@ def prepare(profile, data):
         raise TenantLinearError('Monetary grant settings are available only for the fixed current-case snapshot.',400)
     if 'all_existing_cases' in data and type(data['all_existing_cases']) is not bool:
         raise TenantLinearError('Некорректный охват кейсов.')
+    if 'acknowledge_prior_unknown' in data and type(data['acknowledge_prior_unknown']) is not bool:
+        raise TenantLinearError('Некорректное подтверждение повторной попытки.')
+    if data.get('acknowledge_prior_unknown') and not all_cases:
+        raise TenantLinearError('Повторная попытка доступна только в общей кампании текущих кейсов.',400)
     channels=data.get('channel_ids')
     if not isinstance(channels,list) or (not all_cases and not 1<=len(channels)<=100) or (all_cases and len(channels)>100):
         raise TenantLinearError('Выберите источники.')
@@ -36,7 +40,9 @@ def prepare(profile, data):
     with _connect() as conn:
         store.schema(conn);create_schema(conn)
         with conn.cursor() as cur:
-            tenant,actor,_=store.authorize(cur,profile)
+            tenant,actor,access=store.authorize(cur,profile)
+            if all_cases and access.profile.get('role')!='owner':
+                raise TenantLinearError('Only the company owner can prepare the one-time current-case media grant.',403)
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('knowledge-campaign:'+tenant,))
             case_plan=None;batch_plan=None
             if all_cases:
@@ -49,7 +55,8 @@ def prepare(profile, data):
                 if cur.fetchone():
                     raise TenantLinearError('A current-case media grant already exists and cannot be reset or topped up.',409)
                 from tenant_case_media_admission import plan_existing_cases,existing_routes
-                batch_plan=plan_existing_cases(cur,profile)
+                retry_ack=data.get('acknowledge_prior_unknown') is True
+                batch_plan=plan_existing_cases(cur,profile,acknowledge_prior_unknown=retry_ack)
                 if channels and channels!=batch_plan['channel_ids']:
                     raise TenantLinearError('Снимок каналов изменился.',409)
                 channels=batch_plan['channel_ids']
@@ -90,7 +97,7 @@ def prepare(profile, data):
             for channel in channels:
                 cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid',(tenant,channel))
                 if not cur.fetchone(): raise TenantLinearError('Источник недоступен.',404)
-            cur.execute('SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,agent))
+            cur.execute("SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR SHARE",(tenant,agent))
             if not cur.fetchone(): raise TenantLinearError('Агент недоступен.',404)
             cur.execute("SELECT 1 FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND status<>'stopped'",(tenant,))
             if cur.fetchone(): raise TenantLinearError('Процесс уже подготовлен.',409)
@@ -102,6 +109,8 @@ def prepare(profile, data):
                 progress={'mode':'case_media_batch','snapshot_hash':batch_plan['snapshot_hash'],
                   'case_plans':batch_plan['cases'],'case_count':batch_plan['case_count'],
                   'eligible_count':batch_plan['eligible_count'],'reused_count':batch_plan['reused_count'],
+                  'retry_unknown_count':batch_plan['retry_unknown_count'],
+                  'acknowledge_prior_unknown':retry_ack,
                   'review_count':batch_plan['review_count'],'unknown_media_count':batch_plan['unknown_media_count'],
                   'unavailable_media_count':batch_plan['unavailable_media_count'],'all_existing_cases':True}
             cur.execute('''INSERT INTO saas_knowledge_campaigns
@@ -121,7 +130,7 @@ def control(profile, campaign_id, expected_version, action):
         raise TenantLinearError('Некорректное действие.')
     with _connect() as conn:
         with conn.cursor() as cur:
-            tenant,actor,_=store.authorize(cur,profile)
+            tenant,actor,access=store.authorize(cur,profile)
             cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,identifier(campaign_id)))
             row=cur.fetchone()
             if not row: raise TenantLinearError('Процесс не найден.',404)
@@ -216,6 +225,10 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
         or not isinstance(version,str) or len(version)!=64 or any(c not in '0123456789abcdef' for c in version.lower())):
         return True
     selected=(channel,scoped_id(ids[0]))
+    batch_retry=(route.get('owner_retry_unknown') is True
+        and (campaign.get('progress') or {}).get('mode')=='case_media_batch'
+        and (campaign.get('progress') or {}).get('acknowledge_prior_unknown') is True
+        and str(route.get('media_grant_id') or '')==str(campaign.get('id') or ''))
     for old in unknown:
         if str(old['id']) in retry_parents:
             continue  # Only this exact, owner-acknowledged parent; its hold stays.
@@ -225,9 +238,10 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
         if old_ids is not None:
             if not isinstance(old_ids,list) or not old_ids or any(not scoped_id(value) for value in old_ids):
                 return True
-            if selected[1] in {scoped_id(value) for value in old_ids}:
-                return True
             old_channel=scoped_id(old_route.get('channel_id'))
+            old_selected=selected[1] in {scoped_id(value) for value in old_ids}
+            if old_selected and not (batch_retry and old_channel==channel):
+                return True
             if old_channel:
                 identities.update((old_channel,scoped_id(value)) for value in old_ids)
         refs=old['source_refs']
@@ -242,10 +256,16 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
                 if not ref_id or not ref_channel:
                     return True
                 if ref_id==selected[1]:
-                    return True
+                    if not (batch_retry and ref_channel==channel):return True
+                    continue
                 identities.add((ref_channel,ref_id))
-        if not identities or selected in identities:
+        if not identities or selected in identities and not batch_retry:
             return True  # Same attachment/version replacement or unresolved source.
+        if selected in identities and batch_retry:
+            # The exact current source has a one-time owner acknowledgement;
+            # prior holds stay untouched and a grant-scoped cache claim prevents
+            # another retry under this same grant.
+            continue
     return False
 
 
@@ -438,12 +458,13 @@ def approve(profile,campaign_id,data):
     """Explicit source/budget confirmation, never called by deployment/startup."""
     required={'expected_version','channel_ids','max_calls','max_tokens','confirm_external_processing','media_policy'}
     valid_shapes=(required,required|{'case_id','case_plan_hash'},
-      required|{'all_cases_snapshot_hash','max_cost_microusd','video_model'})
+      required|{'all_cases_snapshot_hash','max_cost_microusd','video_model'},
+      required|{'all_cases_snapshot_hash','max_cost_microusd','video_model','acknowledge_prior_unknown'})
     if not isinstance(data,dict) or set(data) not in valid_shapes or data['confirm_external_processing'] is not True:
         raise TenantLinearError('Подтвердите источники и бюджет внешней обработки.')
     with _connect() as conn:
         with conn.cursor() as cur:
-            tenant,actor,_=store.authorize(cur,profile)
+            tenant,actor,access=store.authorize(cur,profile)
             cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,identifier(campaign_id)))
             row=cur.fetchone()
             if not row:raise TenantLinearError('Процесс не найден.',404)
@@ -471,6 +492,8 @@ def approve(profile,campaign_id,data):
             if not fits(new_policy,row['reserved_kinds'],amount) or calls<amount['calls'] or tokens<amount['tokens']:raise TenantLinearError('Бюджет не покрывает фрагмент.')
             case_mode=(row.get('progress') or {}).get('mode')=='case_media'
             batch_mode=(row.get('progress') or {}).get('mode')=='case_media_batch'
+            if batch_mode and access.profile.get('role')!='owner':
+                raise TenantLinearError('Only the company owner can approve the current-case media grant.',403)
             if batch_mode and row['status']=='budget_exhausted':
                 raise TenantLinearError('The approved fixed $10 grant cannot be topped up or renewed.',409)
             case_plan=None;batch_plan=None;batch_routes=[]
@@ -499,13 +522,17 @@ def approve(profile,campaign_id,data):
                     or calls<len(pending)*amount['calls'] or tokens<len(pending)*amount['tokens']):
                     raise TenantLinearError('Budget does not cover all case attachments.',409)
             elif batch_mode:
-                if (set(data)!=required|{'all_cases_snapshot_hash','max_cost_microusd','video_model'}
+                if set(data) not in (required|{'all_cases_snapshot_hash','max_cost_microusd','video_model'},
+                    required|{'all_cases_snapshot_hash','max_cost_microusd','video_model','acknowledge_prior_unknown'}):
+                    raise TenantLinearError('Confirm this exact current-case snapshot and USD 10 limit.',409)
+                retry_ack=bool(row['progress'].get('acknowledge_prior_unknown'))
+                if (data.get('acknowledge_prior_unknown',False) is not retry_ack
                     or data['all_cases_snapshot_hash']!=row['progress'].get('snapshot_hash')
                     or data['max_cost_microusd']!=10_000_000
                     or data.get('video_model')!=row.get('video_model')):
                     raise TenantLinearError('Confirm this exact current-case snapshot and USD 10 limit.',409)
                 from tenant_case_media_admission import plan_existing_cases,existing_routes
-                batch_plan=plan_existing_cases(cur,profile)
+                batch_plan=plan_existing_cases(cur,profile,acknowledge_prior_unknown=retry_ack)
                 if batch_plan['snapshot_hash']!=row['progress']['snapshot_hash']:
                     raise TenantLinearError('Current case snapshot changed; prepare a new plan.',409)
                 batch_routes=list(existing_routes(batch_plan,row['analysis_agent_id'],row.get('video_model')))
@@ -596,10 +623,10 @@ def preview(profile,channels):
       'messages_per_fragment_max':80,'warning':'Actual availability, unique group events and fragment counts require bounded discovery; no external media has been accessed.'}
 
 
-def preview_existing_cases(profile):
+def preview_existing_cases(profile, *, acknowledge_prior_unknown=False):
     """Read-only owner preview for the exact bounded current-case media set."""
     with _connect() as conn:
         with conn.cursor() as cur:
             from tenant_case_media_admission import plan_existing_cases
-            snapshot=plan_existing_cases(cur,profile)
+            snapshot=plan_existing_cases(cur,profile,acknowledge_prior_unknown=acknowledge_prior_unknown)
     return snapshot
