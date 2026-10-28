@@ -20,6 +20,6 @@
       <button class="outline" id="tnChannelLoad">Yenilə</button><button class="primary" id="tnChannelSave">Yoxla və saxla</button><button class="outline danger" id="tnChannelPause">Göndərişi dayandır</button><p id="tnChannelNotice" role="status"></p></article>`);
     $('tnChannelLoad').onclick=load;$('tnChannelSave').onclick=()=>save(true);$('tnChannelPause').onclick=()=>save(false);load();
   }
-  document.addEventListener('tenant-profile',event=>install(event.detail));const initial=epoch;
-  fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(initial===epoch&&data?.member)install(data);}).catch(()=>{});
+  window.tenantViewDemand.watch({provider:'telegram', activate:install,
+    reset:()=>{epoch++;profile=null;busy=false;$('tnChannelPanel')?.remove();}});
 })();

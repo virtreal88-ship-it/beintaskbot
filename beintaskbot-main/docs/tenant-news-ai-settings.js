@@ -13,6 +13,6 @@
       try{const result=await api({enabled:$('tnAiEnabled').checked,consent:$('tnAiConsent').checked,model:$('tnAiModel').value,daily_limit:Number($('tnAiLimit').value),api_key:key,remove_key:$('tnAiRemove').checked,expected_updated_at:version,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id});if(current!==epoch)return;version=result.updated_at;$('tnAiNotice').textContent='Saxlanıldı. Dəyişiklik yalnız bu şirkətə aiddir.';$('tnAiRemove').checked=false;}
       catch(error){if(current===epoch)$('tnAiNotice').textContent=error.message;}finally{if(current===epoch)disable(false);}};load();
   }
-  document.addEventListener('tenant-profile',event=>install(event.detail));const initial=epoch;
-  fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(initial===epoch&&data?.member)install(data);}).catch(()=>{});
+  window.tenantViewDemand.watch({provider:'openai', activate:install,
+    reset:()=>{epoch++;profile=null;busy=false;$('tnAiPanel')?.remove();}});
 })();

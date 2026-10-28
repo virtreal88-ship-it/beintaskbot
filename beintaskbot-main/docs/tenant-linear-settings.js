@@ -78,6 +78,6 @@
       if(config.team_id){if(![...$('tlTeam').options].some(o=>o.value===config.team_id))$('tlTeam').insertAdjacentHTML('beforeend',`<option value="${esc(config.team_id)}">Saxlanmış komanda</option>`);
         $('tlTeam').value=config.team_id;await teamChoices(current);}}
   }
-  document.addEventListener('tenant-profile',event=>install(event.detail));const initial=generation;
-  fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(initial===generation&&data?.member)install(data);}).catch(()=>{});
+  window.tenantViewDemand.watch({provider:'linear', activate:install,
+    reset:()=>{generation++;profile=null;busy=false;$('tenantLinearPanel')?.remove();}});
 })();

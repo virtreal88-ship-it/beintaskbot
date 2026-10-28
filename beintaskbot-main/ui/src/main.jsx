@@ -1319,17 +1319,19 @@ function IntegrationMarketplace() {
       hostId: "integrationSettingsHost",
       open: true,
     };
-    requestAnimationFrame(() =>
+    const frame = requestAnimationFrame(() =>
       document.dispatchEvent(
         new CustomEvent("tenant-integration-panel", { detail }),
       ),
     );
-    return () =>
+    return () => {
+      cancelAnimationFrame(frame);
       document.dispatchEvent(
         new CustomEvent("tenant-integration-panel", {
           detail: { ...detail, open: false },
         }),
       );
+    };
   }, [selected?.id, tab, owner]);
 
   const localeCopy = {
@@ -2488,7 +2490,15 @@ window.tenantChakraCRM = {
     ),
 };
 mount("aiDashboard", <AIDashboard />);
-mount("chakra-settings-root", <SettingsHub />);
-mount("chakra-integrations-root", <IntegrationMarketplace />);
+for (const [view, host, component] of [
+  ["settings", "chakra-settings-root", <SettingsHub />],
+  ["integrations", "chakra-integrations-root", <IntegrationMarketplace />],
+]) {
+  window.tenantViewDemand.watch({
+    view, host,
+    activate: () => mount(host, component),
+    reset: () => { roots.get(host)?.unmount(); roots.delete(host); },
+  });
+}
 document.documentElement.dataset.chakraUi = "ready";
 document.dispatchEvent(new CustomEvent("tenant-chakra-ready"));

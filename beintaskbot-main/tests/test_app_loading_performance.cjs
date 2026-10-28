@@ -53,7 +53,7 @@ async function requestTests(){
 function browser(view='dialogs',url=''){
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://fixture.test/app?view='+view+url,runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window,requests=[];
  w.Headers=Headers;w.Response=Response;w.fetch=(url,options={})=>{const task=deferred();requests.push({url:String(url),options,...task});return task.promise;};
- w.eval(read('docs/tenant-request-coordinator.js'));
+ w.eval(read('docs/tenant-request-coordinator.js'));w.eval(read('docs/tenant-view-demand.js'));
  w.tenantI18n={language:'en',t:key=>key,source:text=>text,capture:()=>{},date:value=>String(value||'')};
  w.document.querySelectorAll('.view').forEach(node=>node.classList.toggle('active',node.id==='view-'+view));
  const emit=(type,detail)=>w.document.dispatchEvent(new w.CustomEvent(type,{detail}));

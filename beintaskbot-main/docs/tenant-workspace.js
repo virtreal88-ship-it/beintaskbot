@@ -168,7 +168,7 @@
     telegram: ['tnChannelPanel'],
     connect: ['connectWhatsAppSettings'],
   };
-  let activeIntegration = '';
+  let activeIntegration = '', placementGeneration = 0, placedPanels = [];
   function placeIntegrationPanels(provider, hostId) {
     const host = document.getElementById(hostId);
     if (!host) return false;
@@ -176,22 +176,26 @@
     const panels = ids.map(id => document.getElementById(id)).filter(Boolean);
     if (!panels.length) return false;
     host.replaceChildren(...panels);
+    placedPanels = panels;
     panels.forEach(panel => {panel.hidden=false;panel.removeAttribute('data-settings-section');panel.classList.add('integration-modal-panel');});
     activeIntegration = provider;
     return true;
   }
   function restoreIntegrationPanels() {
-    document.querySelectorAll('.integration-modal-panel').forEach(panel => {
+    // React may detach the host before its effect cleanup. Keep the actual nodes,
+    // but never resurrect panels explicitly removed by an authorization reset.
+    placedPanels.filter(panel => panel.parentNode).forEach(panel => {
       panel.classList.remove('integration-modal-panel');panel.hidden=true;integrationRepository.append(panel);
     });
+    placedPanels = [];
     activeIntegration = '';
   }
   document.addEventListener('tenant-integration-panel', event => {
-    const detail = event.detail || {};
+    const detail = event.detail || {}, current = ++placementGeneration;
     if (!detail.open) { restoreIntegrationPanels(); return; }
     restoreIntegrationPanels();
     let attempts=0;
-    const place=()=>{if(activeIntegration||placeIntegrationPanels(detail.provider,detail.hostId))return;if(++attempts<20)setTimeout(place,50);};
+    const place=()=>{if(current!==placementGeneration||activeIntegration||placeIntegrationPanels(detail.provider,detail.hostId))return;if(++attempts<20)setTimeout(place,50);};
     place();
   });
   showSettings();
