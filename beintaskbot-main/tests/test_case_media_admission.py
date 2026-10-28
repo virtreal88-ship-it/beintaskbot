@@ -731,6 +731,8 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
       'live_case_extraction','knowledge_photo_observation'}
     if recover_failure:
         original=db.execute('SELECT version,progress FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign_id,))[0]
+        with pytest.raises(TenantLinearError):
+            campaigns.recover_failed_media({'tenant_id':B,'telegram_id':22},campaign_id,original['version'],str(uuid.uuid4()))
         failed=db.execute("SELECT f.extraction_id FROM saas_knowledge_campaign_fragments f WHERE f.campaign_id=%s::uuid AND f.status='partial'",(campaign_id,))[0]['extraction_id']
         media_key='extraction:'+str(failed)+':vision'
         db.execute("UPDATE saas_ai_spend_reservations SET state='unknown',actual_microusd=NULL WHERE call_key=%s",(media_key,));db.commit()
