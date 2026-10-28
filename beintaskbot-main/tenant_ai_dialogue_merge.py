@@ -124,6 +124,10 @@ def _pairs(cur,cfg):
               'dependency_counts':dependency_counts,'retains_source_rows':True}
         item['precondition']=_token(cfg,'dialogue-precondition',pair_id,state,identity_digest,
                                     item['canonical']['n'],item['split']['n'],snapshot_digest)
+        if state=='merged':
+            from tenant_connect_dialog_equivalence import verification
+            checked=verification(cur,tenant,channel,pair_id)
+            if checked is not None:item['verification']=checked
         items.append(item)
     return tenant,actor,channel,items
 

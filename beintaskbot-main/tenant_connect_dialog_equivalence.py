@@ -175,6 +175,7 @@ def activate(cur, tenant, channel, pair_id, ids, leads, before):
              'states_before':before['states'],'canonical_state_after':after_state,
              'reference_counts':before['references'],
              'route_controls_before':{r['conversation_id']:{k:r[k] for k in ('ai_enabled','manual_hold')} for r in before['routes']},
+             'message_sources':{r['id']:r['kommo_lead_id'] for r in before['messages']},
              'message_ids': [r['id'] for r in before['messages']]}
     cur.execute('''INSERT INTO saas_connect_dialog_links
       (tenant_id,channel_id,source_id,canonical_id,source_lead,canonical_lead,pair_id,snapshot)
@@ -183,6 +184,33 @@ def activate(cur, tenant, channel, pair_id, ids, leads, before):
         canonical_lead=EXCLUDED.canonical_lead,pair_id=EXCLUDED.pair_id,snapshot=EXCLUDED.snapshot,
         active=TRUE,updated_at=now()''', (tenant,channel,source,jid,leads[1],leads[0],pair_id,json.dumps(saved)))
     return saved
+
+
+def verification(cur, tenant, channel, pair_id):
+    """Live owner metadata for post-merge verification; no content or identities."""
+    cur.execute('''SELECT * FROM saas_connect_dialog_links WHERE tenant_id=%s::uuid
+      AND channel_id=%s::uuid AND pair_id=%s AND active''',(tenant,channel,pair_id))
+    row=cur.fetchone()
+    if not row: return None
+    ids=[row['canonical_id'],row['source_id']]
+    leads=[row['canonical_lead'],row['source_lead']]
+    current=snapshot(cur,tenant,channel,ids,leads)
+    saved=row['snapshot']
+    sources={r['id']:r['kommo_lead_id'] for r in current['messages']}
+    expected=saved.get('message_sources') or {}
+    from tenant_operator_access import assert_route
+    redirected=assert_route(cur,tenant,None,'connect',row['source_id'],channel,row['source_lead'],allow_merged=True)
+    return {'canonical_lead_id':leads[0],'source_lead_id':leads[1],
+            'source_rows_retained':len(current['routes'])==2,
+            'combined_messages':len(current['messages']),
+            'original_messages_preserved':all(sources.get(k)==v for k,v in expected.items()),
+            'verified_original_messages':len(expected),
+            'old_link_redirect_preserved':int(redirected['lead_id'])==int(leads[0]),
+            'reference_counts_before':saved['reference_counts'],
+            'reference_counts_current':current['references'],
+            'states':sorted({r['state'] for r in current['states']}),
+            'jobs':len(current['jobs']),'drafts':len(current['drafts']),
+            'read_markers':len(current['reads'])}
 
 
 def rollback(cur, tenant, channel, pair_id):

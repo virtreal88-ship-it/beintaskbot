@@ -88,6 +88,11 @@ def test_retained_merge_keeps_every_history_crm_dependency_and_source_row(db, mo
     result = apply(db, payload)
     assert result['retained_route_merge'] and result['preserved_source_rows']
     assert result['combined_messages'] == 85
+    verified=candidate(db)['verification']
+    assert verified['combined_messages']==verified['verified_original_messages']==85
+    assert verified['original_messages_preserved'] and verified['source_rows_retained']
+    assert verified['old_link_redirect_preserved']
+    assert verified['reference_counts_before']==verified['reference_counts_current']
     assert {table: snapshot_rows(db, table) for table in immutable} == before
     with db.cursor() as cur:
         assert equivalence.members(cur, A, CA, JID) == dict(zip((JID, LID), LEADS))
