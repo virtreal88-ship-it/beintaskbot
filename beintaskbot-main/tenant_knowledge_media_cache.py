@@ -352,8 +352,11 @@ def transcribe_once(profile,item,model,media,invoke,check_before_ai=None,*,retur
         else:
             text,usage=response
         item['asr_usage']=usage or {}
+        # Keep the redacted transcript as an immutable ASR artifact even when
+        # confidence is insufficient. Callers receive the uncertainty metadata
+        # and must keep it out of confirmed facts; deleting it here would waste
+        # a paid result and make cache reuse unable to explain the audio.
         text=redact(text,item.get('redaction_names',[]))[:4000] if isinstance(text,str) else ''
-        if return_diagnostics and diagnostics.get('speech_state')!='confident':text=''
         detail_meta=({
             'speech_state':str(diagnostics.get('speech_state') or 'uncertain')[:32],
             'speech_language':str(diagnostics.get('language') or '')[:24],

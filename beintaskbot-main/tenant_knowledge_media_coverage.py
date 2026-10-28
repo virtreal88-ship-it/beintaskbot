@@ -57,7 +57,9 @@ def project(refs,receipts,execution_status,*,include_content=False):
         if include_content and row:
             # Redaction/content OAuth gates belong to the existing caller. Never
             # project URLs, provider inputs, raw payloads, keys or binary bytes.
-            result={k:redact(row[k][:4000]) for k in ('transcript','observation') if isinstance(row.get(k),str)}
+            result={k:redact(row[k][:4000]) for k in ('transcript','transcript_candidate','observation') if isinstance(row.get(k),str)}
+            candidate_status=row.get('transcript_candidate_status')
+            if candidate_status=='uncertain_unverified':result['transcript_candidate_status']=candidate_status
             observations=[{'text':redact(x['text'][:2400])} for x in row.get('observations',[]) if isinstance(x,dict) and isinstance(x.get('text'),str)]
             if observations:result['observations']=observations[:2]
             if result:item['result']=result

@@ -83,6 +83,19 @@ def test_content_gates_and_wrong_channel_receipt():
     assert coverage.project(refs,receipts,'completed',include_content=True)['media_results'][0]['result']['observation']=='private'
 
 
+def test_uncertain_transcript_candidate_is_content_only_and_never_a_confirmed_transcript():
+    ref={'id':'video','media_kind':'video','channel_id':CA}
+    receipt={'id':'video','channel_id':CA,'status':'partial','code':'video_observation',
+      'audio_status':'uncertain','transcript_candidate':'redacted synthetic words',
+      'transcript_candidate_status':'uncertain_unverified'}
+    hidden=coverage.project([ref],[receipt],'completed')['media_results'][0]
+    assert hidden['status']=='partial' and 'result' not in hidden
+    visible=coverage.project([ref],[receipt],'completed',include_content=True)['media_results'][0]
+    assert visible['result']=={'transcript_candidate':'redacted synthetic words',
+      'transcript_candidate_status':'uncertain_unverified'}
+    assert 'transcript' not in visible['result']
+
+
 @pytest.mark.parametrize('legacy',[
     {'code':'vision_supplied'}, {'code':'vision_observation'},
     {'code':'vision_observation','observation':'  '},

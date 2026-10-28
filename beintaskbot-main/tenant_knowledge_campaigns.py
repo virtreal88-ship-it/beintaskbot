@@ -3,6 +3,7 @@
 Preparing a campaign NEVER authorizes paid analysis. Explicit versioned approval
 binds selected sources and bounded call/token reservations before the worker runs.
 """
+import json
 import uuid
 from datetime import datetime, timezone
 from tenant_platform import _connect, _json
@@ -11,6 +12,38 @@ from tenant_knowledge_candidates_policy import MAX_TOKENS, period
 import tenant_knowledge_candidates_store as store
 from tenant_knowledge_campaign_schema import create_schema
 from tenant_knowledge_campaign_policy import FIELDS, validate, reservation, fits
+
+
+def _analysis_asr_model(cur, tenant, agent_id, *, resolve_asr=True):
+    """Resolve the same owner-authorized ASR configuration used at dispatch."""
+    from tenant_ai_agent_key_policy import platform_model
+    cur.execute('''SELECT a.model,i.secrets,i.metadata FROM saas_ai_agents a
+      LEFT JOIN saas_tenant_integrations i ON i.tenant_id=a.tenant_id AND i.provider='chat_ai'
+      WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid''',(tenant,agent_id))
+    row=cur.fetchone() or {};metadata=row.get('metadata') or {};company_key=''
+    model=row.get('model') or metadata.get('model') or platform_model()
+    if not model:
+        raise TenantLinearError('analysis_model_unavailable',409)
+    if not resolve_asr:
+        return model,''
+    from tenant_ai_agent_key_policy import choose_api_credential
+    from tenant_platform import _fernet
+    from tenant_connect_voice import transcription_model
+    if row.get('secrets'):
+        try:
+            secret=json.loads(_fernet().decrypt(bytes(row['secrets'])))
+            if secret.get('tenant_id')==tenant and secret.get('provider')=='chat_ai':
+                company_key=str(secret.get('api_key') or '')
+        except Exception:
+            company_key=''
+    _,credential_source=choose_api_credential(tenant,str(agent_id),'connect',company_key,model)
+    try:
+        asr_model=transcription_model({'credential_source':credential_source,'config':metadata})
+    except Exception as error:
+        raise TenantLinearError(f'asr_model_unavailable: {str(error)[:120]}',409) from None
+    if not asr_model:
+        raise TenantLinearError('asr_model_unavailable',409)
+    return model,asr_model
 
 
 def _configured_photo_model(cur, tenant, agent_id):
@@ -97,6 +130,14 @@ def prepare(profile, data):
                     for media in item.get('media',[])) for item in batch_plan['cases'])
                 if pending_image:
                     photo_model=_configured_photo_model(cur,tenant,agent)
+                pending_asr=any(item.get('status')=='pending_consent' and any(
+                    media.get('kind') in {'audio','voice','video'} and not media.get('complete')
+                    and media.get('status') in {'pending_consent','pending_retry','pending_processing'}
+                    for media in item.get('media',[])) for item in batch_plan['cases'])
+                if pending_asr and policy['allow_paid_asr'] and policy['max_asr_calls']>0:
+                    _,asr_model=_analysis_asr_model(cur,tenant,agent)
+                    from tenant_ai_asr_model import quote as quote_asr
+                    quote_asr(asr_model)
             if data.get('case_id'):
                 from tenant_case_media_admission import plan, routes
                 case_plan=plan(cur,profile,data['case_id'])
@@ -431,6 +472,10 @@ def get(profile, campaign_id=None):
                 _,credential_source=choose_api_credential(tenant,str(row['analysis_agent_id']),'connect',company_key,analysis_model)
                 try:asr_model=transcription_model({'credential_source':credential_source,'config':metadata})
                 except Exception:asr_model=''
+            asr_tariff={}
+            if asr_model:
+                from tenant_ai_asr_model import tariff_status as asr_tariff_status
+                asr_tariff=asr_tariff_status(asr_model)
 
 
     return {'campaign':{'id':str(row['id']),'version':row['version'],'status':row['status'],
@@ -443,7 +488,7 @@ def get(profile, campaign_id=None):
       'grant_used_microusd':grant_used,'prior_unknown_holds_microusd':old_unknown,
       'prior_settled_microusd':prior_settled,'grant_status':grant_status,
       'grant_approved':grant_approved,
-      'analysis_model':analysis_model,'asr_model':asr_model}}
+      'analysis_model':analysis_model,'asr_model':asr_model,'asr_tariff':asr_tariff}}
 
 
 def complete(claimed, response):
@@ -600,36 +645,19 @@ def approve(profile,campaign_id,data):
                 # Model and per-operation tariffs are immutable prerequisites;
                 # unknown pricing blocks consent and no provider call starts.
                 from tenant_ai_spend_budget import price,media_price
-                from tenant_ai_agent_key_policy import platform_model,choose_api_credential
-                from tenant_platform import _fernet
-                from tenant_connect_voice import transcription_model
-                agent_model=None;agent_meta={}
-                cur.execute('''SELECT a.model,i.secrets,i.metadata FROM saas_ai_agents a
-                  LEFT JOIN saas_tenant_integrations i ON i.tenant_id=a.tenant_id AND i.provider='chat_ai'
-                  WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid''',(tenant,row['analysis_agent_id']))
-                agent_row=cur.fetchone()
-                agent_meta=(agent_row or {}).get('metadata') or {};company_key=''
-                if (agent_row or {}).get('secrets'):
-                    try:
-                        secret=json.loads(_fernet().decrypt(bytes(agent_row['secrets'])))
-                        if secret.get('tenant_id')==tenant and secret.get('provider')=='chat_ai':company_key=str(secret.get('api_key') or '')
-                    except Exception:
-                        company_key=''
-                agent_model=(agent_row or {}).get('model') or agent_meta.get('model') or platform_model()
+                asr_required=bool(audio and new_policy.get('allow_paid_asr') and new_policy.get('max_asr_calls',0)>0)
+                agent_model,asr_model=_analysis_asr_model(cur,tenant,row['analysis_agent_id'],resolve_asr=asr_required)
                 if not agent_model or not price(agent_model):
                     raise TenantLinearError('ai_spend_price_unknown',409)
                 needs_base_vision=any(media_by_id[i]['kind']=='document' or
                     media_by_id[i]['kind']=='image' and not row.get('photo_model') for i in pending_ids)
                 if needs_base_vision and media_price(agent_model,'vision_low') is None:
-                    raise TenantLinearError('ai_spend_media_price_unknown',409)
+                    raise TenantLinearError(f'ai_spend_media_price_unknown: model={agent_model} operation=vision_low',409)
                 if any(media_by_id[i]['kind']=='video' for i in pending_ids) and media_price(row.get('video_model') or '', 'vision_low') is None:
-                    raise TenantLinearError('ai_spend_media_price_unknown',409)
-                if audio and new_policy.get('allow_paid_asr'):
-                    _,credential_source=choose_api_credential(tenant,str(row['analysis_agent_id']),'connect',company_key,agent_model)
-                    try:asr_model=transcription_model({'credential_source':credential_source,'config':agent_meta})
-                    except Exception:asr_model=''
-                    if not asr_model or not media_price(asr_model,'asr'):
-                        raise TenantLinearError('ai_spend_media_price_unknown',409)
+                    raise TenantLinearError(f'ai_spend_media_price_unknown: model={row.get("video_model") or ""} operation=vision_low',409)
+                if asr_required:
+                    from tenant_ai_asr_model import quote as quote_asr
+                    quote_asr(asr_model)
             else:
                 if set(data)!=required:raise TenantLinearError('Некорректные параметры.',400)
                 from tenant_knowledge_campaign_discovery import seed
@@ -672,10 +700,20 @@ def preview(profile,channels):
       'messages_per_fragment_max':80,'warning':'Actual availability, unique group events and fragment counts require bounded discovery; no external media has been accessed.'}
 
 
-def preview_existing_cases(profile, *, acknowledge_prior_unknown=False):
+def preview_existing_cases(profile, *, acknowledge_prior_unknown=False, analysis_agent_id=None):
     """Read-only owner preview for the exact bounded current-case media set."""
     with _connect() as conn:
         with conn.cursor() as cur:
             from tenant_case_media_admission import plan_existing_cases
             snapshot=plan_existing_cases(cur,profile,acknowledge_prior_unknown=acknowledge_prior_unknown)
+            if analysis_agent_id is not None:
+                tenant,_,_=store.authorize(cur,profile)
+                agent_id=identifier(analysis_agent_id)
+                cur.execute('SELECT 1 FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL',(tenant,agent_id))
+                if not cur.fetchone():
+                    raise TenantLinearError('Analysis agent is unavailable.',404)
+                _,asr_model=_analysis_asr_model(cur,tenant,agent_id)
+                from tenant_ai_asr_model import tariff_status
+                snapshot['asr_model']=asr_model
+                snapshot['asr_tariff']=tariff_status(asr_model)
     return snapshot

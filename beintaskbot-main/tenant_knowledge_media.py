@@ -208,6 +208,9 @@ def collect(profile,item,check_before_ai=None):
                         if speech_state=='confident' and text:
                             receipt['transcript']=text
                             message['text']+='\n[Unverified video speech transcript; confirm before treating as fact] '+text
+                        elif text:
+                            receipt['transcript_candidate']=text
+                            receipt['transcript_candidate_status']='uncertain_unverified'
                     except Exception as error: receipt['audio_status']='unknown' if getattr(error,'media_outcome_unknown',False) else 'unavailable_or_error'
             else:
                 if not signature(data,mime): raise ValueError('invalid_image')
