@@ -104,6 +104,8 @@ def test_owner_retry_one_use_actual_bytes_to_observation_and_receipt(prior,monke
     visible=admin.read(db.cursor(),{**cfg,'granted_scopes':[admin.READ_SCOPE,admin.CONTENT_SCOPE]},
       'case_evidence_read',{'id':str(claim['id']),'include_content':True})['items'][0]
     assert visible['media_results'][0]['result']['observations'][0]['text']=='Visible synthetic inventory quantity: 7'
+    assert db.execute("SELECT count(*) AS n FROM saas_knowledge_media_cache WHERE metadata->>'owner_retry'='true' AND state='completed'")[0]['n']==1
+    assert db.execute("SELECT count(*) AS n FROM saas_knowledge_media_cache WHERE state='running'")[0]['n']==0
     assert download.await_count==vision.call_count==main.call_count==1
     assert 'Visible synthetic inventory quantity: 7' in str(main.call_args)
     assert campaigns.complete(claim,response)

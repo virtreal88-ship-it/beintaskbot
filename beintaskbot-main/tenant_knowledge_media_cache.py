@@ -226,6 +226,7 @@ def observe_once(profile,item,ref,content,mime,origin,invoke,check_before_ai=Non
                 if prior and prior['state']=='completed':return prior['transcript'],{},False
                 from tenant_ai_single_photo_retry import cache_namespace
                 fingerprint=cache_namespace(cur,item,fingerprint,meta)
+                cache_fingerprints=[fingerprint]
                 meta={**meta,'owner_retry':True}
             if item['route'].get('owner_retry_unknown') is not True:
                 cur.execute('''INSERT INTO saas_knowledge_media_cache(tenant_id,fingerprint,state,token,metadata)
