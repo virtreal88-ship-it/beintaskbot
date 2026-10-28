@@ -31,6 +31,56 @@ def approve_fixture(d,key):
     # Test-only shortcut; explicit production approval is tested separately.
     d.execute("UPDATE saas_knowledge_campaigns SET status='running',approved_at=now(),approved_by=11 WHERE id=%s::uuid",(key,));d.commit()
 
+
+def test_recovery_skips_quarantined_head_but_never_retries_unknown(campaign,monkeypatch):
+    import tenant_case_media_recovery as recovery
+    d,provider,_,key=campaign
+    blocked_id=str(uuid.UUID(int=1));safe_id=str(uuid.UUID(int=2));unknown_id=str(uuid.UUID(int=3))
+    blocked_source=str(uuid.uuid4());safe_source=str(uuid.uuid4());parent=str(uuid.uuid4())
+    base={'provider':'connect','channel_id':CA,'conversation_id':'client','history_mode':'channel',
+      'period_start':'2026-10-01T00:00:00Z','period_end':'2026-10-02T00:00:00Z',
+      'source_version':'a'*64,'retry_of':parent,'owner_retry_unknown':True}
+    for fragment,source,route,status in [
+      (blocked_id,'blocked',{**base,'message_ids':[blocked_source]},'pending'),
+      (safe_id,'safe',{**base,'message_ids':[safe_source]},'pending'),
+      (unknown_id,'unknown',{'channel_id':CA,'message_ids':[blocked_source]},'unknown')]:
+        d.execute('''INSERT INTO saas_knowledge_campaign_fragments(tenant_id,campaign_id,id,source_key,route,status,created_at)
+          VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::jsonb,%s,'2026-01-01T00:00:00Z')''',
+          (A,key,fragment,source,json.dumps(route),status))
+    d.execute('UPDATE saas_knowledge_campaigns SET progress=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps({'mode':'case_media_batch','failed_media_recovery':{'parents':{blocked_id:parent,safe_id:parent}}}),key));d.commit()
+    monkeypatch.setattr(recovery,'verified_recovery_parent',lambda *args:{'id':parent})
+    approve_fixture(d,key)
+    claimed=campaigns.claim(A,key)
+    assert str(claimed['id'])==safe_id
+    states={str(r['id']):r['status'] for r in d.execute('SELECT id,status FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid',(key,))}
+    assert states=={blocked_id:'pending',safe_id:'running',unknown_id:'unknown'}
+    assert row(d,key)['reserved_calls']==1
+    d.execute("UPDATE saas_knowledge_campaign_fragments SET status='completed' WHERE id=%s::uuid",(safe_id,))
+    d.execute("UPDATE saas_knowledge_campaign_fragments SET route='{}'::jsonb WHERE id=%s::uuid",(unknown_id,));d.commit()
+    assert campaigns.claim(A,key) is None
+    assert row(d,key)['reserved_calls']==1
+    assert d.execute('SELECT status FROM saas_knowledge_campaign_fragments WHERE id=%s::uuid',(blocked_id,))[0]['status']=='pending'
+    provider.assert_not_called()
+
+
+def test_recovery_scan_reaches_work_after_one_full_blocked_page(campaign,monkeypatch):
+    d,provider,_,key=campaign
+    for n in range(1,103):
+        value={'provider':'connect','channel_id':CA,'conversation_id':'client','history_mode':'channel',
+          'period_start':'2026-10-01T00:00:00Z','period_end':'2026-10-02T00:00:00Z'}
+        d.execute('''INSERT INTO saas_knowledge_campaign_fragments(tenant_id,campaign_id,id,source_key,route,status,created_at)
+          VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::jsonb,'pending','2026-01-01T00:00:00Z')''',
+          (A,key,str(uuid.UUID(int=n)),str(n),json.dumps(value)))
+    d.execute('UPDATE saas_knowledge_campaigns SET progress=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps({'mode':'case_media_batch','failed_media_recovery':{'parents':{}}}),key));d.commit()
+    approve_fixture(d,key)
+    monkeypatch.setattr(campaigns,'_unknown_conflicts',lambda cur,tenant,fragment,c: str(fragment['id'])!=str(uuid.UUID(int=102)))
+    claimed=campaigns.claim(A,key)
+    assert str(claimed['id'])==str(uuid.UUID(int=102))
+    assert row(d,key)['reserved_calls']==1
+    provider.assert_not_called()
+
 def test_prepare_is_unapproved_and_idempotent(campaign):
     d,provider,data,key=campaign
     assert campaigns.prepare(PROFILE,data)==key

@@ -433,11 +433,32 @@ def claim(tenant, campaign_id):
             cur.execute("SELECT 1 FROM saas_knowledge_quality_checks q JOIN saas_ai_test_turns t ON t.tenant_id=q.tenant_id AND t.id=q.id WHERE q.tenant_id=%s::uuid AND t.state IN ('generating','unknown') LIMIT 1",(tenant,))
             if cur.fetchone():
                 conn.commit();return None
-            cur.execute("SELECT * FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='pending' ORDER BY created_at,id LIMIT 1 FOR UPDATE",(tenant,campaign_id))
-            fragment=cur.fetchone()
-            if not fragment: return None
-            if _unknown_conflicts(cur,tenant,fragment,campaign):
-                conn.commit();return None
+            if (campaign.get('progress') or {}).get('failed_media_recovery'):
+                # A quarantined source must not starve independent approved
+                # sources. Recheck the full existing unknown fence for every
+                # candidate; leave blocked work and old holds unchanged.
+                fragment=None;last_created=None;last_id=None
+                while True:
+                    cur.execute('''SELECT * FROM saas_knowledge_campaign_fragments
+                      WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='pending'
+                      AND (%s::timestamptz IS NULL OR (created_at,id)>(%s::timestamptz,%s::uuid))
+                      ORDER BY created_at,id LIMIT 100 FOR UPDATE''',
+                      (tenant,campaign_id,last_created,last_created,last_id))
+                    page=cur.fetchall()
+                    if not page:break
+                    for candidate in page:
+                        if not _unknown_conflicts(cur,tenant,candidate,campaign):
+                            fragment=candidate;break
+                    if fragment:break
+                    last_created=page[-1]['created_at'];last_id=str(page[-1]['id'])
+                if not fragment:
+                    conn.commit();return None
+            else:
+                cur.execute("SELECT * FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='pending' ORDER BY created_at,id LIMIT 1 FOR UPDATE",(tenant,campaign_id))
+                fragment=cur.fetchone()
+                if not fragment:return None
+                if _unknown_conflicts(cur,tenant,fragment,campaign):
+                    conn.commit();return None
             store.route(cur,profile,fragment['route'])
             amount=reservation(campaign['media_policy'])
             if not fits(campaign['media_policy'],campaign['reserved_kinds'],amount) or campaign['reserved_calls']+amount['calls']>campaign['max_calls'] or campaign['reserved_tokens']+amount['tokens']>campaign['max_tokens']:
