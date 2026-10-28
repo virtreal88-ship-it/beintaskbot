@@ -155,15 +155,35 @@ def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id
         return None, 'connect_assignment_route_blocked'
     cur.execute('''SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid
       AND connect_channel_id=%s::uuid AND conversation_id=%s''', (tenant, channel_id, conversation_id))
-    if not cur.fetchone() or conflicted(cur, tenant, channel_id, conversation_id):
+    if not cur.fetchone():
         return None, 'conversation_identity_conflict'
     cur.execute('''SELECT agent_id,state,reason,agent_assignment_id FROM saas_ai_conversation_state
       WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
         AND conversation_id=%s FOR UPDATE''', (tenant, channel_id, conversation_id))
     state = cur.fetchone()
+    if conflicted(cur, tenant, channel_id, conversation_id):
+        # A late contradiction can invalidate an earlier automatic placeholder.
+        # Retain its binding for audit, pause it and expose the safety reason;
+        # explicit operator decisions and existing nonautomatic state remain
+        # untouched. A later verified resolution may retry this managed state.
+        if (not state or (state.get('agent_assignment_id') is None
+                and (state.get('agent_id') is None
+                     or str(state.get('reason') or '').startswith('automatic_assignment_')))):
+            cur.execute('''INSERT INTO saas_ai_conversation_state
+              (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason)
+              VALUES(%s::uuid,'connect',%s,%s,NULL,'paused','conversation_identity_conflict')
+              ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE
+                SET state='paused',reason='conversation_identity_conflict',
+                    revision=saas_ai_conversation_state.revision+1,updated_at=now()
+              WHERE saas_ai_conversation_state.agent_assignment_id IS NULL
+                AND (saas_ai_conversation_state.agent_id IS NULL
+                     OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%')''',
+              (tenant,channel_id,conversation_id))
+        return None, 'conversation_identity_conflict'
     if state and (state.get('agent_id') or state.get('agent_assignment_id')
                   or state.get('state') == 'human'
                   or (state.get('state') == 'paused'
+                      and str(state.get('reason') or '') != 'conversation_identity_conflict'
                       and not str(state.get('reason') or '').startswith('automatic_assignment_'))):
         return None, 'explicit_or_existing_state_preserved'
 
@@ -184,7 +204,8 @@ def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id
           WHERE saas_ai_conversation_state.agent_id IS NULL
             AND saas_ai_conversation_state.agent_assignment_id IS NULL
             AND (saas_ai_conversation_state.state='active'
-                 OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%')
+                 OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%'
+                 OR saas_ai_conversation_state.reason='conversation_identity_conflict')
           ''', (tenant, channel_id, conversation_id, durable_reason))
         return None, reason
 
@@ -197,7 +218,8 @@ def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id
       WHERE saas_ai_conversation_state.agent_id IS NULL
         AND saas_ai_conversation_state.agent_assignment_id IS NULL
         AND (saas_ai_conversation_state.state='active'
-             OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%')
+             OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%'
+             OR saas_ai_conversation_state.reason='conversation_identity_conflict')
       RETURNING agent_id''', (tenant, channel_id, conversation_id, agent['id']))
     return (agent, '') if cur.fetchone() else (None, 'explicit_or_existing_state_preserved')
 
