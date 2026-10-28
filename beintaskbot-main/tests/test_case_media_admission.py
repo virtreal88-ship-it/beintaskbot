@@ -472,6 +472,14 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
     results=[{'id':ids[0],'status':'unknown','code':'provider_timeout'}]
     results.extend({'id':message_id,'status':'unavailable','code':'vision_not_approved'} for message_id in ids[1:])
     db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(results),extraction_id))
+    # Production-shaped Connect message: loader-addressable provider message
+    # UUID and conversation, but no separate mediaId/file_uuid in legacy raw.
+    provider_message_id=str(uuid.uuid4())
+    sparse_connect_raw={'id':provider_message_id,'channelId':CA,'conversationId':'client','type':'image'}
+    db.execute('UPDATE saas_crm_messages SET external_id=%s,raw=%s::jsonb WHERE id=%s::uuid',
+      ('connect:'+provider_message_id,json.dumps(sparse_connect_raw),ids[0]))
+    db.commit()
+    original_history=db.execute('SELECT source_refs,media_results FROM saas_knowledge_extractions WHERE id=%s::uuid',(extraction_id,))[0]
     # The fourth photo already has a completed receipt and must be reused.
     evidence.create_schema(db)
     finished=db.execute('SELECT external_id,body,raw FROM saas_crm_messages WHERE id=%s::uuid',(ids[3],))[0]
@@ -504,8 +512,13 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
     with db.cursor() as cur:acknowledged=admission.plan_existing_cases(cur,PROFILE,acknowledge_prior_unknown=True)
     assert acknowledged['eligible_count']==3 and acknowledged['retry_unknown_count']==1 and acknowledged['reused_count']==1
     retry_media=next(m for m in acknowledged['cases'][0]['media'] if m['id']==ids[0])
-    assert retry_media['source_version_verified'] and retry_media['retry_authorized']
+    assert retry_media['source_version_verified'] is False
+    assert retry_media['current_source_addressable'] is True and retry_media['retry_authorized'] is True
+    assert retry_media['retry_source_basis']=='current_connect_message'
     assert len({route['message_ids'][0] for route in admission.existing_routes(acknowledged,AGENT)})==3
+    retry_route=next(route for route in admission.existing_routes(acknowledged,AGENT) if route['message_ids']==[ids[0]])
+    assert retry_route['owner_retry_unknown'] is True
+    assert retry_route['owner_retry_basis']=='current_connect_message'
 
     generation=Mock(return_value=(json.dumps({'cards':[]}),{'input_tokens':20,'output_tokens':10,'total_tokens':30}))
     monkeypatch.setattr(service,'generate',generation)
@@ -538,10 +551,94 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
     assert generation.call_count==3
     hold_after=db.execute("SELECT id,reserved_microusd,state FROM saas_ai_spend_reservations WHERE call_key='legacy-printer-unknown'")[0]
     assert hold_after==old_hold and hold_after['state']=='unknown'
+    unchanged_history=db.execute('SELECT source_refs,media_results FROM saas_knowledge_extractions WHERE id=%s::uuid',(extraction_id,))[0]
+    assert unchanged_history==original_history,'the old extraction refs and claims remain immutable during a current-message retry'
     grant_reservations=db.execute('SELECT kind,state FROM saas_ai_spend_reservations WHERE grant_id=%s::uuid',(campaign_id,))
     assert len(grant_reservations)==6 and {r['kind'] for r in grant_reservations}=={'live_case_extraction','knowledge_vision'}
     with pytest.raises(TenantLinearError,match='cannot be reset or topped up'):
         campaigns.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4())})
+
+
+@pytest.mark.parametrize('change',[
+    {'channel':'connect:'+str(uuid.uuid4())},
+    {'raw':{'conversationId':'another-conversation'}},
+    {'external_id':'connect:not-a-uuid'},
+    {'message_type':'text'},
+])
+def test_current_connect_source_addressability_fails_closed_on_scope_mismatch(change):
+    from tenant_case_media_admission import _current_source_addressable
+    provider_message_id=str(uuid.uuid4())
+    row={'id':str(uuid.uuid4()),'external_id':'connect:'+provider_message_id,
+         'message_type':'image','channel':'connect:'+CA,
+         'raw':{'conversationId':'client'}}
+    assert _current_source_addressable(row,CA,'client') is True
+    assert _current_source_addressable({**row,**change},CA,'client') is False
+    assert _current_source_addressable(row,str(uuid.uuid4()),'client') is False
+    assert _current_source_addressable(row,CA,'other') is False
+
+
+def test_current_connect_retry_does_not_publish_under_unverified_metadata_version(ready):
+    import tenant_media_evidence as evidence
+    db,card,ids=_case(ready,(3,))
+    evidence.create_schema(db)
+    provider_message_id=str(uuid.uuid4())
+    sparse_raw={'id':provider_message_id,'channelId':CA,'conversationId':'client','type':'image'}
+    db.execute('UPDATE saas_crm_messages SET external_id=%s,raw=%s::jsonb WHERE id=%s::uuid',
+      ('connect:'+provider_message_id,json.dumps(sparse_raw),ids[0]));db.commit()
+    message=db.execute('SELECT external_id,body,raw FROM saas_crm_messages WHERE id=%s::uuid',(ids[0],))[0]
+    from tenant_case_media_admission import _has_current_media_version
+    assert _has_current_media_version(message['raw']) is False
+    ref={'id':ids[0],'external_id':message['external_id'],'channel_id':CA,'media_kind':'image',
+         'media_version':evidence.media_version(message['raw']),'body_hash':__import__('tenant_knowledge_candidates_store').digest(message['body'])}
+    receipt={'id':ids[0],'kind':'image','status':'processed','code':'vision_observation',
+             'observation':'Synthetic observation from an explicitly acknowledged current message'}
+    with db.cursor() as cur:
+        evidence.persist(cur,A,[ref],[receipt],skip_unverified_source_ids=[ids[0]])
+    db.commit()
+    assert evidence.reusable(PROFILE,{**ref,'lead_id':41}) is None
+
+
+@pytest.mark.parametrize('mutation',['conversation_removed','message_deleted'])
+def test_batch_worker_fence_rejects_source_change_or_deletion_after_approval(ready,monkeypatch,mutation):
+    import tenant_ai_agent_key_policy as key_policy
+    db,card,ids=_case(ready,(3,))
+    _mark_pending_consent(db,card['id'],ids)
+    extraction_id=db.execute('SELECT extraction_id FROM saas_knowledge_candidates WHERE id=%s::uuid',(card['id'],))[0]['extraction_id']
+    provider_message_id=str(uuid.uuid4())
+    raw={'id':provider_message_id,'channelId':CA,'conversationId':'client','type':'image'}
+    db.execute('UPDATE saas_crm_messages SET external_id=%s,raw=%s::jsonb WHERE id=%s::uuid',
+      ('connect:'+provider_message_id,json.dumps(raw),ids[0]))
+    db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps([{'id':ids[0],'status':'unknown','code':'provider_timeout'}]),extraction_id));db.commit()
+    monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_DEFAULT_MODEL','test-model')
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_MODELS','["test-model"]')
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'test-model':{'input':10,'output':10}}))
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'test-model':{'vision_low':2500}}))
+    monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD',json.dumps({A:10000000}))
+    monkeypatch.setattr(key_policy,'platform_model',lambda:'test-model')
+    monkeypatch.setattr(key_policy,'choose_api_credential',lambda *a:('synthetic-key','platform'))
+    key=str(uuid.uuid4())
+    data={'request_id':key,'all_existing_cases':True,'channel_ids':[],'analysis_agent_id':AGENT,
+      'max_calls':10000,'max_tokens':160000000,'max_cost_microusd':10000000,'video_model':None,
+      'acknowledge_prior_unknown':True,'allow_external_media':True,'allow_paid_asr':False,
+      'max_main_calls':10000,'max_asr_calls':0,'max_vision_calls':10000}
+    campaigns.prepare(PROFILE,data)
+    row=db.execute('SELECT * FROM saas_knowledge_campaigns WHERE id=%s::uuid',(key,))[0]
+    campaigns.approve(PROFILE,key,{'expected_version':row['version'],'channel_ids':row['sources'],
+      'max_calls':row['max_calls'],'max_tokens':row['max_tokens'],'confirm_external_processing':True,
+      'media_policy':row['media_policy'],'all_cases_snapshot_hash':row['progress']['snapshot_hash'],
+      'max_cost_microusd':10000000,'video_model':None,'acknowledge_prior_unknown':True})
+    claimed=campaigns.claim(A,key)
+    assert claimed
+    if mutation=='conversation_removed':
+        db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',
+          (json.dumps({'id':provider_message_id,'channelId':CA,'type':'image'}),ids[0]))
+    else:
+        db.execute('DELETE FROM saas_crm_messages WHERE id=%s::uuid',(ids[0],))
+    db.commit()
+    with db.cursor() as cur,pytest.raises(TenantLinearError,match='case snapshot or media source changed'):
+        worker.check_fence(cur,A,claimed['id'])
 
 
 def test_fixed_grant_over_cap_blocks_before_any_provider_call(ready,monkeypatch):

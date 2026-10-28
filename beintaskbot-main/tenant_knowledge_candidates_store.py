@@ -65,6 +65,10 @@ def route(cur,profile,data):
     if data.get('video_model'):binding['video_model']=str(data['video_model'])[:100]
     if data.get('media_grant_id'):binding['media_grant_id']=identifier(data['media_grant_id'])
     if data.get('owner_retry_unknown') is True:binding['owner_retry_unknown']=True
+    if data.get('owner_retry_basis') is not None:
+        if not data.get('owner_retry_unknown') or data['owner_retry_basis'] not in {'stable_media_identity','current_connect_message'}:
+            raise TenantLinearError('Некорректная привязка повторного анализа.',403)
+        binding['owner_retry_basis']=data['owner_retry_basis']
     if start: binding.update(period_start=start,period_end=end)
     return tenant,actor,policy,chosen,binding,ticket
 

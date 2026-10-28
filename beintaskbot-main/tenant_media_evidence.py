@@ -90,15 +90,22 @@ def reusable(profile, ref):
     return dict(row) if row and row.get('status') in _TERMINAL else None
 
 
-def persist(cur, tenant, refs, receipts):
+def persist(cur, tenant, refs, receipts, *, skip_unverified_source_ids=()):
     """Persist terminal outcomes after the extraction's source revalidation.
 
     This accepts neither URLs nor provider payloads.  The selected extraction
     reference supplies the tenant/channel/message/version fence.
     """
     by_id = {str(ref.get('id')): ref for ref in refs or []}
+    skip_unverified_source_ids={str(value) for value in skip_unverified_source_ids}
     for receipt in receipts or []:
         ref = by_id.get(str(receipt.get('id')))
+        if ref and str(receipt.get('id')) in skip_unverified_source_ids:
+            # The artifact cache may retain the actual downloaded-byte hash,
+            # but this receipt table is indexed by webhook metadata version.
+            # Do not make current-message evidence reusable under an
+            # unverified historical metadata identity.
+            continue
         status = str(receipt.get('status') or '')
         if (not ref or status not in _TERMINAL or str(receipt.get('code') or '') in _POLICY_RETRY
                 or not ref.get('external_id') or not ref.get('channel_id')):

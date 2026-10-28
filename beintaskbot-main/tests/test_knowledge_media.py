@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import wave
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 import pytest
 import tenant_knowledge_media as media
 from test_knowledge_candidates import ready
@@ -73,6 +73,35 @@ def test_channel_or_conversation_mismatch_never_downloads(context,monkeypatch):
     assert media.collect({},item)[1][0]['status']=='unavailable'
     download.assert_not_called()
 
+def test_acknowledged_current_connect_retry_uses_loader_and_actual_bytes_not_metadata_receipt(context,monkeypatch):
+    import tenant_media_evidence as evidence
+    import tenant_knowledge_media_cache as cache
+    item,add,download=context;add('image');item.update(key='synthetic',model='gpt-4.1')
+    item['route'].update(allow_external_media=True,allow_vision=True,owner_retry_unknown=True,
+        owner_retry_basis='current_connect_message',media_grant_id='grant',message_ids=['1'],source_version='a'*64)
+    # A metadata-version receipt may describe different bytes; do not consult it.
+    reused=Mock(return_value={'status':'processed','observation':'stale metadata result'})
+    monkeypatch.setattr(evidence,'reusable',reused)
+    observed=[]
+    monkeypatch.setattr(cache,'observe_once',lambda _p,_i,_r,content,_mime,_origin,*a,**k:
+        (observed.append(content) or 'fresh byte observation',{},True))
+    images,results=media.collect({},item)
+    assert images==[] and results[0]['status']=='processed'
+    assert results[0]['observations'][0]['text']=='fresh byte observation'
+    assert observed==[PNG] and download.await_count==1
+    reused.assert_not_called()
+
+def test_acknowledged_current_connect_retry_fails_closed_if_loader_unavailable(context,monkeypatch):
+    import tenant_knowledge_media_cache as cache
+    item,add,download=context;add('image')
+    item['route'].update(allow_external_media=True,allow_vision=True,owner_retry_unknown=True,
+        owner_retry_basis='current_connect_message',media_grant_id='grant',message_ids=['1'],source_version='a'*64)
+    monkeypatch.setattr(media,'load',lambda *_:(_ for _ in ()).throw(TenantLinearError('expired',410)))
+    observed=Mock();monkeypatch.setattr(cache,'observe_once',observed)
+    images,results=media.collect({},item)
+    assert images==[] and results[0]['status']=='unavailable'
+    download.assert_not_awaited();observed.assert_not_called()
+
 def test_count_limit_unsupported_and_pending(context):
     item,add,download=context
     for _ in range(5):add('sticker')
@@ -91,10 +120,11 @@ def test_owner_batch_retry_cache_is_single_attempt_and_shared_by_same_artifact(r
     monkeypatch.setattr(cache,'_connect',lambda:db)
     monkeypatch.setattr(service,'_connect',lambda:db)
     monkeypatch.setattr(service,'check_active',lambda *_:None)
-    message_id=str(uuid.uuid4());grant_id=str(uuid.uuid4());content=b'synthetic printer image bytes'
-    ref={'id':message_id,'channel_id':'00000000-0000-0000-0000-0000000000c9'}
+    message_id=str(uuid.uuid4());provider_id=str(uuid.uuid4());grant_id=str(uuid.uuid4());content=b'synthetic printer image bytes'
+    ref={'id':message_id,'external_id':'connect:'+provider_id,'channel_id':'00000000-0000-0000-0000-0000000000c9','media_version':'a'*64}
     route={'owner_retry_unknown':True,'media_grant_id':grant_id,'message_ids':[message_id],
-      'source_version':'a'*64,'allow_external_media':True,'allow_vision':True}
+      'channel_id':ref['channel_id'],
+      'source_version':'a'*64,'owner_retry_basis':'current_connect_message','allow_external_media':True,'allow_vision':True}
     item={'tenant':A,'model':'gpt-4.1','route':route,'refs':[ref],'key':'mock-key','vision_attempts':0}
     provider=Mock(return_value=('A synthetic label observation.',{'input_tokens':20,'output_tokens':8,'total_tokens':28}))
     result=cache.observe_once(PROFILE,item,ref,content,'image/png',{},provider)
@@ -107,13 +137,67 @@ def test_owner_batch_retry_cache_is_single_attempt_and_shared_by_same_artifact(r
     assert reused==('A synthetic label observation.',{},False)
     provider.assert_called_once()
     rows=db.execute("SELECT state,metadata FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND metadata->>'owner_retry_grant'=%s",(A,grant_id))
-    assert len(rows)==1 and rows[0]['state']=='completed'
+    assert len(rows)==2 and {row['state'] for row in rows}=={'completed'}
+    assert sum(row['metadata'].get('owner_retry_artifact') is True for row in rows)==1
+    # The same approval cannot dispatch again if the selected message bytes
+    # or provider message binding changes after its first attempt.
+    changed_content=b'different bytes from same current message'
+    with pytest.raises(TenantLinearError,match='Источник изменился'):
+        cache.observe_once(PROFILE,item,ref,changed_content,'image/png',{},provider)
+    changed_ref={**ref,'external_id':'connect:'+str(uuid.uuid4())}
+    with pytest.raises(TenantLinearError,match='Источник изменился'):
+        cache.observe_once(PROFILE,{**item,'refs':[changed_ref]},changed_ref,content,'image/png',{},provider)
+    provider.assert_called_once()
+
+    # An unknown billed attempt also consumes the source-scoped permit. A
+    # different payload cannot create another namespace under the same grant.
+    unknown_id=str(uuid.uuid4());unknown_ref={'id':unknown_id,'external_id':'connect:'+str(uuid.uuid4()),'channel_id':ref['channel_id'],'media_version':'a'*64}
+    unknown_route={**route,'media_grant_id':str(uuid.uuid4()),'message_ids':[unknown_id]}
+    unknown_item={**item,'route':unknown_route,'refs':[unknown_ref]}
     uncertain_provider=Mock(side_effect=RuntimeError('synthetic timeout'))
     uncertain_content=b'a different synthetic image with unknown outcome'
-    with pytest.raises(RuntimeError):cache.observe_once(PROFILE,item,ref,uncertain_content,'image/png',{},uncertain_provider)
-    with pytest.raises(TenantLinearError,match='неизвестен или ещё обрабатывается'):
-        cache.observe_once(PROFILE,item,ref,uncertain_content,'image/png',{},uncertain_provider)
+    with pytest.raises(RuntimeError):cache.observe_once(PROFILE,unknown_item,unknown_ref,uncertain_content,'image/png',{},uncertain_provider)
+    with pytest.raises(TenantLinearError) as second:
+        cache.observe_once(PROFILE,unknown_item,unknown_ref,b'changed after timeout','image/png',{},uncertain_provider)
+    assert second.value.media_outcome_unknown
     uncertain_provider.assert_called_once()
+
+
+@pytest.mark.parametrize('state',['unknown','running','completed'])
+def test_legacy_owner_retry_cache_preserves_hold_or_exact_result(ready,monkeypatch,state):
+    import hashlib,uuid
+    from unittest.mock import Mock
+    import tenant_knowledge_candidates_service as service
+    import tenant_knowledge_media_cache as cache
+    import tenant_knowledge_candidates_store as store
+    from tenant_linear_policy import TenantLinearError
+    db,_,_=ready
+    monkeypatch.setattr(cache,'_connect',lambda:db);monkeypatch.setattr(service,'_connect',lambda:db)
+    monkeypatch.setattr(service,'check_active',lambda *_:None)
+    message_id=str(uuid.uuid4());grant_id=str(uuid.uuid4());external='connect:'+str(uuid.uuid4())
+    channel='00000000-0000-0000-0000-0000000000c9';content=b'legacy retry exact bytes'
+    ref={'id':message_id,'external_id':external,'channel_id':channel,'media_version':'a'*64}
+    route={'owner_retry_unknown':True,'owner_retry_basis':'current_connect_message','media_grant_id':grant_id,
+      'message_ids':[message_id],'channel_id':channel,'source_version':'a'*64,
+      'allow_external_media':True,'allow_vision':True}
+    item={'tenant':A,'key':'mock','model':'gpt-4.1','route':route,'refs':[ref]}
+    meta={'kind':'vision','version':'observations-v1','model':'gpt-4.1','detail':'low',
+      'channel_id':channel,'mime':'image/png','origin':{},'sha256':hashlib.sha256(content).hexdigest()}
+    artifact={key:meta[key] for key in ('kind','version','model','detail','mime','sha256')}
+    base=store.digest(artifact);legacy=store.digest({'artifact':base,'owner_retry_grant':grant_id,'component':'vision'})
+    with db.cursor() as cur:
+        cache.schema(cur)
+        cur.execute("INSERT INTO saas_knowledge_media_cache(tenant_id,fingerprint,state,token,transcript,metadata) VALUES(%s::uuid,%s,%s,%s::uuid,%s,%s::jsonb)",
+          (A,legacy,state,str(uuid.uuid4()),'exact legacy cached result',json.dumps({'owner_retry_grant':grant_id,'owner_retry_component':'vision','artifact_fingerprint':base})))
+    db.commit()
+    provider=Mock(return_value=('must not dispatch',{'total_tokens':1}))
+    if state=='completed':
+        assert cache.observe_once(PROFILE,item,ref,content,'image/png',{},provider)==('exact legacy cached result',{},False)
+    else:
+        with pytest.raises(TenantLinearError) as blocked:
+            cache.observe_once(PROFILE,item,ref,content,'image/png',{},provider)
+        assert blocked.value.media_outcome_unknown
+    assert provider.call_count==0
 
 def test_plain_document_extracts_redacts_and_preserves_caption(context):
     item,add,download=context;add('document')

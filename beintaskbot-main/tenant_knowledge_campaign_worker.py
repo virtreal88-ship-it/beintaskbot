@@ -48,7 +48,9 @@ def check_fence(cur, tenant, extraction_id):
                 or checked_case.get('case_version')!=row['route'].get('case_version')
                 or row['route'].get('case_plan_hash')!=checked_case.get('plan_hash')
                 or not retry_media
-                or bool(row['route'].get('owner_retry_unknown')) is not bool(retry_media.get('retry_authorized'))):
+                or bool(row['route'].get('owner_retry_unknown')) is not bool(retry_media.get('retry_authorized'))
+                or row['route'].get('owner_retry_basis') is not None
+                   and row['route'].get('owner_retry_basis')!=retry_media.get('retry_source_basis')):
                 raise TenantLinearError('Current case snapshot or media source changed.',409)
         # Durable progress heartbeat without unbounded lease extension. The 360s
         # lease remains strictly above the 240s extraction hard deadline.

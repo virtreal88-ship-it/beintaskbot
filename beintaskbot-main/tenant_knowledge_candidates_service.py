@@ -34,7 +34,7 @@ class LiveExtractionDisabled(Exception):
 
 
 def prepare(profile,data,review=None):
-    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','photo_model','video_model','media_grant_id','owner_retry_unknown'}
+    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','photo_model','video_model','media_grant_id','owner_retry_unknown','owner_retry_basis'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректные параметры анализа.')
     for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
         if flag in data and type(data[flag]) is not bool: raise TenantLinearError('Некорректное разрешение медиа.')
@@ -69,6 +69,8 @@ def prepare(profile,data,review=None):
               WHERE f.tenant_id=%s::uuid AND f.id=%s::uuid''',(tenant,request_id))
             campaign_source=cur.fetchone()
             grant_id=(campaign_source or {}).get('route',{}).get('media_grant_id')
+            if data.get('owner_retry_basis') and not campaign_source:
+                raise TenantLinearError('A retry basis is valid only for its server-created case campaign fragment.',403)
             if data.get('media_grant_id') and not campaign_source:
                 raise TenantLinearError('A media grant can be used only by its server-created campaign fragment.',403)
             if grant_id and not campaign_source.get('max_cost_microusd'):
@@ -76,7 +78,8 @@ def prepare(profile,data,review=None):
             if campaign_source:
                 if (data.get('media_grant_id')!=campaign_source['route'].get('media_grant_id')
                     or data.get('video_model')!=campaign_source['route'].get('video_model')
-                    or data.get('owner_retry_unknown',False) is not campaign_source['route'].get('owner_retry_unknown',False)):
+                    or data.get('owner_retry_unknown',False) is not campaign_source['route'].get('owner_retry_unknown',False)
+                    or data.get('owner_retry_basis')!=campaign_source['route'].get('owner_retry_basis')):
                     raise TenantLinearError('Разрешение кампании изменилось.',409)
                 expected=sorted(campaign_source['sources'])
                 for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
@@ -383,7 +386,10 @@ def finish(profile,item,values,usage,error,attempted,proposal=None,accounting_us
                 cur.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(item['media_results']),tenant,request_id))
                 if source_valid:
                     from tenant_media_evidence import persist as persist_media_evidence
-                    persist_media_evidence(cur,tenant,item['refs'],item['media_results'])
+                    retry_route=item.get('route') if isinstance(item.get('route'),dict) else {}
+                    unverified_retry_ids=(retry_route.get('message_ids') or []) if retry_route.get('owner_retry_unknown') is True else []
+                    persist_media_evidence(cur,tenant,item['refs'],item['media_results'],
+                        skip_unverified_source_ids=unverified_retry_ids)
             cur.execute('UPDATE saas_knowledge_extractions SET status=%s,error_code=%s,completed_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(status,error,tenant,request_id))
             cur.execute('UPDATE saas_ai_agent_runs SET state=%s,error_code=%s,generated_at=CASE WHEN %s THEN now() ELSE generated_at END,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',
                 ('completed' if status=='completed' else ('unknown' if attempted else 'skipped'),error,bool(usage),tenant,request_id))

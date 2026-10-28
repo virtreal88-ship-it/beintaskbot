@@ -4,6 +4,7 @@ Planning is read-only.  The owner must approve the resulting campaign before any
 fragment is queued.  No conversation history discovery is used for this mode.
 """
 import json
+import uuid
 from datetime import timedelta
 
 from tenant_linear_policy import TenantLinearError, identifier
@@ -24,6 +25,31 @@ def _has_current_media_version(raw):
         if isinstance(value,int) and not isinstance(value,bool) and value>0:
             return True
     return False
+
+
+def _current_source_addressable(row, channel_id, conversation_id):
+    """Whether the protected Connect loader can address this exact message.
+
+    A validated opaque Connect message ID plus the already-authorized tenant/channel/
+    conversation can identify the current attachment even when legacy raw
+    metadata omitted a separate mediaId/file_uuid. This does not prove old
+    and current attachment bytes are equivalent.
+    """
+    try:
+        uuid.UUID(str(row.get('id') or ''))
+        external=str(row.get('external_id') or '')
+        if not external.startswith('connect:'):
+            return False
+        uuid.UUID(external.removeprefix('connect:'))
+    except (ValueError, TypeError, AttributeError):
+        return False
+    if str(row.get('message_type') or '') not in SUPPORTED:
+        return False
+    if row.get('channel')!='connect:'+str(channel_id):
+        return False
+    raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
+    saved_conversation=raw.get('conversationId')
+    return not saved_conversation or str(saved_conversation)==str(conversation_id)
 
 
 def _explicit_no_media_call(ref, result):
@@ -123,7 +149,7 @@ def plan(cur, profile, candidate_id, *, allow_unknown_retry=False):
     if count > MAX_MESSAGES:
         return {'status': 'pending_boundaries', 'reason': 'case_boundary_context_limit', 'case_id': key}
     channel = str(binding['channel_id'])
-    cur.execute('''SELECT id::text AS id,external_id,body,raw,message_type,
+    cur.execute('''SELECT id::text AS id,external_id,body,raw,message_type,channel,
         COALESCE(happened_at,created_at) AS at FROM saas_crm_messages
       WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
         AND (COALESCE(happened_at,created_at),id)>=(%s::timestamptz,%s::uuid)
@@ -145,9 +171,13 @@ def plan(cur, profile, candidate_id, *, allow_unknown_retry=False):
         item = by_id.get(str(row['id']), {})
         raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
         version=media_version(raw)
+        source_addressable=_current_source_addressable(row,channel,binding['conversation_id'])
+        conversation_scope_hash=store.digest(str(raw.get('conversationId') or ''))
         media.append({'id': str(row['id']), 'kind': kind,
             'source_version': version,
             'source_version_verified':_has_current_media_version(raw),
+            'current_source_addressable':source_addressable,
+            'conversation_scope_hash':conversation_scope_hash,
             'source_hash': source_hash({'external_id': row.get('external_id'),
               'body_hash': store.digest(str(row.get('body') or '')),
               'media_kind': kind, 'media_version': version}),
@@ -164,19 +194,23 @@ def plan(cur, profile, candidate_id, *, allow_unknown_retry=False):
                 media[-1]['status']='pending_consent'
                 media[-1]['code']='verified_not_attempted'
         if (not media[-1]['complete'] and media[-1]['status']=='unknown' and allow_unknown_retry
-                and kind in SUPPORTED and media[-1]['source_version_verified']):
-            # This authorizes one NEW attempt against the current bounded
-            # source. It does not assert that old bytes match, clear old holds,
-            # or rewrite historical extraction evidence.
+                and kind in SUPPORTED and source_addressable):
+            # The owner authorizes one NEW attempt against the exact current
+            # message through the protected loader. Preserve uncertainty about
+            # prior bytes and never rewrite the historical extraction.
             media[-1]['prior_attempt_code']=media[-1]['code']
             media[-1]['status']='pending_retry'
             media[-1]['code']='owner_acknowledged_new_attempt'
             media[-1]['retry_authorized']=True
+            media[-1]['retry_source_basis']='stable_media_identity' if media[-1]['source_version_verified'] else 'current_connect_message'
+    plan_hash=store.digest([(x['id'],x['kind'],x['source_hash'],x['at'],x['source_version_verified'],
+      x['current_source_addressable'],x['conversation_scope_hash'],x.get('retry_authorized',False),x.get('retry_source_basis')) for x in media]
+                              + [start,end,case['version']])
+    for item in media:item.pop('conversation_scope_hash',None)
     return {'status': 'pending_consent', 'case_id': key, 'case_version': case['version'],
         'channel_id': channel, 'conversation_id': binding['conversation_id'],
         'start_message_id': start, 'end_message_id': end, 'media': media,
-        'plan_hash': store.digest([(x['id'],x['kind'],x['source_hash'],x['at']) for x in media]
-                                  + [start,end,case['version']])}
+        'plan_hash': plan_hash}
 
 
 def routes(planned, agent_id, *, allow_legacy_unknown=True):
@@ -193,7 +227,8 @@ def routes(planned, agent_id, *, allow_legacy_unknown=True):
             'period_end':item['period_end'], 'analysis_agent_id':str(agent_id),
             'source_version':item['source_version'], 'case_id':planned['case_id'],
             'case_version':planned['case_version'], 'case_plan_hash':planned['plan_hash'],
-            **({'owner_retry_unknown':True} if item.get('retry_authorized') is True else {})}
+            **({'owner_retry_unknown':True,'owner_retry_basis':item.get('retry_source_basis')}
+               if item.get('retry_authorized') is True else {})}
 
 
 def plan_existing_cases(cur, profile, *, limit=500, acknowledge_prior_unknown=False):
@@ -229,7 +264,9 @@ def plan_existing_cases(cur, profile, *, limit=500, acknowledge_prior_unknown=Fa
         # source identity. Receipt/state changes between preview and approval
         # can add or remove billable calls and must invalidate that preview.
         media_scope=sorted([[m.get('id'),m.get('kind'),m.get('source_version'),m.get('status'),
-          m.get('code'),bool(m.get('complete')),m.get('reconciliation')] for m in item.get('media',[])],key=lambda row:str(row[0]))
+          m.get('code'),bool(m.get('complete')),m.get('reconciliation'),m.get('source_version_verified'),
+          m.get('current_source_addressable'),m.get('retry_authorized'),m.get('retry_source_basis')]
+          for m in item.get('media',[])],key=lambda row:str(row[0]))
         rows.append([case_id,int(candidate['version']),candidate['status'],item.get('plan_hash',''),
           item.get('reason',''),media_scope])
         if item.get('status')!='pending_consent':

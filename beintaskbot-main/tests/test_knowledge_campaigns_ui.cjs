@@ -25,7 +25,7 @@ const script=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant
   assert.equal(requests[1].data.media_policy.allow_paid_asr,false);assert.equal(requests[1].data.media_policy.allow_external_media,false);assert.equal(requests[1].data.media_policy.max_main_calls,4);assert.equal(requests[1].data.confirm_external_processing,true);assert.equal(requests[1].data.expected_version,1);
   await host.querySelector('[data-actions] button').onclick();assert.equal(requests[2].data.action,'pause');
   assert.equal(requests[2].data.expected_version,2);assert.ok(!host.innerHTML.includes('undefined'));
-  const batchRequests=[];let batchState=null;
+  const batchRequests=[],previewRequests=[];let batchState={id:'old-stopped',version:4,status:'stopped',channel_ids:['old-channel'],max_calls:10000,max_tokens:160000000,media_policy:{},progress:{mode:'case_media',attachment_count:1},reserved_calls:2648,reserved_tokens:259,used_tokens:259,cost:0,cards:0};
   const batchCtx={...ctx,api:async(url,options)=>{
     if(options){const data=JSON.parse(options.body);batchRequests.push({url,data});
       if(url.endsWith('/campaigns'))batchState={id:'batch',version:1,status:'awaiting_budget',channel_ids:['channel-a'],
@@ -37,12 +37,23 @@ const script=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant
         prior_unknown_holds_microusd:0,prior_settled_microusd:0,analysis_model:'text-model',asr_model:'asr-model',
         grant_approved:false,fragments:{},reserved_calls:0,reserved_tokens:0,used_tokens:0,cards:0};
       if(url.endsWith('/start'))batchState={...batchState,version:2,status:'running',grant_approved:true};
-    }if(url.includes('/preview?'))return {result:{case_count:3,eligible_count:2,reused_count:1,review_count:0,unknown_media_count:1,unavailable_media_count:0,retry_unknown_count:new URL(url).searchParams.get('acknowledge_prior_unknown')==='true'?1:0,cases:[]}};return {campaign:batchState};}};
+    }if(url.includes('/preview?')){const parsed=new URL(url,'https://example.test');previewRequests.push(parsed);return {result:{case_count:3,eligible_count:2,reused_count:1,review_count:0,unknown_media_count:1,unavailable_media_count:0,retry_unknown_count:parsed.searchParams.get('acknowledge_prior_unknown')==='true'?1:0,cases:[]}};}return {campaign:batchState};}};
   await w.TenantKnowledgeCampaigns.mount(host,batchCtx);
+  assert.match(host.querySelector('[data-campaign-status]').textContent,/stopped|остановлено|dayandırılıb/i,'old stopped campaign is initially visible in its own context');
   const all=host.querySelector('[data-all-existing]');all.checked=true;all.onchange();
+  await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(host.querySelector('[data-source]').disabled,true);
   assert.equal(host.querySelector('[data-retry-wrap]').hidden,false);
+  assert.equal(host.querySelector('[data-batch-grant]').hidden,false);
+  assert.match(host.querySelector('[data-batch-grant]').textContent,/\$10/);
+  assert.match(host.querySelector('[data-prepare]').textContent,/\$10/,'prepare button should name the fixed grant cap');
+  assert.doesNotMatch(host.querySelector('[data-campaign-status]').textContent,/259|2648|old-channel/,'stopped unrelated campaign metrics must not masquerade as this snapshot');
   host.querySelector('[data-retry-unknown]').checked=true;host.querySelector('[data-retry-unknown]').onchange();
+  await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(previewRequests.at(-1).searchParams.get('all_existing_cases'),'true');
+  assert.equal(previewRequests.at(-1).searchParams.get('acknowledge_prior_unknown'),'true','read-only preview must receive the explicit retry choice');
+  assert.equal(previewRequests.at(-1).searchParams.get('expected_tenant_id'),'tenant-a');
+  assert.equal(previewRequests.at(-1).searchParams.get('expected_user_id'),'11');
   assert.ok(batchRequests.length===0,'preview must remain read-only');
   host.querySelector('[data-video-model]').value='gpt-4.1';
   await host.querySelector('[data-prepare]').onclick();
@@ -56,5 +67,8 @@ const script=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant
   const startButton=[...host.querySelectorAll('[data-actions] button')].find(button=>button.textContent===({ru:'Запустить анализ',az:'Analizi başlat',en:'Start analysis'}[language]));
   assert.ok(startButton);await startButton.onclick();
   assert.equal(batchRequests[1].data.acknowledge_prior_unknown,true);
+  all.checked=false;all.onchange();
+  assert.equal(host.querySelector('[data-batch-grant]').hidden,true);
+  assert.equal(host.querySelector('[data-prepare]').textContent,({ru:'Подготовить',az:'Hazırla',en:'Prepare'}[language]));
   dom.window.close();
 }console.log('Campaign controls: RU/AZ/EN, explicit consent, sources, versioned pause passed');})().catch(e=>{console.error(e);process.exitCode=1;});
