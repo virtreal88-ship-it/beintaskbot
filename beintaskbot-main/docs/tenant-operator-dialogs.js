@@ -499,10 +499,10 @@
   document.addEventListener('tenant-profile',event=>profileChanged(event.detail));
   document.addEventListener('tenant-auth-invalid',()=>profileChanged({}));
   document.addEventListener('tenant-auth-pending',()=>{if(caseLinkPending){cancelCaseLink();caseLinkKey='';}listFlight=null;listRevision++;lastListAt=0;if($('operatorDialogs'))$('operatorDialogs').style.visibility='hidden';});
-  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){refresh(false,true);scheduleAutoRefresh();}else{stopAutoRefresh();cancelCaseLink();}});
+  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){refresh(false,true);scheduleAutoRefresh();}else{stopAutoRefresh();cancelCaseLink();if(pendingDialogRoute)closeDialog(false,true);}});
   document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAutoRefresh();else if($('view-dialogs')?.classList.contains('active')){refresh();scheduleAutoRefresh();}});
   window.addEventListener('beforeunload',stopAutoRefresh);
-  window.addEventListener('popstate',event=>{cancelCaseLink();caseLinkKey='';const route=event.state?.operatorDialog;if(event.state?.view==='dialogs'&&route&&window.matchMedia?.('(max-width: 900px)').matches&&hasRight('dialogs')){if(!sameDialog(currentDialog,route))void openDialog(route,true);}else if(currentDialog||pendingDialogRoute)closeDialog(true,true);openLocationCaseLink();});
+  window.addEventListener('popstate',event=>{cancelCaseLink();const route=event.state?.operatorDialog;if(event.state?.view==='dialogs'&&route&&window.matchMedia?.('(max-width: 900px)').matches&&hasRight('dialogs')){if(!sameDialog(currentDialog,route))void openDialog(route,true);}else if(currentDialog||pendingDialogRoute)closeDialog(true,true);const query=new URLSearchParams(location.search),linkKey=[query.get('case_id')||'',query.get('message_id')||'',query.get('review_run_id')||''].join(':');if(!event.state?.operatorCaseHandled||event.state.operatorCaseHandled!==linkKey)openLocationCaseLink();});
   document.addEventListener('tenant-language',()=>{updateSoundButton();if($('operatorRows')){setStates();refresh();}if($('operatorBulkAssignment'))$('operatorBulkAssignment').textContent=bulkText('preview');if(currentDialog&&currentPage){const diagnosticsOpen=$('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden,settingsOpen=$('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden;renderDialog(currentPage);if(diagnosticsOpen)openDialogDiagnostics(currentDialog);if(settingsOpen)openGroupSettings(currentDialog);}});
   document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;if($('operatorCopilot')&&!$('operatorCopilot').hidden){$('operatorCopilotClose')?.click();return;}if($('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden){closeGroupSettings();return;}if($('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden){closeDialogDiagnostics();return;}if(currentDialog||caseLinkPending)closeDialog();});
   let caseLinkKey='';
@@ -548,7 +548,7 @@
     const reviewId=String(data?.review_run_id||''),messageId=String(data?.message_id||'');
     if(!uuid(reviewId)||!uuid(messageId)){cancelCaseLink();notice(caseLinkText('invalid'));return false;}
     return resolveCaseLink(async()=>{
-      const resolved=(await rawApi(endpoint+'administrator/approvals?'+new URLSearchParams({review_run_id:reviewId})).result);
+      const resolved=(await rawApi(endpoint+'administrator/approvals?'+new URLSearchParams({review_run_id:reviewId}))).result;
       if(!resolved?.route||String(resolved.source_message_id)!==messageId)throw Error(caseLinkText('unavailable'));
       return {...resolved.route,source_message_id:resolved.source_message_id};
     });
@@ -556,11 +556,12 @@
   function openLocationCaseLink(){
     let query;try{query=new URLSearchParams(location.search);}catch{return;}
     const caseId=query.get('case_id'),messageId=query.get('message_id'),reviewId=query.get('review_run_id')||'';
-    if(!caseId&&!messageId&&!reviewId)return;
+    if(!caseId&&!messageId&&!reviewId){caseLinkKey='';return;}
     const key=[caseId||'',messageId||'',reviewId].join(':');
     if(key===caseLinkKey)return true;caseLinkKey=key;
     if(caseId)void openCaseLink({case_id:caseId,message_id:messageId,review_run_id:reviewId});
     else void openLearningReviewLink({review_run_id:reviewId,message_id:messageId});
+    history.replaceState({...history.state,operatorCaseHandled:key},'');
     return true;
   }
   window.tenantOperator={messageMarkup,openDialog,openCaseLink,openLearningReviewLink,openLocationCaseLink,closeDialog,changeState,refresh,hasRight,get member(){return member}};
