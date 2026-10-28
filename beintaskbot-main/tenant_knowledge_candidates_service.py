@@ -123,6 +123,16 @@ def prepare(profile,data,review=None):
                 if (not isinstance(data['source_version'],str) or len(data['source_version'])!=64
                         or len(item['refs'])!=1 or item['refs'][0].get('media_version')!=data['source_version']):
                     raise TenantLinearError('Media source changed; obtain a new owner consent.',409)
+            if data.get('owner_retry_unknown'):
+                approved_route=campaign_source['route']
+                if (data.get('message_ids')!=approved_route.get('message_ids')
+                    or data.get('source_version')!=approved_route.get('source_version')
+                    or len(item['refs'])!=1 or data['message_ids']!=[item['refs'][0]['id']]):
+                    raise TenantLinearError('Exact current-source retry scope is unavailable.',409)
+                # The retry cache checks the exact approved source again at
+                # dispatch. Preserve its validated identity in the snapshot.
+                item['route']['message_ids']=list(data['message_ids'])
+                item['route']['source_version']=data['source_version']
             cur.execute('SELECT 1 FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,request_id))
             if cur.fetchone():
                 from tenant_knowledge_campaign_discovery import bound_context

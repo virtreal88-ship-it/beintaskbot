@@ -648,7 +648,16 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
     dispatched=[];collect_entries=[]
     def collect(_profile,item,check_before_ai=None):
         collect_entries.append(item)
+        # Real media collection rechecks the campaign after extraction is
+        # inserted and reservations are recorded, before provider dispatch.
+        service.check_active(_profile,item)
         route=item['route'];message_id=item['refs'][0]['id']
+        if route.get('owner_retry_unknown'):
+            assert route.get('message_ids')==[message_id]
+            assert route.get('source_version')==item['refs'][0]['media_version']
+            from tenant_knowledge_media_cache import _batch_retry_fingerprint
+            keys=_batch_retry_fingerprint(item,'a'*64,'vision',item['refs'][0])
+            assert keys[2]['message_id']==message_id
         media_kind=item['refs'][0]['media_kind']
         assert media_kind=='image' and route.get('campaign_photo_model')==photo_model
         assert item['model']=='test-model' and item['photo_api_key']=='company-photo-key'
