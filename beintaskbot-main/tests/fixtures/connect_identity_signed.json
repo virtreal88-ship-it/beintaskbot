@@ -1,0 +1,323 @@
+{
+  "version": 1,
+  "pair": {
+    "lid": "80427641475293@lid",
+    "jid": "994557773054@s.whatsapp.net"
+  },
+  "fixtures": [
+    {
+      "scenario": "lid_first",
+      "channelId": "0b9283fa-9074-4d2d-b88b-7f9d547dae9f",
+      "canonical": "80427641475293@lid",
+      "signed": [
+        {
+          "event": {
+            "id": "d32ddba4-83a9-4948-b46c-34b69bcb2784",
+            "type": "message.inbound.received",
+            "occurred_at": "2026-10-23T15:55:00.000Z",
+            "data": {
+              "id": "9bc962b3-5501-424c-83ad-01fbd7517f31",
+              "tenantId": "b399626a-b565-47cc-a28e-09612603031d",
+              "channelId": "0b9283fa-9074-4d2d-b88b-7f9d547dae9f",
+              "conversationId": "80427641475293@lid",
+              "externalMessageId": "8ef494cd-23a7-4c34-888f-0977f4e6c3e1",
+              "direction": "incoming",
+              "type": "text",
+              "text": "Synthetic identity fixture",
+              "status": "delivered",
+              "timestamp": "2026-10-23T15:55:00.000Z",
+              "originalConversationId": "80427641475293@lid",
+              "fromMe": false,
+              "isGroup": false,
+              "conversationType": "direct",
+              "source": "evolution"
+            }
+          },
+          "body": "{\"id\":\"d32ddba4-83a9-4948-b46c-34b69bcb2784\",\"type\":\"message.inbound.received\",\"occurred_at\":\"2026-10-23T15:55:00.000Z\",\"data\":{\"id\":\"9bc962b3-5501-424c-83ad-01fbd7517f31\",\"tenantId\":\"b399626a-b565-47cc-a28e-09612603031d\",\"channelId\":\"0b9283fa-9074-4d2d-b88b-7f9d547dae9f\",\"conversationId\":\"80427641475293@lid\",\"externalMessageId\":\"8ef494cd-23a7-4c34-888f-0977f4e6c3e1\",\"direction\":\"incoming\",\"type\":\"text\",\"text\":\"Synthetic identity fixture\",\"status\":\"delivered\",\"timestamp\":\"2026-10-23T15:55:00.000Z\",\"originalConversationId\":\"80427641475293@lid\",\"fromMe\":false,\"isGroup\":false,\"conversationType\":\"direct\",\"source\":\"evolution\"}}",
+          "signature": "sha256=3ce8631f0871d4af039785f97fef6a18c7320eb62fb5820bbfaad70753011cd9"
+        },
+        {
+          "event": {
+            "id": "cb8b8f8c-9eb6-4183-9706-78a410d598b3",
+            "type": "message.outbound.observed",
+            "occurred_at": "2026-10-23T15:55:00.000Z",
+            "data": {
+              "id": "8482e229-9de0-401b-8c01-1a7efc01db49",
+              "tenantId": "b399626a-b565-47cc-a28e-09612603031d",
+              "channelId": "0b9283fa-9074-4d2d-b88b-7f9d547dae9f",
+              "conversationId": "80427641475293@lid",
+              "externalMessageId": "e47e1ef3-8c40-46d5-9cf1-d8d9b27c52ba",
+              "direction": "outgoing",
+              "type": "text",
+              "text": "Synthetic identity fixture",
+              "status": "sent",
+              "timestamp": "2026-10-23T15:55:00.000Z",
+              "originalConversationId": "994557773054@s.whatsapp.net",
+              "directIdentity": {
+                "lid": "80427641475293@lid",
+                "jid": "994557773054@s.whatsapp.net"
+              },
+              "directIdentitySource": "provider_event",
+              "fromMe": true,
+              "isGroup": false,
+              "conversationType": "direct",
+              "source": "linked_phone"
+            }
+          },
+          "body": "{\"id\":\"cb8b8f8c-9eb6-4183-9706-78a410d598b3\",\"type\":\"message.outbound.observed\",\"occurred_at\":\"2026-10-23T15:55:00.000Z\",\"data\":{\"id\":\"8482e229-9de0-401b-8c01-1a7efc01db49\",\"tenantId\":\"b399626a-b565-47cc-a28e-09612603031d\",\"channelId\":\"0b9283fa-9074-4d2d-b88b-7f9d547dae9f\",\"conversationId\":\"80427641475293@lid\",\"externalMessageId\":\"e47e1ef3-8c40-46d5-9cf1-d8d9b27c52ba\",\"direction\":\"outgoing\",\"type\":\"text\",\"text\":\"Synthetic identity fixture\",\"status\":\"sent\",\"timestamp\":\"2026-10-23T15:55:00.000Z\",\"originalConversationId\":\"994557773054@s.whatsapp.net\",\"directIdentity\":{\"lid\":\"80427641475293@lid\",\"jid\":\"994557773054@s.whatsapp.net\"},\"directIdentitySource\":\"provider_event\",\"fromMe\":true,\"isGroup\":false,\"conversationType\":\"direct\",\"source\":\"linked_phone\"}}",
+          "signature": "sha256=834962ebff03db82dc84cf69f288161fc8fbfb62a3aeecc29ac9080221b0ba21"
+        },
+        {
+          "event": {
+            "id": "271f0272-3009-4940-85ae-ad3ebab445c0",
+            "type": "message.inbound.received",
+            "occurred_at": "2026-10-23T15:55:00.000Z",
+            "data": {
+              "id": "aa075c9b-0dd0-4eec-bdc2-cec063500bba",
+              "tenantId": "b399626a-b565-47cc-a28e-09612603031d",
+              "channelId": "0b9283fa-9074-4d2d-b88b-7f9d547dae9f",
+              "conversationId": "80427641475293@lid",
+              "externalMessageId": "48c3afed-91fe-4536-a26c-3e78140a71c6",
+              "direction": "incoming",
+              "type": "text",
+              "text": "Synthetic identity fixture",
+              "status": "delivered",
+              "timestamp": "2026-10-23T15:55:00.000Z",
+              "originalConversationId": "994557773054@s.whatsapp.net",
+              "directIdentity": {
+                "lid": "80427641475293@lid",
+                "jid": "994557773054@s.whatsapp.net"
+              },
+              "directIdentitySource": "persisted_provider_alias",
+              "fromMe": false,
+              "isGroup": false,
+              "conversationType": "direct",
+              "source": "evolution"
+            }
+          },
+          "body": "{\"id\":\"271f0272-3009-4940-85ae-ad3ebab445c0\",\"type\":\"message.inbound.received\",\"occurred_at\":\"2026-10-23T15:55:00.000Z\",\"data\":{\"id\":\"aa075c9b-0dd0-4eec-bdc2-cec063500bba\",\"tenantId\":\"b399626a-b565-47cc-a28e-09612603031d\",\"channelId\":\"0b9283fa-9074-4d2d-b88b-7f9d547dae9f\",\"conversationId\":\"80427641475293@lid\",\"externalMessageId\":\"48c3afed-91fe-4536-a26c-3e78140a71c6\",\"direction\":\"incoming\",\"type\":\"text\",\"text\":\"Synthetic identity fixture\",\"status\":\"delivered\",\"timestamp\":\"2026-10-23T15:55:00.000Z\",\"originalConversationId\":\"994557773054@s.whatsapp.net\",\"directIdentity\":{\"lid\":\"80427641475293@lid\",\"jid\":\"994557773054@s.whatsapp.net\"},\"directIdentitySource\":\"persisted_provider_alias\",\"fromMe\":false,\"isGroup\":false,\"conversationType\":\"direct\",\"source\":\"evolution\"}}",
+          "signature": "sha256=3d8b5153bdd8ddb0b4871c5afb181de0c5db27d1a01175b5db7a7a6a8c5ed5cf"
+        },
+        {
+          "event": {
+            "id": "b2d8c307-29b5-4098-acc2-60dd89dd026a",
+            "type": "message.inbound.received",
+            "occurred_at": "2026-10-23T15:55:00.000Z",
+            "data": {
+              "id": "aa075c9b-0dd0-4eec-bdc2-cec063500bba",
+              "tenantId": "b399626a-b565-47cc-a28e-09612603031d",
+              "channelId": "0b9283fa-9074-4d2d-b88b-7f9d547dae9f",
+              "conversationId": "80427641475293@lid",
+              "externalMessageId": "48c3afed-91fe-4536-a26c-3e78140a71c6",
+              "direction": "incoming",
+              "type": "text",
+              "text": "Synthetic identity fixture",
+              "status": "delivered",
+              "timestamp": "2026-10-23T15:55:00.000Z",
+              "originalConversationId": "994557773054@s.whatsapp.net",
+              "directIdentity": {
+                "lid": "80427641475293@lid",
+                "jid": "994557773054@s.whatsapp.net"
+              },
+              "directIdentitySource": "persisted_provider_alias",
+              "fromMe": false,
+              "isGroup": false,
+              "conversationType": "direct",
+              "source": "evolution"
+            }
+          },
+          "body": "{\"id\":\"b2d8c307-29b5-4098-acc2-60dd89dd026a\",\"type\":\"message.inbound.received\",\"occurred_at\":\"2026-10-23T15:55:00.000Z\",\"data\":{\"id\":\"aa075c9b-0dd0-4eec-bdc2-cec063500bba\",\"tenantId\":\"b399626a-b565-47cc-a28e-09612603031d\",\"channelId\":\"0b9283fa-9074-4d2d-b88b-7f9d547dae9f\",\"conversationId\":\"80427641475293@lid\",\"externalMessageId\":\"48c3afed-91fe-4536-a26c-3e78140a71c6\",\"direction\":\"incoming\",\"type\":\"text\",\"text\":\"Synthetic identity fixture\",\"status\":\"delivered\",\"timestamp\":\"2026-10-23T15:55:00.000Z\",\"originalConversationId\":\"994557773054@s.whatsapp.net\",\"directIdentity\":{\"lid\":\"80427641475293@lid\",\"jid\":\"994557773054@s.whatsapp.net\"},\"directIdentitySource\":\"persisted_provider_alias\",\"fromMe\":false,\"isGroup\":false,\"conversationType\":\"direct\",\"source\":\"evolution\"}}",
+          "signature": "sha256=d66ebf6eca378fdf292478ea6cfcfe35cc024c49e43c74599269e11ce9c8dfbf"
+        },
+        {
+          "event": {
+            "id": "a049f8ef-713f-4778-b641-ccbf0fdc2eb9",
+            "type": "message.outbound.observed",
+            "occurred_at": "2026-10-23T15:55:00.000Z",
+            "data": {
+              "id": "3382f101-0191-4911-99d1-71308b64dff3",
+              "tenantId": "b399626a-b565-47cc-a28e-09612603031d",
+              "channelId": "0b9283fa-9074-4d2d-b88b-7f9d547dae9f",
+              "conversationId": "80427641475293@lid",
+              "externalMessageId": "2f06cc84-a797-493e-be0f-f9446b19bd6a",
+              "direction": "outgoing",
+              "type": "text",
+              "text": "Synthetic identity fixture",
+              "status": "sent",
+              "timestamp": "2026-10-23T15:55:00.000Z",
+              "originalConversationId": "80427641475293@lid",
+              "directIdentity": {
+                "lid": "80427641475293@lid",
+                "jid": "994557773054@s.whatsapp.net"
+              },
+              "directIdentitySource": "persisted_provider_alias",
+              "fromMe": true,
+              "isGroup": false,
+              "conversationType": "direct",
+              "source": "linked_phone"
+            }
+          },
+          "body": "{\"id\":\"a049f8ef-713f-4778-b641-ccbf0fdc2eb9\",\"type\":\"message.outbound.observed\",\"occurred_at\":\"2026-10-23T15:55:00.000Z\",\"data\":{\"id\":\"3382f101-0191-4911-99d1-71308b64dff3\",\"tenantId\":\"b399626a-b565-47cc-a28e-09612603031d\",\"channelId\":\"0b9283fa-9074-4d2d-b88b-7f9d547dae9f\",\"conversationId\":\"80427641475293@lid\",\"externalMessageId\":\"2f06cc84-a797-493e-be0f-f9446b19bd6a\",\"direction\":\"outgoing\",\"type\":\"text\",\"text\":\"Synthetic identity fixture\",\"status\":\"sent\",\"timestamp\":\"2026-10-23T15:55:00.000Z\",\"originalConversationId\":\"80427641475293@lid\",\"directIdentity\":{\"lid\":\"80427641475293@lid\",\"jid\":\"994557773054@s.whatsapp.net\"},\"directIdentitySource\":\"persisted_provider_alias\",\"fromMe\":true,\"isGroup\":false,\"conversationType\":\"direct\",\"source\":\"linked_phone\"}}",
+          "signature": "sha256=97464c398015dba3cd4e93cde0226f6900249a296ae58532d977612b4a200baa"
+        }
+      ]
+    },
+    {
+      "scenario": "phone_first",
+      "channelId": "d70051b6-fcf3-4a71-955d-0d5189ca0da1",
+      "canonical": "994557773054@s.whatsapp.net",
+      "signed": [
+        {
+          "event": {
+            "id": "feaa72f6-1482-4049-b65e-f8747038eaf4",
+            "type": "message.inbound.received",
+            "occurred_at": "2026-10-23T15:55:00.000Z",
+            "data": {
+              "id": "20f88d40-817e-4ccb-bcf0-2ccc7c58278e",
+              "tenantId": "b399626a-b565-47cc-a28e-09612603031d",
+              "channelId": "d70051b6-fcf3-4a71-955d-0d5189ca0da1",
+              "conversationId": "994557773054@s.whatsapp.net",
+              "externalMessageId": "95184ba1-a111-4788-8ace-729b2f3ffc0c",
+              "direction": "incoming",
+              "type": "text",
+              "text": "Synthetic identity fixture",
+              "status": "delivered",
+              "timestamp": "2026-10-23T15:55:00.000Z",
+              "originalConversationId": "994557773054@s.whatsapp.net",
+              "fromMe": false,
+              "isGroup": false,
+              "conversationType": "direct",
+              "source": "evolution"
+            }
+          },
+          "body": "{\"id\":\"feaa72f6-1482-4049-b65e-f8747038eaf4\",\"type\":\"message.inbound.received\",\"occurred_at\":\"2026-10-23T15:55:00.000Z\",\"data\":{\"id\":\"20f88d40-817e-4ccb-bcf0-2ccc7c58278e\",\"tenantId\":\"b399626a-b565-47cc-a28e-09612603031d\",\"channelId\":\"d70051b6-fcf3-4a71-955d-0d5189ca0da1\",\"conversationId\":\"994557773054@s.whatsapp.net\",\"externalMessageId\":\"95184ba1-a111-4788-8ace-729b2f3ffc0c\",\"direction\":\"incoming\",\"type\":\"text\",\"text\":\"Synthetic identity fixture\",\"status\":\"delivered\",\"timestamp\":\"2026-10-23T15:55:00.000Z\",\"originalConversationId\":\"994557773054@s.whatsapp.net\",\"fromMe\":false,\"isGroup\":false,\"conversationType\":\"direct\",\"source\":\"evolution\"}}",
+          "signature": "sha256=78ae8118cfb6c9a8469474b7662d140a8068d5308c9019036cf8fa48b5deaaee"
+        },
+        {
+          "event": {
+            "id": "3e4ccbd1-f84c-4ff4-b968-e23c38b7ea2d",
+            "type": "message.outbound.observed",
+            "occurred_at": "2026-10-23T15:55:00.000Z",
+            "data": {
+              "id": "64ac484c-75b1-4a6b-9a47-292f6a72d72d",
+              "tenantId": "b399626a-b565-47cc-a28e-09612603031d",
+              "channelId": "d70051b6-fcf3-4a71-955d-0d5189ca0da1",
+              "conversationId": "994557773054@s.whatsapp.net",
+              "externalMessageId": "cf1e08cf-c326-4164-a26d-c1fdca61a1af",
+              "direction": "outgoing",
+              "type": "text",
+              "text": "Synthetic identity fixture",
+              "status": "sent",
+              "timestamp": "2026-10-23T15:55:00.000Z",
+              "originalConversationId": "80427641475293@lid",
+              "directIdentity": {
+                "lid": "80427641475293@lid",
+                "jid": "994557773054@s.whatsapp.net"
+              },
+              "directIdentitySource": "provider_event",
+              "fromMe": true,
+              "isGroup": false,
+              "conversationType": "direct",
+              "source": "linked_phone"
+            }
+          },
+          "body": "{\"id\":\"3e4ccbd1-f84c-4ff4-b968-e23c38b7ea2d\",\"type\":\"message.outbound.observed\",\"occurred_at\":\"2026-10-23T15:55:00.000Z\",\"data\":{\"id\":\"64ac484c-75b1-4a6b-9a47-292f6a72d72d\",\"tenantId\":\"b399626a-b565-47cc-a28e-09612603031d\",\"channelId\":\"d70051b6-fcf3-4a71-955d-0d5189ca0da1\",\"conversationId\":\"994557773054@s.whatsapp.net\",\"externalMessageId\":\"cf1e08cf-c326-4164-a26d-c1fdca61a1af\",\"direction\":\"outgoing\",\"type\":\"text\",\"text\":\"Synthetic identity fixture\",\"status\":\"sent\",\"timestamp\":\"2026-10-23T15:55:00.000Z\",\"originalConversationId\":\"80427641475293@lid\",\"directIdentity\":{\"lid\":\"80427641475293@lid\",\"jid\":\"994557773054@s.whatsapp.net\"},\"directIdentitySource\":\"provider_event\",\"fromMe\":true,\"isGroup\":false,\"conversationType\":\"direct\",\"source\":\"linked_phone\"}}",
+          "signature": "sha256=63d1b8fa144178d841d3bc74394daba44ad603296f4c74de51d67678cd89ef0a"
+        },
+        {
+          "event": {
+            "id": "d45a05d1-5134-44e7-b911-96e27d278b0e",
+            "type": "message.inbound.received",
+            "occurred_at": "2026-10-23T15:55:00.000Z",
+            "data": {
+              "id": "43a00bea-a4f3-4def-a4f1-460f488451d0",
+              "tenantId": "b399626a-b565-47cc-a28e-09612603031d",
+              "channelId": "d70051b6-fcf3-4a71-955d-0d5189ca0da1",
+              "conversationId": "994557773054@s.whatsapp.net",
+              "externalMessageId": "d0d173cd-ad8c-401d-8e6c-2c64e534562e",
+              "direction": "incoming",
+              "type": "text",
+              "text": "Synthetic identity fixture",
+              "status": "delivered",
+              "timestamp": "2026-10-23T15:55:00.000Z",
+              "originalConversationId": "80427641475293@lid",
+              "directIdentity": {
+                "lid": "80427641475293@lid",
+                "jid": "994557773054@s.whatsapp.net"
+              },
+              "directIdentitySource": "persisted_provider_alias",
+              "fromMe": false,
+              "isGroup": false,
+              "conversationType": "direct",
+              "source": "evolution"
+            }
+          },
+          "body": "{\"id\":\"d45a05d1-5134-44e7-b911-96e27d278b0e\",\"type\":\"message.inbound.received\",\"occurred_at\":\"2026-10-23T15:55:00.000Z\",\"data\":{\"id\":\"43a00bea-a4f3-4def-a4f1-460f488451d0\",\"tenantId\":\"b399626a-b565-47cc-a28e-09612603031d\",\"channelId\":\"d70051b6-fcf3-4a71-955d-0d5189ca0da1\",\"conversationId\":\"994557773054@s.whatsapp.net\",\"externalMessageId\":\"d0d173cd-ad8c-401d-8e6c-2c64e534562e\",\"direction\":\"incoming\",\"type\":\"text\",\"text\":\"Synthetic identity fixture\",\"status\":\"delivered\",\"timestamp\":\"2026-10-23T15:55:00.000Z\",\"originalConversationId\":\"80427641475293@lid\",\"directIdentity\":{\"lid\":\"80427641475293@lid\",\"jid\":\"994557773054@s.whatsapp.net\"},\"directIdentitySource\":\"persisted_provider_alias\",\"fromMe\":false,\"isGroup\":false,\"conversationType\":\"direct\",\"source\":\"evolution\"}}",
+          "signature": "sha256=f63b2353c9fddcd2bf79752ecd6c170176e2f409b74081ef53390bf5a4e09a1c"
+        },
+        {
+          "event": {
+            "id": "05fe395f-d484-4ec6-a8c1-80ac51d124e9",
+            "type": "message.inbound.received",
+            "occurred_at": "2026-10-23T15:55:00.000Z",
+            "data": {
+              "id": "43a00bea-a4f3-4def-a4f1-460f488451d0",
+              "tenantId": "b399626a-b565-47cc-a28e-09612603031d",
+              "channelId": "d70051b6-fcf3-4a71-955d-0d5189ca0da1",
+              "conversationId": "994557773054@s.whatsapp.net",
+              "externalMessageId": "d0d173cd-ad8c-401d-8e6c-2c64e534562e",
+              "direction": "incoming",
+              "type": "text",
+              "text": "Synthetic identity fixture",
+              "status": "delivered",
+              "timestamp": "2026-10-23T15:55:00.000Z",
+              "originalConversationId": "80427641475293@lid",
+              "directIdentity": {
+                "lid": "80427641475293@lid",
+                "jid": "994557773054@s.whatsapp.net"
+              },
+              "directIdentitySource": "persisted_provider_alias",
+              "fromMe": false,
+              "isGroup": false,
+              "conversationType": "direct",
+              "source": "evolution"
+            }
+          },
+          "body": "{\"id\":\"05fe395f-d484-4ec6-a8c1-80ac51d124e9\",\"type\":\"message.inbound.received\",\"occurred_at\":\"2026-10-23T15:55:00.000Z\",\"data\":{\"id\":\"43a00bea-a4f3-4def-a4f1-460f488451d0\",\"tenantId\":\"b399626a-b565-47cc-a28e-09612603031d\",\"channelId\":\"d70051b6-fcf3-4a71-955d-0d5189ca0da1\",\"conversationId\":\"994557773054@s.whatsapp.net\",\"externalMessageId\":\"d0d173cd-ad8c-401d-8e6c-2c64e534562e\",\"direction\":\"incoming\",\"type\":\"text\",\"text\":\"Synthetic identity fixture\",\"status\":\"delivered\",\"timestamp\":\"2026-10-23T15:55:00.000Z\",\"originalConversationId\":\"80427641475293@lid\",\"directIdentity\":{\"lid\":\"80427641475293@lid\",\"jid\":\"994557773054@s.whatsapp.net\"},\"directIdentitySource\":\"persisted_provider_alias\",\"fromMe\":false,\"isGroup\":false,\"conversationType\":\"direct\",\"source\":\"evolution\"}}",
+          "signature": "sha256=96446001a59954a55d5a70b1dab62cf09d4b8db1a6287e8c24b41e1e87269b7f"
+        },
+        {
+          "event": {
+            "id": "910aab46-4759-4cdd-95cb-2c0589b02454",
+            "type": "message.outbound.observed",
+            "occurred_at": "2026-10-23T15:55:00.000Z",
+            "data": {
+              "id": "a8f4682f-bf32-495e-bb4d-f987370fd68b",
+              "tenantId": "b399626a-b565-47cc-a28e-09612603031d",
+              "channelId": "d70051b6-fcf3-4a71-955d-0d5189ca0da1",
+              "conversationId": "994557773054@s.whatsapp.net",
+              "externalMessageId": "84628501-6fbc-4619-8cb3-f4b6a9f1107a",
+              "direction": "outgoing",
+              "type": "text",
+              "text": "Synthetic identity fixture",
+              "status": "sent",
+              "timestamp": "2026-10-23T15:55:00.000Z",
+              "originalConversationId": "994557773054@s.whatsapp.net",
+              "directIdentity": {
+                "lid": "80427641475293@lid",
+                "jid": "994557773054@s.whatsapp.net"
+              },
+              "directIdentitySource": "persisted_provider_alias",
+              "fromMe": true,
+              "isGroup": false,
+              "conversationType": "direct",
+              "source": "linked_phone"
+            }
+          },
+          "body": "{\"id\":\"910aab46-4759-4cdd-95cb-2c0589b02454\",\"type\":\"message.outbound.observed\",\"occurred_at\":\"2026-10-23T15:55:00.000Z\",\"data\":{\"id\":\"a8f4682f-bf32-495e-bb4d-f987370fd68b\",\"tenantId\":\"b399626a-b565-47cc-a28e-09612603031d\",\"channelId\":\"d70051b6-fcf3-4a71-955d-0d5189ca0da1\",\"conversationId\":\"994557773054@s.whatsapp.net\",\"externalMessageId\":\"84628501-6fbc-4619-8cb3-f4b6a9f1107a\",\"direction\":\"outgoing\",\"type\":\"text\",\"text\":\"Synthetic identity fixture\",\"status\":\"sent\",\"timestamp\":\"2026-10-23T15:55:00.000Z\",\"originalConversationId\":\"994557773054@s.whatsapp.net\",\"directIdentity\":{\"lid\":\"80427641475293@lid\",\"jid\":\"994557773054@s.whatsapp.net\"},\"directIdentitySource\":\"persisted_provider_alias\",\"fromMe\":true,\"isGroup\":false,\"conversationType\":\"direct\",\"source\":\"linked_phone\"}}",
+          "signature": "sha256=b1b64b7706ab7af69aa6c78b9f01f116ae84825241167d39cd5e157c1326b109"
+        }
+      ]
+    }
+  ]
+}
