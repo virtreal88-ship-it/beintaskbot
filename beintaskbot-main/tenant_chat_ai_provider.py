@@ -212,8 +212,16 @@ def transcribe_video(key, model, content, extension, content_type, *, expected_l
     A language mismatch downgrades to uncertain; it never discards the visual
     analysis or is interpreted as proof that the customer did not speak.
     """
+    if model == 'gpt-4o-mini-transcribe':
+        # Use the same bounded transcription adapter as standalone audio. This
+        # model does not expose Whisper's no-speech confidence, so its result
+        # stays uncertain and transcribe_once withholds it from case facts.
+        text, usage = transcribe(key, model, content, extension, content_type,
+            with_usage=True, request_timeout=request_timeout, response_format='json')
+        return text, usage, {'speech_state': 'uncertain',
+            'reason': 'speech_confidence_unavailable', 'language': ''}
     if model != 'whisper-1':
-        return '', {}, {'speech_state': 'uncertain', 'reason': 'confidence_unavailable', 'language': ''}
+        return '', {}, {'speech_state': 'uncertain', 'reason': 'unsupported_video_asr_model', 'language': ''}
     text, usage, diagnostics = transcribe(
         key, model, content, extension, content_type, with_usage=True,
         request_timeout=request_timeout, response_format='verbose_json', with_diagnostics=True)

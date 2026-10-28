@@ -146,12 +146,14 @@ def test_video_whisper_confidence_and_language_mismatch(payload,expected_languag
     assert post.call_args.kwargs['data']['response_format']=='verbose_json'
 
 
-def test_asr_model_without_confidence_is_not_called_for_video():
+def test_gpt4o_mini_video_asr_uses_audio_adapter_but_remains_unverified():
     from tenant_chat_ai_provider import transcribe_video
-    with patch('tenant_chat_ai_provider.requests.post') as post:
+    response=Mock(status_code=200);response.json.return_value={'text':'printer is fixed','usage':{'input_tokens':40,'output_tokens':6}}
+    with patch('tenant_chat_ai_provider.requests.post',return_value=response) as post:
         text,usage,diagnostics=transcribe_video('synthetic','gpt-4o-mini-transcribe',b'audio','wav','audio/wav')
-    assert text=='' and usage=={} and diagnostics['speech_state']=='uncertain'
-    post.assert_not_called()
+    assert text=='printer is fixed' and usage=={'input_tokens':40,'output_tokens':6,'total_tokens':46}
+    assert diagnostics=={'speech_state':'uncertain','reason':'speech_confidence_unavailable','language':''}
+    assert post.call_args.kwargs['data']=={'model':'gpt-4o-mini-transcribe','response_format':'json'}
 
 
 def test_video_history_fails_closed_without_observation_or_confident_speech():

@@ -59,7 +59,7 @@
     const base='/api/platform/ai/knowledge-candidates/campaigns',q=new URLSearchParams(ctx.expected());
     const live=()=>generation===current&&host.isConnected;
     const post=(url,data)=>ctx.api(url,{method:'POST',body:JSON.stringify({...ctx.expected(),...data})});
-    let previewHasUnprocessedVideo=false,videoTariffs={},companyPhotoModel='';
+    let previewHasUnprocessedVideo=false,videoTariffs={},companyPhotoModel='',asrModel='',asrReadiness=null,batchPreviewGeneration=0;
     async function loadModelReadiness(){
       const select=host.querySelector('[data-video-model]');
       try{
@@ -78,20 +78,26 @@
       }catch(_error){if(live()){videoTariffs={};select.replaceChildren(new Option(batch.stale,''));select.disabled=true;}}
     }
     function updateVideoNotice(){const target=host.querySelector('[data-batch-preview]');target.querySelector('[data-video-unconfigured]')?.remove();if(allCases.checked&&previewHasUnprocessedVideo&&!host.querySelector('[data-video-model]').value){const note=document.createElement('p');note.dataset.videoUnconfigured='';note.setAttribute('role','note');note.textContent=batch.stale;target.append(note);}}
+    function updateAsrNotice(target=host.querySelector('[data-batch-preview]')){target.querySelector('[data-asr-readiness]')?.remove();if(!allCases.checked||!host.querySelector('[data-asr]').checked)return;const quote=asrReadiness,note=document.createElement('p');note.dataset.asrReadiness='';note.setAttribute('role','note');note.textContent=quote?.ready?`ASR ${asrModel}: tariff ready; reserve $${(Number(quote.reserve_microusd)/1000000).toFixed(6)} per call.`:`ASR ${asrModel||'model unavailable'}: ${quote?.reason_code||'Choose an analysis agent and refresh readiness.'}`;target.append(note);}
     host.querySelector('[data-video-model]').onchange=updateVideoNotice;
+    host.querySelector('[data-asr]').onchange=()=>updateAsrNotice();
+    host.querySelector('[data-agent]').onchange=()=>{if(allCases.checked)refreshBatchPreview();};
     async function refreshBatchPreview(){
+      const previewGeneration=++batchPreviewGeneration;
       const target=host.querySelector('[data-batch-preview]');target.textContent=batch.previewing;
-      const params=new URLSearchParams({...ctx.expected(),all_existing_cases:'true',acknowledge_prior_unknown:String(retryUnknown.checked)});
+      const params=new URLSearchParams({...ctx.expected(),all_existing_cases:'true',acknowledge_prior_unknown:String(retryUnknown.checked),analysis_agent_id:host.querySelector('[data-agent]').value});
       try{
         const response=await ctx.api(`${base}/preview?${params}`),plan=response?.result||response;
-        if(!live()||!allCases.checked)return;
+        if(!live()||!allCases.checked||previewGeneration!==batchPreviewGeneration)return;
+        asrModel=String(plan.asr_model||'');asrReadiness=plan.asr_tariff||null;
         target.replaceChildren();
         const photo=document.createElement('p');photo.textContent=({ru:'Фото-модель компании: ',az:'Şirkətin foto modeli: ',en:'Company photo model: '}[language]||'Company photo model: ')+(companyPhotoModel||'agent model');target.append(photo);
         const summary=document.createElement('p');summary.textContent=`${batch.preview}: ${plan.case_count} / ${plan.eligible_count} / ${plan.reused_count} / ${plan.review_count} / ${plan.unknown_media_count} / ${plan.unavailable_media_count}${retryUnknown.checked?` (${plan.retry_unknown_count||0} new current-version attempts)`:''}`;target.append(summary);
+        updateAsrNotice(target);
         previewHasUnprocessedVideo=(plan.cases||[]).some(item=>(item.media||[]).some(media=>media.kind==='video'&&!media.complete));updateVideoNotice();
         const blocked=[];for(const item of plan.cases||[]){if(item.status==='pending_boundaries')blocked.push(`${item.case_id}: ${item.reason}`);for(const media of item.media||[])if(media.status==='unknown'&&!media.complete){const reasons=[media.reconciliation?.reason,media.code].map(reason=>reconciliationReason(reason,language)||'').filter(Boolean);const sourceNote=currentSourceRetryNote(media,language);if(sourceNote)reasons.unshift(sourceNote);const reason=[...new Set(reasons)].join('; ')||media.code||'unknown';blocked.push(`${item.case_id}: ${media.id} (${reason})`);}}
         if(blocked.length){const details=document.createElement('details'),label=document.createElement('summary');label.textContent=batch.review;details.append(label);for(const text of blocked){const row=document.createElement('p');row.textContent=text;details.append(row);}target.append(details);}
-      }catch(error){if(live()&&allCases.checked)target.textContent=error.message||batch.previewError;}
+      }catch(error){if(live()&&allCases.checked&&previewGeneration===batchPreviewGeneration)target.textContent=error.message||batch.previewError;}
     }
     const metric=(label,value)=>`<div class="campaign-metric"><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`;
     const shown=value=>value===null||value===undefined||!Number.isFinite(Number(value))?t[11]:Number(value).toLocaleString(language==='ru'?'ru-RU':language==='az'?'az-AZ':'en-US');

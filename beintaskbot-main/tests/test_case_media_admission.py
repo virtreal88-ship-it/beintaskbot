@@ -188,15 +188,27 @@ def test_case_interval_media_without_history_is_exposed_but_stays_unknown(ready)
 def test_read_only_all_cases_preview_reports_zero_eligible_reconciliation(ready,monkeypatch):
     db,card,ids=_case(ready,(3,))
     monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    import tenant_ai_agent_key_policy as key_policy
+    import tenant_connect_voice as voice
+    monkeypatch.setattr(key_policy,'choose_api_credential',lambda *a:('synthetic-key','platform'))
+    monkeypatch.setattr(voice,'transcription_model',lambda *a,**k:'gpt-4o-mini-transcribe')
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_DEFAULT_MODEL','test-model')
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_MODELS','["test-model"]')
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'gpt-4o-mini-transcribe':{'asr':30_000}}))
     provider=ready[1];calls=provider.call_count
     audit_before=db.execute('SELECT count(*) AS n FROM saas_tenant_audit_events')[0]['n']
-    preview=campaigns.preview_existing_cases(PROFILE)
+    preview=campaigns.preview_existing_cases(PROFILE,analysis_agent_id=AGENT)
     item=next(m for m in preview['cases'][0]['media'] if m['id']==ids[0])
     assert preview['eligible_count']==0 and preview['unknown_media_count']==1
     assert item['reconciliation']['reason']=='attempt_history_not_recorded'
+    assert preview['asr_model']=='gpt-4o-mini-transcribe'
+    assert preview['asr_tariff']['ready'] is True and preview['asr_tariff']['reserve_microusd']==30_000
     assert db.execute('SELECT count(*) AS n FROM saas_tenant_audit_events')[0]['n']==audit_before
     assert provider.call_count==calls
     with pytest.raises(TenantLinearError):campaigns.preview_existing_cases({'tenant_id':A,'telegram_id':22})
+    db.execute('UPDATE saas_ai_agents SET archived_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT));db.commit()
+    with pytest.raises(TenantLinearError,match='Analysis agent is unavailable'):
+        campaigns.preview_existing_cases(PROFILE,analysis_agent_id=AGENT)
 
 
 @pytest.mark.parametrize('unknown_kind',['provider_timeout','legacy_source_mismatch'])
@@ -326,7 +338,7 @@ def test_all_cases_grant_requires_exact_owner_acceptance_then_stops_cleanly(read
     monkeypatch.setenv('AI_AGENTS_PLATFORM_MODELS','["test-model"]')
     monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'test-model':{'input':10,'output':10},'gpt-4.1':{'input':2000000,'output':8000000}}))
     monkeypatch.setenv('AI_AGENTS_TRANSCRIPTION_MODEL','whisper-1')
-    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'gpt-4.1':{'vision_low':8896},'whisper-1':{'asr':400}}))
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'gpt-4.1':{'vision_low':8896},'whisper-1':{'asr':12_000}}))
     import tenant_ai_agent_key_policy as key_policy
     monkeypatch.setattr(key_policy,'platform_model',lambda:'test-model')
     monkeypatch.setattr(key_policy,'choose_api_credential',lambda *args:('synthetic-key','platform'))
@@ -473,6 +485,32 @@ def test_all_cases_rejects_video_model_without_configured_tariff_before_grant(re
     assert db.execute('SELECT count(*) AS n FROM saas_ai_media_grants WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
 
 
+def test_all_cases_preflight_names_missing_asr_model_and_operation_before_campaign(ready,monkeypatch):
+    db,card,media=_case(ready,(3,))
+    db.execute("UPDATE saas_crm_messages SET message_type='video' WHERE id=%s::uuid",(media[0],));db.commit()
+    _mark_pending_consent(db,card['id'],media)
+    monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    db.execute("UPDATE saas_ai_agents SET model='analysis-model' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));db.commit()
+    import tenant_ai_agent_key_policy as key_policy
+    import tenant_connect_voice as voice
+    monkeypatch.setattr(key_policy,'choose_api_credential',lambda *a:('synthetic-key','platform'))
+    monkeypatch.setattr(voice,'transcription_model',lambda *a,**k:'gpt-4o-mini-transcribe')
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_DEFAULT_MODEL','test-model')
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_MODELS','["test-model"]')
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({
+      'test-model':{'input':10,'output':10},'gpt-4.1':{'input':2_000_000,'output':8_000_000}}))
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({
+      'gpt-4.1':{'vision_low':8_896}}))
+    data={'request_id':str(uuid.uuid4()),'all_existing_cases':True,'channel_ids':[],
+      'analysis_agent_id':AGENT,'max_calls':10_000,'max_tokens':160_000_000,'max_cost_microusd':10_000_000,
+      'video_model':'gpt-4.1','allow_external_media':True,'allow_paid_asr':True,
+      'max_main_calls':10_000,'max_asr_calls':10_000,'max_vision_calls':10_000}
+    with pytest.raises(TenantLinearError,match='asr_media_tariff_required: model=gpt-4o-mini-transcribe operation=asr minimum_microusd=30000'):
+        campaigns.prepare(PROFILE,data)
+    assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_media_grants WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
+
+
 def test_all_cases_rejects_video_input_bound_before_prepare_and_rechecks_before_activation(ready,monkeypatch):
     db,card,media=_case(ready,(3,))
     provider=ready[1];calls_before=provider.call_count
@@ -482,7 +520,8 @@ def test_all_cases_rejects_video_input_bound_before_prepare_and_rechecks_before_
     monkeypatch.setenv('AI_AGENTS_PLATFORM_DEFAULT_MODEL','test-model')
     monkeypatch.setenv('AI_AGENTS_PLATFORM_MODELS','[\"test-model\"]')
     monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({
-      'gpt-4.1':{'vision_low':8896},'gpt-4o-mini':{'vision_low':2500}}))
+      'gpt-4.1':{'vision_low':8896},'gpt-4o-mini':{'vision_low':2500},
+      'gpt-4o-mini-transcribe':{'asr':30_000}}))
     monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({
       'test-model':{'input':10,'output':10},'gpt-4.1':{'input':2000000,'output':8000000},
       'gpt-4o-mini':{'input':150000,'output':600000}}))
@@ -753,7 +792,7 @@ def test_fixed_grant_over_cap_blocks_before_any_provider_call(ready,monkeypatch)
     monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'test-model':{'input':10,'output':10},'gpt-4.1':{'input':2000000,'output':8000000}}))
     monkeypatch.setenv('AI_AGENTS_TRANSCRIPTION_MODEL','whisper-1')
     monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({
-      'gpt-4.1':{'vision_low':6_000_000},'whisper-1':{'asr':400}}))
+      'gpt-4.1':{'vision_low':6_000_000},'whisper-1':{'asr':12_000}}))
     import tenant_ai_agent_key_policy as key_policy
     import tenant_knowledge_campaign_worker as campaign_worker
     import tenant_knowledge_candidates_service as service

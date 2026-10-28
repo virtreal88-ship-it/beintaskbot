@@ -465,6 +465,68 @@ def test_video_audio_uses_single_authorized_asr_and_preserves_frames(context,mon
     assert 'Synthetic explanation' in item['messages'][0]['text']
     assert item['asr_attempted'] and item['asr_usage']['total_tokens']==25
 
+def test_video_mini_transcript_candidate_is_attempted_but_not_promoted_to_case_facts(context,monkeypatch):
+    import tenant_knowledge_media_cache as cache
+    import tenant_knowledge_candidates_service as service
+    item,add,download=context;add('video');item.update(key='synthetic',credential_source='platform')
+    item['route'].update(allow_external_media=True,allow_paid_asr=True,video_model='gpt-4.1-2025-04-14')
+    item['route']['allow_vision']=True
+    download.return_value=(b'synthetic video','video/mp4')
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({
+        'gpt-4.1-2025-04-14':{'vision_low':8_896}}))
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({
+        'gpt-4.1-2025-04-14':{'input':2_000_000,'output':8_000_000}}))
+    monkeypatch.setattr(media,'video_frames',lambda *a:[(PNG,'image/png',{'second':0})])
+    monkeypatch.setattr(media,'video_audio',lambda *a:(b'RIFFsynthetic','wav','audio/wav'))
+    monkeypatch.setattr(service,'check_active',lambda *a:None)
+    monkeypatch.setattr(cache,'observe_once',lambda *a,**kw:('blank label',{},True))
+    def uncertain_asr(_profile,selected,model,track,invoke,check_before_ai=None,*,return_diagnostics=False):
+        selected['asr_attempted']=True
+        text,usage,diagnostics=invoke(selected['key'],model,*track,with_usage=True)
+        selected['asr_usage']=usage
+        # Return the redacted cached candidate with diagnostics; collect() must
+        # preserve it as uncertain evidence without promoting it to case facts.
+        details={'speech_state':diagnostics['speech_state'],'speech_reason':diagnostics['reason']}
+        return text,usage,True,details
+    monkeypatch.setattr(cache,'transcribe_once',uncertain_asr)
+    monkeypatch.setattr('tenant_chat_ai_provider.transcribe_video',lambda *a,**kw:(
+        'This printer is broken',{'total_tokens':12},
+        {'speech_state':'uncertain','reason':'speech_confidence_unavailable','language':''}))
+    images,results=media.collect({},item)
+    assert results[0]['audio_status']=='uncertain'
+    assert results[0]['audio_reason']=='speech_confidence_unavailable'
+    assert results[0]['transcript_candidate']=='This printer is broken'
+    assert results[0]['transcript_candidate_status']=='uncertain_unverified'
+    assert item['asr_attempted'] and item['asr_usage']=={'total_tokens':12}
+    assert 'This printer is broken' not in item['messages'][0]['text']
+    assert not images and results[0]['status']=='partial'
+    assert 'blank label' in item['messages'][0]['text']
+
+def test_uncertain_asr_cache_preserves_redacted_candidate_without_promoting_it(ready,monkeypatch):
+    import tenant_knowledge_media_cache as cache
+    db,provider,_=ready;monkeypatch.setattr(cache,'_connect',lambda:db)
+    item={'tenant':A,'key':'synthetic-key','route':{'language':'az'},'refs':[]}
+    calls=[]
+    def uncertain(*args,**kwargs):
+        calls.append(args)
+        return 'Synthetic hallucinated speech',{'total_tokens':17},{
+            'speech_state':'uncertain','language':'ja','reason':'expected_language_mismatch'}
+    result=cache.transcribe_once(PROFILE,item,'gpt-4o-mini-transcribe',
+        (b'RIFF synthetic wav','wav','audio/wav'),uncertain,return_diagnostics=True)
+    assert result==('Synthetic hallucinated speech',{'total_tokens':17},True,{
+        'speech_state':'uncertain','speech_language':'ja','speech_reason':'expected_language_mismatch'})
+    fingerprint=cache.transcription_fingerprint(item,'gpt-4o-mini-transcribe',
+        (b'RIFF synthetic wav','wav','audio/wav'),return_diagnostics=True)
+    saved=db.execute('SELECT transcript,metadata FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND fingerprint=%s',(A,fingerprint))[0]
+    assert saved['transcript']=='Synthetic hallucinated speech'
+    assert saved['metadata']['speech_state']=='uncertain'
+    def must_not_call(*args,**kwargs):raise AssertionError('completed uncertain receipt must be reused')
+    reused=cache.transcribe_once(PROFILE,item,'gpt-4o-mini-transcribe',
+        (b'RIFF synthetic wav','wav','audio/wav'),must_not_call,return_diagnostics=True)
+    assert reused==('Synthetic hallucinated speech',{},False,{
+        'speech_state':'uncertain','speech_language':'ja','speech_reason':'expected_language_mismatch'})
+    assert len(calls)==1 and provider.call_count==0
+
 def test_decoder_unavailable_is_explicit(context,monkeypatch):
     item,add,download=context;add('video');item['route']['allow_external_media']=True
     monkeypatch.setattr(media.shutil,'which',lambda *a:None)

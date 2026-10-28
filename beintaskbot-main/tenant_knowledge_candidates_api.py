@@ -27,13 +27,14 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                 _expected(request.query,profile)
                 if resource=='campaign_preview':
                     if request.query.get('all_existing_cases')=='true':
-                        if set(request.query)-{'all_existing_cases','acknowledge_prior_unknown','expected_tenant_id','expected_user_id'}:
+                        if set(request.query)-{'all_existing_cases','acknowledge_prior_unknown','analysis_agent_id','expected_tenant_id','expected_user_id'}:
                             raise TenantLinearError('Некорректные параметры предварительного просмотра.')
                         retry_ack=request.query.get('acknowledge_prior_unknown','false')
                         if retry_ack not in {'true','false'}:
                             raise TenantLinearError('Некорректное подтверждение повторной попытки.')
                         result=await asyncio.to_thread(campaigns.preview_existing_cases,profile,
-                            acknowledge_prior_unknown=retry_ack=='true')
+                            acknowledge_prior_unknown=retry_ack=='true',
+                            analysis_agent_id=request.query.get('analysis_agent_id'))
                     else:
                         result=await asyncio.to_thread(campaigns.preview,profile,request.query.getall('channel_id',[]))
                 elif resource=='campaigns': result=await asyncio.to_thread(campaigns.get,profile)

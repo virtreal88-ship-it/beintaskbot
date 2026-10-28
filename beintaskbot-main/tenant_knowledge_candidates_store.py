@@ -1242,7 +1242,7 @@ def case_media_coverage(cur,tenant,run,chosen,content,*,include_content=False):
             names.extend(raw.get(k) for k in ('participantName','pushName','senderName','contactName'))
         for receipt in result['media_results']:
             payload=receipt.get('result') or {}
-            for key in ('observation','transcript'):
+            for key in ('observation','transcript','transcript_candidate'):
                 if key in payload:payload[key]=redact(payload[key],names)
             for observation in payload.get('observations',[]):observation['text']=redact(observation['text'],names)
     result['media_coverage'].update(scope='case_interval',boundary_status='verified')

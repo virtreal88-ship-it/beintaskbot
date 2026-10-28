@@ -53,6 +53,8 @@ def public(row, tenant_id=None):
     from tenant_ai_video_model import MODELS as VIDEO_MODELS, tariff_status as video_tariff_status
     result['video_model_tariffs'] = ({model: video_tariff_status(model, str(tenant_id))
         for model in VIDEO_MODELS} if tenant_id else {})
+    from tenant_ai_asr_model import MODELS as ASR_MODELS, tariff_status as asr_tariff_status
+    result['asr_model_tariffs'] = {model: asr_tariff_status(model) for model in ASR_MODELS}
     return result
 
 

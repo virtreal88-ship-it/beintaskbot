@@ -39,13 +39,14 @@ const script=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant
         prior_unknown_holds_microusd:0,prior_settled_microusd:0,analysis_model:'text-model',asr_model:'asr-model',
         grant_approved:false,fragments:{},reserved_calls:0,reserved_tokens:0,used_tokens:0,cards:0};
       if(url.endsWith('/start'))batchState={...batchState,version:2,status:'running',grant_approved:true};
-    }if(url.includes('/preview?')){const parsed=new URL(url,'https://example.test');previewRequests.push(parsed);return {result:{case_count:3,eligible_count:2,reused_count:1,review_count:0,unknown_media_count:1,unavailable_media_count:0,retry_unknown_count:parsed.searchParams.get('acknowledge_prior_unknown')==='true'?1:0,cases:[]}};}return {campaign:batchState};}};
+    }if(url.includes('/preview?')){const parsed=new URL(url,'https://example.test');previewRequests.push(parsed);return {result:{case_count:3,eligible_count:2,reused_count:1,review_count:0,unknown_media_count:1,unavailable_media_count:0,retry_unknown_count:parsed.searchParams.get('acknowledge_prior_unknown')==='true'?1:0,asr_model:'gpt-4o-mini-transcribe',asr_tariff:{ready:false,reason_code:'asr_media_tariff_required: model=gpt-4o-mini-transcribe operation=asr minimum_microusd=30000'},cases:[]}};}return {campaign:batchState};}};
   await w.TenantKnowledgeCampaigns.mount(host,batchCtx);
   assert.match(host.querySelector('[data-campaign-status]').textContent,/stopped|остановлено|dayandırılıb/i,'old stopped campaign is initially visible in its own context');
   const all=host.querySelector('[data-all-existing]');all.checked=true;all.onchange();
   await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(host.querySelector('[data-source]').disabled,true);
   assert.equal(host.querySelector('[data-retry-wrap]').hidden,false);
+  assert.match(host.querySelector('[data-asr-readiness]').textContent,/gpt-4o-mini-transcribe.*asr_media_tariff_required/,'preflight exposes the exact ASR model and missing operation tariff');
   assert.ok([...host.querySelector('[data-video-model]').options].some(option=>option.value==='gpt-4.1-2025-04-14'),'dated backend model with a ready tariff is selectable');
   assert.ok(![...host.querySelector('[data-video-model]').options].some(option=>option.value==='gpt-4o'),'video model without a configured tariff is not selectable');
   assert.equal(host.querySelector('[data-batch-grant]').hidden,false);
@@ -58,6 +59,7 @@ const script=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant
   assert.equal(previewRequests.at(-1).searchParams.get('acknowledge_prior_unknown'),'true','read-only preview must receive the explicit retry choice');
   assert.equal(previewRequests.at(-1).searchParams.get('expected_tenant_id'),'tenant-a');
   assert.equal(previewRequests.at(-1).searchParams.get('expected_user_id'),'11');
+  assert.equal(previewRequests.at(-1).searchParams.get('analysis_agent_id'),'agent-a','ASR readiness must use the exact selected agent configuration');
   assert.ok(batchRequests.length===0,'preview must remain read-only');
   host.querySelector('[data-video-model]').value='gpt-4.1-2025-04-14';
   await host.querySelector('[data-prepare]').onclick();
@@ -77,4 +79,31 @@ const script=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant
   assert.equal(host.querySelector('[data-batch-grant]').hidden,true);
   assert.equal(host.querySelector('[data-prepare]').textContent,({ru:'Подготовить',az:'Hazırla',en:'Prepare'}[language]));
   dom.window.close();
-}console.log('Campaign controls: RU/AZ/EN, explicit consent, sources, versioned pause passed');})().catch(e=>{console.error(e);process.exitCode=1;});
+}
+{
+  const dom=new JSDOM('<div id="cases"></div>',{url:'https://example.test/app',runScripts:'outside-only'}),w=dom.window;
+  w.setTimeout=()=>0;w.confirm=()=>false;w.eval(script);let resolveOld;
+  const tick=()=>new Promise(resolve=>setImmediate(resolve));
+  const ctx={lang:()=> 'en',expected:()=>({expected_tenant_id:'tenant',expected_user_id:11}),channels:[],
+    agents:[{id:'agent-a',name:'A'},{id:'agent-b',name:'B'}],api:async(url)=>{
+      if(url==='/api/platform/chat/ai/settings')return {video_model_tariffs:{}};
+      if(url.includes('/preview?')){
+        const agent=new URL(url,'https://example.test').searchParams.get('analysis_agent_id');
+        const result={case_count:0,eligible_count:0,reused_count:0,review_count:0,unknown_media_count:0,unavailable_media_count:0,cases:[],
+          asr_model:agent==='agent-a'?'model-a':'model-b',asr_tariff:{ready:true,reserve_microusd:1000}};
+        if(agent==='agent-a')return new Promise(resolve=>{resolveOld=()=>resolve({result});});
+        return {result};
+      }
+      return {campaign:null};
+    }};
+  const host=w.document.getElementById('cases');await w.TenantKnowledgeCampaigns.mount(host,ctx);
+  const all=host.querySelector('[data-all-existing]');all.checked=true;all.onchange();await tick();
+  assert.equal(typeof resolveOld,'function','first selected-agent preview should be pending');
+  const agent=host.querySelector('[data-agent]');agent.value='agent-b';agent.onchange();await tick();
+  assert.match(host.querySelector('[data-asr-readiness]').textContent,/model-b/);
+  resolveOld();await tick();
+  assert.match(host.querySelector('[data-asr-readiness]').textContent,/model-b/,'late result for the previous agent must not overwrite current readiness');
+  assert.doesNotMatch(host.querySelector('[data-asr-readiness]').textContent,/model-a/);
+  dom.window.close();
+}
+console.log('Campaign controls: RU/AZ/EN, explicit consent, sources, versioned pause and stale-preview fencing passed');})().catch(e=>{console.error(e);process.exitCode=1;});
