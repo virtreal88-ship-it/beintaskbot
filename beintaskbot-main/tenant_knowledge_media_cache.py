@@ -151,6 +151,11 @@ def observe_once(profile,item,ref,content,mime,origin,invoke,check_before_ai=Non
         raise TenantLinearError('Vision не разрешён.',403)
     if ref not in item['refs'] or ('approved_channel_ids' in item['route'] and ref['channel_id'] not in item['route']['approved_channel_ids']):
         raise TenantLinearError('Источник не утверждён.',403)
+    if item['route'].get('_video_input_model'):
+        # Keep video on the same explicit input ceiling used by the quote.
+        # This check runs before cache claims and before any provider call.
+        from tenant_ai_video_model import require_video_tariff
+        require_video_tariff(item['route']['_video_input_model'])
     if item['route'].get('photo_model'):
         import json
         from tenant_ai_photo_model import INPUT_UPPER

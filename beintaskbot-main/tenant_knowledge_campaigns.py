@@ -82,11 +82,15 @@ def prepare(profile, data):
                     if any(item.get('status')=='pending_consent' and any(m['kind']=='video' and not m['complete'] for m in item.get('media',[])) for item in batch_plan['cases']):
                         raise TenantLinearError('Для видео выберите отдельную модель с доступным тарифом.',409)
                 if data.get('video_model'):
-                    from tenant_ai_video_model import MODELS
+                    from tenant_ai_video_model import MODELS, require_video_tariff
                     from tenant_ai_spend_budget import media_price
                     pending_video=any(item.get('status')=='pending_consent' and any(m['kind']=='video' and not m['complete'] for m in item.get('media',[])) for item in batch_plan['cases'])
-                    if data['video_model'] not in MODELS or pending_video and media_price(data['video_model'],'vision_low') is None:
+                    if data['video_model'] not in MODELS:
                         raise TenantLinearError('video_model_tariff_required',409)
+                    if pending_video:
+                        require_video_tariff(data['video_model'])
+                        if media_price(data['video_model'],'vision_low') is None:
+                            raise TenantLinearError('video_model_tariff_required',409)
                 pending_image=any(item.get('status')=='pending_consent' and any(
                     media.get('kind')=='image' and not media.get('complete')
                     and media.get('status') in {'pending_consent','pending_retry','pending_processing'}
@@ -590,6 +594,9 @@ def approve(profile,campaign_id,data):
                     raise TenantLinearError('Campaign call/token limits do not cover this snapshot.',409)
                 if any(media_by_id[i]['kind']=='video' for i in pending_ids) and not row.get('video_model'):
                     raise TenantLinearError('A separate video model must be selected.',409)
+                if any(media_by_id[i]['kind']=='video' for i in pending_ids):
+                    from tenant_ai_video_model import require_video_tariff
+                    require_video_tariff(row['video_model'])
                 # Model and per-operation tariffs are immutable prerequisites;
                 # unknown pricing blocks consent and no provider call starts.
                 from tenant_ai_spend_budget import price,media_price

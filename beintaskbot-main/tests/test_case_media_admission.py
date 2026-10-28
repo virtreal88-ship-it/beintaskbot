@@ -299,7 +299,8 @@ def test_all_cases_campaign_is_unapproved_until_explicit_fixed_cap_grant(ready,m
       'max_cost_microusd':10000000,'video_model':'gpt-4.1',
       'allow_external_media':True,'allow_paid_asr':True,
       'max_main_calls':10000,'max_asr_calls':10000,'max_vision_calls':10000}
-    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'gpt-4.1':{'vision_low':2500}}))
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'gpt-4.1':{'vision_low':8896}}))
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'gpt-4.1':{'input':2000000,'output':8000000}}))
     assert campaigns.prepare(PROFILE,data)==key
     row=db.execute('SELECT * FROM saas_knowledge_campaigns WHERE id=%s::uuid',(key,))[0]
     assert row['status']=='awaiting_budget' and not row['approved_at']
@@ -323,9 +324,9 @@ def test_all_cases_grant_requires_exact_owner_acceptance_then_stops_cleanly(read
     monkeypatch.setattr(campaigns,'_connect',lambda:db)
     monkeypatch.setenv('AI_AGENTS_PLATFORM_DEFAULT_MODEL','test-model')
     monkeypatch.setenv('AI_AGENTS_PLATFORM_MODELS','["test-model"]')
-    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'test-model':{'input':10,'output':10}}))
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'test-model':{'input':10,'output':10},'gpt-4.1':{'input':2000000,'output':8000000}}))
     monkeypatch.setenv('AI_AGENTS_TRANSCRIPTION_MODEL','whisper-1')
-    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'gpt-4.1':{'vision_low':2500},'whisper-1':{'asr':400}}))
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'gpt-4.1':{'vision_low':8896},'whisper-1':{'asr':400}}))
     import tenant_ai_agent_key_policy as key_policy
     monkeypatch.setattr(key_policy,'platform_model',lambda:'test-model')
     monkeypatch.setattr(key_policy,'choose_api_credential',lambda *args:('synthetic-key','platform'))
@@ -470,6 +471,51 @@ def test_all_cases_rejects_video_model_without_configured_tariff_before_grant(re
         campaigns.prepare(PROFILE,data)
     assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
     assert db.execute('SELECT count(*) AS n FROM saas_ai_media_grants WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
+
+
+def test_all_cases_rejects_video_input_bound_before_prepare_and_rechecks_before_activation(ready,monkeypatch):
+    db,card,media=_case(ready,(3,))
+    provider=ready[1];calls_before=provider.call_count
+    db.execute("UPDATE saas_crm_messages SET message_type='video' WHERE id=%s::uuid",(media[0],));db.commit()
+    _mark_pending_consent(db,card['id'],media)
+    monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_DEFAULT_MODEL','test-model')
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_MODELS','[\"test-model\"]')
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({
+      'gpt-4.1':{'vision_low':8896},'gpt-4o-mini':{'vision_low':2500}}))
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({
+      'test-model':{'input':10,'output':10},'gpt-4.1':{'input':2000000,'output':8000000},
+      'gpt-4o-mini':{'input':150000,'output':600000}}))
+    import tenant_ai_agent_key_policy as key_policy
+    monkeypatch.setattr(key_policy,'platform_model',lambda:'test-model')
+    monkeypatch.setattr(key_policy,'choose_api_credential',lambda *args:('synthetic-key','platform'))
+
+    bad_key=str(uuid.uuid4())
+    data={'request_id':bad_key,'all_existing_cases':True,'channel_ids':[],
+      'analysis_agent_id':AGENT,'max_calls':10000,'max_tokens':160000000,
+      'max_cost_microusd':10000000,'video_model':'gpt-4o-mini',
+      'allow_external_media':True,'allow_paid_asr':True,
+      'max_main_calls':10000,'max_asr_calls':10000,'max_vision_calls':10000}
+    with pytest.raises(TenantLinearError,match='video_model_input_bound_exceeded'):
+        campaigns.prepare(PROFILE,data)
+    assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaigns WHERE id=%s::uuid',(bad_key,))[0]['n']==0
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_media_grants WHERE campaign_id=%s::uuid',(bad_key,))[0]['n']==0
+
+    # Defense in depth: even a changed/stale campaign model cannot activate a
+    # grant or enqueue work after a model's cost bound has become invalid.
+    key=str(uuid.uuid4());campaigns.prepare(PROFILE,{**data,'request_id':key,'video_model':'gpt-4.1'})
+    row=db.execute('SELECT * FROM saas_knowledge_campaigns WHERE id=%s::uuid',(key,))[0]
+    db.execute('UPDATE saas_knowledge_campaigns SET video_model=%s WHERE id=%s::uuid',('gpt-4o-mini',key));db.commit()
+    consent={'expected_version':row['version'],'channel_ids':row['sources'],
+      'max_calls':row['max_calls'],'max_tokens':row['max_tokens'],
+      'confirm_external_processing':True,'media_policy':row['media_policy'],
+      'all_cases_snapshot_hash':row['progress']['snapshot_hash'],
+      'max_cost_microusd':10000000,'video_model':'gpt-4o-mini'}
+    with pytest.raises(TenantLinearError,match='video_model_input_bound_exceeded'):
+        campaigns.approve(PROFILE,key,consent)
+    assert db.execute('SELECT status FROM saas_ai_media_grants WHERE campaign_id=%s::uuid',(key,))[0]['status']=='pending'
+    assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid',(key,))[0]['n']==0
+    assert provider.call_count==calls_before
 
 
 def test_campaign_photo_model_migration_adds_column_to_existing_schema(ready):
@@ -704,7 +750,7 @@ def test_fixed_grant_over_cap_blocks_before_any_provider_call(ready,monkeypatch)
     monkeypatch.setattr(campaigns,'_connect',lambda:db)
     monkeypatch.setenv('AI_AGENTS_PLATFORM_DEFAULT_MODEL','test-model')
     monkeypatch.setenv('AI_AGENTS_PLATFORM_MODELS','["test-model"]')
-    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'test-model':{'input':10,'output':10}}))
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'test-model':{'input':10,'output':10},'gpt-4.1':{'input':2000000,'output':8000000}}))
     monkeypatch.setenv('AI_AGENTS_TRANSCRIPTION_MODEL','whisper-1')
     monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({
       'gpt-4.1':{'vision_low':6_000_000},'whisper-1':{'asr':400}}))

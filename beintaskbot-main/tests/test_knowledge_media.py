@@ -33,6 +33,10 @@ def context(monkeypatch):
         return text,usage,True
     monkeypatch.setattr(cache,'transcribe_once',unit_asr)
     item={'tenant':'tenant','model':'gpt-4.1-2025-04-14','route':{'conversation_id':'demo@g.us'},'refs':[], 'messages':[]}
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({
+        'gpt-4.1-2025-04-14':{'input':2_000_000,'output':8_000_000}}))
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({
+        'gpt-4.1-2025-04-14':{'vision_low':8_896}}))
     def add(kind='image',channel='one'):
         index=len(item['refs'])+1
         item['refs'].append({'id':str(index),'channel_id':channel,'lead_id':index,'external_id':'connect:'+str(index),'media_kind':kind,'role':'customer','happened_at':'2026-10-18T00:00:00Z'})
@@ -101,6 +105,66 @@ def test_acknowledged_current_connect_retry_fails_closed_if_loader_unavailable(c
     images,results=media.collect({},item)
     assert images==[] and results[0]['status']=='unavailable'
     download.assert_not_awaited();observed.assert_not_called()
+
+
+def test_video_input_bound_is_model_specific_and_rejects_before_cache_or_provider(monkeypatch):
+    import tenant_knowledge_media_cache as cache
+    import tenant_ai_video_model as video_model
+    from unittest.mock import Mock
+
+    assert video_model.input_tokens_upper('gpt-4.1-2025-04-14') <= video_model.INPUT_UPPER
+    assert video_model.input_tokens_upper('gpt-4o-mini') > video_model.INPUT_UPPER
+    assert video_model.OUTPUT_UPPER == 600 and video_model.MAX_FRAMES == 2
+    monkeypatch.setattr('tenant_connect_images.supports_images', lambda _model: True)
+    monkeypatch.setattr('tenant_ai_spend_budget.media_price', lambda *_: 8896)
+    monkeypatch.setattr('tenant_ai_spend_budget.price', lambda *_: (2_000_000,8_000_000))
+    monkeypatch.setattr('tenant_ai_spend_budget.limit_microusd', lambda *_: 10_000_000)
+    quote=video_model.quote('gpt-4.1-2025-04-14','synthetic-tenant')
+    assert quote['max_frames']==2 and quote['max_vision_calls']==2
+    assert quote['input_upper_tokens']==video_model.INPUT_UPPER
+    assert quote['request_input_upper_tokens']<=quote['input_upper_tokens']
+    assert quote['output_upper_tokens']==600
+
+    monkeypatch.setattr('tenant_ai_spend_budget.media_price', lambda *_: 2500)
+    with pytest.raises(TenantLinearError,match='video_model_tariff_below_input_bound'):
+        video_model.require_video_tariff('gpt-4.1-2025-04-14')
+
+    monkeypatch.setattr(cache, '_connect', lambda: (_ for _ in ()).throw(AssertionError('cache claim reached')))
+    monkeypatch.setattr('tenant_knowledge_candidates_service.check_active', lambda *_: None)
+    ref={'id':'synthetic-message','channel_id':'synthetic-channel','media_kind':'video'}
+    item={'tenant':'synthetic-tenant','model':'gpt-4o-mini','key':'mock-only',
+        'route':{'allow_external_media':True,'allow_vision':True,
+                 '_video_input_model':'gpt-4o-mini'},'refs':[ref]}
+    provider=Mock()
+    with pytest.raises(TenantLinearError, match='video_model_input_bound_exceeded'):
+        cache.observe_once(PROFILE,item,ref,b'synthetic frame','image/jpeg',{'second':0},provider)
+    provider.assert_not_called()
+
+
+def test_video_input_bound_rejects_prompt_growth_without_provider(monkeypatch):
+    import tenant_knowledge_media_cache as cache
+    import tenant_ai_video_model as video_model
+
+    monkeypatch.setattr(cache, 'OBSERVATION_PROMPT', 'x' * video_model.INPUT_UPPER)
+    with pytest.raises(TenantLinearError, match='video_model_input_bound_exceeded'):
+        video_model.require_input_bound('gpt-4.1-2025-04-14')
+
+
+def test_video_input_bound_blocks_single_case_before_decode_or_asr(context,monkeypatch):
+    import tenant_knowledge_media_cache as cache
+    item,add,download=context;add('video')
+    item['model']='gpt-4o-mini'
+    item['route'].update(allow_external_media=True,allow_vision=True,allow_paid_asr=True)
+    download.return_value=(b'synthetic video bytes','video/mp4')
+    frames=Mock();audio=Mock();transcribe=Mock()
+    monkeypatch.setattr(media,'video_frames',frames)
+    monkeypatch.setattr(media,'video_audio',audio)
+    monkeypatch.setattr(cache,'transcribe_once',transcribe)
+
+    _,results=media.collect({},item)
+    assert results[0]['status']=='error'
+    assert results[0]['failure_stage']=='media_validation'
+    frames.assert_not_called();audio.assert_not_called();transcribe.assert_not_called()
 
 def test_count_limit_unsupported_and_pending(context):
     item,add,download=context
