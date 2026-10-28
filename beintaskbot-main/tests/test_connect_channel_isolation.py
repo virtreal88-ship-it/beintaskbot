@@ -401,6 +401,20 @@ def test_company_settings_save_reconciles_old_direct_routes_without_queueing(cha
     assert db.execute("SELECT enabled,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]=={'enabled':False,'auto_send_enabled':False}
 
 
+def test_agent_save_reconciles_each_channel_under_its_own_scope(channels):
+    f=channels;db=f['db']
+    db.execute("UPDATE saas_ai_agent_settings SET enabled=FALSE,auto_send_enabled=FALSE WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='active',reason='' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))
+    db.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect'",(A,));db.commit()
+    version=db.execute("SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]['version'];db.commit()
+    agents.save_agent(PROFILE,{'name':'Night support updated','expected_version':version},agent_id=AGENT)
+    db.commit()
+    assigned={r['channel_id']:r['agent_id'] for r in db.execute("SELECT channel_id,agent_id FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id IN (%s,%s)",(A,CA,CB))}
+    assert assigned=={CA:AGENT,CB:AGENT2}
+    assert not rows(f,'saas_ai_agent_jobs')
+    assert db.execute("SELECT enabled,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]=={'enabled':False,'auto_send_enabled':False}
+
+
 def test_replayed_old_skipped_event_repairs_binding_without_requeue(channels):
     f=channels;db=f['db'];mid='legacy-skipped-event'
     fingerprint=hashlib.sha256(('connect:'+mid).encode()).hexdigest()
