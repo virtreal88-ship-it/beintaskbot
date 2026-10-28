@@ -471,6 +471,39 @@ def claim(tenant, campaign_id):
     return {**fragment,'reservation':amount,'lease_token':token,'profile':profile}
 
 
+def _current_limit_diagnostics(cur,tenant,campaign):
+    """Read current safe quota facts; never infer a historical 429 cause."""
+    if campaign.get('status')!='paused':return None
+    cur.execute("""SELECT route,result FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid
+      AND campaign_id=%s::uuid AND status='blocked' AND error_code='limit_exceeded'
+      ORDER BY updated_at,id LIMIT 1""",(tenant,campaign['id']))
+    blocked=cur.fetchone()
+    if not blocked:return None
+    from tenant_knowledge_candidates_policy import MAX_DAILY_EXTRACTIONS
+    cur.execute("SELECT count(*) AS n FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'",(tenant,))
+    extractions=int(cur.fetchone()['n'])
+    cur.execute('''SELECT COALESCE((SELECT sum(reserved_calls) FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date),0)
+      +COALESCE((SELECT sum(reserved_calls) FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'
+      AND (state IN ('generating','completed','unknown') OR reserved_calls>1 OR generated_at IS NOT NULL)),0) AS n''',(tenant,tenant))
+    calls=int(cur.fetchone()['n'])
+    cur.execute("SELECT metadata->>'daily_limit' AS daily_limit FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'",(tenant,))
+    settings=cur.fetchone() or {};raw=settings.get('daily_limit')
+    try:daily=int(raw or 50) or 50
+    except (TypeError,ValueError):daily=None
+    route=blocked.get('route') or {}
+    extra=1 if route.get('allow_paid_asr') else 0
+    vision=1 if route.get('photo_model') or route.get('campaign_photo_model') else 2 if route.get('allow_vision') is True else 0
+    next_calls=1 if route.get('photo_model') else 1+extra+vision
+    reason=('daily_extraction_limit' if extractions>=MAX_DAILY_EXTRACTIONS else
+      'company_daily_ai_call_limit' if daily is not None and calls+next_calls>daily else 'other_or_cleared_limit')
+    safe_reasons={'daily_extraction_limit','extraction_in_progress','company_daily_ai_call_limit','tenant_token_limit','tenant_spend_limit','campaign_spend_limit','other_limit'}
+    previous=(blocked.get('result') or {}).get('safe_limit_reason')
+    return {'basis':'current_snapshot_not_historical_error','current_blocker':reason,
+      'last_limit_error':previous if previous in safe_reasons else None,
+      'utc_daily_extractions':extractions,'utc_daily_extraction_limit':MAX_DAILY_EXTRACTIONS,
+      'utc_daily_ai_calls':calls,'utc_daily_ai_call_limit':daily,'next_call_reservation':next_calls}
+
+
 def get(profile, campaign_id=None):
     with _connect() as conn:
         store.schema(conn);create_schema(conn)
@@ -571,6 +604,7 @@ def get(profile, campaign_id=None):
             if asr_model:
                 from tenant_ai_asr_model import tariff_status as asr_tariff_status
                 asr_tariff=asr_tariff_status(asr_model)
+            limit_diagnostics=_current_limit_diagnostics(cur,tenant,row)
 
 
     return {'campaign':{'id':str(row['id']),'version':row['version'],'status':row['status'],
@@ -579,6 +613,7 @@ def get(profile, campaign_id=None):
       'media_policy':row['media_policy'],'reserved_kinds':row['reserved_kinds'],
       'used_tokens':int(tokens),'cost':None,'max_calls':row['max_calls'],'max_tokens':row['max_tokens'],
       'progress':progress,'media_processed':media['processed'],'media_unavailable':media['unavailable'],'processed_messages':messages,'reviews':reviews,'quality_checks':quality,
+      'limit_diagnostics':limit_diagnostics,
       'max_cost_microusd':row.get('max_cost_microusd'),'video_model':row.get('video_model'),'photo_model':row.get('photo_model'),
       'grant_used_microusd':grant_used,'prior_unknown_holds_microusd':old_unknown,
       'prior_settled_microusd':prior_settled,'grant_status':grant_status,

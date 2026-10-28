@@ -1,12 +1,25 @@
 """Background orchestration. No delivery imports; only existing knowledge extraction."""
 import asyncio
 import uuid
-from tenant_platform import _connect
+from tenant_platform import _connect, _json
 from tenant_linear_policy import TenantLinearError
 import tenant_knowledge_campaigns as queue
 import tenant_knowledge_campaign_discovery as discovery
 import tenant_knowledge_candidates_store as store
 from tenant_knowledge_candidates_service import analyze
+
+
+def _safe_limit_reason(error):
+    """Persist only allowlisted categories, never exception text or source data."""
+    from tenant_knowledge_candidates_policy import MAX_DAILY_EXTRACTIONS
+    return {
+      f'Лимит анализов: {MAX_DAILY_EXTRACTIONS} в сутки.':'daily_extraction_limit',
+      'Дождитесь завершения текущего анализа.':'extraction_in_progress',
+      'Дневной лимит AI компании исчерпан.':'company_daily_ai_call_limit',
+      'Недостаточно бюджета токенов компании.':'tenant_token_limit',
+      'ai_spend_budget_exhausted':'tenant_spend_limit',
+      'ai_media_grant_budget_exhausted':'campaign_spend_limit',
+    }.get(str(error),'other_limit')
 
 
 def check_fence(cur, tenant, extraction_id):
@@ -115,7 +128,8 @@ def tick():
                 receipt=cur.fetchone()
                 empty=not receipt and error.status==409 and 'нет доступного текста' in str(error)
                 code='no_text' if empty else 'provider_unknown' if receipt else 'limit_exceeded' if error.status==429 else 'source_unavailable'
-                cur.execute("UPDATE saas_knowledge_campaign_fragments SET status=%s,error_code=%s WHERE tenant_id=%s::uuid AND id=%s::uuid AND lease_token=%s::uuid",('unknown' if receipt else 'completed' if empty else 'blocked',code,tenant,claimed['id'],claimed['lease_token']))
+                detail={'safe_limit_reason':_safe_limit_reason(error)} if not receipt and error.status==429 else {}
+                cur.execute("UPDATE saas_knowledge_campaign_fragments SET status=%s,error_code=%s,result=result||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid AND lease_token=%s::uuid",('unknown' if receipt else 'completed' if empty else 'blocked',code,_json(detail),tenant,claimed['id'],claimed['lease_token']))
                 if empty and getattr(error,'next_before',None) and not scoped:
                     queue.enqueue(cur,profile,campaign,{**claimed['route'],'before':error.next_before})
                 if not empty:

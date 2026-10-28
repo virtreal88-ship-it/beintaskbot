@@ -59,6 +59,14 @@ per UTC day. This is a service-wide default applied separately to each tenant,
 not a company-specific setting. Existing company AI-call limits, tenant spend
 limits, campaign grant caps and uncertain-call holds remain in force.
 
+For a campaign paused on a pre-dispatch limit, its existing read response may
+include safe aggregate `limit_diagnostics`: current UTC extraction and company
+AI-call counts and limits, the next fragment's call reservation, and a current
+blocker category. `last_limit_error` is an allowlisted category when recorded;
+older failures without that record return null. Current counters are a snapshot,
+not proof of a historical exception. No message content or exception text is
+included; reading it neither resumes work nor changes limits.
+
 The owner has authorized expansion of the existing `ai_learning.read`
 connection to company-wide reading. Existing read access and refresh tokens
 work for these read tools; no new consent or client credentials are required.
