@@ -19,6 +19,8 @@ def _seed(db):
     db.execute("INSERT INTO saas_tenants(id,slug,name,status,owner_telegram_id) VALUES(%s::uuid,%s,'Delete race','active',%s)",
                (tenant,'delete-'+tenant[:8],owner))
     db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name) VALUES(%s::uuid,%s,'owner','Owner')",(tenant,owner))
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected')",(tenant,))
+    db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled) VALUES(%s::uuid,TRUE)",(tenant,))
     db.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name,active) VALUES(%s::uuid,%s::uuid,'Delete test',TRUE)",(tenant,channel))
     db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,'customer',%s,'Customer',now())",(tenant,channel,lead))
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,%s,'delete-source','connect:'||%s,'incoming','message')",(str(uuid.uuid4()),tenant,lead,channel))
@@ -38,6 +40,8 @@ def test_real_postgres_delete_preserves_runs_and_shared_knowledge(database,monke
     profile,tenant,_channel,agent,_lead=_seed(db)
     dsn=db.dsn
     monkeypatch.setattr(agents,'_connect',_connect_factory(dsn))
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=%s::uuid WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id='customer'",(agent,tenant))
+    db.commit()
     run_id=str(uuid.uuid4());source_id=str(uuid.uuid4())
     db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider) VALUES(%s::uuid,'history-event','connect')",(tenant,))
     db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,result) VALUES(%s::uuid,%s::uuid,%s::uuid,'history-event',1,'fixture','completed','{\"kept\":true}'::jsonb)",(tenant,run_id,agent))
@@ -63,9 +67,13 @@ def test_real_postgres_assignment_race_cannot_leave_deleted_agent_assigned(datab
     dsn=db.dsn;factory=_connect_factory(dsn)
     monkeypatch.setattr(agents,'_connect',factory)
     monkeypatch.setattr(assignment,'_connect',factory)
+    monkeypatch.setattr(agents,'runtime_flag',lambda name: name=='AI_AGENTS_ENABLED')
     data={'provider':'connect','channel_id':channel,'conversation_id':'customer','lead_id':lead}
     options=assignment.options(profile,{**data,'manage':'1'})
+    assert options.get('allowed') is True,options
     assert any(row['id']==agent for row in options.get('agents',[])),options
+    assert db.execute("SELECT agent_id FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id='customer'",(tenant,channel))[0]['agent_id'] is None
+    db.commit()
     version=agents.preview_agent_deletion(profile,agent)['version']
     barrier=threading.Barrier(2)
     def delete():
