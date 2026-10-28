@@ -2,7 +2,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
 const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const root=path.join(__dirname,'..'),read=file=>fs.readFileSync(path.join(root,file),'utf8');
 const tenant='00000000-0000-0000-0000-000000000101',channel='00000000-0000-0000-0000-000000000201';
-const route={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'994501234567@s.whatsapp.net',customer_kind:'contact',customer_name:'Customer',channel_name:'WhatsApp',display_state:'human',state:'human',ai_availability:'stopped',available_actions:[],can_send:true,controls_allowed:true,agent_status:'manual',agent_mode:'manual'};
+const route={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'994501234567@s.whatsapp.net',customer_kind:'contact',customer_name:'Customer',channel_name:'WhatsApp',display_state:'human',state:'human',ai_availability:'stopped',available_actions:[],can_send:true,controls_allowed:true,agent_status:'manual',agent_mode:'manual',agent_name:'A very long agent name that remains readable in the menu'};
 const profile={member:{tenant_id:tenant,telegram_id:33,role:'worker',permissions:['dialogs'],active:true},capabilities:{modules:{dialogs:true}}};
 const page={success:true,result:{dialog:route,messages:[{id:'message-1',external_id:'external-1',direction:'incoming',message_type:'text',body:'Need assistance',author_type:'customer',author_name:'Customer',happened_at:'2026-10-21T10:00:00Z'}],next_before:null}};
 const settle=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediate(resolve));};
@@ -27,6 +27,7 @@ function boot(url='https://crm.test/app?view=dialogs',activeDialogs=false){
  assert.ok(app.w.document.getElementById('operatorToolsMenu')&&app.w.document.getElementById('operatorBulkAssignment'),'bulk preview remains under the compact tools menu');
  const filterStyle=[...app.w.document.head.querySelectorAll('style')].map(style=>style.textContent).join('');assert.match(filterStyle,/\.operator-filters\{display:grid;grid-template-columns:minmax\(0,1fr\) auto/);assert.match(filterStyle,/\.operator-advanced\{grid-column:1\/-1;display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
  await app.w.tenantOperator.openDialog(route);await settle();
+ const menu=app.w.document.getElementById('operatorMoreActions');assert.ok(menu.querySelector('.operator-menu-agent').textContent.includes(route.agent_name),'assigned agent is available inside the menu');menu.querySelector('summary').click();assert.equal(menu.open,true,'menu opens');menu.querySelector('summary').click();assert.equal(menu.open,false,'menu closes');
  const {w}=app,workspace=w.document.getElementById('operatorWorkspace'),composer=w.document.getElementById('chatText');
  assert.equal(workspace.dataset.selected,'true','mobile chat takes over the list');assert.equal(w.document.getElementById('operatorDialogs').dataset.conversationOpen,'true','mobile chat hides the list page heading');assert.notEqual(w.document.activeElement,composer,'opening a chat does not summon the mobile keyboard');
  composer.value='Draft survives';composer.dispatchEvent(new w.Event('input',{bubbles:true}));
