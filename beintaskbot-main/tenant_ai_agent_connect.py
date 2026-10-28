@@ -402,7 +402,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             # Existing bindings always win. If this is an unassigned personal
             # dialogue, persist a unique scoped agent before considering the
             # execution mode; binding itself never creates an AI job.
-            cur.execute('''SELECT agent_id,state,agent_assignment_id FROM saas_ai_conversation_state
+            cur.execute('''SELECT agent_id,state,reason,agent_assignment_id FROM saas_ai_conversation_state
               WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
                 AND conversation_id=%s FOR UPDATE''',
                 (tenant, channel_id, conversation_id))
@@ -415,7 +415,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 selected, _selection_reason = unique_connect_candidate(tenant_agents, channel_id)
                 if selected:
                     _bind_unique_connect_candidate(cur, tenant, channel_id, conversation_id, tenant_agents)
-                    cur.execute('''SELECT agent_id,state,agent_assignment_id FROM saas_ai_conversation_state
+                    cur.execute('''SELECT agent_id,state,reason,agent_assignment_id FROM saas_ai_conversation_state
                       WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
                         AND conversation_id=%s''', (tenant,channel_id,conversation_id))
                     bound=cur.fetchone()
@@ -459,6 +459,26 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 if connection is None:
                     conn.commit()
                 return queued
+            # A prior reconciliation may have left a newly resolved binding
+            # paused while company/runtime admission was off. Only this fresh
+            # inbound path, after all company, global, agent-mode and schedule
+            # gates above admit an automatic candidate, may activate that
+            # specific automatic placeholder. Explicit operator Pause/Human
+            # and manual-agent assignments never match this reason.
+            if (bound and str(bound.get('agent_id') or '') == str(agents[0]['id'])
+                    and bound.get('state') == 'paused'
+                    and bound.get('reason') == 'automatic_assignment_pending'):
+                cur.execute('''UPDATE saas_ai_conversation_state SET state='active',reason='',
+                    revision=revision+1,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+                    AND conversation_id=%s AND agent_id=%s::uuid
+                    AND state='paused' AND reason='automatic_assignment_pending'
+                  RETURNING state,reason''', (tenant,channel_id,conversation_id,agents[0]['id']))
+                resumed = cur.fetchone()
+                if not resumed:
+                    if connection is None:
+                        conn.commit()
+                    return 0
             # ``new_inquiry`` must mean the first customer message actually
             # stored for this Connect conversation, not merely the first
             # event received after an agent happened to be configured.  The

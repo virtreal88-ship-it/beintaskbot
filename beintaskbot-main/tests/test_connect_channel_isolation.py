@@ -345,6 +345,34 @@ def test_disabled_ai_still_reconciles_one_scoped_agent_without_activation(channe
     f['send'].assert_not_called();f['generate'].assert_not_called()
 
 
+def test_gated_assignment_joins_existing_active_runtime_on_later_inbound(channels):
+    f=channels;db=f['db']
+    db.execute("UPDATE saas_ai_agent_settings SET enabled=FALSE,auto_send_enabled=FALSE WHERE tenant_id=%s::uuid",(A,))
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='active',reason='' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))
+    db.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s",(A,CA));db.commit()
+    assert f['incoming'](CA,'while disabled')[1]==0
+    pending=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert pending=={'agent_id':AGENT,'state':'paused','reason':'automatic_assignment_pending'}
+    db.execute("UPDATE saas_ai_agent_settings SET enabled=TRUE,auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,));db.commit()
+    assert connect.allowed({'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':'client','lead_id':41},connection=db)
+    assert f['incoming'](CA,'after active gates')[1]==1
+    live=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert live=={'agent_id':AGENT,'state':'active','reason':''}
+    assert len(rows(f,'saas_ai_agent_jobs'))==1
+    f['send'].assert_not_called()
+
+
+def test_operator_manual_pause_is_not_reassigned_or_resumed(channels):
+    f=channels;db=f['db']
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='paused',reason='operator_manual_pause',agent_assignment_id=NULL WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA));db.commit()
+    db.execute("DELETE FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s",(A,CA));db.commit()
+    assert f['incoming'](CA,'respect manual pause')[1]==0
+    state=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert state=={'agent_id':None,'state':'paused','reason':'operator_manual_pause'}
+    assert not rows(f,'saas_ai_agent_jobs')
+    f['send'].assert_not_called();f['generate'].assert_not_called()
+
+
 def test_assignment_reconciler_retries_no_candidate_and_preserves_manual_no_agent(channels):
     f=channels;db=f['db']
     db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,'later',44)",(A,CA))
