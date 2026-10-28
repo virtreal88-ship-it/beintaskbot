@@ -41,13 +41,18 @@ class ListSnapshot:
                 EXISTS(SELECT 1 FROM saas_ai_agent_jobs j WHERE j.tenant_id=%s::uuid AND j.provider='connect'
                   AND j.channel_id=r.channel_id AND j.conversation_id=r.conversation_id
                   AND j.state IN ('queued','processing','unknown')) AS has_job,
-                EXISTS(SELECT 1 FROM saas_crm_messages m WHERE m.tenant_id=%s::uuid AND m.channel='connect:'||r.channel_id
+                (EXISTS(SELECT 1 FROM saas_connect_identity_conflicts f WHERE f.tenant_id=%s::uuid
+                  AND f.connect_channel_id=r.channel_id::uuid
+                  AND (f.conversation_id=r.conversation_id OR EXISTS(SELECT 1 FROM saas_connect_direct_identities a
+                    WHERE a.tenant_id=f.tenant_id AND a.connect_channel_id=f.connect_channel_id
+                      AND a.identity_key=f.conversation_id AND a.canonical_conversation_id=r.conversation_id)))
+                OR EXISTS(SELECT 1 FROM saas_crm_messages m WHERE m.tenant_id=%s::uuid AND m.channel='connect:'||r.channel_id
                   AND m.raw->>'conversationIdentityConflict'='true'
                   AND (m.raw->>'conversationId'=r.conversation_id OR m.raw->'directIdentity'->>'lid'=r.conversation_id
-                    OR m.raw->'directIdentity'->>'jid'=r.conversation_id)) AS identity_conflict
+                    OR m.raw->'directIdentity'->>'jid'=r.conversation_id))) AS identity_conflict
               FROM routes r LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=%s::uuid AND cs.provider='connect'
                 AND cs.channel_id=r.channel_id AND cs.conversation_id=r.conversation_id''',
-              ([row['channel_id'] for row in direct], [row['conversation_id'] for row in direct], tenant, tenant, tenant))
+              ([row['channel_id'] for row in direct], [row['conversation_id'] for row in direct], tenant, tenant, tenant, tenant))
             self.direct = {(row['channel_id'], row['conversation_id']): dict(row) for row in cur.fetchall()}
 
     @property

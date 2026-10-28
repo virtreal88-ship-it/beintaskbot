@@ -5,12 +5,17 @@ receipt is the evidence; names, avatars and numeric suffixes are not identities.
 """
 
 def conflicted(cur, tenant, channel, conversation):
-    cur.execute("""SELECT 1 FROM saas_crm_messages m
+    cur.execute("""SELECT 1 FROM saas_connect_identity_conflicts f
+      WHERE f.tenant_id=%s::uuid AND f.connect_channel_id=%s::uuid
+        AND (f.conversation_id=%s OR EXISTS(SELECT 1 FROM saas_connect_direct_identities a
+          WHERE a.tenant_id=f.tenant_id AND a.connect_channel_id=f.connect_channel_id
+            AND a.identity_key=f.conversation_id AND a.canonical_conversation_id=%s))
+      UNION ALL SELECT 1 FROM saas_crm_messages m
       WHERE m.tenant_id=%s::uuid AND m.channel=%s
         AND m.raw->>'conversationIdentityConflict'='true'
         AND (m.raw->>'conversationId'=%s OR m.raw->'directIdentity'->>'lid'=%s
              OR m.raw->'directIdentity'->>'jid'=%s)
-      LIMIT 1""", (tenant, 'connect:' + str(channel), str(conversation), str(conversation), str(conversation)))
+      LIMIT 1""", (tenant, channel, str(conversation), str(conversation), tenant, 'connect:' + str(channel), str(conversation), str(conversation), str(conversation)))
     return bool(cur.fetchone())
 
 
@@ -54,6 +59,17 @@ def inventory(cur, tenant, channel):
                 and str(lid).endswith('@lid') and raw.get('conversationId') in {jid,lid}):continue
         add(jid,lid,'signed_provider_pair')
         if raw.get('conversationIdentityConflict') is True:conflicts.update((jid,lid))
+    cur.execute('''SELECT f.conversation_id,f.evidence,a.canonical_conversation_id
+      FROM saas_connect_identity_conflicts f LEFT JOIN saas_connect_direct_identities a
+        ON a.tenant_id=f.tenant_id AND a.connect_channel_id=f.connect_channel_id AND a.identity_key=f.conversation_id
+      WHERE f.tenant_id=%s::uuid AND f.connect_channel_id=%s::uuid''', (tenant,channel))
+    for row in cur.fetchall():
+        conflicts.add(row['conversation_id'])
+        if row.get('canonical_conversation_id'):conflicts.add(row['canonical_conversation_id'])
+        proof=row.get('evidence') or {}
+        pair=proof.get('directIdentity') or {}
+        if proof.get('pair_matches_conversation'):
+            add(pair.get('jid'),pair.get('lid'),'signed_provider_pair')
     cur.execute("SELECT to_regclass('public.saas_connect_direct_identities') AS present")
     if cur.fetchone()['present']:
         cur.execute('''SELECT identity_key,canonical_conversation_id FROM saas_connect_direct_identities
@@ -91,12 +107,22 @@ def inventory(cur, tenant, channel):
             for b in keys[i+1:]:
                 pair=tuple(sorted((a,b),key=lambda x:(x.endswith('@lid'),not x.endswith('@s.whatsapp.net'),x)))
                 evidence.setdefault(pair,{'sources':set(),'receipts':0})['sources'].add('linked_device_echo_hint')
+    # Phone-domain aliases are one provider identity. Count distinct phone/LID
+    # identities, not the edges of a valid {phone, legacy phone, LID} triangle.
+    from tenant_connect_direct_identity import phone_jid
+    normalized_graph=defaultdict(set)
+    for key,neighbors in graph.items():
+        normalized=phone_jid(key) or key
+        for other in neighbors:
+            other=phone_jid(other) or other
+            if other!=normalized:normalized_graph[normalized].add(other)
     items=[]
     for (a,b),proof in sorted(evidence.items()):
         reasons=[];verified=bool(proof['sources'] & {'signed_provider_pair','persisted_provider_alias','provider_jid_domain_alias'})
         if not verified:reasons.append('provider_identity_unproven')
         if a not in routes or b not in routes:reasons.append('route_missing')
-        if len(graph[a])>1 or len(graph[b])>1:reasons.append('provider_identity_ambiguous')
+        if (len(normalized_graph[phone_jid(a) or a])>1
+                or len(normalized_graph[phone_jid(b) or b])>1):reasons.append('provider_identity_ambiguous')
         if a in conflicts or b in conflicts:reasons.append('provider_identity_conflict')
         items.append({'canonical_id':a,'split_id':b,'sources':sorted(proof['sources']),
                       'receipts':proof['receipts'],'conflicts':reasons,'verified':verified})

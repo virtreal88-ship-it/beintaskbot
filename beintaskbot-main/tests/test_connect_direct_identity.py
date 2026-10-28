@@ -98,9 +98,9 @@ def test_conflicting_verified_mapping_fails_closed_without_cross_channel_leak(ch
     db=channels['db']; transport._schema(db)
     with db.cursor() as cur:
         cur.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) VALUES(%s::uuid,%s::uuid,'a'),(%s::uuid,%s::uuid,'b')",(A,CA,A,CA))
-        cur.execute("INSERT INTO saas_connect_direct_identities(tenant_id,connect_channel_id,identity_key,canonical_conversation_id) VALUES(%s::uuid,%s::uuid,'1@lid','a'),(%s::uuid,%s::uuid,'2@s.whatsapp.net','b')",(A,CA,A,CA))
-        canonical,conflict=transport._canonical_direct_conversation(cur,A,CA,'1@lid',{'directIdentity':{'lid':'1@lid','jid':'2@s.whatsapp.net'}},{'kind':'contact'})
-        assert canonical=='1@lid' and conflict is True
+        cur.execute("INSERT INTO saas_connect_direct_identities(tenant_id,connect_channel_id,identity_key,canonical_conversation_id) VALUES(%s::uuid,%s::uuid,'100000@lid','a'),(%s::uuid,%s::uuid,'200000@s.whatsapp.net','b')",(A,CA,A,CA))
+        canonical,conflict=transport._canonical_direct_conversation(cur,A,CA,'100000@lid',{'directIdentity':{'lid':'100000@lid','jid':'200000@s.whatsapp.net'}},{'kind':'contact'})
+        assert canonical=='a' and conflict is True  # keep the established route, never create a third
     db.commit()
 
 
