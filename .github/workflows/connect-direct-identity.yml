@@ -14,7 +14,7 @@ on:
       - 'beintaskbot-main/tenant_ai_dialog*.py'
       - 'beintaskbot-main/tests/test_connect_*.py'
   push:
-    branches: [fix/connect-direct-identity-replay, fix/verified-phone-dialog-reconcile]
+    branches: [fix/connect-direct-identity-replay, fix/verified-phone-dialog-reconcile, fix/owner-asserted-dialog-merge]
 
 permissions:
   contents: read
@@ -53,6 +53,7 @@ jobs:
         run: >-
           python -m pytest -q --tb=short
           tests/test_connect_phone_evidence.py
+          tests/test_connect_owner_identity.py
           tests/test_connect_retained_media.py
           tests/test_connect_dialog_equivalence.py
           tests/test_connect_identity_ingestion_postgres.py

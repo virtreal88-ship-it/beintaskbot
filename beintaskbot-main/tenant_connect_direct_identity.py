@@ -67,6 +67,17 @@ def canonical_conversation(cur, tenant, channel, conversation, data, metadata):
     # Partial/missing metadata must still reuse a previously committed alias.
     fallback = known.get(current, conversation)
     if len(targets) > 1:
+        if verified and not conflict:
+            from tenant_connect_owner_identity import active_link,provider_conflicts
+            assertion=active_link(cur,tenant,channel,current)
+            if (assertion and targets<={assertion['canonical_id'],assertion['source_id']}
+                    and lid==assertion['source_id'] and phone_jid(jid).split('@')[0]==assertion['phone']
+                    and not provider_conflicts(cur,tenant,channel,assertion)):
+                # This receipt really supplies provider evidence. Preserve the
+                # original independent aliases; the owner overlay routes it.
+                metadata['phone_jid']=phone_jid(jid)
+                metadata['direct_aliases']=sorted(aliases)
+                return fallback,False
         return fallback, True
     cur.execute('''SELECT conversation_id FROM saas_connect_conversations
       WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=ANY(%s::text[])''',

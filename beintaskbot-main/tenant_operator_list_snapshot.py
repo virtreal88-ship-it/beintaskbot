@@ -49,10 +49,14 @@ class ListSnapshot:
                 OR EXISTS(SELECT 1 FROM saas_crm_messages m WHERE m.tenant_id=%s::uuid AND m.channel='connect:'||r.channel_id
                   AND m.raw->>'conversationIdentityConflict'='true'
                   AND (m.raw->>'conversationId'=r.conversation_id OR m.raw->'directIdentity'->>'lid'=r.conversation_id
-                    OR m.raw->'directIdentity'->>'jid'=r.conversation_id))) AS identity_conflict
+                    OR m.raw->'directIdentity'->>'jid'=r.conversation_id))
+                OR EXISTS(SELECT 1 FROM saas_connect_dialog_links l WHERE l.tenant_id=%s::uuid
+                  AND l.channel_id=r.channel_id::uuid AND l.active
+                  AND l.snapshot->>'identity_source'='owner_assertion'
+                  AND (l.canonical_id=r.conversation_id OR l.source_id=r.conversation_id))) AS identity_conflict
               FROM routes r LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=%s::uuid AND cs.provider='connect'
                 AND cs.channel_id=r.channel_id AND cs.conversation_id=r.conversation_id''',
-              ([row['channel_id'] for row in direct], [row['conversation_id'] for row in direct], tenant, tenant, tenant, tenant))
+              ([row['channel_id'] for row in direct], [row['conversation_id'] for row in direct], tenant, tenant, tenant, tenant, tenant))
             self.direct = {(row['channel_id'], row['conversation_id']): dict(row) for row in cur.fetchall()}
             from tenant_connect_identity import conflicted
             for (channel,conversation),state in self.direct.items():

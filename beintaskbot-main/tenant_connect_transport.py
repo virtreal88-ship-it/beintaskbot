@@ -103,7 +103,7 @@ def _upsert_conversation(cur, tenant, channel_id, conversation, metadata):
     display_name = metadata.get('display_name') or ''
     # Keep the established direct-chat phone fallback intact. A group must
     # never inherit the numeric prefix of its JID as a customer phone.
-    phone = '' if kind == 'group' else _phone_from_jid(metadata.get('phone_jid') or conversation)
+    phone = '' if kind == 'group' else _phone_from_jid(metadata.get('phone_jid') or metadata.get('provider_conversation_id') or conversation)
     contact_name = display_name if kind == 'contact' else ''
     cur.execute('''INSERT INTO saas_connect_conversations
       (tenant_id,connect_channel_id,conversation_id,contact_name,phone,display_name,conversation_kind,last_message_at)
@@ -208,6 +208,8 @@ def _schema(conn) -> None:
           PRIMARY KEY(tenant_id,connect_channel_id,conversation_id,event_id))''')
         from tenant_connect_dialog_equivalence import schema as equivalence_schema
         equivalence_schema(cur)
+        from tenant_connect_owner_identity import schema as owner_identity_schema
+        owner_identity_schema(cur)
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_webhook_events (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE, event_id TEXT NOT NULL,
           received_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,event_id))''')
@@ -728,10 +730,16 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active=TRUE', (tenant, channel_id))
             if not cur.fetchone():
                 return False
-            data={k:v for k,v in data.items() if k!='_crm_provider_conversation_id'}
+            data={k:v for k,v in data.items() if k not in {'_crm_provider_conversation_id','_crm_owner_assertion_id'}}
             original_conversation = conversation
             conversation, identity_conflict = _canonical_direct_conversation(
                 cur, tenant, channel_id, conversation, data, metadata)
+            provider_conversation=conversation
+            if not identity_conflict and metadata.get('kind')!='group' and _direct_identity(conversation):
+                from tenant_connect_owner_identity import route as owner_route
+                conversation,identity_conflict=owner_route(cur,tenant,channel_id,conversation,data,metadata)
+                if metadata.get('owner_assertion_id'):
+                    data={**data,'_crm_owner_assertion_id':metadata['owner_assertion_id']}
             if identity_conflict:
                 # Keep the receipt readable, but never use an ambiguous pair
                 # to redirect history or admit AI work.
@@ -755,7 +763,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             if not coordinated and not outbound and _direct_identity(conversation):
                 from tenant_ai_group_coordination import EmployeeIdentityConflict
                 try:
-                    employee = verified_employee(cur,tenant,{**data,'participantJid':conversation},
+                    employee = verified_employee(cur,tenant,{**data,'participantJid':provider_conversation},
                         direct_aliases=metadata.get('direct_aliases', ()))
                 except EmployeeIdentityConflict:
                     identity_conflict = True
@@ -855,12 +863,12 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 # retries cannot leave a contact without its message.
                 if metadata.get('kind') == 'contact' and not identity_conflict:
                     from tenant_crm_native_contacts import upsert_whatsapp_contact
-                    upsert_whatsapp_contact(cur, tenant, channel_id, conversation,
-                        _phone_from_jid(metadata.get('phone_jid') or conversation), metadata.get('display_name') or '',
+                    upsert_whatsapp_contact(cur, tenant, channel_id, provider_conversation,
+                        _phone_from_jid(metadata.get('phone_jid') or provider_conversation), metadata.get('display_name') or '',
                         str(data.get('id') or event_id))
                 occurred = str(event.get('occurred_at') or datetime.now(timezone.utc).isoformat())
                 is_group = metadata.get('kind') == 'group'
-                phone = '' if is_group else _phone_from_jid(metadata.get('phone_jid') or conversation)
+                phone = '' if is_group else _phone_from_jid(metadata.get('phone_jid') or provider_conversation)
                 author_name = (metadata.get('participant_name') or _phone_from_jid(metadata.get('participant_jid'))
                                or phone)
                 deal_name = metadata.get('display_name') or author_name

@@ -99,7 +99,7 @@ def snapshot(cur, tenant, channel, ids, leads):
     return result
 
 
-def conflicts(cur, tenant, channel, ids, before):
+def conflicts(cur, tenant, channel, ids, before, *, owner_phone=None):
     reasons = []
     states = before['states']
     for field in ('agent_id', 'assigned_to', 'agent_assignment_id'):
@@ -123,21 +123,30 @@ def conflicts(cur, tenant, channel, ids, before):
     from tenant_connect_phone_evidence import collect
     proof = collect(cur, tenant, channel, ids)
     phones = set().union(*(proof['phones_by_identity'].get(i, set()) for i in ids))
-    if len(phones) != 1 or any(proof['phones_by_identity'].get(i,set()) != phones for i in ids):
-        reasons.append('verified_phone_required')
+    if owner_phone is None:
+        if len(phones) != 1 or any(proof['phones_by_identity'].get(i,set()) != phones for i in ids):
+            reasons.append('verified_phone_required')
+    else:
+        # Owner assertions fill a missing link, never override provider facts.
+        # The canonical phone must already be independently provider-proven.
+        if (proof['phones_by_identity'].get(ids[0],set()) != {owner_phone}
+                or not proof['phones_by_identity'].get(ids[1],set()) <= {owner_phone}):
+            reasons.append('owner_phone_contradicts_provider')
     for i in ids:
         hard=proof['conflicts'].get(i,[])
-        if hard and proof['reviewable_conflicts'].get(i)!=['historical_route_split']:
+        if hard and (owner_phone is not None or proof['reviewable_conflicts'].get(i)!=['historical_route_split']):
             reasons.extend(hard)
     return sorted(set(reasons))
 
 
-def activate(cur, tenant, channel, pair_id, ids, leads, before):
+def activate(cur, tenant, channel, pair_id, ids, leads, before, *, owner_assertion_id=None):
     """Called after fresh proof and locks. No message/CRM/source row is rewritten."""
     from tenant_connect_direct_identity import _aliases
     jid, source = ids
-    aliases = set().union(*(_aliases(i) for i in ids))
-    aliases.update(r['identity_key'] for r in before['aliases'])
+    aliases = set()
+    if owner_assertion_id is None:
+        aliases = set().union(*(_aliases(i) for i in ids))
+        aliases.update(r['identity_key'] for r in before['aliases'])
     for identity in sorted(aliases):
         cur.execute('''INSERT INTO saas_connect_direct_identities
           (tenant_id,connect_channel_id,identity_key,canonical_conversation_id)
@@ -171,7 +180,9 @@ def activate(cur, tenant, channel, pair_id, ids, leads, before):
     cur.execute('''SELECT row_to_json(s) AS row FROM saas_ai_conversation_state s
       WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s''', (tenant,channel,jid))
     after_state = (cur.fetchone() or {}).get('row')
-    saved = {'version':1,'aliases_before':before['aliases'], 'aliases_after':sorted(aliases),
+    saved = {'version':1,'identity_source':'owner_assertion' if owner_assertion_id else 'provider',
+             'owner_assertion_id':owner_assertion_id,
+             'aliases_before':before['aliases'], 'aliases_after':sorted(aliases),
              'states_before':before['states'],'canonical_state_after':after_state,
              'reference_counts':before['references'],
              'route_controls_before':{r['conversation_id']:{k:r[k] for k in ('ai_enabled','manual_hold')} for r in before['routes']},

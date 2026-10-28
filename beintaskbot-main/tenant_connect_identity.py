@@ -5,6 +5,12 @@ receipt is the evidence; names, avatars and numeric suffixes are not identities.
 """
 
 def conflicted(cur, tenant, channel, conversation):
+    from tenant_connect_owner_identity import active_link,provider_conflicts
+    assertion=active_link(cur,tenant,channel,conversation)
+    if assertion:
+        # Source routes stay fenced; owner decisions never clear provider flags,
+        # including flags which exist only on a retained source identity.
+        return conversation==assertion['source_id'] or provider_conflicts(cur,tenant,channel,assertion)
     cur.execute("""SELECT 1 FROM saas_connect_identity_conflicts f
       WHERE f.tenant_id=%s::uuid AND f.connect_channel_id=%s::uuid
         AND (f.conversation_id=%s OR EXISTS(SELECT 1 FROM saas_connect_direct_identities a
