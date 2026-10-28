@@ -184,7 +184,7 @@ def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id
           WHERE saas_ai_conversation_state.agent_id IS NULL
             AND saas_ai_conversation_state.agent_assignment_id IS NULL
             AND (saas_ai_conversation_state.state='active'
-                 OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%')
+                 OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%')
           ''', (tenant, channel_id, conversation_id, durable_reason))
         return None, reason
 
@@ -197,7 +197,7 @@ def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id
       WHERE saas_ai_conversation_state.agent_id IS NULL
         AND saas_ai_conversation_state.agent_assignment_id IS NULL
         AND (saas_ai_conversation_state.state='active'
-             OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%')
+             OR saas_ai_conversation_state.reason LIKE 'automatic_assignment_%%')
       RETURNING agent_id''', (tenant, channel_id, conversation_id, agent['id']))
     return (agent, '') if cur.fetchone() else (None, 'explicit_or_existing_state_preserved')
 
