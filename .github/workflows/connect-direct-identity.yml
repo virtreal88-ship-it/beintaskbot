@@ -53,6 +53,7 @@ jobs:
         run: >-
           python -m pytest -q --tb=short
           tests/test_connect_phone_evidence.py
+          tests/test_connect_retained_media.py
           tests/test_connect_dialog_equivalence.py
           tests/test_connect_identity_ingestion_postgres.py
           tests/test_connect_direct_canonical.py

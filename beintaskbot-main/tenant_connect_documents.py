@@ -52,15 +52,16 @@ def resolve(job, reservation, message):
             if (not route or route['channel_id'] != channel_id
                     or route['conversation_id'] != job['conversation_id']):
                 raise ValueError('document_scope_mismatch')
-            cur.execute("""SELECT 1 FROM saas_crm_messages
+            cur.execute("""SELECT raw FROM saas_crm_messages
               WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
                 AND external_id=%s AND direction='incoming' AND message_type='document'""",
               (job['tenant_id'], int(job['lead_id']), 'connect:' + channel_id,
                'connect:' + message_id))
-            if not cur.fetchone():
+            row = cur.fetchone()
+            if not row:
                 raise ValueError('document_scope_mismatch')
     return {'route': route, 'message_id': message_id,
-            'row': {'message_type': 'document'}}
+            'row': {'message_type': 'document', 'raw': row.get('raw') or {}}}
 
 
 async def prepare(job, reservation, rows, logger):
