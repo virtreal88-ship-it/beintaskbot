@@ -233,7 +233,17 @@ def collect(profile,item,check_before_ai=None):
                       'route':{**item['route'],'photo_model':observation_model}}
                 for content,content_type,origin in visuals:
                     if check_before_ai: check_before_ai()
-                    text,_,_=observe_once(profile,observation_item,ref,content,content_type,origin,generate,check_before_ai=check_before_ai)
+                    try:
+                        text,_,_=observe_once(profile,observation_item,ref,content,content_type,origin,generate,check_before_ai=check_before_ai)
+                    finally:
+                        # observe_once increments attempts on its per-model
+                        # item copy. Propagate that boundary to the request
+                        # object used by finish() for unknown-status and spend
+                        # settlement, including provider exceptions. The usage
+                        # list is created lazily on that copy, so propagate it
+                        # as well before accounting.
+                        item['vision_attempts']=int(observation_item.get('vision_attempts') or 0)
+                        item['vision_usage']=list(observation_item.get('vision_usage') or [])
                     message['text']+='\n[Untrusted visual observation; not a confirmed solution] '+text
                     receipt.setdefault('observations',[]).append({'origin':origin,'text':text})
                 receipt.update(status='partial' if kind=='video' else 'processed',code='vision_observation',visuals=[origin for _,_,origin in visuals])
