@@ -70,8 +70,13 @@ def collect(profile,item,check_before_ai=None):
         # evidence instead of downloading or paying to analyse the attachment
         # again; partial video remains explicitly partial.
         from tenant_media_evidence import reusable, apply_reusable
-        prior=reusable(profile,ref)
         retry_unknown=(item.get('route') or {}).get('owner_retry_unknown') is True
+        # The old receipt index is based on webhook metadata, which is not a
+        # byte identity even when it contains a provider media ID. For any
+        # explicitly acknowledged retry, download through the protected loader
+        # first; observe_once then reuses only a cache keyed by SHA-256 of the
+        # bytes actually fetched.
+        prior=None if retry_unknown else reusable(profile,ref)
         reusable_failure=prior and prior.get('status') in {'unavailable','error'}
         if prior and not (retry_unknown and reusable_failure):
             reused=apply_reusable(message,prior)

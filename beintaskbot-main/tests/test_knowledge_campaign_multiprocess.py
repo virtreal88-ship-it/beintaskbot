@@ -7,6 +7,7 @@ from psycopg.rows import dict_row
 from test_connect_channel_multiprocess import database
 from test_tenant_support_inbox import A,CA,CB,AGENT,PROFILE
 from tenant_knowledge_candidates_policy import MAX_TOKENS
+from tenant_linear_policy import TenantLinearError
 
 
 @pytest.fixture
@@ -63,15 +64,25 @@ def child(dsn,kind,key,barrier,out,index=0):
                 with factory() as conn:conn.execute('INSERT INTO test_asr_calls DEFAULT VALUES')
                 return 'Synthetic transcript',{'total_tokens':10}
             try:
-                if kind=='vision':
+                if kind in {'vision','owner_retry_vision'}:
                     import tenant_knowledge_candidates_service as service
                     from test_tenant_support_inbox import CA,CB
                     service.check_active=lambda *a:None
-                    refs=[{'id':'synthetic-1','channel_id':CA},{'id':'synthetic-2','channel_id':CB}]
-                    ref=refs[index]
-                    item={'tenant':A,'key':'mock','model':'fixture','refs':refs,
-                          'route':{'allow_external_media':True,'allow_vision':True,'approved_channel_ids':[CA,CB]}}
-                    result=cache.observe_once(PROFILE,item,ref,b'fake-image','image/png',{'message_index':index},invoke)
+                    if kind=='owner_retry_vision':
+                        message_id=str(uuid.UUID(int=777+index));external_id='connect:'+str(uuid.UUID(int=778+index))
+                        ref={'id':message_id,'external_id':external_id,'channel_id':CA,'media_version':'a'*64}
+                        refs=[ref]
+                        route={'allow_external_media':True,'allow_vision':True,'owner_retry_unknown':True,
+                          'owner_retry_basis':'current_connect_message','media_grant_id':key,'channel_id':CA,
+                          'message_ids':[message_id],'source_version':'a'*64}
+                        content=b'one current source image'
+                    else:
+                        refs=[{'id':'synthetic-1','channel_id':CA},{'id':'synthetic-2','channel_id':CB}]
+                        ref=refs[index]
+                        route={'allow_external_media':True,'allow_vision':True,'approved_channel_ids':[CA,CB]}
+                        content=b'fake-image'
+                    item={'tenant':A,'key':'mock','model':'fixture','refs':refs,'route':route}
+                    result=cache.observe_once(PROFILE,item,ref,content,'image/png',{'message_index':index},invoke)
                 else:
                     result=cache.transcribe_once(PROFILE,{'tenant':A,'key':'mock'},'test',(b'fake','wav','audio/wav'),invoke)
                 out.put(('ok',result[2]))
@@ -119,4 +130,34 @@ def test_media_cache_race_never_duplicates_vision(campaign):
     assert d.execute('SELECT count(*) AS n FROM test_asr_calls')[0]['n']==1
     # Fresh processes (a worker restart) reuse the durable receipt.
     assert sum(r[1] for r in race(d,'vision',key))==0
+    assert d.execute('SELECT count(*) AS n FROM test_asr_calls')[0]['n']==1
+
+
+def test_owner_retry_is_single_flight_and_changed_bytes_cannot_reuse_ack(campaign,monkeypatch):
+    from unittest.mock import Mock
+    import tenant_knowledge_candidates_service as service
+    import tenant_knowledge_media_cache as cache
+    d,_,_,key=campaign
+    with d.cursor() as cur:cache.schema(cur)
+    d.execute('CREATE TABLE IF NOT EXISTS test_asr_calls(id BIGSERIAL PRIMARY KEY)');d.execute('TRUNCATE test_asr_calls');d.commit()
+    assert sum(r[1] for r in race(d,'owner_retry_vision',key))==1
+    assert d.execute('SELECT count(*) AS n FROM test_asr_calls')[0]['n']==1
+    monkeypatch.setattr(cache,'_connect',lambda:d)
+    monkeypatch.setattr(service,'_connect',lambda:d)
+    monkeypatch.setattr(service,'check_active',lambda *a:None)
+    message_id=str(uuid.UUID(int=779));ref={'id':message_id,'external_id':'connect:'+str(uuid.UUID(int=780)),'channel_id':CA,'media_version':'a'*64}
+    item={'tenant':A,'key':'mock','model':'fixture','refs':[ref],
+      'route':{'allow_external_media':True,'allow_vision':True,'owner_retry_unknown':True,
+        'owner_retry_basis':'current_connect_message','media_grant_id':key,'channel_id':CA,
+        'message_ids':[message_id],'source_version':'a'*64}}
+    # The second message carries identical bytes and must reuse the one shared
+    # tenant artifact instead of creating another provider call.
+    same=Mock(return_value=('must not dispatch',{'total_tokens':1}))
+    reused=cache.observe_once(PROFILE,item,ref,b'one current source image','image/png',{},same)
+    assert reused[2] is False
+    same.assert_not_called()
+    changed=Mock(return_value=('must not dispatch',{'total_tokens':1}))
+    with pytest.raises(TenantLinearError,match='Источник изменился'):
+        cache.observe_once(PROFILE,item,ref,b'different bytes for same message','image/png',{},changed)
+    changed.assert_not_called()
     assert d.execute('SELECT count(*) AS n FROM test_asr_calls')[0]['n']==1
