@@ -115,3 +115,14 @@ change to another tenant can retain its old fields in the repository; normal
 workspace switching reloads /app. No new regression or production exposure was
 established, but that legacy panel and its inline async handlers need a separate
 scope-lifecycle review before claiming isolation for every Settings surface.
+
+Connect inherited-risk detail: before PR304, `tenant-workspace.js` moved the
+same `#connectWhatsAppSettings` DOM node into a hidden repository on modal close;
+its `#connectApiKey`, `#connectChannelList` and diagnostics contents had no
+identity-reset hook. The inline async readers likewise had no generation guard.
+PR304 adds no Connect response cache, extends no Connect retention lifetime and
+does not reuse its requests. Those DOM values already survived for the page's
+lifetime. On an authority change, the new marketplace root is unmounted (closing
+the modal); this improves immediate concealment but is not a fix for the old
+repository/late-reader lifecycle. A separate fix must cover both DOM reset and
+late Connect callbacks; merely clearing the input would not be sufficient.
