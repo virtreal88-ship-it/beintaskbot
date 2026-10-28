@@ -154,6 +154,12 @@ def record_conflict(cur, tenant, channel, canonical, original, data, event_id):
           ON CONFLICT(tenant_id,connect_channel_id,conversation_id,event_id) DO NOTHING''',
           (tenant,channel,identity,event_id,evidence))
         state_ids={identity}
+        # Provider aliases retain their own receipt/history ids, while the
+        # operator listing and runtime may use the canonical route id.
+        cur.execute('''SELECT canonical_conversation_id FROM saas_connect_direct_identities
+          WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND identity_key=%s''',
+          (tenant,channel,identity))
+        state_ids.update(row['canonical_conversation_id'] for row in cur.fetchall())
         # An explicit owner merge overlays the source identity onto a
         # canonical conversation. Fence both state rows when either side is
         # contradicted, while keeping the alias/evidence ledger unchanged.
