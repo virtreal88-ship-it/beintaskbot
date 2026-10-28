@@ -27,13 +27,15 @@ const script=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant
   assert.equal(requests[2].data.expected_version,2);assert.ok(!host.innerHTML.includes('undefined'));
   const batchRequests=[],previewRequests=[];let batchState={id:'old-stopped',version:4,status:'stopped',channel_ids:['old-channel'],max_calls:10000,max_tokens:160000000,media_policy:{},progress:{mode:'case_media',attachment_count:1},reserved_calls:2648,reserved_tokens:259,used_tokens:259,cost:0,cards:0};
   const batchCtx={...ctx,api:async(url,options)=>{
+    if(!options&&url==='/api/platform/chat/ai/settings')return {photo_model:'gpt-4.1-2025-04-14',video_model_tariffs:{
+      'gpt-4.1-2025-04-14':{ready:true,max_microusd:22500},'gpt-4o':{ready:false,reason_code:'video_model_tariff_required'}}};
     if(options){const data=JSON.parse(options.body);batchRequests.push({url,data});
       if(url.endsWith('/campaigns'))batchState={id:'batch',version:1,status:'awaiting_budget',channel_ids:['channel-a'],
         max_calls:data.max_calls,max_tokens:data.max_tokens,media_policy:{allow_external_media:data.allow_external_media,
           allow_paid_asr:data.allow_paid_asr,max_main_calls:data.max_main_calls,max_asr_calls:data.max_asr_calls,
           max_vision_calls:data.max_vision_calls},progress:{mode:'case_media_batch',case_count:3,eligible_count:2,
           reused_count:1,review_count:0,unknown_media_count:1,unavailable_media_count:0,retry_unknown_count:data.acknowledge_prior_unknown?1:0,acknowledge_prior_unknown:data.acknowledge_prior_unknown===true,case_plans:[]},
-        max_cost_microusd:data.max_cost_microusd,video_model:data.video_model,grant_used_microusd:0,
+        max_cost_microusd:data.max_cost_microusd,video_model:data.video_model,photo_model:'gpt-4.1-2025-04-14',grant_used_microusd:0,
         prior_unknown_holds_microusd:0,prior_settled_microusd:0,analysis_model:'text-model',asr_model:'asr-model',
         grant_approved:false,fragments:{},reserved_calls:0,reserved_tokens:0,used_tokens:0,cards:0};
       if(url.endsWith('/start'))batchState={...batchState,version:2,status:'running',grant_approved:true};
@@ -44,6 +46,8 @@ const script=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant
   await new Promise(resolve=>setTimeout(resolve,0));await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(host.querySelector('[data-source]').disabled,true);
   assert.equal(host.querySelector('[data-retry-wrap]').hidden,false);
+  assert.ok([...host.querySelector('[data-video-model]').options].some(option=>option.value==='gpt-4.1-2025-04-14'),'dated backend model with a ready tariff is selectable');
+  assert.ok(![...host.querySelector('[data-video-model]').options].some(option=>option.value==='gpt-4o'),'video model without a configured tariff is not selectable');
   assert.equal(host.querySelector('[data-batch-grant]').hidden,false);
   assert.match(host.querySelector('[data-batch-grant]').textContent,/\$10/);
   assert.match(host.querySelector('[data-prepare]').textContent,/\$10/,'prepare button should name the fixed grant cap');
@@ -55,18 +59,20 @@ const script=fs.readFileSync(require('node:path').join(__dirname,'../docs/tenant
   assert.equal(previewRequests.at(-1).searchParams.get('expected_tenant_id'),'tenant-a');
   assert.equal(previewRequests.at(-1).searchParams.get('expected_user_id'),'11');
   assert.ok(batchRequests.length===0,'preview must remain read-only');
-  host.querySelector('[data-video-model]').value='gpt-4.1';
+  host.querySelector('[data-video-model]').value='gpt-4.1-2025-04-14';
   await host.querySelector('[data-prepare]').onclick();
   assert.equal(batchRequests.length,1);assert.equal(batchRequests[0].data.all_existing_cases,true);
-  assert.equal(batchRequests[0].data.max_cost_microusd,10000000);assert.equal(batchRequests[0].data.video_model,'gpt-4.1');
+  assert.equal(batchRequests[0].data.max_cost_microusd,10000000);assert.equal(batchRequests[0].data.video_model,'gpt-4.1-2025-04-14');
   assert.equal(batchRequests[0].data.acknowledge_prior_unknown,true);
   assert.deepEqual(batchRequests[0].data.channel_ids,[]);
   assert.ok(host.querySelector('.campaign-run-notice').textContent.includes('$10.00'));
   assert.ok(host.querySelector('.campaign-run-notice').textContent.includes('text-model'));
+  assert.ok(host.querySelector('.campaign-run-notice').textContent.includes('gpt-4.1-2025-04-14'),'snapshot readback exposes selected company photo model');
   const batchConsent=host.querySelector('[data-consent]');assert.ok(batchConsent);batchConsent.checked=true;batchConsent.onchange();
   const startButton=[...host.querySelectorAll('[data-actions] button')].find(button=>button.textContent===({ru:'Запустить анализ',az:'Analizi başlat',en:'Start analysis'}[language]));
   assert.ok(startButton);await startButton.onclick();
   assert.equal(batchRequests[1].data.acknowledge_prior_unknown,true);
+  assert.equal(batchRequests[1].data.photo_model,'gpt-4.1-2025-04-14');
   all.checked=false;all.onchange();
   assert.equal(host.querySelector('[data-batch-grant]').hidden,true);
   assert.equal(host.querySelector('[data-prepare]').textContent,({ru:'Подготовить',az:'Hazırla',en:'Prepare'}[language]));

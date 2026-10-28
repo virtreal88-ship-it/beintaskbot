@@ -209,7 +209,8 @@ def collect(profile,item,check_before_ai=None):
                 visuals=[(data,mime,{})]
             if not consent: receipt.update(status='unavailable',code='external_media_permission_required');continue
             if item['route'].get('allow_vision') is False: receipt.update(status='unavailable',code='vision_not_approved');continue
-            observation_model=(item['route'].get('video_model') if kind=='video' else item['model']) or item['model']
+            observation_model=((item['route'].get('video_model') if kind=='video' else
+                item['route'].get('campaign_photo_model') if kind=='image' else item['model']) or item['model'])
             if not supports_images(observation_model): receipt.update(status='unsupported',code='model_has_no_vision');continue
             if visual_count+len(visuals)>MAX_VISUALS: receipt.update(status='partial',code='visual_budget');continue
             if not visuals: raise ValueError('empty_visuals')
@@ -219,6 +220,9 @@ def collect(profile,item,check_before_ai=None):
                 from tenant_knowledge_media_cache import observe_once
                 from tenant_chat_ai_provider import generate
                 observation_item=({**item,'model':observation_model} if observation_model!=item['model'] else item)
+                if kind=='image' and item['route'].get('campaign_photo_model'):
+                    observation_item={**observation_item,'key':item.get('photo_api_key') or item['key'],
+                      'route':{**item['route'],'photo_model':observation_model}}
                 for content,content_type,origin in visuals:
                     if check_before_ai: check_before_ai()
                     text,_,_=observe_once(profile,observation_item,ref,content,content_type,origin,generate,check_before_ai=check_before_ai)

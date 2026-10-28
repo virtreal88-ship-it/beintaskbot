@@ -177,7 +177,7 @@ def test_mcp_current_case_media_tools_use_fixed_grant_and_exact_start_confirmati
     current={'id':campaign_id,'version':7,'status':'awaiting_budget','channel_ids':[channel],
         'max_calls':8,'max_tokens':80000,'media_policy':{'allow_external_media':True,'allow_paid_asr':False,
             'max_main_calls':2,'max_asr_calls':0,'max_vision_calls':4},
-        'max_cost_microusd':10_000_000,'video_model':'gpt-4.1',
+        'max_cost_microusd':10_000_000,'video_model':'gpt-4.1','photo_model':'gpt-4.1-2025-04-14',
         'progress':{'mode':'case_media_batch','snapshot_hash':snapshot}}
     monkeypatch.setattr(campaigns,'get',lambda p,cid:(seen.append(('read',p,str(cid))) or {'campaign':current}))
     monkeypatch.setattr(campaigns,'approve',lambda p,cid,data:(seen.append(('start',p,str(cid),data.copy())) or {'campaign':{'id':cid,'status':'running'}}))
@@ -200,6 +200,7 @@ def test_mcp_current_case_media_tools_use_fixed_grant_and_exact_start_confirmati
     assert started['campaign']['status']=='running'
     assert seen[-1][3]['max_cost_microusd']==10_000_000
     assert seen[-1][3]['all_cases_snapshot_hash']==snapshot
+    assert seen[-1][3]['photo_model']=='gpt-4.1-2025-04-14'
 
 
 def test_mcp_dialog_assignment_uses_pinned_channel_and_existing_guarded_service(db,monkeypatch):

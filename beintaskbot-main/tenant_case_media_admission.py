@@ -203,8 +203,12 @@ def plan(cur, profile, candidate_id, *, allow_unknown_retry=False):
             media[-1]['code']='owner_acknowledged_new_attempt'
             media[-1]['retry_authorized']=True
             media[-1]['retry_source_basis']='stable_media_identity' if media[-1]['source_version_verified'] else 'current_connect_message'
+    # Keep the dispatch fence stable while this approved campaign records its
+    # own completed attempt for one attachment. Retry eligibility is dynamic
+    # evidence state (and remains bound into the owner-approved snapshot), not
+    # source identity. The route still independently checks retry authority.
     plan_hash=store.digest([(x['id'],x['kind'],x['source_hash'],x['at'],x['source_version_verified'],
-      x['current_source_addressable'],x['conversation_scope_hash'],x.get('retry_authorized',False),x.get('retry_source_basis')) for x in media]
+      x['current_source_addressable'],x['conversation_scope_hash']) for x in media]
                               + [start,end,case['version']])
     for item in media:item.pop('conversation_scope_hash',None)
     return {'status': 'pending_consent', 'case_id': key, 'case_version': case['version'],
@@ -291,17 +295,22 @@ def plan_existing_cases(cur, profile, *, limit=500, acknowledge_prior_unknown=Fa
       'acknowledge_prior_unknown':bool(acknowledge_prior_unknown),'snapshot_hash':store.digest([rows,bool(acknowledge_prior_unknown)])}
 
 
-def existing_routes(snapshot, agent_id, video_model=None):
+def existing_routes(snapshot, agent_id, video_model=None, photo_model=None):
     """Yield only incomplete, exact-boundary media in the fixed case snapshot."""
     for case in snapshot.get('cases',[]):
         if case.get('status')!='pending_consent':
             continue
         for route in routes(case,agent_id,allow_legacy_unknown=False):
-            if any(item['id']==route['message_ids'][0] and item['kind']=='video'
-                   for item in case.get('media',[])):
+            media=next((item for item in case.get('media',[]) if item['id']==route['message_ids'][0]),None)
+            if not media:
+                continue
+            route['campaign_media_kind']=media['kind']
+            if media['kind']=='video':
                 if not video_model:
                     continue
                 route['video_model']=video_model
+            if photo_model and media['kind']=='image':
+                route['campaign_photo_model']=photo_model
             yield route
 
 

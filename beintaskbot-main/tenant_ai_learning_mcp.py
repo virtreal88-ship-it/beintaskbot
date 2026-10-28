@@ -365,7 +365,7 @@ def _tools(cur,cfg,name,args):
                 'max_calls':current['max_calls'],'max_tokens':current['max_tokens'],
                 'confirm_external_processing':True,'media_policy':current['media_policy'],
                 'all_cases_snapshot_hash':args['snapshot_hash'],'max_cost_microusd':10_000_000,
-                'video_model':current.get('video_model'),
+                'video_model':current.get('video_model'),'photo_model':current.get('photo_model'),
                 'acknowledge_prior_unknown':args['acknowledge_prior_unknown']})
         if name=='support_media_campaign_control':
             if set(args)!={'campaign_id','expected_version','action'} or args.get('action') not in {'pause','resume','stop'}:

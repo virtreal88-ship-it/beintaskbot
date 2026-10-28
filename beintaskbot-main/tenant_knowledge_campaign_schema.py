@@ -46,6 +46,7 @@ def create_schema(conn):
         # here and continue to use the tenant-wide ledger policy.
         cur.execute('ALTER TABLE saas_knowledge_campaigns ADD COLUMN IF NOT EXISTS max_cost_microusd BIGINT')
         cur.execute('ALTER TABLE saas_knowledge_campaigns ADD COLUMN IF NOT EXISTS video_model TEXT')
+        cur.execute('ALTER TABLE saas_knowledge_campaigns ADD COLUMN IF NOT EXISTS photo_model TEXT')
         cur.execute("ALTER TABLE saas_knowledge_campaign_fragments ADD COLUMN IF NOT EXISTS reservation JSONB NOT NULL DEFAULT '{}'")
         cur.execute("""CREATE TABLE IF NOT EXISTS saas_ai_media_grants(
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id), id UUID NOT NULL UNIQUE,

@@ -10,7 +10,7 @@ from tenant_knowledge_candidates_service import analyze
 
 
 def check_fence(cur, tenant, extraction_id):
-    cur.execute('''SELECT f.status,c.status AS campaign_status,f.lease_until>now() AS live,c.sources,c.progress,c.created_by,c.approved_by,f.route,e.source_refs
+    cur.execute('''SELECT f.status,c.status AS campaign_status,f.lease_until>now() AS live,c.sources,c.progress,c.created_by,c.approved_by,c.photo_model,f.route,e.source_refs
       FROM saas_knowledge_campaign_fragments f JOIN saas_knowledge_campaigns c
       ON c.tenant_id=f.tenant_id AND c.id=f.campaign_id LEFT JOIN saas_knowledge_extractions e ON e.tenant_id=f.tenant_id AND e.id=f.id WHERE f.tenant_id=%s::uuid AND f.id=%s::uuid''',(tenant,extraction_id))
     row=cur.fetchone()
@@ -52,6 +52,9 @@ def check_fence(cur, tenant, extraction_id):
                 or row['route'].get('owner_retry_basis') is not None
                    and row['route'].get('owner_retry_basis')!=retry_media.get('retry_source_basis')):
                 raise TenantLinearError('Current case snapshot or media source changed.',409)
+            expected_photo=row.get('photo_model') if retry_media and retry_media.get('kind')=='image' else None
+            if row.get('route',{}).get('campaign_photo_model')!=expected_photo:
+                raise TenantLinearError('Current case photo model changed.',409)
         # Durable progress heartbeat without unbounded lease extension. The 360s
         # lease remains strictly above the 240s extraction hard deadline.
         cur.execute("UPDATE saas_knowledge_campaign_fragments SET updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND status='running' AND lease_until>now()",(tenant,extraction_id))

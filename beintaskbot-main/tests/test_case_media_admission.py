@@ -454,6 +454,32 @@ def test_all_cases_reuses_exact_completed_media_and_routes_only_remaining(ready)
     assert [route['message_ids'] for route in admission.existing_routes(snapshot,AGENT)]==[[ids[1]]]
 
 
+def test_all_cases_rejects_video_model_without_configured_tariff_before_grant(ready,monkeypatch):
+    db,card,media=_case(ready,(3,))
+    db.execute("UPDATE saas_crm_messages SET message_type='video' WHERE id=%s::uuid",(media[0],));db.commit()
+    _mark_pending_consent(db,card['id'],media)
+    monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_DEFAULT_MODEL','test-model')
+    monkeypatch.setenv('AI_AGENTS_PLATFORM_MODELS','[\"test-model\"]')
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD','{}')
+    data={'request_id':str(uuid.uuid4()),'all_existing_cases':True,'channel_ids':[],
+      'analysis_agent_id':AGENT,'max_calls':10000,'max_tokens':160000000,'max_cost_microusd':10000000,
+      'video_model':'gpt-4.1','allow_external_media':True,'allow_paid_asr':False,
+      'max_main_calls':10000,'max_asr_calls':0,'max_vision_calls':10000}
+    with pytest.raises(TenantLinearError,match='video_model_tariff_required'):
+        campaigns.prepare(PROFILE,data)
+    assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_media_grants WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
+
+
+def test_campaign_photo_model_migration_adds_column_to_existing_schema(ready):
+    """Apply the additive migration to an isolated pre-change table shape."""
+    db,_,_=_case(ready,(3,))
+    db.execute('ALTER TABLE saas_knowledge_campaigns DROP COLUMN photo_model');db.commit()
+    campaigns.create_schema(db);db.commit()
+    assert db.execute("SELECT column_name FROM information_schema.columns WHERE table_name='saas_knowledge_campaigns' AND column_name='photo_model'")
+
+
 def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished_photo(ready,monkeypatch):
     """End-to-end owner snapshot→$10 approval→worker, with providers mocked."""
     import tenant_media_evidence as evidence
@@ -493,13 +519,23 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
     monkeypatch.setattr(spend,'_connect',lambda:db)
     monkeypatch.setenv('AI_AGENTS_PLATFORM_DEFAULT_MODEL','test-model')
     monkeypatch.setenv('AI_AGENTS_PLATFORM_MODELS','["test-model"]')
-    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'test-model':{'input':10,'output':10}}))
+    photo_model='gpt-4.1-2025-04-14'
+    company_metadata={'enabled':True,'consent':True,'model':'test-model','photo_model':photo_model,
+      'models':['test-model',photo_model],'daily_limit':50}
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets,metadata) VALUES(%s::uuid,'chat_ai','connected',%s,%s::jsonb) ON CONFLICT(tenant_id,provider) DO UPDATE SET secrets=EXCLUDED.secrets,metadata=EXCLUDED.metadata,status='connected'",
+      (A,b'synthetic-company-key',json.dumps(company_metadata)))
+    db.execute("UPDATE saas_ai_agents SET model='test-model' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));db.commit()
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({
+      'test-model':{'input':10,'output':10},photo_model:{'input':2000000,'output':8000000}}))
     monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'test-model':{'vision_low':2500}}))
     monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD',json.dumps({A:10000000}))
     import tenant_ai_agent_key_policy as key_policy
     monkeypatch.setattr(key_policy,'platform_model',lambda:'test-model')
     monkeypatch.setattr(key_policy,'choose_api_credential',lambda *args:('synthetic-key','platform'))
     monkeypatch.setattr(service,'platform_model_allowed',lambda _model:True)
+    class SyntheticCipher:
+        def decrypt(self,_value):return json.dumps({'tenant_id':A,'provider':'chat_ai','api_key':'company-photo-key'}).encode()
+    monkeypatch.setattr(service,'_fernet',lambda:SyntheticCipher())
 
     spend.ensure_schema(db)
     with db.cursor() as cur:
@@ -515,8 +551,10 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
     assert retry_media['source_version_verified'] is False
     assert retry_media['current_source_addressable'] is True and retry_media['retry_authorized'] is True
     assert retry_media['retry_source_basis']=='current_connect_message'
-    assert len({route['message_ids'][0] for route in admission.existing_routes(acknowledged,AGENT)})==3
-    retry_route=next(route for route in admission.existing_routes(acknowledged,AGENT) if route['message_ids']==[ids[0]])
+    planned_routes=list(admission.existing_routes(acknowledged,AGENT,'gpt-4.1',photo_model))
+    assert len({route['message_ids'][0] for route in planned_routes})==3
+    assert next(route for route in planned_routes if route['message_ids']==[ids[0]])['campaign_photo_model']==photo_model
+    retry_route=next(route for route in planned_routes if route['message_ids']==[ids[0]])
     assert retry_route['owner_retry_unknown'] is True
     assert retry_route['owner_retry_basis']=='current_connect_message'
 
@@ -526,9 +564,22 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
     def collect(_profile,item,check_before_ai=None):
         collect_entries.append(item)
         route=item['route'];message_id=item['refs'][0]['id']
+        media_kind=item['refs'][0]['media_kind']
+        assert media_kind=='image' and route.get('campaign_photo_model')==photo_model
+        assert item['model']=='test-model' and item['photo_api_key']=='company-photo-key'
+        spend_row=db.execute("SELECT model,kind,reserved_microusd,campaign_id FROM saas_ai_spend_reservations WHERE call_key=%s",
+          ('extraction:'+str(item['id'])+':vision',))[0]
+        assert spend_row['model']==photo_model and spend_row['kind']=='knowledge_photo_observation'
+        assert spend_row['reserved_microusd']==8896
+        calls=1
+        assert spend_row['campaign_id']==campaign_id
+        item['vision_attempts']=calls
+        usage={'input_tokens':100,'output_tokens':20,'total_tokens':120}
+        item['vision_usage']=[usage for _ in range(calls)]
         expected=next(m['source_version'] for m in acknowledged['cases'][0]['media'] if m['id']==message_id)
         dispatched.append((message_id,route.get('owner_retry_unknown') is True,item['refs'][0].get('media_version'),expected))
-        return [],[]
+        return [],[{'id':message_id,'kind':media_kind,'status':'partial' if media_kind=='video' else 'processed',
+          'code':'vision_observation','observation':'Synthetic observation'}]
     monkeypatch.setattr(media_service,'collect',collect)
     campaign_id=str(uuid.uuid4())
     data={'request_id':campaign_id,'all_existing_cases':True,'channel_ids':[],
@@ -537,24 +588,29 @@ def test_printer_batch_acknowledges_one_current_source_retry_and_reuses_finished
       'max_main_calls':10000,'max_asr_calls':0,'max_vision_calls':10000}
     assert campaigns.prepare(PROFILE,data)==campaign_id
     prepared=db.execute('SELECT * FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign_id,))[0]
+    assert prepared['photo_model']==photo_model and prepared['video_model'] is None
     assert prepared['progress']['retry_unknown_count']==1
     approved=campaigns.approve(PROFILE,campaign_id,{'expected_version':prepared['version'],'channel_ids':prepared['sources'],
       'max_calls':prepared['max_calls'],'max_tokens':prepared['max_tokens'],'confirm_external_processing':True,
       'media_policy':prepared['media_policy'],'all_cases_snapshot_hash':prepared['progress']['snapshot_hash'],
-      'max_cost_microusd':10000000,'video_model':None,'acknowledge_prior_unknown':True})
+      'max_cost_microusd':10000000,'video_model':None,'photo_model':photo_model,'acknowledge_prior_unknown':True})
     assert approved['campaign']['status']=='running'
     assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid',(campaign_id,))[0]['n']==3
     for _ in range(3):assert campaign_worker.tick() is True
-    assert {message_id for message_id,*_ in dispatched}==set(ids[:3]), db.execute('SELECT status,error_code FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid',(campaign_id,))
+    assert {message_id for message_id,*_ in dispatched}==set(ids[:3])
     assert all(actual==expected for _,_,actual,expected in dispatched)
     assert sum(retry for _,retry,_,_ in dispatched)==1 and any(message_id==ids[0] and retry for message_id,retry,_,_ in dispatched)
     assert generation.call_count==3
+    configured=db.execute("SELECT metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'",(A,))[0]['metadata']
+    assert configured['model']=='test-model' and configured['photo_model']==photo_model
+    assert db.execute('SELECT model FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))[0]['model']=='test-model'
     hold_after=db.execute("SELECT id,reserved_microusd,state FROM saas_ai_spend_reservations WHERE call_key='legacy-printer-unknown'")[0]
     assert hold_after==old_hold and hold_after['state']=='unknown'
     unchanged_history=db.execute('SELECT source_refs,media_results FROM saas_knowledge_extractions WHERE id=%s::uuid',(extraction_id,))[0]
     assert unchanged_history==original_history,'the old extraction refs and claims remain immutable during a current-message retry'
     grant_reservations=db.execute('SELECT kind,state FROM saas_ai_spend_reservations WHERE grant_id=%s::uuid',(campaign_id,))
-    assert len(grant_reservations)==6 and {r['kind'] for r in grant_reservations}=={'live_case_extraction','knowledge_vision'}
+    assert len(grant_reservations)==6 and {r['kind'] for r in grant_reservations}=={
+      'live_case_extraction','knowledge_photo_observation'}
     with pytest.raises(TenantLinearError,match='cannot be reset or topped up'):
         campaigns.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4())})
 
