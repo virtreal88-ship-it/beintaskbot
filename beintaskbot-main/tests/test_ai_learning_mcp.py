@@ -157,12 +157,57 @@ def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, 
                     'support_case_detail','support_case_confirm_publish','support_case_edit_publish',
                     'support_case_edit_boundaries','support_case_reject_delete','support_case_delete_status','support_agents_list',
                     'support_agent_archive_transfer','support_agent_archive_status','support_agent_delete_preview','support_agent_permanent_delete'} <= set(definitions)
-            assert {'support_media_snapshot_preview','support_media_campaign_prepare','support_media_campaign_read',
+            assert {'support_media_snapshot_preview','support_media_campaign_prepare','support_media_campaign_read','support_media_campaign_list',
                     'support_media_campaign_start','support_media_campaign_control'} <= set(definitions)
+            assert definitions['support_media_campaign_list']['securitySchemes']==[{'type':'oauth2','scopes':[mcp.SUPPORT_MEDIA_SCOPE]}]
+            assert definitions['support_media_campaign_list']['annotations']['readOnlyHint'] is True
             assert definitions['support_dialog_agent_assign']['securitySchemes']==[{'type':'oauth2','scopes':[mcp.DIALOG_ASSIGN_SCOPE]}]
             assert definitions['support_case_reject_delete']['annotations']['destructiveHint'] is True
             assert definitions['support_agent_archive_transfer']['annotations']['destructiveHint'] is True
             assert definitions['support_agent_permanent_delete']['annotations']['destructiveHint'] is True
+    asyncio.run(check())
+
+
+def test_campaign_inventory_is_tenant_scoped_paginated_and_requires_media_scope(db,monkeypatch):
+    _setup(monkeypatch,db)
+    from test_tenant_support_inbox import B
+    ids=[str(uuid.uuid4()) for _ in range(4)]; other_agent=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by) VALUES(%s::uuid,%s::uuid,'Night',11),(%s::uuid,%s::uuid,'Other',22)",(A,AGENT,B,other_agent))
+    for i,key in enumerate(ids):
+        tenant,actor,agent=(A,11,AGENT) if i<3 else (B,22,other_agent)
+        db.execute('''INSERT INTO saas_knowledge_campaigns(tenant_id,id,created_by,sources,analysis_agent_id,status,max_calls,max_tokens,max_cost_microusd,created_at)
+          VALUES(%s::uuid,%s::uuid,%s,'[]'::jsonb,%s::uuid,'stopped',10,24000,10000000,'2026-01-01'::timestamptz + %s * interval '1 second')''',(tenant,key,actor,agent,i))
+    db.commit()
+    cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.TOOL_SCOPE,mcp.SUPPORT_MEDIA_SCOPE]}
+    with db.cursor() as cur:
+        with pytest.raises(Exception): mcp._tools(cur,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'support_media_campaign_list',{})
+        first=mcp._tools(cur,cfg,'support_media_campaign_list',{'limit':2})
+        assert [item['id'] for item in first['campaigns']]==[ids[2],ids[1]]
+        assert first['campaigns'][0]['agent_name']=='Night' and first['campaigns'][0]['max_cost_microusd']==10000000
+        second=mcp._tools(cur,cfg,'support_media_campaign_list',{'before':first['next_before'],'limit':2})
+        assert [item['id'] for item in second['campaigns']]==[ids[0]] and second['next_before'] is None
+        with pytest.raises(Exception): mcp._tools(cur,cfg,'support_media_campaign_list',{'before':ids[3]})
+        with pytest.raises(Exception): mcp._tools(cur,cfg,'support_media_campaign_list',{'limit':True})
+        with pytest.raises(Exception): mcp._tools(cur,{**cfg,'actor_id':22},'support_media_campaign_list',{})
+
+
+def test_campaign_inventory_http_scope_and_audit(db,monkeypatch):
+    token=_setup(monkeypatch,db,scope=mcp.TOOL_SCOPE+' '+mcp.SUPPORT_MEDIA_SCOPE)
+    other='inventory-read-only-token'
+    db.execute('''INSERT INTO saas_ai_learning_mcp_tokens(id,tenant_id,token_hash,agent_id,channel_id,client_id,scope,expires_at,created_by)
+      VALUES(%s::uuid,%s::uuid,%s,%s::uuid,%s::uuid,'https://chatgpt.com/oauth/client.json',%s,now()+interval '1 hour',11)''',
+      (str(uuid.uuid4()),A,hashlib.sha256(other.encode()).hexdigest(),AGENT,CA,mcp.TOOL_SCOPE));db.commit()
+    async def check():
+        app=web.Application();app.router.add_post('/mcp',mcp.mcp)
+        async with TestClient(TestServer(app)) as client:
+            body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'support_media_campaign_list','arguments':{}}}
+            denied=await client.post('/mcp',headers={'Authorization':'Bearer '+other},json=body)
+            assert denied.status==403
+            allowed=await client.post('/mcp',headers={'Authorization':'Bearer '+token},json=body)
+            assert allowed.status==200
+            payload=await allowed.json()
+            assert json.loads(payload['result']['content'][0]['text'])=={'campaigns':[],'next_before':None}
+        assert db.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE action='mcp_support_media_campaign_list'")[0]['n']==1
     asyncio.run(check())
 
 

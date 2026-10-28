@@ -333,6 +333,36 @@ def _tools(cur,cfg,name,args):
                         {'case_count':int(result.get('case_count') or 0),'eligible_count':int(result.get('eligible_count') or 0),
                          'retry_unknown_count':int(result.get('retry_unknown_count') or 0)})
             return result
+        if name=='support_media_campaign_list':
+            if set(args)-{'limit','before'} or type(args.get('limit',20)) is not int or not 1<=args.get('limit',20)<=100:
+                raise TenantLinearError('Invalid campaign list request.',400)
+            before=identifier(args['before']) if 'before' in args else None
+            tenant=cfg['AI_LEARNING_MCP_TENANT_ID']
+            campaigns.store.authorize(cur,profile)
+            if before:
+                cur.execute('SELECT created_at FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,before))
+                anchor=cur.fetchone()
+                if not anchor: raise TenantLinearError('Invalid campaign list cursor.',400)
+                timestamp=anchor['created_at']
+            else: timestamp=None
+            limit=args.get('limit',20)
+            cur.execute('''SELECT c.id,c.status,c.version,c.analysis_agent_id,a.name AS agent_name,c.sources,
+                c.max_cost_microusd,c.max_calls,c.max_tokens,c.reserved_calls,c.reserved_tokens,
+                c.approved_at,c.created_at,c.updated_at,g.status AS grant_status,g.approved_at AS grant_approved_at
+              FROM saas_knowledge_campaigns c
+              LEFT JOIN saas_ai_agents a ON a.tenant_id=c.tenant_id AND a.id=c.analysis_agent_id
+              LEFT JOIN saas_ai_media_grants g ON g.tenant_id=c.tenant_id AND g.campaign_id=c.id
+              WHERE c.tenant_id=%s::uuid AND (%s::timestamptz IS NULL OR (c.created_at,c.id)<(%s::timestamptz,%s::uuid))
+              ORDER BY c.created_at DESC,c.id DESC LIMIT %s''',(tenant,timestamp,timestamp,before,limit+1))
+            rows=cur.fetchall();more=len(rows)>limit;items=[]
+            for row in rows[:limit]:
+                item=dict(row)
+                for key in ('id','analysis_agent_id'): item[key]=str(item[key])
+                for key in ('approved_at','grant_approved_at','created_at','updated_at'):
+                    item[key]=item[key].isoformat() if item[key] else None
+                items.append(item)
+            media_audit('mcp_support_media_campaign_list','knowledge_campaign','',{'count':len(items)})
+            return {'campaigns':items,'next_before':items[-1]['id'] if more else None}
         if name=='support_media_campaign_prepare':
             required={'request_id','channel_ids','analysis_agent_id','max_calls','max_tokens','media_policy','video_model'}
             if set(args) not in (required,required|{'acknowledge_prior_unknown'}) or not isinstance(args.get('media_policy'),dict):
@@ -792,6 +822,8 @@ def _support_media_definitions():
     security=[{'type':'oauth2','scopes':[SUPPORT_MEDIA_SCOPE]}]
     campaign_id={'campaign_id':{'type':'string','format':'uuid'}}
     return [
+      {'name':'support_media_campaign_list','description':'List existing company campaigns and minimal approval, cap and reservation facts; use a returned ID with support_media_campaign_read. Does not start or prepare analysis.',
+       'inputSchema':{'type':'object','properties':{'limit':{'type':'integer','minimum':1,'maximum':100},'before':{'type':'string','format':'uuid'}},'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_media_snapshot_preview','description':'Read a bounded case snapshot. Set acknowledge_prior_unknown=true to include one new attempt against each eligible exact current source whose earlier attempt is unknown. This does not clear old holds, download media, prepare a grant or call a provider.',
        'inputSchema':{'type':'object','properties':{'acknowledge_prior_unknown':{'type':'boolean'}},'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_media_campaign_prepare','description':'Prepare one current-existing-cases snapshot with a fixed $10 prospective cap. Set acknowledge_prior_unknown=true to include one new current-source attempt for eligible old unknowns; old holds remain and a second unknown result is not retried. Preparation never starts provider calls.',
@@ -898,7 +930,7 @@ async def mcp(request):
                 if tool_name.startswith(direct_reconcile.PREFIX):
                     commit_attempted=True
                     conn.commit()
-                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('administrator_single_message_extraction_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge' or data.get('params',{}).get('name','') in {'support_dialog_agent_options','support_dialog_agent_bulk_preview','support_cases_list','support_case_detail','support_case_extraction_status','support_case_delete_status','support_agents_list','support_agent_archive_status','support_agent_delete_preview','support_media_snapshot_preview','support_media_campaign_read'}:
+                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('administrator_single_message_extraction_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge' or data.get('params',{}).get('name','') in {'support_dialog_agent_options','support_dialog_agent_bulk_preview','support_cases_list','support_case_detail','support_case_extraction_status','support_case_delete_status','support_agents_list','support_agent_archive_status','support_agent_delete_preview','support_media_snapshot_preview','support_media_campaign_read','support_media_campaign_list'}:
                     commit_attempted=True
                     conn.commit()
             return response

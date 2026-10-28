@@ -93,6 +93,19 @@ and transcript access must reuse verified application authorization before being
 exposed. These reads do not enqueue analysis, inference, simulation or extraction.
 ## Draft proposal scope and reauthorization
 
+### Existing media campaign inventory
+
+`support_media_campaign_list` requires the existing `ai_learning.support_media`
+scope. It returns tenant-scoped campaign IDs, status, agent and channels, cap,
+call/token reservations, approval and timestamps; it does not return case or
+message content. Use `limit` (1–100, default 20) and pass `next_before` as
+`before` for the next page. Read the exact selected campaign with the existing
+`support_media_campaign_read`; a list entry alone does not prove that a prior
+start succeeded or that unknown provider charges have settled. Listing only
+reads campaign state and writes the usual audit event; it does not prepare,
+approve, start, or retry analysis. The scope also permits guarded write tools,
+so adding it to a connection requires the owner's explicit OAuth consent.
+
 `ai_learning.read`, `ai_learning.drafts`, and `ai_learning.knowledge_dedup`
 are separate OAuth scopes.
 `ai_learning.read` is sufficient for all read tools. `ai_learning.drafts` is
