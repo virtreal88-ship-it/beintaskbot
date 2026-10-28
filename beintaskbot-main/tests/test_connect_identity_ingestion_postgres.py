@@ -502,6 +502,9 @@ def test_owner_redirect_never_becomes_provider_phone_or_employee_proof(ingest,ch
     assert stored['raw']['_crm_provider_conversation_id']==LID
     assert stored['raw']['_crm_owner_assertion_id']==result['assertion_id']
     assert 'verified_employee_id' not in stored['raw']
+    deal=db.execute('SELECT phone FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s',
+                    (A,routes[JID]['lead_id']))[0]
+    assert deal['phone']==JID.split('@')[0]  # Missing LID phone cannot erase the canonical contact's phone.
     assert not db.execute('''SELECT 1 FROM saas_crm_native_contact_conversations WHERE tenant_id=%s::uuid
       AND channel_id=%s::uuid AND conversation_id=%s''',(A,CA,LID))
     with db.cursor() as cur:
@@ -539,6 +542,22 @@ def test_owner_merge_genuine_pair_then_rollback_keeps_provider_evidence_and_late
     assert db.execute('SELECT * FROM saas_connect_direct_identities ORDER BY identity_key')==aliases
     assert db.execute('SELECT * FROM saas_crm_messages ORDER BY id')==messages
     with db.cursor() as cur:assert collect(cur,A,CA)['phones_by_identity'][LID]=={JID.split('@')[0]}
+    db.commit()
+
+
+def test_retained_source_history_prevents_repeated_first_inquiry(ingest,channels,monkeypatch):
+    db=channels['db'];routes,result,originals=owner_merge_fixture(ingest,channels)
+    # Explicit local synthetic resume. A merge itself must never resume AI.
+    db.execute("UPDATE saas_crm_messages SET direction='outgoing' WHERE tenant_id=%s::uuid AND kommo_lead_id=%s",(A,routes[JID]['lead_id']))
+    db.execute('''UPDATE saas_connect_conversations SET manual_hold=FALSE,ai_enabled=TRUE
+      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s''',(A,CA,JID))
+    db.commit();monkeypatch.setenv('AI_AGENTS_ENABLED','true')
+    later=event(LID)
+    assert ingest(later)
+    saved=db.execute("SELECT payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND payload->>'message_id'=%s",(A,later['data']['id']))
+    assert len(saved)==1
+    assert saved[0]['payload']['first_inquiry'] is False
+    assert not channels['send'].called and not channels['generate'].called
     db.commit()
 
 

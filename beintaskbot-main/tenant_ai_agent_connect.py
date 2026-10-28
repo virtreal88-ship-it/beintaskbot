@@ -345,9 +345,11 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             # CRM copy is visible in this transaction and is committed
             # together with the job; no browser-provided flag is trusted.
             cur.execute('''SELECT count(*) AS inbound_count FROM saas_crm_messages
-              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
+              WHERE tenant_id=%s::uuid AND (kommo_lead_id=%s OR kommo_lead_id IN (
+                SELECT l.source_lead FROM saas_connect_dialog_links l WHERE l.tenant_id=%s::uuid
+                  AND l.channel_id=%s::uuid AND l.canonical_lead=%s AND l.active)) AND channel=%s
                 AND direction='incoming' AND external_id<>'' ''',
-                        (tenant, int(lead_id), 'connect:' + str(channel_id)))
+                        (tenant, int(lead_id), tenant, channel_id, int(lead_id), 'connect:' + str(channel_id)))
             inbound_count = int((cur.fetchone() or {}).get('inbound_count') or 0)
             first_inquiry = inbound_count == 1
             # Human Mode and Pause intentionally survive subsequent customer
