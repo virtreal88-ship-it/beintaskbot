@@ -547,7 +547,7 @@ def source_review_preflight(profile,candidate_id,message_id,expected_version):
               'case_reviewable':reviewable,'status':'eligible' if reason=='membership_and_version_match' else 'blocked','reason':reason}
 
 
-def conversation_link(profile,candidate_id,message_id=None,review_run_id=None):
+def conversation_link(profile,candidate_id,message_id=None,review_run_id=None,expected_version=None):
     """Resolve one case evidence message to an authorized dialog route.
 
     The browser never gets to turn a case ID into an arbitrary conversation.
@@ -581,13 +581,15 @@ def conversation_link(profile,candidate_id,message_id=None,review_run_id=None):
                 if not anchor:
                     raise TenantLinearError('Case has no available evidence message.',404)
                 anchor=identifier(anchor)
-            if anchor not in source_ids:
+            if anchor not in source_ids and expected_version is None:
                 raise TenantLinearError('The requested message is not evidence for this case.',403)
             run=extraction_row(cur,tenant,row['extraction_id']); saved=run.get('route') or {}
             channel=identifier(saved.get('channel_id')); conversation=str(saved.get('conversation_id') or '')
             if not conversation:
                 raise TenantLinearError('Case conversation route is unavailable.',404)
             chosen=assert_route(cur,tenant,policy,'connect',conversation,channel)
+            if expected_version is not None:
+                _bounded_media_link(cur,tenant,row,saved,chosen,anchor,expected_version)
             cur.execute('''SELECT id::text AS id FROM saas_crm_messages
               WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s
                 AND channel='connect:'||%s::text FOR SHARE''',(tenant,anchor,chosen['lead_id'],channel))
@@ -626,6 +628,26 @@ def _boundary_context(cur,tenant,run,chosen,start_id,end_id,source_ids):
     count=int((cur.fetchone() or {}).get('message_count') or 0)
     inside=[message_id for message_id in source_ids if message_id in rows and start<=(rows[message_id]['at'],message_id)<=end]
     return rows,count,inside
+
+
+def _bounded_media_link(cur,tenant,case,route,chosen,anchor,expected_version):
+    """Authorize a specific attachment inside the current verified case interval."""
+    if type(expected_version) is not int or case['version']!=expected_version:
+        raise TenantLinearError('Case version changed; refresh the case.',409)
+    content=case.get('content') or {};start=content.get('start_message_id');end=content.get('end_message_id')
+    sources=content.get('source_message_ids') or []
+    if not start or not end or not sources or start not in sources or end not in sources:
+        raise TenantLinearError('Case boundaries are unavailable.',409)
+    anchors,count,inside=_boundary_context(cur,tenant,route,chosen,start,end,[*sources,anchor])
+    if count>MAX_MESSAGES or len(set(inside))!=len(set([*sources,anchor])):
+        raise TenantLinearError('The attachment is outside verified case boundaries.',403)
+    cur.execute('''SELECT message_type,raw FROM saas_crm_messages WHERE tenant_id=%s::uuid
+      AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid FOR SHARE''',
+      (tenant,int(chosen['lead_id']),'connect:'+str(route['channel_id']),anchor))
+    message=cur.fetchone();raw=(message or {}).get('raw') or {}
+    if (not message or message.get('message_type') not in {'image','video','audio','voice','document'}
+        or not isinstance(raw,dict) or (raw.get('conversationId') and raw['conversationId']!=route.get('conversation_id'))):
+        raise TenantLinearError('The attachment is unavailable in this case conversation.',403)
 
 
 def boundary_summary(cur,tenant,run,chosen,value):
