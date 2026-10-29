@@ -5,7 +5,7 @@ Applying an exact preview leaves the campaign paused and reserves no funds.
 from tenant_linear_policy import TenantLinearError, identifier
 import tenant_knowledge_candidates_store as cases
 from tenant_case_source_inventory import inspect
-from tenant_case_media_admission import _historical_attempt_reconciliation
+from tenant_case_media_admission import _historical_attempt_reconciliation, _explicit_no_media_call
 
 
 def _verified_byte_history(cur,tenant,message_id,source_hash,*,exclude_extraction_id=None,allow_incomplete=False):
@@ -15,9 +15,9 @@ def _verified_byte_history(cur,tenant,message_id,source_hash,*,exclude_extractio
     incomplete=history.get('reason') in {'attempt_history_incomplete','historical_source_version_unverified'}
     if history.get('state')!='known_not_attempted' and not (allow_incomplete and incomplete):return history
     if incomplete:
-        # Permit only old completed extractions without ANY media result for
-        # this source and without a media reservation. Missing records are
-        # uncertainty, not a claim that the provider was never called.
+        # Accept missing results or an explicit pre-dispatch consent refusal.
+        # Neither establishes equality with the current bytes; all other
+        # saved outcomes and media reservations remain blocked.
         cur.execute("""SELECT id::text AS id,status,source_refs,media_results FROM saas_knowledge_extractions
           WHERE tenant_id=%s::uuid AND (source_refs @> %s::jsonb OR media_results @> %s::jsonb)
           AND (%s::uuid IS NULL OR id<>%s::uuid) FOR SHARE""",
@@ -30,7 +30,10 @@ def _verified_byte_history(cur,tenant,message_id,source_hash,*,exclude_extractio
             if any(not isinstance(r,dict) or not r.get('id') for r in all_refs+all_results):return history
             refs=[r for r in all_refs if str(r['id'])==str(message_id)]
             results=[r for r in all_results if str(r['id'])==str(message_id)]
-            if row.get('status')!='completed' or len(refs)!=1 or results:return history
+            if row.get('status')!='completed' or len(refs)!=1:return history
+            if results and (len(results)!=1 or refs[0].get('media_kind')!='image'
+                or results[0].get('kind')!='image' or results[0].get('code') not in {'vision_not_approved','external_media_permission_required'}
+                or not _explicit_no_media_call(refs[0],results[0])):return history
             cur.execute("SELECT to_regclass('public.saas_ai_spend_reservations') AS relation")
             if not cur.fetchone().get('relation'):return history
             key='extraction:'+str(row['id'])
