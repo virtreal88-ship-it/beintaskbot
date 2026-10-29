@@ -101,6 +101,12 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
     # Owner's existing case-bound read fetches the current asset through the
     # protected loader even though the old extraction lacks a media version.
     # It never asserts old-byte equality or starts an AI call.
+    db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',(json.dumps({'conversationId':group,'fileLength':12}),message));db.commit()
+    with db.cursor() as cur:
+        address=inventory.inspect(cur,PROFILE,key,message,version,campaign)
+        assert address['source_version_verified'] is False and address['current_source_addressable'] is True
+        unverified=extension.preview(cur,PROFILE,campaign,1,[{'case_id':key,'message_id':message,'expected_version':version}])
+        assert unverified['sources'][0]['extension_state']=='source_version_unverified'
     import tenant_case_current_media as current_media
     import tenant_chat_attachment_store,tenant_chat_attachment_api,tenant_connect_media,tenant_connect_transport
     from cryptography.fernet import Fernet
@@ -152,6 +158,7 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
         with pytest.raises(TenantLinearError):current_media.verify_owner_source(PROFILE,campaign,request)
         assert db.execute("SELECT state,reserved_microusd FROM saas_ai_spend_reservations WHERE call_key='b'")[0]=={'state':'unknown','reserved_microusd':200}
     db.execute("UPDATE saas_connect_channels SET active=TRUE,status='connected' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid",(A,oldchannel));db.commit()
+    db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',(json.dumps(raw),message));db.commit()
     for altered in ({**legacy,'external_id':'wrong'}, {**legacy,'media_kind':'video'}, {**legacy,'channel_id':CA}):
         db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb WHERE id=%s::uuid',(json.dumps([altered]),case['extraction_id']));db.commit()
         with db.cursor() as cur,pytest.raises(TenantLinearError):inventory.inspect(cur,PROFILE,key,message,version,campaign)
