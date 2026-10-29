@@ -53,7 +53,8 @@ def project(refs,receipts,execution_status,*,include_content=False):
             from tenant_chat_ai_provider import is_safe_failure_code
             failure=(row or {}).get('audio_failure_code')
             if is_safe_failure_code(failure):item['audio_failure_code']=failure
-            item['visual_status']='failed' if state=='error' else 'partial' if (row or {}).get('visuals') or state=='partial' else 'unknown'
+            inline_visuals=(row or {}).get('code')=='vision_supplied' and execution_status=='completed' and bool((row or {}).get('visuals'))
+            item['visual_status']='failed' if state=='error' else 'partial' if visual_available or inline_visuals else 'unknown'
         stage=(row or {}).get('failure_stage')
         if stage in {'source_validation','media_download','media_validation','video_decode','audio_transcription','visual_analysis','visual_input_prepare'}:item['failure_stage']=stage
         from tenant_chat_ai_provider import is_safe_failure_code

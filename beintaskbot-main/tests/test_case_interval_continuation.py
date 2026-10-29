@@ -120,6 +120,7 @@ def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind,au
     assert ('synthetic frame observation' if kind=='video' else 'synthetic image observation' if kind=='image' else 'synthetic transcript') in result['saved_byte_results'][0]['text']
     if kind=='video':
         assert 'synthetic video transcript' in result['saved_byte_results'][0]['text']
+        assert result['saved_byte_results'][0]['visual_status']=='partial'
         assert result['saved_byte_results'][0]['audio_status']==('processed' if audio_state=='confident' else 'uncertain')
         if audio_state=='uncertain':assert 'Непроверенная расшифровка' in result['saved_byte_results'][0]['text']
         if audio_state=='confident':

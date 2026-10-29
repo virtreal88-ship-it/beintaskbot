@@ -77,6 +77,7 @@ def _saved_byte_results(cur,tenant,campaign_id,source,digest):
                 entry={'status':result['status'],'text':'\n'.join(parts)[:4000]}
                 entry['_extraction_id']=str(row.get('extraction_id') or '')
                 if source.get('kind')=='video':
+                    entry['visual_status']='partial' if (result.get('observation') or any(isinstance(x,dict) and x.get('text') for x in result.get('observations') or [])) else 'unknown'
                     audio=result.get('audio_status')
                     entry['audio_status']=audio if audio in {'processed','not_requested','unavailable_or_error','uncertain','no_speech_detected'} else 'unknown'
                     reason=result.get('audio_reason')
@@ -99,6 +100,7 @@ def _saved_byte_results(cur,tenant,campaign_id,source,digest):
                 if source.get('kind')=='video' and meta.get('kind')=='asr' and meta.get('speech_state')!='confident':
                     value='Непроверенная расшифровка (не подтверждённый факт): '+value
                 entry={'status':'partial' if source.get('kind')=='video' else 'processed','text':value}
+                if source.get('kind')=='video':entry['visual_status']='unknown'
                 if source.get('kind')=='video' and meta.get('kind')=='asr':
                     state=meta.get('speech_state');entry['audio_status']='processed' if state=='confident' else state if state in {'uncertain','no_speech_detected'} else 'unknown'
                 key=(entry['status'],entry['text'])
