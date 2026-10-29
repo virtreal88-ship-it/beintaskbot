@@ -114,6 +114,8 @@ def test_reviewed_photo_and_new_audio_endpoint_remain_in_verified_interval(ready
     bounded=store.mutate(PROFILE,case_id,{'expected_version':case['version']+1,'start_message_id':photo,'end_message_id':audio},'boundaries')
     assert bounded['candidate']['version']==case['version']+2
     assert bounded['candidate']['media_coverage']['boundary_status']=='verified'
+    assert bounded['candidate']['source_claims_unverified'] is True
+    assert bounded['candidate']['outcome']['status']=='unconfirmed'
     assert {x['id'] for x in bounded['candidate']['media_processing']} >= {photo,audio}
     campaigns.create_schema(db);spend.ensure_schema(db)
     policy={'allow_external_media':True,'allow_paid_asr':True,'max_main_calls':5,'max_asr_calls':5,'max_vision_calls':5}
