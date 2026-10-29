@@ -66,6 +66,9 @@ requires the existing support-case scope. Video and converted AAC are not
 claimed as byte-matched results by this check.
 `support_media_case_sources_inspect` inspects up to 25 explicit case/source
 pairs in one request; individual failures retain their input positions.
+`support_media_case_extension_preview` compares selected case sources with the
+original grant, identifies unresolved prior outcomes, and reports settled and
+held amounts without authorizing or scheduling any new work.
 
 `administrator_case_conversation_link_read` normally anchors only a case's
 evidence messages. To navigate to a media message within the current verified

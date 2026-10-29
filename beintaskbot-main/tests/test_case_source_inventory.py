@@ -10,6 +10,8 @@ from tenant_linear_policy import TenantLinearError
 import tenant_case_source_inventory as inventory
 import tenant_knowledge_campaigns as campaigns
 import tenant_ai_learning_mcp as mcp
+import tenant_case_media_extension as extension
+import tenant_ai_spend_budget as spending
 from tenant_media_evidence import media_version,source_hash,_body_hash
 
 
@@ -34,13 +36,28 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
       VALUES(%s::uuid,%s::uuid,11,%s::jsonb,%s::uuid,'paused',11,now(),10,100000,%s::jsonb,%s::jsonb)""",
       (A,campaign,json.dumps([CA]),AGENT,json.dumps(policy),json.dumps(snapshot)))
     db.execute("INSERT INTO saas_ai_media_grants(tenant_id,id,campaign_id,created_by,cap_microusd,status,approved_by,approved_at) VALUES(%s::uuid,%s::uuid,%s::uuid,11,10000000,'active',11,now())",(A,campaign,campaign));db.commit()
+    spending.ensure_schema(db)
+    db.execute('UPDATE saas_knowledge_campaigns SET max_cost_microusd=10000000 WHERE id=%s::uuid',(campaign,))
+    for call,state,amount,actual in [('a','settled',100,100),('b','unknown',200,None)]:
+        db.execute("INSERT INTO saas_ai_spend_reservations(tenant_id,id,call_key,model,kind,reserved_microusd,actual_microusd,grant_id,state) VALUES(%s::uuid,%s::uuid,%s,'test','vision',%s,%s,%s::uuid,%s)",(A,str(uuid.uuid4()),call,amount,actual,campaign,state))
+    db.execute("INSERT INTO saas_ai_spend_reservations(tenant_id,id,call_key,model,kind,reserved_microusd,actual_microusd,grant_id,state) VALUES(%s::uuid,%s::uuid,'settled-no-actual','test','vision',50,NULL,%s::uuid,'settled')",(A,str(uuid.uuid4()),campaign))
+    db.execute("INSERT INTO saas_ai_spend_reservations(tenant_id,id,call_key,model,kind,reserved_microusd,state) VALUES(%s::uuid,%s::uuid,'prior-hold','test','vision',10,'unknown')",(A,str(uuid.uuid4())))
+    db.commit()
     with db.cursor() as cur:
         out=inventory.inspect(cur,PROFILE,key,message,version,campaign)
         assert out['channel_id']==oldchannel and out['lead_id']==308
         assert out['grant_scope_match'] is False and out['dispatch_authorized'] is False and out['current_bytes_checked'] is False
+        preview=extension.preview(cur,PROFILE,campaign,1,[{'case_id':key,'message_id':message,'expected_version':version}])
+        assert preview['sources'][0]['extension_state']=='previous_outcome_unknown'
+        assert preview['budget']=={'cap_microusd':10000000,'settled_microusd':150,'held_microusd':200,'available_microusd':9999650,'prior_unknown_holds_microusd':10}
+        assert preview['execution_authorized'] is False
+        with pytest.raises(TenantLinearError):extension.preview(cur,PROFILE,campaign,2,[{'case_id':key,'message_id':message,'expected_version':version}])
         cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.SUPPORT_MEDIA_SCOPE]}
         args={'case_id':key,'message_id':message,'campaign_id':campaign,'expected_version':version}
         assert mcp._tools(cur,cfg,'support_media_case_source_inspect',args)['channel_id']==oldchannel
+        extension_args={'campaign_id':campaign,'expected_version':1,'sources':[{'case_id':key,'message_id':message,'expected_version':version}]}
+        assert mcp._tools(cur,cfg,'support_media_case_extension_preview',extension_args)['execution_authorized'] is False
+        with pytest.raises(TenantLinearError):mcp._tools(cur,{**cfg,'granted_scopes':[]},'support_media_case_extension_preview',extension_args)
         batch={'campaign_id':campaign,'sources':[{'case_id':key,'message_id':message,'expected_version':version},
           {'case_id':key,'message_id':str(uuid.uuid4()),'expected_version':version}]}
         rows=mcp._tools(cur,cfg,'support_media_case_sources_inspect',batch)['sources']

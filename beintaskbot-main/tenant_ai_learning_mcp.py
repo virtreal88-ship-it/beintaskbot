@@ -325,6 +325,13 @@ def _tools(cur,cfg,name,args):
                 with audit_conn.cursor() as audit_cur:
                     _audit(audit_cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],action,entity_type,entity_id,details or {})
                 audit_conn.commit()
+        if name=='support_media_case_extension_preview':
+            if set(args)!={'campaign_id','expected_version','sources'}:
+                raise TenantLinearError('Select the existing campaign and exact case sources.',400)
+            from tenant_case_media_extension import preview
+            result=preview(cur,profile,args['campaign_id'],args['expected_version'],args['sources'])
+            media_audit('mcp_support_media_case_extension_preview','knowledge_campaign',result['campaign_id'],{'count':len(result['sources'])})
+            return result
         if name=='support_media_case_source_inspect':
             if set(args)!={'case_id','message_id','expected_version','campaign_id'}:
                 raise TenantLinearError('Select the exact case, version, source and campaign.',400)
@@ -870,6 +877,8 @@ def _support_media_definitions():
     security=[{'type':'oauth2','scopes':[SUPPORT_MEDIA_SCOPE]}]
     campaign_id={'campaign_id':{'type':'string','format':'uuid'}}
     return [
+      {'name':'support_media_case_extension_preview','description':'Preview exact existing case evidence sources against the original approved $10 campaign, including settled/held amounts and unresolved prior outcomes. Does not extend the grant, fetch media or start analysis.',
+       'inputSchema':{'type':'object','properties':{'campaign_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1},'sources':{'type':'array','minItems':1,'maxItems':25,'items':{'type':'object','properties':{'case_id':{'type':'string','format':'uuid'},'message_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1}},'required':['case_id','message_id','expected_version'],'additionalProperties':False}}},'required':['campaign_id','expected_version','sources'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_media_case_source_inspect','description':'Inspect one case-evidence or approved-snapshot attachment in its actual authorized company channel, and whether the existing campaign snapshot covers it. No bytes, provider calls, dispatch, or grant changes.',
        'inputSchema':{'type':'object','properties':{'case_id':{'type':'string','format':'uuid'},'message_id':{'type':'string','format':'uuid'},'campaign_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1}},'required':['case_id','message_id','campaign_id','expected_version'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_media_case_sources_inspect','description':'Inspect up to 25 explicit case attachment references under the same original campaign. Each source is individually authorized; failures remain explicit. Does not download, dispatch or change grants.',
@@ -992,7 +1001,7 @@ async def mcp(request):
                 if tool_name.startswith(direct_reconcile.PREFIX):
                     commit_attempted=True
                     conn.commit()
-                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('administrator_single_message_extraction_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge' or data.get('params',{}).get('name','') in {'support_dialog_agent_options','support_dialog_agent_bulk_preview','support_cases_list','support_case_detail','support_case_extraction_status','support_case_delete_status','support_agents_list','support_agent_archive_status','support_agent_delete_preview','support_media_snapshot_preview','support_media_campaign_read','support_media_campaign_list','support_media_case_source_inspect','support_media_case_sources_inspect'}:
+                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('administrator_single_message_extraction_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge' or data.get('params',{}).get('name','') in {'support_dialog_agent_options','support_dialog_agent_bulk_preview','support_cases_list','support_case_detail','support_case_extraction_status','support_case_delete_status','support_agents_list','support_agent_archive_status','support_agent_delete_preview','support_media_snapshot_preview','support_media_campaign_read','support_media_campaign_list','support_media_case_source_inspect','support_media_case_sources_inspect','support_media_case_extension_preview'}:
                     commit_attempted=True
                     conn.commit()
             return response
