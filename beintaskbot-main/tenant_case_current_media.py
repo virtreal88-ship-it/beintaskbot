@@ -74,7 +74,7 @@ def _saved_byte_results(cur,tenant,campaign_id,source,digest):
     cur.execute("SELECT to_regclass('public.saas_knowledge_media_cache') AS relation")
     if cur.fetchone().get('relation'):
         cur.execute("""SELECT transcript FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid
-          AND state='completed' AND metadata->>'kind'='vision' AND metadata->>'sha256'=%s
+          AND state='completed' AND metadata->>'kind' IN ('vision','asr') AND metadata->>'sha256'=%s
           AND metadata->'owner_retry_source'->>'message_id'=%s
           AND metadata->'owner_retry_source'->>'channel_id'=%s ORDER BY created_at DESC LIMIT 3""",
           (tenant,digest,source['message_id'],source['channel_id']))

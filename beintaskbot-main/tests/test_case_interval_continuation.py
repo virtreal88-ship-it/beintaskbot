@@ -87,6 +87,12 @@ def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind):
     db.execute('UPDATE saas_knowledge_candidates SET version=version+1 WHERE id=%s::uuid',(case_id,));db.commit()
     moved=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version+1})
     assert moved['saved_byte_results'][0]['text']==result['saved_byte_results'][0]['text']
+    if kind=='audio':
+        db.execute("UPDATE saas_knowledge_extractions SET media_results='[]'::jsonb WHERE id=%s::uuid",(claimed['id'],));db.commit()
+        cached=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version+1})
+        assert cached['saved_byte_results'][0]['text']=='synthetic transcript'
+        assert cached['uncertain_retry_available'] is False
+        assert call.call_count==1
     assert db.execute("SELECT state,reserved_microusd FROM saas_ai_spend_reservations WHERE call_key='old-hold'")[0]=={'state':'unknown','reserved_microusd':100}
     assert db.execute('SELECT cap_microusd FROM saas_ai_media_grants WHERE id=%s::uuid',(campaign,))[0]['cap_microusd']==10000000
 
