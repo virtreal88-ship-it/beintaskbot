@@ -59,7 +59,7 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
         assert out['grant_scope_match'] is False and out['dispatch_authorized'] is False and out['current_bytes_checked'] is False
         preview=extension.preview(cur,PROFILE,campaign,1,[{'case_id':key,'message_id':message,'expected_version':version}])
         assert preview['sources'][0]['extension_state']=='previous_outcome_unknown'
-        assert preview['budget']=={'cap_microusd':10000000,'settled_microusd':150,'held_microusd':200,'available_microusd':9999640,'prior_unknown_holds_microusd':10,'prior_settled_microusd':0}
+        assert preview['budget']=={'cap_microusd':10000000,'settled_microusd':150,'held_microusd':200,'available_microusd':9999640,'prior_unknown_holds_microusd':10,'prior_settled_microusd':0,'released_counted_microusd':0}
         assert preview['execution_authorized'] is False
         with pytest.raises(TenantLinearError):extension.preview(cur,PROFILE,campaign,2,[{'case_id':key,'message_id':message,'expected_version':version}])
         cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.SUPPORT_MEDIA_SCOPE]}

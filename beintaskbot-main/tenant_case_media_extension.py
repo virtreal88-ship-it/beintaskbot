@@ -25,7 +25,8 @@ def preview(cur,profile,campaign_id,expected_campaign_version,sources,*,_interna
     if campaign['grant_status'] not in {'active','completed'} or campaign['cap_microusd']!=10000000 or campaign['max_cost_microusd']!=campaign['cap_microusd']:
         raise TenantLinearError('Original grant unavailable.',409)
     cur.execute('''SELECT COALESCE(sum(COALESCE(actual_microusd,reserved_microusd)) FILTER(WHERE state='settled'),0) AS settled,
-      COALESCE(sum(reserved_microusd) FILTER(WHERE state IN ('reserved','unknown')),0) AS held
+      COALESCE(sum(reserved_microusd) FILTER(WHERE state IN ('reserved','unknown')),0) AS held,
+      COALESCE(sum(COALESCE(actual_microusd,reserved_microusd)) FILTER(WHERE state='released'),0) AS released_counted
       FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND grant_id=%s::uuid''',(tenant,campaign_id))
     totals=cur.fetchone()
     cur.execute('''SELECT COALESCE(sum(reserved_microusd) FILTER(WHERE state IN ('reserved','unknown')),0) AS held,
@@ -56,10 +57,11 @@ def preview(cur,profile,campaign_id,expected_campaign_version,sources,*,_interna
           'conversation_id':source_data['conversation_id'],'occurred_at':source_data['occurred_at'],
           'state':state,'reconciliation':history})
     snapshot.sort(key=lambda x:(x['case_id'],x['message_id']))
-    spent=int(totals['settled']);held=int(totals['held'])
+    spent=int(totals['settled']);held=int(totals['held']);released_counted=int(totals['released_counted'])
     budget={'cap_microusd':int(campaign['cap_microusd']),'settled_microusd':spent,'held_microusd':held,
-            'available_microusd':max(0,int(campaign['cap_microusd'])-spent-held-prior_settled-prior_held),
-            'prior_unknown_holds_microusd':prior_held,'prior_settled_microusd':prior_settled}
+            'available_microusd':max(0,int(campaign['cap_microusd'])-spent-held-released_counted-prior_settled-prior_held),
+            'prior_unknown_holds_microusd':prior_held,'prior_settled_microusd':prior_settled,
+            'released_counted_microusd':released_counted}
     from tenant_knowledge_campaign_policy import reservation,fits
     amount=reservation(campaign['media_policy'])
     capacity={'calls_remaining':max(0,campaign['max_calls']-campaign['reserved_calls']),
