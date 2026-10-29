@@ -133,9 +133,15 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
         fetch.side_effect=TenantLinearError('sensitive provider detail',502)
         with pytest.raises(TenantLinearError) as failed:current_media.verify_owner_source(PROFILE,campaign,request)
         assert failed.value.code=='connect_fetch_failed' and 'sensitive' not in str(failed.value)
+        fetch.side_effect=TenantLinearError('sensitive provider path',404)
+        with pytest.raises(TenantLinearError) as missing:current_media.verify_owner_source(PROFILE,campaign,request)
+        assert missing.value.status==404 and missing.value.code=='connect_source_unavailable' and 'sensitive' not in str(missing.value)
         denied=TenantLinearError('provider secret',502);denied.code='connect_access_denied';fetch.side_effect=denied
         with pytest.raises(TenantLinearError) as denied_read:current_media.verify_owner_source(PROFILE,campaign,request)
         assert denied_read.value.status==403 and denied_read.value.code=='connect_access_denied' and 'secret' not in str(denied_read.value)
+        fetch.side_effect=None;fetch.return_value=(b'not-a-real-image','image/png')
+        with pytest.raises(TenantLinearError) as invalid:current_media.verify_owner_source(PROFILE,campaign,request)
+        assert invalid.value.status==415 and invalid.value.code=='connect_format_unsupported'
         async def changed(*args):
             db.execute('UPDATE saas_knowledge_candidates SET version=version+1 WHERE id=%s::uuid',(key,));db.commit()
             return b'\x89PNG\r\n\x1a\ncurrent-image','image/png'
