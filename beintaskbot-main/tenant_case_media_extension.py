@@ -31,8 +31,9 @@ def _verified_byte_history(cur,tenant,message_id,source_hash,*,exclude_extractio
             refs=[r for r in all_refs if str(r['id'])==str(message_id)]
             results=[r for r in all_results if str(r['id'])==str(message_id)]
             if row.get('status')!='completed' or len(refs)!=1:return history
-            if results and (len(results)!=1 or refs[0].get('media_kind') not in {'image','video','audio','voice','document'}
-                or results[0].get('kind')!=refs[0].get('media_kind') or not _explicit_no_media_call(refs[0],results[0])):return history
+            if results and (len(results)!=1 or refs[0].get('media_kind')!='image'
+                or results[0].get('kind')!='image' or results[0].get('code') not in {'vision_not_approved','external_media_permission_required'}
+                or not _explicit_no_media_call(refs[0],results[0])):return history
             cur.execute("SELECT to_regclass('public.saas_ai_spend_reservations') AS relation")
             if not cur.fetchone().get('relation'):return history
             key='extraction:'+str(row['id'])

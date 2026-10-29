@@ -141,6 +141,10 @@ def test_legacy_incomplete_history_requires_owner_ack_and_blocks_recorded_attemp
         db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(mismatch),case['extraction_id']));db.commit()
         blocked=current.verify_owner_source(PROFILE,campaign,{'expected_version':1,'case_id':key,'message_id':message,'case_version':version})
         assert blocked['attempt_reconciliation']['state']=='unknown'
+        wrong_reason=[{'id':message,'kind':'image','status':'unavailable','code':'asr_authorization_required'}]
+        db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(wrong_reason),case['extraction_id']));db.commit()
+        blocked=current.verify_owner_source(PROFILE,campaign,{'expected_version':1,'case_id':key,'message_id':message,'case_version':version})
+        assert blocked['attempt_reconciliation']['state']=='unknown'
         db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(prior_results),case['extraction_id']));db.commit()
     args={'expected_version':1,'source_refs':refs,'snapshot_hash':preview['snapshot_hash'],'request_id':str(uuid.uuid4()),'confirm_exact_preview':True,
       'current_byte_sources':[{'case_id':key,'message_id':message,'case_version':version,'sha256':value['current_sha256']}]}
