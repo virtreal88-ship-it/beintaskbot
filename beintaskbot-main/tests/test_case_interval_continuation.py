@@ -110,6 +110,11 @@ def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind,tm
     if kind=='video':
         states={str(row['id']):row['status'] for row in db.execute('SELECT id,status FROM saas_knowledge_campaign_fragments WHERE id IN (%s::uuid,%s::uuid)',(pending_id,unknown_id))}
         assert states=={pending_id:'pending',unknown_id:'unknown'}
+        db.execute("UPDATE saas_knowledge_campaign_fragments SET status='completed' WHERE id=%s::uuid",(unknown_id,));db.commit()
+        with db.cursor() as cur:
+            cur.execute('SELECT * FROM saas_knowledge_campaign_fragments WHERE id=%s::uuid',(pending_id,));blocked=cur.fetchone()
+            cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign,));original_campaign=cur.fetchone()
+            assert campaigns._unknown_conflicts(cur,A,blocked,original_campaign)
     latest=db.execute('SELECT version FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign,))[0]['version']
     result=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version})
     assert ('synthetic frame observation' if kind=='video' else 'synthetic image observation' if kind=='image' else 'synthetic transcript') in result['saved_byte_results'][0]['text']

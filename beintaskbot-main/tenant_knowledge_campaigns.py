@@ -331,6 +331,14 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
     tenant-wide scheduling hold for an independently identified attachment.
     """
     route=fragment['route']
+    # This exact unresolved video was expressly excluded from the owner's
+    # continuation. Never let an older pending fragment bypass that decision,
+    # even if a historical unknown row has since changed state.
+    if (campaign.get('progress') or {}).get('mode')=='case_media_batch':
+        from tenant_case_uncertain_retry import _excluded
+        message_ids=route.get('message_ids')
+        if isinstance(message_ids,list) and any(_excluded(message_id) for message_id in message_ids if isinstance(message_id,str)):
+            return True
     cur.execute('''SELECT f.id,f.route,e.source_refs FROM saas_knowledge_campaign_fragments f
       LEFT JOIN saas_knowledge_extractions e ON e.tenant_id=f.tenant_id
         AND e.id=COALESCE(f.extraction_id,f.id)
