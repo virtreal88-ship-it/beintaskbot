@@ -127,3 +127,27 @@ def test_reviewed_photo_and_new_audio_endpoint_remain_in_verified_interval(ready
     preview=owner.preview_owner(PROFILE,campaign,1)
     assert any(x['message_id']==audio and x['case_id']==case_id for x in preview['sources'])
     assert db.execute('SELECT source_refs FROM saas_knowledge_extractions WHERE id=%s::uuid',(case['extraction_id'],))[0]['source_refs']==old+[old_photo]
+
+
+def test_group_cross_channel_endpoints_are_not_treated_as_verified_without_proof(ready):
+    import tenant_knowledge_candidates_store as store
+    db,case,ids=_case(ready,(3,));case_id=case['id'];campaign=str(uuid.uuid4());other=str(uuid.uuid4())
+    group='120363000000000000@g.us';foreign=str(uuid.uuid4());start=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'historical')",(A,other))
+    db.execute('UPDATE saas_crm_messages SET kommo_lead_id=410 WHERE tenant_id=%s::uuid AND kommo_lead_id=41',(A,))
+    for channel,lead in ((CA,410),(other,411)):
+        db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name) VALUES(%s::uuid,%s::uuid,%s,%s,'group')",(A,channel,group,lead))
+    for message,at in ((start,'2024-01-02T00:00:00Z'),(foreign,'2024-01-04T00:00:00Z')):
+        db.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,411,%s,%s,'incoming','','image',%s::timestamptz)",(A,message,'connect:'+str(uuid.uuid4()),'connect:'+other,at))
+    content=db.execute('SELECT content FROM saas_knowledge_candidates WHERE id=%s::uuid',(case_id,))[0]['content']
+    content['start_message_id']=start
+    db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE id=%s::uuid',(json.dumps(content),case_id))
+    route={'provider':'connect','channel_id':CA,'conversation_id':group,'approved_channel_ids':[CA,other]}
+    db.execute('UPDATE saas_knowledge_extractions SET route=%s::jsonb WHERE id=%s::uuid',(json.dumps(route),case['extraction_id']))
+    campaigns.create_schema(db)
+    db.execute("INSERT INTO saas_knowledge_campaigns(tenant_id,id,created_by,sources,analysis_agent_id,status,approved_by,approved_at,max_calls,max_tokens,media_policy,progress,max_cost_microusd) VALUES(%s::uuid,%s::uuid,11,%s::jsonb,%s::uuid,'paused',11,now(),100,1000000,'{}'::jsonb,%s::jsonb,10000000)",(A,campaign,json.dumps([CA,other]),AGENT,json.dumps({'mode':'case_media_batch','case_plans':[{'case_id':case_id}]})))
+    db.execute("INSERT INTO saas_ai_media_grants(tenant_id,id,campaign_id,created_by,cap_microusd,status,approved_by,approved_at) VALUES(%s::uuid,%s::uuid,%s::uuid,11,10000000,'active',11,now())",(A,campaign,campaign));db.commit()
+    with db.cursor() as cur:
+        run=store.extraction_row(cur,A,case['extraction_id']);chosen=store.assert_route(cur,A,store.authorize(cur,PROFILE)[2],'connect',group,CA)
+        assert store.case_media_coverage(cur,A,run,chosen,content)['media_coverage']['boundary_status']=='uncertain'
+        with pytest.raises(TenantLinearError):inventory.inspect(cur,PROFILE,case_id,foreign,case['version'],campaign)
