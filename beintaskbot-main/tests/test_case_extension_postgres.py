@@ -12,14 +12,14 @@ import tenant_knowledge_candidates_store as store
 import tenant_knowledge_campaigns as campaigns
 
 
-def _apply(dsn, campaign, request_id, source, barrier, results, byte_source):
+def _apply(dsn, campaign, request_id, source, barrier, results, source_mode):
     import tenant_platform
     import tenant_case_media_extension as extension
     import tenant_knowledge_campaigns as worker_campaigns
     tenant_platform._connect=lambda:psycopg.connect(dsn,row_factory=dict_row)
     extension.cases.authorize=lambda *args:(A,11,SimpleNamespace(profile={'role':'owner'}))
     extension.preview=lambda *args,**kw:{'snapshot_hash':'a'*64,'budget':{'available_microusd':9000000},'operation_capacity':{'next_fragment_fits':True},'_snapshot':[source]}
-    extension._verified_byte_history=lambda *args,**kw:{'state':'known_not_attempted'}
+    extension._verified_byte_history=lambda *args,**kw:{'state':'incomplete_history_eligible' if source_mode=='incomplete' else 'known_not_attempted'}
     def enqueue(cur,profile,campaign,route):
         fragment=str(uuid.uuid4())
         cur.execute('INSERT INTO saas_knowledge_campaign_fragments(tenant_id,campaign_id,id,source_key,route) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::jsonb)',(A,campaign['id'],fragment,fragment,json.dumps(route)))
@@ -27,15 +27,15 @@ def _apply(dsn, campaign, request_id, source, barrier, results, byte_source):
     worker_campaigns.enqueue=enqueue
     try:
         barrier.wait(15)
-        values={(source['case_id'],source['message_id']):'d'*64} if byte_source else None
-        value=extension.apply(PROFILE,campaign,1,[], 'a'*64,request_id,verified_bytes=values)
+        values={(source['case_id'],source['message_id']):'d'*64} if source_mode!='standard' else None
+        value=extension.apply(PROFILE,campaign,1,[], 'a'*64,request_id,verified_bytes=values,acknowledge_incomplete_history=source_mode=='incomplete')
         results.put(('ok',value['replayed']))
     except Exception as error:results.put(('error',type(error).__name__,str(error)))
 
 
 @pytest.mark.parametrize('same_request',[True,False])
-@pytest.mark.parametrize('byte_source',[True,False])
-def test_concurrent_extension_is_single_commit_and_keeps_holds(database,same_request,byte_source):
+@pytest.mark.parametrize('source_mode',['standard','verified','incomplete'])
+def test_concurrent_extension_is_single_commit_and_keeps_holds(database,same_request,source_mode):
     db=database;store.schema(db);campaigns.create_schema(db)
     import tenant_ai_spend_budget as spending
     spending.ensure_schema(db)
@@ -52,10 +52,10 @@ def test_concurrent_extension_is_single_commit_and_keeps_holds(database,same_req
     db.execute("INSERT INTO saas_ai_media_grants(tenant_id,id,campaign_id,created_by,cap_microusd,status,approved_by,approved_at) VALUES(%s::uuid,%s::uuid,%s::uuid,11,10000000,'active',11,now())",(A,key,key))
     db.execute("INSERT INTO saas_ai_spend_reservations(tenant_id,id,call_key,model,kind,reserved_microusd,grant_id,state) VALUES(%s::uuid,%s::uuid,'hold','test','vision',170400,%s::uuid,'unknown')",(A,str(uuid.uuid4()),key));db.commit()
     source={'case_id':str(uuid.uuid4()),'message_id':msg,'case_version':1,'channel_id':CA,'conversation_id':'client','source_version':'b'*64,'source_hash':'c'*64,'kind':'image','occurred_at':'2026-10-01T00:00:00+00:00','state':'known_not_attempted','reconciliation':{}}
-    if byte_source:source['state']='source_version_unverified'
+    if source_mode!='standard':source['state']='source_version_unverified'
     ctx=multiprocessing.get_context('spawn');barrier=ctx.Barrier(2);results=ctx.Queue()
     requests=[req,req if same_request else str(uuid.uuid4())]
-    workers=[ctx.Process(target=_apply,args=(db.dsn,key,request,source,barrier,results,byte_source)) for request in requests]
+    workers=[ctx.Process(target=_apply,args=(db.dsn,key,request,source,barrier,results,source_mode)) for request in requests]
     for worker in workers:worker.start()
     try:
         values=[results.get(timeout=30) for _ in workers]
@@ -64,7 +64,7 @@ def test_concurrent_extension_is_single_commit_and_keeps_holds(database,same_req
         else:assert ('ok',False) in values and any(v[0:2]==('error','TenantLinearError') for v in values),values
         assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid',(key,))[0]['n']==1
         route=db.execute('SELECT route FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid',(key,))[0]['route']
-        assert route.get('case_source_sha256')==('d'*64 if byte_source else None)
+        assert route.get('case_source_sha256')==('d'*64 if source_mode!='standard' else None)
         assert db.execute('SELECT status,version FROM saas_knowledge_campaigns WHERE id=%s::uuid',(key,))[0]=={'status':'paused','version':2}
         assert db.execute("SELECT state,reserved_microusd FROM saas_ai_spend_reservations WHERE call_key='hold'")[0]=={'state':'unknown','reserved_microusd':170400}
         assert db.execute('SELECT cap_microusd FROM saas_ai_media_grants WHERE id=%s::uuid',(key,))[0]['cap_microusd']==10000000

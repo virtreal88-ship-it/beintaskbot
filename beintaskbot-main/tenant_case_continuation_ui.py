@@ -90,10 +90,12 @@ def preview_owner(profile,campaign_id,expected_version):
 
 def apply_owner(profile,campaign_id,data):
     required={'expected_version','source_refs','snapshot_hash','request_id','confirm_exact_preview'}
-    if not isinstance(data,dict) or not required.issubset(data) or set(data)-required-{'current_byte_sources'} or data['confirm_exact_preview'] is not True:
+    if not isinstance(data,dict) or not required.issubset(data) or set(data)-required-{'current_byte_sources','acknowledge_incomplete_history'} or data['confirm_exact_preview'] is not True:
         raise TenantLinearError('Confirm the exact preview.',400)
     # Client hashes are merely assertions. Re-fetch every exact source under the
     # owner's session before the locked transaction; dispatch checks bytes again.
+    ack=data.get('acknowledge_incomplete_history',False)
+    if type(ack) is not bool:raise TenantLinearError('Invalid acknowledgement.',400)
     supplied=data.get('current_byte_sources',[])
     if not isinstance(supplied,list) or len(supplied)>10:raise TenantLinearError('Invalid byte snapshot.',400)
     refs=data['source_refs']
@@ -111,7 +113,9 @@ def apply_owner(profile,campaign_id,data):
         if value['current_sha256']!=item['sha256']:raise TenantLinearError('Current file changed; refresh.',409)
         if not value['continuation_supported']:
             raise TenantLinearError('Concurrent audio processing requires reconciliation.',409)
-        if value['attempt_reconciliation']['state']!='known_not_attempted':
+        state=value['attempt_reconciliation']['state']
+        if value.get('saved_byte_results'):raise TenantLinearError('An exact-byte result is already available.',409)
+        if state!='known_not_attempted' and not (state=='incomplete_history_eligible' and ack):
             raise TenantLinearError('Prior media outcome is unknown.',409)
         verified[key]=value['current_sha256']
-    return apply(profile,campaign_id,data['expected_version'],refs,data['snapshot_hash'],data['request_id'],_max_sources=MAX_SOURCES,original_cases_only=True,verified_bytes=verified)
+    return apply(profile,campaign_id,data['expected_version'],refs,data['snapshot_hash'],data['request_id'],_max_sources=MAX_SOURCES,original_cases_only=True,verified_bytes=verified,acknowledge_incomplete_history=ack)

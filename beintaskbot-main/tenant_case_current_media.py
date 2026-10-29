@@ -117,7 +117,7 @@ def verify_owner_source(profile,campaign_id,data):
         with conn.cursor() as cur:
             after=_authorized_snapshot(cur,*args)
             from tenant_case_media_extension import _verified_byte_history
-            history=_verified_byte_history(cur,str(profile['tenant_id']),after['message_id'],after['_source']['source_hash'])
+            history=_verified_byte_history(cur,str(profile['tenant_id']),after['message_id'],after['_source']['source_hash'],allow_incomplete=True)
             saved=_saved_byte_results(cur,str(profile['tenant_id']),str(campaign_id),after,digest)
     if before!=after:raise TenantLinearError('Кейс или источник изменился. Обновите состояние.',409)
     return {'case_id':before['case_id'],'message_id':before['message_id'],'case_version':before['case_version'],
