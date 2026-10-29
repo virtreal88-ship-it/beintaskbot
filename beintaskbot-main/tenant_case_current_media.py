@@ -39,7 +39,7 @@ def _authorized_snapshot(cur,profile,campaign_id,campaign_version,case_id,messag
 def _saved_byte_results(cur,tenant,campaign_id,source,digest):
     """Return only completed results attributed to these freshly fetched bytes."""
     from tenant_media_evidence import _safe_text
-    cur.execute("""SELECT e.media_results FROM saas_knowledge_campaign_fragments f
+    cur.execute("""SELECT e.id::text AS extraction_id,e.media_results FROM saas_knowledge_campaign_fragments f
       JOIN saas_knowledge_extractions e ON e.tenant_id=f.tenant_id AND e.id=COALESCE(f.extraction_id,f.id)
       WHERE f.tenant_id=%s::uuid AND f.campaign_id=%s::uuid
         AND f.route->>'case_id'=%s
@@ -75,6 +75,7 @@ def _saved_byte_results(cur,tenant,campaign_id,source,digest):
                 if isinstance(value,dict) and isinstance(value.get('text'),str) and value['text'].strip():parts.append(_safe_text(value['text']))
             if parts:
                 entry={'status':result['status'],'text':'\n'.join(parts)[:4000]}
+                entry['_extraction_id']=str(row.get('extraction_id') or '')
                 if source.get('kind')=='video':
                     audio=result.get('audio_status')
                     entry['audio_status']=audio if audio in {'processed','not_requested','unavailable_or_error','uncertain','no_speech_detected'} else 'unknown'
@@ -102,6 +103,28 @@ def _saved_byte_results(cur,tenant,campaign_id,source,digest):
                     state=meta.get('speech_state');entry['audio_status']='processed' if state=='confident' else state if state in {'uncertain','no_speech_detected'} else 'unknown'
                 key=(entry['status'],entry['text'])
                 if key not in seen:saved.append(entry);seen.add(key)
+        if source.get('kind')=='video' and any(item.get('audio_status')=='unknown' for item in saved):
+            # An old partial receipt may omit the audio failure category. Read
+            # only the unknown ASR claim for this exact extension and bytes;
+            # an unrelated old attempt must never be attributed to this video.
+            cur.execute("""SELECT s.metadata,COALESCE(f.extraction_id,f.id)::text AS extraction_id FROM saas_knowledge_media_cache s
+              JOIN saas_knowledge_campaign_fragments f ON f.tenant_id=s.tenant_id
+                AND COALESCE(f.extraction_id,f.id)::text=s.metadata->>'owner_retry_extraction_id'
+              WHERE s.tenant_id=%s::uuid AND f.campaign_id=%s::uuid AND f.route->>'case_id'=%s
+                AND f.route->'message_ids' @> %s::jsonb AND f.route->>'case_source_sha256'=%s
+                AND s.state='unknown' AND s.metadata->>'kind'='asr' AND s.metadata->>'sha256'=%s
+                AND s.metadata->'owner_retry_source'->>'message_id'=%s
+                AND s.metadata->'owner_retry_source'->>'channel_id'=%s
+              ORDER BY s.created_at DESC LIMIT 1""",
+              (tenant,campaign_id,source['case_id'],json.dumps([source['message_id']]),digest,digest,source['message_id'],source['channel_id']))
+            from tenant_chat_ai_provider import is_safe_failure_code
+            for row in cur.fetchall():
+                metadata=row.get('metadata') if isinstance(row.get('metadata'),dict) else {}
+                code=metadata.get('failure_code')
+                if is_safe_failure_code(code):
+                    for entry in saved:
+                        if entry.get('audio_status')=='unknown' and entry.get('_extraction_id')==str(row.get('extraction_id')) and not entry.get('audio_failure_code'):entry['audio_failure_code']=code
+    for entry in saved:entry.pop('_extraction_id',None)
     return saved[:3]
 
 
