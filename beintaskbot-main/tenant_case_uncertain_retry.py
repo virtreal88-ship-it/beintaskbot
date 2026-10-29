@@ -1,4 +1,4 @@
-"""One owner-selected current-image retry; old outcomes and holds remain intact."""
+"""One owner-selected current-media retry; old outcomes and holds remain intact."""
 import json
 import hashlib
 import tenant_knowledge_candidates_store as cases
@@ -13,7 +13,7 @@ def _excluded(message_id):
 
 
 def eligible(cur, tenant, source, sha256, *, exclude_fragment=None):
-    if _excluded(source.get('message_id')) or source.get('kind') not in {'image','audio','voice'} or not isinstance(sha256, str) or len(sha256) != 64:
+    if _excluded(source.get('message_id')) or source.get('kind') not in {'image','audio','voice','video'} or not isinstance(sha256, str) or len(sha256) != 64:
         return False
     message = str(source['message_id'])
     # Neither a live extraction nor a reserved call may race this attempt.
@@ -38,7 +38,7 @@ def eligible(cur, tenant, source, sha256, *, exclude_fragment=None):
     if cur.fetchone(): return False
     # The separate Connect voice worker can process the same source outside
     # case campaigns. Its active receipt is a mandatory single-flight fence.
-    if source.get('kind') in {'audio','voice'}:
+    if source.get('kind') in {'audio','voice','video'}:
         cur.execute("""SELECT 1 FROM saas_connect_voice_receipts v JOIN saas_crm_messages m
           ON m.tenant_id=v.tenant_id AND m.channel='connect:'||v.channel_id::text AND m.external_id=v.external_id
           WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid AND v.state='processing' LIMIT 1""",(tenant,message))
@@ -61,7 +61,7 @@ def eligible(cur, tenant, source, sha256, *, exclude_fragment=None):
       AND (%s::text IS NULL OR metadata->>'owner_retry_extraction_id' IS DISTINCT FROM %s::text) LIMIT 1""",
       (tenant,sha256,message,exclude_fragment,exclude_fragment))
     if cur.fetchone(): return False
-    if source.get('kind') in {'audio','voice'}:
+    if source.get('kind') in {'audio','voice','video'}:
         # Legacy ASR cache entries can lack any source metadata. A running
         # unattributed claim must finish before a new voice attempt starts.
         cur.execute("""SELECT 1 FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND state='running'
@@ -78,7 +78,7 @@ def authorized(progress, campaign_id, fragment_id, route):
     source = saved.get('source') or {}
     signature = cases.digest({'campaign_id':str(campaign_id),'request_id':str(route.get('case_extension_id') or ''),'source':source})
     return (extension.get('acknowledge_unknown_selected') is True and source.get('state')=='owner_uncertain_retry'
-        and source.get('kind') in {'image','audio','voice'} and not _excluded(source.get('message_id')) and saved.get('signature')==signature==route.get('case_plan_hash')
+        and source.get('kind') in {'image','audio','voice','video'} and not _excluded(source.get('message_id')) and saved.get('signature')==signature==route.get('case_plan_hash')
         and route.get('message_ids')==[source.get('message_id')] and route.get('case_id')==source.get('case_id')
         and route.get('case_source_sha256')==source.get('current_sha256') and route.get('owner_retry_unknown') is True
         and str(route.get('media_grant_id'))==str(campaign_id))
