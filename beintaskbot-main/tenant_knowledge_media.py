@@ -19,6 +19,16 @@ from tenant_knowledge_candidates_policy import redact
 from tenant_video_frames import (MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS, MAX_VIDEO_AUDIO_BYTES,
     extract_audio as video_audio, sample_frames as video_frames, validate_video_duration)
 
+class CaseSourceBytesChanged(Exception):
+    """Stop the whole extraction before any AI call on a changed snapshot."""
+
+
+def _check_case_bytes(item,data):
+    expected=(item.get('route') or {}).get('case_source_sha256')
+    if expected and hashlib.sha256(data).hexdigest()!=expected:
+        raise CaseSourceBytesChanged('Approved source bytes changed.')
+
+
 MAX_FILES=4
 MAX_VISUALS=2
 MAX_BYTES=20*1024*1024
@@ -76,7 +86,7 @@ def collect(profile,item,check_before_ai=None):
         # explicitly acknowledged retry, download through the protected loader
         # first; observe_once then reuses only a cache keyed by SHA-256 of the
         # bytes actually fetched.
-        prior=None if retry_unknown else reusable(profile,ref)
+        prior=None if retry_unknown or item['route'].get('case_source_sha256') else reusable(profile,ref)
         reusable_failure=prior and prior.get('status') in {'unavailable','error'}
         if prior and not (retry_unknown and reusable_failure):
             reused=apply_reusable(message,prior)
@@ -99,7 +109,7 @@ def collect(profile,item,check_before_ai=None):
             current=load(profile,ref['lead_id'],ref['external_id'])
             if current.get('provider')!='connect' or current['route']['channel_id']!=ref['channel_id'] or current['route']['conversation_id']!=item['route']['conversation_id']: raise TenantLinearError('scope',403)
             if kind in {'audio','voice'}:
-                text=cached_transcript(item,ref)
+                text='' if item['route'].get('case_source_sha256') else cached_transcript(item,ref)
                 if text:
                     message['text']+='\n[Existing transcript] '+redact(text,names)[:4000]
                     receipt.update(status='processed',code='existing_transcript');continue
@@ -111,6 +121,7 @@ def collect(profile,item,check_before_ai=None):
                 if not model: raise LookupError('asr_model_unavailable')
                 stage='media_download'
                 data,mime=asyncio.run(asyncio.wait_for(download_media(current,max_bytes=min(MAX_AUDIO_BYTES,MAX_BYTES-size)),timeout=10))
+                _check_case_bytes(item,data)
                 size+=len(data)
                 validate_media_size(kind,len(data))
                 if size>MAX_BYTES: receipt.update(status='unavailable',code='byte_budget');continue
@@ -137,6 +148,7 @@ def collect(profile,item,check_before_ai=None):
             stage='media_download'
             data,mime=asyncio.run(asyncio.wait_for(download_media(current,max_bytes=cap),timeout=min(10,max(.1,deadline-time.monotonic()))))
             if load(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
+            _check_case_bytes(item,data)
             stage='media_validation'
             validate_media_size(kind,len(data))
             if kind=='video': video_used=True
@@ -256,7 +268,7 @@ def collect(profile,item,check_before_ai=None):
                 images.append({'content':content,'content_type':content_type,'detail':'low','source_ref':message['ref']})
             receipt.update(status='pending_processing',code='awaiting_model',visuals=[origin for _,_,origin in visuals])
             message['text']+='\n[Visual inputs supplied: '+message['ref']+']'
-        except LiveExtractionDisabled: raise
+        except (LiveExtractionDisabled,CaseSourceBytesChanged): raise
         except LookupError as error:
             _failure_detail(receipt,error)
             code=str(error) if str(error) in {'video_decoder_unavailable','pdf_renderer_unavailable','video_audio_unavailable','asr_model_unavailable'} else 'media_processing_failed'

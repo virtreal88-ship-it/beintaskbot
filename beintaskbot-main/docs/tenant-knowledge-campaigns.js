@@ -54,7 +54,7 @@
     const continuationKey=mountPendingKey+':continuation';
     const continuationPending=()=>{try{return JSON.parse(sessionStorage.getItem(continuationKey)||'null');}catch(_error){return null;}};
     const continuationClear=()=>{try{sessionStorage.removeItem(continuationKey);}catch(_error){}};
-    let continuationPreview=null;
+    let continuationPreview=null,currentByteSources=[];
     const continuationText=({ru:{open:'Проверить оставшиеся вложения',working:'Проверяем источники…',confirm:'Подготовить продолжение',ready:'Подготовлено. Обработка остаётся на паузе.',unknown:'Результат подготовки неизвестен. Обновите состояние; не создавайте повторную подготовку.',none:'Подходящих новых вложений пока нет.',error:'Не удалось проверить источники.'},az:{open:'Qalan əlavələri yoxla',working:'Mənbələr yoxlanılır…',confirm:'Davamı hazırla',ready:'Hazırlandı. Emal fasilədə qalır.',unknown:'Hazırlanmanın nəticəsi məlum deyil. Statusu yeniləyin; təkrar hazırlamayın.',none:'Hazırda uyğun yeni əlavə yoxdur.',error:'Mənbələri yoxlamaq mümkün olmadı.'},en:{open:'Check remaining attachments',working:'Checking sources…',confirm:'Prepare continuation',ready:'Prepared. Processing remains paused.',unknown:'Preparation outcome is unknown. Refresh status; do not prepare again.',none:'No eligible new attachments found.',error:'Could not check sources.'}})[language]||{open:'Check remaining attachments',working:'Checking sources…',confirm:'Prepare continuation',ready:'Prepared. Processing remains paused.',unknown:'Preparation outcome is unknown. Refresh status; do not prepare again.',none:'No eligible new attachments found.',error:'Could not check sources.'};
     async function previewContinuation(){
       if(busy||!scopeCurrent()||!campaign||continuationPending())return;
@@ -62,7 +62,7 @@
       try{const query=new URLSearchParams({...ctx.expected(),expected_version:String(version)});
         const result=await ctx.api(base+'/'+encodeURIComponent(id)+'/case-continuation?'+query);
         if(!scopeCurrent()||String(campaign?.id)!==id||Number(campaign?.version)!==version)return;
-        continuationPreview=result;const counts={};for(const source of result.sources||[])counts[source.extension_state]=(counts[source.extension_state]||0)+1;
+        continuationPreview=result;currentByteSources=[];const counts={};for(const source of result.sources||[])counts[source.extension_state]=(counts[source.extension_state]||0)+1;
         const outside=(result.blocked||[]).filter(item=>item.reason==='outside_verified_case').length;
         const eligible=counts.known_not_attempted||0,uncertain=(result.sources||[]).filter(source=>!['known_not_attempted','already_covered','already_queued'].includes(source.extension_state)).length+(result.blocked||[]).length-outside;
         const covered=(counts.already_covered||0)+(counts.already_queued||0);
@@ -80,14 +80,19 @@
     async function verifyCurrentSources(button,sources,preview){
       if(busy||!scopeCurrent()||!campaign||Number(campaign.version)!==Number(preview.campaign_version))return;
       busy=true;button.disabled=true;const detail=document.createElement('details'),heading=document.createElement('summary');heading.textContent=language==='ru'?'Результаты проверки файлов':'File check results';detail.open=true;detail.append(heading);continuation.append(detail);
-      const ordered=[...sources].sort((a,b)=>Number(b.extension_state==='source_version_unverified')-Number(a.extension_state==='source_version_unverified')).slice(0,10);
-      let checked=0;try{for(const source of ordered){
+      const ordered=[...sources].sort((a,b)=>Number(b.extension_state==='source_version_unverified')-Number(a.extension_state==='source_version_unverified'));
+      const offset=Number(button.dataset.offset||0),batch=ordered.slice(offset,offset+10);
+      let checked=0,attempted=0,stopped=false;try{for(const source of batch){
+        attempted++;
         if(!scopeCurrent()||Number(campaign?.version)!==Number(preview.campaign_version))break;
         const line=document.createElement('p');line.textContent=language==='ru'?'Проверяем файл…':'Checking file…';detail.append(line);
         try{const value=await post(base+'/'+encodeURIComponent(campaign.id)+'/current-media-check',{expected_version:preview.campaign_version,case_id:source.case_id,message_id:source.message_id,case_version:source.case_version});
-          if(!scopeCurrent())return;checked++;line.textContent=[value.case_id,value.message_id,value.provider,value.mime_type,value.size_bytes+' bytes',value.current_sha256,language==='ru'?'Текущий файл получен; старая версия не подтверждена.':'Current bytes received; the previous version remains unverified.'].join(' · ');
-        }catch(error){if(!scopeCurrent())return;line.textContent=[source.case_id,source.message_id,error.message||'Connect: source_check_failed'].join(' · ');if([401,403,409,429].includes(error.status))break;}
-      }if(sources.length>ordered.length){const note=document.createElement('p');note.textContent=language==='ru'?`Проверено не более ${ordered.length} из ${sources.length}; остальные не проверялись.`:`At most ${ordered.length} of ${sources.length} were checked; the rest were not checked.`;detail.append(note);}}
+          if(!scopeCurrent())return;checked++;if(source.extension_state==='source_version_unverified'&&value.attempt_reconciliation?.state==='known_not_attempted')currentByteSources.push({case_id:value.case_id,message_id:value.message_id,case_version:value.case_version,sha256:value.current_sha256});line.textContent=[value.case_id,value.message_id,value.provider,value.mime_type,value.size_bytes+' bytes',value.current_sha256,language==='ru'?'Текущий файл получен; старая версия не подтверждена.':'Current bytes received; the previous version remains unverified.',...(value.saved_byte_results||[]).map(result=>result.text)].join(' · ');
+        }catch(error){if(!scopeCurrent())return;line.textContent=[source.case_id,source.message_id,error.message||'Connect: source_check_failed'].join(' · ');if([401,403,409,429].includes(error.status)){stopped=true;break;}}
+      }if(stopped){currentByteSources=[];continuation.querySelectorAll('button.primary').forEach(item=>item.disabled=true);}if(!stopped&&currentByteSources.length&&Number(preview.budget?.available_microusd)>0&&preview.operation_capacity?.next_fragment_fits!==false){
+        if(!continuation.querySelector('button.primary')){const prepare=document.createElement('button');prepare.type='button';prepare.className='primary';prepare.textContent=continuationText.confirm;prepare.onclick=applyContinuation;continuation.append(prepare);}
+        const note=document.createElement('p');note.textContent=language==='ru'?`Проверено и можно подготовить: ${currentByteSources.length}. Неизвестные прежние попытки остаются заблокированы.`:`Verified and eligible: ${currentByteSources.length}. Unknown previous attempts remain blocked.`;continuation.append(note);
+      }button.dataset.offset=String(offset+attempted);if(!stopped&&offset+attempted<ordered.length&&!currentByteSources.length){button.disabled=false;const note=document.createElement('p');note.textContent=language==='ru'?`Осталось проверить: ${ordered.length-offset-attempted}.`:`Remaining to check: ${ordered.length-offset-attempted}.`;detail.append(note);}}
       finally{busy=false;}
     }
     async function applyContinuation(){
@@ -96,7 +101,7 @@
       const request=crypto.randomUUID(),saved={campaign_id:String(campaign.id),request_id:request};
       try{sessionStorage.setItem(continuationKey,JSON.stringify(saved));}catch(_error){continuation.textContent=continuationText.unknown;return;}
       busy=true;let committed=false;continuation.textContent=continuationText.working;
-      try{await post(base+'/'+encodeURIComponent(saved.campaign_id)+'/case-continuation',{expected_version:p.campaign_version,source_refs:p.source_refs,snapshot_hash:p.snapshot_hash,request_id:request,confirm_exact_preview:true});
+      try{await post(base+'/'+encodeURIComponent(saved.campaign_id)+'/case-continuation',{expected_version:p.campaign_version,source_refs:p.source_refs,snapshot_hash:p.snapshot_hash,request_id:request,confirm_exact_preview:true,current_byte_sources:currentByteSources});
         committed=true;if(!scopeCurrent())return;continuationPreview=null;await refresh(true);if(scopeCurrent())continuation.textContent=continuationText.ready;
       }catch(error){if(scopeCurrent()){if(!committed&&error.status>=400&&error.status<500)continuationClear();draw();continuation.textContent=committed?continuationText.ready:(!committed&&error.status>=400&&error.status<500?(error.message||continuationText.error):continuationText.unknown);}}finally{busy=false;}
     }

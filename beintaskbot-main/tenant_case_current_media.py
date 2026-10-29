@@ -36,6 +36,30 @@ def _authorized_snapshot(cur,profile,campaign_id,campaign_version,case_id,messag
     return source
 
 
+def _saved_byte_results(cur,tenant,campaign_id,source,digest):
+    """Return only completed results attributed to these freshly fetched bytes."""
+    from tenant_media_evidence import _safe_text
+    cur.execute("""SELECT e.media_results FROM saas_knowledge_campaign_fragments f
+      JOIN saas_knowledge_extractions e ON e.tenant_id=f.tenant_id AND e.id=COALESCE(f.extraction_id,f.id)
+      WHERE f.tenant_id=%s::uuid AND f.campaign_id=%s::uuid
+        AND f.route->>'case_id'=%s AND f.route->>'case_version'=%s
+        AND f.route->'message_ids' @> %s::jsonb AND f.route->>'case_source_sha256'=%s
+        AND e.route->>'case_source_sha256'=%s AND e.status='completed' AND f.status IN ('completed','partial')
+      ORDER BY f.updated_at DESC LIMIT 3""",
+      (tenant,campaign_id,source['case_id'],str(source['case_version']),__import__('json').dumps([source['message_id']]),digest,digest))
+    saved=[]
+    for row in cur.fetchall():
+        for result in row.get('media_results') or []:
+            if not isinstance(result,dict) or str(result.get('id'))!=source['message_id'] or result.get('status') not in {'processed','partial'}:continue
+            parts=[]
+            for key in ('observation','transcript'):
+                if isinstance(result.get(key),str) and result[key].strip():parts.append(_safe_text(result[key]))
+            for value in result.get('observations') or []:
+                if isinstance(value,dict) and isinstance(value.get('text'),str) and value['text'].strip():parts.append(_safe_text(value['text']))
+            if parts:saved.append({'status':result['status'],'text':'\n'.join(parts)[:4000]})
+    return saved[:3]
+
+
 def verify_owner_source(profile,campaign_id,data):
     required={'expected_version','case_id','message_id','case_version'}
     if not isinstance(data,dict) or set(data)!=required:raise TenantLinearError('Некорректный источник.',400)
@@ -63,10 +87,15 @@ def verify_owner_source(profile,campaign_id,data):
         if not signature(payload,mime):
             error=TenantLinearError('Не удалось проверить файл. Причина: connect_format_unsupported.',415)
             error.code='connect_format_unsupported';raise error
+    digest=hashlib.sha256(payload).hexdigest()
     with _connect() as conn:
-        with conn.cursor() as cur:after=_authorized_snapshot(cur,*args)
+        with conn.cursor() as cur:
+            after=_authorized_snapshot(cur,*args)
+            from tenant_case_media_extension import _verified_byte_history
+            history=_verified_byte_history(cur,str(profile['tenant_id']),after['message_id'],after['_source']['source_hash'])
+            saved=_saved_byte_results(cur,str(profile['tenant_id']),str(campaign_id),after,digest)
     if before!=after:raise TenantLinearError('Кейс или источник изменился. Обновите состояние.',409)
     return {'case_id':before['case_id'],'message_id':before['message_id'],'case_version':before['case_version'],
-      'provider':'connect','current_bytes_checked':True,'current_sha256':hashlib.sha256(payload).hexdigest(),
+      'provider':'connect','current_bytes_checked':True,'current_sha256':digest,
       'mime_type':mime,'content_signature_checked':before['kind']=='image','size_bytes':len(payload),
-      'previous_bytes_verified':False,'provider_ai_calls':0}
+      'previous_bytes_verified':False,'attempt_reconciliation':history,'saved_byte_results':saved,'provider_ai_calls':0}

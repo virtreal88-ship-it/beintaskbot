@@ -34,7 +34,7 @@ class LiveExtractionDisabled(Exception):
 
 
 def prepare(profile,data,review=None):
-    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','case_extension_id','photo_model','campaign_photo_model','video_model','media_grant_id','owner_retry_unknown','owner_retry_basis'}
+    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','case_extension_id','photo_model','campaign_photo_model','video_model','media_grant_id','owner_retry_unknown','owner_retry_basis','case_source_sha256'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректные параметры анализа.')
     for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
         if flag in data and type(data[flag]) is not bool: raise TenantLinearError('Некорректное разрешение медиа.')
@@ -74,6 +74,8 @@ def prepare(profile,data,review=None):
                 raise TenantLinearError('A retry basis is valid only for its server-created case campaign fragment.',403)
             if data.get('media_grant_id') and not campaign_source:
                 raise TenantLinearError('A media grant can be used only by its server-created campaign fragment.',403)
+            if data.get('case_source_sha256') and (not campaign_source or not data.get('case_extension_id')):
+                raise TenantLinearError('Byte snapshot requires a case extension.',403)
             if data.get('case_extension_id') and not campaign_source:
                 raise TenantLinearError('A case extension requires its server-created fragment.',403)
             if grant_id and not campaign_source.get('max_cost_microusd'):
@@ -83,7 +85,7 @@ def prepare(profile,data,review=None):
                     data.get(k)!=campaign_source['route'].get(k) for k in
                     ('provider','channel_id','conversation_id','history_mode','message_ids',
                      'period_start','period_end','analysis_agent_id','source_version',
-                     'case_id','case_version','case_plan_hash','case_extension_id')
+                     'case_id','case_version','case_plan_hash','case_extension_id','case_source_sha256')
                 ):
                     raise TenantLinearError('Case extension source changed.',409)
                 if (data.get('media_grant_id')!=campaign_source['route'].get('media_grant_id')
@@ -213,14 +215,15 @@ def prepare(profile,data,review=None):
             content_route={'provider':'connect','conversation_id':item['route']['conversation_id'],'history_mode':item['route']['history_mode']}
             if item['route']['history_mode']=='channel': content_route['channel_id']=item['route']['channel_id']
             content_route.update({flag:data[flag] for flag in ('allow_external_media','allow_paid_asr','allow_vision') if flag in data})
+            if data.get('case_source_sha256'):content_route['case_source_sha256']=data['case_source_sha256']
             if data.get('retry_of'):content_route['retry_of']=identifier(data['retry_of'])
             if photo_only:content_route['photo_model']=model
             if campaign_photo_model:content_route['campaign_photo_model']=campaign_photo_model
             fingerprint=store.digest([content_route,item['refs'],item['source_digest'],str(agent['id']),model,data['language'],review['key'] if review else None])
             cur.execute("""SELECT e.* FROM saas_knowledge_extractions e WHERE tenant_id=%s::uuid AND
-              (id=%s::uuid OR fingerprint=%s OR (source_refs=%s::jsonb AND source_digest=%s AND route->>'history_mode'=%s AND (%s='unified_group' OR route->>'channel_id'=%s) AND COALESCE(route->>'language','ru')=%s AND COALESCE(route->'review','null'::jsonb)=%s::jsonb AND COALESCE(route->>'photo_model','')=%s AND COALESCE(route->>'campaign_photo_model','')=%s AND COALESCE(route->>'allow_external_media','false')=%s AND COALESCE(route->>'allow_paid_asr','false')=%s AND COALESCE(route->>'retry_of','')=%s AND COALESCE(route->>'allow_vision','false')=%s AND COALESCE(route->'approved_channel_ids','null'::jsonb)=%s::jsonb AND EXISTS(
+              (id=%s::uuid OR fingerprint=%s OR (source_refs=%s::jsonb AND source_digest=%s AND route->>'history_mode'=%s AND (%s='unified_group' OR route->>'channel_id'=%s) AND COALESCE(route->>'language','ru')=%s AND COALESCE(route->'review','null'::jsonb)=%s::jsonb AND COALESCE(route->>'photo_model','')=%s AND COALESCE(route->>'campaign_photo_model','')=%s AND COALESCE(route->>'case_source_sha256','')=%s AND COALESCE(route->>'allow_external_media','false')=%s AND COALESCE(route->>'allow_paid_asr','false')=%s AND COALESCE(route->>'retry_of','')=%s AND COALESCE(route->>'allow_vision','false')=%s AND COALESCE(route->'approved_channel_ids','null'::jsonb)=%s::jsonb AND EXISTS(
                 SELECT 1 FROM saas_ai_agent_runs r WHERE r.tenant_id=e.tenant_id AND r.id=e.id AND r.agent_id=%s::uuid AND r.model=%s)))
-              ORDER BY id=%s::uuid DESC LIMIT 1""",(tenant,request_id,fingerprint,_json(item['refs']),item['source_digest'],item['route']['history_mode'],item['route']['history_mode'],item['route']['channel_id'],data['language'],_json(review['key']) if review else 'null',str(data.get('photo_model') or ''),campaign_photo_model,str(data.get('allow_external_media',False)).lower(),str(data.get('allow_paid_asr',False)).lower(),str(data.get('retry_of') or ''),str(data.get('allow_vision',False)).lower(),_json(data.get('approved_channel_ids')),agent['id'],model,request_id))
+              ORDER BY id=%s::uuid DESC LIMIT 1""",(tenant,request_id,fingerprint,_json(item['refs']),item['source_digest'],item['route']['history_mode'],item['route']['history_mode'],item['route']['channel_id'],data['language'],_json(review['key']) if review else 'null',str(data.get('photo_model') or ''),campaign_photo_model,str(data.get('case_source_sha256') or ''),str(data.get('allow_external_media',False)).lower(),str(data.get('allow_paid_asr',False)).lower(),str(data.get('retry_of') or ''),str(data.get('allow_vision',False)).lower(),_json(data.get('approved_channel_ids')),agent['id'],model,request_id))
             existing=cur.fetchone()
             if existing:
                 if str(existing['id'])==request_id and existing['fingerprint']!=fingerprint: raise TenantLinearError('request_id уже использован для другого фрагмента.',409)
@@ -439,7 +442,12 @@ def finish(profile,item,values,usage,error,attempted,proposal=None,accounting_us
                 if source_valid:
                     from tenant_media_evidence import persist as persist_media_evidence
                     retry_route=item.get('route') if isinstance(item.get('route'),dict) else {}
-                    unverified_retry_ids=(retry_route.get('message_ids') or []) if retry_route.get('owner_retry_unknown') is True else []
+                    # A current-byte snapshot without a stable provider media
+                    # identity must not populate metadata-only reusable receipts.
+                    # Its extraction and exact-byte cache retain the result.
+                    unverified_retry_ids=([str(ref['id']) for ref in item['refs']]
+                        if retry_route.get('case_source_sha256') else
+                        (retry_route.get('message_ids') or []) if retry_route.get('owner_retry_unknown') is True else [])
                     persist_media_evidence(cur,tenant,item['refs'],item['media_results'],
                         skip_unverified_source_ids=unverified_retry_ids)
             cur.execute('UPDATE saas_knowledge_extractions SET status=%s,error_code=%s,completed_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(status,error,tenant,request_id))
@@ -515,7 +523,11 @@ def analyze(profile,data,*,before_provider=None):
             from tenant_knowledge_media import collect
             stage='media'
             images,item['media_results']=collect(profile,item,check_before_ai=check_live_enabled if live_enabled is not None else None)
-        if item.get('_failed_media_recovery'):
+            if item['route'].get('case_source_sha256'):
+                results=item['media_results']
+                if len(results)!=1 or results[0].get('status') not in {'processed','partial'}:
+                    raise TenantLinearError('Verified source processing failed.',409)
+        if item.get('_failed_media_recovery') or item['route'].get('case_source_sha256'):
             # The previous text extraction already completed. Keep only the
             # new attachment receipt; do not call the text model a second time.
             check_active(profile,item);check_live_enabled()
