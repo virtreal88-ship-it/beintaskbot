@@ -129,11 +129,13 @@ def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind,au
             meta={'kind':'asr','sha256':checked['current_sha256'],'owner_retry_extraction_id':str(claimed['id']),
               'owner_retry_source':{'message_id':message,'channel_id':CA},'failure_code':'provider_http_403_model_access'}
             db.execute("INSERT INTO saas_knowledge_media_cache(tenant_id,fingerprint,state,token,metadata) VALUES(%s::uuid,'synthetic-unknown-video','unknown',%s::uuid,%s::jsonb)",(A,str(uuid.uuid4()),json.dumps(meta)));db.commit()
+            other={**meta,'owner_retry_extraction_id':str(uuid.uuid4()),'failure_code':'provider_http_429_rate_limit'}
+            db.execute("INSERT INTO saas_knowledge_media_cache(tenant_id,fingerprint,state,token,metadata) VALUES(%s::uuid,'synthetic-other-attempt','unknown',%s::uuid,%s::jsonb)",(A,str(uuid.uuid4()),json.dumps(other)));db.commit()
             unknown=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version})['saved_byte_results'][0]
             assert unknown['audio_status']=='unknown' and unknown['audio_failure_code']=='provider_http_403_model_access'
             assert 'Непроверенная расшифровка' in unknown['text']
             db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(original),claimed['id']))
-            db.execute("DELETE FROM saas_knowledge_media_cache WHERE fingerprint='synthetic-unknown-video'");db.commit()
+            db.execute("DELETE FROM saas_knowledge_media_cache WHERE fingerprint IN ('synthetic-unknown-video','synthetic-other-attempt')");db.commit()
         assert result['uncertain_retry_available'] is False
         monkeypatch.setattr(inventory,'_fetch_current',lambda *_:(data+b'changed',mime))
         assert current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version})['saved_byte_results']==[]
