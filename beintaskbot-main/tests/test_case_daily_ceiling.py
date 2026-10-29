@@ -24,9 +24,11 @@ def test_owner_approval_scoped_to_original_grant(campaign,monkeypatch):
     with pytest.raises(TenantLinearError):ceiling.approve({'tenant_id':B,'telegram_id':22},key,1)
     with pytest.raises(TenantLinearError):ceiling.approve(PROFILE,key,99)
     assert ceiling.approve(PROFILE,key,1)=={'daily_call_ceiling':150}
+    other=str(uuid.uuid4())
+    d.execute("INSERT INTO saas_knowledge_campaigns(tenant_id,id,created_by,sources,analysis_agent_id,status,approved_by,approved_at,max_calls,max_tokens,media_policy,progress,max_cost_microusd) VALUES(%s::uuid,%s::uuid,11,%s::jsonb,%s::uuid,'stopped',11,now(),100,1000000,%s::jsonb,%s::jsonb,10000000)",(A,other,json.dumps([CA]),AGENT,json.dumps({}),json.dumps({'mode':'case_media_batch'})))
     with d.cursor() as cur:
         assert ceiling.effective(cur,A,key,50)==150
-        assert ceiling.effective(cur,A,str(uuid.uuid4()),50)==50
+        assert ceiling.effective(cur,A,other,50)==50
         assert ceiling.effective(cur,B,key,50)==50
         assert ceiling.effective(cur,A,key,49)==49
         assert ceiling.effective(cur,A,None,50)==50
