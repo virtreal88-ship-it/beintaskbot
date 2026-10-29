@@ -116,3 +116,20 @@ def test_verified_media_result_does_not_repeat_text_extraction(monkeypatch):
     assert service.analyze({},{} )=={'ok':True}
     provider.assert_not_called()
     assert finish.call_args.args[2]==[] and finish.call_args.args[4]==''
+
+
+def test_daily_ceiling_action_requires_expected_identity_and_origin(monkeypatch):
+    import tenant_case_daily_ceiling as daily
+    import tenant_knowledge_campaigns as campaigns
+    profile={'tenant_id':'tenant-a','telegram_id':11};calls=[]
+    monkeypatch.setattr(daily,'approve',lambda *args:(calls.append(args) or {'daily_call_ceiling':150}))
+    monkeypatch.setattr(campaigns,'get',lambda *args:{'campaign':{'version':10}})
+    handler=api.handler(lambda request:profile,'https://crm.test',Mock(),'campaign_control')
+    data={'expected_tenant_id':'tenant-a','expected_user_id':'11','expected_version':9,'action':'approve_daily_ceiling_150'}
+    async def run():
+        assert (await handler(Request('POST',body=data,origin='https://evil.test'))).status==403
+        assert (await handler(Request('POST',body={**data,'expected_tenant_id':'other'}))).status==409
+        assert (await handler(Request('POST',body={**data,'ceiling':999}))).status==400
+        assert (await handler(Request('POST',body=data))).status==200
+        assert len(calls)==1 and calls[0][2]==9
+    asyncio.run(run())

@@ -510,6 +510,9 @@ def _current_limit_diagnostics(cur,tenant,campaign,credential_source=None):
     settings=cur.fetchone() or {};raw=settings.get('daily_limit')
     try:daily=int(raw or 50) or 50
     except (TypeError,ValueError):daily=None
+    if daily is not None:
+        from tenant_case_daily_ceiling import effective as campaign_daily_limit
+        daily=campaign_daily_limit(cur,tenant,str(campaign['id']),daily)
     route=blocked.get('route') or {}
     extra=1 if route.get('allow_paid_asr') else 0
     vision=1 if route.get('photo_model') or route.get('campaign_photo_model') else 2 if route.get('allow_vision') is True else 0

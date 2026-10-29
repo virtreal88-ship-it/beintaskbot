@@ -254,7 +254,12 @@ def prepare(profile,data,review=None):
             cur.execute("""SELECT COALESCE((SELECT sum(reserved_calls) FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND usage_day=(now() AT TIME ZONE 'UTC')::date),0)
               +COALESCE((SELECT sum(reserved_calls) FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND created_at>=(now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'
               AND (state IN ('generating','completed','unknown') OR reserved_calls>1 OR generated_at IS NOT NULL)),0) AS n""",(tenant,tenant))
-            if int(cur.fetchone()['n'])+(1 if photo_only else 1+extra_calls+vision_calls)>int(meta.get('daily_limit') or 50): raise TenantLinearError('Дневной лимит AI компании исчерпан.',429)
+            daily_calls=int(cur.fetchone()['n'])
+            daily_limit=int(meta.get('daily_limit') or 50)
+            if campaign_source and grant_id and str(grant_id)==str(campaign_source['campaign_id']):
+                from tenant_case_daily_ceiling import effective as campaign_daily_limit
+                daily_limit=campaign_daily_limit(cur,tenant,str(campaign_source['campaign_id']),daily_limit)
+            if daily_calls+(1 if photo_only else 1+extra_calls+vision_calls)>daily_limit: raise TenantLinearError('Дневной лимит AI компании исчерпан.',429)
             cur.execute(TOKEN_USAGE_SQL,(tenant,tenant));used=int(cur.fetchone()['tokens'])
             cap=platform_token_limit(tenant) if source=='platform' else 0
             if cap and used+MAX_TOKENS+(8000 if extra_calls else 0)+(8000 if vision_calls else 0)>cap: raise TenantLinearError('Недостаточно бюджета токенов компании.',429)
