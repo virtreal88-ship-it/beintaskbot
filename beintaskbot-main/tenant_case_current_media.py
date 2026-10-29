@@ -39,7 +39,7 @@ def _authorized_snapshot(cur,profile,campaign_id,campaign_version,case_id,messag
 def _saved_byte_results(cur,tenant,campaign_id,source,digest):
     """Return only completed results attributed to these freshly fetched bytes."""
     from tenant_media_evidence import _safe_text
-    cur.execute("""SELECT e.media_results FROM saas_knowledge_campaign_fragments f
+    cur.execute("""SELECT e.id::text AS extraction_id,e.media_results FROM saas_knowledge_campaign_fragments f
       JOIN saas_knowledge_extractions e ON e.tenant_id=f.tenant_id AND e.id=COALESCE(f.extraction_id,f.id)
       WHERE f.tenant_id=%s::uuid AND f.campaign_id=%s::uuid
         AND f.route->>'case_id'=%s
@@ -64,24 +64,69 @@ def _saved_byte_results(cur,tenant,campaign_id,source,digest):
                 or result.get('status') not in {'processed','partial'} or (legacy and result.get('sha256')!=digest)):continue
             parts=[]
             for key in ('observation','transcript'):
-                if isinstance(result.get(key),str) and result[key].strip():parts.append(_safe_text(result[key]))
+                if isinstance(result.get(key),str) and result[key].strip():
+                    value=_safe_text(result[key])
+                    if key=='transcript' and source.get('kind')=='video' and result.get('audio_status')!='processed':
+                        value='Непроверенная расшифровка (не подтверждённый факт): '+value
+                    parts.append(value)
+            if result.get('transcript_candidate_status')=='uncertain_unverified' and isinstance(result.get('transcript_candidate'),str) and result['transcript_candidate'].strip():
+                parts.append('Непроверенная расшифровка (не подтверждённый факт): '+_safe_text(result['transcript_candidate']))
             for value in result.get('observations') or []:
                 if isinstance(value,dict) and isinstance(value.get('text'),str) and value['text'].strip():parts.append(_safe_text(value['text']))
             if parts:
                 entry={'status':result['status'],'text':'\n'.join(parts)[:4000]}
+                entry['_extraction_id']=str(row.get('extraction_id') or '')
+                if source.get('kind')=='video':
+                    entry['visual_status']='partial' if (result.get('observation') or any(isinstance(x,dict) and x.get('text') for x in result.get('observations') or [])) else 'unknown'
+                    audio=result.get('audio_status')
+                    entry['audio_status']=audio if audio in {'processed','not_requested','unavailable_or_error','uncertain','no_speech_detected'} else 'unknown'
+                    reason=result.get('audio_reason')
+                    if reason in {'speech_confidence_unavailable','unsupported_video_asr_model','language_mismatch'}:entry['audio_reason']=reason
+                    from tenant_chat_ai_provider import is_safe_failure_code
+                    if is_safe_failure_code(result.get('audio_failure_code')):entry['audio_failure_code']=result['audio_failure_code']
                 key=(entry['status'],entry['text'])
                 if key not in seen:saved.append(entry);seen.add(key)
     cur.execute("SELECT to_regclass('public.saas_knowledge_media_cache') AS relation")
     if cur.fetchone().get('relation'):
-        cur.execute("""SELECT transcript FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid
+        cur.execute("""SELECT transcript,metadata FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid
           AND state='completed' AND metadata->>'kind' IN ('vision','asr') AND metadata->>'sha256'=%s
           AND metadata->'owner_retry_source'->>'message_id'=%s
           AND metadata->'owner_retry_source'->>'channel_id'=%s ORDER BY created_at DESC LIMIT 3""",
           (tenant,digest,source['message_id'],source['channel_id']))
         for row in cur.fetchall():
             if isinstance(row.get('transcript'),str) and row['transcript'].strip():
-                entry={'status':'processed','text':_safe_text(row['transcript'])[:4000]};key=(entry['status'],entry['text'])
+                meta=row.get('metadata') if isinstance(row.get('metadata'),dict) else {}
+                value=_safe_text(row['transcript'])[:4000]
+                if source.get('kind')=='video' and meta.get('kind')=='asr' and meta.get('speech_state')!='confident':
+                    value='Непроверенная расшифровка (не подтверждённый факт): '+value
+                entry={'status':'partial' if source.get('kind')=='video' else 'processed','text':value}
+                if source.get('kind')=='video':entry['visual_status']='unknown'
+                if source.get('kind')=='video' and meta.get('kind')=='asr':
+                    state=meta.get('speech_state');entry['audio_status']='processed' if state=='confident' else state if state in {'uncertain','no_speech_detected'} else 'unknown'
+                key=(entry['status'],entry['text'])
                 if key not in seen:saved.append(entry);seen.add(key)
+        if source.get('kind')=='video' and any(item.get('audio_status')=='unknown' for item in saved):
+            # An old partial receipt may omit the audio failure category. Read
+            # only the unknown ASR claim for this exact extension and bytes;
+            # an unrelated old attempt must never be attributed to this video.
+            cur.execute("""SELECT s.metadata,COALESCE(f.extraction_id,f.id)::text AS extraction_id FROM saas_knowledge_media_cache s
+              JOIN saas_knowledge_campaign_fragments f ON f.tenant_id=s.tenant_id
+                AND COALESCE(f.extraction_id,f.id)::text=s.metadata->>'owner_retry_extraction_id'
+              WHERE s.tenant_id=%s::uuid AND f.campaign_id=%s::uuid AND f.route->>'case_id'=%s
+                AND f.route->'message_ids' @> %s::jsonb AND f.route->>'case_source_sha256'=%s
+                AND s.state='unknown' AND s.metadata->>'kind'='asr' AND s.metadata->>'sha256'=%s
+                AND s.metadata->'owner_retry_source'->>'message_id'=%s
+                AND s.metadata->'owner_retry_source'->>'channel_id'=%s
+              ORDER BY s.created_at DESC LIMIT 1""",
+              (tenant,campaign_id,source['case_id'],json.dumps([source['message_id']]),digest,digest,source['message_id'],source['channel_id']))
+            from tenant_chat_ai_provider import is_safe_failure_code
+            for row in cur.fetchall():
+                metadata=row.get('metadata') if isinstance(row.get('metadata'),dict) else {}
+                code=metadata.get('failure_code')
+                if is_safe_failure_code(code):
+                    for entry in saved:
+                        if entry.get('audio_status')=='unknown' and entry.get('_extraction_id')==str(row.get('extraction_id')) and not entry.get('audio_failure_code'):entry['audio_failure_code']=code
+    for entry in saved:entry.pop('_extraction_id',None)
     return saved[:3]
 
 

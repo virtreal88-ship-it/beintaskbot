@@ -89,11 +89,25 @@ def test_uncertain_transcript_candidate_is_content_only_and_never_a_confirmed_tr
       'audio_status':'uncertain','transcript_candidate':'redacted synthetic words',
       'transcript_candidate_status':'uncertain_unverified'}
     hidden=coverage.project([ref],[receipt],'completed')['media_results'][0]
-    assert hidden['status']=='partial' and 'result' not in hidden
+    assert hidden['status']=='partial' and hidden['audio_status']=='uncertain' and 'result' not in hidden
     visible=coverage.project([ref],[receipt],'completed',include_content=True)['media_results'][0]
+    assert visible['visual_status']=='unknown'
     assert visible['result']=={'transcript_candidate':'redacted synthetic words',
       'transcript_candidate_status':'uncertain_unverified'}
     assert 'transcript' not in visible['result']
+
+
+@pytest.mark.parametrize('audio',['unknown','uncertain','no_speech_detected','unavailable_or_error','processed'])
+def test_video_audio_outcomes_remain_distinct_and_safe(audio):
+    ref={'id':'video','media_kind':'video','channel_id':CA}
+    receipt={'id':'video','channel_id':CA,'status':'partial','code':'vision_observation','audio_status':audio,
+      'audio_reason':'speech_confidence_unavailable','audio_failure_code':'provider_http_403_model_access','observation':'Synthetic frame'}
+    result=coverage.project([ref],[receipt],'completed')['media_results'][0]
+    assert result['audio_status']==audio and result['visual_status']=='partial' and not result['complete']
+    assert result['audio_reason']=='speech_confidence_unavailable' and result['audio_failure_code']=='provider_http_403_model_access'
+    receipt.update(audio_reason='unsafe secret',audio_failure_code='unsafe secret')
+    result=coverage.project([ref],[receipt],'completed')['media_results'][0]
+    assert 'audio_reason' not in result and 'audio_failure_code' not in result
 
 
 @pytest.mark.parametrize('legacy',[

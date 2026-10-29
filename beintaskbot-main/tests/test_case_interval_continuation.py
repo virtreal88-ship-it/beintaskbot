@@ -19,8 +19,8 @@ import tenant_knowledge_media as media
 import tenant_knowledge_media_cache as cache
 
 
-@pytest.mark.parametrize('kind',['image','audio','video'])
-def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind,tmp_path):
+@pytest.mark.parametrize(('kind','audio_state'),[('image',None),('audio',None),('video','confident'),('video','uncertain')])
+def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind,audio_state,tmp_path):
     db,case,ids=_case(ready,(3,));message=ids[0];case_id=case['id'];version=case['version'];campaign=str(uuid.uuid4())
     external='connect:'+str(uuid.uuid4());raw={'conversationId':'client'}
     db.execute('UPDATE saas_crm_messages SET external_id=%s,raw=%s::jsonb,message_type=%s WHERE id=%s::uuid',(external,json.dumps(raw),kind,message))
@@ -101,7 +101,7 @@ def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind,tm
         monkeypatch.setattr(voice,'transcription_model',lambda *_:'synthetic-asr')
         monkeypatch.setattr(video_model,'require_video_tariff',lambda *_:None)
         call=Mock(return_value=('synthetic frame observation',{'input_tokens':1,'output_tokens':1}));monkeypatch.setattr(provider,'generate',call)
-        audio_call=Mock(return_value=('synthetic video transcript',{'input_tokens':1,'output_tokens':1},{'speech_state':'confident','language':'az'}));monkeypatch.setattr(provider,'transcribe_video',audio_call)
+        audio_call=Mock(return_value=('synthetic video transcript',{'input_tokens':1,'output_tokens':1},{'speech_state':audio_state,'language':'az','reason':'speech_confidence_unavailable' if audio_state=='uncertain' else ''}));monkeypatch.setattr(provider,'transcribe_video',audio_call)
     campaigns.control(PROFILE,campaign,2,'resume');claimed=campaigns.claim(A,campaign)
     if kind=='video':assert str(claimed['id']) not in {pending_id,unknown_id}
     response=service.analyze(PROFILE,{**claimed['route'],'request_id':str(claimed['id'])});campaigns.complete(claimed,response)
@@ -120,6 +120,23 @@ def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind,tm
     assert ('synthetic frame observation' if kind=='video' else 'synthetic image observation' if kind=='image' else 'synthetic transcript') in result['saved_byte_results'][0]['text']
     if kind=='video':
         assert 'synthetic video transcript' in result['saved_byte_results'][0]['text']
+        assert result['saved_byte_results'][0]['visual_status']=='partial'
+        assert result['saved_byte_results'][0]['audio_status']==('processed' if audio_state=='confident' else 'uncertain')
+        if audio_state=='uncertain':assert 'Непроверенная расшифровка' in result['saved_byte_results'][0]['text']
+        if audio_state=='confident':
+            original=db.execute('SELECT media_results FROM saas_knowledge_extractions WHERE id=%s::uuid',(claimed['id'],))[0]['media_results']
+            changed_receipt=json.loads(json.dumps(original));changed_receipt[0]['audio_status']='unknown'
+            db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(changed_receipt),claimed['id']))
+            meta={'kind':'asr','sha256':checked['current_sha256'],'owner_retry_extraction_id':str(claimed['id']),
+              'owner_retry_source':{'message_id':message,'channel_id':CA},'failure_code':'provider_http_403_model_access'}
+            db.execute("INSERT INTO saas_knowledge_media_cache(tenant_id,fingerprint,state,token,metadata) VALUES(%s::uuid,'synthetic-unknown-video','unknown',%s::uuid,%s::jsonb)",(A,str(uuid.uuid4()),json.dumps(meta)));db.commit()
+            other={**meta,'owner_retry_extraction_id':str(uuid.uuid4()),'failure_code':'provider_http_429_rate_limit'}
+            db.execute("INSERT INTO saas_knowledge_media_cache(tenant_id,fingerprint,state,token,metadata) VALUES(%s::uuid,'synthetic-other-attempt','unknown',%s::uuid,%s::jsonb)",(A,str(uuid.uuid4()),json.dumps(other)));db.commit()
+            unknown=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version})['saved_byte_results'][0]
+            assert unknown['audio_status']=='unknown' and unknown['audio_failure_code']=='provider_http_403_model_access'
+            assert 'Непроверенная расшифровка' in unknown['text']
+            db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(original),claimed['id']))
+            db.execute("DELETE FROM saas_knowledge_media_cache WHERE fingerprint IN ('synthetic-unknown-video','synthetic-other-attempt')");db.commit()
         assert result['uncertain_retry_available'] is False
         monkeypatch.setattr(inventory,'_fetch_current',lambda *_:(data+b'changed',mime))
         assert current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version})['saved_byte_results']==[]
