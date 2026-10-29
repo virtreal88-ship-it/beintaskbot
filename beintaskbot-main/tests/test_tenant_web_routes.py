@@ -124,6 +124,7 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         expected |= {(method,base+suffix) for suffix in ('','/preview','/{campaign_id}') for method in ('GET','HEAD')}
         expected |= {('POST',base+suffix) for suffix in ('','/{campaign_id}/start','/{campaign_id}/control')}
         expected |= {(method,base+'/{campaign_id}/case-continuation') for method in ('GET','HEAD','POST')}
+        expected.add(('POST',base+'/{campaign_id}/current-media-check'))
 
         expected.add(('POST','/api/platform/ai/knowledge-candidates/{candidate_id}/improve'))
         expected |= {('HEAD', path) for method, path in EXPECTED_API if method == 'GET'}

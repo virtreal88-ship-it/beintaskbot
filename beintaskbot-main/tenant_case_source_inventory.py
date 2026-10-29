@@ -85,29 +85,41 @@ def inspect(cur, profile, case_id, message_id, expected_version, campaign_id, *,
     return result
 
 
+def _fetch_current(profile,before):
+    """Use the existing protected attachment loader; never return its route."""
+    import asyncio
+    from tenant_chat_attachment_store import load
+    from tenant_chat_attachment_api import admit
+    from tenant_connect_media import download_media
+    source=before['_source']
+    try:admit(profile)
+    except TenantLinearError as error:error.source_stage='rate_limit';raise
+    kwargs={'channel_id':before['channel_id'],'conversation_id':source['conversation_id']}
+    try:item=load(profile,before['lead_id'],source['external_id'],**kwargs)
+    except TenantLinearError as error:error.source_stage='source_access';raise
+    if str((item.get('row') or {}).get('id'))!=before['message_id']:
+        raise TenantLinearError('Source changed; refresh.',409)
+    try:data,mime=asyncio.run(download_media(item))
+    except TenantLinearError as error:error.source_stage='connect_download';raise
+    try:current=load(profile,before['lead_id'],source['external_id'],**kwargs)
+    except TenantLinearError as error:error.source_stage='source_recheck';raise
+    if current!=item:raise TenantLinearError('Source changed; refresh.',409)
+    return data,mime
+
+
 def verify(profile,case_id,message_id,expected_version,campaign_id,*,include_content=False):
     """Fetch one grant-covered source and compare actual bytes with saved vision results.
 
     This read never calls an AI provider, changes a grant, or releases a hold.
     """
-    import asyncio,hashlib
+    import hashlib
     from tenant_platform import _connect
-    from tenant_chat_attachment_store import load
-    from tenant_chat_attachment_api import admit
-    from tenant_connect_media import download_media
     from tenant_media_evidence import _safe_text
     with _connect() as conn:
         with conn.cursor() as cur:before=inspect(cur,profile,case_id,message_id,expected_version,campaign_id,_internal=True)
     if not before['grant_scope_match']:
         raise TenantLinearError('Source is not covered by this approved campaign snapshot.',403)
-    source=before['_source'];admit(profile)
-    kwargs={'channel_id':before['channel_id'],'conversation_id':source['conversation_id']}
-    item=load(profile,before['lead_id'],source['external_id'],**kwargs)
-    if str((item.get('row') or {}).get('id'))!=before['message_id']:
-        raise TenantLinearError('Source changed; refresh.',409)
-    data,mime=asyncio.run(download_media(item))
-    current=load(profile,before['lead_id'],source['external_id'],**kwargs)
-    if current!=item:raise TenantLinearError('Source changed; refresh.',409)
+    source=before['_source'];data,mime=_fetch_current(profile,before)
     with _connect() as conn:
         with conn.cursor() as cur:
             after=inspect(cur,profile,case_id,message_id,expected_version,campaign_id,_internal=True)
