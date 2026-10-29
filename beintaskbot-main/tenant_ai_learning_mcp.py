@@ -325,6 +325,42 @@ def _tools(cur,cfg,name,args):
                 with audit_conn.cursor() as audit_cur:
                     _audit(audit_cur,cfg['AI_LEARNING_MCP_TENANT_ID'],cfg['actor_id'],action,entity_type,entity_id,details or {})
                 audit_conn.commit()
+        if name=='support_media_case_source_inspect':
+            if set(args)!={'case_id','message_id','expected_version','campaign_id'}:
+                raise TenantLinearError('Select the exact case, version, source and campaign.',400)
+            from tenant_case_source_inventory import inspect
+            result=inspect(cur,profile,args['case_id'],args['message_id'],args['expected_version'],args['campaign_id'])
+            media_audit('mcp_support_media_case_source_inspect','knowledge_candidate',result['case_id'],
+                {'message_id':result['message_id'],'channel_id':result['channel_id']})
+            return result
+        if name=='support_media_case_sources_inspect':
+            if set(args)!={'campaign_id','sources'} or not isinstance(args['sources'],list) or not 1<=len(args['sources'])<=25:
+                raise TenantLinearError('Select up to 25 exact case sources.',400)
+            campaign_id=identifier(args['campaign_id'])
+            from tenant_case_source_inventory import inspect
+            results=[]
+            for source in args['sources']:
+                if not isinstance(source,dict) or set(source)!={'case_id','message_id','expected_version'}:
+                    results.append({'status':'error','code':'invalid_source'});continue
+                try:
+                    result=inspect(cur,profile,source['case_id'],source['message_id'],source['expected_version'],campaign_id)
+                    results.append({'status':'ok',**result})
+                except TenantLinearError as error:
+                    code={400:'invalid_source',403:'source_scope_denied',404:'source_or_case_unavailable',409:'case_or_source_changed'}.get(error.status,'source_check_failed')
+                    results.append({'status':'error','code':code})
+            media_audit('mcp_support_media_case_sources_inspect','knowledge_campaign',campaign_id,{'count':len(results)})
+            return {'sources':results,'dispatch_authorized':False}
+        if name=='support_media_case_source_verify':
+            required={'case_id','message_id','expected_version','campaign_id'}
+            if set(args) not in (required,required|{'include_content'}) or ('include_content' in args and type(args['include_content']) is not bool):
+                raise TenantLinearError('Select the exact case, version, source and campaign.',400)
+            if args.get('include_content') and SUPPORT_CASE_SCOPE not in set(cfg.get('granted_scopes') or []):
+                raise TenantLinearError('Additional OAuth scope required.',403)
+            from tenant_case_source_inventory import verify
+            result=verify(profile,args['case_id'],args['message_id'],args['expected_version'],args['campaign_id'],include_content=args.get('include_content',False))
+            media_audit('mcp_support_media_case_source_verify','knowledge_candidate',result['case_id'],
+                {'message_id':result['message_id'],'channel_id':result['channel_id']})
+            return result
         if name=='support_media_snapshot_preview':
             if set(args)-{'acknowledge_prior_unknown'} or ('acknowledge_prior_unknown' in args and type(args['acknowledge_prior_unknown']) is not bool):
                 raise TenantLinearError('Invalid media snapshot preview request.',400)
@@ -689,7 +725,7 @@ def _tool_response(value, request_id):
                      'structuredContent':value},request_id=request_id)
 
 
-def _tool_error(message, *, status, request_id, retry_safety='not_committed', incident_id=None):
+def _tool_error(message, *, status, request_id, retry_safety='not_committed', incident_id=None, retry_after=None):
     """MCP tool failures are results, not a transport/session failure.
 
     OAuth authentication remains an HTTP challenge.  Once a bearer token was
@@ -697,6 +733,7 @@ def _tool_error(message, *, status, request_id, retry_safety='not_committed', in
     the client can inspect an idempotency receipt instead of blindly retrying.
     """
     error={'message':str(message)[:500],'status':int(status),'retry_safety':retry_safety}
+    if status==429 and retry_after is not None:error['retry_after']=max(1,min(3600,int(retry_after)))
     if incident_id: error['incident_id']=incident_id
     return _jsonrpc({'content':[{'type':'text','text':json.dumps({'error':error},ensure_ascii=False)}],
                      'isError':True},request_id=request_id)
@@ -833,6 +870,12 @@ def _support_media_definitions():
     security=[{'type':'oauth2','scopes':[SUPPORT_MEDIA_SCOPE]}]
     campaign_id={'campaign_id':{'type':'string','format':'uuid'}}
     return [
+      {'name':'support_media_case_source_inspect','description':'Inspect one case-evidence or approved-snapshot attachment in its actual authorized company channel, and whether the existing campaign snapshot covers it. No bytes, provider calls, dispatch, or grant changes.',
+       'inputSchema':{'type':'object','properties':{'case_id':{'type':'string','format':'uuid'},'message_id':{'type':'string','format':'uuid'},'campaign_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1}},'required':['case_id','message_id','campaign_id','expected_version'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_media_case_sources_inspect','description':'Inspect up to 25 explicit case attachment references under the same original campaign. Each source is individually authorized; failures remain explicit. Does not download, dispatch or change grants.',
+       'inputSchema':{'type':'object','properties':{'campaign_id':{'type':'string','format':'uuid'},'sources':{'type':'array','minItems':1,'maxItems':25,'items':{'type':'object','properties':{'case_id':{'type':'string','format':'uuid'},'message_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1}},'required':['case_id','message_id','expected_version'],'additionalProperties':False}}},'required':['campaign_id','sources'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_media_case_source_verify','description':'Read one case attachment already covered by the existing approved campaign and verify actual bytes against saved exact-source vision results. Uses Connect read only; no AI calls, dispatch or grant changes.',
+       'inputSchema':{'type':'object','properties':{'case_id':{'type':'string','format':'uuid'},'message_id':{'type':'string','format':'uuid'},'campaign_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1},'include_content':{'type':'boolean'}},'required':['case_id','message_id','campaign_id','expected_version'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':True},'securitySchemes':security},
       {'name':'support_media_campaign_recover_failed','description':'Explicitly continue proven pre-dispatch media failures from one completed approved campaign under the original cap. Does not retry unknown outcomes. This may start paid processing.',
        'inputSchema':{'type':'object','properties':{**campaign_id,'expected_version':{'type':'integer','minimum':1},'request_id':{'type':'string','format':'uuid'}},'required':['campaign_id','expected_version','request_id'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':True,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_media_campaign_list','description':'List existing company campaigns and minimal approval, cap and reservation facts; use a returned ID with support_media_campaign_read. Does not start or prepare analysis.',
@@ -916,6 +959,9 @@ async def mcp(request):
             if tool_name=='company_ai_settings_read' and isinstance(arguments,dict) and arguments.get('list_provider_models') is True:
                 output=await asyncio.to_thread(_company_model_list,cfg,arguments)
                 return _tool_response(output,request_id)
+            if tool_name=='support_media_case_source_verify':
+                output=await asyncio.to_thread(_tools,None,cfg,tool_name,arguments)
+                return _tool_response(output,request_id)
             if tool_name in {'support_dialog_agent_assign','support_dialog_agent_bulk_assign'}:
                 # The shared assignment service owns its transaction. Once
                 # called, an unexpected transport failure must be reported as
@@ -946,7 +992,7 @@ async def mcp(request):
                 if tool_name.startswith(direct_reconcile.PREFIX):
                     commit_attempted=True
                     conn.commit()
-                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('administrator_single_message_extraction_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge' or data.get('params',{}).get('name','') in {'support_dialog_agent_options','support_dialog_agent_bulk_preview','support_cases_list','support_case_detail','support_case_extraction_status','support_case_delete_status','support_agents_list','support_agent_archive_status','support_agent_delete_preview','support_media_snapshot_preview','support_media_campaign_read','support_media_campaign_list'}:
+                if data.get('params',{}).get('name','').startswith('administrator_training_') or data.get('params',{}).get('name','').startswith('administrator_publish') or data.get('params',{}).get('name','').startswith('administrator_draft_') or data.get('params',{}).get('name','').startswith('administrator_approval_') or data.get('params',{}).get('name','').startswith('administrator_apply_') or data.get('params',{}).get('name','').startswith('administrator_rollback_') or data.get('params',{}).get('name','').startswith('administrator_owner_review_component') or data.get('params',{}).get('name','').startswith('administrator_single_message_extraction_') or data.get('params',{}).get('name','').startswith('knowledge_duplicate_') or data.get('params',{}).get('name','')=='whatsapp_dialogue_merge' or data.get('params',{}).get('name','') in {'support_dialog_agent_options','support_dialog_agent_bulk_preview','support_cases_list','support_case_detail','support_case_extraction_status','support_case_delete_status','support_agents_list','support_agent_archive_status','support_agent_delete_preview','support_media_snapshot_preview','support_media_campaign_read','support_media_campaign_list','support_media_case_source_inspect','support_media_case_sources_inspect'}:
                     commit_attempted=True
                     conn.commit()
             return response
@@ -958,7 +1004,7 @@ async def mcp(request):
         # tool error is encoded as a normal MCP result and never tears down the
         # session. Its transaction was not committed by this handler.
         if method=='tools/call' and (tool_name.startswith('administrator_training_') or tool_name.startswith('support_dialog_agent_') or tool_name.startswith('support_case') or tool_name.startswith('support_media_') or tool_name.startswith('support_agent_')) and exc.status!=401 and not (exc.status==403 and 'OAuth scope required' in str(exc)):
-            return _tool_error(exc,status=exc.status,request_id=request_id)
+            return _tool_error(exc,status=exc.status,request_id=request_id,retry_after=getattr(exc,'retry_after',None))
         return web.json_response({'error':str(exc),**({'details':exc.details} if hasattr(exc,'details') else {})},status=exc.status,headers=headers)
     except Exception:
         incident_id=secrets.token_hex(8)
