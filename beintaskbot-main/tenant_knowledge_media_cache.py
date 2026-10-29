@@ -202,7 +202,12 @@ def observe_once(profile,item,ref,content,mime,origin,invoke,check_before_ai=Non
                     if legacy['state']=='completed':
                         raise TenantLinearError('Saved media result is not bound to these exact bytes.',409)
                     _raise_unknown_cache(legacy,'vision')
-                fingerprint,artifact_retry_key,source_identity=_batch_retry_fingerprint(item,base_fingerprint,'vision',ref)
+                # A video samples multiple deterministic timestamps. Each
+                # frame needs its own one-way permit, still bound to the
+                # original source and validated full-file bytes at dispatch.
+                retry_component=('vision-frame:'+str(origin.get('second'))
+                    if ref.get('media_kind')=='video' and isinstance(origin,dict) and 'second' in origin else 'vision')
+                fingerprint,artifact_retry_key,source_identity=_batch_retry_fingerprint(item,base_fingerprint,retry_component,ref)
                 meta={**meta,'owner_retry_grant':str(item['route']['media_grant_id']),
                       'owner_retry_extraction_id':str(item.get('id') or ''),
                       'owner_retry_component':'vision','artifact_fingerprint':base_fingerprint,
