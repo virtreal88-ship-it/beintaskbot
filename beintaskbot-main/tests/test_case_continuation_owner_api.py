@@ -34,6 +34,21 @@ def test_owner_session_origin_and_tenant_guards(monkeypatch):
     asyncio.run(run())
 
 
+def test_preview_failure_reports_safe_class_without_exception_details(monkeypatch):
+    profile={'tenant_id':'tenant-a','telegram_id':11};logger=Mock()
+    def fail(*args):raise RuntimeError('secret-token SQL customer-content')
+    monkeypatch.setattr(continuation,'preview_owner',fail)
+    handler=api.handler(lambda request:profile,'https://crm.test',logger,'campaign_case_continuation')
+    async def run():
+        response=await handler(Request('GET',{'expected_tenant_id':'tenant-a','expected_user_id':'11','expected_version':'9'}))
+        payload=json.loads(response.text)
+        assert response.status==503 and payload['code']=='case_continuation_preview_failed'
+        assert payload['error_class']=='RuntimeError' and len(payload['reference'])==32
+        assert 'secret-token' not in response.text and 'customer-content' not in response.text and 'SQL' not in response.text
+        assert logger.error.call_count==1 and 'secret-token' not in str(logger.error.call_args)
+    asyncio.run(run())
+
+
 def test_current_media_check_requires_same_origin_and_scoped_session(monkeypatch):
     import tenant_case_current_media as current_media
     from tenant_linear_policy import TenantLinearError

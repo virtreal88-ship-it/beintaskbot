@@ -117,6 +117,15 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                 return web.json_response({'success':False,'error':'Не удалось проверить источник. Код: source_check_failed.','code':'source_check_failed','provider':'connect'},status=503,headers=headers)
             return web.json_response({'success':False,'error':'Некорректные параметры.'},status=400,headers=headers)
         except Exception as error:
+            if resource=='campaign_case_continuation' and request.method=='GET':
+                # Keep details actionable for the owner without exposing SQL,
+                # source contents, credentials, or exception messages.
+                reference=uuid.uuid4().hex
+                error_class=type(error).__name__
+                if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,79}',error_class):error_class='UnknownError'
+                logger.error('case_continuation_preview error_class=%s reference=%s',error_class,reference)
+                return web.json_response({'success':False,'error':f'Не удалось проверить вложения. Тип: {error_class}; код: {reference}',
+                  'code':'case_continuation_preview_failed','error_class':error_class,'reference':reference},status=503,headers=headers)
             if resource in {'campaign_start','campaigns','campaign','campaign_current_media_check'}:
                 reference = uuid.uuid4().hex
                 error_class = type(error).__name__
