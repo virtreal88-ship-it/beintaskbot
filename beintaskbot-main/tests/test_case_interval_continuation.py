@@ -118,7 +118,13 @@ def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind,tm
     latest=db.execute('SELECT version FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign,))[0]['version']
     result=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version})
     assert ('synthetic frame observation' if kind=='video' else 'synthetic image observation' if kind=='image' else 'synthetic transcript') in result['saved_byte_results'][0]['text']
-    if kind=='video':assert 'synthetic video transcript' in result['saved_byte_results'][0]['text']
+    if kind=='video':
+        assert 'synthetic video transcript' in result['saved_byte_results'][0]['text']
+        assert result['uncertain_retry_available'] is False
+        monkeypatch.setattr(inventory,'_fetch_current',lambda *_:(data+b'changed',mime))
+        assert current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version})['saved_byte_results']==[]
+        monkeypatch.setattr(inventory,'_fetch_current',lambda *_:(data,mime))
+        assert call.call_count==2 and audio_call.call_count==1
     db.execute('UPDATE saas_knowledge_candidates SET version=version+1 WHERE id=%s::uuid',(case_id,));db.commit()
     moved=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version+1})
     assert moved['saved_byte_results'][0]['text']==result['saved_byte_results'][0]['text']
