@@ -268,7 +268,17 @@ def collect(profile,item,check_before_ai=None):
             code=('unsupported_document_feature' if kind=='document' and error.status==415 else
                 'video_size_limit' if kind=='video' and error.status==413 else
                 'media_size_limit' if error.status==413 else 'media_unavailable')
-            receipt.update(status='unavailable' if error.status in {403,404,410,413} else 'unsupported' if error.status==415 else 'error',code=code,failure_stage=stage)
+            state='unavailable' if error.status in {403,404,410,413} else 'unsupported' if error.status==415 else 'error'
+            # A failed authority/route check is not proof that bytes vanished.
+            # Keep storage failures separate from access, throttle and other
+            # processing failures without exposing raw exception contents.
+            if stage in {'source_validation','media_download'} and error.status!=413:
+                if error.status==403:code,state='source_access_denied','error'
+                elif error.status in {404,410}:code,state=('source_reference_unavailable' if stage=='source_validation' else 'source_fetch_unavailable'),'error'
+                elif error.status==429:code,state='source_rate_limited','error'
+                elif error.status==409:code,state='source_changed','error'
+                elif error.status!=415:code,state='source_check_failed','error'
+            receipt.update(status=state,code=code,failure_stage=stage)
         except ValueError as error:
             _failure_detail(receipt,error)
             if getattr(error,'media_outcome_unknown',False):

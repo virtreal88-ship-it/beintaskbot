@@ -65,7 +65,7 @@ def test_unified_two_channel_identical_photo_is_one_input(context):
     assert len(images)==1 and results[1]['duplicate_of']=='1'
     assert [r['channel_id'] for r in results]==['one','two']
 
-@pytest.mark.parametrize('status,expected',[(404,'unavailable'),(410,'unavailable'),(403,'unavailable'),(502,'error'),(415,'unsupported')])
+@pytest.mark.parametrize('status,expected',[(404,'error'),(410,'error'),(403,'error'),(502,'error'),(415,'unsupported')])
 def test_evolution_failure_is_never_success(context,status,expected):
     item,add,download=context;add();download.side_effect=TenantLinearError('synthetic',status)
     images,results=media.collect({},item)
@@ -74,8 +74,25 @@ def test_evolution_failure_is_never_success(context,status,expected):
 def test_channel_or_conversation_mismatch_never_downloads(context,monkeypatch):
     item,add,download=context;add()
     monkeypatch.setattr(media,'load',lambda *a:{'provider':'connect','route':{'channel_id':'foreign','conversation_id':'demo@g.us'}})
-    assert media.collect({},item)[1][0]['status']=='unavailable'
+    result=media.collect({},item)[1][0]
+    assert (result['status'],result['code'],result['failure_stage'])==('error','source_access_denied','source_validation')
     download.assert_not_called()
+
+
+@pytest.mark.parametrize('stage,status,code',[
+    ('source_validation',403,'source_access_denied'),('source_validation',404,'source_reference_unavailable'),
+    ('media_download',404,'source_fetch_unavailable'),('media_download',429,'source_rate_limited'),
+    ('media_download',502,'source_check_failed')])
+def test_source_failure_diagnostics_do_not_claim_file_loss(context,monkeypatch,stage,status,code):
+    item,add,download=context;add();item['route']['allow_external_media']=True
+    error=TenantLinearError('secret url and sensitive data',status)
+    if stage=='source_validation':monkeypatch.setattr(media,'load',lambda *_:(_ for _ in ()).throw(error))
+    else:download.side_effect=error
+    images,results=media.collect({},item)
+    assert not images and results[0]['status']=='error'
+    assert results[0]['code']==code and results[0]['failure_stage']==stage
+    assert 'secret' not in json.dumps(results)
+    if stage=='source_validation':download.assert_not_called()
 
 def test_acknowledged_current_connect_retry_uses_loader_and_actual_bytes_not_metadata_receipt(context,monkeypatch):
     import tenant_media_evidence as evidence
@@ -103,7 +120,7 @@ def test_acknowledged_current_connect_retry_fails_closed_if_loader_unavailable(c
     monkeypatch.setattr(media,'load',lambda *_:(_ for _ in ()).throw(TenantLinearError('expired',410)))
     observed=Mock();monkeypatch.setattr(cache,'observe_once',observed)
     images,results=media.collect({},item)
-    assert images==[] and results[0]['status']=='unavailable'
+    assert images==[] and results[0]['status']=='error' and results[0]['code']=='source_reference_unavailable'
     download.assert_not_awaited();observed.assert_not_called()
 
 
@@ -628,9 +645,10 @@ def test_media_only_source_is_retained_status_persisted_and_replay_idempotent(re
     monkeypatch.setattr(media,'load',lambda *a:(_ for _ in ()).throw(TenantLinearError('expired',410)))
     response=service.analyze(PROFILE,data)
     assert response['request']['message_count']==4
-    assert response['request']['media_results'][0]['status']=='unavailable'
+    assert response['request']['media_results'][0]['status']=='error'
+    assert response['request']['media_results'][0]['code']=='source_reference_unavailable'
     assert response['request']['media_results'][0]['id']==source
-    assert any('Attachment status: unavailable' in m['text'] for m in generation.call_args.args[3])
+    assert any('Attachment status: error; source_reference_unavailable' in m['text'] for m in generation.call_args.args[3])
     assert service.analyze(PROFILE,data)['request']['id']==response['request']['id']
     generation.assert_called_once()
 
