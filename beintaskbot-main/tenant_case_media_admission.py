@@ -327,4 +327,7 @@ def grant_for_message(cur, tenant, message_id):
         for case in (grant.get('progress') or {}).get('case_plans',[]):
             if any(str(media.get('id'))==str(message_id) for media in case.get('media',[])):
                 return {'id':str(grant['id']),'status':grant['status'],'approved':bool(grant.get('approved_at'))}
+        for extension in (grant.get('progress') or {}).get('case_extensions',{}).values():
+            if any(str((item.get('source') or {}).get('message_id'))==str(message_id) for item in (extension.get('sources') or {}).values()):
+                return {'id':str(grant['id']),'status':grant['status'],'approved':bool(grant.get('approved_at'))}
     return None

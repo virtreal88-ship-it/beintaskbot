@@ -45,6 +45,7 @@ DIALOGUE_MERGE_SCOPE = dialogue_merge.MERGE_SCOPE
 DIALOG_ASSIGN_SCOPE = 'ai_learning.dialogs.assign'
 SUPPORT_CASE_SCOPE = 'ai_learning.support_cases'
 SUPPORT_MEDIA_SCOPE = 'ai_learning.support_media'
+SUPPORT_MEDIA_EXTEND_SCOPE = 'ai_learning.support_media_continue'
 AGENT_MANAGE_SCOPE = 'ai_learning.agents.manage'
 OFFLINE_SCOPE = 'offline_access'
 MAX_PAGE = 25
@@ -332,6 +333,14 @@ def _tools(cur,cfg,name,args):
             result=preview(cur,profile,args['campaign_id'],args['expected_version'],args['sources'])
             media_audit('mcp_support_media_case_extension_preview','knowledge_campaign',result['campaign_id'],{'count':len(result['sources'])})
             return result
+        if name=='support_media_case_extension_apply':
+            if SUPPORT_MEDIA_EXTEND_SCOPE not in set(cfg.get('granted_scopes') or []):
+                raise TenantLinearError('Additional OAuth scope required.',403)
+            required={'campaign_id','expected_version','sources','snapshot_hash','request_id','confirm_exact_preview'}
+            if set(args)!=required or args['confirm_exact_preview'] is not True:
+                raise TenantLinearError('Confirm the exact extension preview.',400)
+            from tenant_case_media_extension import apply
+            return apply(profile,args['campaign_id'],args['expected_version'],args['sources'],args['snapshot_hash'],args['request_id'])
         if name=='support_media_case_source_inspect':
             if set(args)!={'case_id','message_id','expected_version','campaign_id'}:
                 raise TenantLinearError('Select the exact case, version, source and campaign.',400)
@@ -879,6 +888,8 @@ def _support_media_definitions():
     return [
       {'name':'support_media_case_extension_preview','description':'Preview exact existing case evidence sources against the original approved $10 campaign, including settled/held amounts and unresolved prior outcomes. Does not extend the grant, fetch media or start analysis.',
        'inputSchema':{'type':'object','properties':{'campaign_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1},'sources':{'type':'array','minItems':1,'maxItems':25,'items':{'type':'object','properties':{'case_id':{'type':'string','format':'uuid'},'message_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1}},'required':['case_id','message_id','expected_version'],'additionalProperties':False}}},'required':['campaign_id','expected_version','sources'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_media_case_extension_apply','description':'Queue only sources proven never dispatched, under the original campaign cap, after exact preview confirmation. Does not resume the campaign, retry unknown outcomes, or start provider calls.',
+       'inputSchema':{'type':'object','properties':{'campaign_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1},'sources':{'type':'array','minItems':1,'maxItems':25,'items':{'type':'object','properties':{'case_id':{'type':'string','format':'uuid'},'message_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1}},'required':['case_id','message_id','expected_version'],'additionalProperties':False}},'snapshot_hash':{'type':'string','minLength':64,'maxLength':64},'request_id':{'type':'string','format':'uuid'},'confirm_exact_preview':{'type':'boolean','const':True}},'required':['campaign_id','expected_version','sources','snapshot_hash','request_id','confirm_exact_preview'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':[{'type':'oauth2','scopes':[SUPPORT_MEDIA_SCOPE,SUPPORT_MEDIA_EXTEND_SCOPE]}]},
       {'name':'support_media_case_source_inspect','description':'Inspect one case-evidence or approved-snapshot attachment in its actual authorized company channel, and whether the existing campaign snapshot covers it. No bytes, provider calls, dispatch, or grant changes.',
        'inputSchema':{'type':'object','properties':{'case_id':{'type':'string','format':'uuid'},'message_id':{'type':'string','format':'uuid'},'campaign_id':{'type':'string','format':'uuid'},'expected_version':{'type':'integer','minimum':1}},'required':['case_id','message_id','campaign_id','expected_version'],'additionalProperties':False},'annotations':{'readOnlyHint':True,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_media_case_sources_inspect','description':'Inspect up to 25 explicit case attachment references under the same original campaign. Each source is individually authorized; failures remain explicit. Does not download, dispatch or change grants.',
@@ -979,7 +990,7 @@ async def mcp(request):
                 commit_attempted=True
                 output=await asyncio.to_thread(_tools,None,cfg,tool_name,arguments)
                 return _tool_response(output,request_id)
-            if tool_name in {'support_case_confirm_publish','support_case_edit_publish','support_case_edit_boundaries','support_case_reject_delete','support_media_campaign_prepare','support_media_campaign_start','support_media_campaign_control','support_media_campaign_recover_failed','support_agent_permanent_delete'}:
+            if tool_name in {'support_case_confirm_publish','support_case_edit_publish','support_case_edit_boundaries','support_case_reject_delete','support_media_campaign_prepare','support_media_campaign_start','support_media_campaign_control','support_media_campaign_recover_failed','support_media_case_extension_apply','support_agent_permanent_delete'}:
                 # Case services commit in their own transaction; report any
                 # unexpected post-dispatch failure as unknown, never as a
                 # safe-to-repeat action.
@@ -1051,8 +1062,10 @@ def _oauth_resource(value, cfg):
 
 def _requested_scopes(value):
     requested={part for part in str(value or TOOL_SCOPE).split() if part}
-    if not requested or TOOL_SCOPE not in requested or requested-{TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,DIALOG_ASSIGN_SCOPE,SUPPORT_CASE_SCOPE,SUPPORT_MEDIA_SCOPE,AGENT_MANAGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE}:
+    if not requested or TOOL_SCOPE not in requested or requested-{TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,DIALOG_ASSIGN_SCOPE,SUPPORT_CASE_SCOPE,SUPPORT_MEDIA_SCOPE,SUPPORT_MEDIA_EXTEND_SCOPE,AGENT_MANAGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE}:
         raise TenantLinearError('Unsupported OAuth scope.',400)
+    if SUPPORT_MEDIA_EXTEND_SCOPE in requested and SUPPORT_MEDIA_SCOPE not in requested:
+        raise TenantLinearError('Media continuation requires current-case media access.',400)
     return requested
 
 
@@ -1063,6 +1076,10 @@ def _consent_text(scopes):
     is still a write operation.  The consent page must make that distinction so
     an existing read token is not mistaken for a token that can manage drafts.
     """
+    if SUPPORT_MEDIA_EXTEND_SCOPE in scopes:
+        text,_=_consent_text(set(scopes)-{SUPPORT_MEDIA_EXTEND_SCOPE})
+        text+=' It can also add only exact case sources proven not yet dispatched to the existing approved media campaign. The original $10 cap and all uncertain holds remain; this cannot reset the grant or automatically resume analysis. Each addition requires an exact source preview and confirmation. Unknown prior outcomes are never retried by this access.'
+        return text, 'Allow bounded case media continuation'
     if SUPPORT_CASE_SCOPE in scopes:
         text='Owner-authorized access to support-case content and decisions across this company. Selected case text, source references and attachment metadata are sent to ChatGPT for the requested operation. The plugin can list/read cases, publish guidance while preserving unknown outcomes, use existing evidence-guarded confirmed publication, or permanently delete one exact case after version and target confirmation with a linked-knowledge choice. It cannot call analysis providers, change budgets, send customer messages or bypass publication guards.'
         if SUPPORT_MEDIA_SCOPE in scopes:
@@ -1239,12 +1256,12 @@ def routes(member_from_request):
     async def protected(request):
         try:
             cfg=_require_cfg()
-            return web.json_response({'resource':cfg['issuer']+'/mcp/ai-learning','authorization_servers':[cfg['issuer']], 'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,DIALOG_ASSIGN_SCOPE,SUPPORT_CASE_SCOPE,SUPPORT_MEDIA_SCOPE,AGENT_MANAGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE]})
+            return web.json_response({'resource':cfg['issuer']+'/mcp/ai-learning','authorization_servers':[cfg['issuer']], 'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,DIALOG_ASSIGN_SCOPE,SUPPORT_CASE_SCOPE,SUPPORT_MEDIA_SCOPE,SUPPORT_MEDIA_EXTEND_SCOPE,AGENT_MANAGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE]})
         except TenantLinearError as exc: return web.json_response({'error':str(exc)},status=exc.status)
     async def metadata(request):
         try:
             cfg=_require_cfg(); base=cfg['issuer']
-            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','revocation_endpoint':base+'/oauth/revoke','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,DIALOG_ASSIGN_SCOPE,SUPPORT_CASE_SCOPE,SUPPORT_MEDIA_SCOPE,AGENT_MANAGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code','refresh_token'],'token_endpoint_auth_methods_supported':['none'],'client_id_metadata_document_supported':True})
+            return web.json_response({'issuer':base,'authorization_endpoint':base+'/oauth/authorize','token_endpoint':base+'/oauth/token','revocation_endpoint':base+'/oauth/revoke','code_challenge_methods_supported':['S256'],'scopes_supported':[TOOL_SCOPE,DRAFT_SCOPE,KNOWLEDGE_DEDUP_SCOPE,APPLY_SCOPE,PUBLISH_SCOPE,DIALOGUE_MERGE_SCOPE,DIALOG_ASSIGN_SCOPE,SUPPORT_CASE_SCOPE,SUPPORT_MEDIA_SCOPE,SUPPORT_MEDIA_EXTEND_SCOPE,AGENT_MANAGE_SCOPE,direct_reconcile.WRITE_SCOPE,OFFLINE_SCOPE],'response_types_supported':['code'],'grant_types_supported':['authorization_code','refresh_token'],'token_endpoint_auth_methods_supported':['none'],'client_id_metadata_document_supported':True})
         except TenantLinearError as exc: return web.json_response({'error':str(exc)},status=exc.status)
     return [('POST','/mcp/ai-learning',mcp),('GET','/mcp/ai-learning',mcp),('GET','/.well-known/oauth-protected-resource/mcp/ai-learning',protected),('GET','/.well-known/oauth-authorization-server',metadata),('GET','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/authorize',lambda req:authorize(req,member_from_request)),('POST','/oauth/token',token),('POST','/oauth/revoke',revoke)]
 

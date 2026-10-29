@@ -23,7 +23,7 @@ def _safe_limit_reason(error):
 
 
 def check_fence(cur, tenant, extraction_id):
-    cur.execute('''SELECT f.status,c.id AS campaign_id,c.status AS campaign_status,f.lease_until>now() AS live,c.sources,c.progress,c.created_by,c.approved_by,c.photo_model,f.route,e.source_refs
+    cur.execute('''SELECT f.id,f.status,c.id AS campaign_id,c.status AS campaign_status,f.lease_until>now() AS live,c.sources,c.progress,c.created_by,c.approved_by,c.photo_model,f.route,e.source_refs
       FROM saas_knowledge_campaign_fragments f JOIN saas_knowledge_campaigns c
       ON c.tenant_id=f.tenant_id AND c.id=f.campaign_id LEFT JOIN saas_knowledge_extractions e ON e.tenant_id=f.tenant_id AND e.id=f.id WHERE f.tenant_id=%s::uuid AND f.id=%s::uuid''',(tenant,extraction_id))
     row=cur.fetchone()
@@ -46,6 +46,11 @@ def check_fence(cur, tenant, extraction_id):
                            for item in checked['media'])):
                 raise TenantLinearError('Case boundary or media source changed.',409)
         if isinstance(row.get('progress'),dict) and row['progress'].get('mode')=='case_media_batch':
+            if row['route'].get('case_extension_id'):
+                from tenant_case_media_extension import dispatch_fence
+                dispatch_fence(cur,tenant,row)
+                cur.execute("UPDATE saas_knowledge_campaign_fragments SET updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND status='running' AND lease_until>now()",(tenant,extraction_id))
+                return
             from tenant_case_media_admission import plan
             profile={'tenant_id':tenant,'telegram_id':row['approved_by']}
             expected=row['progress']

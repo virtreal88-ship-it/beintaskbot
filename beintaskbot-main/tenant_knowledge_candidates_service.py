@@ -34,7 +34,7 @@ class LiveExtractionDisabled(Exception):
 
 
 def prepare(profile,data,review=None):
-    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','photo_model','campaign_photo_model','video_model','media_grant_id','owner_retry_unknown','owner_retry_basis'}
+    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','case_extension_id','photo_model','campaign_photo_model','video_model','media_grant_id','owner_retry_unknown','owner_retry_basis'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректные параметры анализа.')
     for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
         if flag in data and type(data[flag]) is not bool: raise TenantLinearError('Некорректное разрешение медиа.')
@@ -74,16 +74,27 @@ def prepare(profile,data,review=None):
                 raise TenantLinearError('A retry basis is valid only for its server-created case campaign fragment.',403)
             if data.get('media_grant_id') and not campaign_source:
                 raise TenantLinearError('A media grant can be used only by its server-created campaign fragment.',403)
+            if data.get('case_extension_id') and not campaign_source:
+                raise TenantLinearError('A case extension requires its server-created fragment.',403)
             if grant_id and not campaign_source.get('max_cost_microusd'):
                 raise TenantLinearError('ai_media_grant_inactive',409)
             if campaign_source:
+                if data.get('case_extension_id') and any(
+                    data.get(k)!=campaign_source['route'].get(k) for k in
+                    ('provider','channel_id','conversation_id','history_mode','message_ids',
+                     'period_start','period_end','analysis_agent_id','source_version',
+                     'case_id','case_version','case_plan_hash','case_extension_id')
+                ):
+                    raise TenantLinearError('Case extension source changed.',409)
                 if (data.get('media_grant_id')!=campaign_source['route'].get('media_grant_id')
                     or data.get('video_model')!=campaign_source['route'].get('video_model')
                     or data.get('campaign_photo_model')!=campaign_source['route'].get('campaign_photo_model')
                     or data.get('owner_retry_unknown',False) is not campaign_source['route'].get('owner_retry_unknown',False)
                     or data.get('owner_retry_basis')!=campaign_source['route'].get('owner_retry_basis')):
                     raise TenantLinearError('Разрешение кампании изменилось.',409)
-                expected=sorted(campaign_source['sources'])
+                expected=sorted(campaign_source['route'].get('approved_channel_ids') or [])
+                if data.get('case_extension_id')!=campaign_source['route'].get('case_extension_id') or not set(expected).issubset(set(campaign_source['sources'])):
+                    raise TenantLinearError('Источники кампании изменились.',409)
                 for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
                     if data.get(flag,False)!=campaign_source['route'].get(flag,False):raise TenantLinearError('Разрешения кампании изменились.',409)
                 if data.get('approved_channel_ids')!=expected:
