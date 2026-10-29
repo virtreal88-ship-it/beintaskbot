@@ -19,8 +19,8 @@ import tenant_knowledge_media as media
 import tenant_knowledge_media_cache as cache
 
 
-@pytest.mark.parametrize('kind',['image','audio'])
-def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind):
+@pytest.mark.parametrize('kind',['image','audio','video'])
+def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind,tmp_path):
     db,case,ids=_case(ready,(3,));message=ids[0];case_id=case['id'];version=case['version'];campaign=str(uuid.uuid4())
     external='connect:'+str(uuid.uuid4());raw={'conversationId':'client'}
     db.execute('UPDATE saas_crm_messages SET external_id=%s,raw=%s::jsonb,message_type=%s WHERE id=%s::uuid',(external,json.dumps(raw),kind,message))
@@ -42,6 +42,13 @@ def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind):
     db.execute("INSERT INTO saas_ai_spend_reservations(tenant_id,id,call_key,model,kind,reserved_microusd,state) VALUES(%s::uuid,%s::uuid,'old-hold','test','vision',100,'unknown')",(A,str(uuid.uuid4())));db.commit()
     for module in (tenant_platform,owner,current,campaigns,cache,spend):monkeypatch.setattr(module,'_connect',lambda:db)
     data=PNG if kind=='image' else b'synthetic audio';mime='image/png' if kind=='image' else 'audio/ogg'
+    if kind=='video':
+        import subprocess,shutil
+        if not shutil.which('ffmpeg'):pytest.skip('ffmpeg required')
+        clip=tmp_path/'synthetic.mp4'
+        subprocess.run(['ffmpeg','-nostdin','-v','error','-f','lavfi','-i','testsrc=size=96x96:rate=4',
+          '-f','lavfi','-i','sine=frequency=440:sample_rate=16000','-t','2','-c:v','mpeg4','-c:a','aac','-threads','1',str(clip)],check=True)
+        data=clip.read_bytes();mime='video/mp4'
     monkeypatch.setattr(inventory,'_fetch_current',lambda *_:(data,mime))
     preview=owner.preview_owner(PROFILE,campaign,1)
     assert any(x['message_id']==message and x['case_id']==case_id for x in preview['sources']),preview
@@ -74,16 +81,39 @@ def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind):
     import tenant_chat_ai_provider as provider
     if kind=='image':
         call=Mock(return_value=('synthetic image observation',{'input_tokens':1,'output_tokens':1}));monkeypatch.setattr(provider,'generate',call)
-    else:
+    elif kind=='audio':
         import tenant_connect_voice as voice
         monkeypatch.setattr(voice,'validate_audio',lambda *a,**k:(data,'ogg',mime));monkeypatch.setattr(voice,'transcription_model',lambda *_:'synthetic-asr')
         call=Mock(return_value=('synthetic transcript',{'input_tokens':1,'output_tokens':1}));monkeypatch.setattr(provider,'transcribe',call)
+    else:
+        import tenant_connect_voice as voice
+        import tenant_ai_video_model as video_model
+        import tenant_case_uncertain_retry as retry
+        import hashlib
+        excluded=str(uuid.uuid4());pending_id=str(uuid.uuid4());unknown_id=str(uuid.uuid4())
+        monkeypatch.setattr(retry,'_EXCLUDED_UNKNOWN_VIDEO_HASH',hashlib.sha256(excluded.encode()).hexdigest())
+        with db.cursor() as cur:assert not retry.eligible(cur,A,{'kind':'video','message_id':excluded},checked['current_sha256'])
+        route={'channel_id':CA,'message_ids':[excluded],'source_version':'a'*64}
+        for fragment,status in ((pending_id,'pending'),(unknown_id,'unknown')):
+            db.execute("INSERT INTO saas_knowledge_campaign_fragments(tenant_id,campaign_id,id,source_key,route,status,created_at) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::jsonb,%s,'2020-01-01')",(A,campaign,fragment,fragment,json.dumps(route),status))
+        progress=db.execute('SELECT progress FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign,))[0]['progress'];progress['failed_media_recovery']={'parents':{}}
+        db.execute('UPDATE saas_knowledge_campaigns SET progress=%s::jsonb WHERE id=%s::uuid',(json.dumps(progress),campaign));db.commit()
+        monkeypatch.setattr(voice,'transcription_model',lambda *_:'synthetic-asr')
+        monkeypatch.setattr(video_model,'require_video_tariff',lambda *_:None)
+        call=Mock(return_value=('synthetic frame observation',{'input_tokens':1,'output_tokens':1}));monkeypatch.setattr(provider,'generate',call)
+        audio_call=Mock(return_value=('synthetic video transcript',{'input_tokens':1,'output_tokens':1},{'speech_state':'confident','language':'az'}));monkeypatch.setattr(provider,'transcribe_video',audio_call)
     campaigns.control(PROFILE,campaign,2,'resume');claimed=campaigns.claim(A,campaign)
+    if kind=='video':assert str(claimed['id']) not in {pending_id,unknown_id}
     response=service.analyze(PROFILE,{**claimed['route'],'request_id':str(claimed['id'])});campaigns.complete(claimed,response)
-    assert call.call_count==1
+    assert call.call_count==(2 if kind=='video' else 1)
+    if kind=='video':assert audio_call.call_count==1
+    if kind=='video':
+        states={str(row['id']):row['status'] for row in db.execute('SELECT id,status FROM saas_knowledge_campaign_fragments WHERE id IN (%s::uuid,%s::uuid)',(pending_id,unknown_id))}
+        assert states=={pending_id:'pending',unknown_id:'unknown'}
     latest=db.execute('SELECT version FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign,))[0]['version']
     result=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version})
-    assert result['saved_byte_results'][0]['text']==('synthetic image observation' if kind=='image' else 'synthetic transcript')
+    assert ('synthetic frame observation' if kind=='video' else 'synthetic image observation' if kind=='image' else 'synthetic transcript') in result['saved_byte_results'][0]['text']
+    if kind=='video':assert 'synthetic video transcript' in result['saved_byte_results'][0]['text']
     db.execute('UPDATE saas_knowledge_candidates SET version=version+1 WHERE id=%s::uuid',(case_id,));db.commit()
     moved=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version+1})
     assert moved['saved_byte_results'][0]['text']==result['saved_byte_results'][0]['text']
@@ -157,3 +187,25 @@ def test_group_cross_channel_endpoints_are_not_treated_as_verified_without_proof
         run=store.extraction_row(cur,A,case['extraction_id']);chosen=store.assert_route(cur,A,store.authorize(cur,PROFILE)[2],'connect',group,CA)
         assert store.case_media_coverage(cur,A,run,chosen,content)['media_coverage']['boundary_status']=='uncertain'
         with pytest.raises(TenantLinearError):inventory.inspect(cur,PROFILE,case_id,foreign,case['version'],campaign)
+
+
+def test_video_frame_unknown_cannot_be_claimed_again(ready):
+    from unittest.mock import Mock
+    from tenant_knowledge_media_cache import _batch_retry_fingerprint, _claim_batch_retry
+    db,case,ids=_case(ready,(3,));message=ids[0];grant=str(uuid.uuid4());external='connect:'+str(uuid.uuid4())
+    ref={'id':message,'channel_id':CA,'external_id':external,'media_kind':'video','media_version':'a'*64}
+    item={'route':{'owner_retry_unknown':True,'media_grant_id':grant,'message_ids':[message],'channel_id':CA,'source_version':'a'*64}}
+    with db.cursor() as cur:cache.schema(cur)
+    first=_batch_retry_fingerprint(item,'b'*64,'vision-frame:0',ref)
+    second=_batch_retry_fingerprint(item,'c'*64,'vision-frame:1',ref)
+    assert first[0]!=second[0]
+    meta={'owner_retry_component':'vision','owner_retry_source':second[2],'artifact_fingerprint':'c'*64}
+    token=str(uuid.uuid4())
+    with db.cursor() as cur:assert _claim_batch_retry(cur,A,second[0],second[1],token,meta,meta)[0]=='claimed'
+    db.execute("UPDATE saas_knowledge_media_cache SET state='unknown' WHERE tenant_id=%s::uuid AND fingerprint IN (%s,%s)",(A,second[0],second[1]));db.commit()
+    external_call=Mock()
+    with pytest.raises(TenantLinearError):
+        with db.cursor() as cur:
+            _claim_batch_retry(cur,A,second[0],second[1],str(uuid.uuid4()),meta,meta)
+            external_call()
+    external_call.assert_not_called()

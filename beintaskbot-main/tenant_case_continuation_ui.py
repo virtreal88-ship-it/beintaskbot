@@ -108,7 +108,8 @@ def apply_owner(profile,campaign_id,data):
     unknown_ack=data.get('acknowledge_unknown_selected',False)
     if type(unknown_ack) is not bool:raise TenantLinearError('Invalid acknowledgement.',400)
     supplied=data.get('current_byte_sources',[])
-    if not isinstance(supplied,list) or len(supplied)>10 or (unknown_ack and not supplied):raise TenantLinearError('Invalid byte snapshot.',400)
+    if not isinstance(supplied,list) or (unknown_ack and not supplied):raise TenantLinearError('Invalid byte snapshot.',400)
+    if len(supplied)>10:raise TenantLinearError('Выберите не более 10 файлов за один раз.',400)
     refs=data['source_refs']
     if not isinstance(refs,list):raise TenantLinearError('Invalid sources.',400)
     verified={};unknown_selected=set()

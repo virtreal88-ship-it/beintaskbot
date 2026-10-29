@@ -136,6 +136,7 @@
       if(busy||Date.now()<retryUntil||!scopeCurrent()||!campaign||!continuationPreview||continuationPending())return;
       const p=continuationPreview;if(Number(campaign.version)!==Number(p.campaign_version))return;
       const chosen=unknownRetry?unknownSelections.filter(item=>item.check.checked).map(item=>item.entry):currentByteSources;if(unknownRetry&&!chosen.length)return;
+      if(chosen.length>10){let note=continuation.querySelector('[data-case-selection-limit]');if(!note){note=document.createElement('p');note.dataset.caseSelectionLimit='';note.setAttribute('role','alert');continuation.append(note);}note.textContent=language==='ru'?'Выберите не более 10 файлов за один раз. Остальные можно подготовить следующей группой.':'Select at most 10 files at a time. Prepare the remainder in the next group.';return;}
       const request=crypto.randomUUID(),saved={campaign_id:String(campaign.id),request_id:request};
       try{sessionStorage.setItem(continuationKey,JSON.stringify(saved));}catch(_error){continuation.textContent=continuationText.unknown;return;}
       busy=true;let committed=false;const progress=document.createElement('p');progress.textContent=continuationText.working;progress.setAttribute('role','status');continuation.append(progress);continuation.querySelectorAll('[data-unknown-retry], button.primary').forEach(el=>el.disabled=true);

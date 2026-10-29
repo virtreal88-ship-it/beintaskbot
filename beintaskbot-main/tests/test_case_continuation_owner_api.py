@@ -82,6 +82,7 @@ def test_byte_snapshot_is_refetched_and_unknown_outcome_rejected(monkeypatch):
     assert continuation.apply_owner({},'campaign',{**data,'acknowledge_unknown_selected':True})=={'count':1}
     assert calls[-1]['unknown_selected']=={(case,message)}
     with pytest.raises(TenantLinearError,match='snapshot'):continuation.apply_owner({},'campaign',{**data,'current_byte_sources':[],'acknowledge_unknown_selected':True})
+    with pytest.raises(TenantLinearError,match='не более 10'):continuation.apply_owner({},'campaign',{**data,'current_byte_sources':data['current_byte_sources']*21,'acknowledge_unknown_selected':True})
     monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':digest,'continuation_supported':True,'uncertain_retry_available':False,'attempt_reconciliation':{'state':'known_not_attempted'}})
     with pytest.raises(TenantLinearError,match='changed or is active'):continuation.apply_owner({},'campaign',{**data,'acknowledge_unknown_selected':True})
 
