@@ -84,7 +84,13 @@ def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind):
     latest=db.execute('SELECT version FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign,))[0]['version']
     result=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version})
     assert result['saved_byte_results'][0]['text']==('synthetic image observation' if kind=='image' else 'synthetic transcript')
-    db.execute('UPDATE saas_knowledge_candidates SET version=version+1 WHERE id=%s::uuid',(case_id,));db.commit()
+    import tenant_knowledge_candidates_store as case_store
+    case_store.mutate(PROFILE,case_id,{'expected_version':version,'title':'Reviewed draft conclusion'},'edit',connection=db)
+    db.commit()
+    monkeypatch.setattr(case_store,'_connect',lambda:db)
+    card_after_save=case_store.detail(PROFILE,case_id)['candidate']
+    assert card_after_save['title']=='Reviewed draft conclusion'
+    assert next(item for item in card_after_save['media_processing'] if item['id']==message)['status']=='unknown'
     moved=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version+1})
     assert moved['saved_byte_results'][0]['text']==result['saved_byte_results'][0]['text']
     if kind=='audio':
@@ -93,6 +99,17 @@ def test_bounded_omitted_source_continues_exactly_once(ready,monkeypatch,kind):
         assert cached['saved_byte_results'][0]['text']=='synthetic transcript'
         assert cached['uncertain_retry_available'] is False
         assert call.call_count==1
+        db.execute("UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid",(json.dumps([{'id':message,'status':'processed','transcript':'synthetic transcript'}]),claimed['id']));db.commit()
+    # The fragment remains usable after a draft edit even without cache. Its
+    # case ID, exact current bytes and current verified interval are rechecked.
+    db.execute("DELETE FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid",(A,));db.commit()
+    fragment_result=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version+1})
+    assert fragment_result['saved_byte_results'][0]['text']==result['saved_byte_results'][0]['text']
+    monkeypatch.setattr(inventory,'_fetch_current',lambda *_:(data+b'changed',mime))
+    changed=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':case_id,'message_id':message,'case_version':version+1})
+    assert changed['saved_byte_results']==[]
+    monkeypatch.setattr(inventory,'_fetch_current',lambda *_:(data,mime))
+    assert call.call_count==1
     assert db.execute("SELECT state,reserved_microusd FROM saas_ai_spend_reservations WHERE call_key='old-hold'")[0]=={'state':'unknown','reserved_microusd':100}
     assert db.execute('SELECT cap_microusd FROM saas_ai_media_grants WHERE id=%s::uuid',(campaign,))[0]['cap_microusd']==10000000
 

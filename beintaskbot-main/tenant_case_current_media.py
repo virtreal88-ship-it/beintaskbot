@@ -42,11 +42,11 @@ def _saved_byte_results(cur,tenant,campaign_id,source,digest):
     cur.execute("""SELECT e.media_results FROM saas_knowledge_campaign_fragments f
       JOIN saas_knowledge_extractions e ON e.tenant_id=f.tenant_id AND e.id=COALESCE(f.extraction_id,f.id)
       WHERE f.tenant_id=%s::uuid AND f.campaign_id=%s::uuid
-        AND f.route->>'case_id'=%s AND f.route->>'case_version'=%s
+        AND f.route->>'case_id'=%s
         AND f.route->'message_ids' @> %s::jsonb AND f.route->>'case_source_sha256'=%s
         AND e.route->>'case_source_sha256'=%s AND e.status='completed' AND f.status IN ('completed','partial')
       ORDER BY f.updated_at DESC LIMIT 3""",
-      (tenant,campaign_id,source['case_id'],str(source['case_version']),__import__('json').dumps([source['message_id']]),digest,digest))
+      (tenant,campaign_id,source['case_id'],__import__('json').dumps([source['message_id']]),digest,digest))
     rows=[(row,False) for row in cur.fetchall()]
     # Older extractions can also be reused when the result itself recorded
     # the exact bytes. Metadata-only source versions are never enough.
