@@ -64,23 +64,43 @@ def _saved_byte_results(cur,tenant,campaign_id,source,digest):
                 or result.get('status') not in {'processed','partial'} or (legacy and result.get('sha256')!=digest)):continue
             parts=[]
             for key in ('observation','transcript'):
-                if isinstance(result.get(key),str) and result[key].strip():parts.append(_safe_text(result[key]))
+                if isinstance(result.get(key),str) and result[key].strip():
+                    value=_safe_text(result[key])
+                    if key=='transcript' and source.get('kind')=='video' and result.get('audio_status')!='processed':
+                        value='Непроверенная расшифровка (не подтверждённый факт): '+value
+                    parts.append(value)
+            if result.get('transcript_candidate_status')=='uncertain_unverified' and isinstance(result.get('transcript_candidate'),str) and result['transcript_candidate'].strip():
+                parts.append('Непроверенная расшифровка (не подтверждённый факт): '+_safe_text(result['transcript_candidate']))
             for value in result.get('observations') or []:
                 if isinstance(value,dict) and isinstance(value.get('text'),str) and value['text'].strip():parts.append(_safe_text(value['text']))
             if parts:
                 entry={'status':result['status'],'text':'\n'.join(parts)[:4000]}
+                if source.get('kind')=='video':
+                    audio=result.get('audio_status')
+                    entry['audio_status']=audio if audio in {'processed','not_requested','unavailable_or_error','uncertain','no_speech_detected'} else 'unknown'
+                    reason=result.get('audio_reason')
+                    if reason in {'speech_confidence_unavailable','unsupported_video_asr_model','language_mismatch'}:entry['audio_reason']=reason
+                    from tenant_chat_ai_provider import is_safe_failure_code
+                    if is_safe_failure_code(result.get('audio_failure_code')):entry['audio_failure_code']=result['audio_failure_code']
                 key=(entry['status'],entry['text'])
                 if key not in seen:saved.append(entry);seen.add(key)
     cur.execute("SELECT to_regclass('public.saas_knowledge_media_cache') AS relation")
     if cur.fetchone().get('relation'):
-        cur.execute("""SELECT transcript FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid
+        cur.execute("""SELECT transcript,metadata FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid
           AND state='completed' AND metadata->>'kind' IN ('vision','asr') AND metadata->>'sha256'=%s
           AND metadata->'owner_retry_source'->>'message_id'=%s
           AND metadata->'owner_retry_source'->>'channel_id'=%s ORDER BY created_at DESC LIMIT 3""",
           (tenant,digest,source['message_id'],source['channel_id']))
         for row in cur.fetchall():
             if isinstance(row.get('transcript'),str) and row['transcript'].strip():
-                entry={'status':'processed','text':_safe_text(row['transcript'])[:4000]};key=(entry['status'],entry['text'])
+                meta=row.get('metadata') if isinstance(row.get('metadata'),dict) else {}
+                value=_safe_text(row['transcript'])[:4000]
+                if source.get('kind')=='video' and meta.get('kind')=='asr' and meta.get('speech_state')!='confident':
+                    value='Непроверенная расшифровка (не подтверждённый факт): '+value
+                entry={'status':'partial' if source.get('kind')=='video' else 'processed','text':value}
+                if source.get('kind')=='video' and meta.get('kind')=='asr':
+                    state=meta.get('speech_state');entry['audio_status']='processed' if state=='confident' else state if state in {'uncertain','no_speech_detected'} else 'unknown'
+                key=(entry['status'],entry['text'])
                 if key not in seen:saved.append(entry);seen.add(key)
     return saved[:3]
 

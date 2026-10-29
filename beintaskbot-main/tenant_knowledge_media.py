@@ -224,7 +224,11 @@ def collect(profile,item,check_before_ai=None):
                         elif text:
                             receipt['transcript_candidate']=text
                             receipt['transcript_candidate_status']='uncertain_unverified'
-                    except Exception as error: receipt['audio_status']='unknown' if getattr(error,'media_outcome_unknown',False) else 'unavailable_or_error'
+                    except Exception as error:
+                        from tenant_chat_ai_provider import is_safe_failure_code
+                        failure=getattr(error,'media_failure_code',None)
+                        receipt['audio_status']='unknown' if getattr(error,'media_outcome_unknown',False) else 'unavailable_or_error'
+                        receipt['audio_failure_code']=failure if is_safe_failure_code(failure) else 'media_processing_failed'
             else:
                 if not signature(data,mime): raise ValueError('invalid_image')
                 visuals=[(data,mime,{})]

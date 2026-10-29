@@ -757,3 +757,25 @@ def test_case_byte_snapshot_mismatch_stops_before_provider(context,monkeypatch,k
     monkeypatch.setattr(voice,'transcription_model',lambda item:'test')
     with pytest.raises(media.CaseSourceBytesChanged):media.collect({},item)
     download.assert_awaited_once()
+
+
+def test_video_audio_unknown_keeps_safe_failure_separate_from_sampled_frames(context,monkeypatch):
+    import tenant_knowledge_media_cache as cache
+    import tenant_knowledge_candidates_service as service
+    item,add,download=context;add('video');item.update(key='synthetic',credential_source='platform')
+    item['route'].update(allow_external_media=True,allow_paid_asr=True,allow_vision=True,video_model='gpt-4.1-2025-04-14')
+    download.return_value=(b'synthetic video','video/mp4')
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'gpt-4.1-2025-04-14':{'vision_low':8896}}))
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'gpt-4.1-2025-04-14':{'input':2000000,'output':8000000}}))
+    monkeypatch.setattr(media,'video_frames',lambda *a:[(PNG,'image/png',{'second':0})])
+    monkeypatch.setattr(media,'video_audio',lambda *a:(b'RIFFsynthetic','wav','audio/wav'))
+    monkeypatch.setattr(service,'check_active',lambda *a:None)
+    monkeypatch.setattr(cache,'observe_once',lambda *a,**kw:('sampled frame',{},True))
+    def fail(*args,**kwargs):
+        error=RuntimeError('SECRET must never be returned');error.media_outcome_unknown=True;error.media_failure_code='provider_http_403_model_access';raise error
+    monkeypatch.setattr(cache,'transcribe_once',fail)
+    _,results=media.collect({},item)
+    assert results[0]['status']=='partial' and results[0]['audio_status']=='unknown'
+    assert results[0]['audio_failure_code']=='provider_http_403_model_access'
+    assert results[0]['observations'][0]['text']=='sampled frame'
+    assert 'SECRET' not in json.dumps(results)
