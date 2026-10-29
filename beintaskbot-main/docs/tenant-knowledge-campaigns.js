@@ -46,6 +46,40 @@
     function clearPending(){if(!scopeCurrent())return;try{sessionStorage.removeItem(mountPendingKey);}catch(_error){}}
     const pendingMessage=()=>({ru:'Результат запуска ещё не подтверждён. Обновите состояние; не запускайте повторно.',az:'Başlatmanın nəticəsi hələ təsdiqlənməyib. Statusu yeniləyin; yenidən başlatmayın.',en:'The start outcome is not yet confirmed. Refresh status; do not start again.'}[language]||'Start outcome is not yet confirmed. Refresh status; do not start again.');
     const restore=host.querySelector('[data-campaign-restore]');
+    const continuation=document.createElement('div');continuation.dataset.caseContinuation='';continuation.setAttribute('role','status');
+    host.querySelector('[data-error]').before(continuation);
+    const continuationKey=mountPendingKey+':continuation';
+    const continuationPending=()=>{try{return JSON.parse(sessionStorage.getItem(continuationKey)||'null');}catch(_error){return null;}};
+    const continuationClear=()=>{try{sessionStorage.removeItem(continuationKey);}catch(_error){}};
+    let continuationPreview=null;
+    const continuationText=({ru:{open:'Проверить оставшиеся вложения',working:'Проверяем источники…',confirm:'Подготовить продолжение',ready:'Подготовлено. Обработка остаётся на паузе.',unknown:'Результат подготовки неизвестен. Обновите состояние; не создавайте повторную подготовку.',none:'Подходящих новых вложений пока нет.',error:'Не удалось проверить источники.'},az:{open:'Qalan əlavələri yoxla',working:'Mənbələr yoxlanılır…',confirm:'Davamı hazırla',ready:'Hazırlandı. Emal fasilədə qalır.',unknown:'Hazırlanmanın nəticəsi məlum deyil. Statusu yeniləyin; təkrar hazırlamayın.',none:'Hazırda uyğun yeni əlavə yoxdur.',error:'Mənbələri yoxlamaq mümkün olmadı.'},en:{open:'Check remaining attachments',working:'Checking sources…',confirm:'Prepare continuation',ready:'Prepared. Processing remains paused.',unknown:'Preparation outcome is unknown. Refresh status; do not prepare again.',none:'No eligible new attachments found.',error:'Could not check sources.'}})[language]||{open:'Check remaining attachments',working:'Checking sources…',confirm:'Prepare continuation',ready:'Prepared. Processing remains paused.',unknown:'Preparation outcome is unknown. Refresh status; do not prepare again.',none:'No eligible new attachments found.',error:'Could not check sources.'};
+    async function previewContinuation(){
+      if(busy||!scopeCurrent()||!campaign||continuationPending())return;
+      busy=true;continuation.textContent=continuationText.working;const id=String(campaign.id),version=Number(campaign.version);
+      try{const query=new URLSearchParams({...ctx.expected(),expected_version:String(version)});
+        const result=await ctx.api(base+'/'+encodeURIComponent(id)+'/case-continuation?'+query);
+        if(!scopeCurrent()||String(campaign?.id)!==id||Number(campaign?.version)!==version)return;
+        continuationPreview=result;const counts={};for(const source of result.sources||[])counts[source.extension_state]=(counts[source.extension_state]||0)+1;
+        const eligible=counts.known_not_attempted||0,uncertain=(counts.previous_outcome_unknown||0)+(counts.cached_bytes_unverified||0)+(counts.source_version_unverified||0)+(result.blocked||[]).length;
+        const covered=(counts.already_covered||0)+(counts.already_queued||0);
+        continuation.replaceChildren();const summary=document.createElement('p');summary.textContent=language==='ru'?`Кейсов исходной обработки: ${result.case_count}. Можно подготовить: ${eligible}; уже охвачено: ${covered}; источников требуют проверки: ${uncertain}. Подготовка разрешит включить перечисленные проверенные вложения, в том числе из прежних каналов компании, в существующую обработку с общим лимитом $10. При последующем продолжении они могут быть переданы внешнему AI. Сейчас анализ не запустится.`:`Cases in original processing: ${result.case_count}; ready: ${eligible}; already covered: ${covered}; sources needing review: ${uncertain}. Preparing adds the verified attachments, including historical company channels, to the existing $10 grant. A later resume may send them to external AI. Analysis will remain paused.`;continuation.append(summary);
+        if(result.cases?.length){const detail=document.createElement('details'),heading=document.createElement('summary');heading.textContent=language==='ru'?'Кейсы исходной обработки':'Cases in original processing';detail.append(heading);for(const item of result.cases){const line=document.createElement('p');line.textContent=[item.title||item.case_id,item.status].filter(Boolean).join(' · ');detail.append(line);}continuation.append(detail);}
+        const issues=[...(result.blocked||[]),...(result.sources||[]).filter(source=>!['known_not_attempted','already_covered','already_queued'].includes(source.extension_state)).map(source=>({case_id:source.case_id,message_id:source.message_id,reason:source.extension_state}))];
+        if(issues.length){const detail=document.createElement('details'),heading=document.createElement('summary');heading.textContent=language==='ru'?'Источники, требующие проверки':'Sources needing review';detail.append(heading);for(const issue of issues){const line=document.createElement('p');line.textContent=[issue.case_id,issue.message_id,issue.reason].filter(Boolean).join(' · ');detail.append(line);}continuation.append(detail);}
+        if(!eligible){const note=document.createElement('p');note.textContent=continuationText.none;continuation.append(note);return;}
+        const button=document.createElement('button');button.type='button';button.className='primary';button.textContent=continuationText.confirm;button.onclick=applyContinuation;continuation.append(button);
+      }catch(error){if(scopeCurrent())continuation.textContent=error.message||continuationText.error;}finally{busy=false;}
+    }
+    async function applyContinuation(){
+      if(busy||!scopeCurrent()||!campaign||!continuationPreview||continuationPending())return;
+      const p=continuationPreview;if(Number(campaign.version)!==Number(p.campaign_version))return;
+      const request=crypto.randomUUID(),saved={campaign_id:String(campaign.id),request_id:request};
+      try{sessionStorage.setItem(continuationKey,JSON.stringify(saved));}catch(_error){continuation.textContent=continuationText.unknown;return;}
+      busy=true;let committed=false;continuation.textContent=continuationText.working;
+      try{await post(base+'/'+encodeURIComponent(saved.campaign_id)+'/case-continuation',{expected_version:p.campaign_version,source_refs:p.source_refs,snapshot_hash:p.snapshot_hash,request_id:request,confirm_exact_preview:true});
+        committed=true;if(!scopeCurrent())return;continuationPreview=null;await refresh(true);if(scopeCurrent())continuation.textContent=continuationText.ready;
+      }catch(error){if(scopeCurrent()){if(!committed&&error.status>=400&&error.status<500)continuationClear();draw();continuation.textContent=committed?continuationText.ready:(!committed&&error.status>=400&&error.status<500?(error.message||continuationText.error):continuationText.unknown);}}finally{busy=false;}
+    }
     const restoreCopy={ru:{loading:'Проверяем обработку…',retry:'Проверить обработку',failed:'Не удалось проверить обработку. Повторите проверку.'},az:{loading:'Emalın vəziyyəti yoxlanılır…',retry:'Emalı yoxla',failed:'Emalın vəziyyəti yoxlanmadı. Yenidən yoxlayın.'},en:{loading:'Checking processing status…',retry:'Check processing status',failed:'Could not check processing status. Please retry.'}}[language]||{loading:'Checking processing status…',retry:'Check processing status',failed:'Could not check processing status. Please retry.'};
     restore.textContent=restoreCopy.retry;host.querySelector('[data-campaign-status]').textContent=restoreCopy.loading;
     const allCases=host.querySelector('[data-all-existing]');
@@ -149,6 +183,14 @@
           const label=document.createElement('label'),box=document.createElement('input');box.type='checkbox';box.dataset.consent='';box.checked=consentVersion===campaign.version;label.append(box,document.createTextNode(t[17]));actions.append(label);add(t[6],'start');const start=actions.querySelector('button');start.disabled=startUncertain||!box.checked;box.onchange=()=>{consentVersion=box.checked?campaign.version:null;start.disabled=startUncertain||!box.checked;};
         }
       }if(campaign.status==='running')add(t[7],'pause');if(campaign.status==='paused')add(t[8],'resume');if(campaign.status!=='stopped')add(t[9],'stop');add(t[10],'refresh');
+      const savedContinuation=continuationPending();
+      if(savedContinuation&&String(savedContinuation.campaign_id)===String(campaign.id)){
+        if(campaign.progress?.case_extensions?.[savedContinuation.request_id]){continuationClear();continuationPreview=null;continuation.textContent=continuationText.ready;}
+        else continuation.textContent=continuationText.unknown;
+      }
+      if(ctx.member?.role==='owner'&&campaign.grant_approved&&campaign.progress?.mode==='case_media_batch'&&['paused','stopped'].includes(campaign.status)&&!continuationPending()){
+        const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=continuationText.open;button.onclick=previewContinuation;actions.append(button);
+      }
     }
     async function refresh(fresh=false){
       if(refreshFlight){if(!fresh)return refreshFlight;try{await refreshFlight;}catch(_error){}if(!scopeCurrent())return;return refresh(true);}

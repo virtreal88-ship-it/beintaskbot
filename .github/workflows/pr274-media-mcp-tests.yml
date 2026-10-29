@@ -81,6 +81,7 @@ jobs:
           tests/test_tenant_ai_testing_retrieval.py
           tests/test_knowledge_candidates.py
           tests/test_case_source_inventory.py
+          tests/test_case_continuation_owner_api.py
           tests/test_case_extension_postgres.py
           tests/test_case_media_coverage.py
           tests/test_case_media_admission.py
@@ -113,6 +114,7 @@ jobs:
           node tests/test_instruction_video_card.cjs
           SUPPORT_CASES_JSDOM=../.support-test-deps/node_modules/jsdom node tests/test_case_media_coverage_ui.cjs
           SUPPORT_CASES_PLAYWRIGHT=../.support-test-deps/node_modules/playwright node tests/test_case_processing_workflow_browser.cjs
+          SUPPORT_CASES_PLAYWRIGHT=../.support-test-deps/node_modules/playwright node tests/test_case_continuation_owner_browser.cjs
           SUPPORT_CASES_PLAYWRIGHT=../.support-test-deps/node_modules/playwright node tests/test_campaign_visibility_browser.cjs
           node tests/test_knowledge_campaigns_ui.cjs
           node tests/test_knowledge_campaign_reconciliation_ui.cjs
