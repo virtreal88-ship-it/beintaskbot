@@ -198,6 +198,7 @@ def observe_once(profile,item,ref,content,mime,origin,invoke,check_before_ai=Non
                     _raise_unknown_cache(legacy,'vision')
                 fingerprint,artifact_retry_key,source_identity=_batch_retry_fingerprint(item,base_fingerprint,'vision',ref)
                 meta={**meta,'owner_retry_grant':str(item['route']['media_grant_id']),
+                      'owner_retry_extraction_id':str(item.get('id') or ''),
                       'owner_retry_component':'vision','artifact_fingerprint':base_fingerprint,
                       'owner_retry_source':source_identity}
                 artifact_meta={**meta,'owner_retry_artifact':True}

@@ -19,7 +19,10 @@ def _apply(dsn, campaign, request_id, source, barrier, results, source_mode):
     tenant_platform._connect=lambda:psycopg.connect(dsn,row_factory=dict_row)
     extension.cases.authorize=lambda *args:(A,11,SimpleNamespace(profile={'role':'owner'}))
     extension.preview=lambda *args,**kw:{'snapshot_hash':'a'*64,'budget':{'available_microusd':9000000},'operation_capacity':{'next_fragment_fits':True},'_snapshot':[source]}
-    extension._verified_byte_history=lambda *args,**kw:{'state':'incomplete_history_eligible' if source_mode=='incomplete' else 'known_not_attempted'}
+    extension._verified_byte_history=lambda *args,**kw:({'state':'unknown','reason':'prior_media_result_unknown'} if source_mode=='unknown' else {'state':'incomplete_history_eligible' if source_mode=='incomplete' else 'known_not_attempted'})
+    if source_mode=='unknown':
+        import tenant_case_uncertain_retry
+        tenant_case_uncertain_retry.eligible=lambda *args,**kw:True
     def enqueue(cur,profile,campaign,route):
         fragment=str(uuid.uuid4())
         cur.execute('INSERT INTO saas_knowledge_campaign_fragments(tenant_id,campaign_id,id,source_key,route) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::jsonb)',(A,campaign['id'],fragment,fragment,json.dumps(route)))
@@ -28,13 +31,13 @@ def _apply(dsn, campaign, request_id, source, barrier, results, source_mode):
     try:
         barrier.wait(15)
         values={(source['case_id'],source['message_id']):'d'*64} if source_mode!='standard' else None
-        value=extension.apply(PROFILE,campaign,1,[], 'a'*64,request_id,verified_bytes=values,acknowledge_incomplete_history=source_mode=='incomplete')
+        value=extension.apply(PROFILE,campaign,1,[], 'a'*64,request_id,verified_bytes=values,acknowledge_incomplete_history=source_mode=='incomplete',unknown_selected={(source['case_id'],source['message_id'])} if source_mode=='unknown' else None)
         results.put(('ok',value['replayed']))
     except Exception as error:results.put(('error',type(error).__name__,str(error)))
 
 
 @pytest.mark.parametrize('same_request',[True,False])
-@pytest.mark.parametrize('source_mode',['standard','verified','incomplete'])
+@pytest.mark.parametrize('source_mode',['standard','verified','incomplete','unknown'])
 def test_concurrent_extension_is_single_commit_and_keeps_holds(database,same_request,source_mode):
     db=database;store.schema(db);campaigns.create_schema(db)
     import tenant_ai_spend_budget as spending

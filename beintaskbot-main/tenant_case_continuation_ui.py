@@ -90,17 +90,19 @@ def preview_owner(profile,campaign_id,expected_version):
 
 def apply_owner(profile,campaign_id,data):
     required={'expected_version','source_refs','snapshot_hash','request_id','confirm_exact_preview'}
-    if not isinstance(data,dict) or not required.issubset(data) or set(data)-required-{'current_byte_sources','acknowledge_incomplete_history'} or data['confirm_exact_preview'] is not True:
+    if not isinstance(data,dict) or not required.issubset(data) or set(data)-required-{'current_byte_sources','acknowledge_incomplete_history','acknowledge_unknown_selected'} or data['confirm_exact_preview'] is not True:
         raise TenantLinearError('Confirm the exact preview.',400)
     # Client hashes are merely assertions. Re-fetch every exact source under the
     # owner's session before the locked transaction; dispatch checks bytes again.
     ack=data.get('acknowledge_incomplete_history',False)
     if type(ack) is not bool:raise TenantLinearError('Invalid acknowledgement.',400)
+    unknown_ack=data.get('acknowledge_unknown_selected',False)
+    if type(unknown_ack) is not bool:raise TenantLinearError('Invalid acknowledgement.',400)
     supplied=data.get('current_byte_sources',[])
-    if not isinstance(supplied,list) or len(supplied)>10:raise TenantLinearError('Invalid byte snapshot.',400)
+    if not isinstance(supplied,list) or len(supplied)>10 or (unknown_ack and not supplied):raise TenantLinearError('Invalid byte snapshot.',400)
     refs=data['source_refs']
     if not isinstance(refs,list):raise TenantLinearError('Invalid sources.',400)
-    verified={}
+    verified={};unknown_selected=set()
     from tenant_case_current_media import verify_owner_source
     for item in supplied:
         if not isinstance(item,dict) or set(item)!={'case_id','message_id','case_version','sha256'}:
@@ -115,7 +117,11 @@ def apply_owner(profile,campaign_id,data):
             raise TenantLinearError('Concurrent audio processing requires reconciliation.',409)
         state=value['attempt_reconciliation']['state']
         if value.get('saved_byte_results'):raise TenantLinearError('An exact-byte result is already available.',409)
-        if state!='known_not_attempted' and not (state=='incomplete_history_eligible' and ack):
+        if unknown_ack:
+            if value.get('uncertain_retry_available') is not True:
+                raise TenantLinearError('Selected uncertain media changed or is active.',409)
+            unknown_selected.add(key)
+        elif state!='known_not_attempted' and not (state=='incomplete_history_eligible' and ack):
             raise TenantLinearError('Prior media outcome is unknown.',409)
         verified[key]=value['current_sha256']
-    return apply(profile,campaign_id,data['expected_version'],refs,data['snapshot_hash'],data['request_id'],_max_sources=MAX_SOURCES,original_cases_only=True,verified_bytes=verified,acknowledge_incomplete_history=ack)
+    return apply(profile,campaign_id,data['expected_version'],refs,data['snapshot_hash'],data['request_id'],_max_sources=MAX_SOURCES,original_cases_only=True,verified_bytes=verified,acknowledge_incomplete_history=ack,unknown_selected=unknown_selected)

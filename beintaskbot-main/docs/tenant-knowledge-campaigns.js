@@ -29,7 +29,7 @@
     else if(supported==='not_reported')blocked='check_response_incomplete';
     else if(supported==='no')blocked='continuation_not_supported';
     else if(!['source_version_unverified','previous_outcome_unknown'].includes(scope))blocked='source_not_eligible';
-    else if(!['known_not_attempted','incomplete_history_eligible'].includes(state))blocked='history_not_eligible';
+    else if(!['known_not_attempted','incomplete_history_eligible'].includes(state))blocked=value?.uncertain_retry_available===true?'owner_selection_required':'history_not_eligible';
     else if(!(Number(preview?.budget?.available_microusd)>0))blocked='budget_unavailable';
     else if(preview?.operation_capacity?.next_fragment_fits===false)blocked='operation_allowance_exhausted';
     return {state,reason,supported,saved,scope,blocked};
@@ -72,7 +72,7 @@
     const continuationKey=mountPendingKey+':continuation';
     const continuationPending=()=>{try{return JSON.parse(sessionStorage.getItem(continuationKey)||'null');}catch(_error){return null;}};
     const continuationClear=()=>{try{sessionStorage.removeItem(continuationKey);}catch(_error){}};
-    let continuationPreview=null,currentByteSources=[],currentByteNeedsAck=false;
+    let continuationPreview=null,currentByteSources=[],currentByteNeedsAck=false,unknownSelections=[];
     const continuationText=({ru:{open:'Проверить оставшиеся вложения',working:'Проверяем источники…',confirm:'Подготовить продолжение',ready:'Подготовлено. Обработка остаётся на паузе.',unknown:'Результат подготовки неизвестен. Обновите состояние; не создавайте повторную подготовку.',none:'Подходящих новых вложений пока нет.',error:'Не удалось проверить источники.'},az:{open:'Qalan əlavələri yoxla',working:'Mənbələr yoxlanılır…',confirm:'Davamı hazırla',ready:'Hazırlandı. Emal fasilədə qalır.',unknown:'Hazırlanmanın nəticəsi məlum deyil. Statusu yeniləyin; təkrar hazırlamayın.',none:'Hazırda uyğun yeni əlavə yoxdur.',error:'Mənbələri yoxlamaq mümkün olmadı.'},en:{open:'Check remaining attachments',working:'Checking sources…',confirm:'Prepare continuation',ready:'Prepared. Processing remains paused.',unknown:'Preparation outcome is unknown. Refresh status; do not prepare again.',none:'No eligible new attachments found.',error:'Could not check sources.'}})[language]||{open:'Check remaining attachments',working:'Checking sources…',confirm:'Prepare continuation',ready:'Prepared. Processing remains paused.',unknown:'Preparation outcome is unknown. Refresh status; do not prepare again.',none:'No eligible new attachments found.',error:'Could not check sources.'};
     async function previewContinuation(){
       if(busy||!scopeCurrent()||!campaign||continuationPending())return;
@@ -80,7 +80,7 @@
       try{const query=new URLSearchParams({...ctx.expected(),expected_version:String(version)});
         const result=await ctx.api(base+'/'+encodeURIComponent(id)+'/case-continuation?'+query);
         if(!scopeCurrent()||String(campaign?.id)!==id||Number(campaign?.version)!==version)return;
-        continuationPreview=result;currentByteSources=[];currentByteNeedsAck=false;const counts={};for(const source of result.sources||[])counts[source.extension_state]=(counts[source.extension_state]||0)+1;
+        continuationPreview=result;currentByteSources=[];currentByteNeedsAck=false;unknownSelections=[];const counts={};for(const source of result.sources||[])counts[source.extension_state]=(counts[source.extension_state]||0)+1;
         const outside=(result.blocked||[]).filter(item=>item.reason==='outside_verified_case').length;
         const eligible=counts.known_not_attempted||0,uncertain=(result.sources||[]).filter(source=>!['known_not_attempted','already_covered','already_queued'].includes(source.extension_state)).length+(result.blocked||[]).length-outside;
         const covered=(counts.already_covered||0)+(counts.already_queued||0);
@@ -92,7 +92,7 @@
         const checkable=(result.sources||[]).filter(source=>source.current_source_addressable===true&&['source_version_unverified','previous_outcome_unknown','cached_bytes_unverified'].includes(source.extension_state));
         if(checkable.length){const check=document.createElement('button');check.type='button';check.className='outline';check.textContent=language==='ru'?'Проверить исходные файлы':'Check original files';check.onclick=()=>verifyCurrentSources(check,checkable,result);continuation.append(check);}
         if(!eligible||result.budget&&Number(result.budget.available_microusd)<=0||result.operation_capacity?.next_fragment_fits===false){const note=document.createElement('p');note.textContent=!eligible?continuationText.none:(language==='ru'?'Исходный лимит исчерпан; продолжение не подготовлено.':'The original allowance is exhausted; no continuation was prepared.');continuation.append(note);return;}
-        const button=document.createElement('button');button.type='button';button.className='primary';button.textContent=continuationText.confirm;button.onclick=applyContinuation;continuation.append(button);
+        const button=document.createElement('button');button.type='button';button.className='primary';button.textContent=continuationText.confirm;button.onclick=()=>applyContinuation(false);continuation.append(button);
       }catch(error){if(scopeCurrent())continuation.textContent=error.message||continuationText.error;}finally{busy=false;}
     }
     async function verifyCurrentSources(button,sources,preview){
@@ -106,25 +106,32 @@
         const line=document.createElement('p');line.textContent=language==='ru'?'Проверяем файл…':'Checking file…';detail.append(line);
         try{const value=await post(base+'/'+encodeURIComponent(campaign.id)+'/current-media-check',{expected_version:preview.campaign_version,case_id:source.case_id,message_id:source.message_id,case_version:source.case_version});
           if(!scopeCurrent())return;checked++;if(['source_version_unverified','previous_outcome_unknown'].includes(source.extension_state)&&value.continuation_supported===true&&!(value.saved_byte_results||[]).length&&['known_not_attempted','incomplete_history_eligible'].includes(value.attempt_reconciliation?.state)){if(value.attempt_reconciliation.state==='incomplete_history_eligible')currentByteNeedsAck=true;currentByteSources.push({case_id:value.case_id,message_id:value.message_id,case_version:value.case_version,sha256:value.current_sha256});}line.textContent=[value.case_id,value.message_id,value.provider,value.mime_type,value.size_bytes+' bytes',value.current_sha256,language==='ru'?'Текущий файл получен; старая версия не подтверждена.':'Current bytes received; the previous version remains unverified.',...(value.continuation_supported===false?[language==='ru'?'Аудио ожидает проверки параллельной обработки.':'Audio awaits concurrent-processing reconciliation.']:[]),...(value.saved_byte_results||[]).map(result=>result.text)].join(' · ');
+          if(['source_version_unverified','previous_outcome_unknown'].includes(source.extension_state)&&value.uncertain_retry_available===true&&value.continuation_supported===true&&!(value.saved_byte_results||[]).length){
+            const label=document.createElement('label'),check=document.createElement('input');check.type='checkbox';
+            const entry={case_id:value.case_id,message_id:value.message_id,case_version:value.case_version,sha256:value.current_sha256};
+            unknownSelections.push({check,entry});label.append(check,document.createTextNode((language==='ru'?' Выбрать одну новую попытку для фото ':' Select one new attempt for photo ')+value.message_id));detail.append(label);
+            let action=continuation.querySelector('[data-unknown-retry]');if(!action){action=document.createElement('button');action.type='button';action.className='outline';action.dataset.unknownRetry='';action.disabled=true;action.textContent=language==='ru'?'Одна новая попытка для выбранных файлов':'One new attempt for selected files';action.onclick=()=>applyContinuation(true);continuation.append(action);const warning=document.createElement('p');warning.textContent=language==='ru'?'Возможна повторная оплата внутри общего лимита $10; прежние удержания сохраняются. Активные попытки блокируются.':'A repeat charge is possible within the total $10 limit; old holds remain. Active attempts are blocked.';continuation.append(warning);}check.onchange=()=>{action.disabled=!unknownSelections.some(item=>item.check.checked);};
+          }
           const details=document.createElement('details'),summary=document.createElement('summary'),diagnostic=document.createElement('p');
           summary.textContent=language==='ru'?'Диагностика файла':'File diagnostics';
           const d=mediaCheckDiagnostics(source,value,preview);
           diagnostic.textContent=`state=${d.state}; reason=${d.reason}; continuation_supported=${d.supported}; saved_byte_results=${d.saved}; preview_state=${d.scope}; blocking_reason=${d.blocked}`;
           details.append(summary,diagnostic);detail.append(details);
         }catch(error){if(!scopeCurrent())return;line.textContent=[source.case_id,source.message_id,error.message||'Connect: source_check_failed'].join(' · ');if([401,403,409,429].includes(error.status)){stopped=true;break;}}
-      }if(stopped){currentByteSources=[];currentByteNeedsAck=false;continuation.querySelectorAll('button.primary').forEach(item=>item.disabled=true);const note=document.createElement('p');note.textContent=language==='ru'?'Проверка прервана: подготовка отключена.':'Check interrupted: preparation is disabled.';detail.append(note);}if(!stopped&&currentByteSources.length&&Number(preview.budget?.available_microusd)>0&&preview.operation_capacity?.next_fragment_fits!==false){
-        if(!continuation.querySelector('button.primary')){const prepare=document.createElement('button');prepare.type='button';prepare.className='primary';prepare.textContent=continuationText.confirm;prepare.onclick=applyContinuation;continuation.append(prepare);}
+      }if(stopped){currentByteSources=[];currentByteNeedsAck=false;unknownSelections=[];continuation.querySelectorAll('[data-unknown-retry]').forEach(item=>item.disabled=true);continuation.querySelectorAll('button.primary').forEach(item=>item.disabled=true);const note=document.createElement('p');note.textContent=language==='ru'?'Проверка прервана: подготовка отключена.':'Check interrupted: preparation is disabled.';detail.append(note);}if(!stopped&&currentByteSources.length&&Number(preview.budget?.available_microusd)>0&&preview.operation_capacity?.next_fragment_fits!==false){
+        if(!continuation.querySelector('button.primary')){const prepare=document.createElement('button');prepare.type='button';prepare.className='primary';prepare.textContent=continuationText.confirm;prepare.onclick=()=>applyContinuation(false);continuation.append(prepare);}
         const note=document.createElement('p');note.textContent=language==='ru'?`Проверено и можно подготовить: ${currentByteSources.length}. ${currentByteNeedsAck?'У некоторых файлов старая история неполная: возможна повторная оплата внутри общего лимита $10. Нажатие «Подготовить продолжение» подтверждает одну попытку; прежние резервы сохраняются.':'Известные незавершённые попытки остаются заблокированы.'}`:`Verified and eligible: ${currentByteSources.length}. ${currentByteNeedsAck?'Some files have incomplete history: one attempt may be billed again within the existing $10 cap. Preparing acknowledges that risk; prior holds remain.':'Known unresolved attempts remain blocked.'}`;continuation.append(note);
-      }button.dataset.offset=String(offset+attempted);if(!stopped&&offset+attempted<ordered.length&&!currentByteSources.length){button.disabled=false;const note=document.createElement('p');note.textContent=language==='ru'?`Осталось проверить: ${ordered.length-offset-attempted}.`:`Remaining to check: ${ordered.length-offset-attempted}.`;detail.append(note);}}
+      }button.dataset.offset=String(offset+attempted);if(!stopped&&offset+attempted<ordered.length){button.disabled=false;const note=document.createElement('p');note.textContent=language==='ru'?`Осталось проверить: ${ordered.length-offset-attempted}.`:`Remaining to check: ${ordered.length-offset-attempted}.`;detail.append(note);}}
       finally{busy=false;}
     }
-    async function applyContinuation(){
+    async function applyContinuation(unknownRetry=false){
       if(busy||!scopeCurrent()||!campaign||!continuationPreview||continuationPending())return;
       const p=continuationPreview;if(Number(campaign.version)!==Number(p.campaign_version))return;
+      const chosen=unknownRetry?unknownSelections.filter(item=>item.check.checked).map(item=>item.entry):currentByteSources;if(unknownRetry&&!chosen.length)return;
       const request=crypto.randomUUID(),saved={campaign_id:String(campaign.id),request_id:request};
       try{sessionStorage.setItem(continuationKey,JSON.stringify(saved));}catch(_error){continuation.textContent=continuationText.unknown;return;}
       busy=true;let committed=false;continuation.textContent=continuationText.working;
-      try{await post(base+'/'+encodeURIComponent(saved.campaign_id)+'/case-continuation',{expected_version:p.campaign_version,source_refs:p.source_refs,snapshot_hash:p.snapshot_hash,request_id:request,confirm_exact_preview:true,current_byte_sources:currentByteSources,acknowledge_incomplete_history:currentByteNeedsAck});
+      try{await post(base+'/'+encodeURIComponent(saved.campaign_id)+'/case-continuation',{expected_version:p.campaign_version,source_refs:p.source_refs,snapshot_hash:p.snapshot_hash,request_id:request,confirm_exact_preview:true,current_byte_sources:chosen,acknowledge_incomplete_history:unknownRetry?false:currentByteNeedsAck,acknowledge_unknown_selected:unknownRetry});
         committed=true;if(!scopeCurrent())return;continuationPreview=null;await refresh(true);if(scopeCurrent())continuation.textContent=continuationText.ready;
       }catch(error){if(scopeCurrent()){if(!committed&&error.status>=400&&error.status<500)continuationClear();draw();continuation.textContent=committed?continuationText.ready:(!committed&&error.status>=400&&error.status<500?(error.message||continuationText.error):continuationText.unknown);}}finally{busy=false;}
     }
