@@ -40,7 +40,9 @@ def _verified_byte_history(cur,tenant,message_id,source_hash,*,exclude_extractio
                 result=results[0]
                 if result.get('status') in {'unknown','running','pending_processing'}:return blocked('prior_media_result_unknown')
                 if result.get('status') in {'processed','partial'}:return blocked('prior_media_result_recorded')
-                if result.get('code') not in {'vision_not_approved','external_media_permission_required','asr_authorization_required'} or not _explicit_no_media_call(refs[0],result):
+                allowed_codes=({'external_media_permission_required','vision_not_approved'} if refs[0]['media_kind']=='image'
+                               else {'external_media_permission_required','asr_authorization_required'})
+                if result.get('code') not in allowed_codes or not _explicit_no_media_call(refs[0],result):
                     return blocked('prior_media_result_not_pre_dispatch')
             cur.execute("SELECT to_regclass('public.saas_ai_spend_reservations') AS relation")
             if not cur.fetchone().get('relation'):return history
