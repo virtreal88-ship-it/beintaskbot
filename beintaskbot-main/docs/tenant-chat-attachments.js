@@ -9,6 +9,18 @@
   const formatSize=value=>{const bytes=Number(value);if(!Number.isFinite(bytes)||bytes<0)return '';if(bytes<1024)return `${bytes} B`;if(bytes<1024*1024)return `${Math.round(bytes/1024)} KB`;return `${(bytes/(1024*1024)).toFixed(1)} MB`;};
   const duration=value=>{const seconds=Number(value);if(!Number.isFinite(seconds)||seconds<0)return '';const whole=Math.round(seconds);return `${Math.floor(whole/60)}:${String(whole%60).padStart(2,'0')}`;};
   const dispositionName=header=>{const encoded=String(header||'').match(/filename\*=UTF-8''([^;]+)/i);if(encoded){try{return decodeURIComponent(encoded[1].trim().replace(/^"|"$/g,''));}catch(_error){}}return String(header||'').match(/filename="?([^";]+)"?/i)?.[1]?.trim()||'';};
+  async function downloadAttachment(button,url,status){
+    if(button.disabled||!member||!url)return;
+    const retry=Number(button.dataset.retryAt||0);if(retry>Date.now()){status.textContent=text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(Math.ceil((retry-Date.now())/1000)));return;}
+    const current=epoch,who=identity(member);button.disabled=true;status.textContent=text('loading','Yüklənir…');
+    try{const response=await fetch(url,{credentials:'same-origin',cache:'no-store'});
+      if(!response.ok){const data=await response.json().catch(()=>({}));if(response.status===429){const seconds=Math.max(1,Math.min(3600,parseInt(response.headers.get('Retry-After')||'60',10)||60));button.dataset.retryAt=String(Date.now()+seconds*1000);throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds)));}throw Error(response.status===404||response.status===410?text('mediaUnavailable','File is unavailable or expired.'):data.error||text('mediaFailed','File could not be downloaded.'));}
+      const blob=await response.blob();if(current!==epoch||who!==identity(member)||!button.isConnected)return;if(!blob.size||blob.size>MAX_PREVIEW_BYTES)throw Error(text('mediaLarge','File is too large.'));
+      const objectUrl=URL.createObjectURL(blob),link=document.createElement('a');link.href=objectUrl;link.download=dispositionName(response.headers.get('Content-Disposition'))||'attachment';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);status.textContent='';delete button.dataset.retryAt;
+    }catch(error){if(current===epoch&&who===identity(member)&&button.isConnected)status.textContent=error.message||text('mediaFailed','File could not be downloaded.');}
+    finally{button.disabled=false;}
+  }
+  if(globalThis.window)window.tenantDownloadAttachment=downloadAttachment;
   function audioPlayer(url,seconds){
     const wrap=document.createElement('div'),audio=document.createElement('audio'),play=document.createElement('button'),range=document.createElement('input'),clock=document.createElement('span');
     wrap.className='operator-media-audio';if(wrap.dataset)wrap.dataset.mediaPreview='audio';audio.preload='none';audio.src=url;play.type='button';play.className='outline';play.textContent='▶';play.setAttribute('aria-label',text('playMedia','Play'));
@@ -59,6 +71,7 @@
     });
   }
   function bind(){
+    document.querySelectorAll('[data-media-download]').forEach(button=>{button.onclick=()=>downloadAttachment(button,button.dataset.mediaDownload,button.closest('.operator-media-card')?.querySelector('[role="status"]'));});
     document.querySelectorAll('#chatRows [data-chat-attachment], [data-learning-chat] [data-chat-attachment]').forEach(host=>{
       const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button'),status=host.querySelector('[role="status"]');
       if(!button)return;

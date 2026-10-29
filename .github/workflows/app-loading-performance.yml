@@ -43,6 +43,9 @@ jobs:
           node tests/test_tenant_app_syntax.cjs
           node tests/test_tenant_dialog_avatar_queue.cjs
           node tests/test_tenant_operator_auto_refresh_ui.cjs
+          node tests/test_case_attachment_download_ui.cjs
+          node tests/test_support_cases_modal_ui.cjs
+          node tests/test_tenant_operator_mobile_ui.cjs
       - name: Check dialog SQL and authorization regressions
         run: >-
           python -m pytest -q --tb=short
@@ -51,6 +54,7 @@ jobs:
           tests/test_knowledge_center_request_contract.py
           tests/test_read_timing.py
           tests/test_operator_list_performance.py
+          tests/test_tenant_chat_attachments.py
           tests/test_connect_channel_isolation.py::test_read_snapshot_uses_insertion_order_and_keeps_later_arrivals_unread
           tests/test_connect_group_history.py::test_read_snapshot_selects_the_captured_copy_on_the_open_channel
           tests/test_tenant_operator_workspace.py
