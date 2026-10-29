@@ -83,6 +83,25 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
         with pytest.raises(TenantLinearError):mcp._tools(cur,{'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[]},'support_media_case_source_inspect',{})
         args={'case_id':key,'message_id':message,'campaign_id':campaign,'expected_version':version,'include_content':True}
         with pytest.raises(TenantLinearError):mcp._tools(cur,{'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.SUPPORT_MEDIA_SCOPE]},'support_media_case_source_verify',args)
+    # Old extractions recorded an internal UUID and channel without the later
+    # attachment fields. Verify the actual route, do not infer historical bytes.
+    legacy={'id':message,'channel_id':oldchannel,'body_hash':_body_hash(''),'text_limit':68}
+    unrelated=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type,body,raw) VALUES(%s::uuid,%s::uuid,308,%s,%s,'incoming','image','',%s::jsonb)",(unrelated,A,'connect:'+str(uuid.uuid4()),'connect:'+oldchannel,json.dumps(raw)))
+    db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb WHERE id=%s::uuid',(json.dumps([legacy,{'id':unrelated,'channel_id':oldchannel}]),case['extraction_id']));db.commit()
+    with db.cursor() as cur:
+        actual=inventory.inspect(cur,PROFILE,key,message,version,campaign)
+        assert actual['legacy_source_reference'] is True and actual['channel_id']==oldchannel
+        assert actual['kind']=='image' and actual['current_source_addressable'] is True
+        assert actual['current_bytes_checked'] is False and actual['dispatch_authorized'] is False
+        state=extension.preview(cur,PROFILE,campaign,1,[{'case_id':key,'message_id':message,'expected_version':version}])
+        assert state['sources'][0]['extension_state']=='previous_outcome_unknown'
+        with pytest.raises(TenantLinearError) as outside:inventory.inspect(cur,PROFILE,key,unrelated,version,campaign)
+        assert outside.value.status==403
+    for altered in ({**legacy,'external_id':'wrong'}, {**legacy,'media_kind':'video'}, {**legacy,'channel_id':CA}):
+        db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb WHERE id=%s::uuid',(json.dumps([altered]),case['extraction_id']));db.commit()
+        with db.cursor() as cur,pytest.raises(TenantLinearError):inventory.inspect(cur,PROFILE,key,message,version,campaign)
+    db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb WHERE id=%s::uuid',(json.dumps([ref]),case['extraction_id']));db.commit()
     version_hash=media_version(raw);hashed=source_hash({'external_id':external,'body_hash':_body_hash(''),'media_kind':'image','media_version':version_hash})
     snapshot['case_plans']=[{'case_id':key,'case_version':version,'channel_id':oldchannel,'media':[{'id':message,'source_version':version_hash,'source_hash':hashed}]}]
     db.execute('UPDATE saas_knowledge_campaigns SET sources=%s::jsonb,progress=%s::jsonb WHERE id=%s::uuid',(json.dumps([oldchannel]),json.dumps(snapshot),campaign));db.commit()
@@ -226,3 +245,43 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
     db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',
       (json.dumps({**raw,'mediaId':'changed'}),message));db.commit()
     with db.cursor() as cur,pytest.raises(TenantLinearError):worker.check_fence(cur,A,fragment['id'])
+
+
+def test_verified_case_interval_allows_only_matching_current_channel_media(ready,monkeypatch):
+    db,provider,_=ready;case=candidate(ready);key=case['id'];version=case['version'];campaign=str(uuid.uuid4())
+    run=db.execute('SELECT source_refs FROM saas_knowledge_extractions WHERE id=%s::uuid',(case['extraction_id'],))[0]
+    refs=run['source_refs'];assert len(refs)>=2
+    ordered=db.execute("SELECT id::text AS id,COALESCE(happened_at,created_at) AS at FROM saas_crm_messages WHERE id=ANY(%s::uuid[]) ORDER BY COALESCE(happened_at,created_at),id",([r['id'] for r in refs],))
+    start,end=ordered[0]['id'],ordered[-1]['id'];inside=str(uuid.uuid4());outside=str(uuid.uuid4())
+    for selected,interval in ((inside,"interval '0.1 second'"),(outside,"interval '-1 second'")):
+        db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type,body,raw,happened_at) SELECT %s::uuid,%s::uuid,41,%s,%s,'incoming','image','',%s::jsonb,COALESCE(happened_at,created_at)+"+interval+" FROM saas_crm_messages WHERE id=%s::uuid",(selected,A,'connect:'+str(uuid.uuid4()),'connect:'+CA,json.dumps({'conversationId':'client','mediaId':'stable'}),start))
+    new_refs=list(refs)
+    for selected in (inside,outside):
+        row=db.execute('SELECT external_id FROM saas_crm_messages WHERE id=%s::uuid',(selected,))[0]
+        new_refs.append({'id':selected,'channel_id':CA,'external_id':row['external_id'],'media_kind':'image'})
+    db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb WHERE id=%s::uuid',(json.dumps(new_refs),case['extraction_id']))
+    content=db.execute('SELECT content FROM saas_knowledge_candidates WHERE id=%s::uuid',(key,))[0]['content']
+    content.update(start_message_id=start,end_message_id=end,source_message_ids=[r['id'] for r in refs])
+    db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE id=%s::uuid',(json.dumps(content),key))
+    campaigns.create_schema(db)
+    policy={'allow_external_media':True,'allow_paid_asr':False,'max_main_calls':1,'max_asr_calls':0,'max_vision_calls':2}
+    progress={'mode':'case_media_batch','case_plans':[{'case_id':key,'status':'pending_boundaries'}]}
+    db.execute("""INSERT INTO saas_knowledge_campaigns(tenant_id,id,created_by,sources,analysis_agent_id,status,approved_by,approved_at,max_calls,max_tokens,media_policy,progress,max_cost_microusd) VALUES(%s::uuid,%s::uuid,11,%s::jsonb,%s::uuid,'paused',11,now(),10,100000,%s::jsonb,%s::jsonb,10000000)""",(A,campaign,json.dumps([CA]),AGENT,json.dumps(policy),json.dumps(progress)))
+    db.execute("INSERT INTO saas_ai_media_grants(tenant_id,id,campaign_id,created_by,cap_microusd,status,approved_by,approved_at) VALUES(%s::uuid,%s::uuid,%s::uuid,11,10000000,'active',11,now())",(A,campaign,campaign));db.commit()
+    spending.ensure_schema(db);db.commit()
+    with db.cursor() as cur:
+        checked=inventory.inspect(cur,PROFILE,key,inside,version,campaign)
+        assert checked['message_id']==inside and checked['grant_scope_match'] is False and checked['dispatch_authorized'] is False
+        with pytest.raises(TenantLinearError):inventory.inspect(cur,PROFILE,key,outside,version,campaign)
+        with pytest.raises(TenantLinearError):inventory.inspect(cur,PROFILE,key,inside,version+1,campaign)
+        with pytest.raises(TenantLinearError):inventory.inspect(cur,{'tenant_id':B,'telegram_id':22},key,inside,version,campaign)
+    import tenant_case_continuation_ui as owner_ui
+    monkeypatch.setattr(owner_ui,'_connect',lambda:db)
+    result=owner_ui.preview_owner(PROFILE,campaign,1)
+    assert any(row['message_id']==inside for row in result['sources'])
+    assert any(row['message_id']==outside and row['reason']=='outside_verified_case' for row in result['blocked'])
+    assert all(row['extension_state']!='known_not_attempted' for row in result['sources'])
+    content['start_message_id']=None
+    db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE id=%s::uuid',(json.dumps(content),key));db.commit()
+    with db.cursor() as cur,pytest.raises(TenantLinearError):inventory.inspect(cur,PROFILE,key,inside,version,campaign)
+    provider.assert_called_once()

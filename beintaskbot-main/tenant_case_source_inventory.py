@@ -4,7 +4,7 @@ from tenant_linear_policy import TenantLinearError, identifier
 from tenant_ai_group_coordination import group_jid
 import tenant_knowledge_candidates_store as cases
 from tenant_media_evidence import media_version, source_hash, _body_hash
-from tenant_case_media_admission import _has_current_media_version
+from tenant_case_media_admission import _has_current_media_version, _current_source_addressable
 
 
 def inspect(cur, profile, case_id, message_id, expected_version, campaign_id, *, _internal=False):
@@ -27,12 +27,12 @@ def inspect(cur, profile, case_id, message_id, expected_version, campaign_id, *,
     approved_plan=bool(campaign.get('approved_at') and campaign.get('grant_approved_at') and str(campaign.get('grant_id') or '')==campaign_id
       and (campaign.get('progress') or {}).get('mode')=='case_media_batch' and campaign.get('grant_status') in {'active','completed'}
       and plan.get('case_version')==expected_version and media)
-    if not evidence and not approved_plan:raise TenantLinearError('Message is not in this case or approved snapshot.',403)
     run=cases.extraction_row(cur,tenant,case['extraction_id']);route=run.get('route') or {}
     conversation=str(route.get('conversation_id') or '');case_channel=identifier(route.get('channel_id'))
-    cases.assert_route(cur,tenant,policy,'connect',conversation,case_channel)
+    chosen_case=cases.assert_route(cur,tenant,policy,'connect',conversation,case_channel)
     refs=[r for r in (run.get('source_refs') or []) if isinstance(r,dict) and str(r.get('id'))==message_id]
     if len(refs)>1 or (evidence and len(refs)!=1):raise TenantLinearError('Case source attribution is unavailable.',409)
+    if not refs and not approved_plan:raise TenantLinearError('Message is not in this case extraction.',403)
     ref=refs[0] if refs else None;channel=identifier(ref.get('channel_id') if ref else plan.get('channel_id'))
     if channel!=case_channel and not group_jid(conversation):raise TenantLinearError('Source is outside the case route.',403)
     selected=cases.assert_route(cur,tenant,policy,'connect',conversation,channel)
@@ -43,8 +43,23 @@ def inspect(cur, profile, case_id, message_id, expected_version, campaign_id, *,
     if not row:raise TenantLinearError('Source message is unavailable in its attributed channel.',404)
     raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
     if raw.get('conversationId') and raw['conversationId']!=conversation:raise TenantLinearError('Source is outside the case route.',403)
-    if ref and (str(row.get('external_id') or '')!=str(ref.get('external_id') or '') or str(row.get('message_type') or '')!=str(ref.get('media_kind') or '')):
+    bounded=False
+    if not evidence and not approved_plan:
+        # Reuse the existing case-link boundary guard only for the exact case
+        # channel. A group copy in another channel requires separate proof.
+        if channel!=case_channel:raise TenantLinearError('Source is outside the verified case route.',403)
+        cases._bounded_media_link(cur,tenant,case,route,chosen_case,message_id,expected_version)
+        bounded=True
+    # Legacy source references recorded the internal message UUID and channel
+    # without external_id/media_kind. The exact tenant/channel/conversation,
+    # case membership and message UUID were checked above. Missing old fields
+    # are not evidence of a changed source; fields that were actually saved
+    # still have to match exactly. This does not establish historical bytes.
+    legacy_ref=bool(ref and ('external_id' not in ref or 'media_kind' not in ref))
+    if ref and (('external_id' in ref and str(row.get('external_id') or '')!=str(ref.get('external_id') or ''))
+                or ('media_kind' in ref and str(row.get('message_type') or '')!=str(ref.get('media_kind') or ''))):
         raise TenantLinearError('Case source attribution changed.',409)
+    if not row.get('external_id'):raise TenantLinearError('Case source address unavailable.',409)
     if row['message_type'] not in {'image','audio','voice','video','document'}:raise TenantLinearError('Case source is not a supported attachment.',409)
     version=media_version(raw);ref_hash=source_hash({'external_id':row['external_id'],'body_hash':_body_hash(row.get('body')),'media_kind':row['message_type'],'media_version':version})
     cur.execute("SELECT to_regclass('public.saas_media_evidence_receipts') AS relation")
@@ -57,11 +72,12 @@ def inspect(cur, profile, case_id, message_id, expected_version, campaign_id, *,
       and channel in [str(c) for c in campaign.get('sources') or []] and str(plan.get('channel_id') or '')==channel
       and plan.get('case_version')==expected_version and media.get('source_version')==version
       and media.get('source_hash')==ref_hash)
-    if not evidence and not covered:raise TenantLinearError('Source is not in this approved snapshot.',403)
+    if not evidence and not covered and not bounded:raise TenantLinearError('Source is not in this approved snapshot.',403)
     cached_code=str(cached.get('code') or '') if cached else ''
     if cached_code and not re.fullmatch(r'[a-z_]{1,80}',cached_code):cached_code='other'
     result={'case_id':case_id,'case_version':expected_version,'message_id':message_id,'channel_id':channel,
-      'lead_id':selected['lead_id'],'kind':row['message_type'],'source_version_verified':_has_current_media_version(raw),
+      'lead_id':selected['lead_id'],'kind':row['message_type'],'legacy_source_reference':legacy_ref,'source_version_verified':_has_current_media_version(raw),
+      'current_source_addressable':_current_source_addressable(row,channel,conversation),
       'cached_status':str(cached['status']) if cached else None,'cached_code':cached_code if cached else None,
       'current_bytes_checked':False,'grant_scope_match':covered,'grant_status':campaign.get('grant_status'),
       'grant_cap_microusd':campaign.get('cap_microusd'),'dispatch_authorized':False}

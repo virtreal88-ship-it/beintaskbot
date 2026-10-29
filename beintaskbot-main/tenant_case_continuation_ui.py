@@ -53,9 +53,10 @@ def preview_owner(profile,campaign_id,expected_version):
                     cur.execute('SELECT id::text AS id,message_type FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[])',(tenant,list(all_linked)))
                     rows=cur.fetchall();found={str(row['id']) for row in rows}
                     media={str(row['id']) for row in rows if row.get('message_type') in {'image','audio','voice','video','document'}}
-                    candidates.update(media & linked)
-                    original={str(m['id']) for m in plan.get('media',[]) if isinstance(m,dict) and m.get('id')}
-                    for unscoped in media-linked-original:blocked.append({'case_id':case_id,'message_id':unscoped,'reason':'outside_case_evidence'})
+                    # Inspect each extraction media against this case. The
+                    # shared extractor can contain unrelated media; only the
+                    # existing verified case-boundary guard can admit it.
+                    candidates.update(media)
                     for missing in linked-found:blocked.append({'case_id':case_id,'message_id':missing,'reason':'source_not_found'})
                 candidates.update(str(m['id']) for m in plan.get('media',[]) if isinstance(m,dict) and m.get('id'))
                 for message_id in sorted(candidates):
@@ -67,7 +68,10 @@ def preview_owner(profile,campaign_id,expected_version):
                     try:inspect(cur,profile,case_id,message_id,case['version'],campaign_id)
                     except TenantLinearError as error:
                         if error.status not in {403,404,409}:raise
-                        blocked.append({'case_id':case_id,'message_id':message_id,'reason':{403:'not_authorized',404:'source_not_found',409:'source_changed'}[error.status]});continue
+                        reason={'Case boundaries are unavailable.':'case_boundaries_unverified',
+                          'The attachment is outside verified case boundaries.':'outside_verified_case',
+                          'Source is outside the verified case route.':'outside_case_route'}.get(str(error),{403:'not_authorized',404:'source_not_found',409:'source_changed'}[error.status])
+                        blocked.append({'case_id':case_id,'message_id':message_id,'reason':reason});continue
                     refs.append(ref)
             if not refs:return {'campaign_id':campaign_id,'campaign_version':campaign['version'],'case_count':case_count,'cases':case_list,'sources':[],'blocked':blocked,'snapshot_hash':None}
             result=preview(cur,profile,campaign_id,expected_version,refs,_max_sources=MAX_SOURCES)
