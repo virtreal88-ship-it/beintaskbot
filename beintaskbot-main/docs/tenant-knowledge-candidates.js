@@ -486,7 +486,7 @@
         const channel=$('casesChannel').value,conversation=$('casesConversation').value;populateChannels();$('casesChannel').value=channel;populateConversations();$('casesConversation').value=conversation;renderCards();
       }
       await list;if(current!==sessionEpoch||paused)return;
-      const caseRoot=root();if(caseRoot)await window.TenantKnowledgeCampaigns?.mount(caseRoot,{channels,agents,api,expected,lang,refreshCards:()=>load()});
+      const caseRoot=root();if(caseRoot)await window.TenantKnowledgeCampaigns?.mount(caseRoot,{channels,agents,api,expected,lang,member,refreshCards:()=>load()});
     }catch(error){if(current===sessionEpoch&&!paused)notice(error.message);}
     finally{if(preparing===work)preparing=null;}})();preparing=work;return work;
   }

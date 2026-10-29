@@ -41,6 +41,12 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                         result=await asyncio.to_thread(campaigns.preview,profile,request.query.getall('channel_id',[]))
                 elif resource=='campaigns': result=await asyncio.to_thread(campaigns.get,profile)
                 elif resource=='campaign': result=await asyncio.to_thread(campaigns.get,profile,request.match_info['campaign_id'])
+                elif resource=='campaign_case_continuation':
+                    if set(request.query)-{'expected_version','expected_tenant_id','expected_user_id'}:raise TenantLinearError('Invalid continuation preview.',400)
+                    try:version=int(request.query.get('expected_version',''))
+                    except ValueError:raise TenantLinearError('Invalid campaign version.',400) from None
+                    from tenant_case_continuation_ui import preview_owner
+                    result=await asyncio.to_thread(preview_owner,profile,request.match_info['campaign_id'],version)
                 elif resource=='batch': result=await asyncio.to_thread(batches.get,profile,request.match_info['batch_id'])
                 elif resource=='request': result=await asyncio.to_thread(request_detail,profile,request.match_info['request_id'])
                 elif resource=='candidate': result=await asyncio.to_thread(detail,profile,request.match_info['candidate_id'])
@@ -74,6 +80,9 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                     if set(data)!={'expected_version','action'}: raise TenantLinearError('Некорректные параметры.')
                     await asyncio.to_thread(campaigns.control,profile,request.match_info['campaign_id'],data['expected_version'],data['action'])
                     result=await asyncio.to_thread(campaigns.get,profile,request.match_info['campaign_id'])
+                elif resource=='campaign_case_continuation':
+                    from tenant_case_continuation_ui import apply_owner
+                    result=await asyncio.to_thread(apply_owner,profile,request.match_info['campaign_id'],data)
                 elif resource=='batches':
                     receipt=await asyncio.to_thread(batches.start,profile,data)
                     if receipt['created']:

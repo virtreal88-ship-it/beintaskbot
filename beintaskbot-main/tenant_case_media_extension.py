@@ -8,11 +8,11 @@ from tenant_case_source_inventory import inspect
 from tenant_case_media_admission import _historical_attempt_reconciliation
 
 
-def preview(cur,profile,campaign_id,expected_campaign_version,sources,*,_internal=False):
+def preview(cur,profile,campaign_id,expected_campaign_version,sources,*,_internal=False,_max_sources=25):
     tenant,actor,policy=cases.authorize(cur,profile)
     if policy.profile.get('role')!='owner':raise TenantLinearError('Owner access required.',403)
     campaign_id=identifier(campaign_id)
-    if type(expected_campaign_version) is not int or expected_campaign_version<1 or not isinstance(sources,list) or not 1<=len(sources)<=25:
+    if type(expected_campaign_version) is not int or expected_campaign_version<1 or not isinstance(sources,list) or not 1<=len(sources)<=_max_sources:
         raise TenantLinearError('Invalid extension preview.',400)
     cur.execute('''SELECT c.version,c.status,c.max_cost_microusd,c.progress,c.max_calls,c.max_tokens,c.media_policy,c.reserved_calls,c.reserved_tokens,c.reserved_kinds,g.id AS grant_id,g.status AS grant_status,
       g.cap_microusd,g.approved_at FROM saas_knowledge_campaigns c JOIN saas_ai_media_grants g
@@ -76,7 +76,7 @@ def preview(cur,profile,campaign_id,expected_campaign_version,sources,*,_interna
     return result
 
 
-def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,request_id):
+def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,request_id,*,_max_sources=25,original_cases_only=False):
     """Queue only proven unattempted sources, under the original fixed grant.
 
     The caller must already hold the separate extension OAuth scope and explicitly
@@ -99,6 +99,10 @@ def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,re
             if not campaign:raise TenantLinearError('Campaign unavailable.',404)
             if str(campaign.get('approved_by'))!=str(actor):raise TenantLinearError('Original grant owner required.',403)
             progress=dict(campaign.get('progress') or {});extensions=dict(progress.get('case_extensions') or {})
+            if original_cases_only:
+                allowed={str(p.get('case_id')) for p in progress.get('case_plans',[]) if isinstance(p,dict) and p.get('case_id')}
+                if not isinstance(sources,list) or any(not isinstance(s,dict) or str(s.get('case_id')) not in allowed for s in sources):
+                    raise TenantLinearError('Case is outside the original campaign.',403)
             prior=extensions.get(request_id)
             if prior:
                 if prior.get('snapshot_hash')!=snapshot_hash:raise TenantLinearError('Request already used for a different preview.',409)
@@ -110,11 +114,11 @@ def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,re
             if campaign['status']=='stopped':
                 cur.execute("SELECT 1 FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND status<>'stopped' AND id<>%s::uuid LIMIT 1",(tenant,campaign_id))
                 if cur.fetchone():raise TenantLinearError('Another campaign is active.',409)
-            cur.execute('SELECT status,cap_microusd FROM saas_ai_media_grants WHERE tenant_id=%s::uuid AND id=%s::uuid AND campaign_id=%s::uuid FOR UPDATE',(tenant,campaign_id,campaign_id))
+            cur.execute('SELECT status,cap_microusd,approved_by,approved_at FROM saas_ai_media_grants WHERE tenant_id=%s::uuid AND id=%s::uuid AND campaign_id=%s::uuid FOR UPDATE',(tenant,campaign_id,campaign_id))
             grant=cur.fetchone()
-            if not grant or grant['status'] not in {'active','completed'} or grant['cap_microusd']!=10000000:
+            if not grant or not grant.get('approved_at') or str(grant.get('approved_by'))!=str(actor) or grant['status'] not in {'active','completed'} or grant['cap_microusd']!=10000000:
                 raise TenantLinearError('Original grant unavailable.',409)
-            prepared=preview(cur,profile,campaign_id,expected_campaign_version,sources,_internal=True)
+            prepared=preview(cur,profile,campaign_id,expected_campaign_version,sources,_internal=True,_max_sources=_max_sources)
             if prepared['snapshot_hash']!=snapshot_hash:raise TenantLinearError('Preview changed; refresh.',409)
             if prepared['budget']['available_microusd']<=0:raise TenantLinearError('Original campaign budget is exhausted.',429)
             if not prepared['operation_capacity']['next_fragment_fits']:raise TenantLinearError('Original campaign operation allowance is exhausted.',409)

@@ -174,8 +174,21 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
     source_args=[{'case_id':key,'message_id':message,'expected_version':version}]
     with db.cursor() as cur:proposed=extension.preview(cur,PROFILE,campaign,1,source_args)
     assert proposed['sources'][0]['extension_state']=='known_not_attempted'
+    import tenant_case_continuation_ui as owner_ui
+    monkeypatch.setattr(owner_ui,'_connect',lambda:db)
+    owner_preview=owner_ui.preview_owner(PROFILE,campaign,1)
+    assert owner_preview['source_refs']==source_args and owner_preview['snapshot_hash']==proposed['snapshot_hash']
+    with pytest.raises(TenantLinearError):owner_ui.preview_owner({'tenant_id':B,'telegram_id':22},campaign,1)
+    with pytest.raises(TenantLinearError):owner_ui.preview_owner(PROFILE,campaign,2)
     req=str(uuid.uuid4())
-    applied=extension.apply(PROFILE,campaign,1,source_args,proposed['snapshot_hash'],req)
+    data={'expected_version':1,'source_refs':source_args,'snapshot_hash':proposed['snapshot_hash'],'request_id':req,'confirm_exact_preview':True}
+    with pytest.raises(TenantLinearError):owner_ui.apply_owner(PROFILE,campaign,{**data,'confirm_exact_preview':False})
+    with pytest.raises(TenantLinearError):owner_ui.apply_owner(PROFILE,campaign,{**data,'source_refs':[{**source_args[0],'case_id':str(uuid.uuid4())}]})
+    db.execute('UPDATE saas_ai_media_grants SET approved_by=22 WHERE id=%s::uuid',(campaign,));db.commit()
+    with pytest.raises(TenantLinearError):owner_ui.preview_owner(PROFILE,campaign,1)
+    with pytest.raises(TenantLinearError):owner_ui.apply_owner(PROFILE,campaign,data)
+    db.execute('UPDATE saas_ai_media_grants SET approved_by=11 WHERE id=%s::uuid',(campaign,));db.commit()
+    applied=owner_ui.apply_owner(PROFILE,campaign,data)
     assert applied=={'replayed':False,'count':1,'status':'paused','provider_calls_started':False}
     assert extension.apply(PROFILE,campaign,1,source_args,proposed['snapshot_hash'],req)['replayed'] is True
     campaign_row=db.execute('SELECT * FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign,))[0]
