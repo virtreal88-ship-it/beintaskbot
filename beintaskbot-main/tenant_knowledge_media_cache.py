@@ -53,6 +53,12 @@ def _same_retry_identity(metadata,artifact_fingerprint,source_identity):
 
 def _claim_batch_retry(cur,tenant,source_key,artifact_key,token,source_meta,artifact_meta):
     """Atomically claim one source permission and one exact-byte flight."""
+    if source_meta.get('owner_retry_component')=='asr':
+        channel=source_meta['owner_retry_source']['channel_id'];external=source_meta['owner_retry_source']['external_id']
+        cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('voice-source:'+str(tenant)+':'+channel+':'+external,))
+        cur.execute("""SELECT 1 FROM saas_connect_voice_receipts WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
+          AND external_id=%s AND state='processing' LIMIT 1""",(tenant,channel,external))
+        if cur.fetchone():raise TenantLinearError('Voice source is already being processed.',409)
     cur.execute('''INSERT INTO saas_knowledge_media_cache(tenant_id,fingerprint,state,token,metadata)
       VALUES(%s::uuid,%s,'running',%s::uuid,%s::jsonb) ON CONFLICT DO NOTHING RETURNING token''',
       (tenant,source_key,token,_json(source_meta)))
@@ -303,9 +309,11 @@ def transcribe_once(profile,item,model,media,invoke,check_before_ai=None,*,retur
                     raise TenantLinearError('Exact current-source retry scope is unavailable.',409)
                 fingerprint,artifact_retry_key,source_identity=_batch_retry_fingerprint(item,base_fingerprint,'asr',refs[0])
                 retry_meta={'owner_retry_grant':str(item['route']['media_grant_id']),
+                  'owner_retry_extraction_id':str(item.get('id') or ''),
+                  'sha256':str(item['route'].get('case_source_sha256') or ''),
                   'owner_retry_component':'asr','artifact_fingerprint':base_fingerprint,
                   'owner_retry_source':source_identity}
-                artifact_meta={'owner_retry_component':'asr','artifact_fingerprint':base_fingerprint,
+                artifact_meta={**retry_meta,'owner_retry_component':'asr','artifact_fingerprint':base_fingerprint,
                     'kind':'asr','model':model,'owner_retry_artifact':True}
                 claimed,reused=_claim_batch_retry(cur,tenant,fingerprint,artifact_retry_key,token,retry_meta,artifact_meta)
                 if claimed=='reused':

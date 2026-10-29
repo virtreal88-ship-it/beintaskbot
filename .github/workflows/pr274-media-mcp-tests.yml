@@ -68,6 +68,7 @@ jobs:
           tests/test_media_evidence.py
           tests/test_media_evidence_pglite.py
           tests/test_knowledge_media.py
+          tests/test_connect_voice.py
           tests/test_media_dispatch.py
           tests/test_ai_learning_mcp.py
           tests/test_ai_training_policy.py
@@ -81,6 +82,7 @@ jobs:
           tests/test_tenant_ai_testing_retrieval.py
           tests/test_knowledge_candidates.py
           tests/test_case_source_inventory.py
+          tests/test_case_interval_continuation.py
           tests/test_case_current_bytes_flow.py
           tests/test_connect_media_preview.py
           tests/test_case_continuation_owner_api.py

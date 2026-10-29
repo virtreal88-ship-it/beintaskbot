@@ -273,7 +273,7 @@ class VoiceBoundaries(unittest.TestCase):
         return connection, cursor
 
     def test_claim_is_committed_and_all_identifiers_are_scoped(self):
-        conn, cur = self.connection([{'external_id': 'connect:' + MESSAGE}])
+        conn, cur = self.connection([{'relation': None}, {'external_id': 'connect:' + MESSAGE}])
         with patch.object(voice, '_connect', return_value=conn), patch.object(voice, 'ensure_schema'):
             self.assertIsNone(voice._claim(JOB, RESERVATION, row(), 'transcriber'))
         sql, params = cur.execute.call_args.args
@@ -285,7 +285,7 @@ class VoiceBoundaries(unittest.TestCase):
         conn.__enter__.return_value.commit.assert_called_once()
 
     def test_claim_conflict_returns_saved_transcript_without_provider_call(self):
-        conn, cur = self.connection([None, {'state': 'completed', 'body': 'cached'}])
+        conn, cur = self.connection([{'relation': None}, None, {'state': 'completed', 'body': 'cached'}])
         with patch.object(voice, '_connect', return_value=conn), patch.object(voice, 'ensure_schema'):
             self.assertEqual(voice._claim(JOB, RESERVATION, row(), 'model'), 'cached')
         self.assertIn('v.channel_id=%s::uuid', cur.execute.call_args.args[0])

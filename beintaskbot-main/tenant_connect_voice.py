@@ -169,6 +169,14 @@ def _claim(job, reservation, source, model):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            external='connect:'+source['external_id']
+            cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('voice-source:'+str(job['tenant_id'])+':'+str(job['channel_id'])+':'+external,))
+            cur.execute("SELECT to_regclass('public.saas_knowledge_media_cache') AS relation")
+            if cur.fetchone().get('relation'):
+                cur.execute("""SELECT 1 FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND state='running'
+                  AND metadata->>'owner_retry_component'='asr' AND metadata->'owner_retry_source'->>'channel_id'=%s
+                  AND metadata->'owner_retry_source'->>'external_id'=%s LIMIT 1""",(job['tenant_id'],str(job['channel_id']),external))
+                if cur.fetchone():raise VoiceError('voice_already_claimed')
             cur.execute("""INSERT INTO saas_connect_voice_receipts
               (tenant_id,channel_id,external_id,run_id,model,state)
               SELECT tenant_id,%s::uuid,external_id,%s::uuid,%s,'processing'

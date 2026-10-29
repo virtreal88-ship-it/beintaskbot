@@ -122,6 +122,7 @@ def collect(profile,item,check_before_ai=None):
                 stage='media_download'
                 data,mime=asyncio.run(asyncio.wait_for(download_media(current,max_bytes=min(MAX_AUDIO_BYTES,MAX_BYTES-size)),timeout=10))
                 _check_case_bytes(item,data)
+                receipt['sha256']=hashlib.sha256(data).hexdigest()
                 size+=len(data)
                 validate_media_size(kind,len(data))
                 if size>MAX_BYTES: receipt.update(status='unavailable',code='byte_budget');continue

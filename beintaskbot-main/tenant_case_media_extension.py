@@ -34,12 +34,15 @@ def _verified_byte_history(cur,tenant,message_id,source_hash,*,exclude_extractio
             if row.get('status')!='completed':return blocked('prior_extraction_unfinished')
             if len(refs)!=1:return blocked('prior_source_reference_ambiguous')
             if results:
-                if len(results)!=1 or refs[0].get('media_kind')!='image' or results[0].get('kind')!='image':
+                if (len(results)!=1 or refs[0].get('media_kind') not in {'image','audio','voice'}
+                    or results[0].get('kind')!=refs[0].get('media_kind')):
                     return blocked('prior_media_result_identity_mismatch')
                 result=results[0]
                 if result.get('status') in {'unknown','running','pending_processing'}:return blocked('prior_media_result_unknown')
                 if result.get('status') in {'processed','partial'}:return blocked('prior_media_result_recorded')
-                if result.get('code') not in {'vision_not_approved','external_media_permission_required'} or not _explicit_no_media_call(refs[0],result):
+                allowed_codes=({'external_media_permission_required','vision_not_approved'} if refs[0]['media_kind']=='image'
+                               else {'external_media_permission_required','asr_authorization_required'})
+                if result.get('code') not in allowed_codes or not _explicit_no_media_call(refs[0],result):
                     return blocked('prior_media_result_not_pre_dispatch')
             cur.execute("SELECT to_regclass('public.saas_ai_spend_reservations') AS relation")
             if not cur.fetchone().get('relation'):return history
@@ -105,6 +108,8 @@ def preview(cur,profile,campaign_id,expected_campaign_version,sources,*,_interna
         source_data=item.pop('_source')
         if item['grant_scope_match']:
             state='already_covered';history=None
+        elif item.get('interval_only'):
+            state='previous_outcome_unknown';history=None
         elif item.get('cached_status') in {'processed','partial'}:
             state='cached_bytes_unverified';history=None
         elif not item.get('source_version_verified'):
@@ -114,7 +119,7 @@ def preview(cur,profile,campaign_id,expected_campaign_version,sources,*,_interna
             state='known_not_attempted' if history.get('state')=='known_not_attempted' else 'previous_outcome_unknown'
         results.append({**item,'extension_state':state,'reconciliation':history})
         snapshot.append({'case_id':case_id,'message_id':message_id,'case_version':source['expected_version'],
-          'channel_id':item['channel_id'],'lead_id':item['lead_id'],'kind':item['kind'],
+          'channel_id':item['channel_id'],'lead_id':item['lead_id'],'kind':item['kind'],'interval_only':item.get('interval_only') is True,
           'source_version':source_data['source_version'],'source_hash':source_data['source_hash'],
           'conversation_id':source_data['conversation_id'],'occurred_at':source_data['occurred_at'],
           'state':state,'reconciliation':history})
@@ -194,7 +199,8 @@ def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,re
                     history=_verified_byte_history(cur,tenant,source['message_id'],source['source_hash'],allow_incomplete=(acknowledge_incomplete_history is True or (source['case_id'],source['message_id']) in (unknown_selected or set())))
                     if (source['case_id'],source['message_id']) in (unknown_selected or set()):
                         from tenant_case_uncertain_retry import eligible
-                        if (history.get('reason') in {'prior_media_result_unknown','prior_attempt_or_unresolved_result'}
+                        if ((history.get('reason') in {'prior_media_result_unknown','prior_attempt_or_unresolved_result','attempt_history_not_recorded'}
+                             or (source.get('interval_only') and history.get('state') in {'known_not_attempted','incomplete_history_eligible'}))
                             and eligible(cur,tenant,source,digest)):
                             source={**source,'state':'owner_uncertain_retry','reconciliation':history,'current_sha256':digest}
                     elif history.get('state') in {'known_not_attempted','incomplete_history_eligible'}:
