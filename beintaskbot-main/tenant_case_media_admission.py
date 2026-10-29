@@ -72,7 +72,7 @@ def _explicit_no_media_call(ref, result):
     return True
 
 
-def _historical_attempt_reconciliation(cur, tenant, message_id, current_source_hash):
+def _historical_attempt_reconciliation(cur, tenant, message_id, current_source_hash, *, exclude_extraction_id=None):
     """Read exact-source extraction history without inferring from missing rows.
 
     Only a saved explicit consent refusal for the same source hash, with no
@@ -81,8 +81,9 @@ def _historical_attempt_reconciliation(cur, tenant, message_id, current_source_h
     """
     cur.execute('''SELECT id::text AS id,status,source_refs,media_results
       FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid
-        AND (source_refs @> %s::jsonb OR media_results @> %s::jsonb)''',
-      (tenant, json.dumps([{'id':str(message_id)}]), json.dumps([{'id':str(message_id)}])))
+        AND (source_refs @> %s::jsonb OR media_results @> %s::jsonb)
+        AND (%s::uuid IS NULL OR id<>%s::uuid)''',
+      (tenant, json.dumps([{'id':str(message_id)}]), json.dumps([{'id':str(message_id)}]),exclude_extraction_id,exclude_extraction_id))
     runs=cur.fetchall()
     if not runs:
         return {'state':'unknown','reason':'attempt_history_not_recorded','matching_runs':0}

@@ -200,6 +200,11 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
     assert claimed and str(claimed['id'])==str(fragment['id'])
     import tenant_knowledge_campaign_worker as worker
     with db.cursor() as cur:worker.check_fence(cur,A,fragment['id'])
+    db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps([{'id':message,'status':'unknown','code':'provider_timeout'}]),case['extraction_id']));db.commit()
+    with db.cursor() as cur,pytest.raises(TenantLinearError):worker.check_fence(cur,A,fragment['id'])
+    db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps([{'id':message,'status':'unavailable','code':'vision_not_approved'}]),case['extraction_id']));db.commit()
     import tenant_knowledge_candidates_service as service
     monkeypatch.setattr(spending,'price',lambda model:(1,1))
     monkeypatch.setattr(spending,'media_price',lambda model,operation:1)

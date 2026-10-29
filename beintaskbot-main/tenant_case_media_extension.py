@@ -174,6 +174,9 @@ def dispatch_fence(cur,tenant,row):
         or route.get('source_version')!=source['source_version'] or identity['source_version']!=source['source_version']
         or identity['source_hash']!=source['source_hash'] or identity['occurred_at']!=source['occurred_at']):
         raise TenantLinearError('Case extension source changed.',409)
+    history=_historical_attempt_reconciliation(cur,tenant,source['message_id'],source['source_hash'],exclude_extraction_id=str(row['id']))
+    if history.get('state')!='known_not_attempted':
+        raise TenantLinearError('Case media attempt history changed.',409)
     expected_photo=row.get('photo_model') if source['kind']=='image' else None
     if route.get('campaign_photo_model')!=expected_photo:raise TenantLinearError('Case photo model changed.',409)
     return source
