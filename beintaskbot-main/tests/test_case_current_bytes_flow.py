@@ -48,6 +48,22 @@ def test_current_bytes_queue_and_dispatch_fences(ready,monkeypatch):
     uncertain=current.verify_owner_source(PROFILE,campaign,{'expected_version':1,'case_id':key,'message_id':message,'case_version':version})
     assert uncertain['attempt_reconciliation']['reason']=='prior_extraction_unfinished'
     db.execute("UPDATE saas_knowledge_extractions SET status='completed' WHERE id=%s::uuid",(case['extraction_id'],));db.commit()
+    db.execute("INSERT INTO saas_connect_voice_receipts(tenant_id,channel_id,external_id,run_id,model,state) VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'fixture','processing')",(A,CA,external,str(uuid.uuid4())));db.commit()
+    uncertain=current.verify_owner_source(PROFILE,campaign,{'expected_version':1,'case_id':key,'message_id':message,'case_version':version})
+    assert uncertain['attempt_reconciliation']['reason']=='prior_voice_receipt'
+    db.execute('DELETE FROM saas_connect_voice_receipts WHERE tenant_id=%s::uuid AND external_id=%s',(A,external));db.commit()
+    import tenant_knowledge_media_cache as cache
+    with db.cursor() as cur:cache.schema(cur)
+    db.execute("INSERT INTO saas_knowledge_media_cache(tenant_id,fingerprint,state,token,metadata) VALUES(%s::uuid,'fixture-source','unknown',%s::uuid,%s::jsonb)",(A,str(uuid.uuid4()),json.dumps({'owner_retry_source':{'message_id':message}})));db.commit()
+    uncertain=current.verify_owner_source(PROFILE,campaign,{'expected_version':1,'case_id':key,'message_id':message,'case_version':version})
+    assert uncertain['attempt_reconciliation']['reason']=='prior_source_cache'
+    db.execute("DELETE FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND fingerprint='fixture-source'",(A,));db.commit()
+    cached={'owner_retry_source':{'message_id':message,'channel_id':CA},'kind':'vision','sha256':value['current_sha256']}
+    db.execute("INSERT INTO saas_knowledge_media_cache(tenant_id,fingerprint,state,token,metadata,transcript) VALUES(%s::uuid,'fixture-source','completed',%s::uuid,%s::jsonb,'previous exact result')",(A,str(uuid.uuid4()),json.dumps(cached)));db.commit()
+    reused=current.verify_owner_source(PROFILE,campaign,{'expected_version':1,'case_id':key,'message_id':message,'case_version':version})
+    assert reused['attempt_reconciliation']['reason']=='prior_source_cache'
+    assert reused['saved_byte_results']==[{'status':'processed','text':'previous exact result'}]
+    db.execute("DELETE FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND fingerprint='fixture-source'",(A,));db.commit()
     competing=str(uuid.uuid4())
     db.execute('INSERT INTO saas_knowledge_campaign_fragments(tenant_id,campaign_id,id,source_key,route) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::jsonb)',
       (A,campaign,competing,competing,json.dumps({'message_ids':[message]})));db.commit()

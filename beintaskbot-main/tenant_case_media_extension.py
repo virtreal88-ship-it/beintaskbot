@@ -22,6 +22,17 @@ def _verified_byte_history(cur,tenant,message_id,source_hash,*,exclude_extractio
       AND route->'message_ids' @> %s::jsonb AND (%s::uuid IS NULL OR id<>%s::uuid) LIMIT 1""",
       (tenant,json.dumps([str(message_id)]),exclude_extraction_id,exclude_extraction_id))
     if cur.fetchone():return {'state':'unknown','reason':'prior_fragment_exists','matching_runs':history.get('matching_runs',0)}
+    # Voice transcription can also run outside a knowledge extraction. A
+    # completed or unresolved receipt is not evidence that it was never sent.
+    cur.execute("""SELECT 1 FROM saas_connect_voice_receipts v JOIN saas_crm_messages m
+      ON m.tenant_id=v.tenant_id AND m.channel='connect:'||v.channel_id::text AND m.external_id=v.external_id
+      WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid LIMIT 1""",(tenant,message_id))
+    if cur.fetchone():return {'state':'unknown','reason':'prior_voice_receipt','matching_runs':history.get('matching_runs',0)}
+    cur.execute("SELECT to_regclass('public.saas_knowledge_media_cache') AS relation")
+    if cur.fetchone().get('relation'):
+        cur.execute("""SELECT 1 FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid
+          AND metadata->'owner_retry_source'->>'message_id'=%s LIMIT 1""",(tenant,str(message_id)))
+        if cur.fetchone():return {'state':'unknown','reason':'prior_source_cache','matching_runs':history.get('matching_runs',0)}
     return history
 
 

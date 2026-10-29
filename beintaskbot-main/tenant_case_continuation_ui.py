@@ -109,6 +109,8 @@ def apply_owner(profile,campaign_id,data):
         value=verify_owner_source(profile,campaign_id,{'expected_version':data['expected_version'],
           'case_id':key[0],'message_id':key[1],'case_version':item['case_version']})
         if value['current_sha256']!=item['sha256']:raise TenantLinearError('Current file changed; refresh.',409)
+        if not value['continuation_supported']:
+            raise TenantLinearError('Concurrent audio processing requires reconciliation.',409)
         if value['attempt_reconciliation']['state']!='known_not_attempted':
             raise TenantLinearError('Prior media outcome is unknown.',409)
         verified[key]=value['current_sha256']

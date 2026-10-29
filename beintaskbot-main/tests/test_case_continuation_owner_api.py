@@ -65,14 +65,16 @@ def test_byte_snapshot_is_refetched_and_unknown_outcome_rejected(monkeypatch):
       'snapshot_hash':'b'*64,'request_id':'request','confirm_exact_preview':True,
       'current_byte_sources':[{'case_id':case,'message_id':message,'case_version':1,'sha256':digest}]}
     calls=[]
-    monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':digest,'attempt_reconciliation':{'state':'known_not_attempted'}})
+    monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':digest,'continuation_supported':True,'attempt_reconciliation':{'state':'known_not_attempted'}})
     monkeypatch.setattr(continuation,'apply',lambda *args,**kwargs:(calls.append(kwargs) or {'count':1}))
     assert continuation.apply_owner({},'campaign',data)=={'count':1}
     assert calls[0]['verified_bytes']=={(case,message):digest}
-    monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':digest,'attempt_reconciliation':{'state':'unknown'}})
+    monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':digest,'continuation_supported':True,'attempt_reconciliation':{'state':'unknown'}})
     with pytest.raises(TenantLinearError,match='unknown'):continuation.apply_owner({},'campaign',data)
-    monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':'c'*64,'attempt_reconciliation':{'state':'known_not_attempted'}})
+    monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':'c'*64,'continuation_supported':True,'attempt_reconciliation':{'state':'known_not_attempted'}})
     with pytest.raises(TenantLinearError,match='changed'):continuation.apply_owner({},'campaign',data)
+    monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':digest,'continuation_supported':False,'attempt_reconciliation':{'state':'known_not_attempted'}})
+    with pytest.raises(TenantLinearError,match='audio'):continuation.apply_owner({},'campaign',data)
     assert len(calls)==1
 
 
