@@ -17,7 +17,9 @@ def language(value=None,profile=None):
     return 'az'
 
 
-def redact(text,names=()):
+OWNER_APPROVED_PAYMENT_URL='https://million.az/attributes/beinaz_yigim'
+
+def redact(text,names=(),*,owner_payment_link=False):
     text=str(text or '')[:30000]
     known={str(n).strip() for n in names if n}
     known.update(part for name in list(known) for part in name.split() if len(part)>=3 and part[:1].isupper())
@@ -25,7 +27,13 @@ def redact(text,names=()):
         if len(name)>=2: text=re.sub(r'(?<!\w)'+re.escape(name)+r'(?!\w)','[PERSON]',text,flags=re.I)
     text=re.sub(r'-----BEGIN [\s\S]*?-----END [^-]+-----','[SECRET]',text)
     text=re.sub(r'(?im)(?:api[_ -]?key|authorization|bearer|password|passwd|пароль|парол|ключ|секрет|код сопряжения|şifrə|token|токен|pairing|pin|cookie|secret)\s*(?:[:=]|\bis\b|—|-)?\s*[^\n]+','[SECRET]',text)
-    text=re.sub(r'(?i)\b(?:https?|postgres(?:ql)?|redis|mongodb)://[^\s<>]+','[URL]',text)
+    def safe_url(match):
+        value=match.group(0)
+        # Sentence punctuation is harmless, but query strings, fragments,
+        # paths, credentials and lookalike hosts are never approved here.
+        bare=value.rstrip('.,;!)]}\"\'')
+        return value if owner_payment_link and bare==OWNER_APPROVED_PAYMENT_URL else '[URL]'
+    text=re.sub(r'(?i)\b(?:https?|postgres(?:ql)?|redis|mongodb)://[^\s<>]+',safe_url,text)
     text=re.sub(r'(?i)\b(?:sk-[\w-]{8,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b','[SECRET]',text)
     text=re.sub(r'(?i)\b[A-F0-9]{24,}\b','[SECRET]',text)
     text=re.sub(r'(?i)\b[A-Z]{2}\d{2}[A-Z0-9]{12,30}\b','[ACCOUNT]',text)
@@ -41,14 +49,14 @@ def redact(text,names=()):
     return text
 
 
-def text(value,limit,required=False):
+def text(value,limit,required=False,*,owner_payment_link=False):
     if not isinstance(value,str) or len(value)>limit: raise TenantLinearError('Некорректное поле карточки.')
-    value=redact(value).strip()
+    value=redact(value,owner_payment_link=owner_payment_link).strip()
     if required and not value: raise TenantLinearError('Заполните обязательные поля карточки.')
     return value
 
 
-def card(data,allowed_ids,allow_boundary_outside_sources=False):
+def card(data,allowed_ids,allow_boundary_outside_sources=False,*,owner_guidance_fields=frozenset()):
     allowed_order=list(allowed_ids);allowed_set=set(allowed_order)
     if not isinstance(data,dict) or not BASE_FIELDS<=set(data) or set(data)-FIELDS: raise TenantLinearError('Некорректная структура карточки.')
     method=data.get('resolution_method','unknown');kind=data.get('case_kind','technical')
@@ -65,12 +73,12 @@ def card(data,allowed_ids,allow_boundary_outside_sources=False):
     if not isinstance(clarification_note,str): raise TenantLinearError('Комментарий уточнения должен быть текстом.')
     result={'resolution_method':method,'case_kind':kind,'operator_actions':[text(v,800,True) for v in actions],'content_language':content_language,
       'clarification_note':text(clarification_note,2000),'work_status':work_status,'case_relation':case_relation,
-      'owner_additions':text(data.get('owner_additions',''),4000)}
+      'owner_additions':text(data.get('owner_additions',''),4000,owner_payment_link='owner_additions' in owner_guidance_fields)}
     result.update({key:text(data[key],180 if key=='title' else 120, key=='title') for key in ('title','product','product_version')})
     for key in ('symptoms','resolution_steps'):
         values=data[key]
         if not isinstance(values,list) or not (1 if key=='symptoms' else 0)<=len(values)<=10: raise TenantLinearError('Нужны симптомы и шаги решения.')
-        result[key]=[text(v,800,True) for v in values]
+        result[key]=[text(v,800,True,owner_payment_link=key in owner_guidance_fields) for v in values]
     cause=data['cause'];outcome=data['outcome']
     if not isinstance(cause,dict) or set(cause)!={'status','text'} or cause['status'] not in ('confirmed','suspected','unknown'): raise TenantLinearError('Некорректная причина.')
     if not isinstance(outcome,dict) or set(outcome)!={'status','text','message_ids'} or outcome['status'] not in ('confirmed','unconfirmed','unknown'): raise TenantLinearError('Некорректное подтверждение.')

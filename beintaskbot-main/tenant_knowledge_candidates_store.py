@@ -772,6 +772,55 @@ def publication_text(value,media_warning=False):
     return '\n'.join(parts)
 
 
+def _restore_owner_payment_link(cur,profile,tenant,actor,row,data,agents,request_hash):
+    """Repair only an owner-approved URL masked in unchanged published guidance."""
+    from tenant_knowledge_candidates_policy import OWNER_APPROVED_PAYMENT_URL, text
+    fields={'resolution_steps','owner_additions'}
+    if set(data)-({'expected_version','agent_ids'}|fields) or not (set(data)&fields):return False
+    if type(data.get('expected_version')) is not int or data['expected_version']!=row['version']:return False
+    if str(row.get('reviewed_by'))!=str(actor):return False
+    old=row.get('content') or {};updated=dict(old);changed=False
+    for field in fields & set(data):
+        supplied=data[field];previous=old.get(field,[] if field=='resolution_steps' else '')
+        if field=='resolution_steps':
+            if not isinstance(supplied,list) or len(supplied)>10:return False
+            revised=[text(v,800,True,owner_payment_link=True) for v in supplied]
+            if [v.replace(OWNER_APPROVED_PAYMENT_URL,'[URL]') for v in revised]!=previous:return False
+            changed=changed or any(OWNER_APPROVED_PAYMENT_URL in v for v in revised)
+        else:
+            revised=text(supplied,4000,owner_payment_link=True)
+            if revised.replace(OWNER_APPROVED_PAYMENT_URL,'[URL]')!=previous:return False
+            changed=changed or OWNER_APPROVED_PAYMENT_URL in revised
+        updated[field]=revised
+    if not changed:return False
+    cur.execute('''SELECT ks.agent_id::text AS agent_id,s.id::text AS id,s.title,s.content,s.content_hash,s.active,s.provenance
+      FROM saas_knowledge_candidate_sources ks JOIN saas_ai_knowledge_sources s
+      ON s.tenant_id=ks.tenant_id AND s.id=ks.source_id
+      WHERE ks.tenant_id=%s::uuid AND ks.candidate_id=%s::uuid ORDER BY ks.agent_id FOR UPDATE OF s''',(tenant,row['id']))
+    sources=cur.fetchall()
+    if [s['agent_id'] for s in sources]!=agents or not sources:return False
+    cur.execute('''SELECT source_id::text AS source_id,source_hash FROM saas_knowledge_candidate_knowledge_reviews
+      WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid FOR UPDATE''',(tenant,row['id']))
+    review=cur.fetchone()
+    if not review or not any(s['id']==review['source_id'] and s['content_hash']==review['source_hash'] for s in sources):return False
+    for source in sources:
+        provenance=source.get('provenance') or {}
+        if (not source.get('active') or provenance.get('candidate_id')!=str(row['id'])
+            or provenance.get('review_status')!='owner_reviewed_guidance' or str(provenance.get('approved_by'))!=str(actor)
+            or source['content']!=publication_text(old,media_warning=bool(provenance.get('media_review_warning')))):
+            return False
+    for source in sources:
+        provenance=dict(source['provenance']);content=publication_text(updated,media_warning=bool(provenance.get('media_review_warning')))
+        saved=save_knowledge(profile,{'content':content},source_id=source['id'],connection=cur.connection)
+        provenance['request_hash']=request_hash
+        cur.execute('UPDATE saas_ai_knowledge_sources SET provenance=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(provenance),tenant,source['id']))
+        if source['id']==review['source_id']:
+            cur.execute('UPDATE saas_knowledge_candidate_knowledge_reviews SET source_hash=%s WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid',(saved['content_hash'],tenant,row['id']))
+    cur.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(updated),tenant,row['id']))
+    _audit(cur,tenant,actor,'knowledge_candidate_owner_payment_link_restored','knowledge_candidate',row['id'],{'agent_ids':agents})
+    return True
+
+
 def mutate(profile,candidate_id,data,action='edit',*,connection=None):
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
         schema(conn)
@@ -1023,6 +1072,12 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                         and provenance.get('request_hash')==request_hash
                         and agents==sorted(v['agent_id'] for v in current['publications'])):
                         return {'candidate':current}
+                    if _restore_owner_payment_link(cur,profile,tenant,actor,row,data,agents,request_hash):
+                        if connection is not None:
+                            cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,row['id']))
+                            return {'candidate':public_card(cur,cur.fetchone())}
+                        conn.commit()
+                        return detail(profile,candidate_id)
                     raise TenantLinearError('Кейс уже опубликован; повторный набор адресатов запрещён.',409)
                 if type(data.get('expected_version')) is not int or data['expected_version']!=row['version']:
                     raise TenantLinearError('Карточка изменилась. Обновите страницу.',409)
@@ -1034,7 +1089,8 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                 if not any(item.get('role')=='customer' and item.get('id') in run['_candidate_source_ids'] for item in items):
                     raise TenantLinearError('original_customer_unproven',409)
                 value=card({**row['content'],**{k:v for k,v in data.items() if k in FIELDS}},
-                  [item['id'] for item in items],allow_boundary_outside_sources=True)
+                  [item['id'] for item in items],allow_boundary_outside_sources=True,
+                  owner_guidance_fields=set(data)&{'resolution_steps','owner_additions'})
                 value=enforce_confirmation(value,items)
                 if not any(value.get(key) for key in ('symptoms','resolution_steps','operator_actions','owner_additions')):
                     raise TenantLinearError('Добавьте хотя бы одно полезное описание или инструкцию перед публикацией.',409)
