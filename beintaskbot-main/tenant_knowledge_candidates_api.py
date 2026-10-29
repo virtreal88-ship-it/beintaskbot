@@ -51,9 +51,13 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                     except ValueError: raise TenantLinearError('Некорректная версия карточки.') from None
                     result=await asyncio.to_thread(source_review_preflight,profile,request.match_info['candidate_id'],request.query.get('message_id'),expected_version)
                 elif resource=='conversation':
-                    if set(request.query)-{'message_id','review_run_id','expected_tenant_id','expected_user_id'}:
+                    if set(request.query)-{'message_id','review_run_id','expected_version','expected_tenant_id','expected_user_id'}:
                         raise TenantLinearError('Invalid conversation selection.',400)
-                    result=await timing.run(conversation_link,profile,request.match_info['candidate_id'],request.query.get('message_id'),request.query.get('review_run_id'))
+                    try: expected_version=int(request.query['expected_version']) if 'expected_version' in request.query else None
+                    except ValueError: raise TenantLinearError('Invalid case version.',400) from None
+                    if expected_version is not None and (not request.query.get('message_id') or request.query.get('review_run_id')):
+                        raise TenantLinearError('Invalid attachment selection.',400)
+                    result=await timing.run(conversation_link,profile,request.match_info['candidate_id'],request.query.get('message_id'),request.query.get('review_run_id'),expected_version)
                 else: result=await asyncio.to_thread(listing,profile,dict(request.query))
             else:
                 _origin(request,canonical_origin)

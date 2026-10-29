@@ -54,6 +54,13 @@ existing tenant audit log as `ai_learning_mcp_read`.
 
 ## Available tools and privacy
 
+`administrator_case_conversation_link_read` normally anchors only a case's
+evidence messages. To navigate to a media message within the current verified
+case interval, provide both `message_id` and the current `expected_version`.
+The server rechecks case boundaries, exact attachment, tenant, channel, dialog
+and agent scope. This does not add the message to case evidence or read media
+bytes; stale versions and out-of-bound messages are rejected.
+
 The extraction service permits at most 100 knowledge extractions per company
 per UTC day. This is a service-wide default applied separately to each tenant,
 not a company-specific setting. Existing company AI-call limits, tenant spend

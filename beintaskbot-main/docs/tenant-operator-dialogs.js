@@ -541,12 +541,13 @@
   }
   async function openCaseLink(data){
     if(!hasRight('dialogs')){notice(t('noAccess'));return false;}
-    const caseId=String(data?.case_id||''),messageId=String(data?.message_id||''),reviewId=data?.review_run_id?String(data.review_run_id):'';
+    const caseId=String(data?.case_id||''),messageId=String(data?.message_id||''),reviewId=data?.review_run_id?String(data.review_run_id):'',version=data?.expected_version;
     if(!uuid(caseId)||(messageId&&!uuid(messageId))||(reviewId&&!uuid(reviewId))){cancelCaseLink();notice(caseLinkText('invalid'));return false;}
     return resolveCaseLink(async()=>{
       const query=new URLSearchParams({expected_tenant_id:String(member?.tenant_id||''),expected_user_id:String(member?.telegram_id||'')});
       if(messageId)query.set('message_id',messageId);
       if(reviewId)query.set('review_run_id',reviewId);
+      if(Number.isInteger(version)&&version>0)query.set('expected_version',String(version));
       const resolved=(await rawApi(endpoint+'knowledge-candidates/'+encodeURIComponent(caseId)+'/conversation?'+query)).result;
       if(!resolved?.route||String(resolved.case_id)!==caseId||!uuid(resolved.message_id)||(messageId&&String(resolved.message_id)!==messageId))throw Error(caseLinkText('unavailable'));
       return {...resolved.route,source_message_id:resolved.message_id};

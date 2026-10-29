@@ -463,6 +463,30 @@ def test_case_conversation_link_read_uses_existing_authorized_case_route(db,monk
     db.rollback()
 
 
+def test_case_conversation_link_read_bounded_attachment_keeps_channel_scope(db,monkeypatch):
+    from test_knowledge_candidates import ready as candidate_ready, candidate as make_candidate
+    setup=candidate_ready.__wrapped__(db,monkeypatch);value=make_candidate(setup)
+    ids=[str(uuid.uuid4()) for _ in range(3)]
+    for n,mid in enumerate(ids):
+        db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type,happened_at,raw)
+          VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','','video',now()+(%s * interval '1 second'),%s::jsonb)""",
+          (mid,A,'test-'+mid,'connect:'+CA,100+n,json.dumps({'conversationId':'client'})))
+    row=db.execute('SELECT content,version FROM saas_knowledge_candidates WHERE id=%s::uuid',(value['id'],))[0]
+    content={**row['content'],'source_message_ids':[ids[0],ids[2]],'start_message_id':ids[0],'end_message_id':ids[2]}
+    db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE id=%s::uuid',(json.dumps(content),value['id']))
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT));db.commit()
+    _setup(monkeypatch,db)
+    cfg=mcp._require_cfg();cfg.update(actor_id=11,granted_scopes=[admin.READ_SCOPE],AI_LEARNING_MCP_AGENT_ID=AGENT,AI_LEARNING_MCP_CHANNEL_ID=CA)
+    args={'case_id':value['id'],'message_id':ids[1],'expected_version':row['version']}
+    with db.cursor() as cur:
+        result=admin.read(cur,cfg,'administrator_case_conversation_link_read',args)
+        assert result['anchor_message_id']==ids[1]
+        with pytest.raises(Exception):admin.read(cur,cfg,'administrator_case_conversation_link_read',{k:v for k,v in args.items() if k!='expected_version'})
+        with pytest.raises(Exception):admin.read(cur,{**cfg,'AI_LEARNING_MCP_CHANNEL_ID':str(uuid.uuid4())},'administrator_case_conversation_link_read',args)
+        with pytest.raises(Exception):admin.read(cur,cfg,'administrator_case_conversation_link_read',{**args,'expected_version':row['version']+1})
+    db.rollback()
+
+
 def test_owner_provided_knowledge_remains_inactive_until_existing_apply_and_publish_gates(db,monkeypatch):
     seed_simulation(db); _setup(monkeypatch,db)
     monkeypatch.setenv('AI_LEARNING_MCP_DRAFTS_ENABLED','true');monkeypatch.setenv('AI_AUTONOMOUS_APPLY_ENABLED','true')

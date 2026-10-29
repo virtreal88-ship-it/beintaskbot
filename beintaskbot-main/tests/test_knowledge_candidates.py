@@ -405,6 +405,34 @@ def test_case_conversation_link_resolves_only_bound_tenant_evidence(ready):
         store.conversation_link(PROFILE,value['id'],anchor)
 
 
+def test_case_attachment_link_requires_current_verified_interval_and_dialog_scope(ready):
+    db,_,_=ready;value=candidate(ready);key=value['id']
+    ids=[str(uuid.uuid4()) for _ in range(4)]
+    for n,mid in enumerate(ids):
+        db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type,happened_at,raw)
+          VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','','video',now()+(%s * interval '1 second'),%s::jsonb)""",
+          (mid,A,'test-'+mid,'connect:'+CA,100+n,json.dumps({'conversationId':'client'})))
+    saved=db.execute('SELECT content,version FROM saas_knowledge_candidates WHERE id=%s::uuid',(key,))[0]
+    content={**saved['content'],'source_message_ids':[ids[0],ids[2]],'start_message_id':ids[0],'end_message_id':ids[2]}
+    db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE id=%s::uuid',(json.dumps(content),key));db.commit()
+    version=saved['version']
+    with pytest.raises(TenantLinearError):store.conversation_link(PROFILE,key,ids[1])
+    assert store.conversation_link(PROFILE,key,ids[1],expected_version=version)['message_id']==ids[1]
+    with pytest.raises(TenantLinearError):store.conversation_link(PROFILE,key,ids[3],expected_version=version)
+    with pytest.raises(TenantLinearError):store.conversation_link(PROFILE,key,ids[1],expected_version=version+1)
+    with pytest.raises(TenantLinearError):store.conversation_link({'tenant_id':B,'telegram_id':22},key,ids[1],expected_version=version)
+    db.execute("UPDATE saas_crm_messages SET channel=%s WHERE id=%s::uuid",('connect:'+CB,ids[1]));db.commit()
+    with pytest.raises(TenantLinearError):store.conversation_link(PROFILE,key,ids[1],expected_version=version)
+    db.execute("UPDATE saas_crm_messages SET channel=%s WHERE id=%s::uuid",('connect:'+CA,ids[1]));db.commit()
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid",(json.dumps({'conversationId':'other'}),ids[1]));db.commit()
+    with pytest.raises(TenantLinearError):store.conversation_link(PROFILE,key,ids[1],expected_version=version)
+    db.execute("UPDATE saas_crm_messages SET raw='{}'::jsonb,message_type='text' WHERE id=%s::uuid",(ids[1],));db.commit()
+    with pytest.raises(TenantLinearError):store.conversation_link(PROFILE,key,ids[1],expected_version=version)
+    content.pop('end_message_id');db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE id=%s::uuid',(json.dumps(content),key));db.commit()
+    with pytest.raises(TenantLinearError):store.conversation_link(PROFILE,key,ids[1],expected_version=version)
+    assert db.execute('SELECT content FROM saas_knowledge_candidates WHERE id=%s::uuid',(key,))[0]['content']['source_message_ids']==[ids[0],ids[2]]
+
+
 def test_internal_forward_without_customer_evidence_cannot_become_support_case(ready):
     db,_,_=ready;value=candidate(ready)
     db.execute('''UPDATE saas_crm_messages SET direction='outgoing',raw='{}'::jsonb
