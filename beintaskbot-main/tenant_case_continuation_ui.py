@@ -90,6 +90,28 @@ def preview_owner(profile,campaign_id,expected_version):
 
 def apply_owner(profile,campaign_id,data):
     required={'expected_version','source_refs','snapshot_hash','request_id','confirm_exact_preview'}
-    if not isinstance(data,dict) or set(data)!=required or data['confirm_exact_preview'] is not True:
+    if not isinstance(data,dict) or not required.issubset(data) or set(data)-required-{'current_byte_sources'} or data['confirm_exact_preview'] is not True:
         raise TenantLinearError('Confirm the exact preview.',400)
-    return apply(profile,campaign_id,data['expected_version'],data['source_refs'],data['snapshot_hash'],data['request_id'],_max_sources=MAX_SOURCES,original_cases_only=True)
+    # Client hashes are merely assertions. Re-fetch every exact source under the
+    # owner's session before the locked transaction; dispatch checks bytes again.
+    supplied=data.get('current_byte_sources',[])
+    if not isinstance(supplied,list) or len(supplied)>10:raise TenantLinearError('Invalid byte snapshot.',400)
+    refs=data['source_refs']
+    if not isinstance(refs,list):raise TenantLinearError('Invalid sources.',400)
+    verified={}
+    from tenant_case_current_media import verify_owner_source
+    for item in supplied:
+        if not isinstance(item,dict) or set(item)!={'case_id','message_id','case_version','sha256'}:
+            raise TenantLinearError('Invalid byte snapshot.',400)
+        key=(identifier(item['case_id']),identifier(item['message_id']))
+        if key in verified or {'case_id':key[0],'message_id':key[1],'expected_version':item['case_version']} not in refs:
+            raise TenantLinearError('Invalid byte snapshot source.',400)
+        value=verify_owner_source(profile,campaign_id,{'expected_version':data['expected_version'],
+          'case_id':key[0],'message_id':key[1],'case_version':item['case_version']})
+        if value['current_sha256']!=item['sha256']:raise TenantLinearError('Current file changed; refresh.',409)
+        if not value['continuation_supported']:
+            raise TenantLinearError('Concurrent audio processing requires reconciliation.',409)
+        if value['attempt_reconciliation']['state']!='known_not_attempted':
+            raise TenantLinearError('Prior media outcome is unknown.',409)
+        verified[key]=value['current_sha256']
+    return apply(profile,campaign_id,data['expected_version'],refs,data['snapshot_hash'],data['request_id'],_max_sources=MAX_SOURCES,original_cases_only=True,verified_bytes=verified)

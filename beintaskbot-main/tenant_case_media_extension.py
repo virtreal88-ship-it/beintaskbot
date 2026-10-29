@@ -8,6 +8,34 @@ from tenant_case_source_inventory import inspect
 from tenant_case_media_admission import _historical_attempt_reconciliation
 
 
+def _verified_byte_history(cur,tenant,message_id,source_hash,*,exclude_extraction_id=None):
+    """Require positive no-call evidence and fence every other queued fragment."""
+    history=_historical_attempt_reconciliation(cur,tenant,message_id,source_hash,exclude_extraction_id=exclude_extraction_id)
+    if history.get('state')!='known_not_attempted':return history
+    import json
+    cur.execute("""SELECT 1 FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid
+      AND (source_refs @> %s::jsonb OR media_results @> %s::jsonb)
+      AND (%s::uuid IS NULL OR id<>%s::uuid) AND status<>'completed' LIMIT 1""",
+      (tenant,json.dumps([{'id':str(message_id)}]),json.dumps([{'id':str(message_id)}]),exclude_extraction_id,exclude_extraction_id))
+    if cur.fetchone():return {'state':'unknown','reason':'prior_extraction_unfinished','matching_runs':history.get('matching_runs',0)}
+    cur.execute("""SELECT 1 FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid
+      AND route->'message_ids' @> %s::jsonb AND (%s::uuid IS NULL OR id<>%s::uuid) LIMIT 1""",
+      (tenant,json.dumps([str(message_id)]),exclude_extraction_id,exclude_extraction_id))
+    if cur.fetchone():return {'state':'unknown','reason':'prior_fragment_exists','matching_runs':history.get('matching_runs',0)}
+    # Voice transcription can also run outside a knowledge extraction. A
+    # completed or unresolved receipt is not evidence that it was never sent.
+    cur.execute("""SELECT 1 FROM saas_connect_voice_receipts v JOIN saas_crm_messages m
+      ON m.tenant_id=v.tenant_id AND m.channel='connect:'||v.channel_id::text AND m.external_id=v.external_id
+      WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid LIMIT 1""",(tenant,message_id))
+    if cur.fetchone():return {'state':'unknown','reason':'prior_voice_receipt','matching_runs':history.get('matching_runs',0)}
+    cur.execute("SELECT to_regclass('public.saas_knowledge_media_cache') AS relation")
+    if cur.fetchone().get('relation'):
+        cur.execute("""SELECT 1 FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid
+          AND metadata->'owner_retry_source'->>'message_id'=%s LIMIT 1""",(tenant,str(message_id)))
+        if cur.fetchone():return {'state':'unknown','reason':'prior_source_cache','matching_runs':history.get('matching_runs',0)}
+    return history
+
+
 def preview(cur,profile,campaign_id,expected_campaign_version,sources,*,_internal=False,_max_sources=25):
     tenant,actor,policy=cases.authorize(cur,profile)
     if policy.profile.get('role')!='owner':raise TenantLinearError('Owner access required.',403)
@@ -76,7 +104,7 @@ def preview(cur,profile,campaign_id,expected_campaign_version,sources,*,_interna
     return result
 
 
-def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,request_id,*,_max_sources=25,original_cases_only=False):
+def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,request_id,*,_max_sources=25,original_cases_only=False,verified_bytes=None):
     """Queue only proven unattempted sources, under the original fixed grant.
 
     The caller must already hold the separate extension OAuth scope and explicitly
@@ -93,6 +121,9 @@ def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,re
         with conn.cursor() as cur:
             tenant,actor,policy=cases.authorize(cur,profile)
             if policy.profile.get('role')!='owner':raise TenantLinearError('Owner access required.',403)
+            # Serialize with extraction admission before locking the campaign,
+            # in the same order used by extraction preparation.
+            cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('tenant-chat-ai:'+tenant,))
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('knowledge-campaign:'+tenant,))
             cur.execute('SELECT * FROM saas_knowledge_campaigns WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,campaign_id))
             campaign=cur.fetchone()
@@ -124,6 +155,11 @@ def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,re
             if not prepared['operation_capacity']['next_fragment_fits']:raise TenantLinearError('Original campaign operation allowance is exhausted.',409)
             selected=[];seen=set()
             for source in prepared['_snapshot']:
+                digest=(verified_bytes or {}).get((source['case_id'],source['message_id']))
+                if source['state']=='source_version_unverified' and digest:
+                    history=_verified_byte_history(cur,tenant,source['message_id'],source['source_hash'])
+                    if history.get('state')=='known_not_attempted':
+                        source={**source,'state':'known_not_attempted','reconciliation':history,'current_sha256':digest}
                 if source['state']!='known_not_attempted':continue
                 source_key=(source['channel_id'],source['message_id'])
                 if source_key in seen:continue
@@ -150,6 +186,7 @@ def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,re
                   'period_end':(at+timedelta(microseconds=1)).isoformat(),'analysis_agent_id':str(campaign['analysis_agent_id']),
                   'source_version':source['source_version'],'case_id':source['case_id'],'case_version':source['case_version'],
                   'case_plan_hash':signature,'case_extension_id':request_id,'campaign_media_kind':source['kind']}
+                if source.get('current_sha256'):route['case_source_sha256']=source['current_sha256']
                 if source['kind']=='image' and campaign.get('photo_model'):route['campaign_photo_model']=campaign['photo_model']
                 fragment=campaigns.enqueue(cur,profile,campaign,route)
                 mapped[str(fragment)]={'source':source,'signature':signature}
@@ -174,13 +211,13 @@ def dispatch_fence(cur,tenant,row):
     profile={'tenant_id':tenant,'telegram_id':row['approved_by']}
     checked=inspect(cur,profile,source['case_id'],source['message_id'],source['case_version'],row['campaign_id'],_internal=True)
     identity=checked['_source']
-    if (not checked.get('source_version_verified') or str(ext.get('owner_id'))!=str(row['approved_by']) or route.get('case_id')!=source['case_id']
+    if ((not checked.get('source_version_verified') and not source.get('current_sha256')) or route.get('case_source_sha256')!=source.get('current_sha256') or str(ext.get('owner_id'))!=str(row['approved_by']) or route.get('case_id')!=source['case_id']
         or route.get('case_version')!=source['case_version'] or route.get('message_ids')!=[source['message_id']]
         or route.get('channel_id')!=source['channel_id'] or route.get('conversation_id')!=source['conversation_id']
         or route.get('source_version')!=source['source_version'] or identity['source_version']!=source['source_version']
         or identity['source_hash']!=source['source_hash'] or identity['occurred_at']!=source['occurred_at']):
         raise TenantLinearError('Case extension source changed.',409)
-    history=_historical_attempt_reconciliation(cur,tenant,source['message_id'],source['source_hash'],exclude_extraction_id=str(row['id']))
+    history=(_verified_byte_history if source.get('current_sha256') else _historical_attempt_reconciliation)(cur,tenant,source['message_id'],source['source_hash'],exclude_extraction_id=str(row['id']))
     if history.get('state')!='known_not_attempted':
         raise TenantLinearError('Case media attempt history changed.',409)
     expected_photo=row.get('photo_model') if source['kind']=='image' else None

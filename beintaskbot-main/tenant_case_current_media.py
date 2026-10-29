@@ -36,6 +36,55 @@ def _authorized_snapshot(cur,profile,campaign_id,campaign_version,case_id,messag
     return source
 
 
+def _saved_byte_results(cur,tenant,campaign_id,source,digest):
+    """Return only completed results attributed to these freshly fetched bytes."""
+    from tenant_media_evidence import _safe_text
+    cur.execute("""SELECT e.media_results FROM saas_knowledge_campaign_fragments f
+      JOIN saas_knowledge_extractions e ON e.tenant_id=f.tenant_id AND e.id=COALESCE(f.extraction_id,f.id)
+      WHERE f.tenant_id=%s::uuid AND f.campaign_id=%s::uuid
+        AND f.route->>'case_id'=%s AND f.route->>'case_version'=%s
+        AND f.route->'message_ids' @> %s::jsonb AND f.route->>'case_source_sha256'=%s
+        AND e.route->>'case_source_sha256'=%s AND e.status='completed' AND f.status IN ('completed','partial')
+      ORDER BY f.updated_at DESC LIMIT 3""",
+      (tenant,campaign_id,source['case_id'],str(source['case_version']),__import__('json').dumps([source['message_id']]),digest,digest))
+    rows=[(row,False) for row in cur.fetchall()]
+    # Older extractions can also be reused when the result itself recorded
+    # the exact bytes. Metadata-only source versions are never enough.
+    import json
+    cur.execute("""SELECT media_results FROM saas_knowledge_extractions
+      WHERE tenant_id=%s::uuid AND status='completed' AND source_refs @> %s::jsonb
+        AND media_results @> %s::jsonb ORDER BY completed_at DESC LIMIT 3""",
+      (tenant,json.dumps([{'id':source['message_id'],'channel_id':source['channel_id']}]),
+       json.dumps([{'id':source['message_id'],'sha256':digest}])))
+    rows.extend((row,True) for row in cur.fetchall())
+    saved=[];seen=set()
+    for row,legacy in rows:
+        for result in row.get('media_results') or []:
+            if (not isinstance(result,dict) or str(result.get('id'))!=source['message_id']
+                or result.get('status') not in {'processed','partial'} or (legacy and result.get('sha256')!=digest)):continue
+            parts=[]
+            for key in ('observation','transcript'):
+                if isinstance(result.get(key),str) and result[key].strip():parts.append(_safe_text(result[key]))
+            for value in result.get('observations') or []:
+                if isinstance(value,dict) and isinstance(value.get('text'),str) and value['text'].strip():parts.append(_safe_text(value['text']))
+            if parts:
+                entry={'status':result['status'],'text':'\n'.join(parts)[:4000]}
+                key=(entry['status'],entry['text'])
+                if key not in seen:saved.append(entry);seen.add(key)
+    cur.execute("SELECT to_regclass('public.saas_knowledge_media_cache') AS relation")
+    if cur.fetchone().get('relation'):
+        cur.execute("""SELECT transcript FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid
+          AND state='completed' AND metadata->>'kind'='vision' AND metadata->>'sha256'=%s
+          AND metadata->'owner_retry_source'->>'message_id'=%s
+          AND metadata->'owner_retry_source'->>'channel_id'=%s ORDER BY created_at DESC LIMIT 3""",
+          (tenant,digest,source['message_id'],source['channel_id']))
+        for row in cur.fetchall():
+            if isinstance(row.get('transcript'),str) and row['transcript'].strip():
+                entry={'status':'processed','text':_safe_text(row['transcript'])[:4000]};key=(entry['status'],entry['text'])
+                if key not in seen:saved.append(entry);seen.add(key)
+    return saved[:3]
+
+
 def verify_owner_source(profile,campaign_id,data):
     required={'expected_version','case_id','message_id','case_version'}
     if not isinstance(data,dict) or set(data)!=required:raise TenantLinearError('Некорректный источник.',400)
@@ -63,10 +112,16 @@ def verify_owner_source(profile,campaign_id,data):
         if not signature(payload,mime):
             error=TenantLinearError('Не удалось проверить файл. Причина: connect_format_unsupported.',415)
             error.code='connect_format_unsupported';raise error
+    digest=hashlib.sha256(payload).hexdigest()
     with _connect() as conn:
-        with conn.cursor() as cur:after=_authorized_snapshot(cur,*args)
+        with conn.cursor() as cur:
+            after=_authorized_snapshot(cur,*args)
+            from tenant_case_media_extension import _verified_byte_history
+            history=_verified_byte_history(cur,str(profile['tenant_id']),after['message_id'],after['_source']['source_hash'])
+            saved=_saved_byte_results(cur,str(profile['tenant_id']),str(campaign_id),after,digest)
     if before!=after:raise TenantLinearError('Кейс или источник изменился. Обновите состояние.',409)
     return {'case_id':before['case_id'],'message_id':before['message_id'],'case_version':before['case_version'],
-      'provider':'connect','current_bytes_checked':True,'current_sha256':hashlib.sha256(payload).hexdigest(),
+      'provider':'connect','current_bytes_checked':True,'current_sha256':digest,
       'mime_type':mime,'content_signature_checked':before['kind']=='image','size_bytes':len(payload),
-      'previous_bytes_verified':False,'provider_ai_calls':0}
+      'previous_bytes_verified':False,'continuation_supported':before['kind'] not in {'audio','voice'},
+      'attempt_reconciliation':history,'saved_byte_results':saved,'provider_ai_calls':0}

@@ -65,6 +65,10 @@ def route(cur,profile,data):
     if data.get('video_model'):binding['video_model']=str(data['video_model'])[:100]
     if data.get('campaign_photo_model'):binding['campaign_photo_model']=str(data['campaign_photo_model'])[:100]
     if data.get('media_grant_id'):binding['media_grant_id']=identifier(data['media_grant_id'])
+    if data.get('case_source_sha256'):
+        value=data['case_source_sha256']
+        if not isinstance(value,str) or not re.fullmatch('[0-9a-f]{64}',value):raise TenantLinearError('Invalid byte snapshot.',400)
+        binding['case_source_sha256']=value
     if data.get('owner_retry_unknown') is True:binding['owner_retry_unknown']=True
     if data.get('owner_retry_basis') is not None:
         if not data.get('owner_retry_unknown') or data['owner_retry_basis'] not in {'stable_media_identity','current_connect_message'}:

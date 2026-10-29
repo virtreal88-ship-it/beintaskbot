@@ -52,3 +52,58 @@ def test_current_media_check_requires_same_origin_and_scoped_session(monkeypatch
         response=await handler(Request('POST',body=data))
         assert response.status==429 and response.headers['Retry-After']=='12' and json.loads(response.text)['code']=='connect_rate_limit'
     asyncio.run(run())
+
+
+def test_byte_snapshot_is_refetched_and_unknown_outcome_rejected(monkeypatch):
+    import pytest
+    import tenant_case_current_media as current
+    from tenant_linear_policy import TenantLinearError
+    case='0250f744-2714-4e68-8174-39721448fa76'
+    message='60c57a14-fc9d-4ddc-a99b-27293228867e'
+    digest='a'*64
+    data={'expected_version':9,'source_refs':[{'case_id':case,'message_id':message,'expected_version':1}],
+      'snapshot_hash':'b'*64,'request_id':'request','confirm_exact_preview':True,
+      'current_byte_sources':[{'case_id':case,'message_id':message,'case_version':1,'sha256':digest}]}
+    calls=[]
+    monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':digest,'continuation_supported':True,'attempt_reconciliation':{'state':'known_not_attempted'}})
+    monkeypatch.setattr(continuation,'apply',lambda *args,**kwargs:(calls.append(kwargs) or {'count':1}))
+    assert continuation.apply_owner({},'campaign',data)=={'count':1}
+    assert calls[0]['verified_bytes']=={(case,message):digest}
+    monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':digest,'continuation_supported':True,'attempt_reconciliation':{'state':'unknown'}})
+    with pytest.raises(TenantLinearError,match='unknown'):continuation.apply_owner({},'campaign',data)
+    monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':'c'*64,'continuation_supported':True,'attempt_reconciliation':{'state':'known_not_attempted'}})
+    with pytest.raises(TenantLinearError,match='changed'):continuation.apply_owner({},'campaign',data)
+    monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':digest,'continuation_supported':False,'attempt_reconciliation':{'state':'known_not_attempted'}})
+    with pytest.raises(TenantLinearError,match='audio'):continuation.apply_owner({},'campaign',data)
+    assert len(calls)==1
+
+
+def test_byte_fence_uses_actual_bytes():
+    import hashlib
+    import pytest
+    from tenant_knowledge_media import _check_case_bytes,CaseSourceBytesChanged
+    expected=hashlib.sha256(b'picture').hexdigest()
+    _check_case_bytes({'route':{'case_source_sha256':expected}},b'picture')
+    with pytest.raises(CaseSourceBytesChanged):
+        _check_case_bytes({'route':{'case_source_sha256':expected}},b'changed')
+
+
+def test_verified_media_result_does_not_repeat_text_extraction(monkeypatch):
+    from unittest.mock import MagicMock,Mock
+    import tenant_knowledge_candidates_service as service
+    import tenant_knowledge_media as media
+    item={'tenant':'t','id':'id','route':{'case_source_sha256':'a'*64},
+      'refs':[{'id':'m','media_kind':'image'}],'messages':[]}
+    monkeypatch.setattr(service,'prepare',lambda *_:item)
+    monkeypatch.setattr(service,'check_active',lambda *_:None)
+    conn=MagicMock();cur=conn.__enter__.return_value.cursor.return_value.__enter__.return_value
+    cur.fetchone.return_value={'enabled':True,'emergency_stop':False}
+    monkeypatch.setattr(service,'_connect',lambda:conn)
+    monkeypatch.setattr(service.store,'extraction_row',lambda *_:{})
+    monkeypatch.setattr(service.store,'evidence',lambda *_:None)
+    monkeypatch.setattr(service.store,'request_detail',lambda *_:{'ok':True})
+    monkeypatch.setattr(media,'collect',lambda *args,**kw:([],[{'id':'m','status':'processed','observations':[{'text':'visible'}]}]))
+    provider=Mock();finish=Mock();monkeypatch.setattr(service,'generate',provider);monkeypatch.setattr(service,'finish',finish)
+    assert service.analyze({},{} )=={'ok':True}
+    provider.assert_not_called()
+    assert finish.call_args.args[2]==[] and finish.call_args.args[4]==''

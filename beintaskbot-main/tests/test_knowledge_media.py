@@ -744,3 +744,16 @@ def test_finish_separates_text_media_unknown_and_media_only_cancel(ready,monkeyp
     assert media[-1][0][1]=='cached-asr' and media[-1][1]['attempted_units']==0
 
 
+
+
+@pytest.mark.parametrize('kind',['image','audio','video','document'])
+def test_case_byte_snapshot_mismatch_stops_before_provider(context,monkeypatch,kind):
+    import tenant_media_evidence as evidence
+    import tenant_connect_voice as voice
+    item,add,download=context;add(kind)
+    item['route'].update(allow_external_media=True,allow_paid_asr=True,case_source_sha256='0'*64)
+    monkeypatch.setattr(evidence,'reusable',Mock(side_effect=AssertionError('metadata cache is not byte proof')))
+    monkeypatch.setattr(media,'cached_transcript',Mock(side_effect=AssertionError('transcript is not byte proof')))
+    monkeypatch.setattr(voice,'transcription_model',lambda item:'test')
+    with pytest.raises(media.CaseSourceBytesChanged):media.collect({},item)
+    download.assert_awaited_once()
