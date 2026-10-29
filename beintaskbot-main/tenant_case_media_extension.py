@@ -26,14 +26,21 @@ def _verified_byte_history(cur,tenant,message_id,source_hash,*,exclude_extractio
         if not rows:return history
         for row in rows:
             all_refs=row.get('source_refs');all_results=row.get('media_results')
-            if not isinstance(all_refs,list) or not isinstance(all_results,list):return history
-            if any(not isinstance(r,dict) or not r.get('id') for r in all_refs+all_results):return history
+            def blocked(reason):return {'state':'unknown','reason':reason,'matching_runs':len(rows)}
+            if not isinstance(all_refs,list) or not isinstance(all_results,list):return blocked('prior_extraction_record_invalid')
+            if any(not isinstance(r,dict) or not r.get('id') for r in all_refs+all_results):return blocked('prior_extraction_record_invalid')
             refs=[r for r in all_refs if str(r['id'])==str(message_id)]
             results=[r for r in all_results if str(r['id'])==str(message_id)]
-            if row.get('status')!='completed' or len(refs)!=1:return history
-            if results and (len(results)!=1 or refs[0].get('media_kind')!='image'
-                or results[0].get('kind')!='image' or results[0].get('code') not in {'vision_not_approved','external_media_permission_required'}
-                or not _explicit_no_media_call(refs[0],results[0])):return history
+            if row.get('status')!='completed':return blocked('prior_extraction_unfinished')
+            if len(refs)!=1:return blocked('prior_source_reference_ambiguous')
+            if results:
+                if len(results)!=1 or refs[0].get('media_kind')!='image' or results[0].get('kind')!='image':
+                    return blocked('prior_media_result_identity_mismatch')
+                result=results[0]
+                if result.get('status') in {'unknown','running','pending_processing'}:return blocked('prior_media_result_unknown')
+                if result.get('status') in {'processed','partial'}:return blocked('prior_media_result_recorded')
+                if result.get('code') not in {'vision_not_approved','external_media_permission_required'} or not _explicit_no_media_call(refs[0],result):
+                    return blocked('prior_media_result_not_pre_dispatch')
             cur.execute("SELECT to_regclass('public.saas_ai_spend_reservations') AS relation")
             if not cur.fetchone().get('relation'):return history
             key='extraction:'+str(row['id'])

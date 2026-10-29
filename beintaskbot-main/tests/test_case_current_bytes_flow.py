@@ -140,11 +140,16 @@ def test_legacy_incomplete_history_requires_owner_ack_and_blocks_recorded_attemp
         mismatch=[{'id':message,'kind':'video','status':'unavailable','code':'vision_not_approved'}]
         db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(mismatch),case['extraction_id']));db.commit()
         blocked=current.verify_owner_source(PROFILE,campaign,{'expected_version':1,'case_id':key,'message_id':message,'case_version':version})
-        assert blocked['attempt_reconciliation']['state']=='unknown'
+        assert blocked['attempt_reconciliation']=={'state':'unknown','reason':'prior_media_result_identity_mismatch','matching_runs':1}
+        for status,expected in [('unknown','prior_media_result_unknown'),('processed','prior_media_result_recorded')]:
+            prior=[{'id':message,'kind':'image','status':status,'code':'media_result_unknown'}]
+            db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(prior),case['extraction_id']));db.commit()
+            result=current.verify_owner_source(PROFILE,campaign,{'expected_version':1,'case_id':key,'message_id':message,'case_version':version})
+            assert result['attempt_reconciliation']=={'state':'unknown','reason':expected,'matching_runs':1}
         wrong_reason=[{'id':message,'kind':'image','status':'unavailable','code':'asr_authorization_required'}]
         db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(wrong_reason),case['extraction_id']));db.commit()
         blocked=current.verify_owner_source(PROFILE,campaign,{'expected_version':1,'case_id':key,'message_id':message,'case_version':version})
-        assert blocked['attempt_reconciliation']['state']=='unknown'
+        assert blocked['attempt_reconciliation']=={'state':'unknown','reason':'prior_media_result_not_pre_dispatch','matching_runs':1}
         db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(prior_results),case['extraction_id']));db.commit()
     args={'expected_version':1,'source_refs':refs,'snapshot_hash':preview['snapshot_hash'],'request_id':str(uuid.uuid4()),'confirm_exact_preview':True,
       'current_byte_sources':[{'case_id':key,'message_id':message,'case_version':version,'sha256':value['current_sha256']}]}
