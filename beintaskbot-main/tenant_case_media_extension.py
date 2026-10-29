@@ -28,9 +28,10 @@ def preview(cur,profile,campaign_id,expected_campaign_version,sources,*,_interna
       COALESCE(sum(reserved_microusd) FILTER(WHERE state IN ('reserved','unknown')),0) AS held
       FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND grant_id=%s::uuid''',(tenant,campaign_id))
     totals=cur.fetchone()
-    cur.execute('''SELECT COALESCE(sum(reserved_microusd) FILTER(WHERE state IN ('reserved','unknown')),0) AS held
+    cur.execute('''SELECT COALESCE(sum(reserved_microusd) FILTER(WHERE state IN ('reserved','unknown')),0) AS held,
+      COALESCE(sum(COALESCE(actual_microusd,reserved_microusd)) FILTER(WHERE state='settled'),0) AS settled
       FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND grant_id IS NULL''',(tenant,))
-    prior_held=int(cur.fetchone()['held']);results=[];keys=set();snapshot=[]
+    prior=cur.fetchone();prior_held=int(prior['held']);prior_settled=int(prior['settled']);results=[];keys=set();snapshot=[]
     for source in sources:
         if not isinstance(source,dict) or set(source)!={'case_id','message_id','expected_version'}:
             raise TenantLinearError('Invalid case source.',400)
@@ -43,6 +44,8 @@ def preview(cur,profile,campaign_id,expected_campaign_version,sources,*,_interna
             state='already_covered';history=None
         elif item.get('cached_status') in {'processed','partial'}:
             state='cached_bytes_unverified';history=None
+        elif not item.get('source_version_verified'):
+            state='source_version_unverified';history=None
         else:
             history=_historical_attempt_reconciliation(cur,tenant,message_id,source_data['source_hash'])
             state='known_not_attempted' if history.get('state')=='known_not_attempted' else 'previous_outcome_unknown'
@@ -55,7 +58,8 @@ def preview(cur,profile,campaign_id,expected_campaign_version,sources,*,_interna
     snapshot.sort(key=lambda x:(x['case_id'],x['message_id']))
     spent=int(totals['settled']);held=int(totals['held'])
     budget={'cap_microusd':int(campaign['cap_microusd']),'settled_microusd':spent,'held_microusd':held,
-            'available_microusd':max(0,int(campaign['cap_microusd'])-spent-held),'prior_unknown_holds_microusd':prior_held}
+            'available_microusd':max(0,int(campaign['cap_microusd'])-spent-held-prior_settled-prior_held),
+            'prior_unknown_holds_microusd':prior_held,'prior_settled_microusd':prior_settled}
     from tenant_knowledge_campaign_policy import reservation,fits
     amount=reservation(campaign['media_policy'])
     capacity={'calls_remaining':max(0,campaign['max_calls']-campaign['reserved_calls']),
@@ -164,7 +168,7 @@ def dispatch_fence(cur,tenant,row):
     profile={'tenant_id':tenant,'telegram_id':row['approved_by']}
     checked=inspect(cur,profile,source['case_id'],source['message_id'],source['case_version'],row['campaign_id'],_internal=True)
     identity=checked['_source']
-    if (str(ext.get('owner_id'))!=str(row['approved_by']) or route.get('case_id')!=source['case_id']
+    if (not checked.get('source_version_verified') or str(ext.get('owner_id'))!=str(row['approved_by']) or route.get('case_id')!=source['case_id']
         or route.get('case_version')!=source['case_version'] or route.get('message_ids')!=[source['message_id']]
         or route.get('channel_id')!=source['channel_id'] or route.get('conversation_id')!=source['conversation_id']
         or route.get('source_version')!=source['source_version'] or identity['source_version']!=source['source_version']

@@ -74,6 +74,9 @@ consented `ai_learning.support_media_continue` scope, the existing media scope,
 and an exact unchanged preview. It queues only sources proven not previously
 dispatched, under the original campaign's fixed grant. The campaign remains
 paused; existing unknown outcomes and holds are not retried or released.
+For these extensions, admission also counts all tenant-level unlinked settled
+spend and outstanding holds against the same $10 ceiling. This conservative
+bound can include unrelated historical spend; no hold is released by it.
 
 `administrator_case_conversation_link_read` normally anchors only a case's
 evidence messages. To navigate to a media message within the current verified

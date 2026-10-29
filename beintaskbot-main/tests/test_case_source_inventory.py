@@ -59,7 +59,7 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
         assert out['grant_scope_match'] is False and out['dispatch_authorized'] is False and out['current_bytes_checked'] is False
         preview=extension.preview(cur,PROFILE,campaign,1,[{'case_id':key,'message_id':message,'expected_version':version}])
         assert preview['sources'][0]['extension_state']=='previous_outcome_unknown'
-        assert preview['budget']=={'cap_microusd':10000000,'settled_microusd':150,'held_microusd':200,'available_microusd':9999650,'prior_unknown_holds_microusd':10}
+        assert preview['budget']=={'cap_microusd':10000000,'settled_microusd':150,'held_microusd':200,'available_microusd':9999640,'prior_unknown_holds_microusd':10,'prior_settled_microusd':0}
         assert preview['execution_authorized'] is False
         with pytest.raises(TenantLinearError):extension.preview(cur,PROFILE,campaign,2,[{'case_id':key,'message_id':message,'expected_version':version}])
         cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.SUPPORT_MEDIA_SCOPE]}
@@ -200,6 +200,11 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
     assert claimed and str(claimed['id'])==str(fragment['id'])
     import tenant_knowledge_campaign_worker as worker
     with db.cursor() as cur:worker.check_fence(cur,A,fragment['id'])
+    import tenant_knowledge_candidates_service as service
+    monkeypatch.setattr(spending,'price',lambda model:(1,1))
+    monkeypatch.setattr(spending,'media_price',lambda model,operation:1)
+    prepared=service.prepare(PROFILE,{**claimed['route'],'request_id':str(fragment['id'])})
+    assert prepared['id']==str(fragment['id'])
     db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',
       (json.dumps({**raw,'mediaId':'changed'}),message));db.commit()
     with db.cursor() as cur,pytest.raises(TenantLinearError):worker.check_fence(cur,A,fragment['id'])
