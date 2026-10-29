@@ -110,7 +110,9 @@ def prepare(profile,data,review=None):
                 if data.get('owner_retry_unknown'):
                     progress=campaign_source.get('progress') or {}
                     grant_id=(campaign_source.get('route') or {}).get('media_grant_id')
-                    if (progress.get('mode')!='case_media_batch' or progress.get('acknowledge_prior_unknown') is not True
+                    from tenant_case_uncertain_retry import authorized as authorized_selected_retry
+                    selected_retry=authorized_selected_retry(progress,campaign_source['campaign_id'],request_id,campaign_source['route'])
+                    if (progress.get('mode')!='case_media_batch' or (progress.get('acknowledge_prior_unknown') is not True and not selected_retry)
                         or not grant_id):
                         raise TenantLinearError('Owner retry authorization is not part of the active fixed grant.',403)
                     cur.execute('''SELECT 1 FROM saas_ai_media_grants WHERE tenant_id=%s::uuid AND id=%s::uuid

@@ -31,6 +31,8 @@ def test_current_bytes_queue_and_dispatch_fences(ready,monkeypatch):
     db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb,media_results=%s::jsonb WHERE id=%s::uuid',
       (json.dumps(old+[ref]),json.dumps([{'id':message,'status':'unavailable','code':'vision_not_approved'}]),case['extraction_id']))
     campaigns.create_schema(db);spend.ensure_schema(db)
+    import tenant_knowledge_media_cache as cache
+    with db.cursor() as cur:cache.schema(cur)
     policy={'allow_external_media':True,'allow_paid_asr':False,'max_main_calls':5,'max_asr_calls':0,'max_vision_calls':5}
     progress={'mode':'case_media_batch','case_plans':[{'case_id':key,'status':'pending_boundaries'}]}
     db.execute("""INSERT INTO saas_knowledge_campaigns(tenant_id,id,created_by,sources,analysis_agent_id,status,approved_by,approved_at,max_calls,max_tokens,media_policy,progress,max_cost_microusd) VALUES(%s::uuid,%s::uuid,11,%s::jsonb,%s::uuid,'paused',11,now(),100,1000000,%s::jsonb,%s::jsonb,10000000)""",(A,campaign,json.dumps([CA]),AGENT,json.dumps(policy),json.dumps(progress)))
@@ -112,7 +114,7 @@ def test_current_bytes_queue_and_dispatch_fences(ready,monkeypatch):
     with db.cursor() as cur,pytest.raises(TenantLinearError):extension.dispatch_fence(cur,A,fence)
 
 
-@pytest.mark.parametrize('old_ref_format',['missing','stale','stale_no_call'])
+@pytest.mark.parametrize('old_ref_format',['missing','stale','stale_no_call','unknown_ack'])
 def test_legacy_incomplete_history_requires_owner_ack_and_blocks_recorded_attempt(ready,monkeypatch,old_ref_format):
     db,case,ids=_case(ready,(3,));message=ids[0];key=case['id'];version=case['version'];campaign=str(uuid.uuid4())
     external='connect:'+str(uuid.uuid4());raw={'conversationId':'client'}
@@ -121,10 +123,13 @@ def test_legacy_incomplete_history_requires_owner_ack_and_blocks_recorded_attemp
     db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE id=%s::uuid',(json.dumps(content),key))
     old=db.execute('SELECT source_refs FROM saas_knowledge_extractions WHERE id=%s::uuid',(case['extraction_id'],))[0]['source_refs']
     ref={'id':message,'channel_id':CA,'lead_id':41,'role':'customer'}
-    if old_ref_format in {'stale','stale_no_call'}:ref.update(external_id=external,media_kind='image',media_version='0'*64)
+    if old_ref_format in {'stale','stale_no_call','unknown_ack'}:ref.update(external_id=external,media_kind='image',media_version='0'*64)
     prior_results=[{'id':message,'kind':'image','status':'unavailable','code':'vision_not_approved'}] if old_ref_format=='stale_no_call' else []
+    if old_ref_format=='unknown_ack':prior_results=[{'id':message,'kind':'image','status':'unknown','code':'media_result_unknown'}]
     db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb,media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(old+[ref]),json.dumps(prior_results),case['extraction_id']))
     campaigns.create_schema(db);spend.ensure_schema(db)
+    import tenant_knowledge_media_cache as cache
+    with db.cursor() as cur:cache.schema(cur)
     policy={'allow_external_media':True,'allow_paid_asr':False,'max_main_calls':5,'max_asr_calls':0,'max_vision_calls':5}
     progress={'mode':'case_media_batch','case_plans':[{'case_id':key,'status':'pending_boundaries'}]}
     db.execute("""INSERT INTO saas_knowledge_campaigns(tenant_id,id,created_by,sources,analysis_agent_id,status,approved_by,approved_at,max_calls,max_tokens,media_policy,progress,max_cost_microusd) VALUES(%s::uuid,%s::uuid,11,%s::jsonb,%s::uuid,'paused',11,now(),100,1000000,%s::jsonb,%s::jsonb,10000000)""",(A,campaign,json.dumps([CA]),AGENT,json.dumps(policy),json.dumps(progress)))
@@ -135,7 +140,10 @@ def test_legacy_incomplete_history_requires_owner_ack_and_blocks_recorded_attemp
     refs=[{'case_id':key,'message_id':message,'expected_version':version}]
     with db.cursor() as cur:preview=extension.preview(cur,PROFILE,campaign,1,refs)
     value=current.verify_owner_source(PROFILE,campaign,{'expected_version':1,'case_id':key,'message_id':message,'case_version':version})
-    assert value['attempt_reconciliation']['state']=='incomplete_history_eligible'
+    if old_ref_format=='unknown_ack':
+        assert value['attempt_reconciliation']['reason']=='prior_media_result_unknown'
+        assert value['uncertain_retry_available'] is True
+    else:assert value['attempt_reconciliation']['state']=='incomplete_history_eligible'
     if old_ref_format=='stale_no_call':
         mismatch=[{'id':message,'kind':'video','status':'unavailable','code':'vision_not_approved'}]
         db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(mismatch),case['extraction_id']));db.commit()
@@ -161,14 +169,29 @@ def test_legacy_incomplete_history_requires_owner_ack_and_blocks_recorded_attemp
     with pytest.raises(TenantLinearError,match='unknown'):owner.apply_owner(PROFILE,campaign,{**args,'acknowledge_incomplete_history':True})
     db.execute('DELETE FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key=%s',(A,'extraction:'+str(case['extraction_id'])+':vision'))
     db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',(json.dumps(prior_results),case['extraction_id']));db.commit()
-    result=owner.apply_owner(PROFILE,campaign,{**args,'acknowledge_incomplete_history':True})
+    if old_ref_format=='unknown_ack':
+        db.execute("INSERT INTO saas_ai_spend_reservations(tenant_id,id,call_key,model,kind,reserved_microusd,state) VALUES(%s::uuid,%s::uuid,%s,'test','vision',100,'unknown')",(A,str(uuid.uuid4()),'extraction:'+str(case['extraction_id'])+':vision'));db.commit()
+        with db.cursor() as cur:args['snapshot_hash']=extension.preview(cur,PROFILE,campaign,1,refs)['snapshot_hash']
+        assert current.verify_owner_source(PROFILE,campaign,{'expected_version':1,'case_id':key,'message_id':message,'case_version':version})['uncertain_retry_available'] is True
+        db.execute("UPDATE saas_ai_spend_reservations SET state='reserved' WHERE call_key=%s",('extraction:'+str(case['extraction_id'])+':vision',));db.commit()
+        assert current.verify_owner_source(PROFILE,campaign,{'expected_version':1,'case_id':key,'message_id':message,'case_version':version})['uncertain_retry_available'] is False
+        db.execute("UPDATE saas_ai_spend_reservations SET state='unknown' WHERE call_key=%s",('extraction:'+str(case['extraction_id'])+':vision',));db.commit()
+        db.execute("INSERT INTO saas_knowledge_media_cache(tenant_id,fingerprint,state,token,metadata) VALUES(%s::uuid,'active-test','running',%s::uuid,%s::jsonb)",(A,str(uuid.uuid4()),json.dumps({'sha256':value['current_sha256']})));db.commit()
+        assert current.verify_owner_source(PROFILE,campaign,{'expected_version':1,'case_id':key,'message_id':message,'case_version':version})['uncertain_retry_available'] is False
+        db.execute("DELETE FROM saas_knowledge_media_cache WHERE fingerprint='active-test'");db.commit()
+        import tenant_case_uncertain_retry as uncertain_retry
+        synthetic_excluded=str(uuid.uuid4())
+        monkeypatch.setattr(uncertain_retry,'_EXCLUDED_UNKNOWN_VIDEO_HASH',hashlib.sha256(synthetic_excluded.encode()).hexdigest())
+        with db.cursor() as cur:assert not uncertain_retry.eligible(cur,A,{'kind':'image','message_id':synthetic_excluded},value['current_sha256'])
+    consent={'acknowledge_unknown_selected':True} if old_ref_format=='unknown_ack' else {'acknowledge_incomplete_history':True}
+    result=owner.apply_owner(PROFILE,campaign,{**args,**consent})
     assert result['count']==1 and result['provider_calls_started'] is False
     saved=db.execute('SELECT * FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign,))[0]
     fragment=db.execute('SELECT * FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid',(campaign,))[0]
-    assert saved['progress']['case_extensions'][args['request_id']]['acknowledge_incomplete_history'] is True
+    assert saved['progress']['case_extensions'][args['request_id']]['acknowledge_unknown_selected' if old_ref_format=='unknown_ack' else 'acknowledge_incomplete_history'] is True
     fence={**fragment,'campaign_id':campaign,'progress':saved['progress'],'approved_by':11,'photo_model':None}
-    with db.cursor() as cur:assert extension.dispatch_fence(cur,A,fence)['state']=='incomplete_history_eligible'
-    changed=json.loads(json.dumps(saved['progress']));changed['case_extensions'][args['request_id']]['acknowledge_incomplete_history']=False
+    with db.cursor() as cur:assert extension.dispatch_fence(cur,A,fence)['state']==('owner_uncertain_retry' if old_ref_format=='unknown_ack' else 'incomplete_history_eligible')
+    changed=json.loads(json.dumps(saved['progress']));changed['case_extensions'][args['request_id']]['acknowledge_unknown_selected' if old_ref_format=='unknown_ack' else 'acknowledge_incomplete_history']=False
     with db.cursor() as cur,pytest.raises(TenantLinearError):extension.dispatch_fence(cur,A,{**fence,'progress':changed})
     with pytest.raises(TenantLinearError):owner.apply_owner(PROFILE,campaign,{**args,'request_id':str(uuid.uuid4()),'expected_version':2,'acknowledge_incomplete_history':True})
     assert db.execute('SELECT count(*) AS n FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid',(campaign,))[0]['n']==1
@@ -179,7 +202,11 @@ def test_legacy_incomplete_history_requires_owner_ack_and_blocks_recorded_attemp
     db.execute("UPDATE saas_knowledge_campaigns SET status='running' WHERE id=%s::uuid",(campaign,));db.commit()
     claimed=campaigns.claim(A,campaign)
     with db.cursor() as cur:worker.check_fence(cur,A,fragment['id'])
-    if old_ref_format=='stale_no_call':
+    if old_ref_format=='unknown_ack':
+        db.execute("INSERT INTO saas_knowledge_media_cache(tenant_id,fingerprint,state,token,metadata) VALUES(%s::uuid,'racing-test','running',%s::uuid,%s::jsonb)",(A,str(uuid.uuid4()),json.dumps({'sha256':value['current_sha256']})));db.commit()
+        with db.cursor() as cur,pytest.raises(TenantLinearError):worker.check_fence(cur,A,fragment['id'])
+        db.execute("DELETE FROM saas_knowledge_media_cache WHERE fingerprint='racing-test'");db.commit()
+    if old_ref_format in {'stale_no_call','unknown_ack'}:
         from unittest.mock import AsyncMock,Mock
         import tenant_knowledge_media as media
         import tenant_knowledge_media_cache as cache
@@ -191,7 +218,13 @@ def test_legacy_incomplete_history_requires_owner_ack_and_blocks_recorded_attemp
             assert content==PNG and ref['id']==message
             item['vision_attempts']=1;item['vision_usage']=[{'input_tokens':1,'output_tokens':1}]
             return 'synthetic observation',{},True
-        observed=Mock(side_effect=fake_observe);monkeypatch.setattr(cache,'observe_once',observed)
+        if old_ref_format=='unknown_ack':
+            import tenant_chat_ai_provider as provider
+            monkeypatch.setattr(cache,'_connect',lambda:db)
+            observed=Mock(return_value=('synthetic observation',{'input_tokens':1,'output_tokens':1}))
+            monkeypatch.setattr(provider,'generate',observed)
+        else:
+            observed=Mock(side_effect=fake_observe);monkeypatch.setattr(cache,'observe_once',observed)
         response=service.analyze(PROFILE,{**claimed['route'],'request_id':str(fragment['id'])})
         assert observed.call_count==1, response
         ready[1].assert_called_once()
@@ -199,6 +232,9 @@ def test_legacy_incomplete_history_requires_owner_ack_and_blocks_recorded_attemp
         latest=db.execute('SELECT version FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign,))[0]['version']
         result=current.verify_owner_source(PROFILE,campaign,{'expected_version':latest,'case_id':key,'message_id':message,'case_version':version})
         assert result['saved_byte_results']==[{'status':'processed','text':'synthetic observation'}]
+        if old_ref_format=='unknown_ack':
+            assert db.execute("SELECT state,reserved_microusd FROM saas_ai_spend_reservations WHERE call_key=%s",('extraction:'+str(case['extraction_id'])+':vision',))[0]=={'state':'unknown','reserved_microusd':100}
+            assert db.execute("SELECT count(*) AS n FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND state='completed' AND metadata->'owner_retry_source'->>'message_id'=%s",(A,message))[0]['n']==2
         assert db.execute('SELECT cap_microusd FROM saas_ai_media_grants WHERE id=%s::uuid',(campaign,))[0]['cap_microusd']==10000000
     else:
         prepared=service.prepare(PROFILE,{**claimed['route'],'request_id':str(fragment['id'])})

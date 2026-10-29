@@ -138,11 +138,10 @@ def preview(cur,profile,campaign_id,expected_campaign_version,sources,*,_interna
     return result
 
 
-def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,request_id,*,_max_sources=25,original_cases_only=False,verified_bytes=None,acknowledge_incomplete_history=False):
-    """Queue only proven unattempted sources, under the original fixed grant.
+def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,request_id,*,_max_sources=25,original_cases_only=False,verified_bytes=None,acknowledge_incomplete_history=False,unknown_selected=None):
+    """Queue selected case sources under the original fixed grant.
 
-    The caller must already hold the separate extension OAuth scope and explicitly
-    confirm this preview. This never starts the worker or releases unknown holds.
+    The caller must be the grant owner and explicitly confirm this preview. This never starts the worker or releases unknown holds.
     """
     import uuid
     from datetime import timedelta
@@ -189,12 +188,18 @@ def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,re
             if not prepared['operation_capacity']['next_fragment_fits']:raise TenantLinearError('Original campaign operation allowance is exhausted.',409)
             selected=[];seen=set()
             for source in prepared['_snapshot']:
+                if unknown_selected and (source['case_id'],source['message_id']) not in unknown_selected:continue
                 digest=(verified_bytes or {}).get((source['case_id'],source['message_id']))
                 if source['state'] in {'source_version_unverified','previous_outcome_unknown'} and digest:
-                    history=_verified_byte_history(cur,tenant,source['message_id'],source['source_hash'],allow_incomplete=acknowledge_incomplete_history is True)
-                    if history.get('state') in {'known_not_attempted','incomplete_history_eligible'}:
+                    history=_verified_byte_history(cur,tenant,source['message_id'],source['source_hash'],allow_incomplete=(acknowledge_incomplete_history is True or (source['case_id'],source['message_id']) in (unknown_selected or set())))
+                    if (source['case_id'],source['message_id']) in (unknown_selected or set()):
+                        from tenant_case_uncertain_retry import eligible
+                        if (history.get('reason') in {'prior_media_result_unknown','prior_attempt_or_unresolved_result'}
+                            and eligible(cur,tenant,source,digest)):
+                            source={**source,'state':'owner_uncertain_retry','reconciliation':history,'current_sha256':digest}
+                    elif history.get('state') in {'known_not_attempted','incomplete_history_eligible'}:
                         source={**source,'state':history['state'],'reconciliation':history,'current_sha256':digest}
-                if source['state'] not in {'known_not_attempted','incomplete_history_eligible'}:continue
+                if source['state'] not in {'known_not_attempted','incomplete_history_eligible','owner_uncertain_retry'}:continue
                 source_key=(source['channel_id'],source['message_id'])
                 if source_key in seen:continue
                 seen.add(source_key)
@@ -205,7 +210,9 @@ def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,re
                   (tenant,campaign_id,_json([source['message_id']])))
                 if cur.fetchone():continue
                 selected.append(source)
-            if not selected:raise TenantLinearError('No proven unattempted new media sources.',409)
+            if unknown_selected and {(s['case_id'],s['message_id']) for s in selected}!=unknown_selected:
+                raise TenantLinearError('Selected media changed or is already queued; refresh.',409)
+            if not selected:raise TenantLinearError('No eligible new media sources.',409)
             channels=sorted({str(x) for x in campaign['sources']}|{x['channel_id'] for x in selected})
             if len(channels)>100:raise TenantLinearError('Too many source channels.',409)
             campaign={**campaign,'sources':channels}
@@ -221,10 +228,11 @@ def apply(profile,campaign_id,expected_campaign_version,sources,snapshot_hash,re
                   'source_version':source['source_version'],'case_id':source['case_id'],'case_version':source['case_version'],
                   'case_plan_hash':signature,'case_extension_id':request_id,'campaign_media_kind':source['kind']}
                 if source.get('current_sha256'):route['case_source_sha256']=source['current_sha256']
+                if source['state']=='owner_uncertain_retry':route['owner_retry_unknown']=True
                 if source['kind']=='image' and campaign.get('photo_model'):route['campaign_photo_model']=campaign['photo_model']
                 fragment=campaigns.enqueue(cur,profile,campaign,route)
                 mapped[str(fragment)]={'source':source,'signature':signature}
-            extensions[request_id]={'snapshot_hash':snapshot_hash,'owner_id':actor,'sources':mapped,'acknowledge_incomplete_history':acknowledge_incomplete_history is True}
+            extensions[request_id]={'snapshot_hash':snapshot_hash,'owner_id':actor,'sources':mapped,'acknowledge_incomplete_history':acknowledge_incomplete_history is True,'acknowledge_unknown_selected':bool(unknown_selected)}
             progress['case_extensions']=extensions
             if grant['status']=='completed':cur.execute("UPDATE saas_ai_media_grants SET status='active' WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,campaign_id))
             cur.execute("UPDATE saas_knowledge_campaigns SET status='paused',version=version+1,updated_at=now(),progress=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(_json(progress),tenant,campaign_id))
@@ -239,7 +247,7 @@ def dispatch_fence(cur,tenant,row):
     ext=(progress.get('case_extensions') or {}).get(str(route.get('case_extension_id') or '')) or {}
     saved=(ext.get('sources') or {}).get(str(row['id'])) or {};source=saved.get('source') or {}
     signature=cases.digest({'campaign_id':str(row['campaign_id']),'request_id':str(route.get('case_extension_id') or ''),'source':source})
-    if (not source or source.get('state') not in {'known_not_attempted','incomplete_history_eligible'}
+    if (not source or source.get('state') not in {'known_not_attempted','incomplete_history_eligible','owner_uncertain_retry'}
         or (source.get('state')=='incomplete_history_eligible' and ext.get('acknowledge_incomplete_history') is not True)
         or saved.get('signature')!=signature or signature!=route.get('case_plan_hash')):
         raise TenantLinearError('Case extension is unavailable.',409)
@@ -252,7 +260,12 @@ def dispatch_fence(cur,tenant,row):
         or route.get('source_version')!=source['source_version'] or identity['source_version']!=source['source_version']
         or identity['source_hash']!=source['source_hash'] or identity['occurred_at']!=source['occurred_at']):
         raise TenantLinearError('Case extension source changed.',409)
-    if source.get('current_sha256'):
+    if source.get('state')=='owner_uncertain_retry':
+        from tenant_case_uncertain_retry import authorized, eligible
+        if not authorized(progress,row['campaign_id'],row['id'],route) or not eligible(cur,tenant,source,source['current_sha256'],exclude_fragment=str(row['id'])):
+            raise TenantLinearError('Case media retry is unavailable.',409)
+        history={'state':'owner_uncertain_retry'}
+    elif source.get('current_sha256'):
         history=_verified_byte_history(cur,tenant,source['message_id'],source['source_hash'],exclude_extraction_id=str(row['id']),allow_incomplete=source.get('state')=='incomplete_history_eligible')
     else:
         history=_historical_attempt_reconciliation(cur,tenant,source['message_id'],source['source_hash'],exclude_extraction_id=str(row['id']))

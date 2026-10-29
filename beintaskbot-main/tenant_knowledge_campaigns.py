@@ -370,9 +370,11 @@ def _unknown_conflicts(cur, tenant, fragment, campaign):
         or not isinstance(version,str) or len(version)!=64 or any(c not in '0123456789abcdef' for c in version.lower())):
         return True
     selected=(channel,scoped_id(ids[0]))
+    from tenant_case_uncertain_retry import authorized as authorized_selected_retry
+    selected_retry=authorized_selected_retry(campaign.get('progress'),campaign.get('id'),fragment.get('id'),route)
     batch_retry=(route.get('owner_retry_unknown') is True
         and (campaign.get('progress') or {}).get('mode')=='case_media_batch'
-        and (campaign.get('progress') or {}).get('acknowledge_prior_unknown') is True
+        and ((campaign.get('progress') or {}).get('acknowledge_prior_unknown') is True or selected_retry)
         and str(route.get('media_grant_id') or '')==str(campaign.get('id') or ''))
     # A recovery is never allowed to bypass an unknown competing fragment.
     if route.get('retry_of') and (campaign.get('progress') or {}).get('failed_media_recovery'):
