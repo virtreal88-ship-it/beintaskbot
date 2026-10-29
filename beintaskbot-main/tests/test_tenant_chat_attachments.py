@@ -130,6 +130,29 @@ class Api(unittest.IsolatedAsyncioTestCase):
         self.assertIn('filename="my report.pdf"',result['headers']['Content-Disposition'])
         self.assertIn("filename*=UTF-8''my%20report.pdf",result['headers']['Content-Disposition'])
 
+    async def test_download_forces_attachment_and_rechecks_case_after_download(self):
+        guard=Mock();self.module.handler.__globals__['_check_case_attachment']=guard
+        result=await self.handle(SimpleNamespace(query={**self.query,'download':'1','case_id':'case','case_message_id':'message','case_version':'1'}))
+        self.assertEqual(guard.call_count,2)
+        self.assertTrue(result['headers']['Content-Disposition'].startswith('attachment;'))
+
+    async def test_case_revoked_after_download_returns_no_bytes(self):
+        self.module.handler.__globals__['_check_case_attachment']=Mock(side_effect=[None,TenantLinearError('case changed',409)])
+        result=await self.handle(SimpleNamespace(query={**self.query,'download':'1','case_id':'case','case_message_id':'message','case_version':'1'}))
+        self.assertEqual(result['status'],409);self.assertNotIn('body',result)
+
+    async def test_case_guard_binds_exact_message_and_route(self):
+        selected={'message_id':'internal','route':{'channel_id':'channel','conversation_id':'dialog','lead_id':7}}
+        item={'row':{'id':'internal'},'route':{'channel_id':'channel','conversation_id':'dialog'}}
+        query={**self.query,'case_id':'case','case_message_id':'internal','case_version':'4'}
+        with patch('tenant_knowledge_candidates_store.conversation_link',return_value=selected) as resolve:
+            self.module._check_case_attachment(SESSION,item,query)
+            resolve.assert_called_with(SESSION,'case','internal',expected_version=4)
+            for changed in ({**item,'row':{'id':'other'}},{**item,'route':{'channel_id':'other','conversation_id':'dialog'}},{**item,'route':{'channel_id':'channel','conversation_id':'other'}}):
+                with self.assertRaises(TenantLinearError):self.module._check_case_attachment(SESSION,changed,query)
+            with self.assertRaises(TenantLinearError):self.module._check_case_attachment(SESSION,item,{**query,'lead_id':'8'})
+            with self.assertRaises(TenantLinearError):self.module._check_case_attachment(SESSION,item,{**query,'case_version':''})
+
     async def test_cached_repeat_still_rechecks_authority(self):
         first=await self.handle(SimpleNamespace(query=self.query))
         second=await self.handle(SimpleNamespace(query=self.query))

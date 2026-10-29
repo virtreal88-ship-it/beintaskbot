@@ -124,6 +124,21 @@ def admit(session):
         REQUESTS[key] = (count + 1, until)
 
 
+def _check_case_attachment(session, item, query):
+    keys=('case_id','case_message_id','case_version')
+    if not any(query.get(k) for k in keys):return
+    if not all(query.get(k) for k in keys):raise TenantLinearError('Некорректная ссылка на вложение.',400)
+    from tenant_knowledge_candidates_store import conversation_link
+    version=int(query['case_version'])
+    resolved=conversation_link(session,query['case_id'],query['case_message_id'],expected_version=version)
+    route=item.get('route') or {};selected=resolved['route']
+    if (str((item.get('row') or {}).get('id'))!=resolved['message_id']
+        or str(route.get('channel_id'))!=str(selected['channel_id'])
+        or str(route.get('conversation_id'))!=str(selected['conversation_id'])
+        or str(query.get('lead_id'))!=str(selected['lead_id'])):
+        raise TenantLinearError('Вложение недоступно в этом кейсе.',403)
+
+
 def handler(member_from_request, request_provider, logger):
     async def handle(request):
         global MEDIA_CACHE_BYTES
@@ -135,6 +150,7 @@ def handler(member_from_request, request_provider, logger):
             scope={'channel_id':request.query.get('channel_id') or None,
                    'conversation_id':request.query.get('conversation_id') or None}
             item = await asyncio.to_thread(load, session, lead, message, **scope)
+            await asyncio.to_thread(_check_case_attachment,session,item,request.query)
             key = _media_key(session, item, lead, message)
             result = _cache_get(key)
             if result is None:
@@ -172,8 +188,9 @@ def handler(member_from_request, request_provider, logger):
             current = await asyncio.to_thread(load, session, lead, message, **scope)
             if current != item:
                 raise TenantLinearError('Çat və ya bağlantı dəyişib. Yeniləyin.', 409)
+            await asyncio.to_thread(_check_case_attachment,session,current,request.query)
             content, mime, filename = result
-            inline = mime.startswith(('image/', 'audio/', 'video/')) or mime in {'application/pdf', 'text/plain'}
+            inline = request.query.get('download')!='1' and (mime.startswith(('image/', 'audio/', 'video/')) or mime in {'application/pdf', 'text/plain'})
             headers['Content-Disposition'] = _content_disposition(filename, inline=inline)
             headers['Accept-Ranges'] = 'bytes'
             requested_range = _byte_range(getattr(request, 'headers', {}).get('Range'), len(content))
