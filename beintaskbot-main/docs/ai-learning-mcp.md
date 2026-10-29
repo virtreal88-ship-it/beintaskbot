@@ -66,6 +66,17 @@ requires the existing support-case scope. Video and converted AAC are not
 claimed as byte-matched results by this check.
 `support_media_case_sources_inspect` inspects up to 25 explicit case/source
 pairs in one request; individual failures retain their input positions.
+`support_media_case_extension_preview` compares selected case sources with the
+original grant, identifies unresolved prior outcomes, and reports settled and
+held amounts without authorizing or scheduling any new work.
+`support_media_case_extension_apply` additionally requires the separately
+consented `ai_learning.support_media_continue` scope, the existing media scope,
+and an exact unchanged preview. It queues only sources proven not previously
+dispatched, under the original campaign's fixed grant. The campaign remains
+paused; existing unknown outcomes and holds are not retried or released.
+For these extensions, admission also counts all tenant-level unlinked settled
+spend and outstanding holds against the same $10 ceiling. This conservative
+bound can include unrelated historical spend; no hold is released by it.
 
 `administrator_case_conversation_link_read` normally anchors only a case's
 evidence messages. To navigate to a media message within the current verified

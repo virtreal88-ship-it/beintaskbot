@@ -10,7 +10,19 @@ from tenant_linear_policy import TenantLinearError
 import tenant_case_source_inventory as inventory
 import tenant_knowledge_campaigns as campaigns
 import tenant_ai_learning_mcp as mcp
+import tenant_case_media_extension as extension
+import tenant_ai_spend_budget as spending
 from tenant_media_evidence import media_version,source_hash,_body_hash
+
+
+def test_continuation_scope_requires_media_scope_and_preserves_consent_description():
+    with pytest.raises(TenantLinearError):
+        mcp._requested_scopes(f'{mcp.TOOL_SCOPE} {mcp.SUPPORT_MEDIA_EXTEND_SCOPE}')
+    scopes=mcp._requested_scopes(f'{mcp.TOOL_SCOPE} {mcp.SUPPORT_MEDIA_SCOPE} {mcp.SUPPORT_CASE_SCOPE} {mcp.SUPPORT_MEDIA_EXTEND_SCOPE}')
+    description,_=mcp._consent_text(scopes)
+    assert 'permanently delete' in description and 'proven not yet dispatched' in description
+    definition=next(d for d in mcp._support_media_definitions() if d['name']=='support_media_case_extension_apply')
+    assert definition['securitySchemes'][0]['scopes']==[mcp.SUPPORT_MEDIA_SCOPE,mcp.SUPPORT_MEDIA_EXTEND_SCOPE]
 
 
 def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
@@ -28,19 +40,37 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
     db.execute('UPDATE saas_knowledge_extractions SET route=%s::jsonb,source_refs=%s::jsonb WHERE id=%s::uuid',
       (json.dumps({'provider':'connect','channel_id':CA,'conversation_id':group}),json.dumps([ref]),case['extraction_id']))
     campaigns.create_schema(db)
-    policy={'allow_external_media':True,'allow_paid_asr':False,'max_main_calls':1,'max_asr_calls':0,'max_vision_calls':1}
+    policy={'allow_external_media':True,'allow_paid_asr':False,'max_main_calls':1,'max_asr_calls':0,'max_vision_calls':2}
     snapshot={'mode':'case_media_batch','case_plans':[{'case_id':key,'status':'pending_boundaries'}]}
     db.execute("""INSERT INTO saas_knowledge_campaigns(tenant_id,id,created_by,sources,analysis_agent_id,status,approved_by,approved_at,max_calls,max_tokens,media_policy,progress)
       VALUES(%s::uuid,%s::uuid,11,%s::jsonb,%s::uuid,'paused',11,now(),10,100000,%s::jsonb,%s::jsonb)""",
       (A,campaign,json.dumps([CA]),AGENT,json.dumps(policy),json.dumps(snapshot)))
     db.execute("INSERT INTO saas_ai_media_grants(tenant_id,id,campaign_id,created_by,cap_microusd,status,approved_by,approved_at) VALUES(%s::uuid,%s::uuid,%s::uuid,11,10000000,'active',11,now())",(A,campaign,campaign));db.commit()
+    spending.ensure_schema(db)
+    db.execute('UPDATE saas_knowledge_campaigns SET max_cost_microusd=10000000 WHERE id=%s::uuid',(campaign,))
+    for call,state,amount,actual in [('a','settled',100,100),('b','unknown',200,None)]:
+        db.execute("INSERT INTO saas_ai_spend_reservations(tenant_id,id,call_key,model,kind,reserved_microusd,actual_microusd,grant_id,state) VALUES(%s::uuid,%s::uuid,%s,'test','vision',%s,%s,%s::uuid,%s)",(A,str(uuid.uuid4()),call,amount,actual,campaign,state))
+    db.execute("INSERT INTO saas_ai_spend_reservations(tenant_id,id,call_key,model,kind,reserved_microusd,actual_microusd,grant_id,state) VALUES(%s::uuid,%s::uuid,'settled-no-actual','test','vision',50,NULL,%s::uuid,'settled')",(A,str(uuid.uuid4()),campaign))
+    db.execute("INSERT INTO saas_ai_spend_reservations(tenant_id,id,call_key,model,kind,reserved_microusd,state) VALUES(%s::uuid,%s::uuid,'prior-hold','test','vision',10,'unknown')",(A,str(uuid.uuid4())))
+    db.commit()
     with db.cursor() as cur:
         out=inventory.inspect(cur,PROFILE,key,message,version,campaign)
         assert out['channel_id']==oldchannel and out['lead_id']==308
         assert out['grant_scope_match'] is False and out['dispatch_authorized'] is False and out['current_bytes_checked'] is False
+        preview=extension.preview(cur,PROFILE,campaign,1,[{'case_id':key,'message_id':message,'expected_version':version}])
+        assert preview['sources'][0]['extension_state']=='previous_outcome_unknown'
+        assert preview['budget']=={'cap_microusd':10000000,'settled_microusd':150,'held_microusd':200,'available_microusd':9999640,'prior_unknown_holds_microusd':10,'prior_settled_microusd':0,'released_counted_microusd':0}
+        assert preview['execution_authorized'] is False
+        with pytest.raises(TenantLinearError):extension.preview(cur,PROFILE,campaign,2,[{'case_id':key,'message_id':message,'expected_version':version}])
         cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.SUPPORT_MEDIA_SCOPE]}
         args={'case_id':key,'message_id':message,'campaign_id':campaign,'expected_version':version}
         assert mcp._tools(cur,cfg,'support_media_case_source_inspect',args)['channel_id']==oldchannel
+        extension_args={'campaign_id':campaign,'expected_version':1,'sources':[{'case_id':key,'message_id':message,'expected_version':version}]}
+        assert mcp._tools(cur,cfg,'support_media_case_extension_preview',extension_args)['execution_authorized'] is False
+        with pytest.raises(TenantLinearError):mcp._tools(cur,{**cfg,'granted_scopes':[]},'support_media_case_extension_preview',extension_args)
+        apply_args={**extension_args,'snapshot_hash':'a'*64,'request_id':str(uuid.uuid4()),'confirm_exact_preview':True}
+        with pytest.raises(TenantLinearError) as denied:mcp._tools(cur,cfg,'support_media_case_extension_apply',apply_args)
+        assert denied.value.status==403
         batch={'campaign_id':campaign,'sources':[{'case_id':key,'message_id':message,'expected_version':version},
           {'case_id':key,'message_id':str(uuid.uuid4()),'expected_version':version}]}
         rows=mcp._tools(cur,cfg,'support_media_case_sources_inspect',batch)['sources']
@@ -131,3 +161,55 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
     with db.cursor() as cur:
         with pytest.raises(TenantLinearError):inventory.inspect(cur,PROFILE,key,message,version,campaign)
     provider.assert_called_once()
+
+    # Extend only after the exact prior record proves no media dispatch.
+    # The source stays paused and all original grant usage/holds are retained.
+    prior_ref={**ref,'body_hash':_body_hash(''),'media_version':version_hash}
+    db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',(json.dumps(raw),message))
+    db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb,media_results=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps([prior_ref]),json.dumps([{'id':message,'status':'unavailable','code':'vision_not_approved'}]),case['extraction_id']))
+    snapshot={'mode':'case_media_batch','case_plans':[{'case_id':key,'status':'pending_boundaries'}]}
+    db.execute("UPDATE saas_knowledge_campaigns SET sources=%s::jsonb,progress=%s::jsonb,status='paused' WHERE id=%s::uuid",(json.dumps([CA]),json.dumps(snapshot),campaign))
+    db.execute("UPDATE saas_ai_media_grants SET status='active' WHERE id=%s::uuid",(campaign,));db.commit()
+    source_args=[{'case_id':key,'message_id':message,'expected_version':version}]
+    with db.cursor() as cur:proposed=extension.preview(cur,PROFILE,campaign,1,source_args)
+    assert proposed['sources'][0]['extension_state']=='known_not_attempted'
+    req=str(uuid.uuid4())
+    applied=extension.apply(PROFILE,campaign,1,source_args,proposed['snapshot_hash'],req)
+    assert applied=={'replayed':False,'count':1,'status':'paused','provider_calls_started':False}
+    assert extension.apply(PROFILE,campaign,1,source_args,proposed['snapshot_hash'],req)['replayed'] is True
+    campaign_row=db.execute('SELECT * FROM saas_knowledge_campaigns WHERE id=%s::uuid',(campaign,))[0]
+    fragment=db.execute('SELECT * FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid',(campaign,))[0]
+    assert campaign_row['status']=='paused' and campaign_row['max_cost_microusd']==10000000
+    assert fragment['status']=='pending' and fragment['route']['approved_channel_ids']==sorted([CA,oldchannel])
+    with db.cursor() as cur:
+        assert extension.dispatch_fence(cur,A,{'id':fragment['id'],'campaign_id':campaign,'progress':campaign_row['progress'],
+          'route':fragment['route'],'approved_by':11,'photo_model':campaign_row.get('photo_model')})['message_id']==message
+        altered=dict(fragment['route'],case_plan_hash='0'*64)
+        with pytest.raises(TenantLinearError):
+            extension.dispatch_fence(cur,A,{'id':fragment['id'],'campaign_id':campaign,'progress':campaign_row['progress'],
+              'route':altered,'approved_by':11,'photo_model':campaign_row.get('photo_model')})
+        from tenant_case_media_admission import grant_for_message
+        assert grant_for_message(cur,A,message)['id']==campaign
+    assert db.execute("SELECT state,reserved_microusd FROM saas_ai_spend_reservations WHERE call_key='b'")[0]=={'state':'unknown','reserved_microusd':200}
+    provider.assert_called_once()
+    # A real claim goes through the worker fence and stops if source identity changes.
+    monkeypatch.setattr(campaigns,'_connect',lambda:db)
+    db.execute("UPDATE saas_knowledge_campaigns SET status='running' WHERE id=%s::uuid",(campaign,));db.commit()
+    claimed=campaigns.claim(A,campaign)
+    assert claimed and str(claimed['id'])==str(fragment['id'])
+    import tenant_knowledge_campaign_worker as worker
+    with db.cursor() as cur:worker.check_fence(cur,A,fragment['id'])
+    db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps([{'id':message,'status':'unknown','code':'provider_timeout'}]),case['extraction_id']));db.commit()
+    with db.cursor() as cur,pytest.raises(TenantLinearError):worker.check_fence(cur,A,fragment['id'])
+    db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps([{'id':message,'status':'unavailable','code':'vision_not_approved'}]),case['extraction_id']));db.commit()
+    import tenant_knowledge_candidates_service as service
+    monkeypatch.setattr(spending,'price',lambda model:(1,1))
+    monkeypatch.setattr(spending,'media_price',lambda model,operation:1)
+    prepared=service.prepare(PROFILE,{**claimed['route'],'request_id':str(fragment['id'])})
+    assert prepared['id']==str(fragment['id'])
+    db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps({**raw,'mediaId':'changed'}),message));db.commit()
+    with db.cursor() as cur,pytest.raises(TenantLinearError):worker.check_fence(cur,A,fragment['id'])

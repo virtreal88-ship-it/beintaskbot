@@ -91,7 +91,7 @@ def _total_cost_upper(prices, total_tokens):
 def _grant_admit(cur, tenant_id, campaign_id, amount):
     if not campaign_id:
         return
-    cur.execute('''SELECT g.id,g.status,g.cap_microusd FROM saas_ai_media_grants g
+    cur.execute('''SELECT g.id,g.status,g.cap_microusd,c.progress FROM saas_ai_media_grants g
       JOIN saas_knowledge_campaigns c ON c.tenant_id=g.tenant_id AND c.id=g.campaign_id
       WHERE g.tenant_id=%s::uuid AND g.campaign_id=%s::uuid AND g.id=%s::uuid
         AND g.status='active' AND c.status='running' AND c.approved_at IS NOT NULL
@@ -102,7 +102,17 @@ def _grant_admit(cur, tenant_id, campaign_id, amount):
     cur.execute('''SELECT COALESCE(sum(CASE WHEN state IN ('reserved','unknown') THEN reserved_microusd
       ELSE COALESCE(actual_microusd,reserved_microusd) END),0) AS used FROM saas_ai_spend_reservations
       WHERE tenant_id=%s::uuid AND grant_id=%s::uuid''',(tenant_id,grant['id']))
-    if int((cur.fetchone() or {}).get('used') or 0)+int(amount)>int(grant['cap_microusd']):
+    used=int((cur.fetchone() or {}).get('used') or 0)
+    if (grant.get('progress') or {}).get('case_extensions'):
+        # Conservative lifetime bound for explicitly extended case batches:
+        # include prior unlinked settled amounts and unsettled holds as well as
+        # the original grant. The tenant spend lock serializes new reservations.
+        cur.execute('''SELECT COALESCE(sum(CASE WHEN state IN ('reserved','unknown') THEN reserved_microusd
+          ELSE COALESCE(actual_microusd,reserved_microusd) END),0) AS used
+          FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND grant_id IS NULL
+          AND state IN ('reserved','unknown','settled')''',(tenant_id,))
+        used+=int((cur.fetchone() or {}).get('used') or 0)
+    if used+int(amount)>int(grant['cap_microusd']):
         raise TenantLinearError('ai_media_grant_budget_exhausted',429)
 
 

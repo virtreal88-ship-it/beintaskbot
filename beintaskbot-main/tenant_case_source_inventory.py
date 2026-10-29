@@ -36,7 +36,7 @@ def inspect(cur, profile, case_id, message_id, expected_version, campaign_id, *,
     ref=refs[0] if refs else None;channel=identifier(ref.get('channel_id') if ref else plan.get('channel_id'))
     if channel!=case_channel and not group_jid(conversation):raise TenantLinearError('Source is outside the case route.',403)
     selected=cases.assert_route(cur,tenant,policy,'connect',conversation,channel)
-    cur.execute('''SELECT id::text AS id,external_id,message_type,channel,raw,body FROM saas_crm_messages
+    cur.execute('''SELECT id::text AS id,external_id,message_type,channel,raw,body,COALESCE(happened_at,created_at) AS occurred_at FROM saas_crm_messages
       WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s FOR SHARE''',
       (tenant,message_id,selected['lead_id'],'connect:'+channel))
     row=cur.fetchone()
@@ -65,7 +65,7 @@ def inspect(cur, profile, case_id, message_id, expected_version, campaign_id, *,
       'cached_status':str(cached['status']) if cached else None,'cached_code':cached_code if cached else None,
       'current_bytes_checked':False,'grant_scope_match':covered,'grant_status':campaign.get('grant_status'),
       'grant_cap_microusd':campaign.get('cap_microusd'),'dispatch_authorized':False}
-    if _internal:result['_source']={'external_id':row['external_id'],'conversation_id':conversation,'source_hash':ref_hash,'source_version':version}
+    if _internal:result['_source']={'external_id':row['external_id'],'conversation_id':conversation,'source_hash':ref_hash,'source_version':version,'occurred_at':str(row['occurred_at'])}
     return result
 
 

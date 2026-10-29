@@ -171,6 +171,9 @@ def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, 
             verified_source=definitions['support_media_case_source_verify']
             assert verified_source['securitySchemes']==[{'type':'oauth2','scopes':[mcp.SUPPORT_MEDIA_SCOPE]}]
             assert verified_source['annotations']['openWorldHint'] is True
+            extension_preview=definitions['support_media_case_extension_preview']
+            assert extension_preview['securitySchemes']==[{'type':'oauth2','scopes':[mcp.SUPPORT_MEDIA_SCOPE]}]
+            assert extension_preview['annotations']['readOnlyHint'] is True
             assert definitions['whatsapp_dialogue_owner_merge']['securitySchemes']==[{'type':'oauth2','scopes':[mcp.DIALOGUE_MERGE_SCOPE]}]
             assert definitions['whatsapp_dialogue_owner_merge_preview']['annotations']['readOnlyHint'] is True
             assert definitions['support_media_campaign_list']['annotations']['readOnlyHint'] is True

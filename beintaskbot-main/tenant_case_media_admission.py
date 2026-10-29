@@ -72,7 +72,7 @@ def _explicit_no_media_call(ref, result):
     return True
 
 
-def _historical_attempt_reconciliation(cur, tenant, message_id, current_source_hash):
+def _historical_attempt_reconciliation(cur, tenant, message_id, current_source_hash, *, exclude_extraction_id=None):
     """Read exact-source extraction history without inferring from missing rows.
 
     Only a saved explicit consent refusal for the same source hash, with no
@@ -81,8 +81,9 @@ def _historical_attempt_reconciliation(cur, tenant, message_id, current_source_h
     """
     cur.execute('''SELECT id::text AS id,status,source_refs,media_results
       FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid
-        AND (source_refs @> %s::jsonb OR media_results @> %s::jsonb)''',
-      (tenant, json.dumps([{'id':str(message_id)}]), json.dumps([{'id':str(message_id)}])))
+        AND (source_refs @> %s::jsonb OR media_results @> %s::jsonb)
+        AND (%s::uuid IS NULL OR id<>%s::uuid)''',
+      (tenant, json.dumps([{'id':str(message_id)}]), json.dumps([{'id':str(message_id)}]),exclude_extraction_id,exclude_extraction_id))
     runs=cur.fetchall()
     if not runs:
         return {'state':'unknown','reason':'attempt_history_not_recorded','matching_runs':0}
@@ -326,5 +327,8 @@ def grant_for_message(cur, tenant, message_id):
     for grant in cur.fetchall():
         for case in (grant.get('progress') or {}).get('case_plans',[]):
             if any(str(media.get('id'))==str(message_id) for media in case.get('media',[])):
+                return {'id':str(grant['id']),'status':grant['status'],'approved':bool(grant.get('approved_at'))}
+        for extension in (grant.get('progress') or {}).get('case_extensions',{}).values():
+            if any(str((item.get('source') or {}).get('message_id'))==str(message_id) for item in (extension.get('sources') or {}).values()):
                 return {'id':str(grant['id']),'status':grant['status'],'approved':bool(grant.get('approved_at'))}
     return None
