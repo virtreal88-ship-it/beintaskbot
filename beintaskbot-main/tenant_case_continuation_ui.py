@@ -71,8 +71,13 @@ def preview_owner(profile,campaign_id,expected_version):
                     refs.append(ref)
             if not refs:return {'campaign_id':campaign_id,'campaign_version':campaign['version'],'case_count':case_count,'cases':case_list,'sources':[],'blocked':blocked,'snapshot_hash':None}
             result=preview(cur,profile,campaign_id,expected_version,refs,_max_sources=MAX_SOURCES)
-            for item in result['sources']:
+            admitted=set()
+            for item in sorted(result['sources'],key=lambda x:(x['case_id'],x['message_id'])):
                 if item.get('extension_state')!='known_not_attempted':continue
+                identity=(item['channel_id'],item['message_id'])
+                if identity in admitted:
+                    item['extension_state']='duplicate_case_source';continue
+                admitted.add(identity)
                 cur.execute("SELECT 1 FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND route->'message_ids' @> %s::jsonb LIMIT 1",(tenant,campaign_id,__import__('json').dumps([item['message_id']])))
                 if cur.fetchone():item['extension_state']='already_queued'
             result.update(case_count=case_count,cases=case_list,blocked=blocked,source_refs=refs)
