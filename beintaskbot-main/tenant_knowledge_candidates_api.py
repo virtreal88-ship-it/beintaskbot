@@ -83,6 +83,9 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                 elif resource=='campaign_case_continuation':
                     from tenant_case_continuation_ui import apply_owner
                     result=await asyncio.to_thread(apply_owner,profile,request.match_info['campaign_id'],data)
+                elif resource=='campaign_current_media_check':
+                    from tenant_case_current_media import verify_owner_source
+                    result=await asyncio.to_thread(verify_owner_source,profile,request.match_info['campaign_id'],data)
                 elif resource=='batches':
                     receipt=await asyncio.to_thread(batches.start,profile,data)
                     if receipt['created']:
@@ -102,16 +105,27 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
             logger.error('campaign_start stage=committed_readback error_class=%s reference=%s', error_class, reference)
             return web.json_response({'success':True,'result':{'start_committed':True,'readback_pending':True,'reference':reference}},headers=headers)
         except TenantLinearError as error:
+            if resource=='campaign_current_media_check':
+                code=getattr(error,'code',None)
+                retry=getattr(error,'retry_after',None)
+                if error.status==429 and isinstance(retry,int) and 1<=retry<=3600:headers['Retry-After']=str(retry)
+                return web.json_response({'success':False,'error':str(error),'code':code or 'source_access_or_state','provider':'connect'},status=error.status,headers=headers)
             return web.json_response({'success':False,'error':str(error)},status=error.status,headers=headers)
         except (ValueError,TypeError,KeyError):
+            if resource=='campaign_current_media_check':
+                logger.error('case_media_check stage=internal_failure error_class=invalid_data')
+                return web.json_response({'success':False,'error':'Не удалось проверить источник. Код: source_check_failed.','code':'source_check_failed','provider':'connect'},status=503,headers=headers)
             return web.json_response({'success':False,'error':'Некорректные параметры.'},status=400,headers=headers)
         except Exception as error:
-            if resource in {'campaign_start','campaigns','campaign'}:
+            if resource in {'campaign_start','campaigns','campaign','campaign_current_media_check'}:
                 reference = uuid.uuid4().hex
                 error_class = type(error).__name__
                 if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,79}', error_class): error_class = 'UnknownError'
-                stage = 'start_unconfirmed' if resource == 'campaign_start' else ('campaign_read' if request.method == 'GET' else 'campaign_prepare')
+                stage = 'source_check_failed' if resource=='campaign_current_media_check' else ('start_unconfirmed' if resource == 'campaign_start' else ('campaign_read' if request.method == 'GET' else 'campaign_prepare'))
                 logger.error('campaign_operation stage=%s error_class=%s reference=%s', stage, error_class, reference)
+                if resource=='campaign_current_media_check':
+                    return web.json_response({'success':False,'error':f'Не удалось проверить источник. Код: source_check_internal; номер: {reference}',
+                      'code':'source_check_internal','reference':reference},status=503,headers=headers)
                 return web.json_response({'success':False,'error':f'Операция временно недоступна. Код: {reference}'},status=503,headers=headers)
             logger.error('Knowledge candidate operation unavailable')
             return web.json_response({'success':False,'error':'Операция временно недоступна.'},status=503,headers=headers)

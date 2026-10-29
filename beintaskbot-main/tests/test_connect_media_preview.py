@@ -168,6 +168,14 @@ def test_safe_unavailable_and_provider_errors(monkeypatch,status):
     assert error.value.status==(404 if status in (404,410) else 502 if status in (500,302) else status)
 
 
+@pytest.mark.parametrize('status',[401,403])
+def test_connect_media_denial_is_distinct_and_redacted(monkeypatch,status):
+    transport(monkeypatch,status=status)
+    with pytest.raises(TenantLinearError) as error:run(media.download_media(item()))
+    assert error.value.status==502 and error.value.code=='connect_access_denied'
+    assert 'test-key' not in str(error.value)
+
+
 @pytest.mark.parametrize('headers,chunks',[
     ({'Content-Type':'text/html'},None),({'Content-Type':'image/svg+xml'},None),
     ({'X-Connect-Channel-Id':CB},None),({'X-Connect-Message-Id':str(uuid.uuid4())},None),

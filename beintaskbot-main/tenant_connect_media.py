@@ -108,6 +108,10 @@ async def download_media(item, *, max_bytes=None, preview_documents=False):
                     error = TenantLinearError('Çox sorğu göndərilib. Göstərilən müddətdən sonra yoxlayın.', 429)
                     error.retry_after = retry_after_seconds(response.headers.get('Retry-After'))
                     raise error
+                if response.status in {401,403}:
+                    error = TenantLinearError('WhatsApp faylı hazırda əlçatan deyil. Sonra yenidən yoxlayın.', 502)
+                    error.code = 'connect_access_denied'
+                    raise error
                 if response.status != 200:
                     raise TenantLinearError('WhatsApp faylı hazırda əlçatan deyil. Sonra yenidən yoxlayın.', 502)
                 if (response.headers.get('X-Connect-Channel-Id') != channel or

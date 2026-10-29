@@ -71,9 +71,24 @@
         if(eligible){const detail=document.createElement('details'),heading=document.createElement('summary');heading.textContent=language==='ru'?'Вложения для продолжения':'Attachments to prepare';detail.append(heading);for(const source of result.sources.filter(source=>source.extension_state==='known_not_attempted')){const line=document.createElement('p');line.textContent=[source.case_id,source.message_id,source.kind,source.channel_id].filter(Boolean).join(' · ');detail.append(line);}continuation.append(detail);}
         const issues=[...(result.blocked||[]),...(result.sources||[]).filter(source=>!['known_not_attempted','already_covered','already_queued'].includes(source.extension_state)).map(source=>({case_id:source.case_id,message_id:source.message_id,reason:[source.extension_state,source.reconciliation?.reason,source.current_source_addressable===true?'current_source_addressable':null].filter(Boolean).join(' / ')}))];
         if(issues.length){const detail=document.createElement('details'),heading=document.createElement('summary');heading.textContent=language==='ru'?'Источники, требующие проверки':'Sources needing review';detail.append(heading);for(const issue of issues){const line=document.createElement('p');line.textContent=[issue.case_id,issue.message_id,issue.reason].filter(Boolean).join(' · ');detail.append(line);}continuation.append(detail);}
+        const checkable=(result.sources||[]).filter(source=>source.current_source_addressable===true&&['source_version_unverified','previous_outcome_unknown','cached_bytes_unverified'].includes(source.extension_state));
+        if(checkable.length){const check=document.createElement('button');check.type='button';check.className='outline';check.textContent=language==='ru'?'Проверить исходные файлы':'Check original files';check.onclick=()=>verifyCurrentSources(check,checkable,result);continuation.append(check);}
         if(!eligible||result.budget&&Number(result.budget.available_microusd)<=0||result.operation_capacity?.next_fragment_fits===false){const note=document.createElement('p');note.textContent=!eligible?continuationText.none:(language==='ru'?'Исходный лимит исчерпан; продолжение не подготовлено.':'The original allowance is exhausted; no continuation was prepared.');continuation.append(note);return;}
         const button=document.createElement('button');button.type='button';button.className='primary';button.textContent=continuationText.confirm;button.onclick=applyContinuation;continuation.append(button);
       }catch(error){if(scopeCurrent())continuation.textContent=error.message||continuationText.error;}finally{busy=false;}
+    }
+    async function verifyCurrentSources(button,sources,preview){
+      if(busy||!scopeCurrent()||!campaign||Number(campaign.version)!==Number(preview.campaign_version))return;
+      busy=true;button.disabled=true;const detail=document.createElement('details'),heading=document.createElement('summary');heading.textContent=language==='ru'?'Результаты проверки файлов':'File check results';detail.open=true;detail.append(heading);continuation.append(detail);
+      const ordered=[...sources].sort((a,b)=>Number(b.extension_state==='source_version_unverified')-Number(a.extension_state==='source_version_unverified')).slice(0,10);
+      let checked=0;try{for(const source of ordered){
+        if(!scopeCurrent()||Number(campaign?.version)!==Number(preview.campaign_version))break;
+        const line=document.createElement('p');line.textContent=language==='ru'?'Проверяем файл…':'Checking file…';detail.append(line);
+        try{const value=await post(base+'/'+encodeURIComponent(campaign.id)+'/current-media-check',{expected_version:preview.campaign_version,case_id:source.case_id,message_id:source.message_id,case_version:source.case_version});
+          if(!scopeCurrent())return;checked++;line.textContent=[value.case_id,value.message_id,value.provider,value.mime_type,value.size_bytes+' bytes',value.current_sha256,language==='ru'?'Текущий файл получен; старая версия не подтверждена.':'Current bytes received; the previous version remains unverified.'].join(' · ');
+        }catch(error){if(!scopeCurrent())return;line.textContent=[source.case_id,source.message_id,error.message||'Connect: source_check_failed'].join(' · ');if([401,403,409,429].includes(error.status))break;}
+      }if(sources.length>ordered.length){const note=document.createElement('p');note.textContent=language==='ru'?`Проверено не более ${ordered.length} из ${sources.length}; остальные не проверялись.`:`At most ${ordered.length} of ${sources.length} were checked; the rest were not checked.`;detail.append(note);}}
+      finally{busy=false;}
     }
     async function applyContinuation(){
       if(busy||!scopeCurrent()||!campaign||!continuationPreview||continuationPending())return;
