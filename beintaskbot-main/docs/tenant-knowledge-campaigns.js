@@ -246,6 +246,10 @@
           const label=document.createElement('label'),box=document.createElement('input');box.type='checkbox';box.dataset.consent='';box.checked=consentVersion===campaign.version;label.append(box,document.createTextNode(t[17]));actions.append(label);add(t[6],'start');const start=actions.querySelector('button');start.disabled=startUncertain||!box.checked;box.onchange=()=>{consentVersion=box.checked?campaign.version:null;start.disabled=startUncertain||!box.checked;};
         }
       }if(campaign.status==='running')add(t[7],'pause');if(campaign.status==='paused')add(t[8],'resume');if(campaign.status!=='stopped')add(t[9],'stop');add(t[10],'refresh');
+      if(ctx.member?.role==='owner'&&campaign.status==='paused'&&campaign.grant_approved&&campaign.progress?.mode==='case_media_batch'&&campaign.limit_diagnostics?.current_blocker==='company_daily_ai_call_limit'&&campaign.limit_diagnostics?.utc_daily_ai_call_limit===50&&!campaign.progress?.daily_call_ceiling){
+        const button=document.createElement('button');button.type='button';button.className='outline';button.dataset.caseDailyCeiling='';button.textContent=language==='ru'?'Разрешить этой обработке до 150 вызовов в сутки':'Allow up to 150 daily calls for this processing';
+        button.onclick=()=>{const text=language==='ru'?'Разрешить только этой обработке до 150 AI-вызовов в сутки? Общий бюджет $10 и прежние ограничения остальных операций сохраняются.':'Allow only this processing up to 150 AI calls per day? The total $10 budget and other operations’ limits remain unchanged.';if(window.confirm(text))void perform('approve_daily_ceiling_150');};actions.append(button);
+      }
       const savedContinuation=continuationPending();
       if(savedContinuation&&String(savedContinuation.campaign_id)===String(campaign.id)){
         if(campaign.progress?.case_extensions?.[savedContinuation.request_id]){continuationClear();continuationPreview=null;continuation.textContent=continuationText.ready;}

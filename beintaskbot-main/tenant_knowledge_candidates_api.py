@@ -78,7 +78,11 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                 elif resource=='campaign_start': result=await asyncio.to_thread(campaigns.approve,profile,request.match_info['campaign_id'],data)
                 elif resource=='campaign_control':
                     if set(data)!={'expected_version','action'}: raise TenantLinearError('Некорректные параметры.')
-                    await asyncio.to_thread(campaigns.control,profile,request.match_info['campaign_id'],data['expected_version'],data['action'])
+                    if data['action']=='approve_daily_ceiling_150':
+                        from tenant_case_daily_ceiling import approve
+                        await asyncio.to_thread(approve,profile,request.match_info['campaign_id'],data['expected_version'])
+                    else:
+                        await asyncio.to_thread(campaigns.control,profile,request.match_info['campaign_id'],data['expected_version'],data['action'])
                     result=await asyncio.to_thread(campaigns.get,profile,request.match_info['campaign_id'])
                 elif resource=='campaign_case_continuation':
                     from tenant_case_continuation_ui import apply_owner
