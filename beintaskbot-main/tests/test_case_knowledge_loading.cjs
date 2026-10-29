@@ -123,4 +123,10 @@ async function authorizationFailureTests(){
  }
  console.log('PASS denied refresh: cached list and modal discarded on authorization failure');
 }
-(async()=>{await metrics();if(!baseline){await knowledgeTests();await caseTests();await tabRaces();await mutationAndBatchTests();await authorizationFailureTests();await firstListAndDetailTests();}})().catch(error=>{console.error(error);process.exitCode=1;});
+async function retryAfterContractTest(){
+ const f=fixture('support_cases',{campaign:false});f.start();await settle();
+ f.w.fetch=async()=>({ok:false,status:429,headers:{get:name=>name.toLowerCase()==='retry-after'?'13':null},json:async()=>({success:false,error:'rate limit'})});
+ await assert.rejects(f.ctx.api(base+'/campaigns/campaign/current-media-check',{method:'POST',body:'{}'}),error=>error.status===429&&error.retryAfter===13);
+ f.close();console.log('PASS campaign API propagates Retry-After');
+}
+(async()=>{await metrics();if(!baseline){await knowledgeTests();await caseTests();await tabRaces();await mutationAndBatchTests();await authorizationFailureTests();await firstListAndDetailTests();await retryAfterContractTest();}})().catch(error=>{console.error(error);process.exitCode=1;});

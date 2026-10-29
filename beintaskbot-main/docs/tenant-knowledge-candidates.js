@@ -57,7 +57,7 @@
     const work=(async()=>{const response=await fetch(path,{credentials:'same-origin',...opt,headers:{'Content-Type':'application/json',...(opt.headers||{})}});
       const body=await response.json().catch(()=>({}));
       if(current!==sessionEpoch||paused||(read&&contentRead&&revision!==readEpoch))throw new Error('Session changed');
-      if(!response.ok||body.success===false){if(read&&[401,403].includes(response.status)){resetSession();member=null;paused=true;if(root()){render();notice(t('noAccess'));}}const error=new Error(body.error||'Request failed');error.status=response.status;throw error;}
+      if(!response.ok||body.success===false){if(read&&[401,403].includes(response.status)){resetSession();member=null;paused=true;if(root()){render();notice(t('noAccess'));}}const error=new Error(body.error||'Request failed');error.status=response.status;if(response.status===429){const seconds=Number.parseInt(response.headers.get('Retry-After')||'60',10);error.retryAfter=Number.isFinite(seconds)?Math.max(1,Math.min(3600,seconds)):60;}throw error;}
       const route=path.split('?')[0].slice(base.length).split('/').filter(Boolean);
       const changesCase=path.startsWith(base+'/')&&route[0]!=='campaigns'&&route[0]!=='batches'&&((opt.method==='PATCH'&&route.length===1)||['archive','restore','delete','approve','reject','clarify','publish-guidance','boundaries','source-review','mark-knowledge-published'].includes(route[1]));
       if(!read&&changesCase){invalidateReads();document.dispatchEvent(new CustomEvent('tenant-knowledge-changed',{detail:{source:'cases'}}));load();}
