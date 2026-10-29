@@ -120,11 +120,12 @@ def verify_owner_source(profile,campaign_id,data):
             history=_verified_byte_history(cur,str(profile['tenant_id']),after['message_id'],after['_source']['source_hash'],allow_incomplete=True)
             saved=_saved_byte_results(cur,str(profile['tenant_id']),str(campaign_id),after,digest)
             from tenant_case_uncertain_retry import eligible
-            uncertain_retry=(history.get('reason') in {'prior_media_result_unknown','prior_attempt_or_unresolved_result'}
+            uncertain_retry=((history.get('reason') in {'prior_media_result_unknown','prior_attempt_or_unresolved_result','attempt_history_not_recorded'}
+                or (after.get('interval_only') and history.get('state') in {'known_not_attempted','incomplete_history_eligible'}))
                 and eligible(cur,str(profile['tenant_id']),after,digest))
     if before!=after:raise TenantLinearError('Кейс или источник изменился. Обновите состояние.',409)
     return {'case_id':before['case_id'],'message_id':before['message_id'],'case_version':before['case_version'],
       'provider':'connect','current_bytes_checked':True,'current_sha256':digest,
       'mime_type':mime,'content_signature_checked':before['kind']=='image','size_bytes':len(payload),
-      'previous_bytes_verified':False,'continuation_supported':before['kind'] not in {'audio','voice'},
+      'previous_bytes_verified':False,'continuation_supported':before['kind'] not in {'audio','voice'} or uncertain_retry,
       'attempt_reconciliation':history,'saved_byte_results':saved,'uncertain_retry_available':uncertain_retry and not saved,'provider_ai_calls':0}

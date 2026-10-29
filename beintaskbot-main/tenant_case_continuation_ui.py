@@ -59,6 +59,15 @@ def preview_owner(profile,campaign_id,expected_version):
                     candidates.update(media)
                     for missing in linked-found:blocked.append({'case_id':case_id,'message_id':missing,'reason':'source_not_found'})
                 candidates.update(str(m['id']) for m in plan.get('media',[]) if isinstance(m,dict) and m.get('id'))
+                # The saved, bounded interval can contain attachments omitted by
+                # the old extraction. Reuse the exact case-coverage guard.
+                try:
+                    chosen=cases.route(cur,profile,run['route'])[3]
+                    interval=cases.case_media_coverage(cur,tenant,run,chosen,case.get('content') or {})
+                    if interval['media_coverage'].get('boundary_status')=='verified':
+                        candidates.update(str(m['id']) for m in interval['media_results'] if m.get('id'))
+                except TenantLinearError as error:
+                    if error.status not in {403,404,409}:raise
                 for message_id in sorted(candidates):
                     pair=(case_id,message_id)
                     if pair in seen:continue

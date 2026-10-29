@@ -208,3 +208,51 @@ def test_owner_retry_is_single_flight_and_changed_bytes_cannot_reuse_ack(campaig
         cache.observe_once(PROFILE,item,ref,b'different bytes for same message','image/png',{},changed)
     changed.assert_not_called()
     assert d.execute('SELECT count(*) AS n FROM test_asr_calls')[0]['n']==1
+
+
+def interval_voice_racer(dsn,mode,tenant,channel,source_id,external_id,grant_id,barrier,voice_done,out):
+    import tenant_connect_voice as voice
+    import tenant_knowledge_media_cache as cache
+    import tenant_knowledge_candidates_service as service
+    factory=lambda:psycopg.connect(dsn,row_factory=dict_row)
+    voice._connect=factory;voice.ensure_schema=lambda *_:None
+    cache._connect=factory;service.check_active=lambda *_:None
+    ref={'id':source_id,'external_id':'connect:'+external_id,'channel_id':channel,'media_version':'a'*64}
+    route={'owner_retry_unknown':True,'media_grant_id':grant_id,'message_ids':[source_id],
+      'channel_id':channel,'source_version':'a'*64,'allow_external_media':True,'allow_vision':True}
+    item={'tenant':tenant,'id':str(uuid.uuid4()),'key':'synthetic','refs':[ref],'route':route}
+    try:
+        barrier.wait(15)
+        if mode=='voice':
+            voice._claim({'tenant_id':tenant,'channel_id':channel,'lead_id':41},
+              {'run_id':str(uuid.uuid4())},{'external_id':external_id},'synthetic')
+            with factory() as conn:conn.execute('INSERT INTO test_asr_calls DEFAULT VALUES')
+        else:
+            def invoke(*args,**kwargs):
+                with factory() as conn:conn.execute('INSERT INTO test_asr_calls DEFAULT VALUES')
+                voice_done.wait(10)
+                return 'synthetic transcript',{}
+            cache.transcribe_once(PROFILE,item,'synthetic',(b'fake','ogg','audio/ogg'),invoke)
+        out.put((mode,'ok'))
+    except Exception as error:out.put((mode,'blocked',type(error).__name__))
+    finally:
+        if mode=='voice':voice_done.set()
+
+
+def test_voice_and_case_asr_share_one_source_claim(campaign):
+    import json
+    d,_,_,grant_id=campaign
+    source_id=str(uuid.uuid4());external_id=str(uuid.uuid4())
+    d.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type) VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','','audio')",(A,source_id,'connect:'+external_id,'connect:'+CA))
+    d.execute('CREATE TABLE IF NOT EXISTS test_asr_calls(id BIGSERIAL PRIMARY KEY)');d.execute('TRUNCATE test_asr_calls');d.commit()
+    ctx=multiprocessing.get_context('spawn');barrier=ctx.Barrier(2);done=ctx.Event();out=ctx.Queue()
+    children=[ctx.Process(target=interval_voice_racer,args=(d.dsn,mode,A,CA,source_id,external_id,grant_id,barrier,done,out)) for mode in ('voice','case')]
+    for child in children:child.start()
+    try:
+        values=[out.get(timeout=25) for _ in children]
+        for child in children:child.join(10);assert child.exitcode==0
+        assert sorted(value[1] for value in values)==['blocked','ok'],values
+        assert d.execute('SELECT count(*) AS n FROM test_asr_calls')[0]['n']==1
+    finally:
+        for child in children:
+            if child.is_alive():child.terminate();child.join(5)
