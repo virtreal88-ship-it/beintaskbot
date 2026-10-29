@@ -75,6 +75,8 @@ def test_byte_snapshot_is_refetched_and_unknown_outcome_rejected(monkeypatch):
     with pytest.raises(TenantLinearError,match='changed'):continuation.apply_owner({},'campaign',data)
     monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':digest,'continuation_supported':False,'attempt_reconciliation':{'state':'known_not_attempted'}})
     with pytest.raises(TenantLinearError,match='audio'):continuation.apply_owner({},'campaign',data)
+    monkeypatch.setattr(current,'verify_owner_source',lambda *args:{'current_sha256':digest,'continuation_supported':True,'attempt_reconciliation':{'state':'incomplete_history_eligible'},'saved_byte_results':[{'text':'cached'}]})
+    with pytest.raises(TenantLinearError,match='already available'):continuation.apply_owner({},'campaign',{**data,'acknowledge_incomplete_history':True})
     assert len(calls)==1
 
 
