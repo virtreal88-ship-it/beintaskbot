@@ -25,6 +25,9 @@
   batchCopy.ru.used='Уже зарезервировано или учтено в новом лимите:';batchCopy.ru.stop='Остановка не отменит запросы, уже отправленные провайдеру.';
   batchCopy.az.used='Yeni limitdə artıq rezerv edilib və ya hesablanıb:';batchCopy.az.stop='Dayandırma provayderə artıq göndərilmiş sorğuları ləğv etmir.';
   batchCopy.en.used='Already reserved or settled against the new cap:';batchCopy.en.stop='Stopping cannot cancel requests already sent to the provider.';
+  batchCopy.ru.unknown='Предыдущие удержания:';batchCopy.ru.settled='Предыдущие расходы:';
+  batchCopy.az.unknown='Əvvəlki rezervlər:';batchCopy.az.settled='Əvvəlki xərclər:';
+  batchCopy.en.unknown='Prior holds:';batchCopy.en.settled='Prior settled spend:';
   window.TenantKnowledgeCampaigns={async mount(root,ctx){
     const current=++generation,language=ctx.lang(),t=copy[language]||copy.en;
     root.querySelector('[data-campaign-panel]')?.remove();
@@ -191,6 +194,10 @@
       }
       if(ctx.member?.role==='owner'&&campaign.grant_approved&&campaign.progress?.mode==='case_media_batch'&&['paused','stopped'].includes(campaign.status)&&!continuationPending()){
         const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=continuationText.open;button.onclick=previewContinuation;actions.append(button);
+      }
+      if(campaign.progress?.mode==='case_media_batch'&&['paused','stopped'].includes(campaign.status)&&!continuationPending()){
+        if(ctx.member?.role!=='owner')continuation.textContent=language==='ru'?'Проверка оставшихся вложений доступна только владельцу.':language==='az'?'Qalan əlavələri yalnız sahib yoxlaya bilər.':'Only the owner can check remaining attachments.';
+        else if(!campaign.grant_approved)continuation.textContent=language==='ru'?'Разрешение исходной обработки не подтверждено. Обновите состояние.':language==='az'?'İlkin emalın icazəsi təsdiqlənməyib. Statusu yeniləyin.':'Original processing approval is not confirmed. Refresh the status.';
       }
     }
     async function refresh(fresh=false){
