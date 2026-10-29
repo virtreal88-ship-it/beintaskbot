@@ -1313,3 +1313,72 @@ def test_case_archive_is_owner_admin_only_and_uses_version(ready):
     db.execute("UPDATE saas_tenant_members SET role='owner' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));db.commit()
     with pytest.raises(TenantLinearError,match='изменилась'):
         store.mutate(PROFILE,value['id'],{'expected_version':0},'archive')
+
+
+def test_owner_published_payment_link_is_exact_scoped_and_retrievable(ready,monkeypatch):
+    from tenant_knowledge_candidates_policy import OWNER_APPROVED_PAYMENT_URL as url,redact
+    db,generation,_=ready;value=candidate(ready)
+    original=db.execute('SELECT content FROM saas_knowledge_candidates WHERE id=%s::uuid',(value['id'],))[0]['content']
+    original['symptoms']=['Untrusted link '+url]
+    db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE id=%s::uuid',(json.dumps(original),value['id']));db.commit()
+    monkeypatch.setattr(agents,'_connect',lambda:db)
+    request={'expected_version':1,'agent_ids':[EXPERT],
+      'resolution_steps':['Payment through '+url+'.','Avoid '+url+'?token=secret'],
+      'owner_additions':'Public payment '+url+'; never use https://evil.invalid/path.'}
+    result=store.mutate(PROFILE,value['id'],request,'publish_guidance')['candidate']
+    assert result['resolution_steps'][0].endswith(url+'.')
+    assert result['resolution_steps'][1]=='Avoid [URL]'
+    assert result['owner_additions']=='Public payment '+url+'; never use [URL]'
+    assert result['symptoms']==['Untrusted link [URL]']
+    source=db.execute('SELECT content FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(result['publications'][0]['source_id'],))[0]['content']
+    assert url in source and 'token=secret' not in source and 'evil.invalid' not in source
+    chunks=db.execute('SELECT content FROM saas_ai_knowledge_chunks WHERE source_id=%s::uuid',(result['publications'][0]['source_id'],))
+    assert any(url in row['content'] for row in chunks)
+    assert any(url in row['content'] for row in runs.knowledge_context(A,'payment',agent_id=EXPERT))
+    assert generation.call_count==1
+    assert redact(url)=='[URL]'
+    assert redact(url+'?token=abc',owner_payment_link=True)=='[URL]'
+    assert redact('password: value '+url,owner_payment_link=True)=='[SECRET]'
+    assert redact('https://million.az.evil.test/attributes/beinaz_yigim',owner_payment_link=True)=='[URL]'
+
+
+def test_owner_repairs_only_exact_masked_payment_link_in_published_guidance(ready,monkeypatch):
+    from tenant_knowledge_candidates_policy import OWNER_APPROVED_PAYMENT_URL as url
+    db,generation,_=ready;case=candidate(ready);monkeypatch.setattr(agents,'_connect',lambda:db)
+    original={'expected_version':1,'agent_ids':[EXPERT],
+      'resolution_steps':['Payment: [URL]'],'owner_additions':'Use [URL] to pay.'}
+    published=store.mutate(PROFILE,case['id'],original,'publish_guidance')['candidate']
+    source_id=published['publications'][0]['source_id']
+    before=db.execute('SELECT content,content_hash,provenance FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(source_id,))[0]
+    request={'expected_version':2,'agent_ids':[EXPERT],
+      'resolution_steps':['Payment: '+url],'owner_additions':'Use '+url+' to pay.'}
+    for bad in ({**request,'expected_version':1},{**request,'agent_ids':[AGENT]},
+      {**request,'owner_additions':'Unrelated change '+url},
+      {**request,'owner_additions':'Use '+url+'?token=private to pay.','resolution_steps':['Payment: [URL]']}):
+        with pytest.raises(TenantLinearError):store.mutate(PROFILE,case['id'],bad,'publish_guidance')
+    with pytest.raises(TenantLinearError):store.mutate({'tenant_id':B,'telegram_id':22},case['id'],request,'publish_guidance')
+    assert db.execute('SELECT content_hash FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(source_id,))[0]['content_hash']==before['content_hash']
+    repaired=store.mutate(PROFILE,case['id'],request,'publish_guidance')['candidate']
+    assert repaired['version']==3 and repaired['status']=='knowledge_published'
+    assert repaired['publications'][0]['source_id']==source_id and repaired['knowledge_publication']['current']
+    assert repaired['outcome']==published['outcome'] and repaired['cause']==published['cause']
+    source=db.execute('SELECT content,content_hash,provenance FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(source_id,))[0]
+    assert url in source['content'] and source['content_hash']!=before['content_hash']
+    assert source['provenance']['review_status']=='owner_reviewed_guidance'
+    assert any(url in part['content'] for part in runs.knowledge_context(A,'payment',agent_id=EXPERT))
+    assert store.mutate(PROFILE,case['id'],request,'publish_guidance')['candidate']['version']==3
+    assert generation.call_count==1
+    assert db.execute("SELECT action FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND entity_id=%s AND action='knowledge_candidate_owner_payment_link_restored'",(A,case['id']))
+
+
+def test_payment_link_repair_rejects_independently_changed_knowledge(ready,monkeypatch):
+    from tenant_knowledge_candidates_policy import OWNER_APPROVED_PAYMENT_URL as url
+    db,generation,_=ready;case=candidate(ready);monkeypatch.setattr(agents,'_connect',lambda:db)
+    published=store.mutate(PROFILE,case['id'],{'expected_version':1,'agent_ids':[EXPERT],'owner_additions':'Pay at [URL].'},'publish_guidance')['candidate']
+    source_id=published['publications'][0]['source_id']
+    agents.save_knowledge(PROFILE,{'content':'Independently edited guidance'},source_id=source_id)
+    with pytest.raises(TenantLinearError):
+        store.mutate(PROFILE,case['id'],{'expected_version':2,'agent_ids':[EXPERT],'owner_additions':'Pay at '+url+'.'},'publish_guidance')
+    assert db.execute('SELECT content FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(source_id,))[0]['content']=='Independently edited guidance'
+    assert store.detail(PROFILE,case['id'])['candidate']['version']==2
+    assert generation.call_count==1
