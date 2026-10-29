@@ -94,6 +94,7 @@ def test_recovery_skips_quarantined_head_but_never_retries_unknown(campaign,monk
       (json.dumps({'mode':'case_media_batch','failed_media_recovery':{'parents':{blocked_id:parent,safe_id:parent}}}),key));d.commit()
     monkeypatch.setattr(recovery,'verified_recovery_parent',lambda *args:{'id':parent})
     approve_fixture(d,key)
+    d.execute("INSERT INTO saas_ai_media_grants(tenant_id,id,campaign_id,created_by,cap_microusd,status,approved_by,approved_at) VALUES(%s::uuid,%s::uuid,%s::uuid,11,10000000,'active',11,now())",(A,key,key));d.commit()
     claimed=campaigns.claim(A,key)
     assert str(claimed['id'])==safe_id
     states={str(r['id']):r['status'] for r in d.execute('SELECT id,status FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid',(key,))}
@@ -104,6 +105,26 @@ def test_recovery_skips_quarantined_head_but_never_retries_unknown(campaign,monk
     assert campaigns.claim(A,key) is None
     assert row(d,key)['reserved_calls']==1
     assert d.execute('SELECT status FROM saas_knowledge_campaign_fragments WHERE id=%s::uuid',(blocked_id,))[0]['status']=='pending'
+    assert row(d,key)['status']=='paused'
+    assert d.execute('SELECT status FROM saas_ai_media_grants WHERE id=%s::uuid',(key,))[0]['status']=='active'
+    diagnostic=campaigns.get(PROFILE,key)['campaign']['quarantine_diagnostics']
+    assert diagnostic=={'basis':'at_pause','reason':'unknown_attempt_conflict','count':1,
+      'fragments':[{'fragment_id':blocked_id,'message_id':blocked_source}],'truncated':False}
+    assert campaigns.get({'tenant_id':B,'telegram_id':22},key)['campaign'] is None
+    provider.assert_not_called()
+
+
+def test_recovery_does_not_pause_while_any_tenant_fragment_is_running(campaign,monkeypatch):
+    d,provider,_,key=campaign
+    pending=add(d,key);running=add(d,key,1)
+    d.execute("UPDATE saas_knowledge_campaign_fragments SET status='running',lease_until=now()+interval '1 minute' WHERE id=%s::uuid",(running,))
+    d.execute('UPDATE saas_knowledge_campaigns SET progress=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps({'mode':'case_media_batch','failed_media_recovery':{'parents':{}}}),key));d.commit()
+    approve_fixture(d,key)
+    monkeypatch.setattr(campaigns,'_unknown_conflicts',lambda *args:True)
+    assert campaigns.claim(A,key) is None
+    assert row(d,key)['status']=='running'
+    assert d.execute('SELECT status FROM saas_knowledge_campaign_fragments WHERE id=%s::uuid',(pending,))[0]['status']=='pending'
     provider.assert_not_called()
 
 

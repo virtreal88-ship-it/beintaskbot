@@ -67,6 +67,13 @@ older failures without that record return null. Current counters are a snapshot,
 not proof of a historical exception. No message content or exception text is
 included; reading it neither resumes work nor changes limits.
 
+When all remaining recovery fragments conflict with an unknown provider attempt,
+the worker pauses the campaign and the existing read returns
+`quarantine_diagnostics` with the count and up to 100 fragment/message IDs.
+The reason describes the check at pause time, not a live re-evaluation. Pending
+fragments, the active grant, and all uncertain reservations are retained; no
+provider call is retried by this transition.
+
 The owner has authorized expansion of the existing `ai_learning.read`
 connection to company-wide reading. Existing read access and refresh tokens
 work for these read tools; no new consent or client credentials are required.

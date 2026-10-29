@@ -96,6 +96,20 @@ def test_parallel_recovery_claim_skips_quarantined_head(database):
         states={str(row['id']):row['status'] for row in db.execute('SELECT id,status FROM saas_knowledge_campaign_fragments WHERE campaign_id=%s::uuid',(key,))}
         assert states=={blocked:'pending',safe:'running',unknown:'unknown'}
         assert db.execute('SELECT reserved_calls FROM saas_knowledge_campaigns WHERE id=%s::uuid',(key,))[0]['reserved_calls']==1
+        db.execute("UPDATE saas_knowledge_campaign_fragments SET status='completed' WHERE id=%s::uuid",(safe,));db.commit()
+        barrier=ctx.Barrier(2);results=ctx.Queue()
+        workers=[ctx.Process(target=_claim_child,args=(db.dsn,key,barrier,results)) for _ in range(2)]
+        for worker in workers:worker.start()
+        values=[results.get(timeout=40) for _ in workers]
+        for worker in workers:worker.join(10);assert worker.exitcode==0
+        assert values.count(('ok',None))==2,values
+        campaign=db.execute('SELECT status,version,progress,reserved_calls FROM saas_knowledge_campaigns WHERE id=%s::uuid',(key,))[0]
+        assert campaign['status']=='paused'
+        assert campaign['version']==2
+        assert campaign['progress']['quarantine_wait']=={'reason':'unknown_attempt_conflict','count':1}
+        assert campaign['reserved_calls']==1
+        assert db.execute('SELECT status FROM saas_knowledge_campaign_fragments WHERE id=%s::uuid',(unknown,))[0]['status']=='unknown'
+        assert db.execute('SELECT status FROM saas_knowledge_campaign_fragments WHERE id=%s::uuid',(blocked,))[0]['status']=='pending'
     finally:
         for worker in workers:
             if worker.is_alive():worker.terminate();worker.join(5)

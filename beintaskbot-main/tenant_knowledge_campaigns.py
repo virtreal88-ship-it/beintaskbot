@@ -208,6 +208,7 @@ def control(profile, campaign_id, expected_version, action):
             if action=='pause' and row['status']!='running': raise TenantLinearError('Процесс не запущен.',409)
             if row['status']=='stopped': raise TenantLinearError('Процесс остановлен.',409)
             if action=='resume':
+                cur.execute("UPDATE saas_knowledge_campaigns SET progress=progress-'quarantine_wait' WHERE tenant_id=%s::uuid AND id=%s::uuid",(tenant,campaign_id))
                 cur.execute('''UPDATE saas_knowledge_campaign_fragments f SET status='pending',error_code=''
                   WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='blocked' AND error_code='limit_exceeded'
                   AND NOT EXISTS(SELECT 1 FROM saas_knowledge_extractions e WHERE e.tenant_id=f.tenant_id AND e.id=f.id)''',(tenant,campaign_id))
@@ -437,7 +438,7 @@ def claim(tenant, campaign_id):
                 # A quarantined source must not starve independent approved
                 # sources. Recheck the full existing unknown fence for every
                 # candidate; leave blocked work and old holds unchanged.
-                fragment=None;last_created=None;last_id=None
+                fragment=None;last_created=None;last_id=None;quarantined=0
                 while True:
                     cur.execute('''SELECT * FROM saas_knowledge_campaign_fragments
                       WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='pending'
@@ -449,9 +450,18 @@ def claim(tenant, campaign_id):
                     for candidate in page:
                         if not _unknown_conflicts(cur,tenant,candidate,campaign):
                             fragment=candidate;break
+                        quarantined+=1
                     if fragment:break
                     last_created=page[-1]['created_at'];last_id=str(page[-1]['id'])
                 if not fragment:
+                    if quarantined:
+                        # The tenant lock and running-fragment check above protect
+                        # this transition from another campaign worker. Preserve
+                        # pending work, grant and unknown spend reservations.
+                        cur.execute("""UPDATE saas_knowledge_campaigns SET status='paused',version=version+1,
+                          updated_at=now(),progress=progress||%s::jsonb
+                          WHERE tenant_id=%s::uuid AND id=%s::uuid AND status='running'""",
+                          (_json({'quarantine_wait':{'reason':'unknown_attempt_conflict','count':quarantined}}),tenant,campaign_id))
                     conn.commit();return None
             else:
                 cur.execute("SELECT * FROM saas_knowledge_campaign_fragments WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='pending' ORDER BY created_at,id LIMIT 1 FOR UPDATE",(tenant,campaign_id))
@@ -615,6 +625,22 @@ def get(profile, campaign_id=None):
                 from tenant_ai_asr_model import tariff_status as asr_tariff_status
                 asr_tariff=asr_tariff_status(asr_model)
             limit_diagnostics=_current_limit_diagnostics(cur,tenant,row,credential_source)
+            quarantine_diagnostics=None
+            if row['status']=='paused' and (row.get('progress') or {}).get('quarantine_wait'):
+                cur.execute("""SELECT id,route FROM saas_knowledge_campaign_fragments
+                  WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid AND status='pending'
+                  ORDER BY created_at,id LIMIT 100""",(tenant,row['id']))
+                waiting=cur.fetchall()
+                def safe_message_id(fragment):
+                    route=fragment.get('route') or {}; ids=route.get('message_ids') if isinstance(route,dict) else None
+                    if not isinstance(ids,list) or len(ids)!=1 or not isinstance(ids[0],str):return None
+                    try:return str(uuid.UUID(ids[0]))
+                    except ValueError:return None
+                quarantine_diagnostics={'basis':'at_pause','reason':'unknown_attempt_conflict',
+                  'count':row['progress']['quarantine_wait']['count'],
+                  'fragments':[{'fragment_id':str(f['id']),
+                    'message_id':safe_message_id(f)} for f in waiting],
+                  'truncated':len(waiting)<row['progress']['quarantine_wait']['count']}
 
 
     return {'campaign':{'id':str(row['id']),'version':row['version'],'status':row['status'],
@@ -624,6 +650,7 @@ def get(profile, campaign_id=None):
       'used_tokens':int(tokens),'cost':None,'max_calls':row['max_calls'],'max_tokens':row['max_tokens'],
       'progress':progress,'media_processed':media['processed'],'media_unavailable':media['unavailable'],'processed_messages':messages,'reviews':reviews,'quality_checks':quality,
       'limit_diagnostics':limit_diagnostics,
+      'quarantine_diagnostics':quarantine_diagnostics,
       'max_cost_microusd':row.get('max_cost_microusd'),'video_model':row.get('video_model'),'photo_model':row.get('photo_model'),
       'grant_used_microusd':grant_used,'prior_unknown_holds_microusd':old_unknown,
       'prior_settled_microusd':prior_settled,'grant_status':grant_status,
