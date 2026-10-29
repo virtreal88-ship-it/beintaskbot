@@ -121,6 +121,12 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
         assert checked['current_sha256']==hashlib.sha256(b'\x89PNG\r\n\x1a\ncurrent-image').hexdigest()
         assert checked['mime_type']=='image/png' and checked['content_signature_checked'] is True and checked['previous_bytes_verified'] is False and checked['provider_ai_calls']==0
         assert loader.call_count==2 and fetch.await_count==1
+        for _ in range(3):assert current_media._READ_SLOTS.acquire(blocking=False)
+        try:
+            with pytest.raises(TenantLinearError) as busy:current_media.verify_owner_source(PROFILE,campaign,request)
+            assert busy.value.status==429 and busy.value.code=='owner_read_busy' and fetch.await_count==1
+        finally:
+            for _ in range(3):current_media._READ_SLOTS.release()
         with pytest.raises(TenantLinearError):current_media.verify_owner_source(PROFILE,campaign,{**request,'message_id':unrelated})
         with pytest.raises(TenantLinearError):current_media.verify_owner_source({'tenant_id':B,'telegram_id':22},campaign,request)
         with pytest.raises(TenantLinearError):current_media.verify_owner_source(PROFILE,campaign,{**request,'case_version':version+1})

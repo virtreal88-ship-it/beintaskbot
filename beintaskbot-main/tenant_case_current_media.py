@@ -1,9 +1,12 @@
 """Owner-session byte verification for one exact existing case attachment."""
 import hashlib
+import threading
 from tenant_linear_policy import TenantLinearError,identifier
 from tenant_platform import _connect
 import tenant_knowledge_candidates_store as cases
 import tenant_case_source_inventory as inventory
+
+_READ_SLOTS=threading.BoundedSemaphore(3)
 
 
 def _authorized_snapshot(cur,profile,campaign_id,campaign_version,case_id,message_id,case_version):
@@ -39,6 +42,9 @@ def verify_owner_source(profile,campaign_id,data):
     args=(profile,campaign_id,data['expected_version'],data['case_id'],data['message_id'],data['case_version'])
     with _connect() as conn:
         with conn.cursor() as cur:before=_authorized_snapshot(cur,*args)
+    if not _READ_SLOTS.acquire(blocking=False):
+        error=TenantLinearError('Проверка файлов занята. Повторите позже.',429)
+        error.code='owner_read_busy';error.retry_after=5;raise error
     try:
         payload,mime=inventory._fetch_current(profile,before)
     except TenantLinearError as error:
@@ -50,6 +56,8 @@ def verify_owner_source(profile,campaign_id,data):
         if stage=='connect_download' and getattr(error,'code',None)=='connect_access_denied':category='connect_access_denied'
         safe=TenantLinearError('Не удалось проверить файл. Причина: '+category+'.',403 if category=='connect_access_denied' else error.status)
         safe.code=category;safe.retry_after=getattr(error,'retry_after',None);raise safe from None
+    finally:
+        _READ_SLOTS.release()
     if before['kind']=='image':
         from tenant_connect_images import signature
         if not signature(payload,mime):
