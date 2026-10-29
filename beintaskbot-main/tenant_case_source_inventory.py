@@ -4,7 +4,7 @@ from tenant_linear_policy import TenantLinearError, identifier
 from tenant_ai_group_coordination import group_jid
 import tenant_knowledge_candidates_store as cases
 from tenant_media_evidence import media_version, source_hash, _body_hash
-from tenant_case_media_admission import _has_current_media_version
+from tenant_case_media_admission import _has_current_media_version, _current_source_addressable
 
 
 def inspect(cur, profile, case_id, message_id, expected_version, campaign_id, *, _internal=False):
@@ -70,6 +70,7 @@ def inspect(cur, profile, case_id, message_id, expected_version, campaign_id, *,
     if cached_code and not re.fullmatch(r'[a-z_]{1,80}',cached_code):cached_code='other'
     result={'case_id':case_id,'case_version':expected_version,'message_id':message_id,'channel_id':channel,
       'lead_id':selected['lead_id'],'kind':row['message_type'],'legacy_source_reference':legacy_ref,'source_version_verified':_has_current_media_version(raw),
+      'current_source_addressable':_current_source_addressable(row,channel,conversation),
       'cached_status':str(cached['status']) if cached else None,'cached_code':cached_code if cached else None,
       'current_bytes_checked':False,'grant_scope_match':covered,'grant_status':campaign.get('grant_status'),
       'grant_cap_microusd':campaign.get('cap_microusd'),'dispatch_authorized':False}

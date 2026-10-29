@@ -92,7 +92,8 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
     with db.cursor() as cur:
         actual=inventory.inspect(cur,PROFILE,key,message,version,campaign)
         assert actual['legacy_source_reference'] is True and actual['channel_id']==oldchannel
-        assert actual['kind']=='image' and actual['current_bytes_checked'] is False and actual['dispatch_authorized'] is False
+        assert actual['kind']=='image' and actual['current_source_addressable'] is True
+        assert actual['current_bytes_checked'] is False and actual['dispatch_authorized'] is False
         state=extension.preview(cur,PROFILE,campaign,1,[{'case_id':key,'message_id':message,'expected_version':version}])
         assert state['sources'][0]['extension_state']=='previous_outcome_unknown'
         with pytest.raises(TenantLinearError) as outside:inventory.inspect(cur,PROFILE,key,unrelated,version,campaign)
