@@ -47,16 +47,30 @@ def _saved_byte_results(cur,tenant,campaign_id,source,digest):
         AND e.route->>'case_source_sha256'=%s AND e.status='completed' AND f.status IN ('completed','partial')
       ORDER BY f.updated_at DESC LIMIT 3""",
       (tenant,campaign_id,source['case_id'],str(source['case_version']),__import__('json').dumps([source['message_id']]),digest,digest))
-    saved=[]
-    for row in cur.fetchall():
+    rows=[(row,False) for row in cur.fetchall()]
+    # Older extractions can also be reused when the result itself recorded
+    # the exact bytes. Metadata-only source versions are never enough.
+    import json
+    cur.execute("""SELECT media_results FROM saas_knowledge_extractions
+      WHERE tenant_id=%s::uuid AND status='completed' AND source_refs @> %s::jsonb
+        AND media_results @> %s::jsonb ORDER BY completed_at DESC LIMIT 3""",
+      (tenant,json.dumps([{'id':source['message_id'],'channel_id':source['channel_id']}]),
+       json.dumps([{'id':source['message_id'],'sha256':digest}])))
+    rows.extend((row,True) for row in cur.fetchall())
+    saved=[];seen=set()
+    for row,legacy in rows:
         for result in row.get('media_results') or []:
-            if not isinstance(result,dict) or str(result.get('id'))!=source['message_id'] or result.get('status') not in {'processed','partial'}:continue
+            if (not isinstance(result,dict) or str(result.get('id'))!=source['message_id']
+                or result.get('status') not in {'processed','partial'} or (legacy and result.get('sha256')!=digest)):continue
             parts=[]
             for key in ('observation','transcript'):
                 if isinstance(result.get(key),str) and result[key].strip():parts.append(_safe_text(result[key]))
             for value in result.get('observations') or []:
                 if isinstance(value,dict) and isinstance(value.get('text'),str) and value['text'].strip():parts.append(_safe_text(value['text']))
-            if parts:saved.append({'status':result['status'],'text':'\n'.join(parts)[:4000]})
+            if parts:
+                entry={'status':result['status'],'text':'\n'.join(parts)[:4000]}
+                key=(entry['status'],entry['text'])
+                if key not in seen:saved.append(entry);seen.add(key)
     return saved[:3]
 
 

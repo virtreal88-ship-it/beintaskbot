@@ -85,6 +85,10 @@ def test_current_bytes_queue_and_dispatch_fences(ready,monkeypatch):
     db.execute("UPDATE saas_knowledge_campaign_fragments SET status='completed',extraction_id=id WHERE id=%s::uuid",(fragment['id'],));db.commit()
     checked=current.verify_owner_source(PROFILE,campaign,{'expected_version':2,'case_id':key,'message_id':message,'case_version':version})
     assert checked['saved_byte_results']==[{'status':'processed','text':'visible printer'}]
+    db.execute('UPDATE saas_knowledge_extractions SET media_results=%s::jsonb WHERE id=%s::uuid',
+      (json.dumps([{'id':message,'status':'processed','sha256':value['current_sha256'],'observation':'older exact bytes'}]),case['extraction_id']));db.commit()
+    checked=current.verify_owner_source(PROFILE,campaign,{'expected_version':2,'case_id':key,'message_id':message,'case_version':version})
+    assert {row['text'] for row in checked['saved_byte_results']}=={'visible printer','older exact bytes'}
     monkeypatch.setattr(inventory,'_fetch_current',lambda *_:(PNG+b'changed','image/png'))
     checked=current.verify_owner_source(PROFILE,campaign,{'expected_version':2,'case_id':key,'message_id':message,'case_version':version})
     assert checked['saved_byte_results']==[]
