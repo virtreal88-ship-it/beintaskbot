@@ -83,6 +83,24 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
         with pytest.raises(TenantLinearError):mcp._tools(cur,{'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[]},'support_media_case_source_inspect',{})
         args={'case_id':key,'message_id':message,'campaign_id':campaign,'expected_version':version,'include_content':True}
         with pytest.raises(TenantLinearError):mcp._tools(cur,{'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.SUPPORT_MEDIA_SCOPE]},'support_media_case_source_verify',args)
+    # Old extractions recorded an internal UUID and channel without the later
+    # attachment fields. Verify the actual route, do not infer historical bytes.
+    legacy={'id':message,'channel_id':oldchannel,'body_hash':_body_hash(''),'text_limit':68}
+    unrelated=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type,body,raw) VALUES(%s::uuid,%s::uuid,308,%s,%s,'incoming','image','',%s::jsonb)",(unrelated,A,'connect:'+str(uuid.uuid4()),'connect:'+oldchannel,json.dumps(raw)))
+    db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb WHERE id=%s::uuid',(json.dumps([legacy,{'id':unrelated,'channel_id':oldchannel}]),case['extraction_id']));db.commit()
+    with db.cursor() as cur:
+        actual=inventory.inspect(cur,PROFILE,key,message,version,campaign)
+        assert actual['legacy_source_reference'] is True and actual['channel_id']==oldchannel
+        assert actual['kind']=='image' and actual['current_bytes_checked'] is False and actual['dispatch_authorized'] is False
+        state=extension.preview(cur,PROFILE,campaign,1,[{'case_id':key,'message_id':message,'expected_version':version}])
+        assert state['sources'][0]['extension_state']=='previous_outcome_unknown'
+        with pytest.raises(TenantLinearError) as outside:inventory.inspect(cur,PROFILE,key,unrelated,version,campaign)
+        assert outside.value.status==403
+    for altered in ({**legacy,'external_id':'wrong'}, {**legacy,'media_kind':'video'}, {**legacy,'channel_id':CA}):
+        db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb WHERE id=%s::uuid',(json.dumps([altered]),case['extraction_id']));db.commit()
+        with db.cursor() as cur,pytest.raises(TenantLinearError):inventory.inspect(cur,PROFILE,key,message,version,campaign)
+    db.execute('UPDATE saas_knowledge_extractions SET source_refs=%s::jsonb WHERE id=%s::uuid',(json.dumps([ref]),case['extraction_id']));db.commit()
     version_hash=media_version(raw);hashed=source_hash({'external_id':external,'body_hash':_body_hash(''),'media_kind':'image','media_version':version_hash})
     snapshot['case_plans']=[{'case_id':key,'case_version':version,'channel_id':oldchannel,'media':[{'id':message,'source_version':version_hash,'source_hash':hashed}]}]
     db.execute('UPDATE saas_knowledge_campaigns SET sources=%s::jsonb,progress=%s::jsonb WHERE id=%s::uuid',(json.dumps([oldchannel]),json.dumps(snapshot),campaign));db.commit()
