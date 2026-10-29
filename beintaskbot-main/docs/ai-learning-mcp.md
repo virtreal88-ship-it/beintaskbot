@@ -64,6 +64,8 @@ saved source-bound photo or audio artifacts. It performs no AI call and does
 not change grants, budgets, holds or cases. Requesting result text additionally
 requires the existing support-case scope. Video and converted AAC are not
 claimed as byte-matched results by this check.
+`support_media_case_sources_inspect` inspects up to 25 explicit case/source
+pairs in one request; individual failures retain their input positions.
 
 `administrator_case_conversation_link_read` normally anchors only a case's
 evidence messages. To navigate to a media message within the current verified

@@ -165,6 +165,9 @@ def test_oauth_metadata_advertises_cimd_pkce_refresh_and_exact_mcp_resource(db, 
             assert source['securitySchemes']==[{'type':'oauth2','scopes':[mcp.SUPPORT_MEDIA_SCOPE]}]
             assert source['annotations']['readOnlyHint'] is True
             assert set(source['inputSchema']['required'])=={'case_id','message_id','campaign_id','expected_version'}
+            batch=definitions['support_media_case_sources_inspect']
+            assert batch['securitySchemes']==[{'type':'oauth2','scopes':[mcp.SUPPORT_MEDIA_SCOPE]}]
+            assert batch['inputSchema']['properties']['sources']['maxItems']==25
             verified_source=definitions['support_media_case_source_verify']
             assert verified_source['securitySchemes']==[{'type':'oauth2','scopes':[mcp.SUPPORT_MEDIA_SCOPE]}]
             assert verified_source['annotations']['openWorldHint'] is True

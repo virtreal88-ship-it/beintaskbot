@@ -41,6 +41,12 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
         cfg={'AI_LEARNING_MCP_TENANT_ID':A,'actor_id':11,'granted_scopes':[mcp.SUPPORT_MEDIA_SCOPE]}
         args={'case_id':key,'message_id':message,'campaign_id':campaign,'expected_version':version}
         assert mcp._tools(cur,cfg,'support_media_case_source_inspect',args)['channel_id']==oldchannel
+        batch={'campaign_id':campaign,'sources':[{'case_id':key,'message_id':message,'expected_version':version},
+          {'case_id':key,'message_id':str(uuid.uuid4()),'expected_version':version}]}
+        rows=mcp._tools(cur,cfg,'support_media_case_sources_inspect',batch)['sources']
+        assert len(rows)==2 and rows[0]['status']=='ok' and rows[0]['channel_id']==oldchannel
+        assert rows[1]=={'status':'error','code':'source_scope_denied'}
+        with pytest.raises(TenantLinearError):mcp._tools(cur,cfg,'support_media_case_sources_inspect',{'campaign_id':campaign,'sources':batch['sources']*13})
         with pytest.raises(TenantLinearError):inventory.inspect(cur,PROFILE,key,message,version+1,campaign)
         with pytest.raises(TenantLinearError):inventory.inspect(cur,PROFILE,key,str(uuid.uuid4()),version,campaign)
         with pytest.raises(TenantLinearError):inventory.inspect(cur,{'tenant_id':B,'telegram_id':22},key,message,version,campaign)
