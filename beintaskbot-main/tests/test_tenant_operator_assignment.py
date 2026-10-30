@@ -362,6 +362,22 @@ def test_assignment_http_requires_identity_origin_and_dialog_permission(monkeypa
     assert assign_mock.call_args.args==(PROFILE,{'provider':'connect'})
 
 
+def test_assignment_conflict_distinguishes_verified_identity(monkeypatch):
+    import asyncio
+    from unittest.mock import Mock
+    from types import SimpleNamespace
+    import tenant_operator_api as api
+    def conflict(*_): raise TenantLinearError('Legacy dialogue channel is ambiguous',409)
+    monkeypatch.setattr(api,'assignment_options',conflict)
+    handle=api.handler(lambda _:PROFILE,'https://crm.test',Mock(),'agent_assignment')
+    def request(tenant):
+        return SimpleNamespace(method='GET',headers={'X-Tenant-Id':tenant,'X-User-Id':'11'},query={})
+    verified=asyncio.run(handle(request(A)))
+    assert verified.status==409 and json.loads(verified.text)['scope_verified'] is True
+    changed=asyncio.run(handle(request(B)))
+    assert changed.status==409 and 'scope_verified' not in json.loads(changed.text)
+
+
 def test_bulk_preview_is_owner_only_channel_and_agent_scoped_read_only(old_dialog,monkeypatch):
     from unittest.mock import Mock
     f=old_dialog;db=f['db'];monkeypatch.setattr(assignment,'_connect',lambda:db)
