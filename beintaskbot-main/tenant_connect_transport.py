@@ -921,6 +921,23 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     # not create new AI/case work on the canonical route.
                     conn.commit()
                     return accepted
+            if (not outbound and message_inserted and coordinated and not ai_origin and data.get('type')=='text'
+                    and ('CASE:' in str(data.get('text') or '').upper() or data.get('quotedExternalMessageId'))):
+                # Optional consultation correlation must never alter the normal
+                # webhook admission or turn group text into an instruction.
+                cur.execute('SAVEPOINT consultation_reply')
+                try:
+                    cur.execute("SELECT to_regclass('saas_consultation_group_deliveries') IS NOT NULL AS ready")
+                    if (cur.fetchone() or {}).get('ready'):
+                        from tenant_consultation_group import record_group_reply
+                        record_group_reply(cur,tenant,channel_id,conversation,str(data.get('id') or event_id),
+                          str(data.get('text') or ''),data.get('quotedExternalMessageId'))
+                    cur.execute('RELEASE SAVEPOINT consultation_reply')
+                except Exception:
+                    cur.execute('ROLLBACK TO SAVEPOINT consultation_reply')
+                    cur.execute('RELEASE SAVEPOINT consultation_reply')
+                    import logging
+                    logging.getLogger(__name__).warning('Consultation reply was not linked; original message was preserved')
             if (not outbound and message_inserted and not ai_origin and employee is None
                     and not uncertain_origin and not control_replayed):
                 # Reuse the existing SaaS CRM notice outbox, push subscriptions and worker.
@@ -1008,6 +1025,24 @@ def send_ai_reply(route: dict, text: str, run_id: str) -> str:
             raise TenantPlatformError('Connect group delivery was not confirmed.')
         return str(result['id'])
     return send(route, text, client_message_id)
+
+
+def send_group_with_receipt(route: dict, text: str, request_id: str) -> dict:
+    """One confirmed group delivery; expose provider reference only when valid.
+
+    Callers must durably reserve the UUID before calling and quarantine unknown
+    outcomes. This helper does not retry, store a receipt or grant permission.
+    """
+    from tenant_ai_group_coordination import group_jid
+    try: key=str(uuid.UUID(str(request_id)))
+    except (ValueError,TypeError,AttributeError): raise TenantPlatformError('Invalid group request ID.') from None
+    if not group_jid(route.get('conversation_id')): raise TenantPlatformError('Group route required.')
+    result=_request(route['api_key'],'POST','/v1/channels/'+route['channel_id']+'/group-messages',
+      {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':key})
+    if result.get('status')!='sent' or not result.get('id'): raise TenantPlatformError('Connect group delivery was not confirmed.')
+    external=result.get('externalMessageId')
+    if not isinstance(external,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',external):external=None
+    return {'message_id':str(result['id']),'external_message_id':external}
 
 
 def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversation_id: str,
