@@ -32,6 +32,8 @@ def schema(conn):
           message_id TEXT NOT NULL,body TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY(tenant_id,channel_id,conversation_id,message_id),
           FOREIGN KEY(tenant_id,consultation_id) REFERENCES saas_internal_consultations(tenant_id,id) ON DELETE RESTRICT)''')
+        cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS customer_draft TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS draft_reply_id TEXT NULL")
 
 
 def _owner(cur,profile):
@@ -39,6 +41,18 @@ def _owner(cur,profile):
     if policy.profile.get('role')!='owner' or not policy.allows('dialogs'):
         raise TenantLinearError('Only the company owner with dialog access may send a consultation.',403)
     return tenant,actor,policy
+
+
+def destinations(profile):
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            tenant,_,policy=_owner(cur,profile)
+            cur.execute('''SELECT c.connect_channel_id::text AS channel_id,c.conversation_id,c.contact_name
+              FROM saas_connect_conversations c JOIN saas_connect_channels ch
+                ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id
+              WHERE c.tenant_id=%s::uuid AND ch.active=TRUE AND c.conversation_id LIKE %s
+              ORDER BY c.last_message_at DESC NULLS LAST LIMIT 200''',(tenant,'%@g.us'))
+            return {'groups':[dict(row) for row in cur.fetchall() if group_jid(row['conversation_id'])]}
 
 
 def prepare(profile,consultation_id,data):
@@ -77,8 +91,11 @@ def prepare(profile,consultation_id,data):
                 links.append('https://crm.pro.az/app?view=support&support_ticket_id='+case_id+'&support_ticket_message_id='+message_id)
             body=('CASE:'+key+'\n'+summary.strip()+'\n\n'
                   'https://crm.pro.az/app?view=support&support_ticket_id='+case_id+
-                  (('\n\nAttachments (CRM sign-in and access required):\n'+'\n'.join(links)) if links else '')+
-                  '\nReply and include CASE:'+key)
+                  (('\n\nƏlavələr (CRM-də giriş və icazə tələb olunur):\n'+'\n'.join(links)) if links else '')+
+                  '\nCavabda CASE:'+key+' qeyd edin.')
+            # Connect validates the JavaScript string length before dispatch.
+            if len(body.encode('utf-16-le'))//2>4096:
+                raise TenantLinearError('Сократите сводку или выберите меньше вложений.',400)
             digest=hashlib.sha256(body.encode()).hexdigest()
             cur.execute('SELECT * FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid FOR UPDATE',(tenant,key));old=cur.fetchone()
             if old:
@@ -155,6 +172,56 @@ def dispatch(profile,consultation_id,request_id):
                 logging.getLogger(__name__).warning('Consultation reply needs reconciliation; delivery receipt preserved')
         conn.commit()
     return {'state':'sent','message_id':receipt['message_id']}
+
+
+def read(profile,consultation_id):
+    key=identifier(consultation_id)
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            tenant,_,policy=_owner(cur,profile)
+            cur.execute('''SELECT d.*,c.channel_id AS source_channel,c.conversation_id AS source_conversation
+              FROM saas_consultation_group_deliveries d JOIN saas_internal_consultations c
+                ON c.tenant_id=d.tenant_id AND c.id=d.consultation_id
+              WHERE d.tenant_id=%s::uuid AND d.consultation_id=%s::uuid''',(tenant,key));row=cur.fetchone()
+            if not row:raise TenantLinearError('Consultation is unavailable.',404)
+            assert_route(cur,tenant,policy,'connect',row['source_conversation'],str(row['source_channel']))
+            group=assert_route(cur,tenant,policy,'connect',row['conversation_id'],str(row['channel_id']))
+            cur.execute('''SELECT message_id,body,created_at FROM saas_consultation_group_replies
+              WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid ORDER BY created_at,message_id''',(tenant,key))
+            replies=[{'message_id':r['message_id'],'body':r['body'],'created_at':r['created_at'].isoformat() if hasattr(r['created_at'],'isoformat') else str(r['created_at'])} for r in cur.fetchall()]
+            return {'consultation_id':key,'case_id':str(row['case_id']),'state':row['state'],'request_id':str(row['request_id']),
+                    'destination':group.get('contact_name') or row['conversation_id'],'prepared_text':row['body'],
+                    'replies':replies,'customer_draft':row['customer_draft'],
+                    'draft_reply_id':row['draft_reply_id'],'customer_message_sent':False}
+
+
+def save_draft(profile,consultation_id,data):
+    if not isinstance(data,dict) or set(data)!={'message_id','draft'}:
+        raise TenantLinearError('Invalid draft.',400)
+    reply_id=data['message_id'];draft=data['draft']
+    if (not isinstance(reply_id,str) or not reply_id or len(reply_id)>200 or
+        not isinstance(draft,str) or not draft.strip() or len(draft)>4000):raise TenantLinearError('Invalid draft.',400)
+    key=identifier(consultation_id)
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            tenant,actor,policy=_owner(cur,profile)
+            cur.execute('''SELECT d.*,c.channel_id AS source_channel,c.conversation_id AS source_conversation
+              FROM saas_consultation_group_deliveries d JOIN saas_internal_consultations c
+                ON c.tenant_id=d.tenant_id AND c.id=d.consultation_id
+              WHERE d.tenant_id=%s::uuid AND d.consultation_id=%s::uuid FOR UPDATE OF d''',(tenant,key));row=cur.fetchone()
+            if not row:raise TenantLinearError('Consultation is unavailable.',404)
+            assert_route(cur,tenant,policy,'connect',row['source_conversation'],str(row['source_channel']))
+            assert_route(cur,tenant,policy,'connect',row['conversation_id'],str(row['channel_id']))
+            cur.execute('''SELECT 1 FROM saas_consultation_group_replies
+              WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND message_id=%s''',(tenant,key,reply_id))
+            if not cur.fetchone():raise TenantLinearError('Group reply is unavailable.',404)
+            cur.execute('''UPDATE saas_consultation_group_deliveries SET customer_draft=%s,draft_reply_id=%s,updated_at=now()
+              WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid''',(draft.strip(),reply_id,tenant,key))
+            _audit(cur,tenant,actor,'consultation_customer_draft_saved','consultation',key,{'reply_id':reply_id})
+        conn.commit()
+    return {'consultation_id':key,'customer_message_sent':False}
 
 
 def record_group_reply(cur,tenant,channel,conversation,message_id,text,quoted_id=None):

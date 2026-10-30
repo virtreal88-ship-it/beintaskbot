@@ -22,7 +22,7 @@
     const response=await fetch(consultationEndpoint+path,{method,credentials:'same-origin',cache:'no-store',headers:data?{'Content-Type':'application/json'}:{},...(data?{body:JSON.stringify({...data,expected_tenant_id:current?.tenant_id,expected_user_id:current?.telegram_id})}:{})});
     const payload=await response.json();
     if(!document?.body||version!==epoch||identity(current)!==identity(member))throw new Error(t('companyChanged'));
-    if(!response.ok||!payload.success)throw new Error(payload.error||t('consultCreateError'));
+    if(!response.ok||!payload.success){const error=new Error(payload.error||t('consultCreateError'));error.status=response.status;throw error;}
     return payload.result;
   }
   function install(){
@@ -73,20 +73,63 @@
     $('supportTakeover').onclick=async()=>{const button=$('supportTakeover'),version=epoch;button.disabled=true;try{await window.tenantOperator.changeState(route,'handoff');if(version===epoch&&selected===ticket.id)await open(ticket.id);}catch(error){if(version===epoch){notice(error.message);button.disabled=false;}}};
     if($('supportSummary'))$('supportSummary').onclick=()=>action(ticket.id,'/summary','POST',{});
     $('supportEarlier').onclick=async()=>{const revision=detailRevision,version=epoch,button=$('supportEarlier');button.disabled=true;try{const page=await api('/'+encodeURIComponent(ticket.id)+'?before='+encodeURIComponent(nextBefore));if(selected!==ticket.id||revision!==detailRevision)return;$('supportHistory').insertAdjacentHTML('afterbegin',messages(page.messages));nextBefore=page.next_before;button.hidden=!nextBefore;}catch(error){if(version===epoch)notice(error.message);}finally{if(button.isConnected)button.disabled=false;}};
-    renderConsultations(ticket);
+    renderConsultations(ticket,result.messages||[]);
   }
-  async function renderConsultations(ticket){
+  async function renderConsultations(ticket,caseMessages=[]){
     const host=$('supportDetail'),revision=detailRevision;if(!host)return;
     $('supportConsultations')?.remove();
     const section=document.createElement('section');section.id='supportConsultations';section.innerHTML=`<h3>${t('consultations')}</h3><p class="sub">${t('consultDeveloperHint')}</p><div class="support-edit"><label>${t('consultRecipient')}<select id="consultRecipient">${members.map(m=>`<option value="${esc(m.telegram_id)}">${esc(m.display_name||m.telegram_id)}</option>`).join('')}</select></label><label>${t('consultReason')}<textarea id="consultReason" maxlength="1000" rows="2"></textarea></label><button type="button" class="outline" id="consultCreate">${t('consultDeveloper')}</button></div><div id="consultRows"></div>`;host.append(section);
-    const show=items=>{const rows=$('consultRows');if(!rows)return;rows.innerHTML=(items||[]).map(item=>`<article class="support-message"><small>${esc(item.recipient_name)} · ${esc(i18n.date(item.created_at))}</small><div data-user-content>${esc(item.reason)}</div><small>${item.status==='queued_after_hours'?t('consultQueued'):t('consultWaiting')}</small>${item.response?`<hr><b>${t('consultAnswer')}</b><div data-user-content>${esc(item.response)}</div><small>${t('consultNoCustomerSend')}</small>`:`<small>${t('consultNoAnswer')}</small><label>${t('consultAnswer')}<textarea data-consult-answer="${esc(item.id)}" maxlength="4000" rows="2"></textarea></label><button type="button" class="outline" data-consult-reply="${esc(item.id)}">${t('save')}</button>`}</article>`).join('');rows.querySelectorAll('[data-consult-reply]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{const field=Array.from(rows.querySelectorAll('[data-consult-answer]')).find(node=>node.dataset.consultAnswer===button.dataset.consultReply);const response=field?.value||'';await consultationApi('/'+encodeURIComponent(button.dataset.consultReply)+'/reply','POST',{response,kind:'diagnosis'});await renderConsultations(ticket);}catch(error){notice(error.message);button.disabled=false;}});};
+    const show=items=>{const rows=$('consultRows');if(!rows)return;rows.innerHTML=(items||[]).map(item=>`<article class="support-message" data-consult-id="${esc(item.id)}"><small>${esc(item.recipient_name)} · ${esc(i18n.date(item.created_at))}</small><div data-user-content>${esc(item.reason)}</div><small>${item.status==='queued_after_hours'?t('consultQueued'):t('consultWaiting')}</small>${item.response?`<hr><b>${t('consultAnswer')}</b><div data-user-content>${esc(item.response)}</div><small>${t('consultNoCustomerSend')}</small>`:`<small>${t('consultNoAnswer')}</small><label>${t('consultAnswer')}<textarea data-consult-answer="${esc(item.id)}" maxlength="4000" rows="2"></textarea></label><button type="button" class="outline" data-consult-reply="${esc(item.id)}">${t('save')}</button>`}</article>`).join('');rows.querySelectorAll('[data-consult-reply]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{const field=Array.from(rows.querySelectorAll('[data-consult-answer]')).find(node=>node.dataset.consultAnswer===button.dataset.consultReply);const response=field?.value||'';await consultationApi('/'+encodeURIComponent(button.dataset.consultReply)+'/reply','POST',{response,kind:'diagnosis'});await renderConsultations(ticket,caseMessages);}catch(error){notice(error.message);button.disabled=false;}});if(member?.role==='owner'&&window.tenantOperator?.hasRight('dialogs'))for(const item of items||[]){const article=Array.from(rows.children).find(el=>el.dataset.consultId===item.id);if(article)void renderGroupFlow(article,item,caseMessages);}};
     try{const result=await consultationApi('?case_id='+encodeURIComponent(ticket.id));if(revision!==detailRevision||selected!==ticket.id)return;show(result.consultations);$('consultCreate').onclick=async()=>{const button=$('consultCreate');button.disabled=true;try{await consultationApi('','POST',{case_id:ticket.id,recipient_id:$('consultRecipient').value,reason:$('consultReason').value,evidence:{ticket_id:ticket.id,conversation_id:ticket.conversation_id},request_key:crypto.randomUUID()});await renderConsultations(ticket);}catch(error){notice(error.message);button.disabled=false;}};}catch(error){section.querySelector('#consultRows').textContent=error.message;section.querySelector('#consultCreate').disabled=true;}
+  }
+  async function renderGroupFlow(article,item,caseMessages){
+    const path='/'+encodeURIComponent(item.id)+'/group',box=document.createElement('details'),title=document.createElement('summary'),host=document.createElement('div');
+    title.textContent=t('groupConsult');box.append(title,host);article.append(box);
+    const element=(tag,text)=>{const node=document.createElement(tag);if(text)node.textContent=text;return node;};
+    let opened=false;
+    box.ontoggle=async()=>{if(!box.open||opened)return;opened=true;
+      async function display(){
+        host.replaceChildren();let state;
+        try{state=await consultationApi(path);}catch(error){
+          if(error.status!==404){host.append(element('p',error.message));return;}
+          let groups;try{groups=(await consultationApi('/groups')).groups||[];}catch(problem){host.append(element('p',problem.message));return;}
+          const select=element('select');select.append(new Option(t('groupChoose'),''));
+          groups.forEach((group,index)=>select.append(new Option(group.contact_name||group.conversation_id,String(index))));
+          const summary=element('textarea');summary.maxLength=2600;summary.value=item.reason||'';summary.setAttribute('aria-label',t('groupSummary'));
+          host.append(element('p',t('groupSummary')),summary,element('p',t('groupChoose')),select,element('p',t('groupAttachments')));
+          const checks=[];for(const message of caseMessages.filter(row=>['image','audio','voice','video','document'].includes(row.message_type))){
+            const label=element('label'),check=element('input');check.type='checkbox';check.value=message.id;
+            label.append(check,document.createTextNode(' '+message.message_type+' · '+i18n.date(message.happened_at||message.created_at)));host.append(label);checks.push(check);
+          }
+          const prepare=element('button',t('groupPrepare'));prepare.type='button';host.append(prepare);
+          prepare.onclick=async()=>{const group=groups[Number(select.value)];if(select.value===''||!group){notice(t('groupChoose'));return;}
+            prepare.disabled=true;try{await consultationApi(path,'POST',{action:'prepare',request_id:crypto.randomUUID(),channel_id:group.channel_id,conversation_id:group.conversation_id,summary:summary.value,confirm_group:true,attachment_ids:checks.filter(c=>c.checked).map(c=>c.value)});await display();}catch(problem){notice(problem.message);prepare.disabled=false;}};
+          return;
+        }
+        if(state.state==='ready'){
+          host.append(element('p',state.destination),element('p',state.prepared_text));
+          const button=element('button',t('groupSend'));button.type='button';host.append(button);
+          button.onclick=async()=>{button.disabled=true;try{await consultationApi(path,'POST',{action:'send',request_id:state.request_id});await display();}catch(problem){notice(problem.message);await display();}};
+        }else {
+          host.append(element('p',state.state==='sent'?t('groupConfirmed'):t('groupUnknown')));
+          const refresh=element('button',t('refresh'));refresh.type='button';refresh.onclick=()=>void display();host.append(refresh);
+        }
+        for(const reply of state.replies||[]){
+          const section=element('section'),heading=element('b',t('groupReply')),body=element('p',reply.body),draft=element('textarea'),save=element('button',t('save')),hint=element('small',t('draftNotSent'));
+          draft.value=state.draft_reply_id===reply.message_id?state.customer_draft||'':'';draft.maxLength=4000;draft.setAttribute('aria-label',t('customerDraft'));save.type='button';save.dataset.groupDraft='true';
+          save.onclick=async()=>{save.disabled=true;try{await consultationApi(path,'POST',{action:'draft',message_id:reply.message_id,draft:draft.value});await display();}catch(problem){notice(problem.message);save.disabled=false;}};
+          section.append(heading,body,element('p',t('customerDraft')),draft,save,hint);host.append(section);
+        }
+      }
+      await display();
+    };
   }
   function renderFocusedAttachment(result){
     const item=result.focus_message,ticket=result.ticket,host=$('supportDetail');if(!item||!host)return;
     const section=document.createElement('section'),label=document.createElement('p');section.dataset.focusedAttachment='true';
     label.textContent=t('attachment')+' · '+String(item.message_type||'');section.append(label);
     const status=document.createElement('small');status.setAttribute('role','status');
+    if(item.media_evidence_context){const details=document.createElement('details'),summary=document.createElement('summary'),text=document.createElement('p');summary.textContent=t('savedMediaEvidence');text.textContent=item.media_evidence_context;text.setAttribute('data-user-content','');details.append(summary,text);section.append(details);}
     if(window.tenantOperator?.hasRight('dialogs')&&item.external_id&&ticket.lead_id){
       const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=t('downloadAttachment');
       button.onclick=()=>{if(!window.tenantDownloadAttachment){status.textContent=t('error');return;}

@@ -197,12 +197,18 @@ def detail(profile, ticket_id, before=None, message_id=None):
             rows = cur.fetchall()
             focus_message = None
             if message_id:
-                cur.execute('''SELECT id,external_id,message_type FROM saas_crm_messages
+                cur.execute('''SELECT id,external_id,message_type,channel,body,raw FROM saas_crm_messages
                   WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid
                     AND message_type IN ('image','audio','voice','video','document')''',
                   (tenant,ticket['lead_id'],'connect:'+str(ticket['channel_id']),identifier(message_id)))
                 focus_message=cur.fetchone()
                 if not focus_message:raise TenantLinearError('Вложение недоступно в этом обращении.',404)
+                focus_message=dict(focus_message)
+                # Reuse only the existing exact-source receipt lookup. This is
+                # read-only; it neither downloads media nor invokes a model.
+                from tenant_media_evidence import annotate_rows
+                annotate_rows(cur,tenant,[focus_message])
+                focus_message.pop('raw',None);focus_message.pop('body',None);focus_message.pop('channel',None)
             cur.execute('''SELECT e.id,e.status,e.result,e.error_code,e.created_at,a.name AS expert_name,r.model
               FROM saas_ai_expert_tasks e JOIN saas_ai_agents a ON a.tenant_id=e.tenant_id AND a.id=e.expert_agent_id
               JOIN saas_ai_agent_runs r ON r.tenant_id=e.tenant_id AND r.id=e.id

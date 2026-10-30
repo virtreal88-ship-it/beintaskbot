@@ -139,6 +139,8 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('support-tickets/{ticket_id}', support_handler(member, origin, logger, 'ticket'), ('GET', 'PATCH')),
         ('support-tickets/{ticket_id}/summary', support_handler(member, origin, logger, 'summary'), ('POST',)),
         ('internal-consultations', support_handler(member, origin, logger, 'consultation'), ('GET','POST')),
+        ('internal-consultations/groups', support_handler(member, origin, logger, 'consultation_groups'), ('GET',)),
+        ('internal-consultations/{consultation_id}/group', support_handler(member, origin, logger, 'consultation_group'), ('GET','POST')),
         ('internal-consultations/{consultation_id}/reply', support_handler(member, origin, logger, 'consultation_reply'), ('POST',)),
         ('handoffs', ai_agents_handler(member, origin, logger, 'handoffs'), ('GET',)),
         ('channels', ai_state_handler(member, logger, 'channels'), ('GET',)),

@@ -20,6 +20,12 @@ def handler(member_from_request, origin, logger, resource):
                 elif resource=='consultation':
                     from tenant_internal_consultations import listing as consultation_listing
                     result=await asyncio.to_thread(consultation_listing,profile,request.query.get('case_id',''))
+                elif resource=='consultation_group':
+                    from tenant_consultation_group import read
+                    result=await asyncio.to_thread(read,profile,request.match_info['consultation_id'])
+                elif resource=='consultation_groups':
+                    from tenant_consultation_group import destinations
+                    result=await asyncio.to_thread(destinations,profile)
                 else:
                     result = await asyncio.to_thread(detail,profile,request.match_info['ticket_id'],request.query.get('before'),request.query.get('message_id'))
             else:
@@ -46,6 +52,13 @@ def handler(member_from_request, origin, logger, resource):
                 elif resource=='consultation_reply' and request.method=='POST':
                     from tenant_internal_consultations import reply
                     result=await asyncio.to_thread(reply,profile,request.match_info['consultation_id'],payload)
+                elif resource=='consultation_group' and request.method=='POST':
+                    from tenant_consultation_group import prepare,dispatch,save_draft
+                    action=payload.pop('action',None);key=request.match_info['consultation_id']
+                    if action=='prepare':result=await asyncio.to_thread(prepare,profile,key,payload)
+                    elif action=='send' and set(payload)=={'request_id'}:result=await asyncio.to_thread(dispatch,profile,key,payload['request_id'])
+                    elif action=='draft':result=await asyncio.to_thread(save_draft,profile,key,payload)
+                    else:raise TenantLinearError('Некорректный запрос.',400)
                 else: raise TenantLinearError('Метод не поддерживается.',405)
             return web.json_response({'success':True,'result':result},headers=headers)
         except TenantLinearError as error:
