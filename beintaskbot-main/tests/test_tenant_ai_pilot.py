@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import tenant_ai_pilot as pilot
 from tenant_linear_policy import TenantLinearError
@@ -153,6 +153,108 @@ def test_owner_approval_is_a_separate_step_and_not_a_runtime_switch(monkeypatch)
         assert not pilot._enabled('AI_AGENTS_PILOT_SCOPE_ENABLED')
         assert not pilot._enabled('AI_AGENTS_AUTO_SEND_ENABLED')
     assert pilot.CONFIRMATION_MINUTES <= 15
+
+
+def _exact_pilot_env(**extra):
+    return {
+        'AI_AGENTS_PILOT_TENANT_ID': pilot.SCOPED_LIVE_TENANT,
+        'AI_AGENTS_PILOT_CHANNEL_ID': pilot.SCOPED_LIVE_CHANNEL,
+        'AI_AGENTS_PILOT_CONVERSATION_ID': pilot.SCOPED_LIVE_CUSTOMER,
+        'AI_AGENTS_PILOT_GROUP_CONVERSATION_ID': pilot.SCOPED_LIVE_GROUP,
+        'AI_AGENTS_SCOPED_LIVE_ENABLED': 'false',
+        'AI_AGENTS_PILOT_SCOPE_ENABLED': 'false',
+        **extra,
+    }
+
+
+def _pilot_resume_row(state='human'):
+    return {
+        'conversation_id': pilot.SCOPED_LIVE_CUSTOMER,
+        'conversation_state': state,
+        'conversation_ai_enabled': True,
+        'conversation_manual_hold': False,
+        'active': True,
+        'integration_status': 'connected',
+        'tenant_status': 'active',
+        'company_enabled': True,
+        'emergency_stop': False,
+        'agent_id': pilot.SCOPED_LIVE_AGENT,
+        'agent_enabled': True,
+        'agent_mode': 'manual',
+        'exact_agent_scope': True,
+    }
+
+
+def test_owner_can_resume_only_exact_pilot_dialog_while_both_guards_are_off(monkeypatch):
+    class Cursor:
+        def __init__(self): self.executed=[]
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def execute(self, sql, params=None): self.executed.append((sql,params))
+        def fetchone(self): return {'role':'owner'}
+    class Connection:
+        def __init__(self): self.cur=Cursor(); self.committed=False
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def cursor(self): return self.cur
+        def commit(self): self.committed=True
+    conn=Connection()
+    resumed=[]
+    monkeypatch.setattr('tenant_platform._connect',lambda:conn)
+    monkeypatch.setattr('tenant_ai_agents_store._authorize',lambda cur,profile:(pilot.SCOPED_LIVE_TENANT,7))
+    monkeypatch.setattr(pilot,'_snapshot',lambda *_:(_pilot_resume_row(),'fingerprint'))
+    monkeypatch.setattr('tenant_ai_agents_store.set_conversation_state',lambda *args:resumed.append(args))
+    monkeypatch.setattr(pilot,'preflight',lambda _profile:{'scope_configured':True,'handoff':'active'})
+    with patch.dict('os.environ',_exact_pilot_env(),clear=True):
+        result=pilot.resume_pilot_dialog({'tenant_id':pilot.SCOPED_LIVE_TENANT,'telegram_id':7},{'confirmed':True})
+    assert result['handoff']=='active' and conn.committed
+    assert len(resumed)==1
+    assert resumed[0][1:]==(pilot.SCOPED_LIVE_CUSTOMER,'active','pilot_preparation_resume','connect',pilot.SCOPED_LIVE_CHANNEL)
+
+
+def test_pilot_preparation_resume_rejects_admin_or_live_guard(monkeypatch):
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def execute(self, *_): pass
+        def fetchone(self): return {'role':'admin'}
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def cursor(self): return Cursor()
+    monkeypatch.setattr('tenant_platform._connect',lambda:Connection())
+    monkeypatch.setattr('tenant_ai_agents_store._authorize',lambda *_:(pilot.SCOPED_LIVE_TENANT,7))
+    monkeypatch.setattr(pilot,'_snapshot',lambda *_:(_pilot_resume_row(),'fingerprint'))
+    with patch.dict('os.environ',_exact_pilot_env(),clear=True):
+        try: pilot.resume_pilot_dialog({'tenant_id':pilot.SCOPED_LIVE_TENANT,'telegram_id':7},{'confirmed':True})
+        except TenantLinearError as error: assert error.status==403
+        else: raise AssertionError('only the database-verified owner may resume')
+    with patch.dict('os.environ',_exact_pilot_env(AI_AGENTS_SCOPED_LIVE_ENABLED='true'),clear=True):
+        try: pilot.resume_pilot_dialog({'tenant_id':pilot.SCOPED_LIVE_TENANT,'telegram_id':7},{'confirmed':True})
+        except TenantLinearError as error: assert error.status==409
+        else: raise AssertionError('preparation resume must reject a live pilot guard')
+
+
+def test_pilot_preparation_resume_preserves_legacy_route_conflict(monkeypatch):
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def execute(self, *_): pass
+        def fetchone(self): return {'role':'owner'}
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def cursor(self): return Cursor()
+        def commit(self): pass
+    monkeypatch.setattr('tenant_platform._connect',lambda:Connection())
+    monkeypatch.setattr('tenant_ai_agents_store._authorize',lambda *_:(pilot.SCOPED_LIVE_TENANT,7))
+    monkeypatch.setattr(pilot,'_snapshot',lambda *_:(_pilot_resume_row(),'fingerprint'))
+    conflict=TenantLinearError('Legacy dialogue channel is ambiguous; manual resolution is required.',409)
+    monkeypatch.setattr('tenant_ai_agents_store.set_conversation_state',Mock(side_effect=conflict))
+    with patch.dict('os.environ',_exact_pilot_env(),clear=True):
+        try: pilot.resume_pilot_dialog({'tenant_id':pilot.SCOPED_LIVE_TENANT,'telegram_id':7},{'confirmed':True})
+        except TenantLinearError as error: assert error.status==409 and 'ambiguous' in str(error)
+        else: raise AssertionError('the existing exact-route conflict must be preserved')
 
 
 def test_admin_attestation_is_short_lived_and_clears_prior_owner_approval(monkeypatch):
