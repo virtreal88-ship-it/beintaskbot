@@ -14,6 +14,7 @@ SCOPED_LIVE_TENANT = 'e09a5c24-093f-4141-992d-532052e00c90'
 SCOPED_LIVE_CHANNEL = '96863d75-d272-4c93-a25e-ffb2b16ecae3'
 SCOPED_LIVE_CUSTOMER = '994502072240@s.whatsapp.net'
 SCOPED_LIVE_GROUP = '120363431915456655@g.us'
+SCOPED_LIVE_AGENT = '67da1058-2ffb-48fa-bfd9-d3d01c1990d1'
 
 
 def schema(cur):
@@ -63,8 +64,10 @@ def configured_group_scope():
     group = str(os.environ.get('AI_AGENTS_PILOT_GROUP_CONVERSATION_ID') or '').strip()
     # Do not accept arbitrary groups from a request or a database listing.
     from tenant_ai_group_coordination import group_jid
+    customer=scope['conversation_id']
+    local=customer[:-len('@s.whatsapp.net')] if customer.endswith('@s.whatsapp.net') else ''
     if (scope['tenant_id'] != SCOPED_LIVE_TENANT or scope['channel_id'] != SCOPED_LIVE_CHANNEL
-            or scope['conversation_id'] != SCOPED_LIVE_CUSTOMER or group != SCOPED_LIVE_GROUP
+            or not local.isdigit() or not 8 <= len(local) <= 15 or group != SCOPED_LIVE_GROUP
             or not group_jid(group)):
         return None
     return {**scope, 'conversation_id': group}
@@ -88,10 +91,9 @@ def is_pilot_customer_target(tenant_id, channel_id, conversation_id):
     return bool(scoped_live_enabled() and scope
         and str(tenant_id) == SCOPED_LIVE_TENANT
         and str(channel_id) == SCOPED_LIVE_CHANNEL
-        and str(conversation_id) == SCOPED_LIVE_CUSTOMER
+        and str(conversation_id) == scope['conversation_id']
         and scope['tenant_id'] == SCOPED_LIVE_TENANT
-        and scope['channel_id'] == SCOPED_LIVE_CHANNEL
-        and scope['conversation_id'] == SCOPED_LIVE_CUSTOMER)
+        and scope['channel_id'] == SCOPED_LIVE_CHANNEL)
 
 
 def manual_live_job(job):
@@ -403,6 +405,57 @@ def approve_pilot(profile, data):
     return preflight(profile)
 
 
+def resume_pilot_dialog(profile, data):
+    """Owner-only, exact-dialog preparation resume while both pilot guards are off.
+
+    This changes only the configured customer conversation state. The existing
+    Connect resume path still enforces unique route resolution and never queues
+    old messages. It cannot be used to arm either runtime guard.
+    """
+    if not isinstance(data, dict) or data != {'confirmed': True}:
+        raise TenantLinearError('Explicit confirmation is required to resume the configured test dialogue.', 400)
+    if (_enabled('AI_AGENTS_SCOPED_LIVE_ENABLED')
+            or _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED')):
+        raise TenantLinearError('Preparation resume is available only while both pilot guards are disabled.', 409)
+    scope = configured_scope()
+    group_scope = configured_group_scope()
+    if (not scope or not group_scope or scope['tenant_id'] != SCOPED_LIVE_TENANT
+            or scope['channel_id'] != SCOPED_LIVE_CHANNEL
+            or group_scope['conversation_id'] != SCOPED_LIVE_GROUP):
+        raise TenantLinearError('The exact two-target pilot scope is not configured.', 409)
+
+    from tenant_platform import _connect
+    from tenant_ai_agents_store import _authorize, set_conversation_state
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            tenant, actor = _authorize(cur, profile)
+            if str(tenant) != SCOPED_LIVE_TENANT:
+                raise TenantLinearError('The configured pilot belongs to another company.', 403)
+            cur.execute('''SELECT role FROM saas_tenant_members
+              WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE FOR SHARE''', (tenant, actor))
+            if (cur.fetchone() or {}).get('role') != 'owner':
+                raise TenantLinearError('Only the company owner can resume the configured pilot dialogue.', 403)
+            row, _fingerprint = _snapshot(cur, tenant, scope)
+            if (row.get('conversation_id') != scope['conversation_id']
+                    or row.get('active') is not True or row.get('integration_status') != 'connected'
+                    or row.get('tenant_status') != 'active' or row.get('company_enabled') is not True
+                    or row.get('emergency_stop') is True
+                    or row.get('conversation_ai_enabled') is not True
+                    or row.get('conversation_manual_hold') is True
+                    or row.get('conversation_state') not in {'human', 'paused'}
+                    or str(row.get('agent_id') or '') != SCOPED_LIVE_AGENT
+                    or row.get('agent_enabled') is not True or row.get('agent_mode') != 'manual'
+                    or not row.get('exact_agent_scope')):
+                raise TenantLinearError('The exact test dialogue is not eligible for preparation resume.', 409)
+        conn.commit()
+
+    # This established path rechecks the exact provider route under its dialog
+    # lock. In particular, it keeps the existing legacy ambiguity 409 intact.
+    set_conversation_state(profile, scope['conversation_id'], 'active',
+        'pilot_preparation_resume', 'connect', scope['channel_id'])
+    return preflight(profile)
+
+
 def preflight(profile):
     """Read tenant-owned pilot state; no writes, AI calls, or KWID API are used."""
     from tenant_platform import _connect
@@ -414,7 +467,7 @@ def preflight(profile):
             group_scope=configured_group_scope()
             scoped_live=scoped_live_enabled()
             result = {'ready': False, 'provider': 'connect', 'pilot_guard_enabled': _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED') or scoped_live,
-                    'scoped_live':{'enabled':scoped_live,'customer_target':SCOPED_LIVE_CUSTOMER,
+                    'scoped_live':{'enabled':scoped_live,'customer_target':scope['conversation_id'] if scope else '',
                         'developer_group_target':SCOPED_LIVE_GROUP if group_scope else '',
                         'mode_override':'exact pilot only' if scoped_live else 'disabled'},
                     'scope_configured': bool(scope), 'competing_handler': {'state':'unknown','source':'manual_confirmation_required'},

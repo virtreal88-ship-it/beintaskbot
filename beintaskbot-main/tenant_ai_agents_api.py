@@ -228,6 +228,9 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 elif resource == 'pilot_kwid_confirmation' and method == 'POST':
                     from tenant_ai_pilot import confirm_kwid_disabled
                     result = await asyncio.to_thread(confirm_kwid_disabled, profile, payload)
+                elif resource == 'pilot_resume' and method == 'POST':
+                    from tenant_ai_pilot import resume_pilot_dialog
+                    result = await asyncio.to_thread(resume_pilot_dialog, profile, payload)
                 elif resource == 'pilot_owner_approval' and method == 'POST':
                     from tenant_ai_pilot import approve_pilot
                     result = await asyncio.to_thread(approve_pilot, profile, payload)
