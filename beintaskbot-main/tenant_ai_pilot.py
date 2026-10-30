@@ -364,8 +364,15 @@ def pilot_group_handoff_allowed(job, connection=None):
             if not _lock_scope(cur, tenant, scope):
                 return False
             row, fingerprint = _snapshot(cur, tenant, scope)
-            if (not fingerprint or row.get('conversation_state') != 'human'
-                    or not str(row.get('handoff_reason') or '').startswith('ai_developer_consultation:')
+            handoff_reason=str(row.get('handoff_reason') or '')
+            group_turn_active=(row.get('conversation_state')=='active'
+                and handoff_reason=='pilot_developer_followup'
+                and isinstance(job.get('payload'),dict)
+                and (job['payload'].get('pilot_developer_followup') is True
+                     or job['payload'].get('pilot_customer_case_reply') is True))
+            initial_handoff=(row.get('conversation_state')=='human'
+                and handoff_reason.startswith('ai_developer_consultation:'))
+            if (not fingerprint or not (initial_handoff or group_turn_active)
                     or row.get('conversation_ai_enabled') is not True
                     or row.get('conversation_manual_hold') is True
                     or row.get('active') is not True or row.get('integration_status') != 'connected'
