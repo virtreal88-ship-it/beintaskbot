@@ -1,6 +1,9 @@
 """Same-origin tenant APIs for manual agent configuration and knowledge."""
 import asyncio
+import json
 import os
+from datetime import date, datetime
+from uuid import UUID
 from aiohttp import web
 from tenant_ai_agents_store import (delete_knowledge, restore_knowledge, list_agents,
     list_knowledge, read_settings, save_agent, save_knowledge, save_settings, configuration_options, refresh_configuration_catalog,
@@ -11,6 +14,19 @@ from tenant_linear_policy import TenantLinearError
 from tenant_ai_agent_runtime_flags import (configured as runtime_configured,
     enabled as runtime_flag, staging_mode as runtime_staging_mode)
 from tenant_ai_expert_tools import registry_snapshot
+
+
+def _json_default(value):
+    """Encode database timestamps/UUIDs returned by tenant AI endpoints."""
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    raise TypeError(f'Object of type {type(value).__name__} is not JSON serializable')
+
+
+def _json_dumps(value):
+    return json.dumps(value, ensure_ascii=False, default=_json_default)
 
 
 def _expected(data, profile):
@@ -166,7 +182,7 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                         'duplicate_ids':[item for item in raw.split(',') if item]})
                 else:
                     result = await asyncio.to_thread(list_knowledge, profile, request.query.get('id'))
-                return web.json_response({'success': True, 'result': result}, headers=headers)
+                return web.json_response({'success': True, 'result': result}, headers=headers, dumps=_json_dumps)
             _origin(request, canonical_origin)
             if request.content_length is not None and request.content_length > 6 * 1024 * 1024:
                 raise TenantLinearError('Sorğu həddən artıq böyükdür.', 413)
@@ -270,7 +286,7 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     raise TenantLinearError('Əməliyyat dəstəklənmir.', 405)
             if resource == 'settings':
                 result = _attach_runtime_status(result)
-            return web.json_response({'success': True, 'result': result}, headers=headers)
+            return web.json_response({'success': True, 'result': result}, headers=headers, dumps=_json_dumps)
         except TenantLinearError as error:
             field = validation_field(error)
             return web.json_response({'success': False, 'error': str(error),

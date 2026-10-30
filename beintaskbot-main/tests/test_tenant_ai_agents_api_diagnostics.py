@@ -1,12 +1,15 @@
 import ast
 import json
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 from unittest.mock import Mock, patch
 
 from aiohttp import web
 from tenant_linear_policy import TenantLinearError
+from tenant_ai_agents_api import _json_dumps
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +31,7 @@ def load_handler(**overrides):
         # the callable inline keeps the dispatch test deterministic on Windows.
         'asyncio': InlineAsyncio,
         'web': web,
+        '_json_dumps': _json_dumps,
         'TenantLinearError': TenantLinearError,
         'list_connect_diagnostics': Mock(return_value={
             'system': {'tenant_id': 'tenant-from-verified-session'},
@@ -216,12 +220,20 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
 
     def test_pilot_preflight_is_get_only_and_uses_verified_profile(self):
         profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}
+        confirmed_at = datetime(2026, 10, 30, 21, 32, tzinfo=timezone.utc)
+        expires_at = datetime(2026, 10, 30, 21, 47, tzinfo=timezone.utc)
         handler, _ = load_handler(_origin=lambda *_args: None, _json_body=lambda _request: True,
             _expected=lambda *_args: None)
-        with patch('tenant_ai_pilot.preflight', return_value={'ready':False,'blockers':['exact_pilot_scope_missing']}) as preflight:
+        with patch('tenant_ai_pilot.preflight', return_value={'ready':False,'blockers':[],
+                'scope': {'tenant_id': UUID('00000000-0000-0000-0000-000000000101')},
+                'kwid_confirmation':{'state':'confirmed','confirmed_at':confirmed_at,'expires_at':expires_at}}) as preflight:
             response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
                 Mock(), 'pilot_preflight')(SimpleNamespace(method='GET', headers={}, query={})))
         self.assertEqual(response.status, 200)
+        payload = json.loads(response.text)
+        self.assertEqual(payload['result']['kwid_confirmation']['confirmed_at'], confirmed_at.isoformat())
+        self.assertEqual(payload['result']['kwid_confirmation']['expires_at'], expires_at.isoformat())
+        self.assertEqual(payload['result']['scope']['tenant_id'], '00000000-0000-0000-0000-000000000101')
         preflight.assert_called_once_with(profile)
 
     def test_kwid_confirmation_uses_verified_profile_and_ignores_browser_scope(self):
@@ -235,10 +247,16 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
                         'expected_user_id':profile['telegram_id']}
         handler, _ = load_handler(_origin=lambda *_args: None, _json_body=lambda _request: True,
             _expected=lambda *_args: None)
-        with patch('tenant_ai_pilot.confirm_kwid_disabled', return_value={'ready':False}) as confirm:
+        confirmed_at = datetime(2026, 10, 30, 21, 32, tzinfo=timezone.utc)
+        expires_at = datetime(2026, 10, 30, 21, 47, tzinfo=timezone.utc)
+        with patch('tenant_ai_pilot.confirm_kwid_disabled', return_value={'ready':False,
+                'kwid_confirmation':{'state':'confirmed','confirmed_at':confirmed_at,'expires_at':expires_at}}) as confirm:
             response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
                 Mock(), 'pilot_kwid_confirmation')(Request()))
         self.assertEqual(response.status, 200, response.text)
+        payload = json.loads(response.text)
+        self.assertEqual(payload['result']['kwid_confirmation']['confirmed_at'], confirmed_at.isoformat())
+        self.assertEqual(payload['result']['kwid_confirmation']['expires_at'], expires_at.isoformat())
         self.assertEqual(confirm.call_args.args, (profile, {'confirmed':True,'tenant_id':'attacker-tenant',
             'channel_id':'attacker-channel','conversation_id':'attacker-dialog'}))
 
