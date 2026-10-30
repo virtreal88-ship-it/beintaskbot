@@ -197,6 +197,9 @@ def detail(profile, ticket_id, before=None, message_id=None):
             rows = cur.fetchall()
             focus_message = None
             if message_id:
+                # Attachment-derived observations require the same current
+                # dialog permission as opening the protected attachment bytes.
+                _authorize(cur,profile,'dialogs')
                 cur.execute('''SELECT id,external_id,message_type,channel,body,raw FROM saas_crm_messages
                   WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid
                     AND message_type IN ('image','audio','voice','video','document')''',

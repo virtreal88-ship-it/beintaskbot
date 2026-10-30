@@ -90,6 +90,10 @@ def test_selected_attachment_must_belong_to_exact_ticket_conversation(db,monkeyp
       VALUES(%s::uuid,%s::uuid,99,'connect:other-group-image',%s,'incoming','image')""",(other,A,'connect:'+CA));db.commit()
     with pytest.raises(TenantLinearError):tickets.detail(PROFILE,case,None,other)
     with pytest.raises(TenantLinearError):tickets.detail({'tenant_id':B,'telegram_id':22},case,None,image)
+    db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions) VALUES(%s::uuid,33,'operator','Support only',%s::jsonb)",(A,'["support"]'));db.commit()
+    assert tickets.detail({'tenant_id':A,'telegram_id':33},case)['ticket']['id']==case
+    with pytest.raises(TenantLinearError) as denied:tickets.detail({'tenant_id':A,'telegram_id':33},case,None,image)
+    assert denied.value.status==403
 
 def test_focused_attachment_reuses_only_matching_saved_receipt_without_ai(db,monkeypatch):
     import tenant_media_evidence as evidence
