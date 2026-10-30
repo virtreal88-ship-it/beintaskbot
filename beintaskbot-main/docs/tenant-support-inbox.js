@@ -5,7 +5,7 @@
   const statuses=['new','waiting','in_progress','resolved'];
   const endpoint=(window.TENANT_AI_AGENTS_CONFIG?.endpoint||'/api/platform/ai/')+'support-tickets';
   const consultationEndpoint=endpoint.replace(/support-tickets$/,'internal-consultations');
-  let member=null,epoch=0,listRevision=0,detailRevision=0,members=[],channels=[],selected=null,nextOffset=null,nextBefore=null,rows=[],timer;
+  let member=null,epoch=0,listRevision=0,detailRevision=0,members=[],channels=[],selected=null,nextOffset=null,nextBefore=null,rows=[],timer,directTicketKey='';
   const identity=person=>person?String(person.tenant_id)+':'+String(person.telegram_id):'';
   const allowed=()=>window.tenantOperator?.hasRight('support')||false;
   function notice(text){if($('supportNotice'))$('supportNotice').textContent=text||'';}
@@ -83,6 +83,14 @@
     try{const result=await consultationApi('?case_id='+encodeURIComponent(ticket.id));if(revision!==detailRevision||selected!==ticket.id)return;show(result.consultations);$('consultCreate').onclick=async()=>{const button=$('consultCreate');button.disabled=true;try{await consultationApi('','POST',{case_id:ticket.id,recipient_id:$('consultRecipient').value,reason:$('consultReason').value,evidence:{ticket_id:ticket.id,conversation_id:ticket.conversation_id},request_key:crypto.randomUUID()});await renderConsultations(ticket);}catch(error){notice(error.message);button.disabled=false;}};}catch(error){section.querySelector('#consultRows').textContent=error.message;section.querySelector('#consultCreate').disabled=true;}
   }
   async function open(id){const revision=++detailRevision,version=epoch;try{const result=await api('/'+encodeURIComponent(id));if(revision!==detailRevision)return;renderDetail(result);$('supportDetail').scrollIntoView({behavior:'smooth',block:'start'});}catch(error){if(version===epoch)notice(error.message);}}
+  function openDirectTicket(){
+    if(!member||!allowed())return;
+    const query=new URLSearchParams(location.search),id=query.get('support_ticket_id')||'';
+    if(query.get('view')!=='support'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))return;
+    const key=epoch+':'+id;if(directTicketKey===key)return;
+    install();if(!$('supportDetail'))return;
+    directTicketKey=key;void open(id);
+  }
   async function action(id,path,method,data){const revision=++detailRevision,version=epoch,host=$('supportDetail');host?.querySelectorAll('button').forEach(button=>button.disabled=true);try{const result=await api('/'+encodeURIComponent(id)+path,method,data);if(revision!==detailRevision)return;renderDetail(result);await load();}catch(error){if(version===epoch){notice(error.message);await open(id);}}}
   const mutate=(id,data)=>action(id,'','PATCH',data);
   document.addEventListener('tenant-chat-open',event=>{
@@ -91,9 +99,9 @@
     const button=document.createElement('button');button.type='button';button.className='outline';button.id='supportCreateFromChat';button.textContent=t('createTicket');host.prepend(button);const requestId=crypto.randomUUID();
     button.onclick=async()=>{button.disabled=true;try{await api('','POST',{request_id:requestId,lead_id:lead});if(version!==epoch)return;button.textContent=t('ticketSaved');await load();}catch(error){if(version===epoch){button.textContent=error.message;button.disabled=false;}}};
   });
-  function profileChanged(data){const person=data.member;if(!allowed()||identity(person)!==identity(member)||JSON.stringify(person?.permissions)!==JSON.stringify(member?.permissions)||person?.active!==member?.active){epoch++;listRevision++;detailRevision++;selected=null;rows=[];members=[];channels=[];nextOffset=null;nextBefore=null;if($('supportRows'))$('supportRows').replaceChildren();if($('supportDetail')){$('supportDetail').hidden=true;$('supportDetail').replaceChildren();}badge(0);notice('');}member=person;if(allowed())load();}
+  function profileChanged(data){const person=data.member;if(!allowed()||identity(person)!==identity(member)||JSON.stringify(person?.permissions)!==JSON.stringify(member?.permissions)||person?.active!==member?.active){epoch++;listRevision++;detailRevision++;directTicketKey='';selected=null;rows=[];members=[];channels=[];nextOffset=null;nextBefore=null;if($('supportRows'))$('supportRows').replaceChildren();if($('supportDetail')){$('supportDetail').hidden=true;$('supportDetail').replaceChildren();}badge(0);notice('');}member=person;if(allowed()){load();openDirectTicket();}}
   document.addEventListener('tenant-profile',event=>profileChanged(event.detail));
-  document.addEventListener('tenant-view',event=>{if(event.detail.view==='support')load();});
+  document.addEventListener('tenant-view',event=>{if(event.detail.view==='support'){load();openDirectTicket();}});
   document.addEventListener('tenant-support-changed',()=>load());
   document.addEventListener('tenant-dialog-state',()=>{load();if(selected)open(selected);});
   document.addEventListener('tenant-operator-error',event=>notice(event.detail.message));

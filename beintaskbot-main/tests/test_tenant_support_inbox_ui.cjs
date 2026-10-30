@@ -8,10 +8,10 @@ const profile={tenant_id:'company-a',telegram_id:11,role:'owner'};
 const members=[{telegram_id:11,display_name:'Support'}];
 const response=value=>({ok:true,json:async()=>({success:true,result:value})});
 const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));};
-function setup(fetch){
- const dom=new JSDOM('<section id="view-support"><div id="operatorSupport"></div></section><div id="modalContent"></div>',{url:'https://crm.test/app',runScripts:'outside-only'});
+function setup(fetch,url='https://crm.test/app',rights=true){
+ const dom=new JSDOM('<section id="view-support"><div id="operatorSupport"></div></section><div id="modalContent"></div>',{url,runScripts:'outside-only'});
  dom.window.HTMLElement.prototype.scrollIntoView=function(){};
- dom.window.fetch=fetch;dom.window.tenantOperator={hasRight:()=>true};dom.window.eval(fs.readFileSync(path.join(__dirname,'../docs/tenant-operator-i18n.js'),'utf8'));dom.window.eval(source);return dom;
+ dom.window.fetch=fetch;dom.window.tenantOperator={hasRight:()=>rights};dom.window.eval(fs.readFileSync(path.join(__dirname,'../docs/tenant-operator-i18n.js'),'utf8'));dom.window.eval(source);return dom;
 }
 (async()=>{
  const calls=[];
@@ -59,5 +59,23 @@ function setup(fetch){
  stale.window.document.dispatchEvent(new stale.window.CustomEvent('tenant-profile',{detail:{member:{tenant_id:'company-b',telegram_id:22,role:'owner'}}}));await settle();
  release();await settle();assert.ok(!stale.window.document.querySelector('#supportRows').textContent.includes('Нет связи'));assert.equal(stale.window.document.querySelector('#supportDetail').hidden,true);
  stale.window.close();
+ // An authenticated recipient can open one exact ticket without a shared
+ // actor-specific attachment URL or a list search.
+ const id='a20d59f3-821b-4fcf-a37e-528252d126b5',deepCalls=[];
+ const deep=setup(async(url,init={})=>{
+   deepCalls.push({url,init});
+   if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
+   if(url.startsWith('/api/platform/ai/internal-consultations'))return response({consultations:[]});
+   if(url==='/api/platform/ai/support-tickets/'+id)return response({ticket:{...ticket,id},messages:[],expert_results:[],next_before:null});
+   return response({tickets:[],members,next_offset:null});
+ },'https://crm.test/app?view=support&support_ticket_id='+id);
+ await settle();
+ assert.equal(deepCalls.filter(x=>x.url==='/api/platform/ai/support-tickets/'+id).length,1);
+ assert.match(deep.window.document.querySelector('#supportDetail').textContent,/Нет связи/);
+ assert.equal(deepCalls.filter(x=>x.init.method&&x.init.method!=='GET').length,0);
+ deep.window.close();
+ const deniedCalls=[];
+ const denied=setup(async(url)=>{deniedCalls.push(url);return {ok:true,json:async()=>({member:profile})};},'https://crm.test/app?view=support&support_ticket_id='+id,false);
+ await settle();assert.ok(!deniedCalls.some(url=>url.includes('/support-tickets')));denied.window.close();
  console.log('PASS: inbox renders safely, opens history read-only, filters, assigns, creates manually and rejects stale tenant responses.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
