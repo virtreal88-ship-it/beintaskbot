@@ -186,6 +186,9 @@ def test_employee_recognition_survives_a_canonical_lid(ingest, channels, configu
     assert ingest(later)
     assert db.execute('SELECT raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',
       (A,'connect:'+later['data']['id']))[0]['raw']['verified_employee_id'] == 11
+    assert db.execute('''SELECT state,reason FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id=%s''',(A,CA,LID)) == [
+        {'state':'human','reason':'manager_replied'}]
     assert not db.execute('SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND conversation_id=%s',
                           (A,LID))
     db.commit()
