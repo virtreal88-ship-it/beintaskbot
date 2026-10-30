@@ -456,7 +456,7 @@ def test_first_unknown_outbound_observation_saves_paused_agent_binding(ingest,ch
     db=channels['db']
     state=db.execute("""SELECT agent_id,state,reason FROM saas_ai_conversation_state
       WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s""",(A,CA,JID))[0]
-    assert state=={'agent_id':str(uuid.UUID(int=301)),'state':'paused','reason':'automatic_assignment_pending'}
+    assert {**state,'agent_id':str(state['agent_id'])}=={'agent_id':str(uuid.UUID(int=301)),'state':'paused','reason':'automatic_assignment_pending'}
     assert db.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s AND state IN ('queued','processing')",(A,CA,JID))==[]
     assert channels['send'].call_count==0 and channels['generate'].call_count==0
 

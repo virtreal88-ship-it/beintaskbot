@@ -1,0 +1,305 @@
+"""One-shot, tenant-scoped WhatsApp group delivery for existing consultations.
+
+No model, attachment download, customer send, resolution or agent setting is
+performed here. Provider errors after dispatch are deliberately quarantined.
+"""
+import hashlib
+import re
+import uuid
+from tenant_platform import _connect
+from tenant_linear_policy import TenantLinearError,identifier
+from tenant_operator_access import access,assert_route
+from tenant_ai_agents_store import _audit
+from tenant_ai_group_coordination import group_jid
+from tenant_internal_consultations import schema as consultation_schema
+
+_MARKER=re.compile(r'(?<![A-Za-z0-9])CASE:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![A-Za-z0-9])',re.I)
+
+
+def schema(conn):
+    consultation_schema(conn)
+    with conn.cursor() as cur:
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_consultation_group_deliveries(
+          tenant_id UUID NOT NULL,consultation_id UUID NOT NULL,request_id UUID NOT NULL,case_id UUID NOT NULL,
+          channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,body TEXT NOT NULL,body_hash TEXT NOT NULL,
+          state TEXT NOT NULL,connect_message_id TEXT NULL,provider_message_id TEXT NULL,created_by BIGINT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,consultation_id,request_id),UNIQUE(tenant_id,request_id),
+          FOREIGN KEY(tenant_id,consultation_id) REFERENCES saas_internal_consultations(tenant_id,id) ON DELETE RESTRICT,
+          FOREIGN KEY(tenant_id,case_id) REFERENCES saas_support_tickets(tenant_id,id) ON DELETE RESTRICT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_consultation_group_replies(
+          tenant_id UUID NOT NULL,consultation_id UUID NOT NULL,channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,
+          message_id TEXT NOT NULL,body TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,channel_id,conversation_id,message_id),
+          FOREIGN KEY(tenant_id,consultation_id) REFERENCES saas_internal_consultations(tenant_id,id) ON DELETE RESTRICT)''')
+        cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS customer_draft TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS draft_reply_id TEXT NULL")
+        cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS draft_revision BIGINT NOT NULL DEFAULT 0")
+
+
+def _owner(cur,profile):
+    tenant,actor,policy=access(cur,profile,'support')
+    if policy.profile.get('role')!='owner' or not policy.allows('dialogs'):
+        raise TenantLinearError('Only the company owner with dialog access may send a consultation.',403)
+    return tenant,actor,policy
+
+
+def destinations(profile):
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            tenant,_,policy=_owner(cur,profile)
+            cur.execute('''SELECT c.connect_channel_id::text AS channel_id,c.conversation_id,
+                COALESCE(NULLIF(c.display_name,''),NULLIF(c.contact_name,''),c.conversation_id) AS contact_name,ch.name AS channel_name
+              FROM saas_connect_conversations c JOIN saas_connect_channels ch
+                ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id
+              WHERE c.tenant_id=%s::uuid AND ch.active=TRUE AND c.conversation_id LIKE %s
+              ORDER BY c.last_message_at DESC NULLS LAST LIMIT 200''',(tenant,'%@g.us'))
+            return {'groups':[dict(row) for row in cur.fetchall() if group_jid(row['conversation_id'])]}
+
+
+def prepare(profile,consultation_id,data):
+    if not isinstance(data,dict) or set(data)!={'request_id','channel_id','conversation_id','summary','confirm_group','attachment_ids'}:
+        raise TenantLinearError('Invalid consultation request.',400)
+    if data.get('confirm_group') is not True:raise TenantLinearError('Confirm the destination group.',409)
+    request_id=identifier(data['request_id']);channel=identifier(data['channel_id']);group=str(data['conversation_id'] or '')
+    if not group_jid(group):raise TenantLinearError('A group destination is required.',400)
+    summary=data['summary']
+    if not isinstance(summary,str) or not summary.strip() or len(summary)>2600:raise TenantLinearError('A short consultation summary is required.',400)
+    if not isinstance(data['attachment_ids'],list) or len(data['attachment_ids'])>10:
+        raise TenantLinearError('Invalid attachment selection.',400)
+    attachment_ids=[identifier(value) for value in data['attachment_ids']]
+    if len(set(attachment_ids))!=len(attachment_ids):raise TenantLinearError('Duplicate attachment selection.',400)
+    key=identifier(consultation_id)
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            tenant,actor,policy=_owner(cur,profile)
+            # A client request UUID must never be mistaken for AI-run origin
+            # when Connect later observes the signed outbound echo.
+            cur.execute('''SELECT 1 FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND id=%s::uuid
+              UNION ALL SELECT 1 FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid LIMIT 1''',
+              (tenant,request_id,tenant,request_id))
+            if cur.fetchone():raise TenantLinearError('Request identity is already in use.',409)
+            cur.execute('''SELECT c.id,c.case_id,c.channel_id,c.conversation_id,c.status,t.status AS ticket_status
+              FROM saas_internal_consultations c JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+              WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid FOR UPDATE OF c,t''',(tenant,key));consult=cur.fetchone()
+            if not consult:raise TenantLinearError('Consultation is unavailable.',404)
+            if consult['status']=='closed' or consult['ticket_status']=='resolved':raise TenantLinearError('Consultation is closed.',409)
+            source=assert_route(cur,tenant,policy,'connect',consult['conversation_id'],str(consult['channel_id']))
+            assert_route(cur,tenant,policy,'connect',group,channel)
+            # The link contains no credentials and opens under the recipient's
+            # own CRM session. Attachment access remains separately authorized.
+            case_id=str(consult['case_id'])
+            links=[]
+            for message_id in attachment_ids:
+                cur.execute('''SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid
+                  AND kommo_lead_id=%s AND channel=%s AND message_type IN ('image','audio','voice','video','document')''',
+                  (tenant,message_id,source['lead_id'],'connect:'+str(consult['channel_id'])))
+                if not cur.fetchone():raise TenantLinearError('Attachment is unavailable in this conversation.',404)
+                links.append('https://crm.pro.az/app?view=support&support_ticket_id='+case_id+'&support_ticket_message_id='+message_id)
+            body=('CASE:'+key+'\n'+summary.strip()+'\n\n'
+                  'https://crm.pro.az/app?view=support&support_ticket_id='+case_id+
+                  (('\n\nƏlavələr (CRM-də giriş və icazə tələb olunur):\n'+'\n'.join(links)) if links else '')+
+                  '\nCavabda CASE:'+key+' qeyd edin.')
+            # Connect validates the JavaScript string length before dispatch.
+            if len(body.encode('utf-16-le'))//2>4096:
+                raise TenantLinearError('Сократите сводку или выберите меньше вложений.',400)
+            digest=hashlib.sha256(body.encode()).hexdigest()
+            cur.execute('''SELECT * FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid
+              ORDER BY created_at,request_id FOR UPDATE''',(tenant,key));previous=cur.fetchall()
+            old=next((r for r in previous if str(r['request_id'])==request_id),None)
+            if old:
+                if str(old['channel_id'])!=channel or old['conversation_id']!=group or old['body_hash']!=digest:
+                    raise TenantLinearError('This request already has a different delivery.',409)
+                return {'consultation_id':key,'case_id':str(consult['case_id']),'state':old['state'],'created':False}
+            if previous and any(str(r['channel_id'])!=channel or r['conversation_id']!=group for r in previous):
+                raise TenantLinearError('The consultation group cannot be changed.',409)
+            if any(r['state'] not in {'sent','blocked'} for r in previous):
+                raise TenantLinearError('An earlier delivery needs review before another message.',409)
+            last=previous[-1] if previous else {}
+            cur.execute('''INSERT INTO saas_consultation_group_deliveries(tenant_id,consultation_id,request_id,case_id,channel_id,conversation_id,body,body_hash,state,created_by,customer_draft,draft_reply_id,draft_revision)
+              VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,'ready',%s,%s,%s,%s)''',
+              (tenant,key,request_id,consult['case_id'],channel,group,body,digest,actor,last.get('customer_draft') or '',last.get('draft_reply_id'),last.get('draft_revision') or 0))
+            _audit(cur,tenant,actor,'consultation_group_prepared','consultation',key,{'request_id':request_id,'channel_id':channel})
+        conn.commit()
+    return {'consultation_id':key,'case_id':str(consult['case_id']),'state':'ready','created':True}
+
+
+def dispatch(profile,consultation_id,request_id):
+    from tenant_connect_transport import connect_route,send_group_with_receipt
+    key=identifier(consultation_id);request_id=identifier(request_id)
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            tenant,actor,policy=_owner(cur,profile)
+            cur.execute('''SELECT c.channel_id,c.conversation_id,c.status,t.status AS ticket_status FROM saas_internal_consultations c
+              JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+              WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid FOR UPDATE OF c,t''',(tenant,key));consult=cur.fetchone()
+            if not consult or consult['status']=='closed' or consult['ticket_status']=='resolved':raise TenantLinearError('Consultation is closed.',409)
+            cur.execute('SELECT * FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid FOR UPDATE',(tenant,key,request_id));row=cur.fetchone()
+            if not row or str(row['request_id'])!=request_id:raise TenantLinearError('Delivery is unavailable.',404)
+            if row['state']=='sent':return {'state':'sent','message_id':row['connect_message_id']}
+            if row['state']!='ready':raise TenantLinearError('Delivery outcome is unresolved; inspect it before retrying.',409)
+            assert_route(cur,tenant,policy,'connect',consult['conversation_id'],str(consult['channel_id']))
+            group=assert_route(cur,tenant,policy,'connect',row['conversation_id'],str(row['channel_id']))
+            route=connect_route(cur,tenant,int(group['lead_id']))
+            if not route or route['channel_id']!=str(row['channel_id']) or route['conversation_id']!=row['conversation_id']:
+                raise TenantLinearError('Destination group changed or is unavailable.',409)
+            cur.execute("UPDATE saas_consultation_group_deliveries SET state='sending',updated_at=now() WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid",(tenant,key,request_id))
+            body=row['body']
+        conn.commit()
+    attempted=False
+    try:
+      with _connect() as conn:
+        with conn.cursor() as cur:
+            # Hold the same group/dialogue fence as the normal Connect sender
+            # across the provider call; never change the group's AI state.
+            from tenant_ai_dialog_scope import lock_dialog
+            from tenant_ai_group_coordination import read as group_state
+            from tenant_platform import _json
+            lock_dialog(cur,tenant,'connect',str(row['channel_id']),row['conversation_id'])
+            _tenant,_actor,current_policy=_owner(cur,profile)
+            assert_route(cur,tenant,current_policy,'connect',consult['conversation_id'],str(consult['channel_id']))
+            current_group=assert_route(cur,tenant,current_policy,'connect',row['conversation_id'],str(row['channel_id']))
+            state=group_state(cur,tenant,row['conversation_id'])
+            cur.execute("""SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect'
+              AND conversation_id=%s AND state IN ('queued','processing') LIMIT 1""",(tenant,row['conversation_id']))
+            if state.get('state') not in {'human','paused'} or cur.fetchone():
+                raise TenantLinearError('Группа должна быть остановлена без активных AI-заданий.',409)
+            current_route=connect_route(cur,tenant,int(current_group['lead_id']))
+            if not current_route or current_route['channel_id']!=str(row['channel_id']) or current_route['conversation_id']!=row['conversation_id']:
+                raise TenantLinearError('Destination group changed or is unavailable.',409)
+            attempted=True;receipt=send_group_with_receipt(current_route,body,request_id)
+            cur.execute("""UPDATE saas_consultation_group_deliveries SET state='sent',connect_message_id=%s,provider_message_id=%s,updated_at=now()
+              WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='sending' RETURNING consultation_id""",(receipt['message_id'],receipt['external_message_id'],tenant,key,request_id))
+            if not cur.fetchone():raise TenantLinearError('Delivery receipt needs review.',409)
+            cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,raw)
+              VALUES(%s::uuid,%s::uuid,%s,%s,'outgoing',%s,'Operator',%s,'text',%s::jsonb)
+              ON CONFLICT(tenant_id,external_id) DO NOTHING RETURNING id''',
+              (str(uuid.uuid4()),tenant,current_group['lead_id'],'connect:'+receipt['message_id'],
+               'connect:'+str(row['channel_id']),body,_json({'source':'connect','consultation_outbound':True})))
+            if not cur.fetchone():raise TenantLinearError('Delivery receipt needs review.',409)
+            _audit(cur,tenant,actor,'consultation_group_sent','consultation',key,{'request_id':request_id})
+            # A prior inbound event was persisted before the receipt existed.
+            # Revisit only matching text in the exact group since preparation.
+            cur.execute('SAVEPOINT consultation_reconcile')
+            try:
+                cur.execute('''SELECT external_id,body,raw FROM saas_crm_messages
+                  WHERE tenant_id=%s::uuid AND channel=%s AND kommo_lead_id=%s
+                    AND direction='incoming' AND message_type='text' AND created_at >= %s
+                    AND (raw->>'quotedExternalMessageId'=%s OR body ILIKE %s)''',
+                  (tenant,'connect:'+str(row['channel_id']),group['lead_id'],row['created_at'],
+                   receipt['external_message_id'],'%CASE:'+key+'%'))
+                messages=cur.fetchall()
+                for message in messages:
+                    raw=message.get('raw') or {}
+                    if not isinstance(raw,dict):continue
+                    record_group_reply(cur,tenant,str(row['channel_id']),row['conversation_id'],
+                      str(raw.get('id') or message['external_id']),message['body'],raw.get('quotedExternalMessageId'))
+                cur.execute('RELEASE SAVEPOINT consultation_reconcile')
+            except Exception:
+                cur.execute('ROLLBACK TO SAVEPOINT consultation_reconcile')
+                cur.execute('RELEASE SAVEPOINT consultation_reconcile')
+                import logging
+                logging.getLogger(__name__).warning('Consultation reply needs reconciliation; delivery receipt preserved')
+        conn.commit()
+    except Exception:
+        with _connect() as conn:
+            with conn.cursor() as cur:cur.execute("UPDATE saas_consultation_group_deliveries SET state=%s,updated_at=now() WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='sending'",('unknown' if attempted else 'blocked',tenant,key,request_id))
+            conn.commit()
+        if not attempted:raise TenantLinearError('Группа недоступна для безопасной отправки; проверьте её состояние.',409) from None
+        raise TenantLinearError('Delivery outcome is unknown; do not resend.',503) from None
+    return {'state':'sent','message_id':receipt['message_id']}
+
+
+def read(profile,consultation_id):
+    key=identifier(consultation_id)
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            tenant,_,policy=_owner(cur,profile)
+            cur.execute('''SELECT d.*,c.channel_id AS source_channel,c.conversation_id AS source_conversation
+              FROM saas_consultation_group_deliveries d JOIN saas_internal_consultations c
+                ON c.tenant_id=d.tenant_id AND c.id=d.consultation_id
+              WHERE d.tenant_id=%s::uuid AND d.consultation_id=%s::uuid ORDER BY d.created_at DESC,d.request_id DESC LIMIT 1''',(tenant,key));row=cur.fetchone()
+            if not row:raise TenantLinearError('Consultation is unavailable.',404)
+            assert_route(cur,tenant,policy,'connect',row['source_conversation'],str(row['source_channel']))
+            group=assert_route(cur,tenant,policy,'connect',row['conversation_id'],str(row['channel_id']))
+            cur.execute('SELECT name FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid',(tenant,str(row['channel_id'])))
+            channel_name=(cur.fetchone() or {}).get('name') or ''
+            cur.execute('''SELECT message_id,body,created_at FROM saas_consultation_group_replies
+              WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid ORDER BY created_at,message_id''',(tenant,key))
+            replies=[{'message_id':r['message_id'],'body':r['body'],'created_at':r['created_at'].isoformat() if hasattr(r['created_at'],'isoformat') else str(r['created_at'])} for r in cur.fetchall()]
+            return {'consultation_id':key,'case_id':str(row['case_id']),'state':row['state'],'request_id':str(row['request_id']),
+                    'destination':group.get('display_name') or group.get('contact_name') or row['conversation_id'],'prepared_text':row['body'],
+                    'channel_name':channel_name,
+                    'channel_id':str(row['channel_id']),'conversation_id':row['conversation_id'],
+                    'replies':replies,'customer_draft':row['customer_draft'],
+                    'draft_reply_id':row['draft_reply_id'],'draft_revision':int(row['draft_revision']),'customer_message_sent':False}
+
+
+def save_draft(profile,consultation_id,data):
+    if not isinstance(data,dict) or set(data)!={'message_id','draft','expected_revision'}:
+        raise TenantLinearError('Invalid draft.',400)
+    reply_id=data['message_id'];draft=data['draft']
+    if (not isinstance(reply_id,str) or not reply_id or len(reply_id)>200 or
+        not isinstance(draft,str) or not draft.strip() or len(draft)>4000 or
+        type(data['expected_revision']) is not int or data['expected_revision']<0):raise TenantLinearError('Invalid draft.',400)
+    key=identifier(consultation_id)
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            tenant,actor,policy=_owner(cur,profile)
+            # Serialize draft edits with creation of the next delivery so the
+            # saved draft cannot be stranded on an older delivery row.
+            cur.execute('SELECT id FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,key))
+            if not cur.fetchone():raise TenantLinearError('Consultation is unavailable.',404)
+            cur.execute('''SELECT d.*,c.channel_id AS source_channel,c.conversation_id AS source_conversation
+              FROM saas_consultation_group_deliveries d JOIN saas_internal_consultations c
+                ON c.tenant_id=d.tenant_id AND c.id=d.consultation_id
+              WHERE d.tenant_id=%s::uuid AND d.consultation_id=%s::uuid ORDER BY d.created_at DESC,d.request_id DESC LIMIT 1 FOR UPDATE OF d''',(tenant,key));row=cur.fetchone()
+            if not row:raise TenantLinearError('Consultation is unavailable.',404)
+            if int(row['draft_revision'])!=data['expected_revision']:raise TenantLinearError('Черновик изменился. Обновите его.',409)
+            assert_route(cur,tenant,policy,'connect',row['source_conversation'],str(row['source_channel']))
+            assert_route(cur,tenant,policy,'connect',row['conversation_id'],str(row['channel_id']))
+            cur.execute('''SELECT 1 FROM saas_consultation_group_replies
+              WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND message_id=%s''',(tenant,key,reply_id))
+            if not cur.fetchone():raise TenantLinearError('Group reply is unavailable.',404)
+            cur.execute('''UPDATE saas_consultation_group_deliveries SET customer_draft=%s,draft_reply_id=%s,draft_revision=draft_revision+1,updated_at=now()
+              WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid''',(draft.strip(),reply_id,tenant,key,row['request_id']))
+            _audit(cur,tenant,actor,'consultation_customer_draft_saved','consultation',key,{'reply_id':reply_id})
+        conn.commit()
+    return {'consultation_id':key,'customer_message_sent':False}
+
+
+def known_outbound(cur,tenant,channel,conversation,data):
+    """Recognize only this workflow's signed Connect echo, never by text."""
+    external=data.get('externalMessageId');token=data.get('originClientMessageId') or data.get('clientMessageId')
+    if not isinstance(external,str):external=''
+    if not isinstance(token,str):token=''
+    if not external and not token:return False
+    cur.execute("SELECT to_regclass('saas_consultation_group_deliveries') AS relation")
+    if not (cur.fetchone() or {}).get('relation'):return False
+    cur.execute('''SELECT 1 FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid
+      AND channel_id=%s::uuid AND conversation_id=%s AND state='sent'
+      AND ((%s<>'' AND provider_message_id=%s) OR (%s<>'' AND request_id::text=%s)) LIMIT 1''',
+      (tenant,channel,conversation,external,external,token,token))
+    return bool(cur.fetchone())
+
+
+def record_group_reply(cur,tenant,channel,conversation,message_id,text,quoted_id=None):
+    """Consume a signed inbound event without treating its content as commands."""
+    if (not group_jid(conversation) or not isinstance(text,str) or not text.strip()
+            or not isinstance(message_id,str) or not message_id or len(message_id)>200):return None
+    matches=set(_MARKER.findall(text));quoted=quoted_id if isinstance(quoted_id,str) and re.fullmatch(r'[A-Za-z0-9_-]{5,200}',quoted_id) else None
+    if len(matches)>1:return None
+    cur.execute('''SELECT consultation_id::text AS id,case_id::text AS case_id,COALESCE(bool_or(provider_message_id=%s),false) AS quote_match FROM saas_consultation_group_deliveries
+      WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s AND state='sent'
+        AND (provider_message_id=%s OR consultation_id::text=%s) GROUP BY consultation_id,case_id''',(quoted,tenant,channel,conversation,quoted,next(iter(matches),'').lower()))
+    rows=cur.fetchall()
+    if len(rows)!=1:return None
+    item=rows[0]
+    if quoted and matches and (not item['quote_match'] or item['id'] not in {value.lower() for value in matches}):return None
+    cur.execute('''INSERT INTO saas_consultation_group_replies(tenant_id,consultation_id,channel_id,conversation_id,message_id,body)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s) ON CONFLICT DO NOTHING RETURNING message_id''',(tenant,item['id'],channel,conversation,str(message_id)[:200],text[:4000]))
+    return item['id'] if cur.fetchone() else None

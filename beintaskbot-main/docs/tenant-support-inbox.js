@@ -5,7 +5,7 @@
   const statuses=['new','waiting','in_progress','resolved'];
   const endpoint=(window.TENANT_AI_AGENTS_CONFIG?.endpoint||'/api/platform/ai/')+'support-tickets';
   const consultationEndpoint=endpoint.replace(/support-tickets$/,'internal-consultations');
-  let member=null,epoch=0,listRevision=0,detailRevision=0,members=[],channels=[],selected=null,nextOffset=null,nextBefore=null,rows=[],timer;
+  let member=null,epoch=0,listRevision=0,detailRevision=0,members=[],channels=[],selected=null,nextOffset=null,nextBefore=null,rows=[],timer,directTicketKey='';
   const identity=person=>person?String(person.tenant_id)+':'+String(person.telegram_id):'';
   const allowed=()=>window.tenantOperator?.hasRight('support')||false;
   function notice(text){if($('supportNotice'))$('supportNotice').textContent=text||'';}
@@ -22,7 +22,7 @@
     const response=await fetch(consultationEndpoint+path,{method,credentials:'same-origin',cache:'no-store',headers:data?{'Content-Type':'application/json'}:{},...(data?{body:JSON.stringify({...data,expected_tenant_id:current?.tenant_id,expected_user_id:current?.telegram_id})}:{})});
     const payload=await response.json();
     if(!document?.body||version!==epoch||identity(current)!==identity(member))throw new Error(t('companyChanged'));
-    if(!response.ok||!payload.success)throw new Error(payload.error||t('consultCreateError'));
+    if(!response.ok||!payload.success){const error=new Error(payload.error||t('consultCreateError'));error.status=response.status;throw error;}
     return payload.result;
   }
   function install(){
@@ -73,16 +73,88 @@
     $('supportTakeover').onclick=async()=>{const button=$('supportTakeover'),version=epoch;button.disabled=true;try{await window.tenantOperator.changeState(route,'handoff');if(version===epoch&&selected===ticket.id)await open(ticket.id);}catch(error){if(version===epoch){notice(error.message);button.disabled=false;}}};
     if($('supportSummary'))$('supportSummary').onclick=()=>action(ticket.id,'/summary','POST',{});
     $('supportEarlier').onclick=async()=>{const revision=detailRevision,version=epoch,button=$('supportEarlier');button.disabled=true;try{const page=await api('/'+encodeURIComponent(ticket.id)+'?before='+encodeURIComponent(nextBefore));if(selected!==ticket.id||revision!==detailRevision)return;$('supportHistory').insertAdjacentHTML('afterbegin',messages(page.messages));nextBefore=page.next_before;button.hidden=!nextBefore;}catch(error){if(version===epoch)notice(error.message);}finally{if(button.isConnected)button.disabled=false;}};
-    renderConsultations(ticket);
+    renderConsultations(ticket,result.messages||[]);
   }
-  async function renderConsultations(ticket){
+  async function renderConsultations(ticket,caseMessages=[]){
     const host=$('supportDetail'),revision=detailRevision;if(!host)return;
     $('supportConsultations')?.remove();
     const section=document.createElement('section');section.id='supportConsultations';section.innerHTML=`<h3>${t('consultations')}</h3><p class="sub">${t('consultDeveloperHint')}</p><div class="support-edit"><label>${t('consultRecipient')}<select id="consultRecipient">${members.map(m=>`<option value="${esc(m.telegram_id)}">${esc(m.display_name||m.telegram_id)}</option>`).join('')}</select></label><label>${t('consultReason')}<textarea id="consultReason" maxlength="1000" rows="2"></textarea></label><button type="button" class="outline" id="consultCreate">${t('consultDeveloper')}</button></div><div id="consultRows"></div>`;host.append(section);
-    const show=items=>{const rows=$('consultRows');if(!rows)return;rows.innerHTML=(items||[]).map(item=>`<article class="support-message"><small>${esc(item.recipient_name)} · ${esc(i18n.date(item.created_at))}</small><div data-user-content>${esc(item.reason)}</div><small>${item.status==='queued_after_hours'?t('consultQueued'):t('consultWaiting')}</small>${item.response?`<hr><b>${t('consultAnswer')}</b><div data-user-content>${esc(item.response)}</div><small>${t('consultNoCustomerSend')}</small>`:`<small>${t('consultNoAnswer')}</small><label>${t('consultAnswer')}<textarea data-consult-answer="${esc(item.id)}" maxlength="4000" rows="2"></textarea></label><button type="button" class="outline" data-consult-reply="${esc(item.id)}">${t('save')}</button>`}</article>`).join('');rows.querySelectorAll('[data-consult-reply]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{const field=Array.from(rows.querySelectorAll('[data-consult-answer]')).find(node=>node.dataset.consultAnswer===button.dataset.consultReply);const response=field?.value||'';await consultationApi('/'+encodeURIComponent(button.dataset.consultReply)+'/reply','POST',{response,kind:'diagnosis'});await renderConsultations(ticket);}catch(error){notice(error.message);button.disabled=false;}});};
+    const show=items=>{const rows=$('consultRows');if(!rows)return;rows.innerHTML=(items||[]).map(item=>`<article class="support-message" data-consult-id="${esc(item.id)}"><small>${esc(item.recipient_name)} · ${esc(i18n.date(item.created_at))}</small><div data-user-content>${esc(item.reason)}</div><small>${item.status==='queued_after_hours'?t('consultQueued'):t('consultWaiting')}</small>${item.response?`<hr><b>${t('consultAnswer')}</b><div data-user-content>${esc(item.response)}</div><small>${t('consultNoCustomerSend')}</small>`:`<small>${t('consultNoAnswer')}</small><label>${t('consultAnswer')}<textarea data-consult-answer="${esc(item.id)}" maxlength="4000" rows="2"></textarea></label><button type="button" class="outline" data-consult-reply="${esc(item.id)}">${t('save')}</button>`}</article>`).join('');rows.querySelectorAll('[data-consult-reply]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{const field=Array.from(rows.querySelectorAll('[data-consult-answer]')).find(node=>node.dataset.consultAnswer===button.dataset.consultReply);const response=field?.value||'';await consultationApi('/'+encodeURIComponent(button.dataset.consultReply)+'/reply','POST',{response,kind:'diagnosis'});await renderConsultations(ticket,caseMessages);}catch(error){notice(error.message);button.disabled=false;}});if(member?.role==='owner'&&window.tenantOperator?.hasRight('dialogs'))for(const item of items||[]){const article=Array.from(rows.children).find(el=>el.dataset.consultId===item.id);if(article)void renderGroupFlow(article,item,caseMessages);}};
     try{const result=await consultationApi('?case_id='+encodeURIComponent(ticket.id));if(revision!==detailRevision||selected!==ticket.id)return;show(result.consultations);$('consultCreate').onclick=async()=>{const button=$('consultCreate');button.disabled=true;try{await consultationApi('','POST',{case_id:ticket.id,recipient_id:$('consultRecipient').value,reason:$('consultReason').value,evidence:{ticket_id:ticket.id,conversation_id:ticket.conversation_id},request_key:crypto.randomUUID()});await renderConsultations(ticket);}catch(error){notice(error.message);button.disabled=false;}};}catch(error){section.querySelector('#consultRows').textContent=error.message;section.querySelector('#consultCreate').disabled=true;}
   }
-  async function open(id){const revision=++detailRevision,version=epoch;try{const result=await api('/'+encodeURIComponent(id));if(revision!==detailRevision)return;renderDetail(result);$('supportDetail').scrollIntoView({behavior:'smooth',block:'start'});}catch(error){if(version===epoch)notice(error.message);}}
+  async function renderGroupFlow(article,item,caseMessages){
+    const path='/'+encodeURIComponent(item.id)+'/group',box=document.createElement('details'),title=document.createElement('summary'),host=document.createElement('div');
+    title.textContent=t('groupConsult');box.append(title,host);article.append(box);
+    const element=(tag,text)=>{const node=document.createElement(tag);if(text)node.textContent=text;return node;};
+    let opened=false;
+    box.ontoggle=async()=>{if(!box.open||opened)return;opened=true;
+      async function display(followup=null){
+        host.replaceChildren();let state;
+        try{if(followup)throw {status:404};state=await consultationApi(path);}catch(error){
+          if(error.status!==404){host.append(element('p',error.message));return;}
+          let groups;try{groups=(await consultationApi('/groups')).groups||[];}catch(problem){host.append(element('p',problem.message));return;}
+          if(followup)groups=groups.filter(group=>group.channel_id===followup.channel_id&&group.conversation_id===followup.conversation_id);
+          const select=element('select');select.append(new Option(t('groupChoose'),''));
+          groups.forEach((group,index)=>select.append(new Option((group.contact_name||group.conversation_id)+(group.channel_name?' · '+group.channel_name:''),String(index))));
+          if(followup&&groups.length===1){select.value='0';select.disabled=true;}
+          // Never prefill old remote-access codes; the owner supplies only
+          // currently relevant details for this specific transmission.
+          const summary=element('textarea');summary.maxLength=2600;summary.value='';summary.setAttribute('aria-label',t('groupSummary'));
+          host.append(element('p',t('groupSummary')),summary,element('small',t('groupRemoteHint')),element('p',t('groupChoose')),select,element('p',t('groupAttachments')));
+          const checks=[];for(const message of caseMessages.filter(row=>['image','audio','voice','video','document'].includes(row.message_type))){
+            const label=element('label'),check=element('input');check.type='checkbox';check.value=message.id;
+            label.append(check,document.createTextNode(' '+message.message_type+' · '+i18n.date(message.happened_at||message.created_at)));host.append(label);checks.push(check);
+          }
+          const prepare=element('button',t('groupPrepare'));prepare.type='button';host.append(prepare);
+          prepare.onclick=async()=>{const group=groups[Number(select.value)];if(select.value===''||!group){notice(t('groupChoose'));return;}
+            prepare.disabled=true;try{await consultationApi(path,'POST',{action:'prepare',request_id:crypto.randomUUID(),channel_id:group.channel_id,conversation_id:group.conversation_id,summary:summary.value,confirm_group:true,attachment_ids:checks.filter(c=>c.checked).map(c=>c.value)});await display();}catch(problem){notice(problem.message);prepare.disabled=false;}};
+          return;
+        }
+        if(state.state==='ready'){
+          host.append(element('p',state.destination+(state.channel_name?' · '+state.channel_name:'')),element('p',state.prepared_text));
+          const button=element('button',t('groupSend'));button.type='button';host.append(button);
+          button.onclick=async()=>{button.disabled=true;try{await consultationApi(path,'POST',{action:'send',request_id:state.request_id});await display();}catch(problem){notice(problem.message);await display();}};
+        }else {
+          host.append(element('p',state.state==='sent'?t('groupConfirmed'):state.state==='blocked'?t('groupBlocked'):t('groupUnknown')));
+          const refresh=element('button',t('refresh'));refresh.type='button';refresh.onclick=()=>void display();host.append(refresh);
+          if(state.state==='sent'){const follow=element('button',t('groupFollowup'));follow.type='button';follow.onclick=()=>void display(state);host.append(follow);}
+          if(state.state==='blocked'){const retry=element('button',t('groupPrepareAgain'));retry.type='button';retry.onclick=()=>void display(state);host.append(retry);}
+        }
+        for(const reply of state.replies||[]){
+          const section=element('section'),heading=element('b',t('groupReply')),body=element('p',reply.body),draft=element('textarea'),save=element('button',t('save')),hint=element('small',t('draftNotSent'));
+          draft.value=state.draft_reply_id===reply.message_id?state.customer_draft||'':'';draft.maxLength=4000;draft.setAttribute('aria-label',t('customerDraft'));save.type='button';save.dataset.groupDraft='true';
+          save.onclick=async()=>{save.disabled=true;try{await consultationApi(path,'POST',{action:'draft',message_id:reply.message_id,draft:draft.value,expected_revision:state.draft_revision});await display();}catch(problem){notice(problem.message);save.disabled=false;}};
+          section.append(heading,body,element('p',t('customerDraft')),draft,save,hint);host.append(section);
+        }
+      }
+      await display();
+    };
+  }
+  function renderFocusedAttachment(result){
+    const item=result.focus_message,ticket=result.ticket,host=$('supportDetail');if(!item||!host)return;
+    const section=document.createElement('section'),label=document.createElement('p');section.dataset.focusedAttachment='true';
+    label.textContent=t('attachment')+' · '+String(item.message_type||'');section.append(label);
+    const status=document.createElement('small');status.setAttribute('role','status');
+    if(item.media_evidence_context){const details=document.createElement('details'),summary=document.createElement('summary'),hint=document.createElement('small'),text=document.createElement('p');summary.textContent=t('savedMediaEvidence');hint.textContent=t('currentBytesNotChecked');text.textContent=item.media_evidence_context;text.setAttribute('data-user-content','');details.append(summary,hint,text);section.append(details);}
+    if(window.tenantOperator?.hasRight('dialogs')&&item.external_id&&ticket.lead_id){
+      const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=t('downloadAttachment');
+      button.onclick=()=>{if(!window.tenantDownloadAttachment){status.textContent=t('error');return;}
+        const query=new URLSearchParams({lead_id:String(ticket.lead_id),message_id:String(item.external_id),channel_id:String(ticket.channel_id),conversation_id:String(ticket.conversation_id),expected_tenant_id:String(member.tenant_id),expected_user_id:String(member.telegram_id),download:'1'});
+        void window.tenantDownloadAttachment(button,'/api/platform/crm/chat/attachment?'+query,status);
+      };section.append(button);
+    }else status.textContent=t('error');
+    section.append(status);host.prepend(section);
+  }
+  async function open(id,focus=''){const revision=++detailRevision,version=epoch;try{const result=await api('/'+encodeURIComponent(id)+(focus?'?'+new URLSearchParams({message_id:focus}):''));if(revision!==detailRevision)return;renderDetail(result);renderFocusedAttachment(result);$('supportDetail').scrollIntoView({behavior:'smooth',block:'start'});}catch(error){if(version===epoch)notice(error.message);}}
+  function openDirectTicket(){
+    if(!member||!allowed())return;
+    const query=new URLSearchParams(location.search),id=query.get('support_ticket_id')||'',focus=query.get('support_ticket_message_id')||'';
+    if(query.get('view')!=='support'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))return;
+    if(focus&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(focus))return;
+    const key=epoch+':'+id+':'+focus;if(directTicketKey===key)return;
+    install();if(!$('supportDetail'))return;
+    directTicketKey=key;void open(id,focus);
+  }
   async function action(id,path,method,data){const revision=++detailRevision,version=epoch,host=$('supportDetail');host?.querySelectorAll('button').forEach(button=>button.disabled=true);try{const result=await api('/'+encodeURIComponent(id)+path,method,data);if(revision!==detailRevision)return;renderDetail(result);await load();}catch(error){if(version===epoch){notice(error.message);await open(id);}}}
   const mutate=(id,data)=>action(id,'','PATCH',data);
   document.addEventListener('tenant-chat-open',event=>{
@@ -91,9 +163,9 @@
     const button=document.createElement('button');button.type='button';button.className='outline';button.id='supportCreateFromChat';button.textContent=t('createTicket');host.prepend(button);const requestId=crypto.randomUUID();
     button.onclick=async()=>{button.disabled=true;try{await api('','POST',{request_id:requestId,lead_id:lead});if(version!==epoch)return;button.textContent=t('ticketSaved');await load();}catch(error){if(version===epoch){button.textContent=error.message;button.disabled=false;}}};
   });
-  function profileChanged(data){const person=data.member;if(!allowed()||identity(person)!==identity(member)||JSON.stringify(person?.permissions)!==JSON.stringify(member?.permissions)||person?.active!==member?.active){epoch++;listRevision++;detailRevision++;selected=null;rows=[];members=[];channels=[];nextOffset=null;nextBefore=null;if($('supportRows'))$('supportRows').replaceChildren();if($('supportDetail')){$('supportDetail').hidden=true;$('supportDetail').replaceChildren();}badge(0);notice('');}member=person;if(allowed())load();}
+  function profileChanged(data){const person=data.member;if(!allowed()||identity(person)!==identity(member)||JSON.stringify(person?.permissions)!==JSON.stringify(member?.permissions)||person?.active!==member?.active){epoch++;listRevision++;detailRevision++;directTicketKey='';selected=null;rows=[];members=[];channels=[];nextOffset=null;nextBefore=null;if($('supportRows'))$('supportRows').replaceChildren();if($('supportDetail')){$('supportDetail').hidden=true;$('supportDetail').replaceChildren();}badge(0);notice('');}member=person;if(allowed()){load();openDirectTicket();}}
   document.addEventListener('tenant-profile',event=>profileChanged(event.detail));
-  document.addEventListener('tenant-view',event=>{if(event.detail.view==='support')load();});
+  document.addEventListener('tenant-view',event=>{if(event.detail.view==='support'){load();openDirectTicket();}});
   document.addEventListener('tenant-support-changed',()=>load());
   document.addEventListener('tenant-dialog-state',()=>{load();if(selected)open(selected);});
   document.addEventListener('tenant-operator-error',event=>notice(event.detail.message));

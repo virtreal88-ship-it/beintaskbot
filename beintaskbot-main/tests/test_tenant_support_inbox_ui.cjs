@@ -8,10 +8,10 @@ const profile={tenant_id:'company-a',telegram_id:11,role:'owner'};
 const members=[{telegram_id:11,display_name:'Support'}];
 const response=value=>({ok:true,json:async()=>({success:true,result:value})});
 const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));};
-function setup(fetch){
- const dom=new JSDOM('<section id="view-support"><div id="operatorSupport"></div></section><div id="modalContent"></div>',{url:'https://crm.test/app',runScripts:'outside-only'});
+function setup(fetch,url='https://crm.test/app',rights=true){
+ const dom=new JSDOM('<section id="view-support"><div id="operatorSupport"></div></section><div id="modalContent"></div>',{url,runScripts:'outside-only'});
  dom.window.HTMLElement.prototype.scrollIntoView=function(){};
- dom.window.fetch=fetch;dom.window.tenantOperator={hasRight:()=>true};dom.window.eval(fs.readFileSync(path.join(__dirname,'../docs/tenant-operator-i18n.js'),'utf8'));dom.window.eval(source);return dom;
+ dom.window.fetch=fetch;dom.window.tenantOperator={hasRight:typeof rights==='function'?rights:()=>rights};dom.window.eval(fs.readFileSync(path.join(__dirname,'../docs/tenant-operator-i18n.js'),'utf8'));dom.window.eval(source);return dom;
 }
 (async()=>{
  const calls=[];
@@ -59,5 +59,71 @@ function setup(fetch){
  stale.window.document.dispatchEvent(new stale.window.CustomEvent('tenant-profile',{detail:{member:{tenant_id:'company-b',telegram_id:22,role:'owner'}}}));await settle();
  release();await settle();assert.ok(!stale.window.document.querySelector('#supportRows').textContent.includes('Нет связи'));assert.equal(stale.window.document.querySelector('#supportDetail').hidden,true);
  stale.window.close();
+ // An authenticated recipient can open one exact ticket without a shared
+ // actor-specific attachment URL or a list search.
+ const id='a20d59f3-821b-4fcf-a37e-528252d126b5',deepCalls=[];
+ const deep=setup(async(url,init={})=>{
+   deepCalls.push({url,init});
+   if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
+   if(url.startsWith('/api/platform/ai/internal-consultations'))return response({consultations:[]});
+   if(url==='/api/platform/ai/support-tickets/'+id)return response({ticket:{...ticket,id},messages:[],expert_results:[],next_before:null});
+   return response({tickets:[],members,next_offset:null});
+ },'https://crm.test/app?view=support&support_ticket_id='+id);
+ await settle();
+ assert.equal(deepCalls.filter(x=>x.url==='/api/platform/ai/support-tickets/'+id).length,1);
+ assert.match(deep.window.document.querySelector('#supportDetail').textContent,/Нет связи/);
+ assert.equal(deepCalls.filter(x=>x.init.method&&x.init.method!=='GET').length,0);
+ deep.window.close();
+ const messageId='93f466f9-767b-4f02-8005-1842cbdbef27',focusCalls=[];
+ const focused=setup(async(url,init={})=>{
+   focusCalls.push({url,init});
+   if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
+   if(url.startsWith('/api/platform/ai/internal-consultations'))return response({consultations:[]});
+   if(url==='/api/platform/ai/support-tickets/'+id+'?message_id='+messageId)
+     return response({ticket:{...ticket,id,channel_id:'channel-a'},messages:[],expert_results:[],focus_message:{id:messageId,external_id:'connect:synthetic',message_type:'image',media_evidence_context:'<img src=x onerror=alert(1)>'},next_before:null});
+   return response({tickets:[],members,next_offset:null});
+ },'https://crm.test/app?view=support&support_ticket_id='+id+'&support_ticket_message_id='+messageId);
+ let attachmentUrl='';focused.window.tenantDownloadAttachment=(_button,url)=>{attachmentUrl=url;};
+ await settle();focused.window.document.querySelector('[data-focused-attachment] button').click();
+ assert.equal(focused.window.document.querySelector('[data-focused-attachment] img'),null);
+ assert.match(focused.window.document.querySelector('[data-focused-attachment] details').textContent,/img src/);
+ assert.match(focused.window.document.querySelector('[data-focused-attachment] details').textContent,/Текущая версия файла не проверялась/);
+ assert.match(attachmentUrl,/expected_user_id=11/);assert.match(attachmentUrl,/message_id=connect%3Asynthetic/);
+ assert.equal(focusCalls.filter(x=>x.init.method&&x.init.method!=='GET').length,0);focused.window.close();
+ const noDialogs=setup(async(url)=>{
+   if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
+   if(url.startsWith('/api/platform/ai/internal-consultations'))return response({consultations:[]});
+   if(url.startsWith('/api/platform/ai/support-tickets/'+id+'?message_id='))return response({ticket:{...ticket,id,channel_id:'channel-a'},messages:[],expert_results:[],focus_message:{id:messageId,external_id:'connect:synthetic',message_type:'image'},next_before:null});
+   return response({tickets:[],members,next_offset:null});
+ },'https://crm.test/app?view=support&support_ticket_id='+id+'&support_ticket_message_id='+messageId,permission=>permission==='support');
+ await settle();assert.equal(noDialogs.window.document.querySelector('[data-focused-attachment] button'),null);noDialogs.window.close();
+ const deniedCalls=[];
+ const denied=setup(async(url)=>{deniedCalls.push(url);return {ok:true,json:async()=>({member:profile})};},'https://crm.test/app?view=support&support_ticket_id='+id,false);
+ await settle();assert.ok(!deniedCalls.some(url=>url.includes('/support-tickets')));denied.window.close();
+ const cid='4bfc7540-38e8-4e14-a571-057817c6ca6b',gid='120363411822115409@g.us',synthetic=[];let delivery=null;
+ const cycle=setup(async(url,init={})=>{
+   const body=init.body?JSON.parse(init.body):{};synthetic.push({url,method:init.method||'GET',body});
+   if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
+   if(url==='/api/platform/ai/internal-consultations?case_id=ticket-1')return response({consultations:[{id:cid,reason:'50 → 49,9992',created_at:'2026-10-16T00:00:00Z',status:'waiting_specialist',recipient_name:'Developer'}]});
+   if(url==='/api/platform/ai/internal-consultations/groups')return response({groups:[{channel_id:'channel-a',conversation_id:gid,contact_name:'Test group'}]});
+   if(url==='/api/platform/ai/internal-consultations/'+cid+'/group'){
+     if(init.method==='POST'&&body.action==='prepare'){delivery={state:'ready',request_id:body.request_id,destination:'Test group',prepared_text:body.summary,replies:[],customer_draft:'',draft_revision:0};return response({state:'ready'});}
+     if(init.method==='POST'&&body.action==='send'){delivery.state='sent';delivery.replies=[{message_id:'reply-1',body:'We are investigating'}];return response({state:'sent'});}
+     if(init.method==='POST'&&body.action==='draft'){delivery.draft_reply_id=body.message_id;delivery.customer_draft=body.draft;return response({customer_message_sent:false});}
+     if(delivery)return response(delivery);
+     return {ok:false,status:404,json:async()=>({success:false,error:'Not prepared'})};
+   }
+   if(url==='/api/platform/ai/support-tickets/ticket-1')return response({ticket,messages:[{id:messageId,message_type:'image',direction:'incoming',happened_at:'2026-10-16T00:00:00Z'}],expert_results:[],next_before:null});
+   return response({tickets:[ticket],members,next_offset:null});
+ });
+ await settle();cycle.window.document.querySelector('[data-support-id]').click();await settle();
+ const panel=cycle.window.document.querySelector('[data-consult-id] details');panel.open=true;panel.dispatchEvent(new cycle.window.Event('toggle'));await settle();
+ panel.querySelector('select').value='0';panel.querySelector('textarea').value='50 → 49,9992';panel.querySelector('input[type=checkbox]').checked=true;panel.querySelector('button').click();await settle();
+ assert.equal(synthetic.filter(x=>x.body.action==='prepare').length,1);assert.equal(synthetic.filter(x=>x.body.action==='send').length,0);
+ assert.deepEqual(synthetic.find(x=>x.body.action==='prepare').body.attachment_ids,[messageId]);
+ assert.match(panel.textContent,/Test group/);panel.querySelector('button').click();await settle();
+ assert.equal(synthetic.filter(x=>x.body.action==='send').length,1);assert.match(panel.textContent,/We are investigating/);
+ panel.querySelector('textarea').value='We are checking.';panel.querySelector('[data-group-draft]').click();await settle();
+ assert.equal(delivery.customer_draft,'We are checking.',JSON.stringify(synthetic));assert.ok(!synthetic.some(x=>/\/dialogs\/send/.test(x.url)));cycle.window.close();
  console.log('PASS: inbox renders safely, opens history read-only, filters, assigns, creates manually and rejects stale tenant responses.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
