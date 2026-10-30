@@ -93,6 +93,13 @@ def test_pause_or_expired_attestation_denies_employee_override(monkeypatch):
             Cursor(False), TENANT, CHANNEL, CUSTOMER, '2026-10-30T20:12:00Z')
 
 
+def test_missing_provider_timestamp_never_activates_employee_override(monkeypatch):
+    install_valid_gate(monkeypatch)
+    with patch.dict('os.environ', ENV, clear=True):
+        assert not pilot.test_client_override_allowed(Cursor(True),TENANT,CHANNEL,CUSTOMER,None)
+        assert not pilot.test_client_override_allowed(Cursor(True),TENANT,CHANNEL,CUSTOMER,'')
+
+
 def test_override_is_disabled_after_scoped_pause_or_legacy_guard_arming(monkeypatch):
     install_valid_gate(monkeypatch)
     with patch.dict('os.environ', {**ENV, 'AI_AGENTS_SCOPED_LIVE_ENABLED': 'false'}, clear=True):

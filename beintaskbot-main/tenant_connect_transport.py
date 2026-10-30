@@ -800,7 +800,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 cur, tenant=tenant, channel_id=channel_id, conversation=conversation,
                 employee=employee, outbound=outbound, coordinated=coordinated,
                 identity_conflict=identity_conflict,
-                occurred_at=event.get('occurred_at') or datetime.now(timezone.utc).isoformat())
+                occurred_at=event.get('occurred_at'))
             if role_override:
                 # Keep the verified employee identity in the immutable source
                 # record. The explicit pilot marker is an audited processing
