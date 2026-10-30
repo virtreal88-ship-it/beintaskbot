@@ -64,7 +64,12 @@ def prepare(profile,consultation_id,data):
             if consult['status']=='closed' or consult['ticket_status']=='resolved':raise TenantLinearError('Consultation is closed.',409)
             assert_route(cur,tenant,policy,'connect',consult['conversation_id'],str(consult['channel_id']))
             assert_route(cur,tenant,policy,'connect',group,channel)
-            body=('CASE:'+key+'\n'+summary.strip()+'\n\nReply to this message or include CASE:'+key)
+            # The link contains no credentials and opens under the recipient's
+            # own CRM session. Attachment access remains separately authorized.
+            case_id=str(consult['case_id'])
+            body=('CASE:'+key+'\n'+summary.strip()+'\n\n'
+                  'https://crm.pro.az/app?view=support&support_ticket_id='+case_id+
+                  '\nReply and include CASE:'+key)
             digest=hashlib.sha256(body.encode()).hexdigest()
             cur.execute('SELECT * FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid FOR UPDATE',(tenant,key));old=cur.fetchone()
             if old:

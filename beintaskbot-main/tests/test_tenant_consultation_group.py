@@ -44,6 +44,8 @@ def test_one_shot_receipt_and_reply_that_arrives_during_send(db,monkeypatch):
     assert flow.dispatch(PROFILE,consult,payload['request_id'])['state']=='sent'
     assert flow.dispatch(PROFILE,consult,payload['request_id'])['state']=='sent'
     assert len(calls)==1 and ('CASE:'+consult+'\n') in calls[0][0]
+    assert 'https://crm.pro.az/app?view=support&support_ticket_id='+case in calls[0][0]
+    assert 'expected_user_id' not in calls[0][0]
     rows=db.execute('SELECT consultation_id::text,body FROM saas_consultation_group_replies WHERE tenant_id=%s::uuid',(A,))
     assert rows==[{'consultation_id':consult,'body':'Synthetic reply'}]
     with db.cursor() as cur:
