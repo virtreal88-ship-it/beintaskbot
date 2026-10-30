@@ -293,24 +293,28 @@ def test_conflicting_new_phone_is_not_linked_to_known_lid(ingest, channels):
     assert len(direct_routes(db)) == 1
 
 
-def test_transaction_failure_rolls_back_identity_route_message_and_receipt(ingest, channels, monkeypatch):
+def test_ai_queue_failure_preserves_verified_crm_receipt_and_dedupes_replay(ingest, channels, monkeypatch):
     import tenant_ai_agent_connect as active
     original=active.enqueue
     def fail(*args, **kwargs):
         raise RuntimeError('synthetic queue write failure')
     monkeypatch.setattr(active,'enqueue',fail)
     payload=event(LID,pair=PAIR)
-    with pytest.raises(RuntimeError,match='synthetic queue'):
-        ingest(payload)
+    assert ingest(payload)
     db=channels['db']
-    assert not direct_routes(db)
-    assert not db.execute('SELECT 1 FROM saas_connect_direct_identities WHERE tenant_id=%s::uuid',(A,))
-    assert not db.execute('SELECT 1 FROM saas_connect_webhook_events WHERE tenant_id=%s::uuid AND event_id=%s',
-                          (A,payload['id']))
+    assert len(direct_routes(db)) == 1
+    assert db.execute('''SELECT 1 FROM saas_connect_direct_identities WHERE tenant_id=%s::uuid
+      AND connect_channel_id=%s::uuid LIMIT 1''',(A,CA))
+    assert db.execute('SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',
+                      (A,'connect:'+payload['data']['id']))
+    assert db.execute('SELECT 1 FROM saas_connect_webhook_events WHERE tenant_id=%s::uuid AND event_id=%s',
+                      (A,payload['id']))
     db.commit()
     monkeypatch.setattr(active,'enqueue',original)
     assert ingest(payload) and ingest(payload)
     assert len(direct_routes(db)) == 1
+    assert len(db.execute('SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',
+                          (A,'connect:'+payload['data']['id']))) == 1
 
 
 def test_unknown_commit_outcome_is_not_automatically_retried_but_provider_replay_is_safe(ingest, channels, monkeypatch):
