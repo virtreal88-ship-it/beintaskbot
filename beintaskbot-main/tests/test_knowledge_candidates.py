@@ -421,6 +421,17 @@ def test_case_attachment_link_requires_current_verified_interval_and_dialog_scop
     with pytest.raises(TenantLinearError):store.conversation_link(PROFILE,key,ids[3],expected_version=version)
     with pytest.raises(TenantLinearError):store.conversation_link(PROFILE,key,ids[1],expected_version=version+1)
     with pytest.raises(TenantLinearError):store.conversation_link({'tenant_id':B,'telegram_id':22},key,ids[1],expected_version=version)
+    # Verified boundaries may be conversation messages outside the evidence
+    # list; all claimed evidence and the attachment must still be inside.
+    content['source_message_ids']=[ids[1]]
+    db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE id=%s::uuid',(json.dumps(content),key));db.commit()
+    assert store.conversation_link(PROFILE,key,ids[1],expected_version=version)['message_id']==ids[1]
+    with pytest.raises(TenantLinearError):store.conversation_link(PROFILE,key,ids[3],expected_version=version)
+    content['source_message_ids']=[ids[1],ids[3]]
+    db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE id=%s::uuid',(json.dumps(content),key));db.commit()
+    with pytest.raises(TenantLinearError):store.conversation_link(PROFILE,key,ids[1],expected_version=version)
+    content['source_message_ids']=[ids[0],ids[2]]
+    db.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb WHERE id=%s::uuid',(json.dumps(content),key));db.commit()
     db.execute("UPDATE saas_crm_messages SET channel=%s WHERE id=%s::uuid",('connect:'+CB,ids[1]));db.commit()
     with pytest.raises(TenantLinearError):store.conversation_link(PROFILE,key,ids[1],expected_version=version)
     db.execute("UPDATE saas_crm_messages SET channel=%s WHERE id=%s::uuid",('connect:'+CA,ids[1]));db.commit()

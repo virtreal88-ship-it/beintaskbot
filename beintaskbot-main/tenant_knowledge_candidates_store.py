@@ -641,7 +641,7 @@ def _bounded_media_link(cur,tenant,case,route,chosen,anchor,expected_version):
         raise TenantLinearError('Case version changed; refresh the case.',409)
     content=case.get('content') or {};start=content.get('start_message_id');end=content.get('end_message_id')
     sources=content.get('source_message_ids') or []
-    if not start or not end or not sources or start not in sources or end not in sources:
+    if not start or not end or not sources:
         raise TenantLinearError('Case boundaries are unavailable.',409)
     anchors,count,inside=_boundary_context(cur,tenant,route,chosen,start,end,[*sources,anchor])
     if count>MAX_MESSAGES or len(set(inside))!=len(set([*sources,anchor])):
