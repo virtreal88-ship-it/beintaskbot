@@ -91,6 +91,20 @@ def test_selected_attachment_must_belong_to_exact_ticket_conversation(db,monkeyp
     with pytest.raises(TenantLinearError):tickets.detail(PROFILE,case,None,other)
     with pytest.raises(TenantLinearError):tickets.detail({'tenant_id':B,'telegram_id':22},case,None,image)
 
+def test_focused_attachment_reuses_only_matching_saved_receipt_without_ai(db,monkeypatch):
+    import tenant_media_evidence as evidence
+    consult,case=setup_case(db,monkeypatch);image=str(uuid.uuid4());external='connect:'+str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type,body,raw)
+      VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','image','',%s::jsonb)""",(image,A,external,'connect:'+CA,'{"mediaId":"v1"}'))
+    evidence.create_schema(db)
+    ref={'id':image,'channel_id':CA,'external_id':external,'media_kind':'image','media_version':evidence.media_version({'mediaId':'v1'}),'body_hash':evidence._body_hash('')}
+    with db.cursor() as cur:evidence.persist(cur,A,[ref],[{'id':image,'status':'processed','kind':'image','observation':'Synthetic saved detail'}])
+    db.commit()
+    focused=tickets.detail(PROFILE,case,None,image)['focus_message']
+    assert 'Synthetic saved detail' in focused['media_evidence_context']
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",('{"mediaId":"v2"}',A,image));db.commit()
+    assert 'media_evidence_context' not in tickets.detail(PROFILE,case,None,image)['focus_message']
+
 def test_preparation_requires_owner_explicit_destination_and_is_tenant_scoped(db,monkeypatch):
     consult,_=setup_case(db,monkeypatch); payload=request()
     with pytest.raises(TenantLinearError):flow.prepare(PROFILE,consult,{**payload,'confirm_group':False})
