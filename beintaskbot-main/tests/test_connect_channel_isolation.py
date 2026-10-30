@@ -373,6 +373,33 @@ def test_operator_manual_pause_is_not_reassigned_or_resumed(channels):
     f['send'].assert_not_called();f['generate'].assert_not_called()
 
 
+def test_first_employee_reply_binds_unique_agent_without_clearing_handoff(channels):
+    f=channels;db=f['db']
+    # This reproduces a direct Connect conversation first materialized by an
+    # outbound employee message: its route exists, but no inbound enqueue has
+    # ever had a chance to save an agent binding.
+    db.execute("DELETE FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA));db.commit()
+    connect.mark_operator_reply(A,41,CA,'client')
+    saved=db.execute("SELECT agent_id,state,reason,agent_assignment_id FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert saved=={'agent_id':AGENT,'state':'human','reason':'manager_replied','agent_assignment_id':None}
+    pending=db.execute("SELECT count(*) AS n FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client' AND state IN ('queued','processing')",(A,CA))[0]['n']
+    assert pending==0
+    assert not rows(f,'saas_ai_agent_runs')
+    f['send'].assert_not_called();f['generate'].assert_not_called()
+
+
+def test_manual_handoff_attaches_unique_agent_but_stays_human(channels):
+    f=channels;db=f['db']
+    db.execute("DELETE FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA));db.commit()
+    result=agents.set_conversation_state(PROFILE,'client','human','operator_handoff',provider='connect',channel_id=CA)
+    saved=db.execute("SELECT agent_id,state,reason,agent_assignment_id FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert result['state']=='human'
+    assert saved=={'agent_id':AGENT,'state':'human','reason':'operator_handoff','agent_assignment_id':None}
+    pending=db.execute("SELECT count(*) AS n FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client' AND state IN ('queued','processing')",(A,CA))[0]['n']
+    assert pending==0
+    f['send'].assert_not_called();f['generate'].assert_not_called()
+
+
 def test_identity_conflict_preserves_operator_no_agent_reason(channels):
     f=channels;db=f['db']
     db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='paused',reason='operator_manual_pause',agent_assignment_id=NULL WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA));db.commit()

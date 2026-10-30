@@ -59,6 +59,27 @@ def unique_connect_candidate(rows, channel_id: str, *, is_group=False):
     return None, 'agent_selection_required' if len(matches) > 1 else 'no_eligible_agent'
 
 
+def unique_unassigned_direct_agent(cur, tenant, channel_id, conversation_id):
+    """Find a safe missing owner for a direct dialog without changing its gate."""
+    from tenant_ai_group_coordination import group_jid
+    if group_jid(conversation_id):
+        return None
+    cur.execute("""SELECT agent_id,agent_assignment_id FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s
+      FOR UPDATE""", (tenant, channel_id, conversation_id))
+    state = cur.fetchone() or {}
+    if state.get('agent_id') or state.get('agent_assignment_id'):
+        return None
+    from tenant_connect_identity import conflicted
+    if conflicted(cur, tenant, channel_id, conversation_id):
+        return None
+    cur.execute("""SELECT id,role,scopes,enabled FROM saas_ai_agents
+      WHERE tenant_id=%s::uuid AND archived_at IS NULL AND role='primary'
+      ORDER BY created_at,id""", (tenant,))
+    agent, _reason = unique_connect_candidate(cur.fetchall(), channel_id)
+    return agent['id'] if agent else None
+
+
 def _bind_unique_connect_candidate(cur, tenant, channel_id, conversation_id, rows, *, is_group=False):
     """Persist one unambiguous inbound binding without resuming or queueing it."""
     from tenant_ai_group_coordination import group_jid, lock_group, read as read_group
@@ -654,7 +675,13 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
 
 
 def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation_id: str, *, connection=None, actor=None) -> None:
-    """Human replies stop pending work atomically with the caller's event receipt."""
+    """Human replies stop pending work atomically with the caller's event receipt.
+
+    When a direct Connect conversation is first created by an employee reply,
+    retain its unique scoped agent binding while keeping the dialogue in
+    ``human``.  The handoff remains authoritative; this only records ownership
+    so later operator tooling can resume the right agent deliberately.
+    """
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -662,12 +689,23 @@ def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation
             cur.execute("SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s AND lead_id=%s", (tenant, channel_id, conversation_id, int(lead_id)))
             if not cur.fetchone():
                 raise ValueError("Connect dialogue route mismatch")
+            # Direct conversations can first appear in Connect when an
+            # employee sends a message.  The inbound queue/reconciler is not
+            # involved in that path, so bind only a sole enabled primary that
+            # explicitly covers this channel.  Never replace an operator's
+            # explicit no-agent choice, and never change the human handoff.
+            candidate_id = unique_unassigned_direct_agent(cur, tenant, channel_id, conversation_id)
             from tenant_ai_group_coordination import stop
             stop(cur, tenant, conversation_id, actor=actor)
-            cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,channel_id,state,reason)
-              VALUES(%s::uuid,'connect',%s,%s,'human','manager_replied')
-              ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE SET state='human',reason='manager_replied',
-                revision=saas_ai_conversation_state.revision+1,updated_at=now()''', (tenant, conversation_id, channel_id))
+            cur.execute('''INSERT INTO saas_ai_conversation_state
+              (tenant_id,provider,conversation_id,channel_id,agent_id,state,reason)
+              VALUES(%s::uuid,'connect',%s,%s,%s::uuid,'human','manager_replied')
+              ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE SET
+                agent_id=COALESCE(saas_ai_conversation_state.agent_id,
+                  CASE WHEN saas_ai_conversation_state.agent_assignment_id IS NULL THEN EXCLUDED.agent_id ELSE NULL END),
+                state='human',reason='manager_replied',
+                revision=saas_ai_conversation_state.revision+1,updated_at=now()''',
+              (tenant, conversation_id, channel_id, candidate_id))
             cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',lease_token=NULL,lease_until=NULL,
               error_code='manager_replied',updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
                 AND conversation_id=%s AND channel_id=%s AND state IN ('queued','processing')''', (tenant, conversation_id, channel_id))

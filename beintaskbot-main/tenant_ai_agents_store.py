@@ -1610,12 +1610,20 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
                 # not queue a prior inbound event, so only a future customer
                 # message can create fresh AI work after this transition.
                 _assert_resume_allowed(cur, tenant, provider, conversation, resolved_channel)
-            cur.execute('''INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,channel_id,state,reason)
-              VALUES(%s::uuid,%s,%s,%s,%s,%s) ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE
-              SET state=EXCLUDED.state,reason=EXCLUDED.reason,revision=saas_ai_conversation_state.revision+1,
+            candidate_id = None
+            if provider == 'connect' and state == 'human':
+                from tenant_ai_agent_connect import unique_unassigned_direct_agent
+                candidate_id = unique_unassigned_direct_agent(cur,tenant,resolved_channel,conversation)
+            cur.execute('''INSERT INTO saas_ai_conversation_state
+              (tenant_id,provider,conversation_id,channel_id,agent_id,state,reason)
+              VALUES(%s::uuid,%s,%s,%s,%s::uuid,%s,%s)
+              ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE
+              SET agent_id=COALESCE(saas_ai_conversation_state.agent_id,
+                    CASE WHEN saas_ai_conversation_state.agent_assignment_id IS NULL THEN EXCLUDED.agent_id ELSE NULL END),
+                state=EXCLUDED.state,reason=EXCLUDED.reason,revision=saas_ai_conversation_state.revision+1,
                 resumed_at=CASE WHEN EXCLUDED.state='active' THEN clock_timestamp() ELSE saas_ai_conversation_state.resumed_at END,
                 updated_at=now()''',
-              (tenant,provider,conversation,resolved_channel,state,str(reason)[:240]))
+              (tenant,provider,conversation,resolved_channel,candidate_id,state,str(reason)[:240]))
             if provider=='connect' and state=='active':
                 from tenant_ai_legacy_permit import renew
                 renew(cur,tenant,resolved_channel,conversation)
