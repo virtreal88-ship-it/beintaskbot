@@ -64,8 +64,10 @@ def configured_group_scope():
     group = str(os.environ.get('AI_AGENTS_PILOT_GROUP_CONVERSATION_ID') or '').strip()
     # Do not accept arbitrary groups from a request or a database listing.
     from tenant_ai_group_coordination import group_jid
+    customer=scope['conversation_id']
+    local=customer[:-len('@s.whatsapp.net')] if customer.endswith('@s.whatsapp.net') else ''
     if (scope['tenant_id'] != SCOPED_LIVE_TENANT or scope['channel_id'] != SCOPED_LIVE_CHANNEL
-            or scope['conversation_id'] != SCOPED_LIVE_CUSTOMER or group != SCOPED_LIVE_GROUP
+            or not local.isdigit() or not 8 <= len(local) <= 15 or group != SCOPED_LIVE_GROUP
             or not group_jid(group)):
         return None
     return {**scope, 'conversation_id': group}
@@ -89,10 +91,9 @@ def is_pilot_customer_target(tenant_id, channel_id, conversation_id):
     return bool(scoped_live_enabled() and scope
         and str(tenant_id) == SCOPED_LIVE_TENANT
         and str(channel_id) == SCOPED_LIVE_CHANNEL
-        and str(conversation_id) == SCOPED_LIVE_CUSTOMER
+        and str(conversation_id) == scope['conversation_id']
         and scope['tenant_id'] == SCOPED_LIVE_TENANT
-        and scope['channel_id'] == SCOPED_LIVE_CHANNEL
-        and scope['conversation_id'] == SCOPED_LIVE_CUSTOMER)
+        and scope['channel_id'] == SCOPED_LIVE_CHANNEL)
 
 
 def manual_live_job(job):
@@ -420,7 +421,6 @@ def resume_pilot_dialog(profile, data):
     group_scope = configured_group_scope()
     if (not scope or not group_scope or scope['tenant_id'] != SCOPED_LIVE_TENANT
             or scope['channel_id'] != SCOPED_LIVE_CHANNEL
-            or scope['conversation_id'] != SCOPED_LIVE_CUSTOMER
             or group_scope['conversation_id'] != SCOPED_LIVE_GROUP):
         raise TenantLinearError('The exact two-target pilot scope is not configured.', 409)
 
@@ -467,7 +467,7 @@ def preflight(profile):
             group_scope=configured_group_scope()
             scoped_live=scoped_live_enabled()
             result = {'ready': False, 'provider': 'connect', 'pilot_guard_enabled': _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED') or scoped_live,
-                    'scoped_live':{'enabled':scoped_live,'customer_target':SCOPED_LIVE_CUSTOMER,
+                    'scoped_live':{'enabled':scoped_live,'customer_target':scope['conversation_id'] if scope else '',
                         'developer_group_target':SCOPED_LIVE_GROUP if group_scope else '',
                         'mode_override':'exact pilot only' if scoped_live else 'disabled'},
                     'scope_configured': bool(scope), 'competing_handler': {'state':'unknown','source':'manual_confirmation_required'},

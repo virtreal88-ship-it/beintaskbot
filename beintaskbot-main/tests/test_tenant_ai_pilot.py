@@ -212,6 +212,19 @@ def test_owner_can_resume_only_exact_pilot_dialog_while_both_guards_are_off(monk
     assert resumed[0][1:]==(pilot.SCOPED_LIVE_CUSTOMER,'active','pilot_preparation_resume','connect',pilot.SCOPED_LIVE_CHANNEL)
 
 
+def test_preparation_scope_uses_server_selected_direct_peer_not_retired_test_number():
+    replacement='994102135103@s.whatsapp.net'
+    with patch.dict('os.environ',_exact_pilot_env(AI_AGENTS_PILOT_CONVERSATION_ID=replacement),clear=True):
+        assert pilot.configured_group_scope()['conversation_id']==pilot.SCOPED_LIVE_GROUP
+        assert pilot.is_pilot_customer_target(pilot.SCOPED_LIVE_TENANT,pilot.SCOPED_LIVE_CHANNEL,replacement) is False
+        with patch.dict('os.environ',{'AI_AGENTS_SCOPED_LIVE_ENABLED':'true'},clear=False):
+            assert pilot.is_pilot_customer_target(pilot.SCOPED_LIVE_TENANT,pilot.SCOPED_LIVE_CHANNEL,replacement)
+        assert not pilot.configured_group_scope() is None
+    for invalid in ('120363431915456655@g.us','not-a-peer','123@s.whatsapp.net'):
+        with patch.dict('os.environ',_exact_pilot_env(AI_AGENTS_PILOT_CONVERSATION_ID=invalid),clear=True):
+            assert pilot.configured_group_scope() is None
+
+
 def test_pilot_preparation_resume_rejects_admin_or_live_guard(monkeypatch):
     class Cursor:
         def __enter__(self): return self
