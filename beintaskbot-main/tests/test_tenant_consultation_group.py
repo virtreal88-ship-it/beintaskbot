@@ -63,6 +63,15 @@ def test_unknown_delivery_is_never_retried_and_media_is_not_silently_dropped(db,
     with pytest.raises(TenantLinearError):flow.dispatch(PROFILE,consult,payload['request_id'])
     assert len(calls)==1
 
+def test_preparation_requires_owner_explicit_destination_and_is_tenant_scoped(db,monkeypatch):
+    consult,_=setup_case(db,monkeypatch); payload=request()
+    with pytest.raises(TenantLinearError):flow.prepare(PROFILE,consult,{**payload,'confirm_group':False})
+    with pytest.raises(TenantLinearError):flow.prepare({'tenant_id':B,'telegram_id':22},consult,payload)
+    with pytest.raises(TenantLinearError):flow.prepare(PROFILE,consult,{**payload,'conversation_id':'not-a-group'})
+    assert flow.prepare(PROFILE,consult,payload)['created']
+    with pytest.raises(TenantLinearError):flow.prepare(PROFILE,consult,{**payload,'summary':'Different summary'})
+    with pytest.raises(TenantLinearError):flow.dispatch(PROFILE,consult,str(uuid.uuid4()))
+
 def test_two_concurrent_cases_require_exact_quote_or_unambiguous_marker(db,monkeypatch):
     first,_=setup_case(db,monkeypatch);first_request=request()
     db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,'client2',100,'Client',now())",(A,CA))
