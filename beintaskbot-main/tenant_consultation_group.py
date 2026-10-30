@@ -327,8 +327,20 @@ def record_group_reply(cur,tenant,channel,conversation,message_id,text,quoted_id
 
 
 _REMOTE_PASSWORD=re.compile(r'(?i)(?:anydesk|парол|password|passcode|şifr)[^\n]{0,48}(?:[:=]\s*|\s+)[A-Za-z0-9!@#$%^&*_.-]{6,}')
-_CUSTOMER_VERIFIED=re.compile(r"(?i)(?:\b(?:it(?:'s| is)|this is|that is|everything is)\s+(?:working now|fixed|resolved)\b|\bworks now\b|\bworking now\b|\bproblem(?: is|'s) solved\b|\bissue(?: is|'s) (?:fixed|resolved)\b|\bthe fix worked\b|проблема решена|исправлено|теперь работает|всё работает|все работает|заработало|düzəldi|problem həll olundu|problem həll oldu|artıq işləyir)")
-_CUSTOMER_NEGATIVE=re.compile(r"(?i)(?:\bnot\b|\bnever\b|\bstill\b|\bno longer\b|\bhardly\b|\b(?:is|are|was|were)n['’]?t\b|\bdoesn['’]?t\b|\bdon['’]?t\b|\bdidn['’]?t\b|\bcan['’]?t\b|\bcannot\b|\bне\b|не исправил|не работает|не помогло|неполностью|hələ|düzəlməyib|işləmir|həll olunmayıb)")
+# Resolving a customer case is consequential: accept only short, whole-message
+# affirmations. Substring matching (e.g. "tell me when it is fixed") is unsafe,
+# and trying to enumerate negation in every language cannot make it safe.
+_CUSTOMER_VERIFIED=re.compile(r"(?i)^(?:"
+    r"(?:yes[, ]*)?(?:(?:it|this|that) is )?(?:working now|works now|fixed|resolved)"
+    r"|(?:yes[, ]*)?the fix worked"
+    r"|(?:yes[, ]*)?(?:the )?problem (?:is )?solved"
+    r"|(?:yes[, ]*)?(?:the )?issue (?:is )?(?:fixed|resolved)"
+    r"|yes|yep|yeah|confirmed|thank you, it works now|thanks, it works now"
+    r"|да[, ]*(?:исправлено|работает|теперь работает|всё работает|все работает|заработало|проблема решена)"
+    r"|исправлено|теперь работает|всё работает|все работает|заработало|проблема решена"
+    r"|bəli[, ]*(?:düzəldi|artıq işləyir|problem həll oldu|problem həll olundu)"
+    r"|düzəldi|artıq işləyir|problem həll oldu|problem həll olundu"
+    r")(?:[.! ]*(?:thank you|thanks|спасибо|təşəkkürlər))?[.! ]*$")
 
 
 def _redact_remote_password(value):
@@ -341,8 +353,7 @@ def record_customer_verification(cur,tenant,channel,conversation,message_id,text
     job={'provider':'connect','tenant_id':tenant,'channel_id':channel,'conversation_id':conversation}
     body=' '.join(str(text or '').split())
     if (not manual_live_job(job) or not body or any(mark in body for mark in ('?','？','؟'))
-            or _CUSTOMER_NEGATIVE.search(body)
-            or not _CUSTOMER_VERIFIED.search(body)):
+            or not _CUSTOMER_VERIFIED.fullmatch(body)):
         return None
     cur.execute("SELECT to_regclass('saas_ai_pilot_followups') IS NOT NULL AS available")
     if not (cur.fetchone() or {}).get('available'):

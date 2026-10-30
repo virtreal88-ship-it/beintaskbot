@@ -469,6 +469,17 @@ def test_case_resolves_only_after_positive_customer_verification_of_pilot_reply(
             'It is not fully fixed.','customer-ai-reply') is None
         assert flow.record_customer_verification(cur,A,CA,'client','customer-contraction',
             "It isn't working now.",'customer-ai-reply') is None
+        # A positive phrase embedded in a request is not customer confirmation.
+        assert flow.record_customer_verification(cur,A,CA,'client','customer-request-en',
+            'Please tell me when it is fixed.','customer-ai-reply') is None
+        assert flow.record_customer_verification(cur,A,CA,'client','customer-request-ru',
+            'Пожалуйста, сообщите, когда исправят.','customer-ai-reply') is None
+        assert flow.record_customer_verification(cur,A,CA,'client','customer-request-az',
+            'Düzələndə mənə xəbər verin.','customer-ai-reply') is None
+        # Affirmations are deliberately brief and explicit in supported languages.
+        assert flow._CUSTOMER_VERIFIED.fullmatch('Yes, works now. Thank you.')
+        assert flow._CUSTOMER_VERIFIED.fullmatch('Да, теперь работает.')
+        assert flow._CUSTOMER_VERIFIED.fullmatch('Bəli, düzəldi.')
     db.commit()
     assert db.execute('SELECT status FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,case))[0]['status']!='resolved'
     with db.cursor() as cur:
