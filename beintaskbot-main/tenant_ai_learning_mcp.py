@@ -499,6 +499,12 @@ def _tools(cur,cfg,name,args):
             if set(args['fields'])-{'title','symptoms','cause','resolution_steps','owner_additions'}:
                 raise TenantLinearError('Unsupported case field.',400)
             return cases.mutate(profile,args['candidate_id'],{'expected_version':args['expected_version'],'agent_ids':args['agent_ids'],**args['fields']},'publish_guidance')
+        if name=='support_case_correct_published':
+            if set(args)!={'candidate_id','expected_version','expected_source_hash','fields'} or not isinstance(args.get('fields'),dict):
+                raise TenantLinearError('Invalid published case correction.',400)
+            if not args['fields'] or set(args['fields'])-{'title','symptoms','resolution_steps','owner_additions'}:
+                raise TenantLinearError('Unsupported correction field.',400)
+            return cases.mutate(profile,args['candidate_id'],{'expected_version':args['expected_version'],'expected_source_hash':args['expected_source_hash'],**args['fields']},'correct_published')
         if name=='support_case_edit_boundaries':
             if set(args)!={'candidate_id','expected_version','start_message_id','end_message_id'}:
                 raise TenantLinearError('Invalid case-boundary edit request.',400)
@@ -872,6 +878,8 @@ def _support_case_definitions():
        'inputSchema':{'type':'object','properties':{**ids,'expected_version':{'type':'integer','minimum':1},'agent_ids':{'type':'array','minItems':1,'maxItems':20,'uniqueItems':True,'items':{'type':'string','format':'uuid'}}},'required':['candidate_id','expected_version','agent_ids'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_case_edit_publish','description':'Edit useful owner guidance and publish it in one operation while preserving unknown outcome/cause as unknown. Existing evidence, tenant, source-version, owner and agent checks remain mandatory.',
        'inputSchema':{'type':'object','properties':{**ids,'expected_version':{'type':'integer','minimum':1},'agent_ids':{'type':'array','minItems':1,'maxItems':20,'uniqueItems':True,'items':{'type':'string','format':'uuid'}},'fields':{'type':'object','properties':{'title':{'type':'string','maxLength':180},'symptoms':{'type':'array','items':{'type':'string','maxLength':1000}},'cause':{'type':'object'},'resolution_steps':{'type':'array','items':{'type':'string','maxLength':2000}},'owner_additions':{'type':'string','maxLength':6000}},'additionalProperties':False}},'required':['candidate_id','expected_version','agent_ids','fields'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
+      {'name':'support_case_correct_published','description':'Owner correction of a published case and its existing knowledge sources. Requires current case version and reviewed source hash; preserves all agent bindings and outcome/cause.',
+       'inputSchema':{'type':'object','properties':{**ids,'expected_version':{'type':'integer','minimum':1},'expected_source_hash':{'type':'string','pattern':'^[a-f0-9]{64}$'},'fields':{'type':'object','minProperties':1,'properties':{'title':{'type':'string','maxLength':180},'symptoms':{'type':'array','items':{'type':'string','maxLength':800}},'resolution_steps':{'type':'array','items':{'type':'string','maxLength':800}},'owner_additions':{'type':'string','maxLength':4000}},'additionalProperties':False}},'required':['candidate_id','expected_version','expected_source_hash','fields'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_case_edit_boundaries','description':'Edit the exact start and end messages for one case. The existing server service rechecks owner role, tenant, source channel, case version, message interval and that required outcome/cause evidence remains inside; it does not start analysis.',
        'inputSchema':{'type':'object','properties':{**ids,'expected_version':{'type':'integer','minimum':1},'start_message_id':{'type':'string','format':'uuid'},'end_message_id':{'type':'string','format':'uuid'}},'required':['candidate_id','expected_version','start_message_id','end_message_id'],'additionalProperties':False},'annotations':{'readOnlyHint':False,'destructiveHint':False,'openWorldHint':False},'securitySchemes':security},
       {'name':'support_case_reject_delete','description':'Permanently delete one exact case after matching candidate ID and current version. Choose retain or deactivate for linked knowledge; use none only when no knowledge is linked. Does not delete the CRM conversation.',
@@ -990,7 +998,7 @@ async def mcp(request):
                 commit_attempted=True
                 output=await asyncio.to_thread(_tools,None,cfg,tool_name,arguments)
                 return _tool_response(output,request_id)
-            if tool_name in {'support_case_confirm_publish','support_case_edit_publish','support_case_edit_boundaries','support_case_reject_delete','support_media_campaign_prepare','support_media_campaign_start','support_media_campaign_control','support_media_campaign_recover_failed','support_media_case_extension_apply','support_agent_permanent_delete'}:
+            if tool_name in {'support_case_confirm_publish','support_case_edit_publish','support_case_correct_published','support_case_edit_boundaries','support_case_reject_delete','support_media_campaign_prepare','support_media_campaign_start','support_media_campaign_control','support_media_campaign_recover_failed','support_media_case_extension_apply','support_agent_permanent_delete'}:
                 # Case services commit in their own transaction; report any
                 # unexpected post-dispatch failure as unknown, never as a
                 # safe-to-repeat action.
@@ -1029,7 +1037,7 @@ async def mcp(request):
     except Exception:
         incident_id=secrets.token_hex(8)
         log.exception('AI Learning MCP tool failure incident=%s method=%s',incident_id,method)
-        if method=='tools/call' and (tool_name.startswith('administrator_training_') or tool_name in {'support_dialog_agent_assign','support_agent_archive_transfer','support_agent_permanent_delete','support_case_confirm_publish','support_case_edit_publish','support_case_edit_boundaries','support_case_reject_delete','support_media_campaign_prepare','support_media_campaign_start','support_media_campaign_control','support_media_campaign_recover_failed'}):
+        if method=='tools/call' and (tool_name.startswith('administrator_training_') or tool_name in {'support_dialog_agent_assign','support_agent_archive_transfer','support_agent_permanent_delete','support_case_confirm_publish','support_case_edit_publish','support_case_correct_published','support_case_edit_boundaries','support_case_reject_delete','support_media_campaign_prepare','support_media_campaign_start','support_media_campaign_control','support_media_campaign_recover_failed'}):
             # A failed commit can have an unknown network outcome. Make that
             # explicit and require the caller to inspect the policy/request
             # receipt before retrying the same idempotency key.

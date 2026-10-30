@@ -829,6 +829,52 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
             cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,identifier(candidate_id)))
             row=cur.fetchone()
             if not row: raise TenantLinearError('Карточка не найдена.',404)
+            if action=='correct_published':
+                from tenant_knowledge_candidates_policy import text
+                if policy.profile.get('role')!='owner': raise TenantLinearError('Исправить опубликованное знание может только владелец.',403)
+                if set(data)-{'expected_version','expected_source_hash','title','symptoms','resolution_steps','owner_additions'} or not set(data)&{'title','symptoms','resolution_steps','owner_additions'}:
+                    raise TenantLinearError('Некорректные поля исправления.')
+                if type(data.get('expected_version')) is not int or data['expected_version']!=row['version']:
+                    raise TenantLinearError('Карточка изменилась. Обновите страницу.',409)
+                if row['status']!='knowledge_published': raise TenantLinearError('Кейс не опубликован.',409)
+                old=row['content'];updated=dict(old)
+                for key in set(data)&{'title','symptoms','resolution_steps','owner_additions'}:
+                    value=data[key]
+                    if key in {'symptoms','resolution_steps'}:
+                        if not isinstance(value,list) or len(value)>10 or (key=='symptoms' and not value): raise TenantLinearError('Некорректное поле карточки.')
+                        updated[key]=[text(v,800,True,owner_payment_link=key=='resolution_steps') for v in value]
+                    else: updated[key]=text(value,180 if key=='title' else 4000,key=='title',owner_payment_link=key=='owner_additions')
+                cur.execute('''SELECT ks.agent_id::text AS agent_id,s.id::text AS id,s.title,s.content,s.content_hash,s.active,s.provenance
+                  FROM saas_knowledge_candidate_sources ks JOIN saas_ai_knowledge_sources s ON s.tenant_id=ks.tenant_id AND s.id=ks.source_id
+                  WHERE ks.tenant_id=%s::uuid AND ks.candidate_id=%s::uuid ORDER BY ks.agent_id FOR UPDATE OF s''',(tenant,row['id']))
+                sources=cur.fetchall()
+                cur.execute('''SELECT source_id::text AS source_id,source_hash FROM saas_knowledge_candidate_knowledge_reviews
+                  WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid FOR UPDATE''',(tenant,row['id']))
+                review=cur.fetchone()
+                if not sources or not review or data.get('expected_source_hash')!=review['source_hash'] or not any(s['id']==review['source_id'] and s['content_hash']==review['source_hash'] for s in sources):
+                    raise TenantLinearError('Источник знания изменился. Обновите страницу.',409)
+                for source in sources:
+                    provenance=source.get('provenance') or {}
+                    if (not source['active'] or source['title']!=old['title'] or provenance.get('candidate_id')!=str(row['id']) or provenance.get('review_status')!='owner_reviewed_guidance'
+                        or source['content']!=publication_text(old,media_warning=bool(provenance.get('media_review_warning')))):
+                        raise TenantLinearError('Источник знания изменился. Обновите страницу.',409)
+                before_hashes={s['id']:s['content_hash'] for s in sources};after_hashes={}
+                for source in sources:
+                    provenance=dict(source.get('provenance') or {})
+                    content=publication_text(updated,media_warning=bool(provenance.get('media_review_warning')))
+                    saved=save_knowledge(profile,{'title':updated['title'],'content':content},source_id=source['id'],connection=cur.connection)
+                    provenance.pop('request_hash',None)
+                    cur.execute('UPDATE saas_ai_knowledge_sources SET provenance=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(provenance),tenant,source['id']))
+                    after_hashes[source['id']]=saved['content_hash']
+                    if source['id']==review['source_id']:
+                        cur.execute('UPDATE saas_knowledge_candidate_knowledge_reviews SET source_title=%s,source_hash=%s,reviewed_by=%s,created_at=now() WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid',(updated['title'],saved['content_hash'],actor,tenant,row['id']))
+                cur.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb,version=version+1,reviewed_by=%s,reviewed_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(updated),actor,tenant,row['id']))
+                _audit(cur,tenant,actor,'knowledge_candidate_owner_correction','knowledge_candidate',row['id'],{'before_source_hashes':before_hashes,'after_source_hashes':after_hashes,'fields':sorted(set(data)-{'expected_version','expected_source_hash'})})
+                if connection is not None:
+                    cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,row['id']))
+                    return {'candidate':public_card(cur,cur.fetchone())}
+                conn.commit()
+                return detail(profile,candidate_id)
             if action in {'archive','restore'}:
                 if policy.profile.get('role') not in {'owner','admin'}:
                     raise TenantLinearError('Архивировать и восстанавливать кейсы может только владелец или администратор.',403)
