@@ -49,7 +49,7 @@ def destinations(profile):
         with conn.cursor() as cur:
             tenant,_,policy=_owner(cur,profile)
             cur.execute('''SELECT c.connect_channel_id::text AS channel_id,c.conversation_id,
-                COALESCE(NULLIF(c.display_name,''),NULLIF(c.contact_name,''),c.conversation_id) AS contact_name
+                COALESCE(NULLIF(c.display_name,''),NULLIF(c.contact_name,''),c.conversation_id) AS contact_name,ch.name AS channel_name
               FROM saas_connect_conversations c JOIN saas_connect_channels ch
                 ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id
               WHERE c.tenant_id=%s::uuid AND ch.active=TRUE AND c.conversation_id LIKE %s
@@ -197,11 +197,14 @@ def read(profile,consultation_id):
             if not row:raise TenantLinearError('Consultation is unavailable.',404)
             assert_route(cur,tenant,policy,'connect',row['source_conversation'],str(row['source_channel']))
             group=assert_route(cur,tenant,policy,'connect',row['conversation_id'],str(row['channel_id']))
+            cur.execute('SELECT name FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid',(tenant,str(row['channel_id'])))
+            channel_name=(cur.fetchone() or {}).get('name') or ''
             cur.execute('''SELECT message_id,body,created_at FROM saas_consultation_group_replies
               WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid ORDER BY created_at,message_id''',(tenant,key))
             replies=[{'message_id':r['message_id'],'body':r['body'],'created_at':r['created_at'].isoformat() if hasattr(r['created_at'],'isoformat') else str(r['created_at'])} for r in cur.fetchall()]
             return {'consultation_id':key,'case_id':str(row['case_id']),'state':row['state'],'request_id':str(row['request_id']),
                     'destination':group.get('display_name') or group.get('contact_name') or row['conversation_id'],'prepared_text':row['body'],
+                    'channel_name':channel_name,
                     'channel_id':str(row['channel_id']),'conversation_id':row['conversation_id'],
                     'replies':replies,'customer_draft':row['customer_draft'],
                     'draft_reply_id':row['draft_reply_id'],'draft_revision':int(row['draft_revision']),'customer_message_sent':False}

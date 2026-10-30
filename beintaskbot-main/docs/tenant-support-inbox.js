@@ -95,7 +95,7 @@
           let groups;try{groups=(await consultationApi('/groups')).groups||[];}catch(problem){host.append(element('p',problem.message));return;}
           if(followup)groups=groups.filter(group=>group.channel_id===followup.channel_id&&group.conversation_id===followup.conversation_id);
           const select=element('select');select.append(new Option(t('groupChoose'),''));
-          groups.forEach((group,index)=>select.append(new Option(group.contact_name||group.conversation_id,String(index))));
+          groups.forEach((group,index)=>select.append(new Option((group.contact_name||group.conversation_id)+(group.channel_name?' · '+group.channel_name:''),String(index))));
           if(followup&&groups.length===1){select.value='0';select.disabled=true;}
           // Never prefill old remote-access codes; the owner supplies only
           // currently relevant details for this specific transmission.
@@ -111,7 +111,7 @@
           return;
         }
         if(state.state==='ready'){
-          host.append(element('p',state.destination),element('p',state.prepared_text));
+          host.append(element('p',state.destination+(state.channel_name?' · '+state.channel_name:'')),element('p',state.prepared_text));
           const button=element('button',t('groupSend'));button.type='button';host.append(button);
           button.onclick=async()=>{button.disabled=true;try{await consultationApi(path,'POST',{action:'send',request_id:state.request_id});await display();}catch(problem){notice(problem.message);await display();}};
         }else {
