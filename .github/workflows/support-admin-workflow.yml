@@ -113,6 +113,7 @@ jobs:
           node tests/test_support_cases_integration_ui.cjs
           node tests/test_support_cases_modal_ui.cjs
           node tests/test_support_cases_locale_ui.cjs
+          node tests/test_published_case_correction_ui.cjs
           node tests/test_knowledge_campaigns_ui.cjs
           node tests/test_knowledge_campaign_reconciliation_ui.cjs
           node tests/test_tenant_operator_assignment_ui.cjs
