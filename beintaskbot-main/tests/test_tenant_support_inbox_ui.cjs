@@ -87,6 +87,7 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  await settle();focused.window.document.querySelector('[data-focused-attachment] button').click();
  assert.equal(focused.window.document.querySelector('[data-focused-attachment] img'),null);
  assert.match(focused.window.document.querySelector('[data-focused-attachment] details').textContent,/img src/);
+ assert.match(focused.window.document.querySelector('[data-focused-attachment] details').textContent,/Текущая версия файла не проверялась/);
  assert.match(attachmentUrl,/expected_user_id=11/);assert.match(attachmentUrl,/message_id=connect%3Asynthetic/);
  assert.equal(focusCalls.filter(x=>x.init.method&&x.init.method!=='GET').length,0);focused.window.close();
  const noDialogs=setup(async(url)=>{

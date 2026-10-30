@@ -134,7 +134,7 @@
     const section=document.createElement('section'),label=document.createElement('p');section.dataset.focusedAttachment='true';
     label.textContent=t('attachment')+' · '+String(item.message_type||'');section.append(label);
     const status=document.createElement('small');status.setAttribute('role','status');
-    if(item.media_evidence_context){const details=document.createElement('details'),summary=document.createElement('summary'),text=document.createElement('p');summary.textContent=t('savedMediaEvidence');text.textContent=item.media_evidence_context;text.setAttribute('data-user-content','');details.append(summary,text);section.append(details);}
+    if(item.media_evidence_context){const details=document.createElement('details'),summary=document.createElement('summary'),hint=document.createElement('small'),text=document.createElement('p');summary.textContent=t('savedMediaEvidence');hint.textContent=t('currentBytesNotChecked');text.textContent=item.media_evidence_context;text.setAttribute('data-user-content','');details.append(summary,hint,text);section.append(details);}
     if(window.tenantOperator?.hasRight('dialogs')&&item.external_id&&ticket.lead_id){
       const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=t('downloadAttachment');
       button.onclick=()=>{if(!window.tenantDownloadAttachment){status.textContent=t('error');return;}
