@@ -32,7 +32,10 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db,monkeypatc
     monkeypatch.setattr(transport,'_fernet',lambda:SimpleNamespace(decrypt=lambda _:b'{"webhook_secret":"synthetic-secret"}'))
     monkeypatch.setattr('tenant_ai_agent_connect.enqueue',lambda *_args,**_kwargs:None)
     sends=[]
-    monkeypatch.setattr(transport,'send_group_with_receipt',lambda route,body,key:(sends.append((route['conversation_id'],body)) or {'message_id':'synthetic','external_message_id':'PROVIDER_123'}))
+    def send(route,body,key):
+        sends.append((route['conversation_id'],body))
+        return {'message_id':'synthetic-'+str(len(sends)),'external_message_id':'PROVIDER_'+str(len(sends))}
+    monkeypatch.setattr(transport,'send_group_with_receipt',send)
     sock=socket.socket();sock.bind(('127.0.0.1',0));sock.listen(16);port=sock.getsockname()[1];origin='http://127.0.0.1:'+str(port)
     loop=asyncio.new_event_loop();ready=threading.Event();state={}
     async def start():

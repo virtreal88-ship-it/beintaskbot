@@ -765,8 +765,12 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             from tenant_ai_group_coordination import group_jid, known_ai_origin, verified_employee, stop as stop_group
             coordinated = bool(group_jid(conversation))
             ai_origin = coordinated and known_ai_origin(cur,tenant,data)
-            uncertain_origin = coordinated and data.get('authorshipUncertain') is True and not ai_origin
-            employee = verified_employee(cur,tenant,data) if coordinated and not ai_origin and not uncertain_origin else None
+            consultation_origin=False
+            if coordinated and outbound and not ai_origin:
+                from tenant_consultation_group import known_outbound
+                consultation_origin=known_outbound(cur,tenant,channel_id,conversation,data)
+            uncertain_origin = coordinated and data.get('authorshipUncertain') is True and not ai_origin and not consultation_origin
+            employee = verified_employee(cur,tenant,data) if coordinated and not ai_origin and not consultation_origin and not uncertain_origin else None
             if not coordinated and not outbound and _direct_identity(conversation):
                 from tenant_ai_group_coordination import EmployeeIdentityConflict
                 try:

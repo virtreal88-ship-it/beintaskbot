@@ -74,6 +74,12 @@ def prepare(profile,consultation_id,data):
         schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy=_owner(cur,profile)
+            # A client request UUID must never be mistaken for AI-run origin
+            # when Connect later observes the signed outbound echo.
+            cur.execute('''SELECT 1 FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND id=%s::uuid
+              UNION ALL SELECT 1 FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid LIMIT 1''',
+              (tenant,request_id,tenant,request_id))
+            if cur.fetchone():raise TenantLinearError('Request identity is already in use.',409)
             cur.execute('''SELECT c.id,c.case_id,c.channel_id,c.conversation_id,c.status,t.status AS ticket_status
               FROM saas_internal_consultations c JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
               WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid FOR UPDATE OF c,t''',(tenant,key));consult=cur.fetchone()
@@ -108,7 +114,7 @@ def prepare(profile,consultation_id,data):
                 return {'consultation_id':key,'case_id':str(consult['case_id']),'state':old['state'],'created':False}
             if previous and any(str(r['channel_id'])!=channel or r['conversation_id']!=group for r in previous):
                 raise TenantLinearError('The consultation group cannot be changed.',409)
-            if any(r['state']!='sent' for r in previous):
+            if any(r['state'] not in {'sent','blocked'} for r in previous):
                 raise TenantLinearError('An earlier delivery needs review before another message.',409)
             last=previous[-1] if previous else {}
             cur.execute('''INSERT INTO saas_consultation_group_deliveries(tenant_id,consultation_id,request_id,case_id,channel_id,conversation_id,body,body_hash,state,created_by,customer_draft,draft_reply_id,draft_revision)
@@ -142,20 +148,36 @@ def dispatch(profile,consultation_id,request_id):
             cur.execute("UPDATE saas_consultation_group_deliveries SET state='sending',updated_at=now() WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid",(tenant,key,request_id))
             body=row['body']
         conn.commit()
-    try: receipt=send_group_with_receipt(route,body,request_id)
-    except Exception:
-        with _connect() as conn:
-            with conn.cursor() as cur:cur.execute("UPDATE saas_consultation_group_deliveries SET state='unknown',updated_at=now() WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='sending'",(tenant,key,request_id))
-            conn.commit()
-        raise TenantLinearError('Delivery outcome is unknown; do not resend.',503) from None
-    with _connect() as conn:
+    attempted=False
+    try:
+      with _connect() as conn:
         with conn.cursor() as cur:
-            # Serialize with the signed group webhook: a reply can arrive
-            # between the provider accepting the send and receipt persistence.
+            # Hold the same group/dialogue fence as the normal Connect sender
+            # across the provider call; never change the group's AI state.
             from tenant_ai_dialog_scope import lock_dialog
+            from tenant_ai_group_coordination import read as group_state
+            from tenant_platform import _json
             lock_dialog(cur,tenant,'connect',str(row['channel_id']),row['conversation_id'])
+            _tenant,_actor,current_policy=_owner(cur,profile)
+            assert_route(cur,tenant,current_policy,'connect',consult['conversation_id'],str(consult['channel_id']))
+            current_group=assert_route(cur,tenant,current_policy,'connect',row['conversation_id'],str(row['channel_id']))
+            state=group_state(cur,tenant,row['conversation_id'])
+            cur.execute("""SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect'
+              AND conversation_id=%s AND state IN ('queued','processing') LIMIT 1""",(tenant,row['conversation_id']))
+            if state.get('state') not in {'human','paused'} or cur.fetchone():
+                raise TenantLinearError('Группа должна быть остановлена без активных AI-заданий.',409)
+            current_route=connect_route(cur,tenant,int(current_group['lead_id']))
+            if not current_route or current_route['channel_id']!=str(row['channel_id']) or current_route['conversation_id']!=row['conversation_id']:
+                raise TenantLinearError('Destination group changed or is unavailable.',409)
+            attempted=True;receipt=send_group_with_receipt(current_route,body,request_id)
             cur.execute("""UPDATE saas_consultation_group_deliveries SET state='sent',connect_message_id=%s,provider_message_id=%s,updated_at=now()
               WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='sending' RETURNING consultation_id""",(receipt['message_id'],receipt['external_message_id'],tenant,key,request_id))
+            if not cur.fetchone():raise TenantLinearError('Delivery receipt needs review.',409)
+            cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,raw)
+              VALUES(%s::uuid,%s::uuid,%s,%s,'outgoing',%s,'Operator',%s,'text',%s::jsonb)
+              ON CONFLICT(tenant_id,external_id) DO NOTHING RETURNING id''',
+              (str(uuid.uuid4()),tenant,current_group['lead_id'],'connect:'+receipt['message_id'],
+               'connect:'+str(row['channel_id']),body,_json({'source':'connect','consultation_outbound':True})))
             if not cur.fetchone():raise TenantLinearError('Delivery receipt needs review.',409)
             _audit(cur,tenant,actor,'consultation_group_sent','consultation',key,{'request_id':request_id})
             # A prior inbound event was persisted before the receipt existed.
@@ -181,6 +203,12 @@ def dispatch(profile,consultation_id,request_id):
                 import logging
                 logging.getLogger(__name__).warning('Consultation reply needs reconciliation; delivery receipt preserved')
         conn.commit()
+    except Exception:
+        with _connect() as conn:
+            with conn.cursor() as cur:cur.execute("UPDATE saas_consultation_group_deliveries SET state=%s,updated_at=now() WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='sending'",('unknown' if attempted else 'blocked',tenant,key,request_id))
+            conn.commit()
+        if not attempted:raise TenantLinearError('Группа недоступна для безопасной отправки; проверьте её состояние.',409) from None
+        raise TenantLinearError('Delivery outcome is unknown; do not resend.',503) from None
     return {'state':'sent','message_id':receipt['message_id']}
 
 
@@ -242,6 +270,21 @@ def save_draft(profile,consultation_id,data):
             _audit(cur,tenant,actor,'consultation_customer_draft_saved','consultation',key,{'reply_id':reply_id})
         conn.commit()
     return {'consultation_id':key,'customer_message_sent':False}
+
+
+def known_outbound(cur,tenant,channel,conversation,data):
+    """Recognize only this workflow's signed Connect echo, never by text."""
+    external=data.get('externalMessageId');token=data.get('originClientMessageId') or data.get('clientMessageId')
+    if not isinstance(external,str):external=''
+    if not isinstance(token,str):token=''
+    if not external and not token:return False
+    cur.execute("SELECT to_regclass('saas_consultation_group_deliveries') AS relation")
+    if not (cur.fetchone() or {}).get('relation'):return False
+    cur.execute('''SELECT 1 FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid
+      AND channel_id=%s::uuid AND conversation_id=%s AND state='sent'
+      AND ((%s<>'' AND provider_message_id=%s) OR (%s<>'' AND request_id::text=%s)) LIMIT 1''',
+      (tenant,channel,conversation,external,external,token,token))
+    return bool(cur.fetchone())
 
 
 def record_group_reply(cur,tenant,channel,conversation,message_id,text,quoted_id=None):

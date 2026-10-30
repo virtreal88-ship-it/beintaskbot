@@ -115,9 +115,10 @@
           const button=element('button',t('groupSend'));button.type='button';host.append(button);
           button.onclick=async()=>{button.disabled=true;try{await consultationApi(path,'POST',{action:'send',request_id:state.request_id});await display();}catch(problem){notice(problem.message);await display();}};
         }else {
-          host.append(element('p',state.state==='sent'?t('groupConfirmed'):t('groupUnknown')));
+          host.append(element('p',state.state==='sent'?t('groupConfirmed'):state.state==='blocked'?t('groupBlocked'):t('groupUnknown')));
           const refresh=element('button',t('refresh'));refresh.type='button';refresh.onclick=()=>void display();host.append(refresh);
           if(state.state==='sent'){const follow=element('button',t('groupFollowup'));follow.type='button';follow.onclick=()=>void display(state);host.append(follow);}
+          if(state.state==='blocked'){const retry=element('button',t('groupPrepareAgain'));retry.type='button';retry.onclick=()=>void display(state);host.append(retry);}
         }
         for(const reply of state.replies||[]){
           const section=element('section'),heading=element('b',t('groupReply')),body=element('p',reply.body),draft=element('textarea'),save=element('button',t('save')),hint=element('small',t('draftNotSent'));

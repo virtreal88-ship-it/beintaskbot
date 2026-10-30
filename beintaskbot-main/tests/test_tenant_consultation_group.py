@@ -13,6 +13,7 @@ def setup_case(db, monkeypatch):
     monkeypatch.setattr(flow, '_connect', lambda: db)
     flow.schema(db)
     db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,99,'Group',now())",(A,CA,GROUP))
+    db.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,state,reason) VALUES(%s::uuid,%s,'human','existing')",(A,GROUP))
     with db.cursor() as cur:
         ticket=tickets.create_in_transaction(cur,A,CA,'client','Synthetic issue','test-group',actor=11)
     case=ticket['id']; consult=str(uuid.uuid4())
@@ -30,15 +31,15 @@ def test_one_shot_receipt_and_reply_that_arrives_during_send(db,monkeypatch):
     consult,case=setup_case(db,monkeypatch); payload=request()
     assert flow.prepare(PROFILE,consult,payload)['created']
     assert not flow.prepare(PROFILE,consult,payload)['created']
-    calls=[]
+    # An already persisted, unlinked event is reconciled after the receipt.
+    with db.cursor() as cur:
+        cur.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw)
+          VALUES(%s::uuid,%s::uuid,99,'connect:inbound-1','incoming',%s,'Synthetic reply','text',%s::jsonb)""",
+          (str(uuid.uuid4()),A,'connect:'+CA,'{"id":"inbound-1","quotedExternalMessageId":"PROVIDER_123"}'))
+        assert flow.record_group_reply(cur,A,CA,GROUP,'inbound-1','Synthetic reply','PROVIDER_123') is None
+    db.commit();calls=[]
     def send(route,body,request_id):
         calls.append((body,request_id))
-        with db.cursor() as cur:
-            cur.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw)
-              VALUES(%s::uuid,%s::uuid,99,'connect:inbound-1','incoming',%s,'Synthetic reply','text',%s::jsonb)""",
-              (str(uuid.uuid4()),A,'connect:'+CA,'{"id":"inbound-1","quotedExternalMessageId":"PROVIDER_123"}'))
-            assert flow.record_group_reply(cur,A,CA,GROUP,'inbound-1','Synthetic reply','PROVIDER_123') is None
-        db.commit()
         return {'message_id':'connect-id','external_message_id':'PROVIDER_123'}
     monkeypatch.setattr(transport,'send_group_with_receipt',send)
     assert flow.dispatch(PROFILE,consult,payload['request_id'])['state']=='sent'
@@ -52,6 +53,9 @@ def test_one_shot_receipt_and_reply_that_arrives_during_send(db,monkeypatch):
         assert flow.record_group_reply(cur,A,CA,GROUP,'inbound-1','Synthetic reply','PROVIDER_123') is None
         assert flow.record_group_reply(cur,B,CA,GROUP,'inbound-2','Synthetic reply','PROVIDER_123') is None
         assert flow.record_group_reply(cur,A,CA,'120363411822115408@g.us','inbound-3','Synthetic reply','PROVIDER_123') is None
+        assert flow.known_outbound(cur,A,CA,GROUP,{'externalMessageId':'PROVIDER_123'})
+        assert not flow.known_outbound(cur,B,CA,GROUP,{'externalMessageId':'PROVIDER_123'})
+        assert not flow.known_outbound(cur,A,CA,'120363411822115408@g.us',{'externalMessageId':'PROVIDER_123'})
     db.commit()
     assert flow.read(PROFILE,consult)['replies'][0]['body']=='Synthetic reply'
     assert flow.save_draft(PROFILE,consult,{'message_id':'inbound-1','draft':'We will check this.','expected_revision':0})['customer_message_sent'] is False
@@ -70,6 +74,22 @@ def test_unknown_delivery_is_never_retried_and_invalid_media_is_rejected(db,monk
     with pytest.raises(TenantLinearError):flow.dispatch(PROFILE,consult,payload['request_id'])
     with pytest.raises(TenantLinearError):flow.dispatch(PROFILE,consult,payload['request_id'])
     assert len(calls)==1
+
+def test_active_group_is_blocked_before_provider_without_state_mutation(db,monkeypatch):
+    consult,_=setup_case(db,monkeypatch);payload=request();calls=[]
+    flow.prepare(PROFILE,consult,payload)
+    db.execute("UPDATE saas_ai_group_coordination SET state='active',reason='existing',revision=7 WHERE tenant_id=%s::uuid AND group_jid=%s",(A,GROUP));db.commit()
+    monkeypatch.setattr(transport,'send_group_with_receipt',lambda *_:calls.append('unsafe'))
+    with pytest.raises(TenantLinearError) as blocked:flow.dispatch(PROFILE,consult,payload['request_id'])
+    assert blocked.value.status==409 and not calls
+    assert flow.read(PROFILE,consult)['state']=='blocked'
+    state=db.execute('SELECT state,reason,revision FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s',(A,GROUP))[0]
+    assert state=={'state':'active','reason':'existing','revision':7};db.commit()
+    # Only a fresh explicit request can proceed once the group is already stopped.
+    db.execute("UPDATE saas_ai_group_coordination SET state='human' WHERE tenant_id=%s::uuid AND group_jid=%s",(A,GROUP));db.commit()
+    fresh=request();flow.prepare(PROFILE,consult,fresh)
+    monkeypatch.setattr(transport,'send_group_with_receipt',lambda *_:{'message_id':'new-synthetic','external_message_id':'PROVIDER_123'})
+    assert flow.dispatch(PROFILE,consult,fresh['request_id'])['state']=='sent'
 
 def test_selected_attachment_must_belong_to_exact_ticket_conversation(db,monkeypatch):
     consult,case=setup_case(db,monkeypatch);payload=request();image=str(uuid.uuid4())
@@ -218,3 +238,11 @@ def test_signed_inbound_group_reply_reaches_exact_consultation_once(db,monkeypat
     result=flow.read(PROFILE,consult)
     assert [reply['body'] for reply in result['replies']]==[response_text]
     assert result['customer_draft']=='' and result['customer_message_sent'] is False
+    echo={'id':'synthetic-echo','type':'message.outbound.observed','data':{'id':'synthetic',
+      'externalMessageId':'PROVIDER_123','channelId':CA,'conversationId':GROUP,'isGroup':True,
+      'fromMe':True,'source':'unknown','authorshipUncertain':True,'type':'text','text':'Synthetic'}}
+    before=db.execute('SELECT state,reason,revision FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s',(A,GROUP))[0];db.commit()
+    echo_raw=json.dumps(echo).encode();echo_sig='sha256='+hmac.new(b'synthetic-secret',echo_raw,hashlib.sha256).hexdigest()
+    assert transport.ingest(echo_raw,echo_sig,echo)
+    after=db.execute('SELECT state,reason,revision FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s',(A,GROUP))[0];db.commit()
+    assert after==before
