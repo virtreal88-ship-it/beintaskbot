@@ -115,6 +115,7 @@ jobs:
           node tests/test_support_cases_locale_ui.cjs
           node tests/test_published_case_correction_ui.cjs
           node tests/test_published_case_deep_link_ui.cjs
+          node tests/test_legacy_case_reconcile_ui.cjs
           node tests/test_knowledge_campaigns_ui.cjs
           node tests/test_knowledge_campaign_reconciliation_ui.cjs
           node tests/test_tenant_operator_assignment_ui.cjs
