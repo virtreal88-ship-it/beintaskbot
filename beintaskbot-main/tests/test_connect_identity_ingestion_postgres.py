@@ -197,6 +197,8 @@ def test_employee_recognition_survives_a_canonical_lid(ingest, channels, configu
 def test_scoped_test_client_override_preserves_employee_provenance_without_human_handoff(ingest, channels, monkeypatch):
     import tenant_ai_pilot as pilot
     db = channels['db']
+    monkeypatch.setattr(pilot, 'configured_scope', lambda: {
+        'tenant_id':A, 'channel_id':CA, 'conversation_id':JID})
     db.execute('''INSERT INTO saas_tenant_member_whatsapp_numbers
       (tenant_id,telegram_id,phone_digits,recognition_enabled,created_by)
       VALUES(%s::uuid,11,%s,TRUE,11)''', (A,JID.split('@')[0]))
