@@ -6,7 +6,7 @@ const base=path.join(__dirname,'..');
 const ticketId='ad00d138-a2f4-491d-9b25-1009bfbca928',consultId='dfb2ba61-c045-4ee7-a9fc-fd9c5204769f',messageId='aac7dfc1-aefe-487b-9379-f6a5219928ca';
 const ticket={id:ticketId,contact_name:'Synthetic client',channel_id:'channel-1',conversation_id:'client',lead_id:41,description:'50 → 49,9992',status:'waiting',source:'manual',created_at:'2026-10-16T00:00:00Z'};
 (async()=>{
- const browser=await chromium.launch({executablePath:'/usr/bin/chromium',headless:true,args:['--no-sandbox']});
+ const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox']});
  try{
   const page=await browser.newPage({viewport:{width:390,height:844}}),calls=[];let delivery=null;
   await page.route('https://crm.test/**',async route=>{
@@ -32,7 +32,7 @@ const ticket={id:ticketId,contact_name:'Synthetic client',channel_id:'channel-1'
   await page.addScriptTag({path:path.join(base,'docs/tenant-support-inbox.js')});
   await page.locator('[data-support-id]').click();
   const panel=page.locator('[data-consult-id] details');await panel.locator('summary').click();
-  await panel.locator('select').selectOption('0');await panel.locator('input[type=checkbox]').check();
+  await panel.locator('select').selectOption('0');await panel.locator('textarea').fill('50 → 49,9992');await panel.locator('input[type=checkbox]').check();
   await panel.getByRole('button',{name:'Подготовить'}).click();
   await panel.getByText('Synthetic group').waitFor();assert.equal(calls.filter(c=>c.body.action==='send').length,0);
   assert.deepEqual(calls.find(c=>c.body.action==='prepare').body.attachment_ids,[messageId]);

@@ -113,6 +113,10 @@ jobs:
           tests/test_instruction_video_postgres.py
       - name: Run instruction card regression
         run: |
+          export CHROMIUM_EXECUTABLE_PATH="$(node -e "console.log(require('./.support-test-deps/node_modules/playwright').chromium.executablePath())")"
+          PYTHONPATH=.:tests python -m pytest -q tests/test_tenant_consultation_group.py tests/test_group_consultation_receipt.py tests/test_support_group_local_e2e.py tests/test_group_consultation_postgres.py
+          node tests/test_tenant_support_inbox_ui.cjs
+          node tests/test_support_group_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_photo_viewer_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_operator_unread_browser.cjs
           node tests/test_instruction_editor.cjs

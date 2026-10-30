@@ -1041,7 +1041,10 @@ def send_group_with_receipt(route: dict, text: str, request_id: str) -> dict:
       {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':key})
     if result.get('status')!='sent' or not result.get('id'): raise TenantPlatformError('Connect group delivery was not confirmed.')
     external=result.get('externalMessageId')
-    if not isinstance(external,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',external):external=None
+    # A Connect row alone does not prove the upstream accepted this message.
+    # Without a usable provider receipt the caller must quarantine the outcome.
+    if not isinstance(external,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',external):
+        raise TenantPlatformError('Connect group provider receipt is unavailable.')
     return {'message_id':str(result['id']),'external_message_id':external}
 
 

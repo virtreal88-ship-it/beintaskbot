@@ -88,15 +88,19 @@
     const element=(tag,text)=>{const node=document.createElement(tag);if(text)node.textContent=text;return node;};
     let opened=false;
     box.ontoggle=async()=>{if(!box.open||opened)return;opened=true;
-      async function display(){
+      async function display(followup=null){
         host.replaceChildren();let state;
-        try{state=await consultationApi(path);}catch(error){
+        try{if(followup)throw {status:404};state=await consultationApi(path);}catch(error){
           if(error.status!==404){host.append(element('p',error.message));return;}
           let groups;try{groups=(await consultationApi('/groups')).groups||[];}catch(problem){host.append(element('p',problem.message));return;}
+          if(followup)groups=groups.filter(group=>group.channel_id===followup.channel_id&&group.conversation_id===followup.conversation_id);
           const select=element('select');select.append(new Option(t('groupChoose'),''));
           groups.forEach((group,index)=>select.append(new Option(group.contact_name||group.conversation_id,String(index))));
-          const summary=element('textarea');summary.maxLength=2600;summary.value=item.reason||'';summary.setAttribute('aria-label',t('groupSummary'));
-          host.append(element('p',t('groupSummary')),summary,element('p',t('groupChoose')),select,element('p',t('groupAttachments')));
+          if(followup&&groups.length===1){select.value='0';select.disabled=true;}
+          // Never prefill old remote-access codes; the owner supplies only
+          // currently relevant details for this specific transmission.
+          const summary=element('textarea');summary.maxLength=2600;summary.value='';summary.setAttribute('aria-label',t('groupSummary'));
+          host.append(element('p',t('groupSummary')),summary,element('small',t('groupRemoteHint')),element('p',t('groupChoose')),select,element('p',t('groupAttachments')));
           const checks=[];for(const message of caseMessages.filter(row=>['image','audio','voice','video','document'].includes(row.message_type))){
             const label=element('label'),check=element('input');check.type='checkbox';check.value=message.id;
             label.append(check,document.createTextNode(' '+message.message_type+' · '+i18n.date(message.happened_at||message.created_at)));host.append(label);checks.push(check);
@@ -113,6 +117,7 @@
         }else {
           host.append(element('p',state.state==='sent'?t('groupConfirmed'):t('groupUnknown')));
           const refresh=element('button',t('refresh'));refresh.type='button';refresh.onclick=()=>void display();host.append(refresh);
+          if(state.state==='sent'){const follow=element('button',t('groupFollowup'));follow.type='button';follow.onclick=()=>void display(state);host.append(follow);}
         }
         for(const reply of state.replies||[]){
           const section=element('section'),heading=element('b',t('groupReply')),body=element('p',reply.body),draft=element('textarea'),save=element('button',t('save')),hint=element('small',t('draftNotSent'));

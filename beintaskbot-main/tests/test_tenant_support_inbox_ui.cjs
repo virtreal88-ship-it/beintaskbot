@@ -117,7 +117,7 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  });
  await settle();cycle.window.document.querySelector('[data-support-id]').click();await settle();
  const panel=cycle.window.document.querySelector('[data-consult-id] details');panel.open=true;panel.dispatchEvent(new cycle.window.Event('toggle'));await settle();
- panel.querySelector('select').value='0';panel.querySelector('input[type=checkbox]').checked=true;panel.querySelector('button').click();await settle();
+ panel.querySelector('select').value='0';panel.querySelector('textarea').value='50 → 49,9992';panel.querySelector('input[type=checkbox]').checked=true;panel.querySelector('button').click();await settle();
  assert.equal(synthetic.filter(x=>x.body.action==='prepare').length,1);assert.equal(synthetic.filter(x=>x.body.action==='send').length,0);
  assert.deepEqual(synthetic.find(x=>x.body.action==='prepare').body.attachment_ids,[messageId]);
  assert.match(panel.textContent,/Test group/);panel.querySelector('button').click();await settle();

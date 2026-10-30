@@ -85,6 +85,9 @@ def test_selected_attachment_must_belong_to_exact_ticket_conversation(db,monkeyp
     assert focused['focus_message']['media_evidence_context']=='Saved synthetic observation'
     assert 'raw' not in focused['focus_message'] and 'body' not in focused['focus_message']
     with pytest.raises(TenantLinearError):tickets.detail(PROFILE,case,None,str(uuid.uuid4()))
+    other=str(uuid.uuid4());db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type)
+      VALUES(%s::uuid,%s::uuid,99,'connect:other-group-image',%s,'incoming','image')""",(other,A,'connect:'+CA));db.commit()
+    with pytest.raises(TenantLinearError):tickets.detail(PROFILE,case,None,other)
     with pytest.raises(TenantLinearError):tickets.detail({'tenant_id':B,'telegram_id':22},case,None,image)
 
 def test_preparation_requires_owner_explicit_destination_and_is_tenant_scoped(db,monkeypatch):
@@ -120,6 +123,28 @@ def test_two_concurrent_cases_require_exact_quote_or_unambiguous_marker(db,monke
     db.commit()
     rows=db.execute('SELECT consultation_id::text AS id,message_id FROM saas_consultation_group_replies ORDER BY message_id')
     assert rows==[{'id':first,'message_id':'first-reply'},{'id':second,'message_id':'second-reply'}]
+
+def test_followup_keeps_same_consultation_and_only_explicit_new_sources(db,monkeypatch):
+    consult,case=setup_case(db,monkeypatch);first=request();calls=[]
+    monkeypatch.setattr(transport,'send_group_with_receipt',lambda _route,body,key:(calls.append((key,body)) or {'message_id':'synthetic-'+str(len(calls)),'external_message_id':'PROVIDER_'+str(len(calls))}))
+    flow.prepare(PROFILE,consult,first);flow.dispatch(PROFILE,consult,first['request_id'])
+    with db.cursor() as cur:assert flow.record_group_reply(cur,A,CA,GROUP,'need-info','CASE:'+consult+' Please ask for a current code.')==consult
+    db.commit()
+    flow.save_draft(PROFILE,consult,{'message_id':'need-info','draft':'Please send your current code when ready.'})
+    new_image=str(uuid.uuid4());db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type)
+      VALUES(%s::uuid,%s::uuid,41,'connect:new-image',%s,'incoming','image')""",(new_image,A,'connect:'+CA));db.commit()
+    second=request();second.update(summary='Customer provided the requested image.',attachment_ids=[new_image])
+    assert flow.prepare(PROFILE,consult,second)['created']
+    assert len(calls)==1  # preparation never sends
+    assert flow.read(PROFILE,consult)['customer_draft']=='Please send your current code when ready.'
+    flow.dispatch(PROFILE,consult,second['request_id']);flow.dispatch(PROFILE,consult,second['request_id'])
+    assert len(calls)==2 and ('support_ticket_id='+case+'&support_ticket_message_id='+new_image) in calls[-1][1]
+    with db.cursor() as cur:
+        assert flow.record_group_reply(cur,A,CA,GROUP,'after-followup','CASE:'+consult+' Investigating.')==consult
+    db.commit()
+    assert len(flow.read(PROFILE,consult)['replies'])==2
+    assert db.execute('SELECT status FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,case))[0]['status']!='resolved'
+    db.commit()
 
 def test_http_owner_prepare_send_and_draft_never_send_customer_message(db,monkeypatch):
     import asyncio,logging
