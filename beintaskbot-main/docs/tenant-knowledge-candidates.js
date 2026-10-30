@@ -6,7 +6,7 @@
   const base='/api/platform/ai/knowledge-candidates';
   let member=null, dialogs=[], channels=[], cards=[], agents=[], selected=null, detail=null, nextBefore=null, batchId=null, batchState=null, batchRequest=null, pollTimer=null, generation=0, detailDirty=false,caseStartMessageId=null,caseEndMessageId=null,caseBoundaryMode=false,caseBoundaryStart=null,caseBoundaryEnd=null,caseBoundaryOriginal=null,caseReturnPending=false;
   // Page-memory only. Authorization and successful writes invalidate pending reads.
-  let sessionEpoch=0,readEpoch=0,scopeKey='',paused=false,metadataAt=0,preparing=null,openVersion=0,listKey='';
+  let sessionEpoch=0,readEpoch=0,scopeKey='',paused=false,metadataAt=0,preparing=null,openVersion=0,listKey='',directCaseKey='';
   const readFlights=new Map();
   const authorized=()=>!!member&&['owner','admin'].includes(member.role)&&member.active!==false&&!paused;
   function stable(value){if(Array.isArray(value))return value.map(stable);if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,stable(value[key])]));return value;}
@@ -527,12 +527,14 @@
     finally{if(preparing===work)preparing=null;}})();preparing=work;return work;
   }
   function conceal(on){for(const node of [root(),$('supportCaseModal')])if(node){node.style.visibility=on?'hidden':'';node.inert=on;}}
-  function resetSession(){sessionEpoch++;invalidateReads();preparing=null;metadataAt=0;caseReturnPending=false;clearTimeout(pollTimer);clearCaseMedia(true);$('supportCaseModal')?.remove();dialogs=[];channels=[];agents=[];selected=null;detail=null;batchRequest=null;batchId=null;batchState=null;detailDirty=false;clarificationDirty=false;caseBoundaryMode=false;root()?.replaceChildren();}
-  function applyProfile(data){const resume=paused;const next=profileKey(data);if(next!==scopeKey){resetSession();scopeKey=next;}member=data?.member||null;paused=false;conceal(false);if(authorized()){prepare();if(resume&&batchState?.status==='running'){const tenant=member.tenant_id;pollTimer=setTimeout(()=>pollBatch(batchId,tenant),2500);}}else resetSession();}
+  function resetSession(){sessionEpoch++;invalidateReads();preparing=null;metadataAt=0;directCaseKey='';caseReturnPending=false;clearTimeout(pollTimer);clearCaseMedia(true);$('supportCaseModal')?.remove();dialogs=[];channels=[];agents=[];selected=null;detail=null;batchRequest=null;batchId=null;batchState=null;detailDirty=false;clarificationDirty=false;caseBoundaryMode=false;root()?.replaceChildren();}
+  function openDirectCase(){const query=new URLSearchParams(location.search),id=query.get('support_case_id')||'';if(!authorized()||query.get('view')!=='support_cases'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))return;const key=sessionEpoch+':'+id;if(directCaseKey===key)return;directCaseKey=key;void openCard(id);}
+  function applyProfile(data){const resume=paused;const next=profileKey(data);if(next!==scopeKey){resetSession();scopeKey=next;}member=data?.member||null;paused=false;conceal(false);if(authorized()){prepare();openDirectCase();if(resume&&batchState?.status==='running'){const tenant=member.tenant_id;pollTimer=setTimeout(()=>pollBatch(batchId,tenant),2500);}}else resetSession();}
   document.addEventListener('tenant-profile',event=>applyProfile(event.detail));
   document.addEventListener('tenant-auth-pending',()=>{paused=true;sessionEpoch++;generation++;openVersion++;readFlights.clear();preparing=null;metadataAt=0;clearTimeout(pollTimer);conceal(true);});
   document.addEventListener('tenant-auth-invalid',()=>{resetSession();member=null;scopeKey='';paused=true;});
-  document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='support_cases')return;const modal=$('supportCaseModal');if(caseReturnPending&&modal){modal.style.display='';caseReturnPending=false;return;}prepare();});
+  document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='support_cases')return;const modal=$('supportCaseModal');if(caseReturnPending&&modal){modal.style.display='';caseReturnPending=false;return;}prepare();openDirectCase();});
+  window.addEventListener('popstate',()=>{if(new URLSearchParams(location.search).get('view')!=='support_cases'){directCaseKey='';return;}if(authorized()){prepare();openDirectCase();}});
   document.addEventListener('tenant-knowledge-changed',event=>{if(event.detail?.source==='cases')return;invalidateReads();if(authorized()&&root()?.closest('.view')?.classList.contains('active'))load();});
   document.addEventListener('tenant-language',()=>{if(!$('casesList'))return;const values=Object.fromEntries([...root().querySelectorAll('input,select')].map(node=>[node.id,{value:node.value,checked:node.checked}]));render();for(const [id,value] of Object.entries(values)){if(id==='casesConversation')populateConversations();if($(id)){$(id).value=value.value;if($(id).type==='checkbox')$(id).checked=value.checked;}}renderCards();if(batchState){renderBatch(batchState);$('casesAnalyse').disabled=batchState.status==='running';}prepare();});
   if(window.tenantProfileSnapshot?.member)applyProfile(window.tenantProfileSnapshot);
