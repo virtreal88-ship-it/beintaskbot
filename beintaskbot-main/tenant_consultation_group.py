@@ -327,8 +327,8 @@ def record_group_reply(cur,tenant,channel,conversation,message_id,text,quoted_id
 
 
 _REMOTE_PASSWORD=re.compile(r'(?i)(?:anydesk|парол|password|passcode|şifr)[^\n]{0,48}(?:[:=]\s*|\s+)[A-Za-z0-9!@#$%^&*_.-]{6,}')
-_CUSTOMER_VERIFIED=re.compile(r'(?i)(?:\bworks? now\b|\bworking now\b|\bfixed\b|\bresolved\b|\bproblem (?:is )?solved\b|\bissue (?:is )?fixed\b|проблема решена|исправлено|всё работает|все работает|заработало|düzəldi|problem həll olundu|problem həll oldu|artıq işləyir)')
-_CUSTOMER_NEGATIVE=re.compile(r'(?i)(?:\bnot fixed\b|\bstill (?:broken|doesn.t work|not working)\b|\bnot resolved\b|не исправил|не работает|не помогло|hələ də|düzəlməyib|işləmir|həll olunmayıb)')
+_CUSTOMER_VERIFIED=re.compile(r"(?i)(?:\b(?:it(?:'s| is)|this is|that is|everything is)\s+(?:working now|fixed|resolved)\b|\bworks now\b|\bworking now\b|\bproblem(?: is|'s) solved\b|\bissue(?: is|'s) (?:fixed|resolved)\b|\bthe fix worked\b|проблема решена|исправлено|теперь работает|всё работает|все работает|заработало|düzəldi|problem həll olundu|problem həll oldu|artıq işləyir)")
+_CUSTOMER_NEGATIVE=re.compile(r"(?i)(?:\bnot\b|\bnever\b|\bstill\b|\bno longer\b|\bhardly\b|\b(?:is|are|was|were)n['’]?t\b|\bdoesn['’]?t\b|\bdon['’]?t\b|\bdidn['’]?t\b|\bcan['’]?t\b|\bcannot\b|\bне\b|не исправил|не работает|не помогло|неполностью|hələ|düzəlməyib|işləmir|həll olunmayıb)")
 
 
 def _redact_remote_password(value):
@@ -340,7 +340,8 @@ def record_customer_verification(cur,tenant,channel,conversation,message_id,text
     from tenant_ai_pilot import manual_live_job
     job={'provider':'connect','tenant_id':tenant,'channel_id':channel,'conversation_id':conversation}
     body=' '.join(str(text or '').split())
-    if (not manual_live_job(job) or not body or _CUSTOMER_NEGATIVE.search(body)
+    if (not manual_live_job(job) or not body or any(mark in body for mark in ('?','？','؟'))
+            or _CUSTOMER_NEGATIVE.search(body)
             or not _CUSTOMER_VERIFIED.search(body)):
         return None
     cur.execute("SELECT to_regclass('saas_ai_pilot_followups') IS NOT NULL AS available")
@@ -627,6 +628,10 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
+                # Serialize the source customer against Pause/Human controls as
+                # well as the destination group; source authorization must
+                # still be current at the external-send boundary.
+                lock_dialog(cur,tenant,'connect',customer_scope['channel_id'],customer_scope['conversation_id'])
                 lock_dialog(cur,tenant,'connect',target['channel_id'],target['conversation_id'])
                 cur.execute('''SELECT c.lead_id FROM saas_connect_conversations c
                   JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
@@ -646,6 +651,12 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
                 current_route=connect_route(cur,tenant,int(group['lead_id']))
                 if not current_route or current_route['channel_id']!=target['channel_id'] or current_route['conversation_id']!=target['conversation_id']:
                     raise TenantLinearError('Pilot group transport route changed.',409)
+                from tenant_ai_pilot import pilot_group_handoff_allowed
+                source_job={**job,'provider':'connect','tenant_id':tenant,
+                    'channel_id':customer_scope['channel_id'],
+                    'conversation_id':customer_scope['conversation_id']}
+                if not pilot_group_handoff_allowed(source_job,connection=conn):
+                    raise TenantLinearError('Customer pilot authorization or handoff state changed before group delivery.',409)
                 attempted=True
                 receipt=send_group_with_receipt(current_route,body,request_id)
                 cur.execute('''UPDATE saas_consultation_group_deliveries SET state='sent',

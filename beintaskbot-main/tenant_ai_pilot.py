@@ -138,7 +138,10 @@ def _snapshot(cur, tenant, scope):
     version = [scope['tenant_id'], scope['channel_id'], scope['conversation_id'], row.get('active'),
         str(row.get('channel_version') or ''), row.get('integration_status'),
         str(row.get('integration_version') or ''), row.get('conversation_lead_id'), row.get('conversation_ai_enabled'),
-        row.get('conversation_manual_hold'), row.get('conversation_state'), row.get('handoff_reason'), row.get('company_enabled'),
+        # Conversation state/reason change during this pilot's expected
+        # human->active workflow. Runtime gates check those independently;
+        # pause/revoke explicitly clears the owner approval below.
+        row.get('conversation_manual_hold'), row.get('company_enabled'),
         row.get('auto_send_enabled'), row.get('emergency_stop'),
         str(row.get('settings_version') or ''), row.get('tenant_status'), row.get('agent_id'),
         row.get('agent_enabled'), row.get('agent_mode'), row.get('agent_version'),
@@ -294,6 +297,49 @@ def automatic_send_allowed(job, connection=None):
         return False
 
 
+def pilot_group_handoff_allowed(job, connection=None):
+    """Validate the exact customer-side handoff immediately before group send."""
+    if not scoped_live_enabled() or not manual_live_job(job):
+        return False
+    scope = configured_scope()
+    tenant = str(job.get('tenant_id') or '')
+    if not scope or tenant != scope['tenant_id'] or not _enabled('AI_AGENTS_SCOPED_LIVE_ENABLED'):
+        return False
+    try:
+        if connection is None:
+            from tenant_platform import _connect
+            with _connect() as conn:
+                return pilot_group_handoff_allowed(job, conn)
+        with connection.cursor() as cur:
+            if not _lock_scope(cur, tenant, scope):
+                return False
+            row, fingerprint = _snapshot(cur, tenant, scope)
+            if (not fingerprint or row.get('conversation_state') != 'human'
+                    or not str(row.get('handoff_reason') or '').startswith('ai_developer_consultation:')
+                    or row.get('conversation_ai_enabled') is not True
+                    or row.get('conversation_manual_hold') is True
+                    or row.get('active') is not True or row.get('integration_status') != 'connected'
+                    or row.get('tenant_status') != 'active' or row.get('company_enabled') is not True
+                    or row.get('emergency_stop') is True or row.get('agent_enabled') is not True
+                    or row.get('agent_mode') != 'manual' or not row.get('exact_agent_scope')
+                    or (job.get('agent_id') and str(row.get('agent_id') or '') != str(job.get('agent_id')))
+                    or not runtime_flag('AI_AGENTS_ENABLED')):
+                return False
+            cur.execute('''SELECT (c.kwid_expires_at>clock_timestamp()
+                    AND c.owner_expires_at>clock_timestamp()
+                    AND e.received_at>=GREATEST(c.kwid_confirmed_at,c.owner_approved_at)) AS valid
+              FROM saas_ai_pilot_confirmations c
+              JOIN saas_tenant_webhook_events e ON e.tenant_id=c.tenant_id AND e.fingerprint=%s
+              WHERE c.tenant_id=%s::uuid AND c.channel_id=%s::uuid
+                AND c.conversation_id=%s AND c.scope_fingerprint=%s
+                AND c.kwid_confirmed_by IS NOT NULL AND c.owner_approved_by IS NOT NULL
+              FOR SHARE OF c,e''', (str(job.get('event_fingerprint') or ''),tenant,
+                scope['channel_id'],scope['conversation_id'],fingerprint))
+            return bool((cur.fetchone() or {}).get('valid'))
+    except Exception:
+        return False
+
+
 def _authorized_scope(cur, profile):
     from tenant_ai_agents_store import _authorize
     tenant, actor = _authorize(cur, profile)
@@ -303,6 +349,10 @@ def _authorized_scope(cur, profile):
     row, fingerprint = _snapshot(cur, tenant, scope)
     if not fingerprint or not row.get('active') or row.get('integration_status') != 'connected':
         raise TenantLinearError('The exact Connect channel and conversation must be active before confirmation.', 409)
+    if (row.get('conversation_state') != 'active' or row.get('conversation_manual_hold') is True
+            or row.get('tenant_status') != 'active' or row.get('company_enabled') is not True
+            or row.get('emergency_stop') is True):
+        raise TenantLinearError('The selected customer dialogue must be active and unpaused before pilot approval.', 409)
     return tenant, actor, scope, row, fingerprint
 
 

@@ -88,6 +88,31 @@ def test_channel_or_agent_setting_change_invalidates_scope_fingerprint():
         assert fingerprint != initial
 
 
+def test_expected_human_active_handoff_transition_keeps_scope_identity_stable():
+    import tenant_ai_pilot as pilot
+    scope={'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'test-chat'}
+    base={'conversation_id':scope['conversation_id'],'scopes':[{'provider':'connect','channel_id':scope['channel_id']}],
+      'active':True,'channel_version':'channel-v1','integration_status':'connected','integration_version':'integration-v1',
+      'conversation_lead_id':41,'conversation_ai_enabled':True,'conversation_manual_hold':False,
+      'conversation_state':'human','handoff_reason':'ai_developer_consultation:missing_knowledge',
+      'company_enabled':True,'auto_send_enabled':False,'emergency_stop':False,'settings_version':'settings-v1',
+      'tenant_status':'active','agent_id':'agent-1','agent_enabled':True,'agent_mode':'manual',
+      'agent_version':1,'agent_settings_version':'agent-v1'}
+    class Cursor:
+        def __init__(self,row):self.row=row
+        def execute(self,*_):pass
+        def fetchone(self):return dict(self.row)
+    with patch.dict('os.environ',{
+        'AI_AGENTS_PILOT_TENANT_ID':scope['tenant_id'],
+        'AI_AGENTS_PILOT_CHANNEL_ID':scope['channel_id'],
+        'AI_AGENTS_PILOT_CONVERSATION_ID':scope['conversation_id']},clear=True):
+        _row,human=pilot._snapshot(Cursor(base),scope['tenant_id'],scope)
+        active_row={**base,'conversation_state':'active','handoff_reason':'pilot_developer_followup'}
+        _row,active=pilot._snapshot(Cursor(active_row),scope['tenant_id'],scope)
+        assert human==active
+        assert pilot._snapshot(Cursor({**base,'conversation_manual_hold':True}),scope['tenant_id'],scope)[1]!=human
+
+
 def test_preflight_marks_kwid_as_unknown_until_fresh_manual_attestation(monkeypatch):
     row = {'active': True, 'integration_status': 'connected', 'conversation_id': 'test-chat',
            'conversation_state': 'active', 'company_enabled': False,

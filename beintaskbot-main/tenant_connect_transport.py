@@ -1090,9 +1090,15 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
                     return None
                 if source['source_kind']=='run':
                     from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+                    from tenant_ai_pilot import manual_live_job
                     cur.execute('SELECT a.mode,s.auto_send_enabled FROM saas_ai_agents a JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid FOR SHARE OF s',(tenant,source['agent_id']))
                     send_policy=cur.fetchone() or {}
-                    if send_policy.get('mode')!='automatic' or send_policy.get('auto_send_enabled') is not True or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'):
+                    scoped_override=bool(pilot_scope_fenced and manual_live_job({**source,
+                        'provider':'connect','tenant_id':tenant,'channel_id':channel_id,
+                        'conversation_id':conversation_id}))
+                    if (not scoped_override and (send_policy.get('mode')!='automatic'
+                            or send_policy.get('auto_send_enabled') is not True
+                            or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'))):
                         return None
                 from tenant_ai_agent_connect import allowed
                 if not allowed({**source,'tenant_id':tenant,'provider':'connect','channel_id':channel_id,'conversation_id':conversation_id,'lead_id':lead_id},connection=conn):

@@ -9,7 +9,10 @@ from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 
-if 'psycopg' not in sys.modules:
+try:
+    import psycopg
+    import psycopg.rows
+except ImportError:
     psycopg = types.ModuleType('psycopg')
     psycopg.connect = MagicMock()
     rows = types.ModuleType('psycopg.rows')
