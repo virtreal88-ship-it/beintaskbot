@@ -87,7 +87,9 @@ def allowed_job(job):
     """Recheck company, provider route and agent authorization before work."""
     provider = str(job.get('provider') or '')
     from tenant_ai_agent_runtime_flags import enabled as runtime_flag
-    if not runtime_flag('AI_AGENTS_ENABLED') or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'):
+    from tenant_ai_pilot import manual_live_job
+    pilot_live=manual_live_job(job)
+    if not runtime_flag('AI_AGENTS_ENABLED') or (not pilot_live and not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')):
         return False
     if provider == 'connect':
         from tenant_ai_agent_connect import allowed as connect_allowed

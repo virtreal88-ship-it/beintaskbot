@@ -379,10 +379,16 @@ def allowed(job: dict, connection=None) -> bool:
                          conversation, bound_agent, bound_agent))
             connected = bool(cur.fetchone())
             tenant_active = tenant_status_allows_ai(settings.get('status'), 'connect')
+            from tenant_ai_pilot import manual_live_job
+            pilot_live=manual_live_job({'provider':'connect','tenant_id':tenant,
+                'channel_id':channel,'conversation_id':conversation})
             result = bool(tenant_active and connected and settings.get('enabled') is True
                           and settings.get('operating_mode') in (None,'active')
                           and settings.get('auto_send_enabled') is True and settings.get('emergency_stop') is not True
                           and runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'))
+            if pilot_live:
+                result=bool(tenant_active and connected and settings.get('enabled') is True
+                    and settings.get('emergency_stop') is not True and runtime_flag('AI_AGENTS_ENABLED'))
             from tenant_ai_group_coordination import group_jid, authority, job_allowed
             if group_jid(conversation):
                 result = result and bool(authority(cur, tenant, channel, conversation, job.get('agent_id')))
@@ -394,7 +400,8 @@ def allowed(job: dict, connection=None) -> bool:
 
 
 def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
-            message_id: str, event_id: str, text: str, message_type: str = 'text', is_group=False, provider_message_id=None, connection=None) -> int:
+            message_id: str, event_id: str, text: str, message_type: str = 'text', is_group=False,
+            provider_message_id=None, quoted_message_id=None, connection=None) -> int:
     """Queue one inbound Connect message for all matching tenant agents.
 
     The webhook event table + job primary key make Connect retries and Evolution
@@ -417,6 +424,10 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                        # A phone is available only for the first inbound event
                        # in a person-to-person WhatsApp conversation.
                        'first_inquiry': False, 'phone': ''}
+            if not is_group:
+                from tenant_consultation_group import record_customer_verification
+                record_customer_verification(cur,tenant,channel_id,conversation_id,
+                    str(message_id or event_id),str(text or ''),quoted_message_id)
             from tenant_ai_group_coordination import group_jid, admit
             group_fence = None
             if is_group and not group_jid(conversation_id):
@@ -507,6 +518,15 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             automatic_agents = (eligible_connect_agents(enabled_scoped_agents)
                                 if settings.get('enabled') is True and settings.get('auto_send_enabled') is True
                                 and runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED') else [])
+            from tenant_ai_pilot import manual_live_job
+            pilot_live=manual_live_job({'provider':'connect','tenant_id':tenant,
+                'channel_id':channel_id,'conversation_id':conversation_id})
+            if pilot_live and settings.get('enabled') is True and not settings.get('emergency_stop'):
+                # A bounded runtime override: exact pilot dialog and its
+                # already-bound primary only. Agent/company modes remain saved
+                # as Manual/Simulation.
+                automatic_agents=[row for row in enabled_scoped_agents
+                    if row.get('mode')=='manual' and bound and str(row.get('id'))==str(bound.get('agent_id'))]
             group_agents = [row for row in automatic_agents
                             if scope_matches(row.get('scopes'), channel_id, is_group=True)]
             agents = group_agents if is_group else automatic_agents

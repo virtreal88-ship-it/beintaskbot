@@ -934,8 +934,12 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     cur.execute("SELECT to_regclass('saas_consultation_group_deliveries') IS NOT NULL AS ready")
                     if (cur.fetchone() or {}).get('ready'):
                         from tenant_consultation_group import record_group_reply
-                        record_group_reply(cur,tenant,channel_id,conversation,str(data.get('id') or event_id),
+                        consultation_id=record_group_reply(cur,tenant,channel_id,conversation,str(data.get('id') or event_id),
                           str(data.get('text') or ''),data.get('quotedExternalMessageId'))
+                        if consultation_id:
+                            from tenant_consultation_group import enqueue_pilot_customer_followup
+                            enqueue_pilot_customer_followup(cur,tenant,channel_id,conversation,
+                                str(data.get('id') or event_id))
                     cur.execute('RELEASE SAVEPOINT consultation_reply')
                 except Exception:
                     cur.execute('ROLLBACK TO SAVEPOINT consultation_reply')
@@ -976,7 +980,8 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
                     lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
                     text=queued_payload[6], message_type=queued_payload[7],
-                    is_group=metadata.get('kind') == 'group', provider_message_id=data.get('externalMessageId'), connection=conn)
+                    is_group=metadata.get('kind') == 'group', provider_message_id=data.get('externalMessageId'),
+                    quoted_message_id=data.get('quotedExternalMessageId'), connection=conn)
             # Simulation admits only the first durable inbound delivery.
             # Webhook retries may repair the Active queue above but must
             # never backfill Simulation or replay a paid virtual run.
@@ -1133,6 +1138,9 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,'AI Agent',%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
                         (uuid.uuid4(),tenant,int(lead_id),'connect:'+message_id,'connect:'+channel_id,text,_json({'source':'connect','status':'accepted','run_id':str(run_id)})))
+            if isinstance((send_source or {}).get('payload'),dict) and (send_source or {}).get('payload',{}).get('pilot_developer_followup') is True:
+                from tenant_consultation_group import record_customer_send_receipt
+                record_customer_send_receipt(cur,tenant,str(send_source.get('event_fingerprint') or ''),message_id)
             cur.execute('''UPDATE saas_ai_conversation_state SET last_agent_message_id=%s,revision=revision+1,updated_at=now()
               WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=%s AND state='active' AND revision=%s''',
                         (str(message_id),tenant,conversation_id,channel_id,int(expected_revision)))

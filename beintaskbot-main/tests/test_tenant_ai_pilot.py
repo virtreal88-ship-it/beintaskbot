@@ -245,6 +245,102 @@ def test_confirmation_schema_migration_is_idempotent_additive_ddl():
         assert field in sql
 
 
+def test_scoped_live_group_allowlist_is_exact_and_independent_of_global_auto_send():
+    group='120363431915456655@g.us'
+    env={'AI_AGENTS_PILOT_TENANT_ID':pilot.SCOPED_LIVE_TENANT,
+         'AI_AGENTS_PILOT_CHANNEL_ID':pilot.SCOPED_LIVE_CHANNEL,
+         'AI_AGENTS_PILOT_CONVERSATION_ID':pilot.SCOPED_LIVE_CUSTOMER,
+         'AI_AGENTS_PILOT_GROUP_CONVERSATION_ID':group,
+         'AI_AGENTS_SCOPED_LIVE_ENABLED':'true'}
+    with patch.dict('os.environ',env,clear=True):
+        assert pilot.scoped_live_enabled()
+        assert pilot.is_pilot_group_target(pilot.SCOPED_LIVE_TENANT,pilot.SCOPED_LIVE_CHANNEL,group)
+        assert not pilot.is_pilot_group_target(pilot.SCOPED_LIVE_TENANT,pilot.SCOPED_LIVE_CHANNEL,'120363406724408631@g.us')
+        assert not pilot.is_pilot_group_target(pilot.SCOPED_LIVE_TENANT,OTHER,group)
+        assert not pilot.is_pilot_group_target(OTHER,pilot.SCOPED_LIVE_CHANNEL,group)
+        assert not pilot._enabled('AI_AGENTS_AUTO_SEND_ENABLED')
+
+
+def test_scoped_live_group_allowlist_rejects_missing_or_non_group_target():
+    for group in ('', '994502072240@s.whatsapp.net', '120363406724408631@g.us'):
+        env={'AI_AGENTS_PILOT_TENANT_ID':pilot.SCOPED_LIVE_TENANT,
+             'AI_AGENTS_PILOT_CHANNEL_ID':pilot.SCOPED_LIVE_CHANNEL,
+             'AI_AGENTS_PILOT_CONVERSATION_ID':pilot.SCOPED_LIVE_CUSTOMER,
+             'AI_AGENTS_PILOT_GROUP_CONVERSATION_ID':group,
+             'AI_AGENTS_SCOPED_LIVE_ENABLED':'true'}
+        with patch.dict('os.environ',env,clear=True):
+            assert not pilot.scoped_live_enabled()
+            assert not pilot.is_pilot_group_target(pilot.SCOPED_LIVE_TENANT,pilot.SCOPED_LIVE_CHANNEL,group)
+
+
+def test_scoped_live_customer_can_pass_final_gate_while_saved_modes_stay_manual(monkeypatch):
+    customer=pilot.SCOPED_LIVE_CUSTOMER
+    tenant=pilot.SCOPED_LIVE_TENANT
+    channel=pilot.SCOPED_LIVE_CHANNEL
+    job={'provider':'connect','tenant_id':tenant,'channel_id':channel,
+         'conversation_id':customer,'event_fingerprint':'pilot-event','agent_id':'agent'}
+    row={'conversation_state':'active','conversation_ai_enabled':True,'conversation_manual_hold':False,
+         'active':True,'integration_status':'connected','tenant_status':'active','company_enabled':True,
+         'auto_send_enabled':False,'emergency_stop':False,'agent_enabled':True,'agent_mode':'manual',
+         'exact_agent_scope':True,'agent_id':'agent'}
+    monkeypatch.setattr(pilot,'_snapshot',lambda *_:(row,'pilot-fingerprint'))
+    monkeypatch.setattr(pilot,'_lock_scope',lambda *_:True)
+    class Cursor:
+        def __enter__(self):return self
+        def __exit__(self,*_):return False
+        def execute(self,sql,_params=None):self.sql=sql
+        def fetchone(self):return {'valid':True}
+    class Connection:
+        def cursor(self):return Cursor()
+    monkeypatch.setattr(pilot,'runtime_flag',lambda name:name=='AI_AGENTS_ENABLED')
+    env={'AI_AGENTS_PILOT_TENANT_ID':tenant,'AI_AGENTS_PILOT_CHANNEL_ID':channel,
+         'AI_AGENTS_PILOT_CONVERSATION_ID':customer,
+         'AI_AGENTS_PILOT_GROUP_CONVERSATION_ID':pilot.SCOPED_LIVE_GROUP,
+         'AI_AGENTS_SCOPED_LIVE_ENABLED':'true'}
+    with patch.dict('os.environ',env,clear=True):
+        assert pilot.automatic_send_allowed(job,Connection())
+        assert pilot.processing_allowed(job,Connection())
+        assert pilot.processing_allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel,
+            'conversation_id':'ordinary-client','event_fingerprint':'ordinary-event'},Connection())
+
+
+def test_worker_config_overrides_modes_only_for_exact_scoped_customer(monkeypatch):
+    import tenant_ai_agent_run_store as store
+    customer=pilot.SCOPED_LIVE_CUSTOMER;tenant=pilot.SCOPED_LIVE_TENANT;channel=pilot.SCOPED_LIVE_CHANNEL
+    job={'provider':'connect','tenant_id':tenant,'channel_id':channel,'conversation_id':customer,
+         'agent_id':'agent','event_fingerprint':'event','lease_token':'lease','revision':1}
+    row={'role':'primary','agent_enabled':True,'scopes':[{'provider':'connect','channel_id':channel}],
+         'agent_model':'model','safety':{},'response_policy':{},'schedule':{},'mode':'manual',
+         'settings_enabled':True,'operating_mode':'simulation','auto_send_enabled':False,
+         'emergency_stop':False,'crm_actions_enabled':False,'native_crm_actions_enabled':False,
+         'metadata':{'enabled':True,'consent':True,'model':'model','models':['model']},
+         'secrets':b'credential','tenant_status':'active','conversation_state':'active'}
+    class Cursor:
+        def __enter__(self):return self
+        def __exit__(self,*_):return False
+        def execute(self,*_):pass
+        def fetchone(self):return row
+    class Connection:
+        def __enter__(self):return self
+        def __exit__(self,*_):return False
+        def cursor(self):return Cursor()
+    monkeypatch.setattr(store,'_connect',lambda:Connection())
+    monkeypatch.setattr(store,'ensure_schema',lambda *_:None)
+    monkeypatch.setattr(store,'platform_service_ready',lambda:False)
+    monkeypatch.setattr(store,'platform_key_ready',lambda *_:True)
+    monkeypatch.setattr(store,'platform_model_allowed',lambda *_:True)
+    env={'AI_AGENTS_PILOT_TENANT_ID':tenant,'AI_AGENTS_PILOT_CHANNEL_ID':channel,
+         'AI_AGENTS_PILOT_CONVERSATION_ID':customer,
+         'AI_AGENTS_PILOT_GROUP_CONVERSATION_ID':pilot.SCOPED_LIVE_GROUP,
+         'AI_AGENTS_SCOPED_LIVE_ENABLED':'true'}
+    with patch.dict('os.environ',env,clear=True):
+        config=store.load_agent_config(job)
+        assert config['mode']=='automatic' and config['auto_send_enabled'] is True
+        assert row['mode']=='manual' and row['operating_mode']=='simulation' and row['auto_send_enabled'] is False
+        other=store.load_agent_config({**job,'conversation_id':'ordinary-client'})
+        assert other is None
+
+
 
 
 def test_final_gate_rejects_agent_id_mismatch(monkeypatch):

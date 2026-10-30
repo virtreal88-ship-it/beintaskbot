@@ -1,7 +1,7 @@
 """Isolated SQL tests; external delivery is always synthetic."""
 import uuid
 import pytest
-from test_tenant_support_inbox import database, db, A, B, CA, PROFILE
+from test_tenant_support_inbox import database, db, A, B, CA, AGENT, PROFILE
 import tenant_consultation_group as flow
 import tenant_support_inbox_store as tickets
 import tenant_connect_transport as transport
@@ -246,3 +246,117 @@ def test_signed_inbound_group_reply_reaches_exact_consultation_once(db,monkeypat
     assert transport.ingest(echo_raw,echo_sig,echo)
     after=db.execute('SELECT state,reason,revision FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s',(A,GROUP))[0];db.commit()
     assert after==before
+
+
+def test_exact_group_reply_queues_one_budgeted_followup_for_its_case(db,monkeypatch):
+    consult,case=setup_case(db,monkeypatch)
+    monkeypatch.setattr('tenant_ai_pilot.manual_live_job',lambda job:
+        job.get('tenant_id')==A and job.get('channel_id')==CA and job.get('conversation_id')=='client')
+    monkeypatch.setattr('tenant_ai_pilot.is_pilot_group_target',lambda tenant,channel,group:
+        tenant==A and channel==CA and group==GROUP)
+    db.execute("""INSERT INTO saas_ai_agents(id,tenant_id,name,enabled,mode,scopes,created_by)
+      VALUES(%s::uuid,%s::uuid,'Pilot',TRUE,'manual',%s::jsonb,11)""",
+      (AGENT,A,'[{"provider":"connect","channel_id":"'+CA+'"}]'))
+    db.execute("""INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,agent_id,state,reason)
+      VALUES(%s::uuid,'connect',%s,'client',%s::uuid,'human','ai_developer_consultation:missing_knowledge')""",(A,CA,AGENT))
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type)
+      VALUES(%s::uuid,%s::uuid,41,'connect:customer-issue','incoming',%s,'The app crashes when I upload a photo.','text')""",
+      (str(uuid.uuid4()),A,'connect:'+CA))
+    db.commit()
+    payload=request();flow.prepare(PROFILE,consult,payload)
+    monkeypatch.setattr(transport,'send_group_with_receipt',lambda *_:{'message_id':'pilot-group-send','external_message_id':'PILOT_QUOTE_1'})
+    assert flow.dispatch(PROFILE,consult,payload['request_id'])['state']=='sent'
+    with db.cursor() as cur:
+        linked=flow.record_group_reply(cur,A,CA,GROUP,'pilot-group-reply','CASE:'+consult+' The upload issue is fixed in the new build. Please ask the customer to retry.','PILOT_QUOTE_1')
+        assert linked==consult
+        assert flow.enqueue_pilot_customer_followup(cur,A,CA,GROUP,'pilot-group-reply')
+        assert not flow.enqueue_pilot_customer_followup(cur,A,CA,GROUP,'pilot-group-reply')
+        assert flow.materialize_pilot_followup(cur)
+    db.commit()
+    followup=db.execute('''SELECT consultation_id::text,case_id::text,source_message_id,agent_id::text,state
+      FROM saas_ai_pilot_followups WHERE tenant_id=%s::uuid''',(A,))[0]
+    assert followup=={'consultation_id':consult,'case_id':case,'source_message_id':'customer-issue',
+      'agent_id':AGENT,'state':'linked'}
+    event=db.execute("SELECT payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND event_type='developer_consultation_reply'",(A,))[0]['payload']
+    assert event['consultation_id']==consult and event['case_id']==case
+    assert 'CASE:'+consult in event['developer_reply']
+    state=db.execute("SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert state=={'state':'active','reason':'pilot_developer_followup'}
+
+
+def test_ai_handoff_delivery_uses_only_configured_paused_group_and_saved_attachment(db,monkeypatch):
+    consult,case=setup_case(db,monkeypatch)
+    group=GROUP
+    monkeypatch.setattr('tenant_ai_pilot.manual_live_job',lambda job:
+        job.get('tenant_id')==A and job.get('channel_id')==CA and job.get('conversation_id')=='client')
+    monkeypatch.setattr('tenant_ai_pilot.configured_group_scope',lambda:{
+        'tenant_id':A,'channel_id':CA,'conversation_id':group})
+    monkeypatch.setattr('tenant_ai_pilot.configured_scope',lambda:{
+        'tenant_id':A,'channel_id':CA,'conversation_id':'client'})
+    monkeypatch.setattr('tenant_ai_group_coordination._connect',lambda:db)
+    monkeypatch.setattr(transport,'connect_route',lambda *_:{'api_key':'synthetic','channel_id':CA,'conversation_id':group})
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets) VALUES(%s::uuid,'connect','connected',%s)",(A,b'synthetic'))
+    db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,emergency_stop,auto_send_enabled) VALUES(%s::uuid,TRUE,FALSE,FALSE)",(A,))
+    attachment=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,message_type)
+      VALUES(%s::uuid,%s::uuid,41,'connect:customer-issue','incoming',%s,'image')""",
+      (attachment,A,'connect:'+CA))
+    db.commit();sent=[]
+    monkeypatch.setattr(transport,'send_group_with_receipt',lambda route,body,key:
+        sent.append((route['conversation_id'],body,key)) or {'message_id':'pilot-handoff','external_message_id':'PILOT_HANDOFF'})
+    result=flow.deliver_pilot_consultation_to_group(
+        {'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client'},
+        consult,'The upload crashes when the customer selects a photo.','customer-issue')
+    assert result['state']=='sent' and len(sent)==1 and sent[0][0]==group, result
+    assert 'CASE:'+consult in sent[0][1] and 'support_ticket_id='+case+'&support_ticket_message_id='+attachment in sent[0][1]
+    assert 'password' in sent[0][1].lower() and 'pass' in sent[0][1].lower()
+    assert db.execute("SELECT state FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['state']=='sent'
+
+
+def test_ai_handoff_delivery_quarantines_unknown_send_without_retry(db,monkeypatch):
+    consult,_=setup_case(db,monkeypatch)
+    monkeypatch.setattr('tenant_ai_pilot.manual_live_job',lambda _job:True)
+    monkeypatch.setattr('tenant_ai_pilot.configured_group_scope',lambda:{
+        'tenant_id':A,'channel_id':CA,'conversation_id':GROUP})
+    monkeypatch.setattr('tenant_ai_pilot.configured_scope',lambda:{
+        'tenant_id':A,'channel_id':CA,'conversation_id':'client'})
+    monkeypatch.setattr('tenant_ai_group_coordination._connect',lambda:db)
+    monkeypatch.setattr(transport,'connect_route',lambda *_:{'api_key':'synthetic','channel_id':CA,'conversation_id':GROUP})
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets) VALUES(%s::uuid,'connect','connected',%s)",(A,b'synthetic'))
+    db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,emergency_stop,auto_send_enabled) VALUES(%s::uuid,TRUE,FALSE,FALSE)",(A,))
+    db.commit();calls=[]
+    monkeypatch.setattr(transport,'send_group_with_receipt',lambda *_:(calls.append('once') or (_ for _ in ()).throw(TimeoutError())))
+    job={'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client'}
+    first=flow.deliver_pilot_consultation_to_group(job,consult,'Synthetic issue')
+    assert first['state']=='unknown', first
+    assert flow.deliver_pilot_consultation_to_group(job,consult,'Synthetic issue')['state']=='unknown'
+    assert calls==['once']
+
+
+def test_case_resolves_only_after_positive_customer_verification_of_pilot_reply(db,monkeypatch):
+    consult,case=setup_case(db,monkeypatch)
+    monkeypatch.setattr('tenant_ai_pilot.manual_live_job',lambda _job:True)
+    flow.schema(db)
+    followup=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_ai_pilot_followups(tenant_id,id,consultation_id,case_id,channel_id,
+      conversation_id,group_channel_id,group_conversation_id,group_message_id,group_reply,agent_id,state,
+      customer_outbound_message_id)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s,'group-reply',
+        'Synthetic specialist advice',%s::uuid,'linked','customer-ai-reply')""",
+      (A,followup,consult,case,CA,CA,GROUP,AGENT))
+    db.commit()
+    with db.cursor() as cur:
+        assert flow.record_customer_verification(cur,A,CA,'client','customer-not-yet',
+            'It is still broken; not fixed.','customer-ai-reply') is None
+    db.commit()
+    assert db.execute('SELECT status FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,case))[0]['status']!='resolved'
+    with db.cursor() as cur:
+        assert flow.record_customer_verification(cur,A,CA,'client','customer-verified',
+            'Yes, works now. Thank you.','wrong-outbound') is None
+    db.commit()
+    with db.cursor() as cur:
+        assert flow.record_customer_verification(cur,A,CA,'client','customer-verified',
+            'Yes, works now. Thank you.','customer-ai-reply')==case
+    db.commit()
+    assert db.execute('SELECT status,completion_outcome FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,case))[0]=={'status':'resolved','completion_outcome':'resolved_confirmed'}
+    assert db.execute('SELECT status FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,consult))[0]['status']=='closed'
