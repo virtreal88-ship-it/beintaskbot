@@ -446,6 +446,10 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                     previous=(cur.fetchone() or {}).get('payload') or {}
                     if previous.get('channel_id')!=channel_id or previous.get('conversation_id')!=conversation_id:
                         raise ValueError('Connect event scope mismatch')
+                    # Preserve the legacy safe reconciliation path, but only
+                    # after the event fingerprint has been proven duplicate
+                    # and before any pilot CASE/confirmation side effect.
+                    reconcile_unassigned_connect_dialog(cur,tenant,channel_id,conversation_id)
                     if connection is None:conn.commit()
                     return 0
                 from tenant_ai_pilot import manual_live_job,processing_allowed
