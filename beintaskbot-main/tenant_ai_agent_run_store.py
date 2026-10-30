@@ -16,7 +16,9 @@ from tenant_ai_agent_key_policy import (choose_api_credential, platform_key_read
 
 def claim_next():
     from tenant_ai_agent_runtime_flags import enabled as runtime_flag
-    if not runtime_flag('AI_AGENTS_ENABLED') or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'):
+    from tenant_ai_pilot import configured_scope,scoped_live_enabled
+    if not runtime_flag('AI_AGENTS_ENABLED') or (not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')
+            and not scoped_live_enabled()):
         return None
     conn = _connect()
     try:
@@ -53,14 +55,28 @@ def claim_next():
             cur.execute('''UPDATE saas_tenant_webhook_events e SET state='unknown',error_code='provider_result_unknown'
               WHERE e.state='processing' AND EXISTS (SELECT 1 FROM saas_ai_agent_jobs j
                 WHERE j.tenant_id=e.tenant_id AND j.event_fingerprint=e.fingerprint AND j.state='unknown')''')
+            if scoped_live_enabled():
+                cur.execute("SELECT to_regclass('saas_ai_pilot_followups') IS NOT NULL AS available")
+                if (cur.fetchone() or {}).get('available'):
+                    from tenant_consultation_group import materialize_pilot_followup
+                    materialize_pilot_followup(cur)
+            pilot_scope=configured_scope() if scoped_live_enabled() else None
+            pilot_tenant=(pilot_scope or {}).get('tenant_id','00000000-0000-0000-0000-000000000000')
+            pilot_channel=(pilot_scope or {}).get('channel_id','')
+            pilot_conversation=(pilot_scope or {}).get('conversation_id','')
+            pilot_enabled=bool(pilot_scope and scoped_live_enabled())
             cur.execute('''SELECT j.* FROM saas_ai_agent_jobs j
-              JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id AND a.archived_at IS NULL AND a.enabled=TRUE AND a.role='primary' AND a.mode='automatic'
-              JOIN saas_ai_agent_settings cfg ON cfg.tenant_id=j.tenant_id AND cfg.enabled=TRUE AND cfg.auto_send_enabled=TRUE AND cfg.emergency_stop=FALSE
+              JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id AND a.archived_at IS NULL AND a.enabled=TRUE AND a.role='primary'
+              JOIN saas_ai_agent_settings cfg ON cfg.tenant_id=j.tenant_id AND cfg.enabled=TRUE AND cfg.emergency_stop=FALSE
               JOIN saas_tenants t ON t.id=j.tenant_id
               WHERE j.state='queued' AND j.due_at<=now()
+              AND ((a.mode='automatic' AND cfg.auto_send_enabled=TRUE)
+                OR (%s AND j.provider='connect' AND j.tenant_id=%s::uuid
+                  AND j.channel_id=%s AND j.conversation_id=%s AND a.mode='manual'))
               AND (j.provider<>'connect' OR NOT ai_legacy_blocked(j.tenant_id,j.channel_id,j.conversation_id,j.event_fingerprint))
               AND (t.status='active' OR (j.provider='connect' AND t.status IN ('onboarding','ready_for_integration')))
-              ORDER BY j.due_at,j.updated_at LIMIT 1 FOR UPDATE OF j SKIP LOCKED''')
+              ORDER BY j.due_at,j.updated_at LIMIT 1 FOR UPDATE OF j SKIP LOCKED''',
+              (pilot_enabled,pilot_tenant,pilot_channel,pilot_conversation))
             row = cur.fetchone()
             if not row:
                 conn.commit()
@@ -124,6 +140,8 @@ def retry_or_fail(job, error_code):
 
 
 def load_agent_config(job, *, with_block_reason=False):
+    from tenant_ai_pilot import manual_live_job
+    pilot_live=manual_live_job(job)
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -147,11 +165,11 @@ def load_agent_config(job, *, with_block_reason=False):
         reason = 'agent_disabled'
     elif row['settings_enabled'] is not True:
         reason = 'company_ai_disabled'
-    elif row.get('operating_mode') not in (None,'active'):
+    elif not pilot_live and row.get('operating_mode') not in (None,'active'):
         reason = 'company_mode_not_active'
-    elif row.get('mode') != 'automatic':
+    elif row.get('mode') != 'automatic' and not (pilot_live and row.get('mode')=='manual'):
         reason = 'manual_mode_requires_operator_request'
-    elif row.get('auto_send_enabled') is not True:
+    elif row.get('auto_send_enabled') is not True and not pilot_live:
         reason = 'auto_send_disabled'
     elif row.get('conversation_state') in {'human', 'paused'}:
         reason = 'conversation_paused_or_human'
@@ -180,7 +198,9 @@ def load_agent_config(job, *, with_block_reason=False):
       'response_policy':row.get('response_policy') or {},
       'chat_model':str(config.get('model') or ''),'schedule':row['schedule'],'mode':row['mode'],
       'crm_actions_enabled':row['crm_actions_enabled'] is True,
-      'native_crm_actions_enabled':row.get('native_crm_actions_enabled') is True}
+      'native_crm_actions_enabled':row.get('native_crm_actions_enabled') is True,
+      'mode':'automatic' if pilot_live else row['mode'],
+      'auto_send_enabled':True if pilot_live else row.get('auto_send_enabled') is True}
     return (result, None) if with_block_reason else result
 
 
@@ -329,6 +349,8 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1, video_re
             if not row:
                 raise TenantLinearError('Agent işi yenilənib.', 409)
             config = row['metadata'] if isinstance(row.get('metadata'), dict) else {}
+            from tenant_ai_pilot import manual_live_job
+            pilot_live=manual_live_job(job)
             configured_model = str(row.get('configured_model') or '')
             selected_model = str(model or configured_model or '')
             if not selected_model and platform_service_ready():
@@ -367,8 +389,8 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1, video_re
                             asr_tariff_available=(media_price('whisper-1','asr') is not None))
                 except TenantLinearError:
                     video_model='';video_api_key=''
-            if (not tenant_status_allows_ai(row['tenant_status'],job.get('provider')) or row['settings_enabled'] is not True or row.get('operating_mode') not in (None,'active') or row.get('emergency_stop') is True or row['agent_enabled'] is not True or row.get('role','primary')!='primary'
-                    or row.get('mode')=='manual'
+            if (not tenant_status_allows_ai(row['tenant_status'],job.get('provider')) or row['settings_enabled'] is not True or (not pilot_live and row.get('operating_mode') not in (None,'active')) or row.get('emergency_stop') is True or row['agent_enabled'] is not True or row.get('role','primary')!='primary'
+                    or (row.get('mode')=='manual' and not pilot_live)
                     or row['conversation_state'] in {'human','paused'}
                     or (not use_platform_key and (config.get('enabled') is not True or config.get('consent') is not True or not company_key))):
                 raise TenantLinearError('AI Agents və mövcud Chat AI ayarları aktiv deyil.', 409)
@@ -439,7 +461,8 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1, video_re
               'response_policy':row.get('response_policy') or {},
               'agent_style':row['style'],'agent_safety':row.get('safety') or {},'scope_instructions':str(scope.get('instructions') or ''),
               'agent_version':row['agent_version'],'conversation_revision':conversation.get('revision') if conversation else row.get('conversation_revision'),
-              'mode':row['mode'],'auto_send_enabled':row['auto_send_enabled'],'crm_actions_enabled':row['crm_actions_enabled'],
+              'mode':'automatic' if pilot_live else row['mode'],
+              'auto_send_enabled':True if pilot_live else row['auto_send_enabled'],'crm_actions_enabled':row['crm_actions_enabled'],
               'max_replies_per_chat':row['max_replies_per_chat'],
               'source_message_id':str((job.get('payload') or {}).get('message_id') or ''),
               'model':selected_model,'credential_source':credential_source,'pipeline_id':str(pipeline_id),'stage_id':str(stage_id),

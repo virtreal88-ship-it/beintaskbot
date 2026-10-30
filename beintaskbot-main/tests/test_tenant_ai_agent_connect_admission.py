@@ -3,7 +3,10 @@ import types
 import unittest
 from unittest.mock import MagicMock, patch
 
-if 'psycopg' not in sys.modules:
+try:
+    import psycopg
+    import psycopg.rows
+except ImportError:
     psycopg = types.ModuleType('psycopg')
     psycopg.connect = MagicMock()
     rows = types.ModuleType('psycopg.rows')
@@ -17,11 +20,11 @@ import tenant_ai_agent_connect as connect_ai
 class Cursor:
     def __init__(self, settings):
         self.settings = settings
-        self.calls = 0
+        self.current_sql = ''
         self.executed = []
 
     def execute(self, sql, params=None):
-        self.calls += 1
+        self.current_sql = sql
         self.executed.append((sql, params))
 
     def __enter__(self):
@@ -31,7 +34,16 @@ class Cursor:
         return False
 
     def fetchone(self):
-        return self.settings if self.calls == 1 else {'connected': True}
+        sql = self.current_sql
+        if 'FROM saas_ai_agent_settings' in sql:
+            return self.settings
+        if 'saas_connect_identity_conflicts' in sql:
+            return None
+        if 'saas_connect_conversations route' in sql:
+            return {'connected': True}
+        if 'to_regclass' in sql:
+            return {'present': None}
+        return None
 
     def fetchall(self):
         # Dialogue-lock guards read any legacy row set; this fixture has none.
@@ -102,11 +114,17 @@ class ConnectAdmissionTests(unittest.TestCase):
         database.assert_not_called()
 
     def test_server_flag_block_is_recorded_for_diagnostics_instead_of_lost(self):
-        cursor = Cursor({'auto_send_enabled': False})
+        class BlockedEventCursor(Cursor):
+            def fetchone(self):
+                if 'INSERT INTO saas_tenant_webhook_events' in self.current_sql:
+                    return {'fingerprint':'synthetic-fingerprint'}
+                return super().fetchone()
+        cursor = BlockedEventCursor({'auto_send_enabled': False})
         with patch.object(connect_ai, '_connect', return_value=Connection(cursor)), \
              patch.object(connect_ai, 'ensure_schema'), \
              patch.object(connect_ai, 'allowed', return_value=False), \
-             patch.object(connect_ai, 'runtime_flag', return_value=False):
+             patch.object(connect_ai, 'runtime_flag', return_value=False), \
+             patch.object(connect_ai, 'reconcile_unassigned_connect_dialog'):
             queued = connect_ai.enqueue(
                 '00000000-0000-0000-0000-000000000001', channel_id='00000000-0000-0000-0000-000000000002',
                 conversation_id='conversation-a', lead_id=1, message_id='message-a', event_id='event-a',

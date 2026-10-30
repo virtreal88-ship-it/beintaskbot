@@ -88,6 +88,31 @@ def test_channel_or_agent_setting_change_invalidates_scope_fingerprint():
         assert fingerprint != initial
 
 
+def test_expected_human_active_handoff_transition_keeps_scope_identity_stable():
+    import tenant_ai_pilot as pilot
+    scope={'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'test-chat'}
+    base={'conversation_id':scope['conversation_id'],'scopes':[{'provider':'connect','channel_id':scope['channel_id']}],
+      'active':True,'channel_version':'channel-v1','integration_status':'connected','integration_version':'integration-v1',
+      'conversation_lead_id':41,'conversation_ai_enabled':True,'conversation_manual_hold':False,
+      'conversation_state':'human','handoff_reason':'ai_developer_consultation:missing_knowledge',
+      'company_enabled':True,'auto_send_enabled':False,'emergency_stop':False,'settings_version':'settings-v1',
+      'tenant_status':'active','agent_id':'agent-1','agent_enabled':True,'agent_mode':'manual',
+      'agent_version':1,'agent_settings_version':'agent-v1'}
+    class Cursor:
+        def __init__(self,row):self.row=row
+        def execute(self,*_):pass
+        def fetchone(self):return dict(self.row)
+    with patch.dict('os.environ',{
+        'AI_AGENTS_PILOT_TENANT_ID':scope['tenant_id'],
+        'AI_AGENTS_PILOT_CHANNEL_ID':scope['channel_id'],
+        'AI_AGENTS_PILOT_CONVERSATION_ID':scope['conversation_id']},clear=True):
+        _row,human=pilot._snapshot(Cursor(base),scope['tenant_id'],scope)
+        active_row={**base,'conversation_state':'active','handoff_reason':'pilot_developer_followup'}
+        _row,active=pilot._snapshot(Cursor(active_row),scope['tenant_id'],scope)
+        assert human==active
+        assert pilot._snapshot(Cursor({**base,'conversation_manual_hold':True}),scope['tenant_id'],scope)[1]!=human
+
+
 def test_preflight_marks_kwid_as_unknown_until_fresh_manual_attestation(monkeypatch):
     row = {'active': True, 'integration_status': 'connected', 'conversation_id': 'test-chat',
            'conversation_state': 'active', 'company_enabled': False,
@@ -243,6 +268,102 @@ def test_confirmation_schema_migration_is_idempotent_additive_ddl():
                   'scope_fingerprint TEXT NOT NULL','kwid_confirmed_at TIMESTAMPTZ','kwid_expires_at TIMESTAMPTZ',
                   'owner_approved_at TIMESTAMPTZ','owner_expires_at TIMESTAMPTZ','kwid_confirmed_by IS NOT NULL AND owner_expires_at'):
         assert field in sql
+
+
+def test_scoped_live_group_allowlist_is_exact_and_independent_of_global_auto_send():
+    group='120363431915456655@g.us'
+    env={'AI_AGENTS_PILOT_TENANT_ID':pilot.SCOPED_LIVE_TENANT,
+         'AI_AGENTS_PILOT_CHANNEL_ID':pilot.SCOPED_LIVE_CHANNEL,
+         'AI_AGENTS_PILOT_CONVERSATION_ID':pilot.SCOPED_LIVE_CUSTOMER,
+         'AI_AGENTS_PILOT_GROUP_CONVERSATION_ID':group,
+         'AI_AGENTS_SCOPED_LIVE_ENABLED':'true'}
+    with patch.dict('os.environ',env,clear=True):
+        assert pilot.scoped_live_enabled()
+        assert pilot.is_pilot_group_target(pilot.SCOPED_LIVE_TENANT,pilot.SCOPED_LIVE_CHANNEL,group)
+        assert not pilot.is_pilot_group_target(pilot.SCOPED_LIVE_TENANT,pilot.SCOPED_LIVE_CHANNEL,'120363406724408631@g.us')
+        assert not pilot.is_pilot_group_target(pilot.SCOPED_LIVE_TENANT,OTHER,group)
+        assert not pilot.is_pilot_group_target(OTHER,pilot.SCOPED_LIVE_CHANNEL,group)
+        assert not pilot._enabled('AI_AGENTS_AUTO_SEND_ENABLED')
+
+
+def test_scoped_live_group_allowlist_rejects_missing_or_non_group_target():
+    for group in ('', '994502072240@s.whatsapp.net', '120363406724408631@g.us'):
+        env={'AI_AGENTS_PILOT_TENANT_ID':pilot.SCOPED_LIVE_TENANT,
+             'AI_AGENTS_PILOT_CHANNEL_ID':pilot.SCOPED_LIVE_CHANNEL,
+             'AI_AGENTS_PILOT_CONVERSATION_ID':pilot.SCOPED_LIVE_CUSTOMER,
+             'AI_AGENTS_PILOT_GROUP_CONVERSATION_ID':group,
+             'AI_AGENTS_SCOPED_LIVE_ENABLED':'true'}
+        with patch.dict('os.environ',env,clear=True):
+            assert not pilot.scoped_live_enabled()
+            assert not pilot.is_pilot_group_target(pilot.SCOPED_LIVE_TENANT,pilot.SCOPED_LIVE_CHANNEL,group)
+
+
+def test_scoped_live_customer_can_pass_final_gate_while_saved_modes_stay_manual(monkeypatch):
+    customer=pilot.SCOPED_LIVE_CUSTOMER
+    tenant=pilot.SCOPED_LIVE_TENANT
+    channel=pilot.SCOPED_LIVE_CHANNEL
+    job={'provider':'connect','tenant_id':tenant,'channel_id':channel,
+         'conversation_id':customer,'event_fingerprint':'pilot-event','agent_id':'agent'}
+    row={'conversation_state':'active','conversation_ai_enabled':True,'conversation_manual_hold':False,
+         'active':True,'integration_status':'connected','tenant_status':'active','company_enabled':True,
+         'auto_send_enabled':False,'emergency_stop':False,'agent_enabled':True,'agent_mode':'manual',
+         'exact_agent_scope':True,'agent_id':'agent'}
+    monkeypatch.setattr(pilot,'_snapshot',lambda *_:(row,'pilot-fingerprint'))
+    monkeypatch.setattr(pilot,'_lock_scope',lambda *_:True)
+    class Cursor:
+        def __enter__(self):return self
+        def __exit__(self,*_):return False
+        def execute(self,sql,_params=None):self.sql=sql
+        def fetchone(self):return {'valid':True}
+    class Connection:
+        def cursor(self):return Cursor()
+    monkeypatch.setattr(pilot,'runtime_flag',lambda name:name=='AI_AGENTS_ENABLED')
+    env={'AI_AGENTS_PILOT_TENANT_ID':tenant,'AI_AGENTS_PILOT_CHANNEL_ID':channel,
+         'AI_AGENTS_PILOT_CONVERSATION_ID':customer,
+         'AI_AGENTS_PILOT_GROUP_CONVERSATION_ID':pilot.SCOPED_LIVE_GROUP,
+         'AI_AGENTS_SCOPED_LIVE_ENABLED':'true'}
+    with patch.dict('os.environ',env,clear=True):
+        assert pilot.automatic_send_allowed(job,Connection())
+        assert pilot.processing_allowed(job,Connection())
+        assert pilot.processing_allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel,
+            'conversation_id':'ordinary-client','event_fingerprint':'ordinary-event'},Connection())
+
+
+def test_worker_config_overrides_modes_only_for_exact_scoped_customer(monkeypatch):
+    import tenant_ai_agent_run_store as store
+    customer=pilot.SCOPED_LIVE_CUSTOMER;tenant=pilot.SCOPED_LIVE_TENANT;channel=pilot.SCOPED_LIVE_CHANNEL
+    job={'provider':'connect','tenant_id':tenant,'channel_id':channel,'conversation_id':customer,
+         'agent_id':'agent','event_fingerprint':'event','lease_token':'lease','revision':1}
+    row={'role':'primary','agent_enabled':True,'scopes':[{'provider':'connect','channel_id':channel}],
+         'agent_model':'model','safety':{},'response_policy':{},'schedule':{},'mode':'manual',
+         'settings_enabled':True,'operating_mode':'simulation','auto_send_enabled':False,
+         'emergency_stop':False,'crm_actions_enabled':False,'native_crm_actions_enabled':False,
+         'metadata':{'enabled':True,'consent':True,'model':'model','models':['model']},
+         'secrets':b'credential','tenant_status':'active','conversation_state':'active'}
+    class Cursor:
+        def __enter__(self):return self
+        def __exit__(self,*_):return False
+        def execute(self,*_):pass
+        def fetchone(self):return row
+    class Connection:
+        def __enter__(self):return self
+        def __exit__(self,*_):return False
+        def cursor(self):return Cursor()
+    monkeypatch.setattr(store,'_connect',lambda:Connection())
+    monkeypatch.setattr(store,'ensure_schema',lambda *_:None)
+    monkeypatch.setattr(store,'platform_service_ready',lambda:False)
+    monkeypatch.setattr(store,'platform_key_ready',lambda *_:True)
+    monkeypatch.setattr(store,'platform_model_allowed',lambda *_:True)
+    env={'AI_AGENTS_PILOT_TENANT_ID':tenant,'AI_AGENTS_PILOT_CHANNEL_ID':channel,
+         'AI_AGENTS_PILOT_CONVERSATION_ID':customer,
+         'AI_AGENTS_PILOT_GROUP_CONVERSATION_ID':pilot.SCOPED_LIVE_GROUP,
+         'AI_AGENTS_SCOPED_LIVE_ENABLED':'true'}
+    with patch.dict('os.environ',env,clear=True):
+        config=store.load_agent_config(job)
+        assert config['mode']=='automatic' and config['auto_send_enabled'] is True
+        assert row['mode']=='manual' and row['operating_mode']=='simulation' and row['auto_send_enabled'] is False
+        other=store.load_agent_config({**job,'conversation_id':'ordinary-client'})
+        assert other is None
 
 
 

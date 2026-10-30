@@ -80,8 +80,13 @@ def create_from_ai(job, *, recipient_id, reason, evidence, run_id=None):
         schema(conn)
         with conn.cursor() as cur:
             tenant=str(job['tenant_id']);recipient=_recipient(cur,tenant,recipient_id)
-            cur.execute('''SELECT id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
-              AND conversation_id=%s ORDER BY created_at DESC LIMIT 1 FOR SHARE''',(tenant,job['channel_id'],job['conversation_id']))
+            # Bind to the ticket recorded by this exact handoff event. A
+            # newer ticket in the same dialog can belong to a different issue.
+            cur.execute('''SELECT t.id FROM saas_support_events e JOIN saas_support_tickets t
+              ON t.tenant_id=e.tenant_id AND t.id=e.ticket_id
+              WHERE e.tenant_id=%s::uuid AND e.event_key=%s AND t.channel_id=%s::uuid
+                AND t.conversation_id=%s AND t.status<>'resolved' FOR SHARE OF t''',
+              (tenant,'handoff:'+str(job.get('event_fingerprint') or ''),job['channel_id'],job['conversation_id']))
             case=cur.fetchone()
             if not case: return {'created':False,'reason':'support_case_missing'}
             key='ai:'+str(job['agent_id'])+':'+str(job.get('event_fingerprint') or '')

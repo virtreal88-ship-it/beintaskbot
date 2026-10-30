@@ -1624,6 +1624,22 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
                 resumed_at=CASE WHEN EXCLUDED.state='active' THEN clock_timestamp() ELSE saas_ai_conversation_state.resumed_at END,
                 updated_at=now()''',
               (tenant,provider,conversation,resolved_channel,candidate_id,state,str(reason)[:240]))
+            # A manual Pause/Human action on the scoped live pilot revokes both
+            # short-lived attestations. The pilot's own handoff/follow-up
+            # transitions write conversation state internally and do not use
+            # this manager action path.
+            if provider == 'connect' and state in {'human','paused'}:
+                from tenant_ai_pilot import (SCOPED_LIVE_CHANNEL,SCOPED_LIVE_CUSTOMER,
+                    SCOPED_LIVE_TENANT)
+                if (str(tenant)==SCOPED_LIVE_TENANT and str(resolved_channel)==SCOPED_LIVE_CHANNEL
+                        and str(conversation)==SCOPED_LIVE_CUSTOMER):
+                    cur.execute("SELECT to_regclass('saas_ai_pilot_confirmations') IS NOT NULL AS available")
+                    if (cur.fetchone() or {}).get('available'):
+                        cur.execute('''UPDATE saas_ai_pilot_confirmations SET
+                          kwid_confirmed_by=NULL,kwid_confirmed_at=NULL,kwid_expires_at=NULL,
+                          owner_approved_by=NULL,owner_approved_at=NULL,owner_expires_at=NULL,updated_at=now()
+                          WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s''',
+                          (tenant,resolved_channel,conversation))
             if provider=='connect' and state=='active':
                 from tenant_ai_legacy_permit import renew
                 renew(cur,tenant,resolved_channel,conversation)

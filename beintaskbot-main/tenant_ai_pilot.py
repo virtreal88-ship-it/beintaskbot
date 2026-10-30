@@ -10,6 +10,10 @@ from tenant_linear_policy import TenantLinearError
 
 _TRUE = {'1', 'true', 'yes', 'on'}
 CONFIRMATION_MINUTES = 15
+SCOPED_LIVE_TENANT = 'e09a5c24-093f-4141-992d-532052e00c90'
+SCOPED_LIVE_CHANNEL = '96863d75-d272-4c93-a25e-ffb2b16ecae3'
+SCOPED_LIVE_CUSTOMER = '994502072240@s.whatsapp.net'
+SCOPED_LIVE_GROUP = '120363431915456655@g.us'
 
 
 def schema(cur):
@@ -51,6 +55,56 @@ def configured_scope():
     return {'tenant_id': tenant, 'channel_id': channel, 'conversation_id': conversation}
 
 
+def configured_group_scope():
+    """Return the separately configured developer group for the two-target pilot."""
+    scope = configured_scope()
+    if not scope:
+        return None
+    group = str(os.environ.get('AI_AGENTS_PILOT_GROUP_CONVERSATION_ID') or '').strip()
+    # Do not accept arbitrary groups from a request or a database listing.
+    from tenant_ai_group_coordination import group_jid
+    if (scope['tenant_id'] != SCOPED_LIVE_TENANT or scope['channel_id'] != SCOPED_LIVE_CHANNEL
+            or scope['conversation_id'] != SCOPED_LIVE_CUSTOMER or group != SCOPED_LIVE_GROUP
+            or not group_jid(group)):
+        return None
+    return {**scope, 'conversation_id': group}
+
+
+def scoped_live_enabled():
+    """Dedicated opt-in for the scoped pilot; independent of global auto-send."""
+    return _enabled('AI_AGENTS_SCOPED_LIVE_ENABLED') and configured_group_scope() is not None
+
+
+def is_pilot_group_target(tenant_id, channel_id, conversation_id):
+    scope = configured_group_scope()
+    return bool(scoped_live_enabled() and scope
+        and str(tenant_id) == scope['tenant_id']
+        and str(channel_id) == scope['channel_id']
+        and str(conversation_id) == scope['conversation_id'])
+
+
+def is_pilot_customer_target(tenant_id, channel_id, conversation_id):
+    scope = configured_scope()
+    return bool(scoped_live_enabled() and scope
+        and str(tenant_id) == SCOPED_LIVE_TENANT
+        and str(channel_id) == SCOPED_LIVE_CHANNEL
+        and str(conversation_id) == SCOPED_LIVE_CUSTOMER
+        and scope['tenant_id'] == SCOPED_LIVE_TENANT
+        and scope['channel_id'] == SCOPED_LIVE_CHANNEL
+        and scope['conversation_id'] == SCOPED_LIVE_CUSTOMER)
+
+
+def manual_live_job(job):
+    return (str(job.get('provider') or '') == 'connect'
+        and is_pilot_customer_target(job.get('tenant_id'),job.get('channel_id'),job.get('conversation_id')))
+
+
+def assert_pilot_group_target(tenant_id, channel_id, conversation_id):
+    """Fail closed when the scoped live pilot attempts a non-approved group."""
+    if scoped_live_enabled() and not is_pilot_group_target(tenant_id, channel_id, conversation_id):
+        raise TenantLinearError('Destination is outside the configured two-address pilot scope.', 409)
+
+
 def _snapshot(cur, tenant, scope):
     cur.execute('''SELECT ch.active, ch.updated_at AS channel_version,
             i.status AS integration_status, i.updated_at AS integration_version,
@@ -84,7 +138,10 @@ def _snapshot(cur, tenant, scope):
     version = [scope['tenant_id'], scope['channel_id'], scope['conversation_id'], row.get('active'),
         str(row.get('channel_version') or ''), row.get('integration_status'),
         str(row.get('integration_version') or ''), row.get('conversation_lead_id'), row.get('conversation_ai_enabled'),
-        row.get('conversation_manual_hold'), row.get('conversation_state'), row.get('handoff_reason'), row.get('company_enabled'),
+        # Conversation state/reason change during this pilot's expected
+        # human->active workflow. Runtime gates check those independently;
+        # pause/revoke explicitly clears the owner approval below.
+        row.get('conversation_manual_hold'), row.get('company_enabled'),
         row.get('auto_send_enabled'), row.get('emergency_stop'),
         str(row.get('settings_version') or ''), row.get('tenant_status'), row.get('agent_id'),
         row.get('agent_enabled'), row.get('agent_mode'), row.get('agent_version'),
@@ -136,7 +193,8 @@ def _lock_scope(cur, tenant, scope):
 def processing_allowed(job, connection=None):
     """Fence all AI/CRM stages to one explicitly armed and confirmed dialog."""
     scope = configured_scope()
-    armed = _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED')
+    manual_live = manual_live_job(job)
+    armed = _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED') or manual_live
     exact = bool(scope and str(job.get('provider') or '') == 'connect'
         and str(job.get('tenant_id') or '') == scope['tenant_id']
         and str(job.get('channel_id') or '') == scope['channel_id']
@@ -166,7 +224,8 @@ def automatic_send_allowed(job, connection=None):
     switch is off; arming the pilot also blocks every other conversation.
     """
     scope = configured_scope()
-    armed = _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED')
+    manual_live = manual_live_job(job)
+    armed = _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED') or manual_live
     if job.get('_pilot_scope_fenced') is True and (not scope or not armed):
         return False
     if not scope:
@@ -192,12 +251,13 @@ def automatic_send_allowed(job, connection=None):
                             or row.get('conversation_manual_hold') is True
                             or row.get('active') is not True or row.get('integration_status') != 'connected'
                             or row.get('tenant_status') != 'active' or row.get('company_enabled') is not True
-                            or row.get('auto_send_enabled') is not True
+                            or (not manual_live and row.get('auto_send_enabled') is not True)
                             or row.get('emergency_stop') is True or row.get('agent_enabled') is not True
-                            or row.get('agent_mode') != 'automatic' or not row.get('exact_agent_scope')
-                    or (job.get('agent_id') and str(row.get('agent_id') or '') != str(job.get('agent_id')))
+                            or (not manual_live and row.get('agent_mode') != 'automatic') or not row.get('exact_agent_scope')
                             or (job.get('agent_id') and str(row.get('agent_id') or '') != str(job.get('agent_id')))
-                            or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')):
+                            or (job.get('agent_id') and str(row.get('agent_id') or '') != str(job.get('agent_id')))
+                            or (not manual_live and not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'))
+                            or (manual_live and not runtime_flag('AI_AGENTS_ENABLED'))):
                         return False
                     cur.execute('''SELECT (c.kwid_expires_at>clock_timestamp() AND c.owner_expires_at>clock_timestamp()
                       AND e.received_at>=GREATEST(c.kwid_confirmed_at,c.owner_approved_at)) AS valid
@@ -217,11 +277,12 @@ def automatic_send_allowed(job, connection=None):
                     or row.get('conversation_manual_hold') is True
                     or row.get('active') is not True or row.get('integration_status') != 'connected'
                     or row.get('tenant_status') != 'active' or row.get('company_enabled') is not True
-                    or row.get('auto_send_enabled') is not True
+                    or (not manual_live and row.get('auto_send_enabled') is not True)
                     or row.get('emergency_stop') is True or row.get('agent_enabled') is not True
-                    or row.get('agent_mode') != 'automatic' or not row.get('exact_agent_scope')
+                    or (not manual_live and row.get('agent_mode') != 'automatic') or not row.get('exact_agent_scope')
                     or (job.get('agent_id') and str(row.get('agent_id') or '') != str(job.get('agent_id')))
-                    or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')):
+                    or (not manual_live and not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'))
+                    or (manual_live and not runtime_flag('AI_AGENTS_ENABLED'))):
                 return False
             cur.execute('''SELECT (c.kwid_expires_at>clock_timestamp() AND c.owner_expires_at>clock_timestamp()
                       AND e.received_at>=GREATEST(c.kwid_confirmed_at,c.owner_approved_at)) AS valid
@@ -236,6 +297,49 @@ def automatic_send_allowed(job, connection=None):
         return False
 
 
+def pilot_group_handoff_allowed(job, connection=None):
+    """Validate the exact customer-side handoff immediately before group send."""
+    if not scoped_live_enabled() or not manual_live_job(job):
+        return False
+    scope = configured_scope()
+    tenant = str(job.get('tenant_id') or '')
+    if not scope or tenant != scope['tenant_id'] or not _enabled('AI_AGENTS_SCOPED_LIVE_ENABLED'):
+        return False
+    try:
+        if connection is None:
+            from tenant_platform import _connect
+            with _connect() as conn:
+                return pilot_group_handoff_allowed(job, conn)
+        with connection.cursor() as cur:
+            if not _lock_scope(cur, tenant, scope):
+                return False
+            row, fingerprint = _snapshot(cur, tenant, scope)
+            if (not fingerprint or row.get('conversation_state') != 'human'
+                    or not str(row.get('handoff_reason') or '').startswith('ai_developer_consultation:')
+                    or row.get('conversation_ai_enabled') is not True
+                    or row.get('conversation_manual_hold') is True
+                    or row.get('active') is not True or row.get('integration_status') != 'connected'
+                    or row.get('tenant_status') != 'active' or row.get('company_enabled') is not True
+                    or row.get('emergency_stop') is True or row.get('agent_enabled') is not True
+                    or row.get('agent_mode') != 'manual' or not row.get('exact_agent_scope')
+                    or (job.get('agent_id') and str(row.get('agent_id') or '') != str(job.get('agent_id')))
+                    or not runtime_flag('AI_AGENTS_ENABLED')):
+                return False
+            cur.execute('''SELECT (c.kwid_expires_at>clock_timestamp()
+                    AND c.owner_expires_at>clock_timestamp()
+                    AND e.received_at>=GREATEST(c.kwid_confirmed_at,c.owner_approved_at)) AS valid
+              FROM saas_ai_pilot_confirmations c
+              JOIN saas_tenant_webhook_events e ON e.tenant_id=c.tenant_id AND e.fingerprint=%s
+              WHERE c.tenant_id=%s::uuid AND c.channel_id=%s::uuid
+                AND c.conversation_id=%s AND c.scope_fingerprint=%s
+                AND c.kwid_confirmed_by IS NOT NULL AND c.owner_approved_by IS NOT NULL
+              FOR SHARE OF c,e''', (str(job.get('event_fingerprint') or ''),tenant,
+                scope['channel_id'],scope['conversation_id'],fingerprint))
+            return bool((cur.fetchone() or {}).get('valid'))
+    except Exception:
+        return False
+
+
 def _authorized_scope(cur, profile):
     from tenant_ai_agents_store import _authorize
     tenant, actor = _authorize(cur, profile)
@@ -245,6 +349,10 @@ def _authorized_scope(cur, profile):
     row, fingerprint = _snapshot(cur, tenant, scope)
     if not fingerprint or not row.get('active') or row.get('integration_status') != 'connected':
         raise TenantLinearError('The exact Connect channel and conversation must be active before confirmation.', 409)
+    if (row.get('conversation_state') != 'active' or row.get('conversation_manual_hold') is True
+            or row.get('tenant_status') != 'active' or row.get('company_enabled') is not True
+            or row.get('emergency_stop') is True):
+        raise TenantLinearError('The selected customer dialogue must be active and unpaused before pilot approval.', 409)
     return tenant, actor, scope, row, fingerprint
 
 
@@ -303,7 +411,12 @@ def preflight(profile):
         with conn.cursor() as cur:
             tenant, _actor = _authorize(cur, profile)
             scope = configured_scope()
-            result = {'ready': False, 'provider': 'connect', 'pilot_guard_enabled': _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED'),
+            group_scope=configured_group_scope()
+            scoped_live=scoped_live_enabled()
+            result = {'ready': False, 'provider': 'connect', 'pilot_guard_enabled': _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED') or scoped_live,
+                    'scoped_live':{'enabled':scoped_live,'customer_target':SCOPED_LIVE_CUSTOMER,
+                        'developer_group_target':SCOPED_LIVE_GROUP if group_scope else '',
+                        'mode_override':'exact pilot only' if scoped_live else 'disabled'},
                     'scope_configured': bool(scope), 'competing_handler': {'state':'unknown','source':'manual_confirmation_required'},
                     'separate_owner_approval': {'state':'missing'},
                     'auto_send': {'server': runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'), 'company': False},
@@ -318,10 +431,27 @@ def preflight(profile):
                 return result
             result['scope'] = dict(scope)
             row, fingerprint = _snapshot(cur, tenant, scope)
+            group_row={}
+            if group_scope:
+                cur.execute('''SELECT c.lead_id,g.state,
+                    NOT EXISTS(SELECT 1 FROM saas_ai_agent_jobs j WHERE j.tenant_id=c.tenant_id
+                      AND j.provider='connect' AND j.channel_id=c.connect_channel_id::text
+                      AND j.conversation_id=c.conversation_id AND j.state IN ('queued','processing')) AS no_pending_jobs
+                  FROM saas_connect_conversations c JOIN saas_connect_channels ch
+                    ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
+                  JOIN saas_tenant_integrations i ON i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected'
+                  LEFT JOIN saas_ai_group_coordination g ON g.tenant_id=c.tenant_id
+                    AND g.provider='connect' AND g.group_jid=c.conversation_id
+                  WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s''',
+                  (tenant,group_scope['channel_id'],group_scope['conversation_id']))
+                group_row=cur.fetchone() or {}
+            result['scoped_live']['developer_group_route']='verified' if group_row else 'unavailable'
+            result['scoped_live']['developer_group_state']=group_row.get('state') or 'uninitialized'
             result['auto_send']['company'] = row.get('auto_send_enabled') is True
             result['channel'] = 'active' if row.get('active') is True and row.get('integration_status') == 'connected' else 'unavailable'
             result['conversation'] = 'verified' if row.get('conversation_id') else 'unavailable'
-            result['agent'] = 'eligible' if (row.get('agent_enabled') is True and row.get('agent_mode') == 'automatic'
+            result['agent'] = 'eligible' if (row.get('agent_enabled') is True and (row.get('agent_mode') == 'automatic'
+                or (scoped_live and row.get('agent_mode')=='manual'))
                 and row.get('exact_agent_scope')) else 'unavailable'
             result['handoff'] = str(row.get('conversation_state') or 'uninitialized')
             result['rollback'] = {'available':bool(row.get('conversation_id')),'action':'pause this conversation; WhatsApp session remains connected'}
@@ -340,8 +470,13 @@ def preflight(profile):
             if result['agent'] != 'eligible': result['blockers'].append('automatic_agent_not_active_for_conversation')
             if row.get('tenant_status') != 'active' or row.get('company_enabled') is not True or row.get('emergency_stop') is True:
                 result['blockers'].append('company_ai_not_in_active_state')
-            if row.get('auto_send_enabled') is not True or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'):
+            if (not scoped_live and (row.get('auto_send_enabled') is not True or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'))):
                 result['blockers'].append('automatic_send_not_enabled')
+            # An uninitialized coordination row means the group is not assigned
+            # to automation. It is safe to initialize it paused on first send.
+            if scoped_live and (not group_row or group_row.get('state') not in {'human','paused',None}
+                    or group_row.get('no_pending_jobs') is not True):
+                result['blockers'].append('developer_group_route_not_stopped_and_verified')
             if row.get('conversation_state') != 'active': result['blockers'].append('conversation_not_active_or_handed_off')
             if not result['pilot_guard_enabled']: result['blockers'].append('pilot_guard_not_armed')
             if result['kwid_confirmation']['state'] != 'confirmed': result['blockers'].append('kwid_confirmation_missing_expired_or_scope_changed')
