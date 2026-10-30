@@ -1344,6 +1344,20 @@ def test_case_archive_is_owner_admin_only_and_uses_version(ready):
         store.mutate(PROFILE,value['id'],{'expected_version':0},'archive')
 
 
+def test_archived_case_and_all_status_listing_are_json_serializable(ready,monkeypatch):
+    from datetime import datetime,timezone
+    db,_,_=ready;case=candidate(ready);row=store._row
+    def psycopg_row(value):
+        result=row(value)
+        if result.get('archived_at'):result['archived_at']=datetime(2026,10,30,tzinfo=timezone.utc)
+        return result
+    monkeypatch.setattr(store,'_row',psycopg_row)
+    archived=store.mutate(PROFILE,case['id'],{'expected_version':1},'archive')['candidate']
+    assert archived['status']=='archived'
+    for payload in (archived,store.detail(PROFILE,case['id']),store.listing(PROFILE,{'status':'all','limit':50})):
+        assert json.loads(json.dumps(payload))
+
+
 def test_owner_published_payment_link_is_exact_scoped_and_retrievable(ready,monkeypatch):
     from tenant_knowledge_candidates_policy import OWNER_APPROVED_PAYMENT_URL as url,redact
     db,generation,_=ready;value=candidate(ready)
