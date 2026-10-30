@@ -1157,8 +1157,9 @@ def test_after_hours_ai_consultation_waits_for_in_hours_final_authorization(db, 
     monkeypatch.setattr(member_store, 'member', lambda *_: profile)
     monkeypatch.setattr(telegram_binding, 'binding_snapshot', lambda **_: {'chat_id':777,'verified_at':'2026-10-25T08:00:00+00:00'})
     monkeypatch.setattr(tenant_notifications, 'notification_channels', lambda *_, **__: ['telegram'])
-    manual()
+    ticket=manual()['ticket']['id']
     job={'tenant_id':A,'agent_id':AGENT,'provider':'connect','channel_id':CA,'conversation_id':'client','event_fingerprint':'webhook-after-hours'}
+    db.execute('INSERT INTO saas_support_events(tenant_id,event_key,ticket_id) VALUES(%s::uuid,%s,%s::uuid)',(A,'handoff:webhook-after-hours',ticket));db.commit()
     receipt=consultations.create_from_ai(job,recipient_id=11,reason='ai_developer_consultation:missing_knowledge',evidence={})
     assert receipt['status']=='queued_after_hours' and receipt['delivery']=='telegram_pending'
     queued=db.execute('''SELECT status,chat_id,binding_verified_at FROM saas_consultation_telegram_deliveries
@@ -1180,8 +1181,9 @@ def test_after_hours_ai_consultation_waits_for_in_hours_final_authorization(db, 
 def test_ai_consultation_uses_handoff_case_notifies_recipient_and_never_sends_customer_message(db, monkeypatch):
     monkeypatch.setattr(consultations, '_connect', lambda: db)
     monkeypatch.setattr(consultations, '_hours', lambda: False)
-    manual()
+    ticket=manual()['ticket']['id']
     job={'tenant_id':A,'agent_id':AGENT,'provider':'connect','channel_id':CA,'conversation_id':'client','event_fingerprint':'webhook-consult-1'}
+    db.execute('INSERT INTO saas_support_events(tenant_id,event_key,ticket_id) VALUES(%s::uuid,%s,%s::uuid)',(A,'handoff:webhook-consult-1',ticket));db.commit()
     first=consultations.create_from_ai(job,recipient_id=11,reason='ai_developer_consultation:missing_knowledge',evidence={'source_external_id':'m1'})
     second=consultations.create_from_ai(job,recipient_id=11,reason='ai_developer_consultation:missing_knowledge',evidence={'source_external_id':'m1'})
     assert first['created'] and first['customer_message_sent'] is False
@@ -1191,3 +1193,26 @@ def test_ai_consultation_uses_handoff_case_notifies_recipient_and_never_sends_cu
     assert row['delivery_state']=='internal_inbox' and row['status']=='queued_after_hours' and row['ai_run_id'] is None
     consultations.reply(PROFILE,first['id'],{'response':'Исправлено в версии 2.4','kind':'deployed_fix'})
     assert db.execute('SELECT knowledge_candidate_requested FROM saas_support_tickets WHERE tenant_id=%s::uuid',(A,))[0]['knowledge_candidate_requested'] is True
+
+
+def test_ai_consultation_does_not_select_newer_unrelated_ticket(db, monkeypatch):
+    monkeypatch.setattr(consultations, '_connect', lambda: db)
+    old=manual()['ticket']['id']
+    job={'tenant_id':A,'agent_id':AGENT,'provider':'connect','channel_id':CA,'conversation_id':'client','event_fingerprint':'old-event'}
+    db.execute('INSERT INTO saas_support_events(tenant_id,event_key,ticket_id) VALUES(%s::uuid,%s,%s::uuid)',(A,'handoff:old-event',old))
+    db.execute("UPDATE saas_support_tickets SET status='resolved' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,old));db.commit()
+    new=manual()['ticket']['id']
+    assert new != old
+    result=consultations.create_from_ai(job,recipient_id=11,reason='test',evidence={})
+    assert result == {'created':False,'reason':'support_case_missing'}
+    assert db.execute('SELECT count(*) AS n FROM saas_internal_consultations WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
+
+
+def test_ai_consultation_requires_same_tenant_and_route_handoff_event(db, monkeypatch):
+    monkeypatch.setattr(consultations, '_connect', lambda: db)
+    ticket=manual()['ticket']['id']
+    db.execute('INSERT INTO saas_support_events(tenant_id,event_key,ticket_id) VALUES(%s::uuid,%s,%s::uuid)',(A,'handoff:correct-event',ticket));db.commit()
+    job={'tenant_id':A,'agent_id':AGENT,'provider':'connect','channel_id':CA,'conversation_id':'client','event_fingerprint':'missing-event'}
+    for invalid in (job, {**job,'event_fingerprint':'correct-event','channel_id':CB},
+                    {**job,'event_fingerprint':'correct-event','conversation_id':'another'}):
+        assert consultations.create_from_ai(invalid,recipient_id=11,reason='test',evidence={}) == {'created':False,'reason':'support_case_missing'}
