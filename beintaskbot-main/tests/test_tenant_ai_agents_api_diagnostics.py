@@ -4,6 +4,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 from unittest.mock import Mock, patch
 
 from aiohttp import web
@@ -224,6 +225,7 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
         handler, _ = load_handler(_origin=lambda *_args: None, _json_body=lambda _request: True,
             _expected=lambda *_args: None)
         with patch('tenant_ai_pilot.preflight', return_value={'ready':False,'blockers':[],
+                'scope': {'tenant_id': UUID('00000000-0000-0000-0000-000000000101')},
                 'kwid_confirmation':{'state':'confirmed','confirmed_at':confirmed_at,'expires_at':expires_at}}) as preflight:
             response = run_without_event_loop(handler(Mock(return_value=profile), 'https://crm.pro.az',
                 Mock(), 'pilot_preflight')(SimpleNamespace(method='GET', headers={}, query={})))
@@ -231,6 +233,7 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
         payload = json.loads(response.text)
         self.assertEqual(payload['result']['kwid_confirmation']['confirmed_at'], confirmed_at.isoformat())
         self.assertEqual(payload['result']['kwid_confirmation']['expires_at'], expires_at.isoformat())
+        self.assertEqual(payload['result']['scope']['tenant_id'], '00000000-0000-0000-0000-000000000101')
         preflight.assert_called_once_with(profile)
 
     def test_kwid_confirmation_uses_verified_profile_and_ignores_browser_scope(self):
