@@ -401,6 +401,7 @@ def _public_media_processing(media_results,source_ids,extraction_status,source_r
 def public_card(cur,row,content_language='az',source_route=None,tenant=None,dialog=None,media_results=None,extraction_status=None,source_refs=None,include_media_content=False):
     value={**_row(row),**row['content']};value.pop('content',None);value.pop('content_hash',None)
     if value.get('reviewed_at'): value['reviewed_at']=value['reviewed_at'].isoformat()
+    if value.get('archived_at'): value['archived_at']=value['archived_at'].isoformat()
     value['extraction_id']=str(row['extraction_id'])
     cur.execute('SELECT agent_id,source_id FROM saas_knowledge_candidate_sources WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid ORDER BY agent_id',(row['tenant_id'],row['id']))
     value['publications']=[{k:str(v) for k,v in item.items()} for item in cur.fetchall()]
