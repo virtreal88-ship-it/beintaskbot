@@ -54,7 +54,7 @@ def test_one_shot_receipt_and_reply_that_arrives_during_send(db,monkeypatch):
         assert flow.record_group_reply(cur,A,CA,'120363411822115408@g.us','inbound-3','Synthetic reply','PROVIDER_123') is None
     db.commit()
 
-def test_unknown_delivery_is_never_retried_and_media_is_not_silently_dropped(db,monkeypatch):
+def test_unknown_delivery_is_never_retried_and_invalid_media_is_rejected(db,monkeypatch):
     consult,_=setup_case(db,monkeypatch); payload=request()
     with pytest.raises(TenantLinearError):flow.prepare(PROFILE,consult,{**payload,'attachment_ids':['synthetic']})
     assert flow.prepare(PROFILE,consult,payload)['created']
@@ -64,6 +64,19 @@ def test_unknown_delivery_is_never_retried_and_media_is_not_silently_dropped(db,
     with pytest.raises(TenantLinearError):flow.dispatch(PROFILE,consult,payload['request_id'])
     with pytest.raises(TenantLinearError):flow.dispatch(PROFILE,consult,payload['request_id'])
     assert len(calls)==1
+
+def test_selected_attachment_must_belong_to_exact_ticket_conversation(db,monkeypatch):
+    consult,case=setup_case(db,monkeypatch);payload=request();image=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type)
+      VALUES(%s::uuid,%s::uuid,41,'connect:synthetic-image',%s,'incoming','image')""",(image,A,'connect:'+CA));db.commit()
+    payload['attachment_ids']=[image]
+    assert flow.prepare(PROFILE,consult,payload)['created']
+    rows=db.execute('SELECT body FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid',(A,consult))
+    assert 'support_ticket_id='+case+'&support_ticket_message_id='+image in rows[0]['body']
+    focused=tickets.detail(PROFILE,case,None,image)
+    assert str(focused['focus_message']['id'])==image
+    with pytest.raises(TenantLinearError):tickets.detail(PROFILE,case,None,str(uuid.uuid4()))
+    with pytest.raises(TenantLinearError):tickets.detail({'tenant_id':B,'telegram_id':22},case,None,image)
 
 def test_preparation_requires_owner_explicit_destination_and_is_tenant_scoped(db,monkeypatch):
     consult,_=setup_case(db,monkeypatch); payload=request()

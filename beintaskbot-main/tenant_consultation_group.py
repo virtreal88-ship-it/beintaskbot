@@ -49,9 +49,10 @@ def prepare(profile,consultation_id,data):
     if not group_jid(group):raise TenantLinearError('A group destination is required.',400)
     summary=data['summary']
     if not isinstance(summary,str) or not summary.strip() or len(summary)>2600:raise TenantLinearError('A short consultation summary is required.',400)
-    if not isinstance(data['attachment_ids'],list):raise TenantLinearError('Invalid attachment selection.',400)
-    if data['attachment_ids']:
-        raise TenantLinearError('Group attachment forwarding is not yet available; no message was sent.',409)
+    if not isinstance(data['attachment_ids'],list) or len(data['attachment_ids'])>10:
+        raise TenantLinearError('Invalid attachment selection.',400)
+    attachment_ids=[identifier(value) for value in data['attachment_ids']]
+    if len(set(attachment_ids))!=len(attachment_ids):raise TenantLinearError('Duplicate attachment selection.',400)
     key=identifier(consultation_id)
     with _connect() as conn:
         schema(conn)
@@ -62,13 +63,21 @@ def prepare(profile,consultation_id,data):
               WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid FOR UPDATE OF c,t''',(tenant,key));consult=cur.fetchone()
             if not consult:raise TenantLinearError('Consultation is unavailable.',404)
             if consult['status']=='closed' or consult['ticket_status']=='resolved':raise TenantLinearError('Consultation is closed.',409)
-            assert_route(cur,tenant,policy,'connect',consult['conversation_id'],str(consult['channel_id']))
+            source=assert_route(cur,tenant,policy,'connect',consult['conversation_id'],str(consult['channel_id']))
             assert_route(cur,tenant,policy,'connect',group,channel)
             # The link contains no credentials and opens under the recipient's
             # own CRM session. Attachment access remains separately authorized.
             case_id=str(consult['case_id'])
+            links=[]
+            for message_id in attachment_ids:
+                cur.execute('''SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid
+                  AND kommo_lead_id=%s AND channel=%s AND message_type IN ('image','audio','voice','video','document')''',
+                  (tenant,message_id,source['lead_id'],'connect:'+str(consult['channel_id'])))
+                if not cur.fetchone():raise TenantLinearError('Attachment is unavailable in this conversation.',404)
+                links.append('https://crm.pro.az/app?view=support&support_ticket_id='+case_id+'&support_ticket_message_id='+message_id)
             body=('CASE:'+key+'\n'+summary.strip()+'\n\n'
                   'https://crm.pro.az/app?view=support&support_ticket_id='+case_id+
+                  (('\n\nAttachments (CRM sign-in and access required):\n'+'\n'.join(links)) if links else '')+
                   '\nReply and include CASE:'+key)
             digest=hashlib.sha256(body.encode()).hexdigest()
             cur.execute('SELECT * FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid FOR UPDATE',(tenant,key));old=cur.fetchone()

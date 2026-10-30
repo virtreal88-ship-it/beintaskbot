@@ -11,7 +11,7 @@ const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmedia
 function setup(fetch,url='https://crm.test/app',rights=true){
  const dom=new JSDOM('<section id="view-support"><div id="operatorSupport"></div></section><div id="modalContent"></div>',{url,runScripts:'outside-only'});
  dom.window.HTMLElement.prototype.scrollIntoView=function(){};
- dom.window.fetch=fetch;dom.window.tenantOperator={hasRight:()=>rights};dom.window.eval(fs.readFileSync(path.join(__dirname,'../docs/tenant-operator-i18n.js'),'utf8'));dom.window.eval(source);return dom;
+ dom.window.fetch=fetch;dom.window.tenantOperator={hasRight:typeof rights==='function'?rights:()=>rights};dom.window.eval(fs.readFileSync(path.join(__dirname,'../docs/tenant-operator-i18n.js'),'utf8'));dom.window.eval(source);return dom;
 }
 (async()=>{
  const calls=[];
@@ -74,6 +74,26 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  assert.match(deep.window.document.querySelector('#supportDetail').textContent,/Нет связи/);
  assert.equal(deepCalls.filter(x=>x.init.method&&x.init.method!=='GET').length,0);
  deep.window.close();
+ const messageId='93f466f9-767b-4f02-8005-1842cbdbef27',focusCalls=[];
+ const focused=setup(async(url,init={})=>{
+   focusCalls.push({url,init});
+   if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
+   if(url.startsWith('/api/platform/ai/internal-consultations'))return response({consultations:[]});
+   if(url==='/api/platform/ai/support-tickets/'+id+'?message_id='+messageId)
+     return response({ticket:{...ticket,id,channel_id:'channel-a'},messages:[],expert_results:[],focus_message:{id:messageId,external_id:'connect:synthetic',message_type:'image'},next_before:null});
+   return response({tickets:[],members,next_offset:null});
+ },'https://crm.test/app?view=support&support_ticket_id='+id+'&support_ticket_message_id='+messageId);
+ let attachmentUrl='';focused.window.tenantDownloadAttachment=(_button,url)=>{attachmentUrl=url;};
+ await settle();focused.window.document.querySelector('[data-focused-attachment] button').click();
+ assert.match(attachmentUrl,/expected_user_id=11/);assert.match(attachmentUrl,/message_id=connect%3Asynthetic/);
+ assert.equal(focusCalls.filter(x=>x.init.method&&x.init.method!=='GET').length,0);focused.window.close();
+ const noDialogs=setup(async(url)=>{
+   if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
+   if(url.startsWith('/api/platform/ai/internal-consultations'))return response({consultations:[]});
+   if(url.startsWith('/api/platform/ai/support-tickets/'+id+'?message_id='))return response({ticket:{...ticket,id,channel_id:'channel-a'},messages:[],expert_results:[],focus_message:{id:messageId,external_id:'connect:synthetic',message_type:'image'},next_before:null});
+   return response({tickets:[],members,next_offset:null});
+ },'https://crm.test/app?view=support&support_ticket_id='+id+'&support_ticket_message_id='+messageId,permission=>permission==='support');
+ await settle();assert.equal(noDialogs.window.document.querySelector('[data-focused-attachment] button'),null);noDialogs.window.close();
  const deniedCalls=[];
  const denied=setup(async(url)=>{deniedCalls.push(url);return {ok:true,json:async()=>({member:profile})};},'https://crm.test/app?view=support&support_ticket_id='+id,false);
  await settle();assert.ok(!deniedCalls.some(url=>url.includes('/support-tickets')));denied.window.close();

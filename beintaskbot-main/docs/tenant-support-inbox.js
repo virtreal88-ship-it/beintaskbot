@@ -82,14 +82,29 @@
     const show=items=>{const rows=$('consultRows');if(!rows)return;rows.innerHTML=(items||[]).map(item=>`<article class="support-message"><small>${esc(item.recipient_name)} · ${esc(i18n.date(item.created_at))}</small><div data-user-content>${esc(item.reason)}</div><small>${item.status==='queued_after_hours'?t('consultQueued'):t('consultWaiting')}</small>${item.response?`<hr><b>${t('consultAnswer')}</b><div data-user-content>${esc(item.response)}</div><small>${t('consultNoCustomerSend')}</small>`:`<small>${t('consultNoAnswer')}</small><label>${t('consultAnswer')}<textarea data-consult-answer="${esc(item.id)}" maxlength="4000" rows="2"></textarea></label><button type="button" class="outline" data-consult-reply="${esc(item.id)}">${t('save')}</button>`}</article>`).join('');rows.querySelectorAll('[data-consult-reply]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{const field=Array.from(rows.querySelectorAll('[data-consult-answer]')).find(node=>node.dataset.consultAnswer===button.dataset.consultReply);const response=field?.value||'';await consultationApi('/'+encodeURIComponent(button.dataset.consultReply)+'/reply','POST',{response,kind:'diagnosis'});await renderConsultations(ticket);}catch(error){notice(error.message);button.disabled=false;}});};
     try{const result=await consultationApi('?case_id='+encodeURIComponent(ticket.id));if(revision!==detailRevision||selected!==ticket.id)return;show(result.consultations);$('consultCreate').onclick=async()=>{const button=$('consultCreate');button.disabled=true;try{await consultationApi('','POST',{case_id:ticket.id,recipient_id:$('consultRecipient').value,reason:$('consultReason').value,evidence:{ticket_id:ticket.id,conversation_id:ticket.conversation_id},request_key:crypto.randomUUID()});await renderConsultations(ticket);}catch(error){notice(error.message);button.disabled=false;}};}catch(error){section.querySelector('#consultRows').textContent=error.message;section.querySelector('#consultCreate').disabled=true;}
   }
-  async function open(id){const revision=++detailRevision,version=epoch;try{const result=await api('/'+encodeURIComponent(id));if(revision!==detailRevision)return;renderDetail(result);$('supportDetail').scrollIntoView({behavior:'smooth',block:'start'});}catch(error){if(version===epoch)notice(error.message);}}
+  function renderFocusedAttachment(result){
+    const item=result.focus_message,ticket=result.ticket,host=$('supportDetail');if(!item||!host)return;
+    const section=document.createElement('section'),label=document.createElement('p');section.dataset.focusedAttachment='true';
+    label.textContent=t('attachment')+' · '+String(item.message_type||'');section.append(label);
+    const status=document.createElement('small');status.setAttribute('role','status');
+    if(window.tenantOperator?.hasRight('dialogs')&&item.external_id&&ticket.lead_id){
+      const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=t('downloadAttachment');
+      button.onclick=()=>{if(!window.tenantDownloadAttachment){status.textContent=t('error');return;}
+        const query=new URLSearchParams({lead_id:String(ticket.lead_id),message_id:String(item.external_id),channel_id:String(ticket.channel_id),conversation_id:String(ticket.conversation_id),expected_tenant_id:String(member.tenant_id),expected_user_id:String(member.telegram_id),download:'1'});
+        void window.tenantDownloadAttachment(button,'/api/platform/crm/chat/attachment?'+query,status);
+      };section.append(button);
+    }else status.textContent=t('error');
+    section.append(status);host.prepend(section);
+  }
+  async function open(id,focus=''){const revision=++detailRevision,version=epoch;try{const result=await api('/'+encodeURIComponent(id)+(focus?'?'+new URLSearchParams({message_id:focus}):''));if(revision!==detailRevision)return;renderDetail(result);renderFocusedAttachment(result);$('supportDetail').scrollIntoView({behavior:'smooth',block:'start'});}catch(error){if(version===epoch)notice(error.message);}}
   function openDirectTicket(){
     if(!member||!allowed())return;
-    const query=new URLSearchParams(location.search),id=query.get('support_ticket_id')||'';
+    const query=new URLSearchParams(location.search),id=query.get('support_ticket_id')||'',focus=query.get('support_ticket_message_id')||'';
     if(query.get('view')!=='support'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))return;
-    const key=epoch+':'+id;if(directTicketKey===key)return;
+    if(focus&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(focus))return;
+    const key=epoch+':'+id+':'+focus;if(directTicketKey===key)return;
     install();if(!$('supportDetail'))return;
-    directTicketKey=key;void open(id);
+    directTicketKey=key;void open(id,focus);
   }
   async function action(id,path,method,data){const revision=++detailRevision,version=epoch,host=$('supportDetail');host?.querySelectorAll('button').forEach(button=>button.disabled=true);try{const result=await api('/'+encodeURIComponent(id)+path,method,data);if(revision!==detailRevision)return;renderDetail(result);await load();}catch(error){if(version===epoch){notice(error.message);await open(id);}}}
   const mutate=(id,data)=>action(id,'','PATCH',data);

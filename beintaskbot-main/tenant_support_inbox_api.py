@@ -21,7 +21,7 @@ def handler(member_from_request, origin, logger, resource):
                     from tenant_internal_consultations import listing as consultation_listing
                     result=await asyncio.to_thread(consultation_listing,profile,request.query.get('case_id',''))
                 else:
-                    result = await asyncio.to_thread(detail,profile,request.match_info['ticket_id'],request.query.get('before'))
+                    result = await asyncio.to_thread(detail,profile,request.match_info['ticket_id'],request.query.get('before'),request.query.get('message_id'))
             else:
                 _origin(request,origin)
                 if request.content_type!='application/json': raise TenantLinearError('Ожидается JSON.',415)
