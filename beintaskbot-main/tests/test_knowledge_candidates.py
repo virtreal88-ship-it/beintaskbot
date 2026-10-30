@@ -1382,3 +1382,43 @@ def test_payment_link_repair_rejects_independently_changed_knowledge(ready,monke
     assert db.execute('SELECT content FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(source_id,))[0]['content']=='Independently edited guidance'
     assert store.detail(PROFILE,case['id'])['candidate']['version']==2
     assert generation.call_count==1
+
+
+def test_owner_corrects_published_case_without_reassigning_agents(ready,monkeypatch):
+    db,generation,_=ready;case=candidate(ready);monkeypatch.setattr(agents,'_connect',lambda:db)
+    published=store.mutate(PROFILE,case['id'],{'expected_version':1,'agent_ids':[EXPERT], 'resolution_steps':['Old explanation']},'publish_guidance')['candidate']
+    source_id=published['publications'][0]['source_id'];source_hash=published['knowledge_publication']['source_hash']
+    correction={'expected_version':2,'expected_source_hash':source_hash,'title':'Price discrepancy','resolution_steps':['Record 50 versus 49.9992 as a bug.']}
+    for wrong in ({**correction,'expected_version':1},{**correction,'expected_source_hash':'0'*64},{**correction,'agent_ids':[AGENT]},{**correction,'cause':{'status':'confirmed','text':'x'}}):
+        with pytest.raises(TenantLinearError):store.mutate(PROFILE,case['id'],wrong,'correct_published')
+    with pytest.raises(TenantLinearError):store.mutate({'tenant_id':B,'telegram_id':22},case['id'],correction,'correct_published')
+    db.execute("UPDATE saas_tenant_members SET role='admin' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));db.commit()
+    with pytest.raises(TenantLinearError):store.mutate(PROFILE,case['id'],correction,'correct_published')
+    db.execute("UPDATE saas_tenant_members SET role='owner' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));db.commit()
+    corrected=store.mutate(PROFILE,case['id'],correction,'correct_published')['candidate']
+    assert corrected['version']==3 and corrected['publications']==published['publications']
+    assert corrected['knowledge_publication']['current'] and corrected['knowledge_publication']['source_id']==source_id
+    assert corrected['cause']==published['cause'] and corrected['outcome']==published['outcome']
+    assert any('49.9992' in item['content'] for item in runs.knowledge_context(A,'price discrepancy',agent_id=EXPERT))
+    assert generation.call_count==1
+    assert db.execute("SELECT action FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND entity_id=%s AND action='knowledge_candidate_owner_correction'",(A,case['id']))
+
+
+def test_owner_correction_rejects_changed_source_and_rolls_back(ready,monkeypatch):
+    db,_,_=ready;case=candidate(ready);monkeypatch.setattr(agents,'_connect',lambda:db)
+    published=store.mutate(PROFILE,case['id'],{'expected_version':1,'agent_ids':[EXPERT]},'publish_guidance')['candidate']
+    source_id=published['publications'][0]['source_id'];source_hash=published['knowledge_publication']['source_hash']
+    request={'expected_version':2,'expected_source_hash':source_hash,'title':'Changed'}
+    original_audit=store._audit
+    def fail_audit(cur,tenant,actor,action,*args,**kwargs):
+        if action=='knowledge_candidate_owner_correction': raise RuntimeError('synthetic failure')
+        return original_audit(cur,tenant,actor,action,*args,**kwargs)
+    monkeypatch.setattr(store,'_audit',fail_audit)
+    with pytest.raises(RuntimeError):store.mutate(PROFILE,case['id'],request,'correct_published')
+    db.rollback()
+    assert store.detail(PROFILE,case['id'])['candidate']['version']==2
+    assert db.execute('SELECT content_hash FROM saas_ai_knowledge_sources WHERE id=%s::uuid',(source_id,))[0]['content_hash']==source_hash
+    monkeypatch.setattr(store,'_audit',original_audit)
+    agents.save_knowledge(PROFILE,{'content':'Independent edit'},source_id=source_id)
+    with pytest.raises(TenantLinearError):store.mutate(PROFILE,case['id'],request,'correct_published')
+    assert store.detail(PROFILE,case['id'])['candidate']['version']==2

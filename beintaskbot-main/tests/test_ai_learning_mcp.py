@@ -343,6 +343,17 @@ def test_mcp_support_case_tools_reuse_existing_owner_mutations_and_confirm_exact
     mcp._tools(None,cfg,'support_case_edit_publish',{'candidate_id':candidate,'expected_version':3,
         'agent_ids':[source_agent],'fields':{'owner_additions':'Verified owner guidance'}})
     assert calls[-1]==('publish_guidance',profile,candidate,{'expected_version':3,'agent_ids':[source_agent],'owner_additions':'Verified owner guidance'})
+    schema=next(item['inputSchema'] for item in mcp._support_case_definitions() if item['name']=='support_case_correct_published')
+    assert set(schema['required'])=={'candidate_id','expected_version','expected_source_hash','fields'}
+    mcp._tools(None,cfg,'support_case_correct_published',{'candidate_id':candidate,'expected_version':3,
+        'expected_source_hash':'a'*64,'fields':{'title':'Corrected'}})
+    assert calls[-1]==('correct_published',profile,candidate,{'expected_version':3,'expected_source_hash':'a'*64,'title':'Corrected'})
+    with pytest.raises(Exception):
+        mcp._tools(None,cfg,'support_case_correct_published',{'candidate_id':candidate,'expected_version':3,
+            'expected_source_hash':'a'*64,'fields':{'agent_ids':[source_agent]}})
+    with pytest.raises(Exception):
+        mcp._tools(None,{**cfg,'granted_scopes':[mcp.TOOL_SCOPE]},'support_case_correct_published',{'candidate_id':candidate,
+            'expected_version':3,'expected_source_hash':'a'*64,'fields':{'title':'Corrected'}})
     start_message,end_message=str(uuid.uuid4()),str(uuid.uuid4())
     mcp._tools(None,cfg,'support_case_edit_boundaries',{'candidate_id':candidate,'expected_version':4,
         'start_message_id':start_message,'end_message_id':end_message})
