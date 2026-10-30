@@ -180,6 +180,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('knowledge-candidates/{candidate_id}/archive', knowledge_candidates_handler(member, origin, logger, 'archive'), ('POST',)),
         ('knowledge-candidates/{candidate_id}/restore', knowledge_candidates_handler(member, origin, logger, 'restore'), ('POST',)),
         ('knowledge-candidates/{candidate_id}/mark-knowledge-published', knowledge_candidates_handler(member, origin, logger, 'mark_knowledge_published'), ('POST',)),
+        ('knowledge-candidates/{candidate_id}/reconcile-approved-publication', knowledge_candidates_handler(member, origin, logger, 'reconcile_approved_publication'), ('POST',)),
         ('knowledge', ai_agents_handler(member, origin, logger, 'knowledge'), ('GET', 'POST')),
         ('knowledge/deduplication', ai_agents_handler(member, origin, logger, 'knowledge_deduplication'), ('GET', 'POST')),
         ('knowledge/upload', ai_agents_handler(member, origin, logger, 'knowledge_upload'), ('POST',)),

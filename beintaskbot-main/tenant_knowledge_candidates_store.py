@@ -704,7 +704,11 @@ def listing(profile,data):
                 if status not in {'pending_review','needs_clarification','approved','knowledge_published','rejected','archived','all'}: raise TenantLinearError('Некорректный статус.')
                 if status!='all': clauses.append('c.status=%s');args.append(status)
             else:
-                clauses.append("c.status NOT IN ('rejected','archived','knowledge_published')")
+                clauses.append("""c.status NOT IN ('rejected','archived','knowledge_published') AND NOT
+                  (c.status='approved' AND EXISTS(SELECT 1 FROM saas_knowledge_candidate_knowledge_reviews kr
+                    JOIN saas_ai_knowledge_sources ks ON ks.tenant_id=kr.tenant_id AND ks.id=kr.source_id
+                    WHERE kr.tenant_id=c.tenant_id AND kr.candidate_id=c.id AND ks.active=TRUE
+                      AND ks.content_hash=kr.source_hash AND ks.title=kr.source_title))""")
             if data.get('batch_id'):
                 clauses.append('EXISTS(SELECT 1 FROM saas_knowledge_batch_items bi WHERE bi.tenant_id=c.tenant_id AND bi.extraction_id=c.extraction_id AND bi.batch_id=%s::uuid)')
                 args.append(identifier(data['batch_id']))
@@ -773,6 +777,18 @@ def publication_text(value,media_warning=False):
     return '\n'.join(parts)
 
 
+def _legacy_confirmed_publication_text(value):
+    # Confirmed-case template used before owner-guidance publication was added.
+    return '\n'.join([value['title'],'Тип кейса: '+value.get('case_kind','technical'),'Симптомы: '+ '; '.join(value['symptoms']),
+      'Причина ('+value['cause']['status']+'): '+value['cause']['text'],
+      'Решение:\n'+'\n'.join(str(i+1)+'. '+s for i,s in enumerate(value['resolution_steps'])),
+      'Состояние работы: '+value.get('work_status','unknown'),
+      'Результат подтверждён в исходной переписке: '+value['outcome']['text'],
+      'Способ решения: '+value.get('resolution_method','unknown'),
+      'Действия сотрудника: '+'; '.join(value.get('operator_actions',[])),
+      'Продукт и версия из карточки (не являются отдельным доказательством): '+value['product']+'; '+value['product_version']]).strip()
+
+
 def _restore_owner_payment_link(cur,profile,tenant,actor,row,data,agents,request_hash):
     """Repair only an owner-approved URL masked in unchanged published guidance."""
     from tenant_knowledge_candidates_policy import OWNER_APPROVED_PAYMENT_URL, text
@@ -830,6 +846,39 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
             cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,identifier(candidate_id)))
             row=cur.fetchone()
             if not row: raise TenantLinearError('Карточка не найдена.',404)
+            if action=='reconcile_approved_publication':
+                if policy.profile.get('role')!='owner': raise TenantLinearError('Только владелец может проверить связь публикации.',403)
+                if set(data)!={'expected_version','source_id','expected_source_hash'} or type(data.get('expected_version')) is not int:
+                    raise TenantLinearError('Некорректные параметры проверки публикации.')
+                if row['status']!='approved': raise TenantLinearError('Кейс не является опубликованным подтверждённым решением.',409)
+                source_id=identifier(data['source_id']);expected_hash=data['expected_source_hash']
+                cur.execute('''SELECT ks.agent_id::text AS binding_agent,s.id::text AS id,s.agent_id::text AS source_agent,s.title,s.content,s.content_hash,s.active,s.provenance
+                  FROM saas_knowledge_candidate_sources ks JOIN saas_ai_knowledge_sources s ON s.tenant_id=ks.tenant_id AND s.id=ks.source_id
+                  WHERE ks.tenant_id=%s::uuid AND ks.candidate_id=%s::uuid FOR UPDATE OF ks,s''',(tenant,row['id']))
+                sources=cur.fetchall();cur.execute('''SELECT source_id::text AS source_id,source_hash FROM saas_knowledge_candidate_knowledge_reviews
+                  WHERE tenant_id=%s::uuid AND candidate_id=%s::uuid FOR UPDATE''',(tenant,row['id']));review=cur.fetchone()
+                if len(sources)!=1: raise TenantLinearError('Нельзя однозначно проверить связь источника.',409)
+                source=sources[0];provenance=source.get('provenance') or {};content=row.get('content') or {}
+                legacy=_legacy_confirmed_publication_text(content);computed=hashlib.sha256(legacy.encode('utf-8')).hexdigest()
+                if (source['id']!=source_id or not source['active'] or source['binding_agent']!=source['source_agent']
+                    or provenance.get('candidate_id')!=str(row['id']) or provenance.get('extraction_id')!=str(row['extraction_id'])
+                    or str(provenance.get('approved_by'))!=str(row.get('reviewed_by')) or not row.get('reviewed_by')
+                    or source['title']!=content['title'] or content.get('outcome',{}).get('status')!='confirmed'
+                    or source['content']!=legacy or source['content_hash']!=computed or expected_hash!=computed):
+                    raise TenantLinearError('Опубликованный источник изменился или не совпадает с кейсом.',409)
+                if review:
+                    if review['source_id']!=source_id or review['source_hash']!=computed: raise TenantLinearError('Связь источника уже изменилась.',409)
+                    if data['expected_version'] not in {row['version'],row['version']-1}: raise TenantLinearError('Карточка изменилась. Обновите страницу.',409)
+                    return {'candidate':public_card(cur,row)}
+                if data['expected_version']!=row['version']: raise TenantLinearError('Карточка изменилась. Обновите страницу.',409)
+                cur.execute('''INSERT INTO saas_knowledge_candidate_knowledge_reviews(tenant_id,candidate_id,source_id,source_title,source_hash,reviewed_by)
+                  VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s)''',(tenant,row['id'],source_id,source['title'],computed,actor))
+                cur.execute('UPDATE saas_knowledge_candidates SET version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,row['id']))
+                _audit(cur,tenant,actor,'knowledge_candidate_approved_publication_reconciled','knowledge_candidate',row['id'],{'source_id':source_id,'source_hash':computed,'agent_id':source['binding_agent']})
+                cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,row['id']))
+                result={'candidate':public_card(cur,cur.fetchone())}
+                if connection is None:conn.commit()
+                return result
             if action=='correct_published':
                 from tenant_knowledge_candidates_policy import text
                 if policy.profile.get('role')!='owner': raise TenantLinearError('Исправить опубликованное знание может только владелец.',403)

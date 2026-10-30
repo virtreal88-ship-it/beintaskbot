@@ -1465,3 +1465,69 @@ def test_owner_correction_rejects_changed_source_and_rolls_back(ready,monkeypatc
     agents.save_knowledge(PROFILE,{'content':'Independent edit'},source_id=source_id)
     with pytest.raises(TenantLinearError):store.mutate(PROFILE,case['id'],request,'correct_published')
     assert store.detail(PROFILE,case['id'])['candidate']['version']==2
+
+
+def test_reconcile_legacy_approved_publication_preserves_status_and_source(ready,monkeypatch):
+    ready=confirmed_case(ready);db,generation,_=ready;case=candidate(ready);monkeypatch.setattr(agents,'_connect',lambda:db)
+    approved=store.mutate(PROFILE,case['id'],{'expected_version':1,'agent_ids':[EXPERT]},'approve')['candidate']
+    source_id=approved['publications'][0]['source_id'];legacy=store._legacy_confirmed_publication_text(approved)
+    old_source=agents.save_knowledge(PROFILE,{'content':legacy},source_id=source_id)
+    request={'expected_version':2,'source_id':source_id,'expected_source_hash':old_source['content_hash']}
+    assert any(item['id']==case['id'] for item in store.listing(PROFILE,{})['candidates'])
+    with pytest.raises(TenantLinearError):store.mutate(PROFILE,case['id'],{**request,'expected_source_hash':'0'*64},'reconcile_approved_publication')
+    with pytest.raises(TenantLinearError):store.mutate(PROFILE,case['id'],{**request,'expected_version':1},'reconcile_approved_publication')
+    with pytest.raises(TenantLinearError):store.mutate({'tenant_id':B,'telegram_id':22},case['id'],request,'reconcile_approved_publication')
+    db.execute("UPDATE saas_tenant_members SET role='admin' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));db.commit()
+    with pytest.raises(TenantLinearError):store.mutate(PROFILE,case['id'],request,'reconcile_approved_publication')
+    db.execute("UPDATE saas_tenant_members SET role='owner' WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));db.commit()
+    result=store.mutate(PROFILE,case['id'],request,'reconcile_approved_publication')['candidate']
+    assert result['version']==3 and result['status']=='approved' and result['outcome']==approved['outcome']
+    assert result['publications']==approved['publications'] and result['knowledge_publication']['current']
+    assert result['knowledge_publication']['source_id']==source_id and result['knowledge_publication']['source_hash']==old_source['content_hash']
+    assert not any(item['id']==case['id'] for item in store.listing(PROFILE,{})['candidates'])
+    assert any(item['id']==case['id'] for item in store.listing(PROFILE,{'status':'approved'})['candidates'])
+    assert store.mutate(PROFILE,case['id'],request,'reconcile_approved_publication')['candidate']['version']==3
+    db.execute('UPDATE saas_ai_knowledge_sources SET active=false WHERE id=%s::uuid',(source_id,));db.commit()
+    assert any(item['id']==case['id'] for item in store.listing(PROFILE,{})['candidates'])
+    db.execute('UPDATE saas_ai_knowledge_sources SET active=true,content_hash=%s WHERE id=%s::uuid',('0'*64,source_id));db.commit()
+    assert any(item['id']==case['id'] for item in store.listing(PROFILE,{})['candidates'])
+    assert len(db.execute('SELECT id FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid',(A,)))==1
+    assert db.execute("SELECT action FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND entity_id=%s AND action='knowledge_candidate_approved_publication_reconciled'",(A,case['id']))
+    assert generation.call_count==1
+
+
+def test_reconcile_legacy_publication_rejects_changed_or_inactive_source(ready,monkeypatch):
+    ready=confirmed_case(ready);db,_,_=ready;case=candidate(ready);monkeypatch.setattr(agents,'_connect',lambda:db)
+    approved=store.mutate(PROFILE,case['id'],{'expected_version':1,'agent_ids':[EXPERT]},'approve')['candidate']
+    source_id=approved['publications'][0]['source_id'];legacy=store._legacy_confirmed_publication_text(approved)
+    source=agents.save_knowledge(PROFILE,{'content':legacy},source_id=source_id);request={'expected_version':2,'source_id':source_id,'expected_source_hash':source['content_hash']}
+    db.execute('UPDATE saas_ai_knowledge_sources SET active=false WHERE id=%s::uuid',(source_id,));db.commit()
+    with pytest.raises(TenantLinearError):store.mutate(PROFILE,case['id'],request,'reconcile_approved_publication')
+    db.execute('UPDATE saas_ai_knowledge_sources SET active=true WHERE id=%s::uuid',(source_id,));db.commit()
+    agents.save_knowledge(PROFILE,{'content':'Different source'},source_id=source_id)
+    with pytest.raises(TenantLinearError):store.mutate(PROFILE,case['id'],request,'reconcile_approved_publication')
+    assert store.detail(PROFILE,case['id'])['candidate']['knowledge_publication'] is None
+
+
+def test_reconcile_legacy_publication_rolls_back_on_audit_error(ready,monkeypatch):
+    ready=confirmed_case(ready);db,_,_=ready;case=candidate(ready);monkeypatch.setattr(agents,'_connect',lambda:db)
+    approved=store.mutate(PROFILE,case['id'],{'expected_version':1,'agent_ids':[EXPERT]},'approve')['candidate']
+    source_id=approved['publications'][0]['source_id'];source=agents.save_knowledge(PROFILE,{'content':store._legacy_confirmed_publication_text(approved)},source_id=source_id)
+    original=store._audit
+    def fail(cur,tenant,actor,action,*args,**kwargs):
+        if action=='knowledge_candidate_approved_publication_reconciled':raise RuntimeError('synthetic audit failure')
+        return original(cur,tenant,actor,action,*args,**kwargs)
+    monkeypatch.setattr(store,'_audit',fail)
+    with pytest.raises(RuntimeError):store.mutate(PROFILE,case['id'],{'expected_version':2,'source_id':source_id,'expected_source_hash':source['content_hash']},'reconcile_approved_publication')
+    db.rollback();after=store.detail(PROFILE,case['id'])['candidate']
+    assert after['version']==2 and after['status']=='approved' and after['knowledge_publication'] is None
+    assert after['publications']==approved['publications']
+
+
+def test_reconcile_legacy_requires_one_unchanged_binding_and_provenance(ready,monkeypatch):
+    ready=confirmed_case(ready);db,_,_=ready;case=candidate(ready);monkeypatch.setattr(agents,'_connect',lambda:db)
+    approved=store.mutate(PROFILE,case['id'],{'expected_version':1,'agent_ids':[AGENT,EXPERT]},'approve')['candidate']
+    source_id=approved['publications'][0]['source_id'];source=agents.save_knowledge(PROFILE,{'content':store._legacy_confirmed_publication_text(approved)},source_id=source_id)
+    request={'expected_version':2,'source_id':source_id,'expected_source_hash':source['content_hash']}
+    with pytest.raises(TenantLinearError):store.mutate(PROFILE,case['id'],request,'reconcile_approved_publication')
+    assert store.detail(PROFILE,case['id'])['candidate']['publications']==approved['publications']
