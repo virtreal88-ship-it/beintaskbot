@@ -1629,8 +1629,10 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
             # transitions write conversation state internally and do not use
             # this manager action path.
             if provider == 'connect' and state in {'human','paused'}:
-                from tenant_ai_pilot import is_pilot_customer_target
-                if is_pilot_customer_target(tenant,resolved_channel,conversation):
+                from tenant_ai_pilot import (SCOPED_LIVE_CHANNEL,SCOPED_LIVE_CUSTOMER,
+                    SCOPED_LIVE_TENANT)
+                if (str(tenant)==SCOPED_LIVE_TENANT and str(resolved_channel)==SCOPED_LIVE_CHANNEL
+                        and str(conversation)==SCOPED_LIVE_CUSTOMER):
                     cur.execute("SELECT to_regclass('saas_ai_pilot_confirmations') IS NOT NULL AS available")
                     if (cur.fetchone() or {}).get('available'):
                         cur.execute('''UPDATE saas_ai_pilot_confirmations SET

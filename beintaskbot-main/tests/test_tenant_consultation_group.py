@@ -431,11 +431,13 @@ def test_real_pilot_group_send_gate_blocks_customer_pause_after_handoff(db,monke
     consult,_case=setup_case(db,monkeypatch)
     _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch)
     monkeypatch.setattr(agent_store,'_connect',lambda:db)
+    monkeypatch.setattr(pilot,'scoped_live_enabled',lambda:False)
     result_pause=agent_store.set_conversation_state(PROFILE,'client','paused',reason='pilot_emergency_stop',
         provider='connect',channel_id=CA)
     assert result_pause['state']=='paused'
     revoked=db.execute("SELECT kwid_confirmed_by,owner_approved_by FROM saas_ai_pilot_confirmations WHERE tenant_id=%s::uuid",(A,))[0]
     assert revoked=={'kwid_confirmed_by':None,'owner_approved_by':None}
+    monkeypatch.setattr(pilot,'scoped_live_enabled',lambda:True)
     sent=[]
     monkeypatch.setattr(transport,'send_group_with_receipt',lambda *_:sent.append('unsafe'))
     result=flow.deliver_pilot_consultation_to_group({'tenant_id':A,'provider':'connect','channel_id':CA,
