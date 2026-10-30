@@ -74,7 +74,7 @@
     const response=await fetch(url,{...options,credentials:'same-origin',cache:'no-store',headers:{...(options.body?{'Content-Type':'application/json'}:{}),...((options.method||'GET')==='GET'?{'X-Tenant-Id':String(member?.tenant_id||''),'X-User-Id':String(member?.telegram_id||'')}:{ }),...options.headers}});
     const payload=await response.json();
     if(!document?.body||version!==epoch||who!==identity(member))throw new Error(t('companyChanged'));
-    if(response.status===401||response.status===403||((options.method||'GET')==='GET'&&response.status===409)){profileChanged({});if(response.status===409)void window.tenantRequestCoordinator?.revalidateProfile().catch(()=>{});}
+    if(response.status===401||response.status===403||((options.method||'GET')==='GET'&&response.status===409&&payload.scope_verified!==true)){profileChanged({});if(response.status===409)void window.tenantRequestCoordinator?.revalidateProfile().catch(()=>{});}
     if((options.method||'GET')!=='GET'){listFlight=null;lastListAt=0;}
     if(!response.ok||!payload.success){const error=new Error(payload.error||t('error'));error.status=response.status;error.keepRequest=payload.keep_request!==false;throw error;}
     return payload;
@@ -261,14 +261,14 @@
     const state={...history.state,view:'dialogs',operatorDialog:dialog};
     if(history.state?.operatorDialog)history.replaceState(state,'');else history.pushState(state,'');
   }
-  async function openDialog(route,fromHistory=false){
+  async function openDialog(route,fromHistory=false,caseLocationKey=''){
     if(!hasRight('dialogs')){notice(t('noAccess'));return;}
     cancelCaseLink();
     closeDialogDiagnostics();
     if(currentDialog&&!sameDialog(currentDialog,route))closeDialog(false);
     const revision=++openRevision,version=epoch;pendingDialogRoute=route;
     $('operatorConversationContent')?.setAttribute('aria-busy','true');notice(t('loading'));
-    try{const page=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||revision!==openRevision)return;pendingDialogRoute=null;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;if(!fromHistory)rememberMobileDialog(route);selectedDialog=page.dialog;selectedDialogOwner=identity(member);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;sessionStorage.setItem(contextKey('route',page.dialog),JSON.stringify({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id}));const workspace=$('operatorWorkspace');if(workspace)workspace.dataset.selected='true';const host=$('operatorDialogs');if(host)host.dataset.conversationOpen='true';renderRows();renderDialog(page);notice('');void markDialogReadIfVisible(page);}
+    try{const page=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||revision!==openRevision)return;pendingDialogRoute=null;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;if(caseLocationKey)consumeCaseLocation(caseLocationKey);if(!fromHistory)rememberMobileDialog(route);selectedDialog=page.dialog;selectedDialogOwner=identity(member);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;sessionStorage.setItem(contextKey('route',page.dialog),JSON.stringify({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id}));const workspace=$('operatorWorkspace');if(workspace)workspace.dataset.selected='true';const host=$('operatorDialogs');if(host)host.dataset.conversationOpen='true';renderRows();renderDialog(page);notice('');void markDialogReadIfVisible(page);}
     catch(error){if(version===epoch&&revision===openRevision){if(error.message!=='Request scope changed')pendingDialogRoute=null;notice(error.message);document.dispatchEvent(new CustomEvent('tenant-operator-error',{detail:{message:error.message}}));}}
     finally{if(version===epoch&&revision===openRevision)$('operatorConversationContent')?.setAttribute('aria-busy','false');}
   }
@@ -400,7 +400,7 @@
         if(current!==groupSettingsRevision)return;choices=result.agents||[];revision=Number(result.revision)||0;currentAgentId=result.current_agent_id||route.agent_id||'';
         if(!result.can_manage)throw new Error(t('assignmentBusy'));
       }
-    }catch(error){body.append(dxNode('p',error.message||t('groupConfigureDenied')));$('operatorGroupSettingsClose').focus();return;}
+    }catch(error){if(current!==groupSettingsRevision)return;body.append(dxNode('p',error.message||t('groupConfigureDenied')));$('operatorGroupSettingsClose')?.focus();return;}
     const single=assignments.length===1?assignments[0]:null,savedId=isGroup?(single?String(single.agent_id)+'|'+String(single.channel_id):''):String(currentAgentId||'');
     const currentOption=isGroup?choices.find(agent=>String(agent.id)===String(single?.agent_id)):choices.find(agent=>String(agent.id)===String(currentAgentId));
     body.append(dxNode('p',t('groupCurrentAgent')+': '+(currentOption?.name||(!assignments.length&&!currentAgentId?t('noAgent'):t('groupMissing')))));
@@ -518,7 +518,7 @@
   const caseLinkText=key=>({opening:{ru:'Открываем исходный диалог кейса…',az:'Halın ilkin dialoqu açılır…',en:'Opening the case conversation…'},invalid:{ru:'Ссылка на кейс неполная или некорректна.',az:'Hal keçidi natamam və ya yanlışdır.',en:'The case link is incomplete or invalid.'},unavailable:{ru:'Исходное сообщение кейса недоступно или у вас нет доступа к нему.',az:'Halın ilkin mesajı əlçatan deyil və ya ona girişiniz yoxdur.',en:'The original case message is unavailable or you do not have access to it.'}}[key]?.[i18n.language]||'The case conversation is unavailable.');
   const uuid=value=>/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value||''));
   function cancelCaseLink(){caseLinkRevision++;caseLinkPending=false;}
-  async function resolveCaseLink(resolve){
+  async function resolveCaseLink(resolve,locationKey=''){
     closeDialog(false);
     window.tenantAppNavigate?.('dialogs',false);
     const revision=++caseLinkRevision,version=epoch;
@@ -529,7 +529,7 @@
       if(!current())return false;
       caseLinkPending=false;
       window.tenantAppNavigate?.('dialogs',false);
-      await openDialog(route);
+      await openDialog(route,false,locationKey);
       return true;
     }catch(error){
       if(!current())return false;
@@ -539,7 +539,7 @@
       return false;
     }finally{if(revision===caseLinkRevision)caseLinkPending=false;}
   }
-  async function openCaseLink(data){
+  async function openCaseLink(data,locationKey=''){
     if(!hasRight('dialogs')){notice(t('noAccess'));return false;}
     const caseId=String(data?.case_id||''),messageId=String(data?.message_id||''),reviewId=data?.review_run_id?String(data.review_run_id):'',version=data?.expected_version;
     if(!uuid(caseId)||(messageId&&!uuid(messageId))||(reviewId&&!uuid(reviewId))){cancelCaseLink();notice(caseLinkText('invalid'));return false;}
@@ -551,9 +551,9 @@
       const resolved=(await rawApi(endpoint+'knowledge-candidates/'+encodeURIComponent(caseId)+'/conversation?'+query)).result;
       if(!resolved?.route||String(resolved.case_id)!==caseId||!uuid(resolved.message_id)||(messageId&&String(resolved.message_id)!==messageId))throw Error(caseLinkText('unavailable'));
       return {...resolved.route,source_message_id:resolved.message_id,...(Number.isInteger(version)&&version>0?{case_attachment:{case_id:caseId,message_id:messageId,version}}:{})};
-    });
+    },locationKey);
   }
-  async function openLearningReviewLink(data){
+  async function openLearningReviewLink(data,locationKey=''){
     if(!hasRight('dialogs')){notice(t('noAccess'));return false;}
     const reviewId=String(data?.review_run_id||''),messageId=String(data?.message_id||'');
     if(!uuid(reviewId)||!uuid(messageId)){cancelCaseLink();notice(caseLinkText('invalid'));return false;}
@@ -561,7 +561,14 @@
       const resolved=(await rawApi(endpoint+'administrator/approvals?'+new URLSearchParams({review_run_id:reviewId}))).result;
       if(!resolved?.route||String(resolved.source_message_id)!==messageId)throw Error(caseLinkText('unavailable'));
       return {...resolved.route,source_message_id:resolved.source_message_id};
-    });
+    },locationKey);
+  }
+  function consumeCaseLocation(key){
+    const url=new URL(location.href),q=url.searchParams;
+    if([q.get('case_id')||'',q.get('message_id')||'',q.get('review_run_id')||'',q.get('case_version')||''].join(':')!==key)return;
+    for(const name of ['case_id','message_id','review_run_id','case_version'])q.delete(name);
+    history.replaceState(history.state,'',url.pathname+url.search+url.hash);
+    caseLinkKey='';
   }
   function openLocationCaseLink(){
     let query;try{query=new URLSearchParams(location.search);}catch{return;}
@@ -570,8 +577,8 @@
     if(caseVersion&&(!/^[1-9]\d*$/.test(caseVersion)||!Number.isSafeInteger(Number(caseVersion))||!caseId||!messageId||reviewId)){notice(caseLinkText('invalid'));return true;}
     const key=[caseId||'',messageId||'',reviewId,caseVersion||''].join(':');
     if(key===caseLinkKey)return true;caseLinkKey=key;
-    if(caseId)void openCaseLink({case_id:caseId,message_id:messageId,review_run_id:reviewId,...(caseVersion&&/^[1-9]\d*$/.test(caseVersion)?{expected_version:Number(caseVersion)}:{})});
-    else void openLearningReviewLink({review_run_id:reviewId,message_id:messageId});
+    if(caseId)void openCaseLink({case_id:caseId,message_id:messageId,review_run_id:reviewId,...(caseVersion&&/^[1-9]\d*$/.test(caseVersion)?{expected_version:Number(caseVersion)}:{})},key);
+    else void openLearningReviewLink({review_run_id:reviewId,message_id:messageId},key);
     history.replaceState({...history.state,operatorCaseHandled:key},'');
     return true;
   }
