@@ -97,6 +97,20 @@ def _phone_from_jid(jid):
     return candidate if re.fullmatch(r'[1-9][0-9]{5,18}', candidate) else ''
 
 
+def _pilot_test_client_role_override(cur, *, tenant, channel_id, conversation, employee,
+                                     outbound, coordinated, identity_conflict, occurred_at):
+    """Treat a verified employee as the pilot client only under live attestations."""
+    if employee is None or outbound or coordinated or identity_conflict:
+        return False
+    from tenant_ai_pilot import configured_scope, test_client_override_allowed
+    scope = configured_scope()
+    if (not scope or str(tenant) != scope['tenant_id']
+            or str(channel_id) != scope['channel_id']
+            or str(conversation) != scope['conversation_id']):
+        return False
+    return test_client_override_allowed(cur, tenant, channel_id, conversation, occurred_at)
+
+
 def _upsert_conversation(cur, tenant, channel_id, conversation, metadata):
     """Persist group metadata separately from an individual contact identity."""
     kind = metadata.get('kind') or ''
@@ -737,7 +751,8 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active=TRUE', (tenant, channel_id))
             if not cur.fetchone():
                 return False
-            data={k:v for k,v in data.items() if k not in {'_crm_provider_conversation_id','_crm_owner_assertion_id'}}
+            data={k:v for k,v in data.items() if k not in {
+                '_crm_provider_conversation_id','_crm_owner_assertion_id','pilot_test_role_override'}}
             original_conversation = conversation
             conversation, identity_conflict = _canonical_direct_conversation(
                 cur, tenant, channel_id, conversation, data, metadata)
@@ -781,9 +796,25 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     data = {**data, 'conversationIdentityConflict': True}
                     from tenant_connect_direct_identity import record_conflict
                     record_conflict(cur, tenant, channel_id, conversation, original_conversation, data, event_id)
+            role_override = _pilot_test_client_role_override(
+                cur, tenant=tenant, channel_id=channel_id, conversation=conversation,
+                employee=employee, outbound=outbound, coordinated=coordinated,
+                identity_conflict=identity_conflict,
+                occurred_at=event.get('occurred_at') or datetime.now(timezone.utc).isoformat())
+            if role_override:
+                # Keep the verified employee identity in the immutable source
+                # record. The explicit pilot marker is an audited processing
+                # role and never changes the signed inbound direction.
+                data['pilot_test_role_override'] = {
+                    'role': 'test_client_override',
+                    'verified_employee_id': employee,
+                    'scope': 'configured_scoped_live_dialog'}
+                employee = None
             data = {key: value for key, value in data.items() if key != 'verified_employee_id'}
             if employee is not None:
                 data['verified_employee_id'] = employee
+            elif role_override:
+                data['verified_employee_id'] = int(data['pilot_test_role_override']['verified_employee_id'])
 
             if coordinated and (ai_origin or employee is not None or uncertain_origin):
                 # A repeated employee event must not undo a later explicit Resume.
@@ -981,7 +1012,9 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
                     text=queued_payload[6], message_type=queued_payload[7],
                     is_group=metadata.get('kind') == 'group', provider_message_id=data.get('externalMessageId'),
-                    quoted_message_id=data.get('quotedExternalMessageId'), connection=conn)
+                    quoted_message_id=data.get('quotedExternalMessageId'),
+                    source_role_override='test_client_override' if role_override else None,
+                    connection=conn)
             # Simulation admits only the first durable inbound delivery.
             # Webhook retries may repair the Active queue above but must
             # never backfill Simulation or replay a paid virtual run.

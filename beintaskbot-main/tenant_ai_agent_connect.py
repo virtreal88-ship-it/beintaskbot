@@ -401,7 +401,8 @@ def allowed(job: dict, connection=None) -> bool:
 
 def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             message_id: str, event_id: str, text: str, message_type: str = 'text', is_group=False,
-            provider_message_id=None, quoted_message_id=None, connection=None) -> int:
+            provider_message_id=None, quoted_message_id=None, source_role_override=None,
+            connection=None) -> int:
     """Queue one inbound Connect message for all matching tenant agents.
 
     The webhook event table + job primary key make Connect retries and Evolution
@@ -424,6 +425,10 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                        # A phone is available only for the first inbound event
                        # in a person-to-person WhatsApp conversation.
                        'first_inquiry': False, 'phone': ''}
+            if source_role_override == 'test_client_override':
+                # Linked to the AI job by event_fingerprint; this is an audit
+                # label, not a caller-controlled identity or direction field.
+                payload['source_role_override'] = 'test_client_override'
             if not is_group:
                 from tenant_consultation_group import record_customer_verification
                 record_customer_verification(cur,tenant,channel_id,conversation_id,

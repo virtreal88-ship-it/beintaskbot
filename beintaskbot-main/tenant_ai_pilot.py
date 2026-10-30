@@ -101,6 +101,54 @@ def manual_live_job(job):
         and is_pilot_customer_target(job.get('tenant_id'),job.get('channel_id'),job.get('conversation_id')))
 
 
+def test_client_override_allowed(cur, tenant_id, channel_id, conversation_id, occurred_at):
+    """Authorize an employee-identified inbound as the owner's pilot test client.
+
+    This never changes provider direction or employee identity. It only permits
+    the exact configured direct peer to enter the already-armed pilot pipeline.
+    """
+    scope = configured_scope()
+    if (not scope or not scoped_live_enabled()
+            or _enabled('AI_AGENTS_PILOT_SCOPE_ENABLED')
+            or not runtime_flag('AI_AGENTS_ENABLED')
+            or str(tenant_id) != scope['tenant_id']
+            or str(channel_id) != scope['channel_id']
+            or str(conversation_id) != scope['conversation_id']):
+        return False
+    try:
+        from datetime import datetime
+        # Provider timestamps are required so an old employee message cannot
+        # be revived by later approvals.
+        event_time = datetime.fromisoformat(str(occurred_at).replace('Z', '+00:00'))
+        if event_time.tzinfo is None:
+            return False
+        if not _lock_scope(cur, scope['tenant_id'], scope):
+            return False
+        row, fingerprint = _snapshot(cur, scope['tenant_id'], scope)
+        if (not fingerprint or row.get('conversation_state') != 'active'
+                or row.get('conversation_ai_enabled') is not True
+                or row.get('conversation_manual_hold') is True
+                or row.get('active') is not True or row.get('integration_status') != 'connected'
+                or row.get('tenant_status') != 'active' or row.get('company_enabled') is not True
+                or row.get('emergency_stop') is True or row.get('agent_enabled') is not True
+                or str(row.get('agent_id') or '') != SCOPED_LIVE_AGENT
+                or row.get('agent_mode') != 'manual' or not row.get('exact_agent_scope')):
+            return False
+        cur.execute('''SELECT (kwid_expires_at>clock_timestamp()
+              AND owner_expires_at>clock_timestamp()
+              AND kwid_confirmed_by IS NOT NULL AND owner_approved_by IS NOT NULL
+              AND kwid_confirmed_at<=%s::timestamptz
+              AND owner_approved_at<=%s::timestamptz) AS valid
+          FROM saas_ai_pilot_confirmations
+          WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
+            AND scope_fingerprint=%s''',
+            (event_time.isoformat(), event_time.isoformat(), scope['tenant_id'],
+             scope['channel_id'], scope['conversation_id'], fingerprint))
+        return bool((cur.fetchone() or {}).get('valid'))
+    except Exception:
+        return False
+
+
 def assert_pilot_group_target(tenant_id, channel_id, conversation_id):
     """Fail closed when the scoped live pilot attempts a non-approved group."""
     if scoped_live_enabled() and not is_pilot_group_target(tenant_id, channel_id, conversation_id):
