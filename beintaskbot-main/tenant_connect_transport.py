@@ -728,6 +728,27 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
         from tenant_knowledge_live_queue import create_schema as create_live_queue_schema
         create_live_queue_schema(conn)
         _schema(conn)
+        # Usually installed by tenant_ai_agent_startup.prepare_database. The
+        # HTTP listener starts before the background worker's startup task, so
+        # close that first-request race as well. This is additive/idempotent;
+        # if it fails, the CRM receipt path remains available and AI admission
+        # below is isolated behind its own savepoint.
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('saas_ai_pilot_followups') IS NOT NULL AS ready")
+            pilot_case_schema_ready=bool((cur.fetchone() or {}).get('ready'))
+        if not pilot_case_schema_ready:
+            with conn.cursor() as cur:
+                cur.execute('SAVEPOINT pilot_case_schema_setup')
+                try:
+                    from tenant_ai_agent_startup import ensure_pilot_case_schema
+                    ensure_pilot_case_schema(conn)
+                except Exception:
+                    cur.execute('ROLLBACK TO SAVEPOINT pilot_case_schema_setup')
+                    import logging
+                    logging.getLogger(__name__).exception(
+                        'Pilot CASE schema setup failed; continuing with CRM-only ingress')
+                finally:
+                    cur.execute('RELEASE SAVEPOINT pilot_case_schema_setup')
         with conn.cursor() as cur:
             cur.execute("SELECT to_regclass('saas_crm_notice_events') IS NOT NULL AND to_regclass('saas_crm_notice_deliveries') IS NOT NULL AS ready")
             notices_ready = (cur.fetchone() or {}).get('ready')
@@ -1008,18 +1029,33 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             if message_inserted:
                 enqueue_case_extraction(cur,tenant,channel_id,conversation,queued_payload[3],str(source_message['id']))
             from tenant_ai_agent_connect import enqueue
-            enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
-                    lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
-                    text=queued_payload[6], message_type=queued_payload[7],
-                    is_group=metadata.get('kind') == 'group', provider_message_id=data.get('externalMessageId'),
-                    quoted_message_id=data.get('quotedExternalMessageId'),
-                    source_role_override='test_client_override' if role_override else None,
-                    connection=conn)
+            # AI admission is an optional hook on the durable Connect receipt.
+            # A pilot-only schema/queue failure must not roll back the verified
+            # provider event and its CRM message. Keep every AI side effect
+            # inside a savepoint and fail closed if it cannot be committed.
+            ai_admission_failed = False
+            cur.execute('SAVEPOINT connect_ai_admission')
+            try:
+                enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
+                        lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
+                        text=queued_payload[6], message_type=queued_payload[7],
+                        is_group=metadata.get('kind') == 'group', provider_message_id=data.get('externalMessageId'),
+                        quoted_message_id=data.get('quotedExternalMessageId'),
+                        source_role_override='test_client_override' if role_override else None,
+                        connection=conn)
+            except Exception:
+                cur.execute('ROLLBACK TO SAVEPOINT connect_ai_admission')
+                ai_admission_failed = True
+                import logging
+                logging.getLogger(__name__).exception(
+                    'Connect AI admission failed; durable CRM receipt preserved')
+            finally:
+                cur.execute('RELEASE SAVEPOINT connect_ai_admission')
             # Simulation admits only the first durable inbound delivery.
             # Webhook retries may repair the Active queue above but must
             # never backfill Simulation or replay a paid virtual run.
             from tenant_ai_agent_runtime_flags import enabled as runtime_flag
-            if inserted_event and runtime_flag('AI_SIMULATION_ENABLED'):
+            if inserted_event and not ai_admission_failed and runtime_flag('AI_SIMULATION_ENABLED'):
                 from tenant_ai_simulation_schema import ensure_schema as ensure_simulation_schema
                 from tenant_ai_simulation_engine import enqueue_inbound
                 ensure_simulation_schema(conn)

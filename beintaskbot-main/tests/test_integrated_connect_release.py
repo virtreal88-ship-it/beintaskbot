@@ -68,6 +68,81 @@ def state(db):
     db.commit()
     return result
 
+
+def _signed_inbound_event(channel=CA, conversation='client'):
+    message_id=str(uuid.uuid4())
+    payload={'id':str(uuid.uuid4()),'type':'message.inbound.received',
+        'occurred_at':'2026-10-30T12:00:00Z',
+        'data':{'id':message_id,'channelId':channel,'conversationId':conversation,
+            'type':'text','text':'Check the invoice amount','fromMe':False,
+            'contactName':'Pilot test client'}}
+    return message_id,payload
+
+
+def test_startup_prepares_pilot_case_schema_repeatably_before_signed_ingress(flow,monkeypatch):
+    from tenant_ai_agent_startup import prepare_database
+    import tenant_platform_core
+    f=flow;db=f['db']
+    db.execute('DROP TABLE IF EXISTS saas_ai_pilot_followups');db.commit()
+    assert not db.execute("SELECT to_regclass('saas_ai_pilot_followups') IS NOT NULL AS ready")[0]['ready']
+    monkeypatch.setattr(transport,'_verify_signature',lambda *_:True)
+    monkeypatch.setattr(tenant_platform_core,'_connect',lambda:db)
+    monkeypatch.setattr(tenant_platform_core,'_fernet',transport._fernet)
+    secret=transport._fernet().encrypt(json.dumps({'webhook_secret':'test-secret'}).encode())
+    db.execute("UPDATE saas_tenant_integrations SET secrets=%s WHERE tenant_id=%s::uuid AND provider='connect'",(secret,A));db.commit()
+    prepare_database();db.commit()
+    prepare_database();db.commit()
+    assert db.execute("SELECT to_regclass('saas_ai_pilot_followups') IS NOT NULL AS ready")[0]['ready']
+    db.commit()
+
+    monkeypatch.setenv('AI_AGENTS_PILOT_SCOPE_ENABLED','false')
+    monkeypatch.setenv('AI_AGENTS_SCOPED_LIVE_ENABLED','false')
+    monkeypatch.setenv('AI_AGENTS_ENABLED','true')
+    monkeypatch.setenv('AI_SIMULATION_ENABLED','false')
+    message_id,payload=_signed_inbound_event()
+    assert transport.ingest(json.dumps(payload).encode(),'signed-test',payload)
+    fingerprint=__import__('hashlib').sha256(('connect:'+message_id).encode()).hexdigest()
+    assert db.execute("SELECT direction FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s",
+        (A,'connect:'+message_id))[0]['direction']=='incoming'
+    assert db.execute("SELECT state FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s",
+        (A,fingerprint))[0]['state']=='queued'
+    f['send'].assert_not_called()
+    f['generate'].assert_not_called()
+    db.commit()
+
+
+def test_missing_optional_pilot_schema_keeps_signed_crm_receipt_and_fails_ai_closed(flow,monkeypatch):
+    f=flow;db=f['db']
+    db.execute('DROP TABLE IF EXISTS saas_ai_pilot_followups');db.commit()
+    assert not db.execute("SELECT to_regclass('saas_ai_pilot_followups') IS NOT NULL AS ready")[0]['ready']
+    def unavailable_schema(_conn):
+        raise RuntimeError('simulated additive pilot schema failure')
+    monkeypatch.setattr('tenant_ai_agent_startup.ensure_pilot_case_schema',unavailable_schema)
+    monkeypatch.setattr(transport,'_verify_signature',lambda *_:True)
+    secret=transport._fernet().encrypt(json.dumps({'webhook_secret':'test-secret'}).encode())
+    db.execute("UPDATE saas_tenant_integrations SET secrets=%s WHERE tenant_id=%s::uuid AND provider='connect'",(secret,A));db.commit()
+    monkeypatch.setenv('AI_AGENTS_ENABLED','true')
+    monkeypatch.setenv('AI_SIMULATION_ENABLED','false')
+    # Exercise the optional-schema failure branch as if the exact pilot gates
+    # had admitted this scoped customer. No provider or model calls are made.
+    import tenant_ai_pilot as pilot
+    monkeypatch.setattr(pilot,'manual_live_job',lambda *_:True)
+    monkeypatch.setattr(pilot,'processing_allowed',lambda *_a,**_k:True)
+    monkeypatch.setattr(pilot,'is_pilot_customer_target',lambda *_:True)
+    message_id,payload=_signed_inbound_event()
+    assert transport.ingest(json.dumps(payload).encode(),'signed-test',payload)
+    assert db.execute("SELECT direction FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s",
+        (A,'connect:'+message_id))[0]['direction']=='incoming'
+    fingerprint=__import__('hashlib').sha256(('connect:'+message_id).encode()).hexdigest()
+    jobs=db.execute("SELECT state,provider,agent_id::text AS agent_id,conversation_id,error_code,event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s",
+        (A,fingerprint))
+    assert not jobs, jobs
+    assert not db.execute("SELECT 1 FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s",
+        (A,fingerprint))
+    f['send'].assert_not_called()
+    f['generate'].assert_not_called()
+    db.commit()
+
 @pytest.mark.parametrize('transcript',['Salam, qiyməti nə qədərdir?','Здравствуйте, какая цена?'])
 def test_real_sql_text_voice_text_and_central_key(flow,transcript):
     f=flow
