@@ -407,8 +407,11 @@ def record_customer_send_receipt(cur,tenant,event_fingerprint,message_id):
     if not (cur.fetchone() or {}).get('available'):
         return False
     cur.execute('''UPDATE saas_ai_pilot_followups SET customer_outbound_message_id=%s,
-        awaiting_customer=(reply_action IN ('customer_question','customer_update')),updated_at=now()
+        awaiting_customer=(reply_action IN ('customer_question','customer_update')),
+        customer_reply_message_id=CASE WHEN reply_action IN ('customer_question','customer_update')
+          THEN NULL ELSE customer_reply_message_id END,updated_at=now()
       WHERE tenant_id=%s::uuid AND event_fingerprint=%s AND state='linked'
+        AND reply_action IN ('customer_question','customer_update')
       RETURNING id''',
       (str(message_id)[:200],tenant,str(event_fingerprint or '')))
     return bool(cur.fetchone())
@@ -599,8 +602,12 @@ def attach_pilot_customer_reply(cur,tenant,channel,conversation,message_id):
         return {'blocked':True}
     turn=rows[0]
     cur.execute('''INSERT INTO saas_support_events(tenant_id,event_key,ticket_id)
-      VALUES(%s::uuid,%s,%s::uuid) ON CONFLICT(tenant_id,event_key) DO NOTHING''',
+      VALUES(%s::uuid,%s,%s::uuid) ON CONFLICT(tenant_id,event_key) DO NOTHING
+      RETURNING ticket_id::text AS ticket_id''',
       (tenant,'pilot-case-turn:'+str(message_id),turn['case_id']))
+    inserted=cur.fetchone()
+    if not inserted or inserted['ticket_id']!=turn['case_id']:
+        return None
     if int(turn.get('turn_number') or 0)>=3:
         cur.execute('''UPDATE saas_ai_conversation_state SET state='human',reason='pilot_case_turn_limit',
           revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
@@ -650,26 +657,6 @@ def record_pilot_followup_action(job,action):
               (_json(payload),job['tenant_id'],job.get('event_fingerprint')))
         conn.commit()
     return True
-
-
-def record_customer_reply_action(job,action,message_id):
-    """Mark customer question/solution outbound with its precise verification role."""
-    if action not in {'customer_question','customer_update'}:return False
-    payload=job.get('payload') if isinstance(job.get('payload'),dict) else {}
-    followup_id=str(payload.get('pilot_followup_id') or '')
-    if not followup_id:return False
-    with _connect() as conn:
-        schema(conn)
-        with conn.cursor() as cur:
-            cur.execute('''UPDATE saas_ai_pilot_followups SET reply_action=%s,
-                customer_outbound_message_id=%s,awaiting_customer=TRUE,updated_at=now()
-              WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='linked'
-                AND consultation_id=%s::uuid AND case_id=%s::uuid RETURNING id''',
-              (action,str(message_id)[:200],job['tenant_id'],followup_id,
-               str(payload.get('consultation_id') or ''),str(payload.get('case_id') or '')))
-            updated=bool(cur.fetchone())
-        conn.commit()
-    return updated
 
 
 def record_group_turn_action(job,action,message_id):

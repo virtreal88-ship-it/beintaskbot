@@ -429,8 +429,38 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 # Linked to the AI job by event_fingerprint; this is an audit
                 # label, not a caller-controlled identity or direction field.
                 payload['source_role_override'] = 'test_client_override'
+            event_claimed=False
             verified_pilot_case=False
             if not is_group:
+                # Claim/dedupe the provider event before any CASE mutation.
+                # In particular, a replay of an old inbound must not consume a
+                # newly waiting clarification turn.
+                cur.execute('''INSERT INTO saas_tenant_webhook_events
+                  (tenant_id,fingerprint,provider,external_id,event_type,payload,state,available_at)
+                  VALUES(%s::uuid,%s,'connect',%s,'incoming_message',%s::jsonb,'queued',now())
+                  ON CONFLICT(tenant_id,fingerprint) DO NOTHING RETURNING fingerprint''',
+                  (tenant,fingerprint,str(message_id or event_id),_json(payload)))
+                event_claimed=bool(cur.fetchone())
+                if not event_claimed:
+                    cur.execute("SELECT payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s",(tenant,fingerprint))
+                    previous=(cur.fetchone() or {}).get('payload') or {}
+                    if previous.get('channel_id')!=channel_id or previous.get('conversation_id')!=conversation_id:
+                        raise ValueError('Connect event scope mismatch')
+                    if connection is None:conn.commit()
+                    return 0
+                from tenant_ai_pilot import manual_live_job,processing_allowed
+                pilot_job={'provider':'connect','tenant_id':tenant,'channel_id':channel_id,
+                    'conversation_id':conversation_id,'event_fingerprint':fingerprint}
+                if manual_live_job(pilot_job):
+                    cur.execute('''SELECT agent_id::text AS agent_id FROM saas_ai_conversation_state
+                      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+                        AND conversation_id=%s FOR UPDATE''',(tenant,channel_id,conversation_id))
+                    pilot_binding=cur.fetchone() or {}
+                    pilot_job['agent_id']=pilot_binding.get('agent_id')
+                    if not pilot_job['agent_id'] or not processing_allowed(pilot_job,connection=conn):
+                        cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',error_code='pilot_case_turn_gate_closed',completed_at=now() WHERE tenant_id=%s::uuid AND fingerprint=%s",(tenant,fingerprint))
+                        if connection is None:conn.commit()
+                        return 0
                 from tenant_consultation_group import record_customer_verification
                 verified_pilot_case=bool(record_customer_verification(cur,tenant,channel_id,conversation_id,
                     str(message_id or event_id),str(text or ''),quoted_message_id)
@@ -438,12 +468,14 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 if verified_pilot_case:
                     # A real customer confirmation closes the pilot CASE; it
                     # must not also generate an unsolicited AI reply.
+                    cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',error_code='pilot_case_customer_verified',completed_at=now() WHERE tenant_id=%s::uuid AND fingerprint=%s",(tenant,fingerprint))
                     if connection is None:conn.commit()
                     return 0
                 from tenant_consultation_group import attach_pilot_customer_reply
                 customer_turn=attach_pilot_customer_reply(cur,tenant,channel_id,conversation_id,
                     str(message_id or event_id))
                 if customer_turn and customer_turn.get('blocked') is True:
+                    cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',error_code='pilot_case_turn_blocked',completed_at=now() WHERE tenant_id=%s::uuid AND fingerprint=%s",(tenant,fingerprint))
                     if connection is None:conn.commit()
                     return 0
                 if customer_turn:
@@ -454,6 +486,9 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                         'developer_reply':customer_turn['group_reply'],
                         'group_reply_message_id':customer_turn['group_message_id'],
                         'customer_turn_number':customer_turn['turn_number']})
+                if event_claimed:
+                    cur.execute('UPDATE saas_tenant_webhook_events SET payload=%s::jsonb WHERE tenant_id=%s::uuid AND fingerprint=%s',
+                        (_json(payload),tenant,fingerprint))
             from tenant_ai_group_coordination import group_jid, admit
             group_fence = None
             if is_group and not group_jid(conversation_id):
@@ -467,12 +502,14 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                     _auto_assign_group_from_inbound(cur, tenant, channel_id, conversation_id)
                     return 0
                 payload.update(group_fence)
-            cur.execute('''INSERT INTO saas_tenant_webhook_events
-              (tenant_id,fingerprint,provider,external_id,event_type,payload,state,available_at)
-              VALUES(%s::uuid,%s,'connect',%s,'incoming_message',%s::jsonb,'queued',now())
-              ON CONFLICT(tenant_id,fingerprint) DO NOTHING RETURNING fingerprint''',
-                        (tenant, fingerprint, str(message_id or event_id), _json(payload)))
-            if not cur.fetchone():
+            if not event_claimed:
+                cur.execute('''INSERT INTO saas_tenant_webhook_events
+                  (tenant_id,fingerprint,provider,external_id,event_type,payload,state,available_at)
+                  VALUES(%s::uuid,%s,'connect',%s,'incoming_message',%s::jsonb,'queued',now())
+                  ON CONFLICT(tenant_id,fingerprint) DO NOTHING RETURNING fingerprint''',
+                            (tenant, fingerprint, str(message_id or event_id), _json(payload)))
+            inserted_event=event_claimed or bool(cur.fetchone())
+            if not inserted_event:
                 cur.execute("SELECT payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s", (tenant, fingerprint))
                 previous = (cur.fetchone() or {}).get('payload') or {}
                 if previous.get('channel_id') != channel_id or previous.get('conversation_id') != conversation_id:

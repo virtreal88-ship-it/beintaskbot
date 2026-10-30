@@ -1177,7 +1177,9 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,'AI Agent',%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
                         (uuid.uuid4(),tenant,int(lead_id),'connect:'+message_id,'connect:'+channel_id,text,_json({'source':'connect','status':'accepted','run_id':str(run_id)})))
-            if isinstance((send_source or {}).get('payload'),dict) and (send_source or {}).get('payload',{}).get('pilot_developer_followup') is True:
+            if (isinstance((send_source or {}).get('payload'),dict) and
+                    ((send_source or {}).get('payload',{}).get('pilot_developer_followup') is True or
+                     (send_source or {}).get('payload',{}).get('pilot_customer_case_reply') is True)):
                 from tenant_consultation_group import record_customer_send_receipt
                 record_customer_send_receipt(cur,tenant,str(send_source.get('event_fingerprint') or ''),message_id)
             cur.execute('''UPDATE saas_ai_conversation_state SET last_agent_message_id=%s,revision=revision+1,updated_at=now()
