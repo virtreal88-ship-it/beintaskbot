@@ -450,6 +450,17 @@ def test_outbound_replay_with_new_envelope_does_not_repeat_takeover(ingest,chann
     assert len(direct_routes(channels['db']))==1
 
 
+def test_first_unknown_outbound_observation_saves_paused_agent_binding(ingest,channels):
+    payload=event(JID,outbound=True,source='unknown')
+    assert ingest(payload)
+    db=channels['db']
+    state=db.execute("""SELECT agent_id,state,reason FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s""",(A,CA,JID))[0]
+    assert state=={'agent_id':str(uuid.UUID(int=301)),'state':'paused','reason':'automatic_assignment_pending'}
+    assert db.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s AND state IN ('queued','processing')",(A,CA,JID))==[]
+    assert channels['send'].call_count==0 and channels['generate'].call_count==0
+
+
 def test_crm_outbound_record_retry_does_not_repeat_takeover(ingest,channels,monkeypatch):
     import tenant_ai_agent_connect as active
     assert ingest(event(LID,pair=PAIR))

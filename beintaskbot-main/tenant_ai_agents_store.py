@@ -1613,7 +1613,7 @@ def set_conversation_state(profile,conversation_id,state,reason='',provider='kom
             candidate_id = None
             if provider == 'connect' and state == 'human':
                 from tenant_ai_agent_connect import unique_unassigned_direct_agent
-                candidate_id = unique_unassigned_direct_agent(cur,tenant,resolved_channel,conversation)
+                candidate_id = unique_unassigned_direct_agent(cur,tenant,resolved_channel,conversation,allow_human=True)
             cur.execute('''INSERT INTO saas_ai_conversation_state
               (tenant_id,provider,conversation_id,channel_id,agent_id,state,reason)
               VALUES(%s::uuid,%s,%s,%s,%s::uuid,%s,%s)

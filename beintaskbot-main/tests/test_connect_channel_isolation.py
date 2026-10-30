@@ -400,6 +400,25 @@ def test_manual_handoff_attaches_unique_agent_but_stays_human(channels):
     f['send'].assert_not_called();f['generate'].assert_not_called()
 
 
+def test_first_unclassified_outbound_creates_paused_scoped_binding(channels,monkeypatch):
+    f=channels;db=f['db']
+    peer='994705694403@s.whatsapp.net'
+    monkeypatch.setattr(transport,'_verify_signature',lambda *args:True)
+    monkeypatch.setenv('AI_AGENTS_ENABLED','false')
+    monkeypatch.setenv('AI_AGENTS_AUTO_SEND_ENABLED','false')
+    before=db.execute("SELECT enabled,operating_mode,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]
+    event={'id':str(uuid.uuid4()),'type':'message.outbound.observed','data':{
+      'id':str(uuid.uuid4()),'channelId':CA,'conversationId':peer,'fromMe':True,
+      'source':'unknown','type':'text','text':'outbound preview'}}
+    assert transport.ingest(json.dumps(event).encode(),'signed-fixture',event)
+    state=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s",(A,CA,peer))[0]
+    assert state=={'agent_id':AGENT,'state':'paused','reason':'automatic_assignment_pending'}
+    assert db.execute("SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s AND state IN ('queued','processing')",(A,CA,peer))==[]
+    after=db.execute("SELECT enabled,operating_mode,auto_send_enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid",(A,))[0]
+    assert after==before
+    f['send'].assert_not_called();f['generate'].assert_not_called()
+
+
 def test_identity_conflict_preserves_operator_no_agent_reason(channels):
     f=channels;db=f['db']
     db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL,state='paused',reason='operator_manual_pause',agent_assignment_id=NULL WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA));db.commit()

@@ -59,16 +59,22 @@ def unique_connect_candidate(rows, channel_id: str, *, is_group=False):
     return None, 'agent_selection_required' if len(matches) > 1 else 'no_eligible_agent'
 
 
-def unique_unassigned_direct_agent(cur, tenant, channel_id, conversation_id):
+def unique_unassigned_direct_agent(cur, tenant, channel_id, conversation_id, *, allow_human=False):
     """Find a safe missing owner for a direct dialog without changing its gate."""
     from tenant_ai_group_coordination import group_jid
     if group_jid(conversation_id):
         return None
-    cur.execute("""SELECT agent_id,agent_assignment_id FROM saas_ai_conversation_state
+    cur.execute("""SELECT agent_id,agent_assignment_id,state,reason FROM saas_ai_conversation_state
       WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s
       FOR UPDATE""", (tenant, channel_id, conversation_id))
     state = cur.fetchone() or {}
     if state.get('agent_id') or state.get('agent_assignment_id'):
+        return None
+    if state.get('state') == 'human' and not allow_human:
+        return None
+    if (state.get('state') == 'paused'
+            and not str(state.get('reason') or '').startswith('automatic_assignment_')
+            and state.get('reason') != 'conversation_identity_conflict'):
         return None
     from tenant_connect_identity import conflicted
     if conflicted(cur, tenant, channel_id, conversation_id):
@@ -78,6 +84,23 @@ def unique_unassigned_direct_agent(cur, tenant, channel_id, conversation_id):
       ORDER BY created_at,id""", (tenant,))
     agent, _reason = unique_connect_candidate(cur.fetchall(), channel_id)
     return agent['id'] if agent else None
+
+
+def bind_unassigned_direct_agent(cur, tenant, channel_id, conversation_id):
+    """Persist a unique binding for a newly observed direct dialog, still gated."""
+    candidate_id = unique_unassigned_direct_agent(cur, tenant, channel_id, conversation_id)
+    if not candidate_id:
+        return None
+    cur.execute('''INSERT INTO saas_ai_conversation_state
+      (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason)
+      VALUES(%s::uuid,'connect',%s,%s,%s::uuid,'paused','automatic_assignment_pending')
+      ON CONFLICT(tenant_id,provider,channel_id,conversation_id) DO UPDATE
+        SET agent_id=COALESCE(saas_ai_conversation_state.agent_id,EXCLUDED.agent_id),
+            revision=saas_ai_conversation_state.revision+1,updated_at=now()
+      WHERE saas_ai_conversation_state.agent_id IS NULL
+        AND saas_ai_conversation_state.agent_assignment_id IS NULL
+      RETURNING agent_id''', (tenant,channel_id,conversation_id,candidate_id))
+    return (cur.fetchone() or {}).get('agent_id')
 
 
 def _bind_unique_connect_candidate(cur, tenant, channel_id, conversation_id, rows, *, is_group=False):
@@ -694,7 +717,7 @@ def mark_operator_reply(tenant: str, lead_id: int, channel_id: str, conversation
             # involved in that path, so bind only a sole enabled primary that
             # explicitly covers this channel.  Never replace an operator's
             # explicit no-agent choice, and never change the human handoff.
-            candidate_id = unique_unassigned_direct_agent(cur, tenant, channel_id, conversation_id)
+            candidate_id = unique_unassigned_direct_agent(cur, tenant, channel_id, conversation_id, allow_human=True)
             from tenant_ai_group_coordination import stop
             stop(cur, tenant, conversation_id, actor=actor)
             cur.execute('''INSERT INTO saas_ai_conversation_state

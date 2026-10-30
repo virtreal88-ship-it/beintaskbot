@@ -829,6 +829,15 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 if stored and (stored.get('channel') != 'connect:' + channel_id or
                                stored.get('kommo_lead_id') not in lead_members(cur,tenant,channel_id,lead_id)):
                     raise ConnectWebhookError('message_scope_conflict', 'Connect message scope mismatch.', 409)
+                if (stored and not coordinated and _direct_identity(conversation)
+                        and data.get('fromMe') is not False and not _outbound_is_ai(data, stored)
+                        and data.get('conversationIdentityConflict') is not True):
+                    # An outbound observation can be the first event that
+                    # creates a direct route. Unknown authorship must not turn
+                    # on replies, but it still gets its unique channel-scoped
+                    # owner recorded in a paused placeholder.
+                    from tenant_ai_agent_connect import bind_unassigned_direct_agent
+                    bind_unassigned_direct_agent(cur,tenant,channel_id,conversation)
                 # A malformed outbound event with ``fromMe:false`` is kept as
                 # an observable outbound record, but cannot take over a chat.
                 if message_inserted and data.get('fromMe') is not False and data.get('source') != 'unknown' and not _outbound_is_ai(data, stored) and not ai_origin and (not coordinated or employee is not None):
