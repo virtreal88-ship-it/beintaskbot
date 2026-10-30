@@ -186,8 +186,68 @@ def test_employee_recognition_survives_a_canonical_lid(ingest, channels, configu
     assert ingest(later)
     assert db.execute('SELECT raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',
       (A,'connect:'+later['data']['id']))[0]['raw']['verified_employee_id'] == 11
+    assert db.execute('''SELECT state,reason FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id=%s''',(A,CA,LID)) == [
+        {'state':'human','reason':'manager_replied'}]
     assert not db.execute('SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND conversation_id=%s',
                           (A,LID))
+    db.commit()
+
+
+def test_scoped_test_client_override_preserves_employee_provenance_without_human_handoff(ingest, channels, monkeypatch):
+    import tenant_ai_pilot as pilot
+    db = channels['db']
+    monkeypatch.setattr(pilot, 'configured_scope', lambda: {
+        'tenant_id':A, 'channel_id':CA, 'conversation_id':JID})
+    db.execute('''INSERT INTO saas_tenant_member_whatsapp_numbers
+      (tenant_id,telegram_id,phone_digits,recognition_enabled,created_by)
+      VALUES(%s::uuid,11,%s,TRUE,11)''', (A,JID.split('@')[0]))
+    db.commit()
+    monkeypatch.setattr(pilot, 'test_client_override_allowed', lambda *_: True)
+    inbound = event(JID, senderName='Recognized staff member')
+    assert ingest(inbound)
+    stored = db.execute('''SELECT direction,raw FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid AND external_id=%s''', (A,'connect:'+inbound['data']['id']))[0]
+    assert stored['direction'] == 'incoming'
+    assert stored['raw']['verified_employee_id'] == 11
+    assert stored['raw']['pilot_test_role_override'] == {
+        'role':'test_client_override','verified_employee_id':11,
+        'scope':'configured_scoped_live_dialog'}
+    assert not db.execute('''SELECT 1 FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id=%s
+        AND state='human' AND reason='manager_replied' ''', (A,CA,JID))
+    payload = db.execute('''SELECT payload FROM saas_tenant_webhook_events
+      WHERE tenant_id=%s::uuid AND provider='connect' AND external_id=%s''',
+      (A,inbound['data']['id']))[0]['payload']
+    assert payload['source_role_override'] == 'test_client_override'
+    db.commit()
+
+
+@pytest.mark.parametrize('provider_timestamp', [None, ''])
+def test_missing_provider_timestamp_keeps_employee_handoff(ingest, channels, monkeypatch, provider_timestamp):
+    import tenant_ai_pilot as pilot
+    db = channels['db']
+    monkeypatch.setattr(pilot, 'configured_scope', lambda: {
+        'tenant_id':A, 'channel_id':CA, 'conversation_id':JID})
+    monkeypatch.setattr(pilot, 'test_client_override_allowed', lambda _cur, _tenant, _channel, _conversation, occurred:
+                        bool(occurred))
+    db.execute('''INSERT INTO saas_tenant_member_whatsapp_numbers
+      (tenant_id,telegram_id,phone_digits,recognition_enabled,created_by)
+      VALUES(%s::uuid,11,%s,TRUE,11)''', (A,JID.split('@')[0]))
+    db.commit()
+    incoming = event(JID)
+    incoming['occurred_at'] = provider_timestamp
+    assert ingest(incoming)
+    stored = db.execute('''SELECT direction,raw FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid AND external_id=%s''', (A,'connect:'+incoming['data']['id']))[0]
+    assert stored['direction'] == 'incoming'
+    assert stored['raw']['verified_employee_id'] == 11
+    assert 'pilot_test_role_override' not in stored['raw']
+    assert db.execute('''SELECT state,reason FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id=%s''',(A,CA,JID)) == [
+        {'state':'human','reason':'manager_replied'}]
+    assert not db.execute('SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND conversation_id=%s',
+                          (A,JID))
     db.commit()
 
 
