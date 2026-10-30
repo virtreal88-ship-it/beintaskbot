@@ -923,6 +923,24 @@ def test_http_origin_identity_scope_and_no_store(monkeypatch):
         assert read.call_count==1
     asyncio.run(scenario())
 
+
+def test_http_published_correction_uses_owner_service_and_identity_guard(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import tenant_knowledge_candidates_api as api
+    async def scenario():
+        operation=Mock(return_value={'candidate':{'version':3}});monkeypatch.setattr(api,'mutate',operation)
+        payload={'expected_tenant_id':A,'expected_user_id':11,'expected_version':2,'expected_source_hash':'a'*64,'title':'Fixed'}
+        async def body():return payload
+        req=SimpleNamespace(method='POST',content_type='application/json',headers={'Origin':'https://test.local'},json=body,match_info={'candidate_id':'case-id'})
+        handle=api.handler(lambda _:PROFILE,'https://test.local',Mock(),'correct_published')
+        assert (await handle(req)).status==200
+        assert operation.call_args.args==(PROFILE,'case-id',{'expected_version':2,'expected_source_hash':'a'*64,'title':'Fixed'},'correct_published')
+        req.headers={'Origin':'https://evil.local'};assert (await handle(req)).status==403
+        req.headers={'Origin':'https://test.local'};payload['expected_tenant_id']=B;assert (await handle(req)).status==409
+        assert operation.call_count==1
+    asyncio.run(scenario())
+
 def test_model_cannot_certify_its_own_cause(ready):
     db,generation,data=ready
     value=model_card();value['cause']['status']='confirmed'
