@@ -429,10 +429,31 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 # Linked to the AI job by event_fingerprint; this is an audit
                 # label, not a caller-controlled identity or direction field.
                 payload['source_role_override'] = 'test_client_override'
+            verified_pilot_case=False
             if not is_group:
                 from tenant_consultation_group import record_customer_verification
-                record_customer_verification(cur,tenant,channel_id,conversation_id,
+                verified_pilot_case=bool(record_customer_verification(cur,tenant,channel_id,conversation_id,
                     str(message_id or event_id),str(text or ''),quoted_message_id)
+                )
+                if verified_pilot_case:
+                    # A real customer confirmation closes the pilot CASE; it
+                    # must not also generate an unsolicited AI reply.
+                    if connection is None:conn.commit()
+                    return 0
+                from tenant_consultation_group import attach_pilot_customer_reply
+                customer_turn=attach_pilot_customer_reply(cur,tenant,channel_id,conversation_id,
+                    str(message_id or event_id))
+                if customer_turn and customer_turn.get('blocked') is True:
+                    if connection is None:conn.commit()
+                    return 0
+                if customer_turn:
+                    payload.update({'pilot_customer_case_reply':True,
+                        'pilot_followup_id':customer_turn['followup_id'],
+                        'consultation_id':customer_turn['consultation_id'],
+                        'case_id':customer_turn['case_id'],
+                        'developer_reply':customer_turn['group_reply'],
+                        'group_reply_message_id':customer_turn['group_message_id'],
+                        'customer_turn_number':customer_turn['turn_number']})
             from tenant_ai_group_coordination import group_jid, admit
             group_fence = None
             if is_group and not group_jid(conversation_id):

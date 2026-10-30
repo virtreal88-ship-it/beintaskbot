@@ -49,6 +49,16 @@ def schema(conn):
         cur.execute("ALTER TABLE saas_ai_pilot_followups ADD COLUMN IF NOT EXISTS customer_outbound_message_id TEXT NULL")
         cur.execute("ALTER TABLE saas_ai_pilot_followups ADD COLUMN IF NOT EXISTS customer_verified_at TIMESTAMPTZ NULL")
         cur.execute("ALTER TABLE saas_ai_pilot_followups ADD COLUMN IF NOT EXISTS customer_verification_message_id TEXT NULL")
+        # One consultation may now have several developer/customer turns. The
+        # original group message remains the stable CASE linkage; these fields
+        # describe the current single outstanding question/answer turn.
+        cur.execute("ALTER TABLE saas_ai_pilot_followups ADD COLUMN IF NOT EXISTS reply_action TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_ai_pilot_followups ADD COLUMN IF NOT EXISTS awaiting_customer BOOLEAN NOT NULL DEFAULT FALSE")
+        cur.execute("ALTER TABLE saas_ai_pilot_followups ADD COLUMN IF NOT EXISTS customer_reply_message_id TEXT NULL")
+        cur.execute("ALTER TABLE saas_ai_pilot_followups ADD COLUMN IF NOT EXISTS turn_number INTEGER NOT NULL DEFAULT 0")
+        cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS saas_ai_pilot_one_waiting_customer_idx
+          ON saas_ai_pilot_followups(tenant_id,channel_id,conversation_id)
+          WHERE awaiting_customer=TRUE AND state='linked' ''')
 
 
 def _owner(cur,profile):
@@ -327,6 +337,8 @@ def record_group_reply(cur,tenant,channel,conversation,message_id,text,quoted_id
 
 
 _REMOTE_PASSWORD=re.compile(r'(?i)(?:anydesk|парол|password|passcode|şifr)[^\n]{0,48}(?:[:=]\s*|\s+)[A-Za-z0-9!@#$%^&*_.-]{6,}')
+_REMOTE_SECRET_MENTION=re.compile(r'(?i)(?:anydesk[^\n]{0,60}(?:password|passcode|парол|şifr)|(?:password|passcode|парол|şifr)[^\n]{0,60}anydesk)')
+_CLAIMS_RESOLVED=re.compile(r'(?i)(?:\b(?:fixed|resolved|works now|working now|problem solved|issue solved)\b|\b(?:исправлено|решено|работает теперь|теперь работает|проблема решена)\b|\b(?:düzəldi|problem həll oldu|problem həll olundu|artıq işləyir)\b)')
 # Resolving a customer case is consequential: accept only short, whole-message
 # affirmations. Substring matching (e.g. "tell me when it is fixed") is unsafe,
 # and trying to enumerate negation in every language cannot make it safe.
@@ -363,15 +375,14 @@ def record_customer_verification(cur,tenant,channel,conversation,message_id,text
       FROM saas_ai_pilot_followups f JOIN saas_support_tickets t
         ON t.tenant_id=f.tenant_id AND t.id=f.case_id
       WHERE f.tenant_id=%s::uuid AND f.channel_id=%s::uuid AND f.conversation_id=%s
-        AND f.state='linked' AND f.customer_outbound_message_id IS NOT NULL
+        AND f.state='linked' AND f.reply_action='customer_update'
+        AND f.customer_outbound_message_id IS NOT NULL
         AND f.customer_verified_at IS NULL AND t.status<>'resolved'
       ORDER BY f.created_at DESC''',(tenant,channel,conversation))
     rows=cur.fetchall()
     quote=str(quoted_id or '')
     if quote:
         rows=[row for row in rows if row['customer_outbound_message_id']==quote]
-    elif len(rows)!=1:
-        return None
     if len(rows)!=1:
         return None
     item=rows[0]
@@ -395,9 +406,10 @@ def record_customer_send_receipt(cur,tenant,event_fingerprint,message_id):
     cur.execute("SELECT to_regclass('saas_ai_pilot_followups') IS NOT NULL AS available")
     if not (cur.fetchone() or {}).get('available'):
         return False
-    cur.execute('''UPDATE saas_ai_pilot_followups SET customer_outbound_message_id=%s,updated_at=now()
+    cur.execute('''UPDATE saas_ai_pilot_followups SET customer_outbound_message_id=%s,
+        awaiting_customer=(reply_action IN ('customer_question','customer_update')),updated_at=now()
       WHERE tenant_id=%s::uuid AND event_fingerprint=%s AND state='linked'
-        AND customer_outbound_message_id IS NULL RETURNING id''',
+      RETURNING id''',
       (str(message_id)[:200],tenant,str(event_fingerprint or '')))
     return bool(cur.fetchone())
 
@@ -446,6 +458,13 @@ def enqueue_pilot_customer_followup(cur,tenant,group_channel,group_conversation,
           ON CONFLICT DO NOTHING''',(tenant,uuid.uuid4(),row['consultation_id'],row['case_id'],row['channel_id'],
           row['conversation_id'],group_channel,group_conversation,group_message_id,text,state['agent_id']))
         return False
+    # Keep the conversation serial: don't let a second CASE reply race a
+    # clarification already waiting on the test customer.
+    cur.execute('''SELECT 1 FROM saas_ai_pilot_followups WHERE tenant_id=%s::uuid
+      AND channel_id=%s::uuid AND conversation_id=%s AND state='linked'
+      AND awaiting_customer=TRUE LIMIT 1 FOR UPDATE''',(tenant,row['channel_id'],row['conversation_id']))
+    if cur.fetchone():
+        return False
     if _REMOTE_PASSWORD.search(text):
         cur.execute('''INSERT INTO saas_ai_pilot_followups(tenant_id,id,consultation_id,case_id,channel_id,
           conversation_id,group_channel_id,group_conversation_id,group_message_id,group_reply,agent_id,state,error_code)
@@ -474,7 +493,14 @@ def enqueue_pilot_customer_followup(cur,tenant,group_channel,group_conversation,
 
 def materialize_pilot_followup(cur):
     """Turn the next pilot reply into one shared, budgeted Connect Agent job."""
-    from tenant_ai_pilot import manual_live_job
+    from tenant_ai_pilot import manual_live_job,configured_scope
+    scope=configured_scope()
+    if not scope:return False
+    cur.execute('''SELECT 1 FROM saas_ai_pilot_followups WHERE state='linked'
+      AND tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
+      AND awaiting_customer=TRUE LIMIT 1''',(scope['tenant_id'],scope['channel_id'],scope['conversation_id']))
+    if cur.fetchone():
+        return False
     cur.execute('''SELECT f.* FROM saas_ai_pilot_followups f
       WHERE f.state='queued' ORDER BY f.created_at,f.id FOR UPDATE SKIP LOCKED LIMIT 1''')
     followup=cur.fetchone()
@@ -506,7 +532,8 @@ def materialize_pilot_followup(cur):
     payload={'message_id':followup['source_message_id'],'channel_id':str(followup['channel_id']),
       'conversation_id':followup['conversation_id'],'developer_reply':followup['group_reply'],
       'consultation_id':str(followup['consultation_id']),'case_id':str(followup['case_id']),
-      'group_reply_message_id':followup['group_message_id'],'pilot_developer_followup':True}
+      'group_reply_message_id':followup['group_message_id'],'pilot_followup_id':str(followup['id']),
+      'pilot_developer_followup':True}
     cur.execute('''INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,external_id,event_type,payload,state,available_at)
       VALUES(%s::uuid,%s,'connect',%s,'developer_consultation_reply',%s::jsonb,'queued',now())
       ON CONFLICT(tenant_id,fingerprint) DO NOTHING RETURNING fingerprint''',
@@ -547,7 +574,154 @@ def materialize_pilot_followup(cur):
     return True
 
 
-def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_external_id=''):
+def attach_pilot_customer_reply(cur,tenant,channel,conversation,message_id):
+    """Bind one new inbound test-client event to its sole waiting CASE turn."""
+    from tenant_ai_pilot import is_pilot_customer_target
+    if not is_pilot_customer_target(tenant,channel,conversation):
+        return None
+    cur.execute('''SELECT f.id::text AS id,f.case_id::text AS case_id,
+        f.consultation_id::text AS consultation_id,f.group_reply,f.group_message_id,
+        f.turn_number,f.reply_action,t.status
+      FROM saas_ai_pilot_followups f JOIN saas_support_tickets t
+        ON t.tenant_id=f.tenant_id AND t.id=f.case_id
+      WHERE f.tenant_id=%s::uuid AND f.channel_id=%s::uuid AND f.conversation_id=%s
+        AND f.state='linked' AND f.awaiting_customer=TRUE AND t.status<>'resolved'
+        AND f.created_at>=now()-interval '24 hours'
+      ORDER BY f.created_at DESC LIMIT 2 FOR UPDATE OF f''',(tenant,channel,conversation))
+    rows=cur.fetchall()
+    # Ambiguous pending turns must never be guessed or cross-linked.
+    if not rows:
+        return None
+    if len(rows)>1:
+        cur.execute('''UPDATE saas_ai_conversation_state SET state='human',reason='pilot_case_turn_ambiguous',
+          revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
+          AND channel_id=%s AND conversation_id=%s AND state='active' ''',(tenant,channel,conversation))
+        return {'blocked':True}
+    turn=rows[0]
+    cur.execute('''INSERT INTO saas_support_events(tenant_id,event_key,ticket_id)
+      VALUES(%s::uuid,%s,%s::uuid) ON CONFLICT(tenant_id,event_key) DO NOTHING''',
+      (tenant,'pilot-case-turn:'+str(message_id),turn['case_id']))
+    if int(turn.get('turn_number') or 0)>=3:
+        cur.execute('''UPDATE saas_ai_conversation_state SET state='human',reason='pilot_case_turn_limit',
+          revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
+          AND channel_id=%s AND conversation_id=%s AND state='active' ''',(tenant,channel,conversation))
+        return {'blocked':True,'followup_id':turn['id'],'case_id':turn['case_id']}
+    cur.execute('''UPDATE saas_ai_pilot_followups SET awaiting_customer=FALSE,
+        customer_reply_message_id=%s,event_fingerprint=%s,turn_number=turn_number+1,updated_at=now()
+      WHERE tenant_id=%s::uuid AND id=%s::uuid AND awaiting_customer=TRUE
+        AND customer_reply_message_id IS NULL RETURNING id''',
+      (str(message_id)[:200],hashlib.sha256(('connect:'+str(message_id)).encode()).hexdigest(),tenant,turn['id']))
+    if not cur.fetchone():
+        return None
+    # The CRM messages remain immutable. This event only associates the new
+    # test-client message with the existing support ticket.
+    return {'followup_id':turn['id'],'case_id':turn['case_id'],
+      'consultation_id':turn['consultation_id'],'group_reply':turn['group_reply'],
+      'group_message_id':turn['group_message_id'],'reply_action':turn['reply_action'],
+      'turn_number':int(turn.get('turn_number') or 0)+1}
+
+
+def record_pilot_followup_action(job,action):
+    """Persist the model's bounded routing decision before any provider send."""
+    allowed={'group_answer','customer_question','customer_update','no_action'}
+    if action not in allowed:
+        return False
+    payload=job.get('payload') if isinstance(job.get('payload'),dict) else {}
+    followup_id=str(payload.get('pilot_followup_id') or '')
+    if not followup_id:
+        return False
+    from tenant_platform import _json
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''SELECT id,state,case_id FROM saas_ai_pilot_followups
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND channel_id=%s::uuid
+                AND conversation_id=%s FOR UPDATE''',(job['tenant_id'],followup_id,job['channel_id'],job['conversation_id']))
+            row=cur.fetchone()
+            if not row or row.get('state')!='linked':
+                return False
+            cur.execute('''UPDATE saas_ai_pilot_followups SET reply_action=%s,
+              awaiting_customer=FALSE,updated_at=now()
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='linked' ''',
+              (action,job['tenant_id'],followup_id))
+            payload['pilot_action']=action
+            cur.execute('''UPDATE saas_tenant_webhook_events SET payload=%s::jsonb
+              WHERE tenant_id=%s::uuid AND fingerprint=%s AND state='processing' ''',
+              (_json(payload),job['tenant_id'],job.get('event_fingerprint')))
+        conn.commit()
+    return True
+
+
+def record_customer_reply_action(job,action,message_id):
+    """Mark customer question/solution outbound with its precise verification role."""
+    if action not in {'customer_question','customer_update'}:return False
+    payload=job.get('payload') if isinstance(job.get('payload'),dict) else {}
+    followup_id=str(payload.get('pilot_followup_id') or '')
+    if not followup_id:return False
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''UPDATE saas_ai_pilot_followups SET reply_action=%s,
+                customer_outbound_message_id=%s,awaiting_customer=TRUE,updated_at=now()
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='linked'
+                AND consultation_id=%s::uuid AND case_id=%s::uuid RETURNING id''',
+              (action,str(message_id)[:200],job['tenant_id'],followup_id,
+               str(payload.get('consultation_id') or ''),str(payload.get('case_id') or '')))
+            updated=bool(cur.fetchone())
+        conn.commit()
+    return updated
+
+
+def record_group_turn_action(job,action,message_id):
+    if action not in {'group_answer','no_action'}:return False
+    payload=job.get('payload') if isinstance(job.get('payload'),dict) else {}
+    followup_id=str(payload.get('pilot_followup_id') or '')
+    if not followup_id:return False
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''UPDATE saas_ai_pilot_followups SET reply_action=%s,
+                awaiting_customer=FALSE,updated_at=now()
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='linked' RETURNING id''',
+              (action,job['tenant_id'],followup_id))
+            updated=bool(cur.fetchone())
+            if updated:
+                cur.execute('''UPDATE saas_ai_conversation_state SET state='human',
+                    reason='ai_developer_consultation:awaiting_specialist',revision=revision+1,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+                    AND conversation_id=%s AND state='active' AND agent_id=%s::uuid''',
+                  (job['tenant_id'],job['channel_id'],job['conversation_id'],job['agent_id']))
+        conn.commit()
+    return updated
+
+
+def parse_pilot_turn_decision(value):
+    """Strictly decode the single-agent structured decision; fail closed."""
+    import json
+    if not isinstance(value,str) or len(value)>6000:return None
+    try: result=json.loads(value)
+    except (TypeError,ValueError):return None
+    if not isinstance(result,dict) or set(result)!={'action','message','evidence_quote'}:
+        return None
+    action=result.get('action');message=result.get('message');quote=result.get('evidence_quote')
+    if action not in {'group_answer','customer_question','customer_update','no_action'}:
+        return None
+    if not isinstance(message,str) or len(message.strip())>1800:
+        return None
+    if not isinstance(quote,str) or len(quote)>500:return None
+    if action=='no_action':
+        return {'action':action,'message':'','evidence_quote':''}
+    if len(message.strip())<2:return None
+    if action=='group_answer' and len(quote.strip())<8:return None
+    if action!='group_answer' and quote.strip():return None
+    # Never let an LLM repeat a remote-access secret. A proposed fix sent to
+    # the customer must ask them to test it, and cannot state that it worked.
+    if _REMOTE_SECRET_MENTION.search(message) or _REMOTE_PASSWORD.search(message):return None
+    if action=='customer_update' and _CLAIMS_RESOLVED.search(message):return None
+    return {'action':action,'message':message.strip(),'evidence_quote':quote.strip()}
+
+
+def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_external_id='',*,turn_id=None):
     """One-shot AI handoff delivery to the configured developer test group."""
     from tenant_ai_pilot import manual_live_job,configured_group_scope,configured_scope
     from tenant_ai_dialog_scope import lock_dialog
@@ -560,7 +734,9 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
     if not target or not customer_scope:
         return {'state':'blocked','reason':'pilot_group_unconfigured'}
     tenant=str(job['tenant_id']);consultation_id=identifier(consultation_id)
-    request_id=str(uuid.uuid5(uuid.NAMESPACE_URL,'beintaskbot-pilot-group:'+tenant+':'+consultation_id))
+    request_id=str(uuid.uuid5(uuid.NAMESPACE_URL,
+        ('beintaskbot-pilot-turn:'+tenant+':'+str(turn_id)) if turn_id else
+        'beintaskbot-pilot-group:'+tenant+':'+consultation_id))
     body=''
     with _connect() as conn:
         schema(conn)
@@ -612,11 +788,15 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
               WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s
                 AND m.direction='incoming' AND m.message_type IN ('image','audio','voice','video','document')
                 AND m.external_id=%s''',
-              (tenant,int(source_route.get('lead_id') or 0),'connect:'+target['channel_id'],'connect:'+str(source_external_id)))
-            attachments=[str(r['id']) for r in cur.fetchall()]
+              (tenant,int(source_route.get('lead_id') or 0),'connect:'+target['channel_id'],'connect:'+str(source_external_id or '')))
+            if turn_id:
+                attachments=[]
+            else:
+                attachments=[str(r['id']) for r in cur.fetchall()]
             links=['https://crm.pro.az/app?view=support&support_ticket_id='+consult['case_id']
                    +'&support_ticket_message_id='+message_id for message_id in attachments]
-            body=('CASE:'+consultation_id+'\n'+safe_summary+'\n\n'
+            intro=('Agent response to this CASE:' if turn_id else '')
+            body=('CASE:'+consultation_id+'\n'+intro+safe_summary+'\n\n'
                 'Client case: https://crm.pro.az/app?view=support&support_ticket_id='+consult['case_id']+
                 (('\n\nAttachments (CRM access required):\n'+'\n'.join(links)) if links else '')+
                 '\nReply to this message or include CASE:'+consultation_id+
@@ -683,6 +863,12 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
                   ON CONFLICT(tenant_id,external_id) DO NOTHING''',
                   (uuid.uuid4(),tenant,int(group['lead_id']),'connect:'+receipt['message_id'],
                    'connect:'+target['channel_id'],body,_json({'source':'connect','pilot_consultation_id':consultation_id})))
+                if turn_id:
+                    cur.execute('''UPDATE saas_ai_conversation_state SET state='human',
+                      reason='ai_developer_consultation:awaiting_specialist',revision=revision+1,updated_at=now()
+                      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+                        AND conversation_id=%s AND state='active' AND reason='pilot_developer_followup'
+                        AND agent_id=%s::uuid''',(tenant,customer_scope['channel_id'],customer_scope['conversation_id'],job['agent_id']))
             conn.commit()
     except Exception:
         with _connect() as conn:

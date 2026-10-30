@@ -1,6 +1,8 @@
 """Isolated SQL tests; external delivery is always synthetic."""
+import asyncio
 import uuid
 import pytest
+from unittest.mock import AsyncMock
 from test_tenant_support_inbox import database, db, A, B, CA, AGENT, PROFILE
 import tenant_consultation_group as flow
 import tenant_support_inbox_store as tickets
@@ -302,6 +304,8 @@ def test_exact_group_reply_queues_one_budgeted_followup_for_its_case(db,monkeypa
         job.get('tenant_id')==A and job.get('channel_id')==CA and job.get('conversation_id')=='client')
     monkeypatch.setattr('tenant_ai_pilot.is_pilot_group_target',lambda tenant,channel,group:
         tenant==A and channel==CA and group==GROUP)
+    monkeypatch.setattr('tenant_ai_pilot.configured_scope',lambda:
+        {'tenant_id':A,'channel_id':CA,'conversation_id':'client'})
     db.execute("""INSERT INTO saas_ai_agents(id,tenant_id,name,enabled,mode,scopes,created_by)
       VALUES(%s::uuid,%s::uuid,'Pilot',TRUE,'manual',%s::jsonb,11)""",
       (AGENT,A,'[{"provider":"connect","channel_id":"'+CA+'"}]'))
@@ -330,6 +334,147 @@ def test_exact_group_reply_queues_one_budgeted_followup_for_its_case(db,monkeypa
     assert 'CASE:'+consult in event['developer_reply']
     state=db.execute("SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
     assert state=={'state':'active','reason':'pilot_developer_followup'}
+
+
+def test_pilot_turn_decision_and_customer_reply_stay_in_same_case(db,monkeypatch):
+    consult,case=setup_case(db,monkeypatch)
+    monkeypatch.setattr('tenant_ai_pilot.manual_live_job',lambda _job:True)
+    monkeypatch.setattr('tenant_ai_pilot.is_pilot_customer_target',lambda tenant,channel,conversation:
+        tenant==A and channel==CA and conversation=='client')
+    flow.schema(db)
+    followup=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_ai_pilot_followups(tenant_id,id,consultation_id,case_id,channel_id,
+      conversation_id,group_channel_id,group_conversation_id,group_message_id,group_reply,agent_id,state,
+      customer_outbound_message_id,reply_action,awaiting_customer)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s,'group-q',
+        'Which amount did the customer report?',%s::uuid,'linked','question-id','customer_question',TRUE)""",
+      (A,followup,consult,case,CA,CA,GROUP,AGENT));db.commit()
+    known=flow.parse_pilot_turn_decision('{"action":"group_answer","message":"The customer reported 50 versus 49.9992.","evidence_quote":"entered 50; system showed 49.9992"}')
+    assert known and known['action']=='group_answer'
+    assert flow.parse_pilot_turn_decision('{"action":"group_answer","message":"The bug is fixed.","evidence_quote":""}') is None
+    assert flow.parse_pilot_turn_decision('{"action":"customer_question","message":"Please confirm the exact displayed amount?","evidence_quote":""}')['action']=='customer_question'
+    assert flow.parse_pilot_turn_decision('{"action":"customer_update","message":"Try saving once and tell us what you see.","evidence_quote":""}')['action']=='customer_update'
+    assert flow.parse_pilot_turn_decision('{"action":"customer_update","message":"The fix is working now.","evidence_quote":""}') is None
+    assert flow.parse_pilot_turn_decision('{"action":"customer_update","message":"Please send your AnyDesk password.","evidence_quote":""}') is None
+    assert flow.parse_pilot_turn_decision('{"action":"group_answer","message":"The password is abc12345.","evidence_quote":"entered 50; system showed 49.9992"}') is None
+    assert flow.parse_pilot_turn_decision('{"action":"no_action","message":"","evidence_quote":""}')['action']=='no_action'
+    customer_message='new-customer-answer'
+    with db.cursor() as cur:
+        attached=flow.attach_pilot_customer_reply(cur,A,CA,'client',customer_message)
+        assert attached['followup_id']==followup and attached['case_id']==case
+        assert attached['consultation_id']==consult
+    db.commit()
+    row=db.execute('''SELECT customer_reply_message_id,turn_number,awaiting_customer,event_fingerprint
+      FROM saas_ai_pilot_followups WHERE tenant_id=%s::uuid AND id=%s::uuid''',(A,followup))[0]
+    assert row['customer_reply_message_id']==customer_message and row['turn_number']==1 and not row['awaiting_customer']
+    assert row['event_fingerprint']
+    assert db.execute('SELECT ticket_id::text FROM saas_support_events WHERE tenant_id=%s::uuid AND event_key=%s',(A,'pilot-case-turn:'+customer_message))[0]['ticket_id']==case
+    with db.cursor() as cur:
+        assert flow.attach_pilot_customer_reply(cur,A,CA,'client',customer_message) is None
+    db.commit()
+
+
+def test_agent_group_answer_uses_case_turn_receipt_and_stub_transport(db,monkeypatch):
+    consult,case=setup_case(db,monkeypatch)
+    setup_real_pilot_gate(db,monkeypatch,customer_state='human',reason='ai_developer_consultation:missing_knowledge')
+    monkeypatch.setattr('tenant_ai_pilot.pilot_group_handoff_allowed',lambda *_args,**_kwargs:True)
+    monkeypatch.setattr('tenant_ai_dialog_scope.lock_dialog',lambda *_args:None)
+    db.execute("UPDATE saas_ai_conversation_state SET state='active',reason='pilot_developer_followup' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))
+    followup=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_ai_pilot_followups(tenant_id,id,consultation_id,case_id,channel_id,
+      conversation_id,group_channel_id,group_conversation_id,group_message_id,group_reply,agent_id,state)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s,'group-q',
+        'Which amount did the customer report?',%s::uuid,'linked')""",(A,followup,consult,case,CA,CA,GROUP,AGENT));db.commit()
+    sends=[]
+    def stub(route,body,request_id):
+        sends.append((route,body,request_id))
+        return {'message_id':'pilot-turn-outbound','external_message_id':'PILOT_TURN_RECEIPT'}
+    monkeypatch.setattr(transport,'send_group_with_receipt',stub)
+    job={'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':'client',
+      'agent_id':AGENT,'payload':{'pilot_developer_followup':True},'event_fingerprint':'turn-fp'}
+    result=flow.deliver_pilot_consultation_to_group(job,consult,
+      'The customer reported 50 versus 49.9992.','',turn_id=followup)
+    assert result['state']=='sent' and len(sends)==1
+    next_turn=flow.deliver_pilot_consultation_to_group(job,consult,
+      'The customer answered the clarification; CASE remains the same.','',turn_id=followup+':1')
+    assert next_turn['state']=='sent' and len(sends)==2
+    assert sends[0][2]!=sends[1][2]
+    assert 'CASE:'+consult in sends[0][1] and 'The customer reported 50 versus 49.9992.' in sends[0][1]
+    assert all(row['case_id']==case and row['state']=='sent' for row in db.execute('SELECT case_id::text AS case_id,state FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND request_id=ANY(%s::uuid[])',(A,[sends[0][2],sends[1][2]])))
+    assert db.execute("SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id='client'",(A,CA))[0]=={'state':'human','reason':'ai_developer_consultation:awaiting_specialist'}
+
+
+def test_full_agent_worker_answers_developer_in_group_from_case_fact(db,monkeypatch):
+    import tenant_ai_agent_worker as worker
+    consult,case=setup_case(db,monkeypatch)
+    setup_real_pilot_gate(db,monkeypatch,customer_state='human',reason='ai_developer_consultation:missing_knowledge')
+    monkeypatch.setattr('tenant_ai_pilot.pilot_group_handoff_allowed',lambda *_args,**_kwargs:True)
+    monkeypatch.setattr('tenant_ai_dialog_scope.lock_dialog',lambda *_args:None)
+    db.execute("UPDATE saas_ai_conversation_state SET state='active',reason='pilot_developer_followup' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))
+    followup=str(uuid.uuid4());event_fp='developer-turn-event'
+    db.execute("""INSERT INTO saas_ai_pilot_followups(tenant_id,id,consultation_id,case_id,channel_id,
+      conversation_id,group_channel_id,group_conversation_id,group_message_id,group_reply,agent_id,state,
+      source_message_id,event_fingerprint)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s,'group-q',
+        'Which amount did the customer report?',%s::uuid,'linked','customer-issue',%s)""",
+      (A,followup,consult,case,CA,CA,GROUP,AGENT,event_fp))
+    db.execute("""INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,external_id,event_type,payload,state)
+      VALUES(%s::uuid,%s,'connect','developer-reply','developer_consultation_reply',%s::jsonb,'processing')""",
+      (A,event_fp,'{"pilot_developer_followup":true,"pilot_followup_id":"'+followup+'","consultation_id":"'+consult+'","case_id":"'+case+'","message_id":"customer-issue","developer_reply":"Which amount did the customer report?"}'))
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,'connect:customer-issue','incoming',%s,'Please test copy. Customer reported 50; system showed 49.9992.','text',now())""",
+      (str(uuid.uuid4()),A,'connect:'+CA));db.commit()
+    import tenant_ai_agent_connect as connect_ai
+    source={'external_id':'customer-issue','direction':'incoming','body':'Please test copy. Customer reported 50; system showed 49.9992.',
+      'message_type':'text','happened_at':'2026-10-30T20:40:00+00:00'}
+    history_rows=[source]
+    context_rows=[{**source,'has_attachment':False,'author_name':'Test client'}]
+    config={'agent_model':'gpt-4o-mini','chat_model':'gpt-4o-mini','scopes':[{'provider':'connect','channel_id':CA}],
+      'schedule':{},'company_instructions':'','agent_instructions':'','scope_instructions':'','response_policy':{'enabled':False}}
+    reservation={'run_id':str(uuid.uuid4()),'api_key':'stub','model':'gpt-4o-mini','agent_language':'az',
+      'agent_style':'balanced','conversation_revision':6,'mode':'automatic','auto_send_enabled':True,
+      'response_policy':{'enabled':False}}
+    quote='Customer reported 50; system showed 49.9992.'
+    generated='{"action":"group_answer","message":"The customer reported 50, while the system displayed 49.9992.","evidence_quote":"'+quote+'"}'
+    monkeypatch.setattr(worker,'assert_job_allowed',lambda *_args,**_kwargs:None)
+    monkeypatch.setattr(connect_ai,'history',lambda *_args:history_rows)
+    monkeypatch.setattr(connect_ai,'group_context',lambda *_args:context_rows)
+    monkeypatch.setattr(worker,'enabled_triggers',lambda *_args:[])
+    monkeypatch.setattr(worker,'handoff_reason',lambda *_args:None)
+    monkeypatch.setattr(worker,'reserve_run',lambda *_args,**_kwargs:dict(reservation))
+    import tenant_ai_agent_run_store as run_store
+    monkeypatch.setattr(run_store,'load_agent_config',lambda *_args,**_kwargs:(config,None))
+    monkeypatch.setattr(worker,'knowledge_context',lambda *_args,**_kwargs:[])
+    monkeypatch.setattr(worker,'request_expert',AsyncMock(return_value=None))
+    monkeypatch.setattr(worker,'history',lambda *_args,**_kwargs:([{'speaker':'CLIENT','text':source['body']}],0))
+    monkeypatch.setattr(worker,'generate',lambda *_args,**_kwargs:(generated,{'input_tokens':12,'output_tokens':15,'total_tokens':27}))
+    monkeypatch.setattr(worker,'record_token_usage',lambda *_args,**_kwargs:None)
+    monkeypatch.setattr(worker,'_next_open',lambda *_args:None)
+    monkeypatch.setattr(worker,'finish_sent',lambda *_args,**_kwargs:True)
+    monkeypatch.setattr(worker,'finish_unknown',lambda *_args,**_kwargs:pytest.fail('provider result should be known'))
+    monkeypatch.setattr(worker,'finish_superseded',lambda *_args,**_kwargs:pytest.fail('turn should send to group'))
+    async def empty_images(*_args):return [],set()
+    async def empty_documents(*_args):return []
+    async def empty_videos(*_args):return {},{},{}
+    for module_name,attr,value in [
+      ('tenant_connect_images','prepare',empty_images),
+      ('tenant_connect_images','live',lambda *_args:True),
+      ('tenant_connect_documents','prepare',empty_documents),
+      ('tenant_connect_documents','live',lambda *_args:True),
+      ('tenant_connect_videos','prepare',empty_videos)]:
+        module=__import__(module_name);monkeypatch.setattr(module,attr,value)
+    sent=[]
+    monkeypatch.setattr(transport,'send_group_with_receipt',lambda route,body,request_id:
+      sent.append((route,body,request_id)) or {'message_id':'group-agent-answer','external_message_id':'GROUP_AGENT_RECEIPT'})
+    job={'tenant_id':A,'agent_id':AGENT,'provider':'connect','channel_id':CA,'conversation_id':'client',
+      'lead_id':41,'lease_token':'lease','revision':1,'event_fingerprint':event_fp,
+      'payload':{'message_id':'customer-issue','pilot_developer_followup':True,'pilot_followup_id':followup,
+        'consultation_id':consult,'case_id':case,'developer_reply':'Which amount did the customer report?'}}
+    import logging
+    asyncio.run(worker.process_connect_one(job,logging.getLogger('pilot-integration-test')))
+    assert len(sent)==1 and sent[0][1].startswith('CASE:'+consult)
+    assert '49.9992' in sent[0][1]
+    assert db.execute("SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id='client'",(A,CA))[0]=={'state':'human','reason':'ai_developer_consultation:awaiting_specialist'}
 
 
 def test_ai_handoff_delivery_uses_only_configured_paused_group_and_saved_attachment(db,monkeypatch):
@@ -454,10 +599,10 @@ def test_case_resolves_only_after_positive_customer_verification_of_pilot_reply(
     flow.schema(db)
     followup=str(uuid.uuid4())
     db.execute("""INSERT INTO saas_ai_pilot_followups(tenant_id,id,consultation_id,case_id,channel_id,
-      conversation_id,group_channel_id,group_conversation_id,group_message_id,group_reply,agent_id,state,
-      customer_outbound_message_id)
+          conversation_id,group_channel_id,group_conversation_id,group_message_id,group_reply,agent_id,state,
+          customer_outbound_message_id,reply_action)
       VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s,'group-reply',
-        'Synthetic specialist advice',%s::uuid,'linked','customer-ai-reply')""",
+            'Synthetic specialist advice',%s::uuid,'linked','customer-ai-reply','customer_update')""",
       (A,followup,consult,case,CA,CA,GROUP,AGENT))
     db.commit()
     with db.cursor() as cur:
