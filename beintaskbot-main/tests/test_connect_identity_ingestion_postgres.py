@@ -309,6 +309,11 @@ def test_ai_queue_failure_preserves_verified_crm_receipt_and_dedupes_replay(inge
                       (A,'connect:'+payload['data']['id']))
     assert db.execute('SELECT 1 FROM saas_connect_webhook_events WHERE tenant_id=%s::uuid AND event_id=%s',
                       (A,payload['id']))
+    fingerprint=hashlib.sha256(('connect:'+payload['data']['id']).encode()).hexdigest()
+    assert not db.execute('SELECT 1 FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s',
+                          (A,fingerprint))
+    assert not db.execute('SELECT 1 FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',
+                          (A,fingerprint))
     db.commit()
     monkeypatch.setattr(active,'enqueue',original)
     assert ingest(payload) and ingest(payload)
