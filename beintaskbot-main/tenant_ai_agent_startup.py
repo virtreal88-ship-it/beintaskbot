@@ -37,12 +37,22 @@ def prepare_database() -> None:
     _fernet()
     with _connect() as conn:
         ensure_agents_schema(conn)
+        # These receipts are read from the Connect ingestion transaction. Make
+        # their additive schema available before that HTTP path starts serving
+        # events; it must not depend on a consultation having been created first.
+        ensure_pilot_case_schema(conn)
         ensure_chat_ai_schema(conn)
         ensure_simulation_schema(conn)
         ensure_drafts_schema(conn)
         ensure_approvals_schema(conn)
         ensure_observations_schema(conn)
         ensure_apply_schema(conn)
+
+
+def ensure_pilot_case_schema(conn) -> None:
+    """Idempotently install the additive consultation/follow-up schema."""
+    from tenant_consultation_group import schema as ensure_schema
+    ensure_schema(conn)
 
 
 async def start_worker(app, worker, kommo_request, logger, wait_slot,
