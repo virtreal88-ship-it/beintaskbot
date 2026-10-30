@@ -19,7 +19,7 @@ const ticket={id:ticketId,contact_name:'Synthetic client',channel_id:'channel-1'
    else if(url.pathname==='/api/platform/ai/internal-consultations/groups')result={groups:[{channel_id:'channel-1',conversation_id:'120363411822115409@g.us',contact_name:'Synthetic group'}]};
    else if(url.pathname==='/api/platform/ai/internal-consultations')result={consultations:[{id:consultId,reason:'50 → 49,9992',status:'waiting_specialist',recipient_name:'Owner',created_at:'2026-10-16T00:00:00Z'}]};
    else if(url.pathname==='/api/platform/ai/internal-consultations/'+consultId+'/group'){
-    if(method==='POST'&&body.action==='prepare')delivery={state:'ready',request_id:body.request_id,destination:'Synthetic group',prepared_text:body.summary,replies:[]};
+    if(method==='POST'&&body.action==='prepare')delivery={state:'ready',request_id:body.request_id,destination:'Synthetic group',prepared_text:body.summary,replies:[],draft_revision:0};
     if(method==='POST'&&body.action==='send'){delivery.state='sent';delivery.replies=[{message_id:'reply-1',body:'We are investigating'}];}
     if(method==='POST'&&body.action==='draft'){delivery.customer_draft=body.draft;delivery.draft_reply_id=body.message_id;}
     if(!delivery)status=404;else result=delivery;

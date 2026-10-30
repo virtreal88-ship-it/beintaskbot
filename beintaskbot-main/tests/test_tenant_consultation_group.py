@@ -54,9 +54,10 @@ def test_one_shot_receipt_and_reply_that_arrives_during_send(db,monkeypatch):
         assert flow.record_group_reply(cur,A,CA,'120363411822115408@g.us','inbound-3','Synthetic reply','PROVIDER_123') is None
     db.commit()
     assert flow.read(PROFILE,consult)['replies'][0]['body']=='Synthetic reply'
-    assert flow.save_draft(PROFILE,consult,{'message_id':'inbound-1','draft':'We will check this.'})['customer_message_sent'] is False
+    assert flow.save_draft(PROFILE,consult,{'message_id':'inbound-1','draft':'We will check this.','expected_revision':0})['customer_message_sent'] is False
     assert flow.read(PROFILE,consult)['customer_draft']=='We will check this.'
-    with pytest.raises(TenantLinearError):flow.save_draft(PROFILE,consult,{'message_id':'not-this-reply','draft':'wrong'})
+    with pytest.raises(TenantLinearError):flow.save_draft(PROFILE,consult,{'message_id':'not-this-reply','draft':'wrong','expected_revision':1})
+    with pytest.raises(TenantLinearError):flow.save_draft(PROFILE,consult,{'message_id':'inbound-1','draft':'stale','expected_revision':0})
     with pytest.raises(TenantLinearError):flow.read({'tenant_id':B,'telegram_id':22},consult)
 
 def test_unknown_delivery_is_never_retried_and_invalid_media_is_rejected(db,monkeypatch):
@@ -130,7 +131,7 @@ def test_followup_keeps_same_consultation_and_only_explicit_new_sources(db,monke
     flow.prepare(PROFILE,consult,first);flow.dispatch(PROFILE,consult,first['request_id'])
     with db.cursor() as cur:assert flow.record_group_reply(cur,A,CA,GROUP,'need-info','CASE:'+consult+' Please ask for a current code.')==consult
     db.commit()
-    flow.save_draft(PROFILE,consult,{'message_id':'need-info','draft':'Please send your current code when ready.'})
+    flow.save_draft(PROFILE,consult,{'message_id':'need-info','draft':'Please send your current code when ready.','expected_revision':0})
     new_image=str(uuid.uuid4());db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type)
       VALUES(%s::uuid,%s::uuid,41,'connect:new-image',%s,'incoming','image')""",(new_image,A,'connect:'+CA));db.commit()
     second=request();second.update(summary='Customer provided the requested image.',attachment_ids=[new_image])
@@ -170,7 +171,7 @@ def test_http_owner_prepare_send_and_draft_never_send_customer_message(db,monkey
             assert len(sent)==1 and sent[0][0]==GROUP
             with db.cursor() as cur:assert flow.record_group_reply(cur,A,CA,GROUP,'inbound-1','Needs investigation','PROVIDER_123')==consult
             db.commit()
-            data={'action':'draft','message_id':'inbound-1','draft':'We are checking.','expected_tenant_id':A,'expected_user_id':11}
+            data={'action':'draft','message_id':'inbound-1','draft':'We are checking.','expected_revision':0,'expected_tenant_id':A,'expected_user_id':11}
             assert (await client.post(path,headers={'Origin':'https://crm.test'},json=data)).status==200
             content=await (await client.get(path)).json()
             assert content['result']['customer_draft']=='We are checking.' and content['result']['customer_message_sent'] is False

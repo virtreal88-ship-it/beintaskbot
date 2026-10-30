@@ -122,7 +122,7 @@
         for(const reply of state.replies||[]){
           const section=element('section'),heading=element('b',t('groupReply')),body=element('p',reply.body),draft=element('textarea'),save=element('button',t('save')),hint=element('small',t('draftNotSent'));
           draft.value=state.draft_reply_id===reply.message_id?state.customer_draft||'':'';draft.maxLength=4000;draft.setAttribute('aria-label',t('customerDraft'));save.type='button';save.dataset.groupDraft='true';
-          save.onclick=async()=>{save.disabled=true;try{await consultationApi(path,'POST',{action:'draft',message_id:reply.message_id,draft:draft.value});await display();}catch(problem){notice(problem.message);save.disabled=false;}};
+          save.onclick=async()=>{save.disabled=true;try{await consultationApi(path,'POST',{action:'draft',message_id:reply.message_id,draft:draft.value,expected_revision:state.draft_revision});await display();}catch(problem){notice(problem.message);save.disabled=false;}};
           section.append(heading,body,element('p',t('customerDraft')),draft,save,hint);host.append(section);
         }
       }

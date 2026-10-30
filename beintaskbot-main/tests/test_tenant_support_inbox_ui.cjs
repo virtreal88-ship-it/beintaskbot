@@ -106,7 +106,7 @@ function setup(fetch,url='https://crm.test/app',rights=true){
    if(url==='/api/platform/ai/internal-consultations?case_id=ticket-1')return response({consultations:[{id:cid,reason:'50 → 49,9992',created_at:'2026-10-16T00:00:00Z',status:'waiting_specialist',recipient_name:'Developer'}]});
    if(url==='/api/platform/ai/internal-consultations/groups')return response({groups:[{channel_id:'channel-a',conversation_id:gid,contact_name:'Test group'}]});
    if(url==='/api/platform/ai/internal-consultations/'+cid+'/group'){
-     if(init.method==='POST'&&body.action==='prepare'){delivery={state:'ready',request_id:body.request_id,destination:'Test group',prepared_text:body.summary,replies:[],customer_draft:''};return response({state:'ready'});}
+     if(init.method==='POST'&&body.action==='prepare'){delivery={state:'ready',request_id:body.request_id,destination:'Test group',prepared_text:body.summary,replies:[],customer_draft:'',draft_revision:0};return response({state:'ready'});}
      if(init.method==='POST'&&body.action==='send'){delivery.state='sent';delivery.replies=[{message_id:'reply-1',body:'We are investigating'}];return response({state:'sent'});}
      if(init.method==='POST'&&body.action==='draft'){delivery.draft_reply_id=body.message_id;delivery.customer_draft=body.draft;return response({customer_message_sent:false});}
      if(delivery)return response(delivery);
