@@ -12,6 +12,11 @@ from tenant_linear_policy import TenantLinearError
 GROUP='120363411822115409@g.us'
 
 def setup_case(db, monkeypatch):
+    # Handoff tests need only the canonical public origin; do not import the
+    # production runtime config and require Railway secrets in CI.
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setitem(sys.modules,'legacy_runtime_config',SimpleNamespace(CANONICAL_WEB_ORIGIN='https://crm.pro.az'))
     monkeypatch.setattr(flow, '_connect', lambda: db)
     flow.schema(db)
     db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,99,'Group',now())",(A,CA,GROUP))
