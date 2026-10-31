@@ -2,7 +2,7 @@
 import asyncio
 import uuid
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from test_tenant_support_inbox import database, db, A, B, CA, AGENT, PROFILE, manual
 import tenant_consultation_group as flow
 import tenant_support_inbox_store as tickets
@@ -92,6 +92,7 @@ def test_selected_case_message_validation_is_idempotent_for_existing_membership(
 
 def test_connect_media_download_uses_scoped_api_and_returns_bytes_without_storage_url(monkeypatch):
     import base64
+    from urllib.parse import parse_qs,urlsplit
     class Response:
         status_code=200;is_redirect=False
         headers={'Content-Type':'image/png','Content-Length':'8'}
@@ -99,12 +100,124 @@ def test_connect_media_download_uses_scoped_api_and_returns_bytes_without_storag
         def close(self):pass
     calls=[]
     monkeypatch.setattr(transport.requests,'get',lambda *args,**kwargs:(calls.append((args,kwargs)) or Response()))
-    result=transport.download_connect_message_media({'channel_id':CA,'api_key':'test-only'},'message-123','image')
+    route={'channel_id':CA,'conversation_id':'client','api_key':'test-only'}
+    result=transport.download_connect_message_media(route,'message-123','image','client')
     assert result=={'type':'image','base64':base64.b64encode(b'\x89PNG\r\n\x1a\n').decode(),
       'mimeType':'image/png','fileName':'case-attachment'}
-    assert calls[0][0][0].endswith('/v1/channels/'+CA+'/messages/message-123/media')
+    parsed=urlsplit(calls[0][0][0])
+    assert parsed.path.endswith('/v1/channels/'+CA+'/messages/message-123/media')
+    assert parse_qs(parsed.query)=={'conversationId':['client']}
     assert calls[0][1]['allow_redirects'] is False and calls[0][1]['headers']['x-api-key']=='test-only'
     assert not any('http' in str(value).lower() for value in result.values())
+
+    # Current Connect contract requires a nonempty, strict conversationId query.
+    # Never send a request if the independently verified route disagrees.
+    with pytest.raises(transport.TenantPlatformError):
+        transport.download_connect_message_media(route,'message-123','image','other-conversation')
+    with pytest.raises(transport.TenantPlatformError):
+        transport.download_connect_message_media(route,'message-123','image','')
+    assert len(calls)==1
+
+
+def test_pilot_turn_media_observation_schema_is_backward_compatible_and_source_bound():
+    import json
+    # Existing no-image model responses remain accepted for initial and old followup runs.
+    legacy={'action':'customer_question','message':'Which value do you see?','evidence_quote':''}
+    assert flow.parse_pilot_turn_decision(json.dumps(legacy))['action']=='customer_question'
+    observation={'message_id':'photo-12345','relevance':'relevant',
+      'observation':'The screenshot shows an upload error banner.'}
+    with_media={**legacy,'media_observations':[observation]}
+    assert flow.parse_pilot_turn_decision(json.dumps(with_media),expected_media_ids=['photo-12345'])['media_observations']==[observation]
+    assert flow.parse_pilot_turn_decision(json.dumps(legacy),expected_media_ids=['photo-12345']) is None
+    assert flow.parse_pilot_turn_decision(json.dumps({**with_media,'media_observations':[
+      {**observation,'message_id':'foreign-photo'}]}),expected_media_ids=['photo-12345']) is None
+    assert flow.parse_pilot_turn_decision(json.dumps({**with_media,'media_observations':[
+      {**observation,'relevance':'irrelevant'}]}),expected_media_ids=['photo-12345'])['media_observations'][0]['relevance']=='irrelevant'
+
+
+def _persistable_case_photo(db,monkeypatch):
+    import tenant_connect_images as photos
+    _consult,case=setup_case(db,monkeypatch)
+    message_id='case-photo-persist-1'
+    message_uuid=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,
+      message_type,raw,happened_at) VALUES(%s::uuid,%s::uuid,41,%s,'incoming',%s,'synthetic screenshot','image',
+      %s::jsonb,now()-interval '60 days')''',
+      (message_uuid,A,'connect:'+message_id,'connect:'+CA,'{"mediaId":"synthetic-version-1"}'))
+    db.commit()
+    with db.cursor() as cur:
+        assert tickets.record_case_message_membership(cur,A,case,CA,'client',[message_id],'persist-case-photo-test')==1
+    db.commit()
+    monkeypatch.setattr(photos,'_connect',lambda:db)
+    job={'tenant_id':A,'channel_id':CA,'conversation_id':'client','lead_id':41}
+    refs=photos._case_image_refs(job,case)
+    assert [ref['message_id'] for ref in refs]==[message_id]
+    artifact={**refs[0],'analysis_expected':True,'content_sha256':'synthetic-byte-hash'}
+    observation={'message_id':message_id,'relevance':'relevant',
+      'observation':'The screenshot shows an upload error banner.'}
+    return photos,job,case,message_id,artifact,observation
+
+
+def test_case_visual_receipt_is_persisted_only_while_exact_ticket_member_and_source_version_remain(db,monkeypatch):
+    photos,job,case,message_id,artifact,observation=_persistable_case_photo(db,monkeypatch)
+    saved=photos.persist_case_observations(job,case,[artifact],[observation],'gpt-4o-mini')
+    assert saved==[message_id]
+    receipt=db.execute('''SELECT result,provenance FROM saas_media_evidence_receipts
+      WHERE tenant_id=%s::uuid AND external_id=%s AND source_hash=%s''',
+      (A,artifact['ref']['external_id'],artifact['source_hash']))[0]
+    note=receipt['result']['case_observations'][0]
+    assert note['case_id']==case and note['message_id']==message_id and note['untrusted'] is True
+    assert note['source_hash']==artifact['source_hash']
+    assert receipt['provenance']['case_followups'][0]['model']=='gpt-4o-mini'
+
+
+@pytest.mark.parametrize('stale_change',['removed_membership','changed_source_version'])
+def test_stale_case_visual_generation_cannot_return_persisted_evidence_id(db,monkeypatch,stale_change):
+    photos,job,case,message_id,artifact,observation=_persistable_case_photo(db,monkeypatch)
+    if stale_change=='removed_membership':
+        row=db.execute('''SELECT id::text AS message_id FROM saas_crm_messages
+          WHERE tenant_id=%s::uuid AND external_id=%s''',(A,artifact['ref']['external_id']))[0]
+        db.execute('''DELETE FROM saas_support_ticket_messages WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid
+          AND message_id=%s::uuid''',(A,case,row['message_id']))
+    else:
+        db.execute('''UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND external_id=%s''',
+          ('{"mediaId":"synthetic-version-2"}',A,artifact['ref']['external_id']))
+    db.commit()
+    assert photos.persist_case_observations(job,case,[artifact],[observation],'gpt-4o-mini')==[]
+    assert photos._case_image_refs(job,case)==[] if stale_change=='removed_membership' else True
+    from tenant_ai_agent_worker import _pilot_case_media_quote_lines,_pilot_quote_supported
+    alleged=_pilot_case_media_quote_lines([observation],persisted_ids=[])
+    assert alleged==[] and not _pilot_quote_supported(observation['observation'],alleged,[])
+
+
+@pytest.mark.parametrize('stale_change',['removed_membership','changed_source_version'])
+def test_cached_case_receipt_is_revalidated_after_generation_before_it_supports_a_reply(db,monkeypatch,stale_change):
+    import tenant_media_evidence as evidence
+    from unittest.mock import AsyncMock,patch
+    photos,job,case,message_id,artifact,observation=_persistable_case_photo(db,monkeypatch)
+    assert photos.persist_case_observations(job,case,[artifact],[observation],'gpt-4o-mini')==[message_id]
+    monkeypatch.setattr(evidence,'_connect',lambda:db)
+    download=AsyncMock()
+    with patch.object(photos,'supports_images',return_value=True),\
+         patch.object(photos,'generation_budget_available',return_value=True),\
+         patch.object(photos,'download_media',new=download):
+        _images,_analyzed,cached_artifacts=asyncio.run(
+          photos.prepare_case(job,{'synthetic':'reservation'},case,'gpt-4o-mini',Mock()))
+    assert len(cached_artifacts)==1
+    assert cached_artifacts[0]['cached_observation']['source']=='case_receipt'
+    assert photos.validate_cached_case_observations(job,case,cached_artifacts)==[message_id]
+    download.assert_not_awaited()
+
+    if stale_change=='removed_membership':
+        row=db.execute('''SELECT id::text AS message_id FROM saas_crm_messages
+          WHERE tenant_id=%s::uuid AND external_id=%s''',(A,artifact['ref']['external_id']))[0]
+        db.execute('''DELETE FROM saas_support_ticket_messages WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid
+          AND message_id=%s::uuid''',(A,case,row['message_id']))
+    else:
+        db.execute('''UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND external_id=%s''',
+          ('{"mediaId":"synthetic-version-2"}',A,artifact['ref']['external_id']))
+    db.commit()
+    assert photos.validate_cached_case_observations(job,case,cached_artifacts)==[]
 
 
 def test_actual_pilot_handoff_publishes_linked_case_photo_without_eager_download(db,monkeypatch):
@@ -122,7 +235,7 @@ def test_actual_pilot_handoff_publishes_linked_case_photo_without_eager_download
     monkeypatch.setattr(transport,'connect_route',lambda cur,tenant,lead_id,**kw:
       {'api_key':'synthetic','channel_id':CA,'conversation_id':GROUP if int(lead_id)==99 else 'client'})
     media={'type':'image','base64':'bG9jYWwtdGVzdC1pbWFnZS1ieXRlcw==','mimeType':'image/png','fileName':'case-attachment'}
-    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:media)
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind,conversation_id:media)
     sent=[]
     def send(route,body,request_id,**kwargs):
         sent.append({'body':body,'request_id':request_id,'media':kwargs.get('media')})
@@ -141,7 +254,7 @@ def test_actual_pilot_handoff_publishes_linked_case_photo_without_eager_download
     unrelated=str(uuid.uuid4())
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'connect:unrelated-photo','incoming',%s,'image',now()-interval '2 seconds')",(unrelated,A,'connect:'+CA));db.commit()
     fetched=[]
-    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:(fetched.append(message_id) or media))
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind,conversation_id:(fetched.append(message_id) or media))
     result=flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')
     assert result['state']=='sent' and len(sent)==1, result
     assert sent[0]['media'] is None and sent[0]['request_id']!='' and fetched==[]
@@ -1006,7 +1119,7 @@ def test_ai_handoff_delivery_links_case_media_without_eager_download(db,monkeypa
     db.commit();sent=[]
     media={'type':'image','base64':'c3ludGhldGljLWltYWdl','mimeType':'image/png','fileName':'case-attachment'}
     fetched=[]
-    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:(fetched.append(message_id) or media))
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind,conversation_id:(fetched.append(message_id) or media))
     def send(route,body,key,**kwargs):
         sent.append((route['conversation_id'],body,key,kwargs.get('media')))
         return {'message_id':'pilot-handoff','external_message_id':'PILOT_HANDOFF'}

@@ -14,7 +14,7 @@ import re
 import secrets
 import uuid
 from contextlib import contextmanager
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from tenant_ai_dialog_scope import lock_dialog
 from datetime import datetime, timezone
 
@@ -1143,7 +1143,8 @@ def send_group_with_receipt(route: dict, text: str, request_id: str, *, media: d
     return {'message_id':str(result['id']),'external_message_id':external}
 
 
-def download_connect_message_media(route: dict, message_id: str, expected_type: str) -> dict:
+def download_connect_message_media(route: dict, message_id: str, expected_type: str,
+                                   conversation_id: str) -> dict:
     """Fetch one tenant/channel-scoped Connect attachment without exposing its URL."""
     limits={'image':8*1024*1024,'audio':8*1024*1024,'video':8*1024*1024,'document':5*1024*1024}
     allowed={
@@ -1152,10 +1153,15 @@ def download_connect_message_media(route: dict, message_id: str, expected_type: 
       'video':{'video/mp4'},
       'document':{'application/pdf','text/plain','application/vnd.openxmlformats-officedocument.wordprocessingml.document'},
     }
-    if expected_type not in limits or not isinstance(message_id,str) or not message_id or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',message_id):
+    if (expected_type not in limits or not isinstance(message_id,str) or not message_id
+            or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',message_id)
+            or not isinstance(conversation_id,str) or not conversation_id or len(conversation_id)>200
+            or any(ord(char)<33 for char in conversation_id)
+            or route.get('conversation_id')!=conversation_id):
         raise TenantPlatformError('Connect əlavəsi düzgün deyil.')
     try:
-        response=requests.get(CONNECT_URL+'/v1/channels/'+str(route['channel_id'])+'/messages/'+message_id+'/media',
+        url=CONNECT_URL+'/v1/channels/'+str(route['channel_id'])+'/messages/'+message_id+'/media?'+urlencode({'conversationId':conversation_id})
+        response=requests.get(url,
           headers={'x-api-key':route['api_key'],'Accept':'application/octet-stream','Accept-Encoding':'identity'},
           timeout=(5,20),allow_redirects=False,stream=True)
     except requests.RequestException as exc:
