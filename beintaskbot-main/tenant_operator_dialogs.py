@@ -101,8 +101,38 @@ def _media_filename(raw):
     return ''
 
 
+def _attach_saved_audio_transcripts(cur, tenant, rows):
+    """Read only exact-version ASR evidence for already-authorized message rows."""
+    from tenant_media_evidence import media_version, source_hash, _body_hash
+    audio=[row for row in rows if str(row.get('message_type') or '').lower() in {'audio','voice','voice_message','ptt'}
+           and str(row.get('channel') or '').startswith('connect:') and row.get('external_id')]
+    if not audio:return
+    cur.execute("SELECT to_regclass('public.saas_media_evidence_receipts') AS relation")
+    if not (cur.fetchone() or {}).get('relation'):return
+    keys=[]
+    for row in audio:
+        channel=str(row['channel']).removeprefix('connect:');kind=str(row['message_type']).lower()
+        ref={'external_id':row['external_id'],'body_hash':_body_hash(row.get('body')),
+             'media_kind':kind,'media_version':media_version(row.get('raw'))}
+        keys.append((channel,str(row['external_id']),source_hash(ref),kind))
+    placeholders=','.join(['(%s::uuid,%s,%s,%s)']*len(keys))
+    cur.execute("""SELECT channel_id::text AS channel_id,external_id,source_hash,media_kind,status,result
+      FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid
+        AND (channel_id,external_id,source_hash,media_kind) IN ("""+placeholders+")",
+      (tenant,*[value for key in keys for value in key]))
+    receipts={(str(r['channel_id']),str(r['external_id']),str(r['source_hash']),str(r['media_kind'])):r for r in cur.fetchall()}
+    for row,key in zip(audio,keys):
+        receipt=receipts.get(key) or {};result=receipt.get('result') if isinstance(receipt.get('result'),dict) else {}
+        text=result.get('transcript')
+        if receipt.get('status')=='error':row['_saved_audio_state']='failed'
+        if receipt.get('status')=='processed' and isinstance(text,str) and text.strip():
+            row['_saved_audio_transcript']=text
+
+
 def _message(item, *, group=False, participant_names=None, employee_participants=None, contact_name=''):
     value = dict(item)
+    saved_audio_transcript=value.pop('_saved_audio_transcript',None)
+    saved_audio_state=value.pop('_saved_audio_state',None)
     raw = value.pop('raw', None) or {}
     direction = str(value.get('direction') or '')
     if direction not in {'incoming', 'outgoing'}:
@@ -154,15 +184,16 @@ def _message(item, *, group=False, participant_names=None, employee_participants
                 value[target]=identifier_value
         # No provider URL or raw webhook payload crosses the browser boundary.
         value['media_url'] = ''
-        if value.get('message_type') in {'image','audio','voice','video','document'}:
+        if value.get('message_type') in {'image','audio','voice','voice_message','ptt','video','document'}:
             filename=_media_filename(raw)
             if filename:value['media_filename']=filename
             size=_media_size(raw)
             if size is not None:value['media_size_bytes']=size
         transcript = raw.get('voice_transcription', {}) if isinstance(raw, dict) else {}
-        if value.get('message_type') in {'image','audio','voice','video','document'}:
+        if value.get('message_type') in {'image','audio','voice','voice_message','ptt','video','document'}:
             state=transcript.get('status') if isinstance(transcript,dict) else None
             value['analysis_state']=state if state in {'completed','pending','processing','failed','disabled','not_required'} else 'not_requested'
+            if value['analysis_state']=='not_requested' and saved_audio_state:value['analysis_state']=saved_audio_state
             code=transcript.get('error_code') if isinstance(transcript,dict) else None
             if state=='failed':
                 if code in {'voice_media_unavailable','voice_download_timeout'}:
@@ -171,10 +202,12 @@ def _message(item, *, group=False, participant_names=None, employee_participants
                     value['analysis_state']='unsupported'
                 elif code in {'voice_transcription_failed','voice_model_unavailable'}:
                     value['analysis_state']='transcription_unavailable'
-        if (value.get('message_type') in {'audio','voice'} and isinstance(transcript, dict)
-                and transcript.get('status') == 'completed' and value.get('body')):
-            value['has_transcription'] = True
-        if value.get('message_type') in {'audio','voice'}:
+        if value.get('message_type') in {'audio','voice','voice_message','ptt'}:
+            text=(str(value.get('body') or '') if isinstance(transcript,dict) and transcript.get('status')=='completed' else '') or saved_audio_transcript
+            if isinstance(text,str) and text.strip():
+                value['audio_transcript']=text
+                value['has_transcription']=True
+        if value.get('message_type') in {'audio','voice','voice_message','ptt'}:
             duration = _audio_duration(raw)
             if duration is not None:
                 value['duration_seconds'] = duration
@@ -701,6 +734,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     for message in messages:
                         message['source_conversation_id']=by_lead[int(message['source_lead_id'])]
                         message['source_channel_id']=channel
+            if provider=='connect':_attach_saved_audio_transcripts(cur,tenant,messages[:50])
             captured_group=[]
             if provider=='connect' and group_jid(conversation):
                 # A displayed group event can be represented by another channel's
