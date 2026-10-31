@@ -13,7 +13,8 @@ _UNVERIFIED_OPERATION_CLAIM = re.compile(
     r'\b(?:зарегистрирован[аоы]?|передан[аоы]?|отправлен[аоы]?|подтвержд[её]нная ошибка|'
     r'исправлен[аоы]?|причина в|причину нашли)\b|'
     r'\b(?:qeyd(?:ə|e) alındı|qeydiyyata alındı|proqramçılara göndərildi|'
-    r'proqramçılara yönləndirildi|təsdiqlənmiş xətadır|səbəb budur|həll olundu)\b)', re.I)
+    r'proqramçılara yönləndirildi|(?:proqramçılara|texniki komandaya)\s+(?:ötürdüm|göndərdim|yönləndirdim)|'
+    r'təsdiqlənmiş xətadır|səbəb budur|həll olundu)\b)', re.I)
 _UNVERIFIED_CAUSAL_DIAGNOSIS = re.compile(
     r'(?:\b(?:is|was|are|were) caused by\b|\bcaused by\b|\bdue to\b|\broot cause\b|'
     r'\b(?:this|it) is (?:a|the) [\w -]{0,50}\b(?:bug|defect|error|fault)\b|'
@@ -142,12 +143,32 @@ def instructions():
     )
 
 
-def parse(value, *, lines, knowledge, media_usable=False, media_present=False, language='en'):
-    """Validate a model triage decision and its evidence before routing."""
+_FALLBACK_CLARIFICATION = {
+    'az': 'Zəhmət olmasa, söhbətdə hələ qeyd olunmayan və problemi aydınlaşdırmağa kömək edə biləcək məlumatı əlavə edin.',
+    'ru': 'Пожалуйста, добавьте сведения, которых ещё нет в переписке и которые помогут уточнить проблему.',
+    'tr': 'Lütfen konuşmada henüz yer almayan ve sorunu netleştirmeye yardımcı olabilecek bilgileri paylaşın.',
+    'en': 'Please add any details that are not already in the conversation and could help clarify the issue.',
+}
+
+PARSER_REJECTIONS = {
+    'invalid_json', 'invalid_schema', 'forbidden_claim', 'unsupported_clarification',
+    'redundant_missing_detail', 'unavailable_media_request', 'media_request_not_specific',
+    'unknown_missing_label', 'unverified_evidence', 'unverified_paraphrase',
+}
+
+
+def fallback_clarification(language='en'):
+    """Server-owned, neutral clarification; never includes model output or requests media."""
+    lang = str(language or 'en').casefold().split('-', 1)[0]
+    return _FALLBACK_CLARIFICATION.get(lang, _FALLBACK_CLARIFICATION['en'])
+
+
+def parse_with_reason(value, *, lines, knowledge, media_usable=False, media_present=False, language='en'):
+    """Validate a model triage decision and return an allowlisted rejection code."""
     try:
         item = json.loads(str(value or ''))
     except (TypeError, ValueError):
-        return None
+        return None, 'invalid_json'
     if (not isinstance(item, dict) or set(item) != {'action', 'message', 'evidence_quote', 'missing_items', 'request_media'}
             or item.get('action') not in INITIAL_ACTIONS
             or not isinstance(item.get('message'), str) or not 2 <= len(item['message'].strip()) <= 1800
@@ -155,46 +176,53 @@ def parse(value, *, lines, knowledge, media_usable=False, media_present=False, l
             or not isinstance(item.get('missing_items'), list) or len(item['missing_items']) > 4
             or any(not isinstance(entry, str) or not entry.strip() or len(entry) > 120 for entry in item['missing_items'])
             or type(item.get('request_media')) is not bool):
-        return None
+        return None, 'invalid_schema'
     action, quote = item['action'], item['evidence_quote'].strip()
     if _UNVERIFIED_ADMISSION.search(item['message']) or _UNVERIFIED_OPERATION_CLAIM.search(item['message']):
-        return None
+        return None, 'forbidden_claim'
     if _UNVERIFIED_CAUSAL_DIAGNOSIS.search(item['message']):
-        return None
+        return None, 'forbidden_claim'
     if action == 'clarify':
         if quote or (not item['missing_items'] and not item['request_media']):
-            return None
+            return None, 'unsupported_clarification'
         client_sources = [line.get('text', '') for line in (lines or [])
             if isinstance(line, dict) and line.get('speaker') == 'CLIENT']
         if any(_already_supplied(missing, client_sources) for missing in item['missing_items']):
-            return None
+            return None, 'redundant_missing_detail'
         if item['request_media'] and media_usable:
-            return None
+            return None, 'unavailable_media_request'
         if media_present and item['request_media'] and not _BETTER_MEDIA_REQUEST.search(item['message']):
-            return None
+            return None, 'media_request_not_specific'
         if media_usable and _MEDIA_REQUEST.search(item['message']):
-            return None
+            return None, 'unavailable_media_request'
         message = _render_clarification(item['missing_items'], item['request_media'], media_present, language)
         if not message:
-            return None
+            return None, 'unknown_missing_label'
     else:
         if item['missing_items'] or item['request_media']:
-            return None
+            return None, 'unsupported_clarification'
         if len(quote) < 8:
-            return None
+            return None, 'unverified_evidence'
         norm = lambda text: ' '.join(str(text or '').casefold().split())
         case_sources = [line.get('text', '') for line in (lines or [])
             if isinstance(line, dict) and line.get('speaker') == 'CLIENT']
         kb_sources = [row.get('content', '') for row in (knowledge or []) if isinstance(row, dict)]
         if not any(norm(quote) in norm(source) for source in case_sources + kb_sources):
-            return None
+            return None, 'unverified_evidence'
         if action == 'consult_developer' and not any(norm(quote) in norm(source) for source in case_sources):
-            return None
+            return None, 'unverified_evidence'
         if action == 'reply' and not any(norm(item['message']) in norm(source)
                 for source in case_sources + kb_sources):
             # A quote alone does not substantiate an unrelated answer. Initial
             # factual replies must be directly present in trusted evidence.
-            return None
+            return None, 'unverified_paraphrase'
         message = item['message'].strip()
-    return {'action': action, 'message': message, 'evidence_quote': quote,
-        'missing_items': item['missing_items'], 'request_media': item['request_media']}
+    return ({'action': action, 'message': message, 'evidence_quote': quote,
+        'missing_items': item['missing_items'], 'request_media': item['request_media']}, '')
+
+
+def parse(value, *, lines, knowledge, media_usable=False, media_present=False, language='en'):
+    """Backward-compatible decision-only parser."""
+    decision, _reason = parse_with_reason(value, lines=lines, knowledge=knowledge,
+        media_usable=media_usable, media_present=media_present, language=language)
+    return decision

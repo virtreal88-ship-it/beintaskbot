@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from tenant_ai_pilot_initial import instructions, parse
+from tenant_ai_pilot_initial import instructions, parse, parse_with_reason, fallback_clarification
 
 
 def decision(action, message, quote='', missing_items=None, request_media=False):
@@ -42,13 +42,13 @@ def test_similar_kb_quote_cannot_be_repeated_as_a_diagnosis_for_this_case():
         knowledge=[{'source_id': 'similar-case', 'content': kb_text}]) is None
 
 
-def test_clarification_discards_model_authored_delivery_claim_and_renders_safe_question():
+def test_clarification_rejects_model_authored_delivery_claim_before_safe_fallback():
     lines = [{'speaker': 'CLIENT', 'text': 'Alış 1 qutu 50 AZN, ekranda 49,9992 göstərilir.'}]
-    result = parse(decision('clarify', 'Müraciətinizi proqramçılara ötürdüm. Hansı versiyadan istifadə edirsiniz?',
+    result, reason = parse_with_reason(decision('clarify', 'Müraciətinizi proqramçılara ötürdüm. Hansı versiyadan istifadə edirsiniz?',
         missing_items=['version']), lines=lines, knowledge=[], language='az')
-    assert result and result['action'] == 'clarify'
-    assert result['message'] == 'Zəhmət olmasa, istifadə etdiyiniz proqramın versiyasını yaza bilərsiniz?'
-    assert 'ötürdüm' not in result['message']
+    assert result is None and reason == 'forbidden_claim'
+    safe = fallback_clarification('az')
+    assert 'ötürdüm' not in safe and 'proqramçılara' not in safe
 
 
 def test_supplied_version_is_not_requested_again():
@@ -117,3 +117,33 @@ def test_initial_prompt_forbids_false_registration_and_resolution_claims():
     for claim in ('registered', 'escalated', 'sent', 'fixed', 'resolved'):
         assert claim in prompt
     assert 'never proof' in prompt
+
+
+@pytest.mark.parametrize('raw,lines,knowledge,expected', [
+    ('not json', [], [], 'invalid_json'),
+    ('{"action":"reply"}', [], [], 'invalid_schema'),
+    (decision('clarify', 'Müraciətinizi proqramçılara ötürdüm. Hansı versiyadan istifadə edirsiniz?',
+        missing_items=['version']), [], [], 'forbidden_claim'),
+    (decision('clarify', 'Which version?', missing_items=['version']),
+        [{'speaker':'CLIENT','text':'I use version 2.4.1.'}], [], 'redundant_missing_detail'),
+    (decision('clarify', 'What is missing?', missing_items=['mystery-field']), [], [], 'unknown_missing_label'),
+    (decision('reply', 'The mismatch is caused by a rounding defect.',
+        'The mismatch is caused by a rounding defect.'), [],
+        [{'content':'The mismatch is caused by a rounding defect.'}], 'forbidden_claim'),
+    (decision('reply', 'Rounding can change the displayed total.',
+        'A rounding issue may affect the display.'), [],
+        [{'content':'A rounding issue may affect the display.'}], 'unverified_paraphrase'),
+])
+def test_parser_returns_typed_allowlisted_rejection_reason(raw, lines, knowledge, expected):
+    _decision, reason = parse_with_reason(raw, lines=lines, knowledge=knowledge)
+    assert reason == expected
+
+
+@pytest.mark.parametrize('language', ['az', 'ru', 'tr', 'en', 'auto'])
+def test_fallback_clarification_is_server_owned_and_never_requests_media(language):
+    text = fallback_clarification(language)
+    assert text
+    assert 'screenshot' not in text.casefold()
+    assert 'video' not in text.casefold()
+    assert 'sent' not in text.casefold()
+    assert 'göndərildi' not in text.casefold()
