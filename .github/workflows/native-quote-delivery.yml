@@ -1,0 +1,35 @@
+name: Native quoted delivery regression
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-quote-delivery.yml'
+      - 'beintaskbot-main/tenant_chat_send*.py'
+      - 'beintaskbot-main/tenant_connect_transport.py'
+      - 'beintaskbot-main/docs/tenant-chat-send.js'
+      - 'beintaskbot-main/tests/test_native_quote_delivery*'
+      - 'beintaskbot-main/tests/test_tenant_native_reply*'
+permissions:
+  contents: read
+jobs:
+  quoted-delivery:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      PYTHONPATH: .:tests
+      SUPPORT_CASES_JSDOM: ../.support-test-deps/node_modules/jsdom
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt pytest
+      - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0
+      - run: python -m pytest -q tests/test_native_quote_delivery_status.py tests/test_tenant_native_reply.py tests/test_tenant_chat_send.py tests/test_tenant_chat_send_store.py tests/test_tenant_chat_send_api.py
+      - run: node tests/test_native_quote_delivery_ui.cjs
+      - run: node tests/test_tenant_native_reply_ui.cjs
