@@ -47,16 +47,21 @@ def _pilot_quote_supported(quote,lines,knowledge):
 
 
 def _pilot_case_message_ids(context, quote, source_external_id):
-    """Select the bounded dialogue episode from the exact complaint to this inbound."""
+    """Select the bounded current-session episode from its exact complaint quote."""
     quote=str(quote or '').strip();source_external_id=str(source_external_id or '').strip()
     if len(quote)<8 or not source_external_id:return []
-    source_rows=[row for row in (context or []) if isinstance(row,dict)
+    # _context_for_source may retain a few messages from a previous session to
+    # help the agent answer. That context is not CASE membership: never publish
+    # an older-session quote or any intervening messages/media from it.
+    current_rows=[row for row in (context or []) if isinstance(row,dict)
+      and row.get('segment')!='earlier']
+    source_rows=[row for row in current_rows if isinstance(row,dict)
       and str(row.get('external_id') or '')==source_external_id and row.get('direction')=='incoming']
-    quote_rows=[row for row in (context or []) if isinstance(row,dict)
+    quote_rows=[row for row in current_rows if isinstance(row,dict)
       and row.get('direction')=='incoming' and str(row.get('message_type') or 'text').casefold()=='text'
       and quote in str(row.get('body') or '')]
     if len(source_rows)!=1 or len(quote_rows)!=1:return []
-    ordered=[row for _,row in sorted(enumerate(context or []),
+    ordered=[row for _,row in sorted(enumerate(current_rows),
       key=lambda entry:(entry[1].get('happened_at') or '',entry[0]))]
     start=next((i for i,row in enumerate(ordered) if row is quote_rows[0]),None)
     end=next((i for i,row in enumerate(ordered) if row is source_rows[0]),None)

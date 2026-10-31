@@ -62,6 +62,26 @@ def test_worker_case_membership_is_the_quote_anchored_bounded_dialogue_episode()
     assert worker._pilot_case_message_ids(rows,'The app still shows the wrong total.','unrelated-earlier')==[]
 
 
+def test_worker_does_not_publish_quote_or_media_from_previous_session():
+    import tenant_ai_agent_worker as worker
+    rows=[
+      {'external_id':'prior-complaint','direction':'incoming','message_type':'text',
+       'body':'The old invoice is wrong; it should be 50 but shows 49.9992.',
+       'happened_at':'2026-10-01T00:00:00Z'},
+      {'external_id':'prior-invoice-photo','direction':'incoming','message_type':'image',
+       'body':'','has_attachment':True,'media_url':'synthetic://unrelated-invoice',
+       'happened_at':'2026-10-01T00:05:00Z'},
+      {'external_id':'current-question','direction':'incoming','message_type':'text',
+       'body':'How do I check the new issue?',
+       'happened_at':'2026-10-02T12:00:00Z'},
+    ]
+    context,_media=worker._context_for_source(rows,'current-question')
+    assert [row['segment'] for row in context]==['earlier','earlier','current']
+    ids=worker._pilot_case_message_ids(
+      context,'The old invoice is wrong; it should be 50 but shows 49.9992.','current-question')
+    assert ids==[]
+
+
 def test_connect_media_download_uses_scoped_api_and_returns_bytes_without_storage_url(monkeypatch):
     import base64
     class Response:
