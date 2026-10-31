@@ -45,7 +45,8 @@
     const person=profile,version=generation;if(!person||busy)return;const read=++readVersion;
     try {
       const result=await api();if(!current(person,version)||read!==readVersion)return;
-      window.tenantPushConnected=await browserDeviceIsConnected(result.devices);window.tenantOperatorUpdateBrowserNotice?.();
+      const connected=await browserDeviceIsConnected(result.devices);if(!current(person,version)||read!==readVersion)return;
+      window.tenantPushConnected=connected;window.tenantOperatorUpdateBrowserNotice?.();
       list.replaceChildren();
       for(const device of result.devices||[]) {
         const row=document.createElement('div');row.className='member';
