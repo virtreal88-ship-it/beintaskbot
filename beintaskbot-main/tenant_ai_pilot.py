@@ -38,11 +38,13 @@ def schema(cur):
               AND kwid_confirmed_by IS NOT NULL AND owner_expires_at>owner_approved_at
                   AND owner_expires_at<=kwid_expires_at)))""")
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_pilot_episode_cutoffs(
-      tenant_id UUID NOT NULL,channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,
       reset_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),reset_by BIGINT NOT NULL,
       PRIMARY KEY(tenant_id,channel_id,conversation_id))''')
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_pilot_episode_resets(
-      tenant_id UUID NOT NULL,request_id UUID NOT NULL,channel_id UUID NOT NULL,
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      request_id UUID NOT NULL,channel_id UUID NOT NULL,
       conversation_id TEXT NOT NULL,reset_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
       reset_by BIGINT NOT NULL,PRIMARY KEY(tenant_id,request_id))''')
 
@@ -620,8 +622,8 @@ def reset_pilot_test_dialog(profile, data):
               ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE
               SET reset_at=clock_timestamp(),reset_by=EXCLUDED.reset_by''',
               (tenant,scope['channel_id'],scope['conversation_id'],actor))
-            cur.execute('''UPDATE saas_ai_conversation_state SET revision=revision+1,
-              updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
+            cur.execute('''UPDATE saas_ai_conversation_state SET state='active',reason='pilot_test_reset',
+              revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
               AND channel_id=%s AND conversation_id=%s''',(tenant,scope['channel_id'],scope['conversation_id']))
             cur.execute('''UPDATE saas_ai_pilot_confirmations SET kwid_confirmed_by=NULL,
               kwid_confirmed_at=NULL,kwid_expires_at=NULL,owner_approved_by=NULL,
@@ -647,7 +649,7 @@ def reset_pilot_test_dialog(profile, data):
               delivery_state='test_reset' WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
                 AND conversation_id=%s AND status<>'closed' ''',
               (tenant,scope['channel_id'],scope['conversation_id']))
-            cur.execute('''UPDATE saas_support_tickets SET status='resolved',resolved_at=COALESCE(resolved_at,now()),
+            cur.execute('''UPDATE saas_support_tickets SET status='waiting',resolved_at=NULL,
               completion_outcome='test_stopped',completion_note='Pilot test episode reset; not a customer resolution.',
               knowledge_candidate_requested=FALSE,summary_state='unavailable',updated_at=now()
               WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s

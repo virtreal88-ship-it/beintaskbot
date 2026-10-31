@@ -42,7 +42,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('instructor/jobs', ('GET','POST')), ('instructor/jobs/{job_id}', ('GET','POST')),
     ('instructor/jobs/{job_id}/artifacts/{artifact_id}', ('GET',)),
     ('agents/settings', ('GET','PATCH')),
-    ('agents/pilot-preflight', ('GET',)), ('agents/pilot/resume', ('POST',)), ('agents/pilot/kwid-confirmation', ('POST',)),
+    ('agents/pilot-preflight', ('GET',)), ('agents/pilot/resume', ('POST',)), ('agents/pilot/reset', ('POST',)), ('agents/pilot/kwid-confirmation', ('POST',)),
     ('agents/pilot/owner-approval', ('POST',)),
     ('knowledge/deduplication', ('GET','POST')),
     ('administrator/approvals', ('GET','POST')),

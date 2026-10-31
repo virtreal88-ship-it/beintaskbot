@@ -80,7 +80,8 @@ def create_in_transaction(cur, tenant, channel, conversation, reason, event_key,
     ticket_id = str(uuid.uuid4())
     cur.execute('''INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,reason,description,status,created_by)
       VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s)
-      ON CONFLICT(tenant_id,channel_id,conversation_id) WHERE status<>'resolved' DO UPDATE
+      ON CONFLICT(tenant_id,channel_id,conversation_id)
+      WHERE status<>'resolved' AND completion_outcome<>'test_stopped' DO UPDATE
         SET source=CASE WHEN EXCLUDED.source='ai_handoff' THEN 'ai_handoff' ELSE saas_support_tickets.source END,
         reason=CASE WHEN EXCLUDED.source='ai_handoff' THEN EXCLUDED.reason ELSE saas_support_tickets.reason END,
         status=CASE WHEN EXCLUDED.source='ai_handoff' AND saas_support_tickets.status='new' THEN 'waiting' ELSE saas_support_tickets.status END
