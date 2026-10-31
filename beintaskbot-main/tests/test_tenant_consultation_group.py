@@ -31,13 +31,9 @@ def request():
 
 
 def test_case_group_body_uses_prior_case_text_but_never_synthetic_media_as_observation():
-    body=flow._case_group_body('case-123','ticket-123','',{'case_lines':[
-      {'speaker':'CLIENT','text':'The upload still shows the wrong amount.'},
-      {'speaker':'CLIENT','text':'[Image supplied for analysis: attachment-456]'},
-      {'speaker':'CLIENT','text':'50.00 expected; display says 49.99.'}]})
+    body=flow._case_group_body('case-123','ticket-123','',{'query':'The upload still shows the wrong amount.'})
     assert 'The upload still shows the wrong amount.' in body
-    assert '50.00 expected; display says 49.99.' in body
-    assert 'Image supplied for analysis' not in body
+    assert '50.00 expected; display says 49.99.' not in body
     assert '49.9992' not in body
     assert 'Yoxlanılmayıb' in body and 'CASE:case-123' in body
 
@@ -78,20 +74,22 @@ def test_actual_pilot_handoff_sends_exact_case_photo_bytes_with_prior_complaint(
         return {'message_id':'group-media-message','external_message_id':'GROUP_MEDIA_REF'}
     monkeypatch.setattr(transport,'send_group_with_receipt',send)
     job={'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client','agent_id':AGENT,'event_fingerprint':event_fingerprint}
-    lines=[{'speaker':'CLIENT','text':'The upload still shows the wrong amount.'},
-      {'speaker':'CLIENT','text':'[Image supplied for analysis: attachment-456]'}]
+    source_at=db.execute("SELECT COALESCE(happened_at,created_at) AS at FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,))[0]['at']
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'connect:prior-case-complaint','incoming',%s,'The purchase receipt total should be 50.00.','text',%s::timestamptz-interval '1 minute')",(str(uuid.uuid4()),A,'connect:'+CA,source_at));db.commit()
+    db.execute("UPDATE saas_internal_consultations SET evidence=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      ('{"query":"The purchase receipt total should be 50.00."}',A,consult));db.commit()
     unrelated=str(uuid.uuid4())
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'connect:unrelated-photo','incoming',%s,'image',now()-interval '2 seconds')",(unrelated,A,'connect:'+CA));db.commit()
     fetched=[]
     monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:(fetched.append(message_id) or media))
-    result=flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message',case_lines=lines)
+    result=flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')
     assert result['state']=='sent' and len(sent)==1, result
     assert sent[0]['media']==media and sent[0]['request_id']!='' and fetched==['customer-message']
-    assert 'The upload still shows the wrong amount.' in sent[0]['body']
+    assert 'The purchase receipt total should be 50.00.' in sent[0]['body']
     assert 'Yoxlanılmayıb' in sent[0]['body']
     assert 'Image supplied for analysis' not in sent[0]['body']
     assert db.execute("SELECT state,provider_message_id FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]=={'state':'sent','provider_message_id':'GROUP_MEDIA_REF'}
-    assert flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message',case_lines=lines)['state']=='sent'
+    assert flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')['state']=='sent'
     assert len(sent)==1 and fetched==['customer-message']
 
 
@@ -133,8 +131,9 @@ def test_unavailable_case_attachment_is_reported_and_text_fallback_has_no_false_
 def test_developer_followup_includes_saved_case_facts_without_resending_the_original_photo(db,monkeypatch):
     consult,case=setup_case(db,monkeypatch)
     _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch)
+    db.execute("UPDATE saas_crm_messages SET body='The purchase receipt total does not match.' WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,))
     db.execute("UPDATE saas_internal_consultations SET evidence=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
-      ('{"case_lines":[{"speaker":"CLIENT","text":"The purchase receipt total does not match."},{"speaker":"CLIENT","text":"[Image supplied for analysis: photo-1]"}]}',A,consult));db.commit()
+      ('{"source_external_id":"customer-message"}',A,consult));db.commit()
     sent=[]
     monkeypatch.setattr(transport,'send_group_with_receipt',lambda route,body,key,**kw:
       (sent.append({'body':body,'media':kw.get('media')}) or {'message_id':'followup-case-message','external_message_id':'FOLLOWUP_CASE_REF'}))

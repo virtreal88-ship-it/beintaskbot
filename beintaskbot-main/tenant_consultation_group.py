@@ -723,22 +723,14 @@ def parse_pilot_turn_decision(value):
 
 
 def _case_group_body(consultation_id,case_id,summary,evidence,media_note='',turn_context=False):
-    """Render bounded stored case evidence; never treat synthetic media markers as observations."""
-    lines=(evidence or {}).get('case_lines') if isinstance(evidence,dict) else []
-    excerpts=[]
-    if isinstance(lines,list):
-        for item in lines[-12:]:
-            if not isinstance(item,dict) or str(item.get('speaker') or '').casefold() not in {'client','customer'}:continue
-            text=' '.join(str(item.get('text') or '').split())
-            text=re.split(r'\s+\[(?:image supplied|attachment unavailable|untrusted document|untrusted sampled video|unverified video|audio transcript|audio unavailable|video was not analyzed)',text,1,flags=re.I)[0].strip()
-            if not text or re.match(r'^\[(?:image|video|audio|attachment)\b',text,re.I):continue
-            excerpts.append('Müştəri: '+text[:500])
+    """Render the parser-selected exact client quote, never a generic history slice."""
     summary=' '.join(_redact_remote_password(str(summary or '')).split())[:1000]
+    evidence=evidence if isinstance(evidence,dict) else {}
+    case_summary=' '.join(_redact_remote_password(str(evidence.get('query') or '')).split())[:500]
+    if re.match(r'^\[(?:image|video|audio|attachment)\b',case_summary,re.I):case_summary=''
     parts=['CASE:'+consultation_id,'Müştərinin yazışması üzrə məlum məlumatlar:']
-    if excerpts:
-        parts.extend(excerpts[-6:])
-        parts.append('Bu yaxın tarixli müştəri mesajlarının bir-biri ilə və cari əlavə ilə əlaqəsi ayrıca təsdiqlənməyib.')
-    elif summary:parts.append('Cari müraciət: '+summary)
+    if case_summary:parts.append('Müştərinin seçilmiş mesajından dəqiq sitat: '+case_summary)
+    elif not turn_context and summary:parts.append('Cari müraciət: '+summary)
     else:parts.append('Müştəri müraciəti yazışmadan təsdiqlənməyib; əlavə məlumat tələb olunur.')
     if turn_context and summary:
         parts.append('Cari mütəxəssis sualına cavab və ya CASE yenilənməsi: '+summary)
@@ -749,7 +741,7 @@ def _case_group_body(consultation_id,case_id,summary,evidence,media_note='',turn
     return '\n'.join(parts)
 
 
-def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_external_id='',*,turn_id=None,case_lines=None):
+def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_external_id='',*,turn_id=None):
     """One-shot AI handoff delivery to the configured developer test group."""
     from tenant_ai_pilot import manual_live_job,configured_group_scope,configured_scope
     from tenant_ai_dialog_scope import lock_dialog
@@ -770,7 +762,7 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
         schema(conn)
         with conn.cursor() as cur:
             cur.execute('''SELECT c.case_id::text AS case_id,c.channel_id::text AS channel_id,
-                c.conversation_id,c.status,t.status AS ticket_status
+              c.conversation_id,c.status,c.evidence,t.status AS ticket_status
               FROM saas_internal_consultations c JOIN saas_support_tickets t
                 ON t.tenant_id=c.tenant_id AND t.id=c.case_id
               WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid FOR SHARE OF c,t''',(tenant,consultation_id))
@@ -821,10 +813,7 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
             source_media=cur.fetchone() if source_external_id and not turn_id else None
             if source_media:
                 media_request_id=str(uuid.uuid5(uuid.NAMESPACE_URL,'pilot-case-media:'+tenant+':'+consult['case_id']+':'+target['channel_id']+':'+target['conversation_id']+':'+str(source_external_id)))
-            evidence={'case_lines':case_lines if isinstance(case_lines,list) else []}
-            cur.execute('SELECT evidence FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,consultation_id))
-            stored_evidence=cur.fetchone() or {}
-            merged_evidence=dict(stored_evidence.get('evidence') or {});merged_evidence['case_lines']=evidence['case_lines'] or merged_evidence.get('case_lines',[])
+            merged_evidence=consult.get('evidence') if isinstance(consult.get('evidence'),dict) else {}
             body=_case_group_body(consultation_id,consult['case_id'],safe_summary,merged_evidence,turn_context=bool(turn_id))
             if len(body.encode('utf-16-le'))//2>4096:
                 return {'state':'blocked','reason':'pilot_group_message_too_long'}
