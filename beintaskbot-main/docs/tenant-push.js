@@ -12,7 +12,7 @@
     startFailed:['Служба уведомлений не запустилась. Повторите попытку.','Push xidməti başlamadı. Yenidən yoxlayın.','Notification service did not start. Try again.'],
     denied:['Уведомления запрещены. Откройте настройки сайта рядом с адресом Chrome и разрешите уведомления.','Brauzerdə bildiriş icazəsi verilməyib. Chrome ünvanının yanındakı sayt ayarlarında bildirişlərə icazə verin.','Notifications are blocked. Open site settings next to the Chrome address and allow notifications.'],
     connected:['Устройство подключено. Типы уведомлений выбираются в настройках сотрудников.','Cihaz qoşuldu. Bildiriş növləri əməkdaş ayarlarından seçilir.','Device connected. Select event categories in employee settings.'],
-    wait:['Дождитесь завершения настройки уведомлений.','Push əməliyyatı bitsin, sonra çıxış edin.','Wait for notification setup to finish.'],checking:['Проверяем подключение…','Qoşulma yoxlanılır…','Checking connection…']
+    wait:['Дождитесь завершения настройки уведомлений.','Push əməliyyatı bitsin, sonra çıxış edin.','Wait for notification setup to finish.'],checking:['Проверяем подключение…','Qoşulma yoxlanılır…','Checking connection…'],retry:['Проверить снова','Yenidən yoxla','Retry check']
   };
   const text=key=>words[key][({ru:0,az:1,en:2})[window.tenantI18n?.language||document.documentElement?.lang]??1];
   const panel=document.createElement('article');panel.className='panel';
@@ -73,7 +73,8 @@
     return reg;
   }
   button.onclick=async()=>{
-    if(busy||!profile||!supported())return;
+    if(busy||!supported())return;
+    if(!profile){await loadProfile();return;}
     const person=profile,version=generation;busy=true;readVersion++;button.disabled=true;button.textContent=text('connecting');
     try {
       if(Notification.permission==='denied'||await Notification.requestPermission()!=='granted')throw Error(text('denied'));
@@ -98,8 +99,9 @@
     if(!reg||new URL(reg.scope).pathname!=='/app/')return;
     const sub=await reg.pushManager.getSubscription();if(sub)await sub.unsubscribe();
   };
-  function apply(data){profile=data.member;generation++;window.tenantPushConnected=false;window.tenantPushConnectionState='loading';window.tenantOperatorUpdateBrowserNotice?.();list.replaceChildren();status.textContent='';button.disabled=busy||!supported();refresh();}
-  let received=false;
-  document.addEventListener('tenant-profile',event=>{received=true;apply(event.detail);});
-  fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(response=>response.json()).then(data=>{if(data.success&&!received)apply(data);}).catch(()=>{});
+  let received=false,profileReadVersion=0;
+  function apply(data){profile=data.member;generation++;window.tenantPushConnected=false;window.tenantPushConnectionState='loading';window.tenantOperatorUpdateBrowserNotice?.();list.replaceChildren();status.textContent='';button.textContent=text('connect');button.disabled=busy||!supported();refresh();}
+  async function loadProfile(){const read=++profileReadVersion;window.tenantPushConnectionState='loading';window.tenantOperatorUpdateBrowserNotice?.();try{const response=await fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}),data=await response.json();if(received||read!==profileReadVersion)return false;if(response.ok===false||!data.success||!data.member)throw Error(text('failed'));apply(data);return true;}catch{if(!received&&read===profileReadVersion){window.tenantPushConnectionState='error';window.tenantOperatorUpdateBrowserNotice?.();button.textContent=text('retry');button.disabled=!supported();status.textContent=text('failed');}return false;}}
+  document.addEventListener('tenant-profile',event=>{received=true;profileReadVersion++;apply(event.detail);});
+  void loadProfile();
 })();

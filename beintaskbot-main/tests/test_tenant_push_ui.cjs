@@ -7,8 +7,8 @@ class Element {
 }
 const source=fs.readFileSync(path.join(__dirname,'../docs/tenant-push.js'),'utf8');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-function setup(deferDigest=false){
- const grid=new Element(),listeners={},calls=[],digestResolvers=[],state={permission:'granted',requests:0,subscribeCalls:0,unsubscribed:0,devices:[],postError:false,deferDigest,noticeUpdates:0};
+function setup(deferDigest=false,profileFailures=0){
+ const grid=new Element(),listeners={},calls=[],digestResolvers=[],state={permission:'granted',requests:0,subscribeCalls:0,unsubscribed:0,devices:[],postError:false,deferDigest,noticeUpdates:0,profileFailures};
  const profile={tenant_id:'company-a',telegram_id:20,role:'owner'};
  const sub={endpoint:'https://fcm.googleapis.com/fcm/send/device',toJSON:()=>({endpoint:'https://fcm.googleapis.com/fcm/send/device',keys:{}}),unsubscribe:async()=>{state.unsubscribed++;}};
  const reg={scope:'https://crm.pro.az/app/',active:true,pushManager:{getSubscription:async()=>sub,subscribe:async()=>{state.subscribeCalls++;return sub;}}};
@@ -17,7 +17,7 @@ function setup(deferDigest=false){
  const document={createElement:()=>new Element(),querySelector:()=>grid,addEventListener:(name,fn)=>{listeners[name]=fn;}};
  const fetch=async(url,options={})=>{
    calls.push([url,options]);
-   if(url==='/api/platform/me')return{json:async()=>({success:true,member:profile})};
+   if(url==='/api/platform/me'){if(state.profileFailures>0){state.profileFailures--;return{ok:false,json:async()=>({success:false})};}return{ok:true,json:async()=>({success:true,member:profile})};}
    if(options.method==='POST'){
      const body=JSON.parse(options.body);if(body.action==='subscribe')state.devices=[{device_id:'a'.repeat(64),label:'Phone'}];else state.devices=[];
      return{ok:!state.postError,json:async()=>state.postError?{success:false,error:'API failed'}:{success:true}};
@@ -30,6 +30,7 @@ function setup(deferDigest=false){
 }
 (async()=>{
  const reloaded=setup(true);reloaded.state.devices=[{device_id:'aa'.repeat(32),label:'Current device'}];await tick();assert.equal(reloaded.window.tenantPushConnectionState,'loading','device state remains unknown while the saved browser subscription is checked');assert.equal(reloaded.state.requests,0,'reload does not ask for browser permission');assert.equal(reloaded.state.subscribeCalls,0,'reload does not create or renew a push subscription');assert.equal(reloaded.digestResolvers.length,1,'the existing browser subscription is matched against the server device list');reloaded.digestResolvers[0](new Uint8Array(32).fill(0xaa).buffer);await tick();assert.equal(reloaded.window.tenantPushConnectionState,'connected','the saved current-device subscription is restored after matching');assert.equal(reloaded.window.tenantPushConnected,true);
+ const profileRetry=setup(false,1);await tick();assert.equal(profileRetry.window.tenantPushConnectionState,'error','failed profile bootstrap is exposed instead of leaving Push in checking state');assert.equal(profileRetry.grid.children[0].querySelector('.push-connect').textContent,'Yenidən yoxla','the profile control offers a retry');assert.equal(profileRetry.state.requests,0,'profile retry does not request notification permission');await profileRetry.grid.children[0].querySelector('.push-connect').onclick();await tick();assert.equal(profileRetry.window.tenantPushConnectionState,'disconnected','retry loads current device state after profile recovery');assert.equal(profileRetry.state.requests,0,'profile recovery alone still does not ask permission');assert.equal(profileRetry.state.subscribeCalls,0,'profile recovery does not create a subscription');
  const app=setup();await tick();const panel=app.grid.children[0],button=panel.querySelector('.push-connect');
  assert.equal(app.state.requests,0,'No automatic permission prompt');
  await button.onclick();assert.equal(app.state.requests,1);
