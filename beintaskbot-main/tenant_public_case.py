@@ -391,6 +391,9 @@ def read(token,client=''):
 
 
 def media(token,message_id,client=''):
+    from tenant_dialog_consultations import public_media
+    independent=public_media(token,message_id,client,connection_factory=_connect)
+    if independent is not None:return independent
     if not isinstance(token,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,100}',token):raise TenantLinearError('Файл недоступен.',404)
     try:message_id=str(uuid.UUID(message_id))
     except (ValueError,TypeError,AttributeError):raise TenantLinearError('Файл недоступен.',404) from None

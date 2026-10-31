@@ -16841,6 +16841,7 @@ async def check_tenant_approval_notifications(context: ContextTypes.DEFAULT_TYPE
         ('crm_notices', partial(deliver_from, 'tenant_crm_notice_worker', context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
         ('task_approvals', partial(deliver_approval_notifications, context.bot, logger)),
         ('ai_consultations', partial(deliver_consultation_notifications, context.bot, logger)),
+        ('dialog_consultation_drafts', partial(deliver_from, 'tenant_dialog_consultations_worker', logger)),
         ('push_approvals', partial(deliver_push_notifications, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
         ('task_decisions', partial(deliver_from, 'tenant_task_decision_worker', context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
         ('deal_approvals', partial(deliver_from, 'tenant_deal_notice_worker', context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
