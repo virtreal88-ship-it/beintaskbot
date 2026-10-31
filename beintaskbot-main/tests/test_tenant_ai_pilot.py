@@ -1,4 +1,5 @@
 from unittest.mock import Mock, patch
+import pytest
 
 import tenant_ai_pilot as pilot
 from tenant_linear_policy import TenantLinearError
@@ -334,6 +335,51 @@ def test_owner_approval_rejects_admin_and_is_separate_from_kwid_attestation(monk
     monkeypatch.setattr('tenant_platform._connect', lambda: owner_conn)
     assert pilot.approve_pilot({'tenant_id':TENANT,'telegram_id':7}, {'approved':True}) == {'ready':False}
     assert owner_conn.committed and 'LEAST(kwid_expires_at' in owner_conn.cur.sql[-1]
+
+
+@pytest.mark.parametrize(('state','reason','continuation_valid','scope_tenant','allowed'), [
+    ('human','ai_developer_consultation:unsupported_evidence',True,TENANT,True),
+    ('human','manual_takeover',True,TENANT,False),
+    ('paused','ai_developer_consultation:unsupported_evidence',True,TENANT,False),
+    ('human','ai_developer_consultation:unsupported_evidence',False,TENANT,False),
+    ('human','ai_developer_consultation:unsupported_evidence',True,OTHER,False),
+])
+def test_attestation_renewal_is_limited_to_one_open_consultation_receipt(
+        monkeypatch,state,reason,continuation_valid,scope_tenant,allowed):
+    row={**_pilot_resume_row(state), 'handoff_reason':reason}
+    class Cursor:
+        def __init__(self): self.sql=[]
+        def execute(self,sql,_params=None): self.sql.append(sql)
+        def fetchone(self): return {'valid':continuation_valid}
+    cur=Cursor()
+    monkeypatch.setattr('tenant_ai_agents_store._authorize',lambda *_:(scope_tenant,7))
+    monkeypatch.setattr(pilot,'configured_scope',lambda:{'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'test-chat'})
+    monkeypatch.setattr(pilot,'configured_group_scope',lambda:{'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'developers@g.us'})
+    monkeypatch.setattr(pilot,'_snapshot',lambda *_:(row,'fingerprint'))
+    try:
+        result=pilot._authorized_scope(cur,{'tenant_id':TENANT,'telegram_id':7})
+    except TenantLinearError as error:
+        assert error.status==409
+        result=None
+    assert bool(result) is allowed
+    if state=='human' and reason.startswith('ai_developer_consultation:') and scope_tenant==TENANT:
+        assert len(cur.sql)==1
+        assert 'provider_message_id IS NOT NULL' in cur.sql[0]
+        assert "t.status NOT IN ('resolved','closed')" in cur.sql[0]
+        assert "d.state='sent'" in cur.sql[0]
+
+
+def test_continuation_validation_requires_exactly_one_valid_open_case_receipt(monkeypatch):
+    class Cursor:
+        def __init__(self,value): self.value=value; self.sql=''
+        def execute(self,sql,_params=None): self.sql=sql
+        def fetchone(self): return {'valid':self.value}
+    monkeypatch.setattr(pilot,'configured_group_scope',lambda:{'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'developers@g.us'})
+    for value in (True,False):
+        cur=Cursor(value)
+        assert pilot._valid_consultation_continuation(cur,TENANT,{'channel_id':CHANNEL,'conversation_id':'test-chat'}) is value
+        assert 'count(DISTINCT c.id)=1' in cur.sql
+        assert 'd.channel_id=%s::uuid AND d.conversation_id=%s' in cur.sql
 
 
 def test_active_exact_scope_fails_closed_when_confirmation_table_is_missing(monkeypatch):

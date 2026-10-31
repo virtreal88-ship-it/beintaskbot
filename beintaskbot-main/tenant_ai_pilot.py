@@ -398,6 +398,25 @@ def pilot_group_handoff_allowed(job, connection=None):
         return False
 
 
+def _valid_consultation_continuation(cur, tenant, scope):
+    """Require one live CASE consultation with a delivered developer-group receipt."""
+    group_scope = configured_group_scope()
+    if not group_scope or group_scope['tenant_id'] != str(tenant):
+        return False
+    cur.execute('''SELECT count(DISTINCT c.id)=1 AS valid
+      FROM saas_internal_consultations c
+      JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+      JOIN saas_consultation_group_deliveries d ON d.tenant_id=c.tenant_id
+        AND d.consultation_id=c.id AND d.case_id=c.case_id
+        AND d.channel_id=%s::uuid AND d.conversation_id=%s
+        AND d.state='sent' AND d.provider_message_id IS NOT NULL
+      WHERE c.tenant_id=%s::uuid AND c.channel_id=%s::uuid AND c.conversation_id=%s
+        AND c.status<>'closed' AND t.status NOT IN ('resolved','closed')''',
+      (group_scope['channel_id'], group_scope['conversation_id'], tenant,
+       scope['channel_id'], scope['conversation_id']))
+    return bool((cur.fetchone() or {}).get('valid'))
+
+
 def _authorized_scope(cur, profile):
     from tenant_ai_agents_store import _authorize
     tenant, actor = _authorize(cur, profile)
@@ -407,10 +426,18 @@ def _authorized_scope(cur, profile):
     row, fingerprint = _snapshot(cur, tenant, scope)
     if not fingerprint or not row.get('active') or row.get('integration_status') != 'connected':
         raise TenantLinearError('The exact Connect channel and conversation must be active before confirmation.', 409)
-    if (row.get('conversation_state') != 'active' or row.get('conversation_manual_hold') is True
-            or row.get('tenant_status') != 'active' or row.get('company_enabled') is not True
-            or row.get('emergency_stop') is True):
-        raise TenantLinearError('The selected customer dialogue must be active and unpaused before pilot approval.', 409)
+    common_ok = (row.get('conversation_manual_hold') is not True
+            and row.get('tenant_status') == 'active' and row.get('company_enabled') is True
+            and row.get('emergency_stop') is not True)
+    if not common_ok:
+        raise TenantLinearError('The selected customer dialogue is paused or the company is unavailable.', 409)
+    state = row.get('conversation_state')
+    if state == 'active':
+        return tenant, actor, scope, row, fingerprint
+    reason = str(row.get('handoff_reason') or '')
+    if (state != 'human' or not reason.startswith('ai_developer_consultation:')
+            or not _valid_consultation_continuation(cur, tenant, scope)):
+        raise TenantLinearError('Only the same open developer consultation can renew pilot attestations.', 409)
     return tenant, actor, scope, row, fingerprint
 
 
@@ -567,6 +594,9 @@ def preflight(profile):
                 or (scoped_live and row.get('agent_mode')=='manual'))
                 and row.get('exact_agent_scope')) else 'unavailable'
             result['handoff'] = str(row.get('conversation_state') or 'uninitialized')
+            result['continuation_renewal'] = bool(row.get('conversation_state') == 'human'
+                and str(row.get('handoff_reason') or '').startswith('ai_developer_consultation:')
+                and _valid_consultation_continuation(cur, tenant, scope))
             result['rollback'] = {'available':bool(row.get('conversation_id')),'action':'pause this conversation; WhatsApp session remains connected'}
             confirmation, validity = _confirmation(cur, tenant, scope, fingerprint) if fingerprint else ({}, {})
             if confirmation.get('kwid_confirmed_by'):

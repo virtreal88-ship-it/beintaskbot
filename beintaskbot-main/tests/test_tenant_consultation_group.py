@@ -1159,6 +1159,83 @@ def test_actual_pilot_gates_cover_handoff_group_reply_and_stubbed_customer_send(
     assert db.execute("SELECT status FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,case))[0]['status']!='resolved'
 
 
+def test_expired_attestations_renew_during_same_open_handoff_and_new_signed_reply_reuses_case(db,monkeypatch):
+    import hashlib,hmac,json
+    from types import SimpleNamespace
+    import tenant_ai_pilot as pilot
+    import tenant_ai_agents_store as agent_store
+    import tenant_platform
+    import tenant_ai_agents_schema
+    import tenant_connect_transport as connect_transport
+
+    consult,case=setup_case(db,monkeypatch)
+    scope,event_fp=setup_real_pilot_gate(db,monkeypatch)
+    profile={'tenant_id':A,'telegram_id':11}
+    monkeypatch.setattr(tenant_platform,'_connect',lambda:db)
+    monkeypatch.setattr(agent_store,'_connect',lambda:db)
+    monkeypatch.setattr(tenant_ai_agents_schema,'ensure_schema',lambda _conn:None)
+
+    # Establish one real sent-group receipt for the existing open consultation.
+    group_sends=[]
+    def send_group(_route,_body,request_id):
+        group_sends.append(request_id)
+        return {'message_id':'renewal-group-message','external_message_id':'RENEWAL_GROUP_RECEIPT'}
+    monkeypatch.setattr(transport,'send_group_with_receipt',send_group)
+    group_request=request()
+    assert flow.prepare(PROFILE,consult,group_request)['created']
+    assert flow.dispatch(PROFILE,consult,group_request['request_id'])['state']=='sent'
+    assert len(group_sends)==1
+
+    # Both short lived attestations have expired while Human Mode and the
+    # developer-consultation reason remain intact.
+    db.execute("UPDATE saas_ai_pilot_confirmations SET kwid_expires_at=now()-interval '1 second',owner_expires_at=now()-interval '1 second' WHERE tenant_id=%s::uuid",(A,));db.commit()
+    db.execute("UPDATE saas_ai_conversation_state SET state='human',reason='ai_developer_consultation:unsupported_evidence' WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA));db.commit()
+    before_state=db.execute("SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert pilot.confirm_kwid_disabled(profile,{'confirmed':True})['handoff']=='human'
+    assert pilot.approve_pilot(profile,{'approved':True})['handoff']=='human'
+    after_state=db.execute("SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert after_state==before_state
+    assert len(group_sends)==1
+    assert db.execute("SELECT count(*) AS n FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND conversation_id='client'",(A,))[0]['n']==0
+
+    # The next authentic signed reply to that receipt enters the existing
+    # consultation and materializes exactly one follow-up job for the same CASE.
+    monkeypatch.setattr(connect_transport,'_connect',lambda:db)
+    monkeypatch.setattr(connect_transport,'_fernet',lambda:SimpleNamespace(decrypt=lambda _:b'{"webhook_secret":"synthetic-secret"}'))
+    reply={'id':'renewal-developer-reply','type':'message.inbound.received','data':{
+      'id':'renewal-developer-reply','channelId':CA,'conversationId':GROUP,'isGroup':True,
+      'fromMe':False,'type':'text','text':'CASE:'+consult+' We reproduced the reported issue and have a fix to verify.',
+      'quotedExternalMessageId':'RENEWAL_GROUP_RECEIPT'}}
+    raw=json.dumps(reply).encode()
+    signature='sha256='+hmac.new(b'synthetic-secret',raw,hashlib.sha256).hexdigest()
+    assert connect_transport.ingest(raw,signature,reply)
+    assert connect_transport.ingest(raw,signature,reply)
+    with db.cursor() as cur:
+        assert flow.materialize_pilot_followup(cur)
+        assert not flow.materialize_pilot_followup(cur)
+    db.commit()
+    jobs=db.execute("SELECT j.event_fingerprint,e.payload FROM saas_ai_agent_jobs j JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint WHERE j.tenant_id=%s::uuid AND j.conversation_id='client'",(A,))
+    assert len(jobs)==1
+    payload=jobs[0]['payload'] if isinstance(jobs[0]['payload'],dict) else json.loads(jobs[0]['payload'])
+    assert payload['case_id']==case and payload['consultation_id']==consult
+    assert payload['group_reply_message_id']=='renewal-developer-reply'
+
+
+@pytest.mark.parametrize('invalid_receipt', ['closed_case','unsent_group_receipt'])
+def test_consultation_renewal_requires_open_case_and_sent_group_receipt(db,monkeypatch,invalid_receipt):
+    import tenant_ai_pilot as pilot
+    consult,case=setup_case(db,monkeypatch)
+    scope,_=setup_real_pilot_gate(db,monkeypatch)
+    if invalid_receipt=='closed_case':
+        db.execute("UPDATE saas_support_tickets SET status='resolved' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,case))
+    else:
+        db.execute("INSERT INTO saas_consultation_group_deliveries(tenant_id,consultation_id,request_id,case_id,channel_id,conversation_id,body,body_hash,state,created_by) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,'synthetic','hash','sending',11)",
+          (A,consult,str(uuid.uuid4()),case,CA,GROUP))
+    db.commit()
+    with db.cursor() as cur:
+        assert not pilot._valid_consultation_continuation(cur,A,scope)
+
+
 def test_two_customer_clarification_rounds_return_to_group_before_solution_confirmation(db,monkeypatch):
     import hashlib
     import uuid

@@ -8,6 +8,9 @@ const app = fs.readFileSync(path.join(root, 'docs', 'tenant-app.html'), 'utf8');
 const routes = fs.readFileSync(path.join(root, 'tenant_web_routes.py'), 'utf8');
 
 assert.match(ui, /const resume=\$\('aiPilotResume'\)/, 'pilot preflight must expose its exact-scope preparation control');
+assert.match(ui, /continuation_renewal/,'renewal UI is driven by server verified open CASE continuation state');
+assert.match(ui, /KWID təsdiqini yenilə — eyni CASE davamı/,'expired attestation action is labeled as same CASE renewal');
+assert.match(ui, /Eyni CASE davamını 15 dəqiqəlik təsdiqlə/,'owner action is distinguished from an initial pilot run');
 assert.match(ui, /resume\.hidden=profile\?\.role!=='owner'.*!p\.scope.*!preparationOnly/,
   'only the owner can see preparation resume, and both pilot guards must be off');
 assert.match(ui, /preparationOnly=live\.enabled===false&&p\.pilot_guard_enabled===false/,
