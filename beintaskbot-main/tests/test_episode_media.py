@@ -405,3 +405,13 @@ def test_manual_latest_request_stops_at_incoming_staff_reply(staff_raw):
     staff=row('text',2,raw=staff_raw)
     latest=row('voice',3)
     assert runtime.episode([old,staff,latest],latest_request=True)==[latest]
+
+
+def test_knowledge_query_cannot_use_legacy_voice_body_when_current_audio_unread():
+    rows=[row('voice',body='OLD_TOPIC_UNVERIFIED_BODY',_copilot_context_body='',
+        _episode_receipt={'status':'unsupported','code':'media_unavailable'})]
+    assert runtime.evidence_query(rows,'1')==''
+    rows[0].update(_episode_receipt={'status':'processed','transcript':'Actual newest speech'},
+        _copilot_attachment_text='Actual newest speech')
+    query=runtime.evidence_query(rows,'1')
+    assert 'Actual newest speech' in query and 'OLD_TOPIC' not in query

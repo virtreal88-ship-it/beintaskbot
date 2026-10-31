@@ -15,6 +15,8 @@ on:
       - 'beintaskbot-main/tests/test_dialog_developer*'
       - 'beintaskbot-main/tests/test_helper_type_full_app_browser.cjs'
       - 'beintaskbot-main/tests/test_assigned_operator_copilot.py'
+      - 'beintaskbot-main/tests/test_operator_audio_transcripts.py'
+      - 'beintaskbot-main/tests/test_operator_audio_transcript_browser.cjs'
   workflow_dispatch:
 permissions:
   contents: read
@@ -61,6 +63,7 @@ jobs:
             tests/test_dialog_consultations_api.py \
             tests/test_dialog_consultations_postgres.py \
             tests/test_assigned_operator_copilot.py \
+            tests/test_operator_audio_transcripts.py \
             tests/test_tenant_operator_copilot.py \
             tests/test_tenant_public_case.py \
             tests/test_tenant_consultation_group.py \
@@ -73,3 +76,4 @@ jobs:
           node tests/test_dialog_consultations_ui.cjs
           node tests/test_tenant_operator_copilot_ui.cjs
           node tests/test_tenant_operator_mobile_ui.cjs
+          PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_operator_audio_transcript_browser.cjs

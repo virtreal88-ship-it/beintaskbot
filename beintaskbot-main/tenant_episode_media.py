@@ -430,7 +430,9 @@ def evidence_query(rows,source_id,*,max_chars=1000):
     parts=[];used=0
     for row in reversed(selected):
         kind=str(row.get('message_type') or 'text')
-        body=str(row.get('body') or '').strip()
+        # Voice body can be a legacy transcript for replaced/unread bytes.
+        # Only exact-version prepared evidence may describe current speech.
+        body='' if kind in {'voice','audio'} else str(row.get('_copilot_context_body',row.get('body') or '') or '').strip()
         receipt=row.get('_episode_receipt') or {}
         evidence=str(row.get('_copilot_attachment_text') or '').strip() if receipt.get('status') in {'processed','partial'} else ''
         content=(evidence if body and body in evidence else (body+'\n'+evidence).strip())

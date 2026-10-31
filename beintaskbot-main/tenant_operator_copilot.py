@@ -297,7 +297,7 @@ def _clean(data):
 
 def _hash(command):
     value = {key: val for key, val in command.items() if key != 'request_id'}
-    if command.get('mode')=='reply':value['media_selection_version']='latest-customer-request-v2'
+    if command.get('mode')=='reply':value['media_selection_version']='latest-customer-request-v3-audio-evidence'
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -439,7 +439,34 @@ def run(profile, data, *, consultation_reply_id=None):
             latest_row=next((row for row in reversed(rows) if row.get('direction')=='incoming'
                 and (row.get('raw') if isinstance(row.get('raw'),dict) else {}).get('verified_employee_id') is None
                 and (row.get('raw') if isinstance(row.get('raw'),dict) else {}).get('ai_authored') is not True),{})
-        latest_customer=str(latest_row.get('_copilot_attachment_text') or latest_row.get('body') or '')
+        if command['mode']=='reply' and consultation_evidence is None and str(latest_row.get('message_type') or '').lower() in {'voice','audio'}:
+            receipt=latest_row.get('_episode_receipt') or {}
+            if receipt.get('status')!='processed' or not str(receipt.get('transcript') or '').strip():
+                # Missing latest speech cannot be answered from historical text,
+                # legacy body, a prior assistant answer or unrelated KB matches.
+                stage=receipt.get('failure_stage')
+                if stage not in {'source_validation','media_download','media_validation','audio_transcription'}:stage='unknown'
+                code=receipt.get('code')
+                if code not in {'media_unavailable','source_fetch_unavailable','source_check_failed','source_rate_limited',
+                    'source_access_denied','source_changed','media_processing_failed','media_result_unknown',
+                    'asr_authorization_required','legacy_voice_version_unverified','pre_dispatch_retryable',
+                    'media_size_limit','asr_model_unavailable','transcript_truncated'}:code='audio_evidence_incomplete'
+                from tenant_episode_media import reference
+                from tenant_media_evidence import source_hash
+                ref=reference(latest_row,command['channel_id'],command['lead_id'])
+                command['_media_failure']={'source_id':ref['external_id'],'source_hash':source_hash(ref),
+                    'kind':ref['media_kind'],'status':str(receipt.get('status') or 'unavailable'),
+                    'code':code,'failure_stage':stage}
+                language=str(agent_context.get('language') or 'auto')
+                message={'az':'Son səs mesajı oxunmayıb. AI cavabı yaradılmadı; əvvəlki mövzu əvəzində istifadə olunmadı.',
+                    'en':'The latest voice message was not read. No AI reply was created from the earlier topic.'}.get(language,
+                    'Последнее голосовое не прочитано. AI-ответ по старой теме не создан.')
+                error=TenantLinearError(message+' ['+stage+': '+code+']',409)
+                error.keep_request=True
+                raise error
+            latest_customer=str(receipt['transcript'])
+        else:
+            latest_customer=str(latest_row.get('_copilot_attachment_text') or latest_row.get('_copilot_context_body',latest_row.get('body') or '') or '')
         knowledge=knowledge_context(tenant,latest_customer+'\n'+command['prompt']+'\n'+str((consultation_evidence or {}).get('body') or '')[:2000],agent_id=command['_agent_id'],limit=4)
         knowledge=[{**item,'content':item['content'][:1200]} for item in knowledge]
     except Exception as error:
@@ -548,8 +575,9 @@ def _finish(tenant, command, actor, result, turns, request, answer):
                 cur.execute("SELECT updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
                 status = 'completed' if str((cur.fetchone() or {}).get('updated_at') or '') == expected else 'unknown'
             stored = dict(result or {})
+            if result is None and command.get('_media_failure'):stored={'media_failure':command['_media_failure']}
             cur.execute("UPDATE saas_chat_ai_runs SET status=%s,result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending'",
-                        (status, json.dumps(stored, ensure_ascii=False) if status == 'completed' else None, tenant, command['request_id']))
+                        (status, json.dumps(stored, ensure_ascii=False) if status == 'completed' or command.get('_media_failure') else None, tenant, command['request_id']))
             if status == 'completed' and not command.get('_consultation_evidence'):
                 new_turns = (turns + [{'role':'employee','text':request[:1600],'agent_binding':command['_agent_binding']}, {'role':'copilot','text':answer[:6000],'agent_binding':command['_agent_binding']}])[-20:]
                 cur.execute('''INSERT INTO saas_operator_copilot_threads(tenant_id,requested_by,channel_id,conversation_id,turns)

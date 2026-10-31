@@ -101,7 +101,22 @@ def _media_filename(raw):
     return ''
 
 
-def _attach_saved_audio_transcripts(cur, tenant, rows):
+def _audio_diagnostic(status, code, result, at):
+    """Product diagnostics: fixed enums only, never raw errors, text or URLs."""
+    if status not in {'processed','partial','unavailable','unsupported','error','unknown'}:return None
+    codes={'transcribed','transcript_truncated','existing_transcript','media_unavailable',
+        'source_fetch_unavailable','source_check_failed','source_rate_limited','source_access_denied',
+        'source_changed','media_processing_failed','media_result_unknown','asr_authorization_required',
+        'legacy_voice_version_unverified','pre_dispatch_retryable','media_size_limit',
+        'asr_model_unavailable','audio_evidence_incomplete','legacy_exact_transcript'}
+    result=result if isinstance(result,dict) else {}
+    stage=result.get('failure_stage')
+    if stage not in {'source_validation','media_download','media_validation','audio_transcription'}:stage='unknown'
+    return {'status':status,'code':code if code in codes else 'audio_evidence_incomplete',
+            'stage':stage,'at':str(at or '')}
+
+
+def _attach_saved_audio_transcripts(cur, tenant, rows, *, conversation_id=None):
     """Read only exact-version ASR evidence for already-authorized message rows."""
     from tenant_media_evidence import media_version, source_hash, _body_hash
     audio=[row for row in rows if str(row.get('message_type') or '').lower() in {'audio','voice','voice_message','ptt'}
@@ -116,7 +131,7 @@ def _attach_saved_audio_transcripts(cur, tenant, rows):
              'media_kind':kind,'media_version':media_version(row.get('raw'))}
         keys.append((channel,str(row['external_id']),source_hash(ref),kind))
     placeholders=','.join(['(%s::uuid,%s,%s,%s)']*len(keys))
-    cur.execute("""SELECT channel_id::text AS channel_id,external_id,source_hash,media_kind,status,result
+    cur.execute("""SELECT channel_id::text AS channel_id,external_id,source_hash,media_kind,status,code,result,updated_at
       FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid
         AND (channel_id,external_id,source_hash,media_kind) IN ("""+placeholders+")",
       (tenant,*[value for key in keys for value in key]))
@@ -124,15 +139,49 @@ def _attach_saved_audio_transcripts(cur, tenant, rows):
     for row,key in zip(audio,keys):
         receipt=receipts.get(key) or {};result=receipt.get('result') if isinstance(receipt.get('result'),dict) else {}
         text=result.get('transcript')
+        diagnostic=_audio_diagnostic(receipt.get('status'),receipt.get('code'),result,receipt.get('updated_at'))
+        if diagnostic:row['_saved_audio_diagnostic']=diagnostic
         if receipt.get('status')=='error':row['_saved_audio_state']='failed'
         if receipt.get('status')=='processed' and isinstance(text,str) and text.strip():
             row['_saved_audio_transcript']=text
+    # Existing authorized history, bounded metadata-only projection. No model,
+    # download, log access or private copilot text is read or dispatched here.
+    if conversation_id:
+        cur.execute("SELECT to_regclass('public.saas_chat_ai_runs') AS relation")
+        if (cur.fetchone() or {}).get('relation'):
+            channels=sorted({key[0] for key in keys})
+            cur.execute('''SELECT channel_id,result->'media_failure' AS failure,
+              result->'source_versions' AS refs,result->'context_usage'->'evidence' AS evidence,updated_at
+              FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND provider='connect'
+                AND channel_id=ANY(%s::text[]) AND conversation_id=%s AND result IS NOT NULL
+              ORDER BY updated_at DESC LIMIT 20''',(tenant,channels,conversation_id))
+            found={}
+            for attempt in cur.fetchall():
+                failure=attempt.get('failure')
+                entries=[]
+                if isinstance(failure,dict):entries.append((failure.get('source_id'),failure.get('source_hash'),failure.get('kind'),failure))
+                refs=attempt.get('refs') if isinstance(attempt.get('refs'),list) else []
+                evidence=attempt.get('evidence') if isinstance(attempt.get('evidence'),list) else []
+                for item in evidence:
+                    if not isinstance(item,dict):continue
+                    ref=next((r for r in refs if isinstance(r,dict) and r.get('external_id')==item.get('source_id')
+                              and str(r.get('channel_id'))==str(attempt['channel_id'])),None)
+                    if ref:entries.append((item.get('source_id'),source_hash(ref),item.get('kind'),item))
+                for external,version,kind,item in entries:
+                    key=(str(attempt['channel_id']),str(external),str(version),str(kind))
+                    diagnostic=_audio_diagnostic(item.get('status'),item.get('code'),item,attempt.get('updated_at'))
+                    if key in keys and key not in found and diagnostic:found[key]=diagnostic
+            for row,key in zip(audio,keys):
+                if key in found and not row.get('_saved_audio_transcript'):
+                    prior=row.get('_saved_audio_diagnostic') or {}
+                    if not prior or found[key]['at']>=prior.get('at',''):row['_saved_audio_diagnostic']=found[key]
 
 
 def _message(item, *, group=False, participant_names=None, employee_participants=None, contact_name=''):
     value = dict(item)
     saved_audio_transcript=value.pop('_saved_audio_transcript',None)
     saved_audio_state=value.pop('_saved_audio_state',None)
+    audio_diagnostic=value.pop('_saved_audio_diagnostic',None)
     raw = value.pop('raw', None) or {}
     direction = str(value.get('direction') or '')
     if direction not in {'incoming', 'outgoing'}:
@@ -208,6 +257,10 @@ def _message(item, *, group=False, participant_names=None, employee_participants
                 value['audio_transcript']=text
                 value['has_transcription']=True
         if value.get('message_type') in {'audio','voice','voice_message','ptt'}:
+            if audio_diagnostic:
+                value['analysis_diagnostic']=audio_diagnostic
+                if audio_diagnostic['status']!='processed' and not value.get('has_transcription'):
+                    value['analysis_state']='unsupported' if audio_diagnostic['status']=='unsupported' else 'failed'
             duration = _audio_duration(raw)
             if duration is not None:
                 value['duration_seconds'] = duration
@@ -754,7 +807,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     for message in messages:
                         message['source_conversation_id']=by_lead[int(message['source_lead_id'])]
                         message['source_channel_id']=channel
-            if provider=='connect':_attach_saved_audio_transcripts(cur,tenant,messages[:50])
+            if provider=='connect':_attach_saved_audio_transcripts(cur,tenant,messages[:50],conversation_id=conversation)
             captured_group=[]
             if provider=='connect' and group_jid(conversation):
                 # A displayed group event can be represented by another channel's
