@@ -25,6 +25,12 @@
     if(!response.ok||!payload.success){const error=new Error(payload.error||t('consultCreateError'));error.status=response.status;throw error;}
     return payload.result;
   }
+  async function publicShareApi(path,method='GET',data){
+    const current=member,version=epoch,url='/api/platform/support-cases/'+path;
+    const response=await fetch(url,{method,credentials:'same-origin',cache:'no-store',headers:data?{'Content-Type':'application/json'}:{},...(data?{body:JSON.stringify({...data,expected_tenant_id:current?.tenant_id,expected_user_id:current?.telegram_id})}:{})});
+    const payload=await response.json();if(!document?.body||version!==epoch||identity(current)!==identity(member))throw new Error(t('companyChanged'));
+    if(!response.ok||!payload.success)throw new Error(payload.error||t('error'));return payload.result;
+  }
   function install(){
     const page=$('operatorSupport');if(!page||$('supportInbox'))return;
     const panel=document.createElement('article');panel.id='supportInbox';
@@ -65,6 +71,7 @@
     const expertPanel=document.createElement('section');expertPanel.dataset.expertDiagnostics='';
     expertPanel.innerHTML='<h3>Внутренняя экспертная диагностика</h3>'+(result.expert_results||[]).map(item=>{const value=item.result;return `<article><b>${esc(item.expert_name)} · ${esc(item.model)}</b><p>${esc(expertStates[item.status]||item.status)}</p>${item.error_code?`<p>${esc(expertErrors[item.error_code]||'Экспертная диагностика недоступна.')}</p>`:''}${value?`<p>${esc(value.cause)}</p><p>Уверенность: ${esc(value.confidence)}</p><ul>${(value.evidence||[]).map(text=>`<li>${esc(text)}</li>`).join('')}</ul><p>${esc(value.ticket_summary)}</p><p>Безопасные рекомендации: ${esc((value.safe_actions||[]).join('; '))}</p><p>Нужны данные: ${esc(value.additional_information)}</p><p>Требуется сотрудник: ${value.requires_human?'да':'нет'}</p>`:''}</article>`}).join('');
     if(result.expert_results?.length)host.append(expertPanel);
+    if(member?.role==='owner')renderPublicShareControls(ticket,result.messages||[],host);
     $('supportClose').onclick=()=>{detailRevision++;selected=null;host.hidden=true;host.replaceChildren();};
     $('supportSave').onclick=()=>mutate(ticket.id,{status:$('supportEditStatus').value,assigned_to:$('supportEditAssignee').value||null,description:$('supportDescription').value,suggestions:$('supportSuggestions').value,next_steps:$('supportNextSteps').value});
     $('supportTake').onclick=()=>mutate(ticket.id,{status:'in_progress',assigned_to:member.telegram_id});
@@ -74,6 +81,25 @@
     if($('supportSummary'))$('supportSummary').onclick=()=>action(ticket.id,'/summary','POST',{});
     $('supportEarlier').onclick=async()=>{const revision=detailRevision,version=epoch,button=$('supportEarlier');button.disabled=true;try{const page=await api('/'+encodeURIComponent(ticket.id)+'?before='+encodeURIComponent(nextBefore));if(selected!==ticket.id||revision!==detailRevision)return;$('supportHistory').insertAdjacentHTML('afterbegin',messages(page.messages));nextBefore=page.next_before;button.hidden=!nextBefore;}catch(error){if(version===epoch)notice(error.message);}finally{if(button.isConnected)button.disabled=false;}};
     renderConsultations(ticket,result.messages||[]);
+  }
+  function renderPublicShareControls(ticket,caseMessages,host){
+    const section=document.createElement('section');section.id='publicCaseShare';section.className='support-ai-state';
+    const heading=document.createElement('h3');heading.textContent='İctimai CASE dialoqu';
+    const help=document.createElement('p');help.textContent='Yalnız aşağıda seçdiyiniz mesajlar paylaşılacaq. Faylları ayrıca CRM-də açıb məzmununu yoxlayın; mətn redaktəsi faylı təmizləmir.';
+    const choices=document.createElement('div');choices.className='support-edit';
+    for(const message of caseMessages){const label=document.createElement('label'),check=document.createElement('input'),preview=document.createElement('span');check.type='checkbox';check.value=String(message.id);check.dataset.shareMessage='true';const type=String(message.message_type||'text').toLowerCase();preview.textContent=(message.direction==='incoming'?'Müştəri':'Texniki komanda')+' · '+type+' · '+String(message.body||'Əlavə').replace(/\s+/g,' ').slice(0,150);label.append(check,document.createTextNode(' '),preview);choices.append(label);if(['image','video','audio','voice','document'].includes(type)){const inspect=document.createElement('a');inspect.href='/?view=support&support_ticket_id='+encodeURIComponent(ticket.id)+'&support_ticket_message_id='+encodeURIComponent(message.id);inspect.target='_blank';inspect.rel='noopener noreferrer';inspect.textContent='CRM-də faylı aç';label.append(document.createTextNode(' · '),inspect);}}
+    const reviewLabel=document.createElement('label'),review=document.createElement('input');review.type='checkbox';review.id='publicCaseMediaReviewed';reviewLabel.append(review,document.createTextNode(' Seçilmiş hər faylı CRM-də yoxladım və bu CASE səhifəsində paylaşılmasının təhlükəsiz olduğunu təsdiqləyirəm.'));
+    const group=document.createElement('select');group.id='publicCaseGroup';const groupHint=document.createElement('label');groupHint.textContent='Bu CASE üçün developer WhatsApp qrupu';groupHint.append(group);
+    const create=document.createElement('button');create.type='button';create.className='outline';create.textContent='24 saatlıq baxış linki yarat';
+    const status=document.createElement('p');status.setAttribute('role','status');const active=document.createElement('div');active.className='support-edit';section.append(heading,help,groupHint,choices,reviewLabel,create,status,active);host.append(section);
+    const ticketPath=encodeURIComponent(ticket.id);
+    let groupRows=[];void consultationApi('/groups').then(result=>{
+      groupRows=result.groups||[];group.replaceChildren(new Option('Qrupu seçin',''));
+      groupRows.forEach((row,index)=>{const caption=(row.contact_name||row.conversation_id)+(row.channel_name?' · '+row.channel_name:'');group.append(new Option(caption,String(index)));});
+    }).catch(error=>{status.textContent=error.message;});
+    const refresh=async()=>{try{const rows=await publicShareApi(ticketPath+'/public-shares');active.replaceChildren();for(const row of rows){const item=document.createElement('div'),label=document.createElement('span'),button=document.createElement('button');label.textContent='Link · '+row.message_count+' mesaj · '+row.media_count+' fayl · '+(row.revoked?'ləğv edilib':'bitmə: '+row.expires_at);item.append(label);if(!row.revoked){button.type='button';button.className='outline danger';button.textContent='Linki ləğv et';button.onclick=async()=>{button.disabled=true;try{await publicShareApi('public-share/'+encodeURIComponent(row.id),'DELETE',{});await refresh();}catch(error){status.textContent=error.message;button.disabled=false;}};item.append(button);}active.append(item);}}catch(error){status.textContent=error.message;}};
+    create.onclick=async()=>{const selected=[...choices.querySelectorAll('[data-share-message]:checked')].map(node=>node.value);if(!selected.length){status.textContent='Ən azı bir mesaj seçin.';return;}const selectedGroup=groupRows[Number(group.value)];if(group.value===''||!selectedGroup){status.textContent='Developer qrupunu seçin.';return;}const media=[...choices.querySelectorAll('[data-share-message]:checked')].filter(node=>['image','video','audio','voice','document'].includes(String(caseMessages.find(row=>String(row.id)===node.value)?.message_type||'').toLowerCase())).map(node=>node.value);if(media.length&&!review.checked){status.textContent='Seçilmiş faylları CRM-də açıb təhlükəsizliyini təsdiqləyin.';return;}create.disabled=true;try{const result=await publicShareApi(ticketPath+'/public-share','POST',{message_ids:selected,media_message_ids:media,confirm_media_review:media.length>0&&review.checked,group_channel_id:selectedGroup.channel_id,group_conversation_id:selectedGroup.conversation_id});const link=document.createElement('a');link.href=result.url;link.rel='noopener noreferrer';link.target='_blank';link.textContent='İctimai CASE linkini aç';status.replaceChildren(link,document.createTextNode(' · 24 saat etibarlıdır. WhatsApp-a yalnız istədiyiniz halda özünüz göndərin.'));choices.querySelectorAll('input').forEach(input=>input.checked=false);review.checked=false;await refresh();}catch(error){status.textContent=error.message;}finally{create.disabled=false;}};
+    void refresh();
   }
   async function renderConsultations(ticket,caseMessages=[]){
     const host=$('supportDetail'),revision=detailRevision;if(!host)return;

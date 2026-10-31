@@ -133,7 +133,7 @@ def test_developer_followup_includes_saved_case_facts_without_resending_the_orig
     _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch)
     db.execute("UPDATE saas_crm_messages SET body='The purchase receipt total does not match.' WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,))
     db.execute("UPDATE saas_internal_consultations SET evidence=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
-      ('{"source_external_id":"customer-message"}',A,consult));db.commit()
+      ('{"query":"The purchase receipt total does not match.","source_external_id":"customer-message"}',A,consult));db.commit()
     sent=[]
     monkeypatch.setattr(transport,'send_group_with_receipt',lambda route,body,key,**kw:
       (sent.append({'body':body,'media':kw.get('media')}) or {'message_id':'followup-case-message','external_message_id':'FOLLOWUP_CASE_REF'}))
