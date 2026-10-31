@@ -9,7 +9,7 @@ function fixture() {
   const storage = new Map(), sent = [], alerts = [];
   const input = {value:'Salam',dispatchEvent(){}}, button = {disabled:false,textContent:'Göndər',classList:{add(){},remove(){}}};
   const env = {
-    Event:class{constructor(type){this.type=type}},onAccepted:text=>{env.accepted=text;},copy:(_key,fallback)=>fallback,button,input,key:'tenant-chat-send:tenant:20:7',leadId:7,me:{tenant_id:'tenant',telegram_id:20},
+    Event:class{constructor(type){this.type=type}},getQuote:()=>null,isQuoteCurrent:()=>true,onPending:()=>{},onDiscard:()=>{},onAccepted:text=>{env.accepted=text;},copy:(_key,fallback)=>fallback,button,input,key:'tenant-chat-send:tenant:20:7',leadId:7,me:{tenant_id:'tenant',telegram_id:20},
     isCurrent:()=>env.chatIdentity()==='tenant:20',reload:async()=>{},
     $:id=>id==='chatText'?input:button, x:{kommo_lead_id:7},
     identity:'tenant:20',revision:1,chatRevision:1,chatIdentity:()=>env.identity,

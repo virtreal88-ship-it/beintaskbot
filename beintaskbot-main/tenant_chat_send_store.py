@@ -34,11 +34,27 @@ def authority(cur, session, lead_id):
     return profile, [integration['account_domain'], str(integration['connected_at'])], integration
 
 
+def quote_target(cur,tenant,command,connection):
+    if not command.get('quote_message_id'):return None
+    if connection[0]!='connect' or connection[1:]!=[command['quote_channel_id'],command['quote_conversation_id']]:
+        raise TenantLinearError('İstinad edilən dialoq dəyişib.',409)
+    cur.execute("""SELECT raw->>'externalMessageId' AS provider_id FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s
+        AND direction IN ('incoming','outgoing') FOR SHARE""",
+      (tenant,command['quote_message_id'],command['lead_id'],'connect:'+connection[1]))
+    found=cur.fetchone();value=(found or {}).get('provider_id')
+    import re
+    if not isinstance(value,str) or not re.fullmatch('[A-Za-z0-9_-]{5,200}',value):
+        raise TenantLinearError('İstinad edilən mesaj bu dialoqda əlçatan deyil.',409)
+    return value
+
+
 def reserve(session, command):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             profile, connection, _ = authority(cur, session, command['lead_id'])
+            quote=quote_target(cur,profile['tenant_id'],command,connection)
             key = (profile['tenant_id'], int(profile['telegram_id']), command['request_id'])
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (f"chat-send:{key[0]}:{command['lead_id']}",))
             cur.execute("UPDATE saas_chat_send_receipts SET state=CASE WHEN state='preparing' THEN 'blocked' ELSE 'unknown' END,updated_at=now() WHERE tenant_id=%s::uuid AND lead_id=%s AND state IN ('preparing','sending') AND updated_at<now()-interval '10 minutes'", (key[0], command['lead_id']))
@@ -61,7 +77,7 @@ def reserve(session, command):
                 raise TenantLinearError('Bu çatda başqa göndərmə yoxlanılır. Kommo-da vəziyyəti yoxlayın.', 409)
             cur.execute("INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state) VALUES(%s::uuid,%s,%s::uuid,%s,%s,'preparing')", (*key, command['lead_id'], fingerprint(command)))
         conn.commit()
-    return {'key': key, 'command': command, 'connection': connection, 'profile': profile}
+    return {'key': key, 'command': command, 'connection': connection, 'profile': profile, 'quote':quote}
 
 
 def mark_sending(item, route):
@@ -77,6 +93,8 @@ def mark_sending(item, route):
             profile, connection, integration = authority(cur, {'tenant_id': item['key'][0], 'telegram_id': item['key'][1]}, item['command']['lead_id'])
             if connection != item['connection']:
                 raise TenantLinearError('Kommo bağlantısı dəyişib.', 409)
+            if quote_target(cur,profile['tenant_id'],item['command'],connection)!=item.get('quote'):
+                raise TenantLinearError('İstinad edilən mesaj dəyişib.',409)
             if integration.get('provider') == 'connect':
                 credentials = integration['route']
                 if is_group:
