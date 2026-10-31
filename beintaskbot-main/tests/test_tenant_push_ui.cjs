@@ -7,12 +7,12 @@ class Element {
 }
 const source=fs.readFileSync(path.join(__dirname,'../docs/tenant-push.js'),'utf8');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-function setup(){
- const grid=new Element(),listeners={},calls=[],state={permission:'granted',requests:0,unsubscribed:0,devices:[],postError:false};
+function setup(deferDigest=false){
+ const grid=new Element(),listeners={},calls=[],digestResolvers=[],state={permission:'granted',requests:0,unsubscribed:0,devices:[],postError:false,deferDigest,noticeUpdates:0};
  const profile={tenant_id:'company-a',telegram_id:20,role:'owner'};
- const sub={toJSON:()=>({endpoint:'https://fcm.googleapis.com/fcm/send/device',keys:{}}),unsubscribe:async()=>{state.unsubscribed++;}};
+ const sub={endpoint:'https://fcm.googleapis.com/fcm/send/device',toJSON:()=>({endpoint:'https://fcm.googleapis.com/fcm/send/device',keys:{}}),unsubscribe:async()=>{state.unsubscribed++;}};
  const reg={scope:'https://crm.pro.az/app/',active:true,pushManager:{getSubscription:async()=>sub,subscribe:async()=>sub}};
- const window={isSecureContext:true,PushManager:class{},Notification:{}};
+ const window={isSecureContext:true,PushManager:class{},Notification:{},tenantOperatorUpdateBrowserNotice(){state.noticeUpdates++;},crypto:{subtle:{digest:async()=>state.deferDigest?await new Promise(resolve=>digestResolvers.push(resolve)):new Uint8Array(32).fill(0xaa).buffer}}};
  const navigator={platform:'Phone',serviceWorker:{register:async(url,opt)=>{calls.push(['register',url,opt]);return reg;},getRegistration:async()=>reg}};
  const document={createElement:()=>new Element(),querySelector:()=>grid,addEventListener:(name,fn)=>{listeners[name]=fn;}};
  const fetch=async(url,options={})=>{
@@ -25,8 +25,8 @@ function setup(){
    return{ok:true,json:async()=>({success:true,devices:state.devices,public_key:Buffer.alloc(65).toString('base64url'),delivery_enabled:true,tenant_id:profile.tenant_id,user_id:String(profile.telegram_id)})};
  };
  const notification={requestPermission:async()=>{state.requests++;return state.permission;}};
- vm.runInNewContext(source,{window,navigator,document,fetch,Notification:notification,Uint8Array,URL,atob:value=>Buffer.from(value,'base64').toString('binary'),setTimeout,clearTimeout});
- return{grid,listeners,calls,state,profile,window,reg,navigator};
+ vm.runInNewContext(source,{window,navigator,document,fetch,Notification:notification,Uint8Array,URL,TextEncoder,atob:value=>Buffer.from(value,'base64').toString('binary'),setTimeout,clearTimeout});
+ return{grid,listeners,calls,state,profile,window,reg,navigator,digestResolvers};
 }
 (async()=>{
  const app=setup();await tick();const panel=app.grid.children[0],button=panel.querySelector('.push-connect');
@@ -46,6 +46,8 @@ function setup(){
  // A new profile invalidates callbacks and prevents sending old identity.
  changed.listeners['tenant-profile']({detail:{member:{tenant_id:'company-b',telegram_id:99,role:'owner'}}});
  await tick();assert(changed.grid.children[0].querySelector('.push-status').textContent.includes('Kabinet dəyişib'));
+ const stale=setup();stale.state.devices=[{device_id:'aa'.repeat(32),label:'Current device'}];await tick();await tick();assert.equal(stale.window.tenantPushConnected,true,'a matching current browser device is recognized');stale.state.deferDigest=true;const setupPending=stale.window.tenantPushEnable();for(let i=0;i<10&&stale.digestResolvers.length===0;i++)await tick();assert.equal(stale.digestResolvers.length,1,'a subscription refresh can be pending after its list response');const remove=stale.grid.children[0].querySelector('.push-devices').children[0].children[1];const removePending=remove.onclick();for(let i=0;i<10&&stale.digestResolvers.length<2;i++)await tick();assert.equal(stale.digestResolvers.length,2,'unsubscribe starts a newer device-state refresh');const noticesBefore=stale.state.noticeUpdates;stale.digestResolvers[0](new Uint8Array(32).fill(0xaa).buffer);await tick();assert.equal(stale.state.noticeUpdates,noticesBefore,'the late pre-unsubscribe response is ignored');stale.digestResolvers[1](new Uint8Array(32).fill(0xaa).buffer);await Promise.all([setupPending,removePending]);assert.equal(stale.window.tenantPushConnected,false,'unsubscribe refresh wins and clears this browser device state');
+ const staleProfile=setup(true);staleProfile.state.devices=[{device_id:'aa'.repeat(32),label:'Current device'}];for(let i=0;i<10&&staleProfile.digestResolvers.length===0;i++)await tick();assert.equal(staleProfile.digestResolvers.length,1,'device matching can remain pending after its tenant list response');staleProfile.listeners['tenant-profile']({detail:{member:{tenant_id:'company-b',telegram_id:99,role:'owner'}}});await tick();staleProfile.digestResolvers[0](new Uint8Array(32).fill(0xaa).buffer);await tick();assert.equal(staleProfile.window.tenantPushConnected,false,'a late device match from the previous tenant cannot restore connected status');
  const sw=fs.readFileSync(path.join(__dirname,'../docs/tenant-push-sw.js'),'utf8'),events={},notifications=[],opened=[];
  vm.runInNewContext(sw,{self:{addEventListener:(name,fn)=>events[name]=fn,registration:{showNotification:async(title,data)=>notifications.push([title,data])},clients:{openWindow:async(url)=>opened.push(url)}}});
  let work;events.push({data:{json:()=>({body:'PRIVATE TASK',url:'https://evil.test'})},waitUntil:promise=>work=promise});await work;
