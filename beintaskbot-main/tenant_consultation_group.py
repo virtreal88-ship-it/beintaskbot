@@ -32,6 +32,14 @@ def schema(conn):
           message_id TEXT NOT NULL,body TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY(tenant_id,channel_id,conversation_id,message_id),
           FOREIGN KEY(tenant_id,consultation_id) REFERENCES saas_internal_consultations(tenant_id,id) ON DELETE RESTRICT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_consultation_customer_acks(
+          tenant_id UUID NOT NULL,consultation_id UUID NOT NULL,request_id UUID NOT NULL,
+          case_id UUID NOT NULL,channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,
+          body TEXT NOT NULL,body_hash TEXT NOT NULL,state TEXT NOT NULL,
+          connect_message_id TEXT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,consultation_id),UNIQUE(tenant_id,request_id),
+          FOREIGN KEY(tenant_id,consultation_id) REFERENCES saas_internal_consultations(tenant_id,id) ON DELETE RESTRICT,
+          FOREIGN KEY(tenant_id,case_id) REFERENCES saas_support_tickets(tenant_id,id) ON DELETE RESTRICT)''')
         cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS customer_draft TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS draft_reply_id TEXT NULL")
         cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS draft_revision BIGINT NOT NULL DEFAULT 0")
@@ -835,6 +843,16 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
                     'conversation_id':customer_scope['conversation_id']}
                 if not pilot_group_handoff_allowed(source_job,connection=conn):
                     raise TenantLinearError('Customer pilot authorization or handoff state changed before group delivery.',409)
+                if not turn_id and source_external_id:
+                    cur.execute('''SELECT m.external_id FROM saas_crm_messages m
+                      WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s
+                        AND m.direction='incoming'
+                      ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1''',
+                      (tenant,int(consult.get('lead_id') or source_route.get('lead_id') or 0),
+                       'connect:'+customer_scope['channel_id']))
+                    latest=cur.fetchone() or {}
+                    if latest.get('external_id')!='connect:'+str(source_external_id):
+                        raise TenantLinearError('A newer customer message replaced this consultation.',409)
                 attempted=True
                 receipt=send_group_with_receipt(current_route,body,request_id)
                 cur.execute('''UPDATE saas_consultation_group_deliveries SET state='sent',
@@ -866,3 +884,114 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
             conn.commit()
         return {'state':'unknown' if attempted else 'blocked','reason':'pilot_group_delivery_needs_review'}
     return {'state':'sent','request_id':request_id,'message_id':receipt['message_id']}
+
+
+def acknowledge_pilot_consultation_to_customer(job,consultation_id,source_external_id='',language='auto'):
+    """Send a fixed customer acknowledgment only after the group receipt is durable."""
+    from tenant_ai_pilot import manual_live_job,configured_group_scope,configured_scope
+    from tenant_ai_dialog_scope import lock_dialog
+    from tenant_connect_transport import connect_route,send_ai_reply_with_receipt
+    from tenant_platform import _json
+    if not manual_live_job(job):return {'state':'blocked','reason':'pilot_scope_disabled'}
+    target=configured_group_scope();customer_scope=configured_scope()
+    if not target or not customer_scope:return {'state':'blocked','reason':'pilot_scope_unconfigured'}
+    tenant=str(job['tenant_id']);consultation_id=identifier(consultation_id)
+    request_id=str(uuid.uuid5(uuid.NAMESPACE_URL,'beintaskbot-pilot-customer-ack:'+tenant+':'+consultation_id))
+    body={
+      'az':'Müraciətinizi texniki komandaya göndərdik. Hələ həll olunduğunu təsdiqləmirik; əlavə məlumat lazım olsa, sizdən soruşacağıq.',
+      'ru':'Мы передали обращение технической команде. Решение пока не подтверждено; если понадобятся сведения, мы уточним их у вас.',
+      'tr':'Bildiriminizi teknik ekibe ilettik. Sorun henüz çözülmüş değil; ek bilgi gerekirse size soracağız.',
+      'en':'We sent your report to the technical team. It is not confirmed resolved; we will ask if more details are needed.',
+    }.get(str(language or 'auto').casefold(),'We sent your report to the technical team. It is not confirmed resolved; we will ask if more details are needed.')
+    group_request=str(uuid.uuid5(uuid.NAMESPACE_URL,'beintaskbot-pilot-group:'+tenant+':'+consultation_id))
+    try:source_key=str(uuid.UUID(str(source_external_id)))
+    except (ValueError,TypeError,AttributeError):return {'state':'blocked','reason':'source_message_invalid'}
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''SELECT c.case_id::text AS case_id,c.channel_id::text AS channel_id,c.conversation_id,
+                c.status,t.status AS ticket_status,d.state AS group_state,d.channel_id::text AS group_channel_id,
+                d.conversation_id AS group_conversation_id
+              FROM saas_internal_consultations c JOIN saas_support_tickets t
+                ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+              JOIN saas_consultation_group_deliveries d ON d.tenant_id=c.tenant_id
+                AND d.consultation_id=c.id AND d.request_id=%s::uuid
+              WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid''',(group_request,tenant,consultation_id))
+            consult=cur.fetchone()
+            if (not consult or consult['group_state']!='sent' or consult['status']=='closed'
+                    or consult['ticket_status']=='resolved' or consult['channel_id']!=customer_scope['channel_id']
+                    or consult['conversation_id']!=customer_scope['conversation_id']
+                    or consult['group_channel_id']!=target['channel_id']
+                    or consult['group_conversation_id']!=target['conversation_id']):
+                return {'state':'blocked','reason':'group_receipt_or_case_unavailable'}
+            cur.execute('''SELECT state,connect_message_id FROM saas_consultation_customer_acks
+              WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid''',(tenant,consultation_id))
+            previous=cur.fetchone()
+            if previous:
+                return {'state':'sent' if previous['state']=='sent' else
+                    ('unknown' if previous['state'] in {'sending','unknown'} else 'blocked'),
+                    'message_id':previous.get('connect_message_id')}
+            cur.execute('''SELECT lead_id FROM saas_connect_conversations WHERE tenant_id=%s::uuid
+              AND connect_channel_id=%s::uuid AND conversation_id=%s''',
+              (tenant,customer_scope['channel_id'],customer_scope['conversation_id']))
+            route_row=cur.fetchone() or {}
+            cur.execute('''INSERT INTO saas_consultation_customer_acks(tenant_id,consultation_id,request_id,
+              case_id,channel_id,conversation_id,body,body_hash,state)
+              VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,'sending')''',
+              (tenant,consultation_id,request_id,consult['case_id'],consult['channel_id'],consult['conversation_id'],
+               body,hashlib.sha256(body.encode()).hexdigest()))
+        conn.commit()
+    attempted=False
+    try:
+      with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            lock_dialog(cur,tenant,'connect',customer_scope['channel_id'],customer_scope['conversation_id'])
+            from tenant_ai_pilot import pilot_group_handoff_allowed
+            source_job={**job,'provider':'connect','tenant_id':tenant,'channel_id':customer_scope['channel_id'],
+                'conversation_id':customer_scope['conversation_id']}
+            if not pilot_group_handoff_allowed(source_job,connection=conn):
+                raise TenantLinearError('Customer pilot authorization changed before the acknowledgment.',409)
+            cur.execute('''SELECT state,revision,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid
+              AND provider='connect' AND channel_id=%s AND conversation_id=%s FOR UPDATE''',
+              (tenant,customer_scope['channel_id'],customer_scope['conversation_id']))
+            current_state=cur.fetchone() or {}
+            if current_state.get('state')!='human' or not str(current_state.get('reason') or '').startswith('ai_developer_consultation:'):
+                raise TenantLinearError('Customer handoff changed before acknowledgment.',409)
+            cur.execute('''SELECT m.external_id FROM saas_crm_messages m WHERE m.tenant_id=%s::uuid
+              AND m.kommo_lead_id=%s AND m.channel=%s AND m.direction='incoming'
+              ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1''',
+              (tenant,int(route_row.get('lead_id') or 0),'connect:'+customer_scope['channel_id']))
+            latest=cur.fetchone() or {}
+            if latest.get('external_id')!='connect:'+source_key:
+                raise TenantLinearError('A newer customer message replaced this acknowledgment.',409)
+            group=connect_route(cur,tenant,int(route_row['lead_id']))
+            if not group or group['channel_id']!=customer_scope['channel_id'] or group['conversation_id']!=customer_scope['conversation_id']:
+                raise TenantLinearError('Customer route changed before acknowledgment.',409)
+            cur.execute('''SELECT state FROM saas_consultation_customer_acks WHERE tenant_id=%s::uuid
+              AND consultation_id=%s::uuid AND request_id=%s::uuid FOR UPDATE''',(tenant,consultation_id,request_id))
+            row=cur.fetchone()
+            if not row or row['state']!='sending':
+                raise TenantLinearError('Acknowledgment request is unavailable.',409)
+            attempted=True
+            message_id=send_ai_reply_with_receipt(group,body,request_id)
+            cur.execute('''UPDATE saas_consultation_customer_acks SET state='sent',connect_message_id=%s,updated_at=now()
+              WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='sending'
+              RETURNING consultation_id''',(message_id,tenant,consultation_id,request_id))
+            if not cur.fetchone():raise TenantLinearError('Customer acknowledgment receipt needs review.',409)
+            cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,
+              channel,author_name,body,message_type,raw)
+              VALUES(%s::uuid,%s::uuid,%s,%s,'outgoing',%s,'AI Agent',%s,'text',%s::jsonb)
+              ON CONFLICT(tenant_id,external_id) DO NOTHING''',
+              (uuid.uuid4(),tenant,int(route_row['lead_id']),'connect:'+message_id,
+               'connect:'+customer_scope['channel_id'],body,_json({'source':'connect','pilot_consultation_ack':consultation_id})))
+        conn.commit()
+    except Exception:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute('''UPDATE saas_consultation_customer_acks SET state=%s,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='sending' ''',
+                  ('unknown' if attempted else 'blocked',tenant,consultation_id,request_id))
+            conn.commit()
+        return {'state':'unknown' if attempted else 'blocked','reason':'customer_ack_needs_review'}
+    return {'state':'sent','request_id':request_id,'message_id':message_id}

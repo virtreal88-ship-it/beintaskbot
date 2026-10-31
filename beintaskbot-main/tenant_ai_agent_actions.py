@@ -98,7 +98,7 @@ def matching_triggers(triggers,text,*,first_inquiry=False,phone=''):
     return matches
 
 
-def handoff(job,reason):
+def handoff(job,reason,*,source_message_id='',expected_conversation_revision=None):
     from tenant_support_inbox_store import handoff_ticket, summarize_created, handoff_recorded
     ticket = None
     tenant=str(job['tenant_id']);chat=str(job['chat_id'])
@@ -106,6 +106,42 @@ def handoff(job,reason):
         ensure_schema(conn)
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, job["provider"], job.get("channel_id"), chat)
+            if source_message_id:
+                # A generated handoff is valid only while this exact inbound
+                # remains the newest customer event and the claimed worker
+                # lease/conversation revision are still current. Ingestion,
+                # Pause and takeover serialize on this same dialog lock.
+                if job.get('provider')!='connect' or not job.get('lease_token'):
+                    return False
+                scope=job_scope(job)
+                cur.execute('''SELECT j.state,j.lease_token,j.revision,
+                    j.lease_until>clock_timestamp() AS lease_live
+                  FROM saas_ai_agent_jobs j WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid
+                    AND j.provider='connect' AND j.conversation_id=%s AND j.scope_channel_id=%s
+                    AND j.event_fingerprint=%s FOR UPDATE''',
+                  (tenant,job['agent_id'],chat,scope,job.get('event_fingerprint')))
+                claimed=cur.fetchone() or {}
+                if (claimed.get('state')!='processing' or claimed.get('lease_token')!=job.get('lease_token')
+                        or int(claimed.get('revision') or 0)!=int(job.get('revision') or 0)
+                        or claimed.get('lease_live') is not True):
+                    return False
+                cur.execute('''SELECT state,revision FROM saas_ai_conversation_state
+                  WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+                    AND conversation_id=%s FOR UPDATE''',(tenant,scope,chat))
+                state=cur.fetchone() or {}
+                if (state.get('state')!='active' or
+                        (expected_conversation_revision is not None
+                         and int(state.get('revision') or 0)!=expected_conversation_revision)):
+                    return False
+                try: source_key=str(uuid.UUID(str(source_message_id)))
+                except (ValueError,TypeError,AttributeError): return False
+                cur.execute('''SELECT external_id FROM saas_crm_messages
+                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND direction='incoming'
+                  ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 1''',
+                  (tenant,int(job['lead_id']),'connect:'+scope))
+                latest=cur.fetchone() or {}
+                if latest.get('external_id')!='connect:'+source_key:
+                    return False
             if handoff_recorded(cur, job):
                 return False
             if job['provider'] == 'connect':

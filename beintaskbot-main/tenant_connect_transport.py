@@ -1105,6 +1105,19 @@ def send_ai_reply(route: dict, text: str, run_id: str) -> str:
     return send(route, text, client_message_id)
 
 
+def send_ai_reply_with_receipt(route: dict, text: str, request_id: str) -> str:
+    """Send one direct reply and require a provider message ID receipt."""
+    try:
+        client_message_id=str(uuid.UUID(str(request_id)))
+    except (ValueError,TypeError,AttributeError):
+        raise TenantPlatformError('AI cavabının sorğu ID-si düzgün deyil.') from None
+    result=_request(route['api_key'],'POST','/v1/channels/'+route['channel_id']+'/messages',
+        {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':client_message_id})
+    if not isinstance(result,dict) or not isinstance(result.get('id'),str) or not result['id']:
+        raise TenantPlatformError('Connect direct delivery receipt is unavailable.')
+    return str(result['id'])
+
+
 def send_group_with_receipt(route: dict, text: str, request_id: str) -> dict:
     """One confirmed group delivery; expose provider reference only when valid.
 

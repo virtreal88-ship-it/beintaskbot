@@ -594,6 +594,47 @@ def test_ai_handoff_delivery_uses_only_configured_paused_group_and_saved_attachm
     assert db.execute("SELECT state FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['state']=='sent'
 
 
+def test_customer_ack_is_receipt_backed_idempotent_and_uses_exact_client_route(db,monkeypatch):
+    consult,case=setup_case(db,monkeypatch)
+    _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch,
+        customer_state='human',reason='ai_developer_consultation:missing_knowledge')
+    source_id=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,%s,'incoming',%s,'The amount is displayed incorrectly.','text',now()+interval '1 second')''',
+      (str(uuid.uuid4()),A,'connect:'+source_id,'connect:'+CA));db.commit()
+    import tenant_ai_dialog_scope
+    import tenant_ai_pilot as pilot
+    monkeypatch.setattr(tenant_ai_dialog_scope,'lock_dialog',lambda *_args:None)
+    monkeypatch.setattr(pilot,'pilot_group_handoff_allowed',lambda *_args,**_kwargs:True)
+    group_sends=[];customer_sends=[]
+    def group_route(_cur,_tenant,_lead):
+        # The same provider channel uses distinct exact conversation routes.
+        return {'api_key':'synthetic','channel_id':CA,'conversation_id':GROUP}
+    monkeypatch.setattr(transport,'connect_route',group_route)
+    monkeypatch.setattr(transport,'send_group_with_receipt',lambda route,body,key:
+        group_sends.append((route['conversation_id'],key)) or
+        {'message_id':'group-receipt','external_message_id':'GROUP_RECEIPT'})
+    job={'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client',
+        'agent_id':AGENT,'event_fingerprint':event_fingerprint}
+    group=flow.deliver_pilot_consultation_to_group(job,consult,
+        'The amount displayed differs from the reported total.',source_id)
+    assert group['state']=='sent' and group_sends==[(GROUP,group['request_id'])]
+    monkeypatch.setattr(transport,'connect_route',lambda _cur,_tenant,_lead:
+        {'api_key':'synthetic','channel_id':CA,'conversation_id':'client'})
+    monkeypatch.setattr(transport,'send_ai_reply_with_receipt',lambda route,body,key:
+        customer_sends.append((route['conversation_id'],body,key)) or 'customer-ack-id')
+    ack=flow.acknowledge_pilot_consultation_to_customer(job,consult,source_id,'az')
+    assert ack['state']=='sent' and len(customer_sends)==1,ack
+    assert customer_sends[0][0]=='client'
+    assert 'texniki komandaya göndərdik' in customer_sends[0][1]
+    assert 'CASE:' not in customer_sends[0][1]
+    assert flow.acknowledge_pilot_consultation_to_customer(job,consult,source_id,'az')['state']=='sent'
+    assert len(customer_sends)==1
+    assert db.execute('''SELECT state,connect_message_id,case_id::text AS case_id
+      FROM saas_consultation_customer_acks WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid''',(A,consult))[0]=={
+        'state':'sent','connect_message_id':'customer-ack-id','case_id':case}
+
+
 def test_ai_handoff_delivery_quarantines_unknown_send_without_retry(db,monkeypatch):
     consult,_=setup_case(db,monkeypatch)
     monkeypatch.setattr('tenant_ai_pilot.manual_live_job',lambda _job:True)
@@ -613,6 +654,33 @@ def test_ai_handoff_delivery_quarantines_unknown_send_without_retry(db,monkeypat
     assert first['state']=='unknown', first
     assert flow.deliver_pilot_consultation_to_group(job,consult,'Synthetic issue')['state']=='unknown'
     assert calls==['once']
+
+
+def test_new_customer_message_between_handoff_and_group_dispatch_blocks_stale_report(db,monkeypatch):
+    consult,_=setup_case(db,monkeypatch)
+    _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch,
+        customer_state='human',reason='ai_developer_consultation:missing_knowledge')
+    source_id=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,%s,'incoming',%s,'Original issue','text',now()+interval '1 second')''',
+      (str(uuid.uuid4()),A,'connect:'+source_id,'connect:'+CA));db.commit()
+    monkeypatch.setattr('tenant_ai_pilot.manual_live_job',lambda _job:True)
+    monkeypatch.setattr('tenant_ai_pilot.configured_group_scope',lambda:{'tenant_id':A,'channel_id':CA,'conversation_id':GROUP})
+    monkeypatch.setattr('tenant_ai_pilot.configured_scope',lambda:{'tenant_id':A,'channel_id':CA,'conversation_id':'client'})
+    monkeypatch.setattr('tenant_ai_group_coordination._connect',lambda:db)
+    monkeypatch.setattr('tenant_ai_dialog_scope.lock_dialog',lambda *_args:None)
+    monkeypatch.setattr(transport,'connect_route',lambda *_:{'api_key':'synthetic','channel_id':CA,'conversation_id':GROUP})
+    sends=[];monkeypatch.setattr(transport,'send_group_with_receipt',lambda *_:sends.append('sent'))
+    def newer_message_gate(*_args,**_kwargs):
+        db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,happened_at)
+          VALUES(%s::uuid,%s::uuid,41,'connect:newer-message','incoming',%s,'Correction to the report','text',now()+interval '2 seconds')''',
+          (str(uuid.uuid4()),A,'connect:'+CA))
+        return True
+    monkeypatch.setattr('tenant_ai_pilot.pilot_group_handoff_allowed',newer_message_gate)
+    result=flow.deliver_pilot_consultation_to_group({'tenant_id':A,'provider':'connect','channel_id':CA,
+        'conversation_id':'client','agent_id':AGENT,'event_fingerprint':event_fingerprint},
+        consult,'Original issue summary',source_id)
+    assert result['state']=='blocked' and sends==[]
 
 
 def test_actual_pilot_gates_cover_handoff_group_reply_and_stubbed_customer_send(db,monkeypatch):
