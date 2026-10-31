@@ -120,7 +120,7 @@ def test_other_tenant_cannot_use_dialog_context(ready):
 
 @pytest.mark.parametrize('interrupt',[False,True,'media_version','body','answered'])
 @pytest.mark.parametrize('kind',['voice','audio','image','document','video'])
-def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receipt_without_send(ready,monkeypatch,kind,interrupt):
+def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receipt_without_send(ready,monkeypatch,kind,interrupt,burst=False):
     from unittest.mock import AsyncMock
     import tenant_episode_media as media
     import tenant_knowledge_media as core
@@ -135,13 +135,20 @@ def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receip
     db.execute('''INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,raw,happened_at)
       VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','',%s,'{"mediaId":"version1"}',now()+interval '2 seconds')''',
       (A,str(uuid.uuid4()),source,'connect:'+CA,kind));db.commit()
+    sources=[source]
+    if burst:
+        for external,direction,message_kind,seconds in [('resolved-old','incoming','voice',-2),('resolved-answer','outgoing','text',-1),('between-voices','incoming','text',3),('voice-two','incoming','voice',4),('between-more','incoming','text',5),('voice-three','incoming','voice',6)]:
+            external='connect:'+external
+            db.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,raw,happened_at) VALUES(%s::uuid,%s::uuid,41,%s,%s,%s,'Interleaved context',%s,'{\"mediaId\":\"version1\"}',now()+(%s * interval '1 second'))",(A,str(uuid.uuid4()),external,'connect:'+CA,direction,message_kind,seconds))
+            if message_kind=='voice' and seconds>0:sources.append(external)
+        db.commit()
     monkeypatch.setattr(media,'_connect',lambda:db)
     monkeypatch.setattr('tenant_media_evidence._connect',lambda:db)
     monkeypatch.setattr('tenant_ai_spend_budget._connect',lambda:db)
     def loaded(session,lead,external,**scope):
-        assert session['tenant_id']==A and lead==41 and external==source
+        assert session['tenant_id']==A and lead==41 and external in sources
         assert scope=={'channel_id':CA,'conversation_id':'client'}
-        current=db.execute('SELECT external_id,body,raw,direction,message_type,channel FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',(A,source))[0]
+        current=db.execute('SELECT external_id,body,raw,direction,message_type,channel FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',(A,external))[0]
         db.commit()
         return {'provider':'connect','route':{'channel_id':CA,'conversation_id':'client'},'row':current}
     monkeypatch.setattr('tenant_chat_attachment_store.load',loaded)
@@ -163,8 +170,8 @@ def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receip
     monkeypatch.setattr('tenant_ai_agent_run_store.knowledge_context',retrieve)
     if interrupt=='answered':
         db.execute('''INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,happened_at)
-          VALUES(%s::uuid,%s::uuid,41,'employee-after-media',%s,'outgoing','Earlier employee answer',now()+interval '3 seconds')''',
-          (A,str(uuid.uuid4()),'connect:'+CA));db.commit()
+          VALUES(%s::uuid,%s::uuid,41,'employee-after-media',%s,'outgoing','Earlier employee answer',now()+(%s * interval '1 second'))''',
+          (A,str(uuid.uuid4()),'connect:'+CA,7 if burst else 3));db.commit()
     if interrupt and interrupt!='answered' and kind!='document':
         fired=[]
         def newer(response):
@@ -211,6 +218,10 @@ def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receip
     assert first['context_usage']['evidence'][0]['source_id']==source
     assert first['context_usage']['evidence'][0]['status']==('partial' if kind=='video' else 'processed')
     assert generated.call_args.kwargs['extra_context']['assigned_agent_id']==AGENT
+    if burst:
+        assert speech.call_count==3
+        assert {item['source_id'] for item in first['context_usage']['evidence']}==set(sources)
+        assert set(sources)<={item['source_id'] for item in generated.call_args.args[3]}
     before=(visual.call_count,speech.call_count,video_speech.call_count)
     db.execute("UPDATE saas_crm_messages SET body='edited after completed draft' WHERE tenant_id=%s::uuid AND external_id=%s",(A,source));db.commit()
     with pytest.raises(TenantLinearError):copilot.run(PROFILE,data)
@@ -230,7 +241,7 @@ def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receip
     media.prepare(auto,current)
     assert current[0]['_episode_receipt']['reused'] is True
     assert (visual.call_count,speech.call_count,video_speech.call_count)==before
-    assert download.await_count==1
+    assert download.await_count==(3 if burst else 1)
     assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
     assert db.execute('SELECT count(*) AS n FROM saas_knowledge_candidates')[0]['n']==0
     db.commit()
@@ -292,3 +303,9 @@ def test_manual_kb_uses_customer_evidence_after_incoming_employee_reply(ready,mo
     copilot.run(PROFILE,data)
     assert 'CUSTOMER_TRANSCRIPT' in lookup.call_args.args[1]
     assert 'STAFF_BODY' not in lookup.call_args.args[1]
+
+
+
+def test_three_voice_customer_request_after_staff_answer_reuses_all_receipts(ready,monkeypatch):
+    test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receipt_without_send(
+        ready,monkeypatch,'voice','answered',burst=True)
