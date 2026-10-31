@@ -10,7 +10,25 @@ from tenant_linear_policy import TenantLinearError
 
 IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
 AUDIO_TYPES = {'audio/ogg', 'application/ogg', 'audio/mpeg', 'audio/mp3', 'audio/mp4',
-               'audio/wav', 'audio/x-wav', 'audio/webm', 'audio/flac', 'audio/x-flac', 'audio/aac'}
+               'audio/opus', 'audio/x-m4a', 'audio/m4a', 'audio/wav', 'audio/x-wav', 'audio/webm', 'audio/flac', 'audio/x-flac', 'audio/aac'}
+
+
+def canonical_audio_mime(content, mime):
+    """Named audio aliases only; never guess a format for generic/missing MIME."""
+    if mime == 'audio/opus':
+        segments = content[26] if len(content) > 26 else 0
+        start = 27 + segments
+        if (len(content) >= start + 19 and content[:4] == b'OggS' and content[4] == 0
+                and content[5] & 2 and segments and content[27] >= 19
+                and content[start:start + 8] == b'OpusHead'):
+            return 'audio/ogg'
+        raise TenantLinearError('Fayl formatı dəstəklənmir.', 415)
+    if mime in {'audio/x-m4a', 'audio/m4a'}:
+        if (len(content) >= 16 and content[4:8] == b'ftyp'
+                and content[8:12] in {b'M4A ', b'M4B ', b'isom', b'iso2', b'mp41', b'mp42'}):
+            return 'audio/mp4'
+        raise TenantLinearError('Fayl formatı dəstəklənmir.', 415)
+    return mime
 
 
 class PublicResolver(aiohttp.resolver.DefaultResolver):
@@ -132,7 +150,9 @@ async def download_media(item, *, max_bytes=None, preview_documents=False):
                     chunks.append(chunk)
                 if not size or length and size != int(length):
                     raise ValueError('Incomplete media')
-                return b''.join(chunks), mime
+                content = b''.join(chunks)
+                if kind in {'audio', 'voice'}: mime = canonical_audio_mime(content, mime)
+                return content, mime
     except TenantLinearError:
         raise
     except Exception:

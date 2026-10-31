@@ -334,3 +334,70 @@ def test_onboarding_does_not_expand_legacy_attachment_access(media_db):
     media_db.execute("UPDATE saas_tenants SET status='onboarding' WHERE id=%s::uuid",(A,));media_db.commit()
     with pytest.raises(TenantLinearError) as error:store.load(PROFILE,41,'kommo-file')
     assert error.value.status==403
+
+
+@pytest.mark.parametrize('kind', ['voice', 'audio'])
+def test_opus_alias_is_canonicalized_only_for_real_ogg_opus(monkeypatch, kind):
+    from pathlib import Path
+    data=(Path(__file__).parent/'fixtures/connect-voice-tone.ogg').read_bytes()
+    transport(monkeypatch,headers={'Content-Type':'audio/opus'},chunks=[data[:32],data[32:]])
+    value=item();value['row']['message_type']=kind
+    downloaded,mime=run(media.download_media(value))
+    assert (downloaded,mime)==(data,'audio/ogg')
+    from tenant_connect_voice import validate_audio,FORMATS
+    assert validate_audio(downloaded,FORMATS[mime],mime)[1:] == ('ogg','audio/ogg')
+
+
+@pytest.mark.parametrize('mime', ['audio/opus','audio/x-m4a','audio/m4a','application/octet-stream',''])
+def test_audio_alias_does_not_admit_unknown_or_spoofed_bytes(monkeypatch,mime):
+    transport(monkeypatch,headers={'Content-Type':mime},chunks=[b'<html>not audio</html>'])
+    value=item();value['row']['message_type']='voice'
+    with pytest.raises(TenantLinearError) as error:run(media.download_media(value))
+    assert error.value.status==415
+
+
+@pytest.mark.parametrize('mime', ['audio/x-m4a','audio/m4a'])
+def test_m4a_alias_keeps_canonical_container_and_rejects_unknown_brand(mime):
+    assert media.canonical_audio_mime(b'\x00\x00\x00\x18ftypM4A '+b'\x00'*4,mime)=='audio/mp4'
+    with pytest.raises(TenantLinearError):media.canonical_audio_mime(b'\x00\x00\x00\x18ftypBAD!'+b'\x00'*4,mime)
+
+
+@pytest.mark.parametrize('kind',['audio','voice'])
+@pytest.mark.parametrize('mime_in',['audio/opus','audio/x-m4a','audio/m4a'])
+def test_protected_alias_download_real_decode_reaches_mock_asr(monkeypatch,tmp_path,kind,mime_in):
+    from pathlib import Path
+    import tenant_knowledge_media as core
+    import tenant_chat_ai_provider as provider
+    data=(Path(__file__).parent/'fixtures/connect-voice-tone.ogg').read_bytes()
+    if mime_in != 'audio/opus':
+        import subprocess
+        target=tmp_path/'tone.m4a'
+        subprocess.run(['ffmpeg','-nostdin','-v','error','-i',str(Path(__file__).parent/'fixtures/connect-voice-tone.ogg'),str(target)],check=True,capture_output=True)
+        data=target.read_bytes()
+    transport(monkeypatch,headers={'Content-Type':mime_in},chunks=[data])
+    current=item();current['row']['message_type']=kind
+    ref={'id':'ref','external_id':'connect:'+MID,'channel_id':CA,'lead_id':41,'media_kind':kind}
+    message={'ref':'ref','text':''}
+    request={'tenant':'unit','model':'mock-model','key':'mock-key',
+        'config':{'audio_enabled':True,'transcription_model':'mock-asr'},
+        'route':{'channel_id':CA,'conversation_id':'g@g.us','allow_external_media':True,'allow_paid_asr':True},
+        'refs':[ref],'messages':[message]}
+    asr=Mock(return_value=('Synthetic tone transcript',{'total_tokens':2}))
+    monkeypatch.setattr(provider,'transcribe',asr)
+    monkeypatch.setattr('tenant_media_evidence.reusable',lambda *_:None)
+    def transcribe_once(_profile,request,model,audio,invoke,**kw):
+        request['asr_attempted']=True
+        text,usage=invoke(request['key'],model,*audio,with_usage=True)
+        return text,usage,True
+    execution=SimpleNamespace(load=lambda *_:current,check=Mock(),transcribe_once=transcribe_once)
+    images,receipts=core.collect({},request,execution=execution)
+    assert images==[] and receipts[0]['status']=='processed'
+    assert receipts[0]['transcript']=='Synthetic tone transcript'
+    assert 'Synthetic tone transcript' in message['text']
+    asr.assert_called_once()
+    assert asr.call_args.args[2:]==(data,'ogg' if mime_in=='audio/opus' else 'm4a','audio/ogg' if mime_in=='audio/opus' else 'audio/mp4')
+    # A failed *paid* boundary must no longer carry ambiguous validation stage.
+    asr.reset_mock();asr.side_effect=ValueError('synthetic provider failure')
+    _,failed=core.collect({},request,execution=execution)
+    assert failed[0]['status']=='error' and failed[0]['failure_stage']=='audio_transcription'
+    asr.assert_called_once()
