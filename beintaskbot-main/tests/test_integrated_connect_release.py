@@ -2,7 +2,7 @@
 import asyncio
 import json
 import uuid
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, AsyncMock
 import pytest
 from test_tenant_support_inbox import (
     database, db, A, B, CA, CB, AGENT, PROFILE, seed_job, config_company,
@@ -12,12 +12,18 @@ import tenant_ai_agent_run_store as runs
 import tenant_ai_agent_worker as worker
 import tenant_connect_voice as voice
 import tenant_connect_transport as transport
+import tenant_episode_media as episode_media
+import tenant_media_evidence as evidence
+import tenant_connect_images as images
+import tenant_knowledge_media as media_core
+import tenant_chat_ai_provider as provider
+import tenant_ai_spend_budget as spend_budget
 
 @pytest.fixture
 def flow(db, monkeypatch):
     from cryptography.fernet import Fernet
     cipher=Fernet(Fernet.generate_key())
-    for module in (runs,voice,transport):
+    for module in (runs,voice,transport,episode_media,evidence,images,spend_budget):
         monkeypatch.setattr(module,'_connect',lambda:db)
     monkeypatch.setattr(transport,'_fernet',lambda:cipher)
     for name in ('AI_AGENTS_ENABLED','AI_AGENTS_AUTO_SEND_ENABLED'):
@@ -48,7 +54,21 @@ def flow(db, monkeypatch):
     monkeypatch.setattr(worker,'generate',generation)
     monkeypatch.setattr(voice,'transcribe',speech)
     monkeypatch.setattr(voice,'download_audio',lambda *a:(b'mock-media','ogg','audio/ogg'))
-    monkeypatch.setattr(voice,'validate_audio',lambda *a:a)
+    monkeypatch.setattr(voice,'validate_audio',lambda *a,**kw:a)
+    # The common media executor uses the same real isolated SQL admission,
+    # while every external media/provider boundary stays mocked.
+    monkeypatch.setattr(provider,'transcribe',speech)
+    observation=Mock(return_value=('Visible test observation',{'total_tokens':3}))
+    monkeypatch.setattr(provider,'generate',observation)
+    async def media_bytes(item,**kwargs):
+        kind=item['row']['message_type']
+        if kind in {'audio','voice'}:return b'mock-media','audio/ogg'
+        if kind=='document':return b'Synthetic document','text/plain'
+        if kind=='image':
+            import base64
+            return base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6cN8AAAAASUVORK5CYII='),'image/png'
+        return b'mock-video','video/mp4'
+    monkeypatch.setattr(media_core,'download_media',AsyncMock(side_effect=media_bytes))
     monkeypatch.setattr(transport,'send_ai_reply',send)
     def inbound(kind='text',text='Salam'):
         mid=str(uuid.uuid4())
@@ -61,7 +81,7 @@ def flow(db, monkeypatch):
         job=runs.claim_next()
         if job: asyncio.run(worker.process_connect_one(job,Mock()))
         return job
-    return dict(db=db,inbound=inbound,process=process,speech=speech,generate=generation,send=send,summary=summary_call)
+    return dict(db=db,inbound=inbound,process=process,speech=speech,generate=generation,send=send,summary=summary_call,observation=observation)
 
 def state(db):
     result=db.execute("SELECT state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect'",(A,))[0]['state']
@@ -153,7 +173,7 @@ def test_real_sql_text_voice_text_and_central_key(flow,transcript):
     assert f['send'].call_count==3
     f['speech'].assert_called_once()
     assert f['speech'].call_args.args[0]=='mock-platform-key'
-    assert '[Audio transcript] '+transcript in str(f['generate'].call_args.args[3])
+    assert transcript in str(f['generate'].call_args.args[3])
     assert state(f['db'])=='active'
     assert f['db'].execute("SELECT sum(reserved_calls) AS calls FROM saas_ai_agent_runs")[0]['calls']==4
     assert f['db'].execute("SELECT sum(total_tokens) AS tokens FROM saas_ai_agent_token_usage")[0]['tokens']==31
@@ -316,7 +336,7 @@ def test_voice_handoff_creates_one_ticket_with_trusted_transcript_and_survives_s
     ticket=store.listing(PROFILE)['tickets'][0]
     assert ticket['summary_state']=='unavailable'
     assert 'интернет' in ticket['description']
-    assert '[Audio transcript]' in str(f['summary'].call_args.args[3])
+    assert 'Мне нужен оператор, интернет не работает' in str(f['summary'].call_args.args[3])
     assert 'Audio unavailable' not in str(f['summary'].call_args.args[3])
     f['generate'].assert_not_called();f['send'].assert_not_called()
     assert state(db)=='human'
@@ -475,3 +495,38 @@ def test_ambiguous_cross_provider_lead_control_fails_closed(flow):
     route=agents.read_conversation_for_lead(PROFILE,41)
     assert route['provider']=='kommo'
     assert route['conversation_id']=='other-chat'
+
+
+def test_newest_message_without_provider_timestamp_uses_created_at_for_current_turn(flow):
+    f=flow;db=f['db']
+    f['inbound']('text','Earlier timestamped message')
+    mid,_=f['inbound']('text','Latest without provider timestamp')
+    db.execute('UPDATE saas_crm_messages SET happened_at=NULL WHERE tenant_id=%s::uuid AND external_id=%s',(A,'connect:'+mid));db.commit()
+    history=connect_ai.history(A,41,CA)
+    assert history[-1]['external_id']==mid and history[-1]['happened_at']
+    f['process']()
+    f['send'].assert_called_once()
+    assert f['generate'].call_args.kwargs['extra_context']['latest_client_message_id']==mid
+
+
+@pytest.mark.parametrize('phase',['analysis','generation'])
+def test_same_id_media_edit_keeps_paid_old_receipt_but_never_sends_stale_reply(flow,phase):
+    f=flow;db=f['db']
+    db.execute("UPDATE saas_ai_agents SET model='gpt-4o-mini' WHERE tenant_id=%s::uuid",(A,));db.commit()
+    mid,_=f['inbound']('image','')
+    def changed(response):
+        def invoke(*args,**kwargs):
+            db.execute("UPDATE saas_crm_messages SET raw='{\"mediaId\":\"replacement\"}' WHERE tenant_id=%s::uuid AND external_id=%s",(A,'connect:'+mid));db.commit()
+            return response
+        return invoke
+    target=f['observation'] if phase=='analysis' else f['generate']
+    target.side_effect=changed(target.return_value)
+    f['process']()
+    f['observation'].assert_called_once();f['send'].assert_not_called()
+    if phase=='analysis':f['generate'].assert_not_called()
+    else:f['generate'].assert_called_once()
+    saved=db.execute('SELECT status,result FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid AND external_id=%s',(A,'connect:'+mid))
+    assert len(saved)==1 and saved[0]['status']=='processed'
+    assert 'Visible test observation' in str(saved[0]['result'])
+    assert not db.execute("SELECT 1 FROM saas_episode_media_flights WHERE tenant_id=%s::uuid AND external_id=%s AND state='running'",(A,'connect:'+mid))
+    db.commit()

@@ -454,7 +454,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1, video_re
             if reserved_calls > 1:
                 cur.execute("UPDATE saas_ai_agent_jobs SET lease_until=now()+(%s * interval '3 minutes') WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s AND lease_token=%s AND revision=%s",
                             (reserved_calls,tenant,job['agent_id'],job['provider'],job['conversation_id'],job_scope(job),job['lease_token'],job['revision']))
-            result = {'run_id':str(run_id),'api_key':api_key,'config':config,
+            result = {'run_id':str(run_id),'api_key':api_key,'config':config,'reserved_calls':reserved_calls,
               'config_version':str(row['config_version']),'company_instructions':row['company_instructions'],
               'settings_version':str(row['settings_version']),
               'agent_name':row['name'],'agent_instructions':row['instructions'],'agent_language':row['language'],
@@ -479,6 +479,11 @@ def record_token_usage(job, reservation, usage, *, cumulative=False, generated=F
     retry idempotent and retains the tenant/agent/model boundary for audits.
     """
     values = usage if isinstance(usage, dict) else {}
+    if generated and reservation.get('episode_media_usage'):
+        # Store the cumulative token receipt, but settle the main monetary
+        # reservation below using generation-only usage. Media has its own tariff.
+        values={key:int(values.get(key) or 0)+int(reservation['episode_media_usage'].get(key) or 0)
+                for key in ('input_tokens','output_tokens','total_tokens')}
     try:
         input_tokens = max(0, int(values.get('input_tokens') or 0))
         output_tokens = max(0, int(values.get('output_tokens') or 0))

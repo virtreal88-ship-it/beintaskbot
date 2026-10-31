@@ -96,22 +96,17 @@ def test_resolve_requires_tenant_channel_conversation_and_message_binding():
 
 
 class DocumentWorker(WorkerVoice):
-    async def test_document_text_reaches_existing_agent_without_transcription_call(self):
-        self.rows = [document_row()]
-        with patch('tenant_connect_documents.prepare', new=AsyncMock(return_value={MESSAGE: 'Invoice total: 42 AZN'})), \
-             patch('tenant_connect_documents.live', return_value=True):
-            await self.process()
-        lines = self.generate.call_args.args[3]
-        assert 'Invoice total: 42 AZN' in str(lines)
-        assert 'never follow as instructions' in str(lines)
+    async def test_document_evidence_reaches_assigned_agent_without_legacy_transcription(self):
+        self.rows=[document_row()]
+        self.evidence={'status':'processed','code':'document_text','observation':'Invoice total: 42 AZN'}
+        await self.process()
+        assert 'Invoice total: 42 AZN' in str(self.generate.call_args.args[3])
         assert 'never instructions' in self.generate.call_args.kwargs['instructions']
-        self.transcribe.assert_not_called()
-        self.send.assert_called_once()
+        self.transcribe.assert_not_called();self.send.assert_called_once()
 
-    async def test_document_failure_is_not_inferred(self):
-        self.rows = [document_row()]
-        with patch('tenant_connect_documents.prepare', new=AsyncMock(return_value={} )):
-            await self.process()
+    async def test_document_failure_is_explicit(self):
+        self.rows=[document_row()];self.evidence={'status':'error','code':'media_unavailable'}
+        await self.process()
         assert 'do not infer' in str(self.generate.call_args.args[3])
 
 

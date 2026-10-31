@@ -10,7 +10,10 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
-if 'psycopg' not in sys.modules:
+try:
+    import psycopg
+    import psycopg.rows
+except ImportError:
     pg = types.ModuleType('psycopg')
     pg.connect = MagicMock()
     rows_module = types.ModuleType('psycopg.rows')
@@ -82,7 +85,7 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
         mocked(worker, '_next_open', return_value=None)
         mocked(worker, 'runtime_flag', return_value=True)
         mocked(worker, 'enabled_triggers', return_value=[])
-        mocked(worker, 'knowledge_context', return_value=[])
+        self.knowledge=mocked(worker, 'knowledge_context', return_value=[])
         self.reserve = mocked(worker, 'reserve_run', side_effect=reserve)
         self.handoff = mocked(worker, 'handoff')
         self.send = mocked(transport, 'send_ai_reply_if_active', return_value='sent-id')
@@ -102,167 +105,87 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
         self.transcribe = mocked(voice, 'transcribe', return_value=('Salam, qiyməti nə qədərdir?',
                            {'input_tokens': 20, 'output_tokens': 4, 'total_tokens': 24}))
 
+        # Worker integration mocks the media boundary. Processing, exact-version
+        # reuse, budget and concurrent-flight behavior are exercised in
+        # test_episode_media against the real shared core and isolated SQL.
+        import tenant_episode_media as media
+        self.evidence={'status':'processed','code':'transcribed','transcript':'Salam, qiyməti nə qədərdir?'}
+        def prepare(execution,rows):
+            for item in rows:
+                if item.get('message_type') in media.KINDS and item.get('direction')=='incoming':
+                    item['_episode_receipt']=dict(self.evidence)
+                    item['_episode_channel']=execution.channel
+                    item['_copilot_media_notice']='[Attachment '+self.evidence['status']+': '+self.evidence['code']+'; do not infer unread contents]'
+                    item['_copilot_attachment_text']=self.evidence.get('transcript') or self.evidence.get('observation') or ''
+        self.prepare_media=mocked(media,'prepare',side_effect=prepare)
+        mocked(media.AutoExecution,'check',side_effect=lambda: None if self.active else (_ for _ in ()).throw(TenantLinearError('inactive',409)))
+        mocked(media.AutoExecution,'check_sources',side_effect=lambda: None if self.active else (_ for _ in ()).throw(TenantLinearError('inactive',409)))
+
     async def process(self, job=None):
         await worker.process_connect_one(job or JOB, Mock())
 
-    async def test_azerbaijani_voice_uses_central_key_history_and_text_send(self):
+    async def test_prepared_voice_reaches_assigned_agent_before_existing_send(self):
         await self.process()
-        self.transcribe.assert_called_once()
-        self.assertEqual(self.transcribe.call_args.args[:2], ('central-key', 'gpt-4o-mini-transcribe'))
-        args = self.generate.call_args
-        self.assertIn('Salam, qiyməti', str(args.args[3]))
-        self.assertIn('[Audio transcript]', str(args.args[3]))
-        self.assertEqual(args.kwargs['extra_context']['unprocessed_media_count'], 0)
-        self.assertEqual(args.kwargs['extra_context']['latest_client_message'], 'Salam, qiyməti nə qədərdir?')
-        self.assertEqual(self.reserve.call_args.kwargs['reserved_calls'], 2)
-        self.assertEqual(self.usage.call_args.args[2]['total_tokens'], 31)
-        self.assertEqual(self.rows[0]['transcript'], 'Salam, qiyməti nə qədərdir?')
-        self.handoff.assert_not_called()
+        self.prepare_media.assert_called_once()
+        assert 'Salam, qiyməti' in str(self.generate.call_args.args[3])
+        assert self.generate.call_args.kwargs['extra_context']['latest_client_message']=='Salam, qiyməti nə qədərdir?'
+        assert self.generate.call_args.kwargs['extra_context']['unprocessed_media_count']==0
+        self.transcribe.assert_not_called()  # legacy worker must not spend again
         self.send.assert_called_once()
         self.completed.assert_called_once()
 
-    async def test_english_voice_keeps_original_language(self):
-        self.transcribe.return_value = ('The application shows a synchronization error.', {})
+    async def test_captionless_photo_document_video_query_assigned_kb_after_analysis(self):
+        for kind in ('image','document','video'):
+            self.rows=[row(mid='source-'+kind,kind=kind,text='')]
+            self.evidence={'status':'partial' if kind=='video' else 'processed',
+                           'code':'vision_observation','observation':'Visible E17 '+kind}
+            await self.process({**JOB,'payload':{'message_id':'source-'+kind}})
+            query=self.knowledge.call_args.args[1]
+            assert 'Visible E17 '+kind in query
+            assert 'source-'+kind in query and kind in query and len(query)<=1000
+            assert self.knowledge.call_args.kwargs['agent_id']==JOB['agent_id']
+
+    async def test_duplicate_event_never_starts_a_second_media_preparation_or_reply(self):
+        await self.process();await self.process()
+        self.prepare_media.assert_called_once();self.generate.assert_called_once();self.send.assert_called_once()
+
+    async def test_explicit_failed_evidence_reaches_agent_without_invented_transcript(self):
+        self.evidence={'status':'error','code':'media_unavailable'}
         await self.process()
-        self.assertIn('synchronization error', str(self.generate.call_args))
-        self.assertNotIn('language', self.transcribe.call_args.kwargs)
-
-    async def test_russian_voice_keeps_original_language(self):
-        self.transcribe.return_value = ('Здравствуйте, сколько стоит программа?', {})
-        await self.process()
-        self.assertIn('сколько стоит программа', str(self.generate.call_args))
-        self.assertNotIn('language', self.transcribe.call_args.kwargs)
-
-    async def test_text_voice_text_retains_transcript_without_another_paid_call(self):
-        self.rows = [row('text-1', 'text', 'Salam', '2026-10-16T00:00:00Z')]
-        await self.process({**JOB, 'payload': {'message_id': 'text-1'}})
-        self.rows.append(row())
-        await self.process()
-        self.rows.append(row('text-2', 'text', 'Bəs aylıq?', '2026-10-16T02:00:00Z'))
-        await self.process({**JOB, 'payload': {'message_id': 'text-2'}})
-        self.assertEqual(self.send.call_count, 3)
-        self.transcribe.assert_called_once()
-        self.assertIn('qiyməti nə qədərdir', str(self.generate.call_args.args[3]))
-        self.assertIn('Bəs aylıq', str(self.generate.call_args.args[3]))
-
-    async def test_fast_text_voice_text_coalescing_recovers_pending_audio(self):
-        self.rows = [row('first', 'text', 'Salam', '2026-10-16T00:00:00Z'), row(),
-                     row('latest', 'text', 'Bəs aylıq?', '2026-10-16T02:00:00Z')]
-        await self.process({**JOB, 'payload': {'message_id': 'latest'}})
-        self.transcribe.assert_called_once()
-        self.send.assert_called_once()
-        self.assertIn('qiyməti nə qədərdir', str(self.generate.call_args.args[3]))
-        self.assertEqual(self.generate.call_args.kwargs['extra_context']['latest_client_message'], 'Bəs aylıq?')
-
-    async def test_resume_does_not_transcribe_older_pending_audio(self):
-        self.rows = [{**row(), 'voice_eligible': False},
-                     row('new-text', 'text', 'Salam', '2026-10-16T02:00:00Z')]
-        await self.process({**JOB, 'payload': {'message_id': 'new-text'}})
-        self.transcribe.assert_not_called()
-        self.send.assert_called_once()
-        self.assertIn('Audio unavailable', str(self.generate.call_args.args[3]))
-
-    async def test_delayed_pre_resume_voice_job_is_skipped(self):
-        self.rows[0]['voice_eligible'] = False
-        await self.process()
-        self.transcribe.assert_not_called()
-        self.generate.assert_not_called()
-        self.send.assert_not_called()
-
-    async def test_three_pending_audio_calls_are_bounded_and_usage_is_cumulative(self):
-        self.rows = [row('v1', at='2026-10-16T00:01:00Z'),
-                     row('v2', at='2026-10-16T00:02:00Z'),
-                     row('v3', at='2026-10-16T00:03:00Z'),
-                     row('latest', 'text', 'Salam', '2026-10-16T02:00:00Z')]
-        await self.process({**JOB, 'payload': {'message_id': 'latest'}})
-        self.assertEqual(self.transcribe.call_count, 3)
-        self.assertEqual(self.reserve.call_args.kwargs['reserved_calls'], 4)
-        self.assertEqual(self.audio_usage.call_args.args[2]['total_tokens'], 72)
-        self.assertEqual(self.usage.call_args.args[2]['total_tokens'], 79)
-        self.send.assert_called_once()
-
-    async def test_failed_pending_voice_does_not_block_newer_text(self):
-        self.rows = [row(), row('latest', 'text', 'Salam', '2026-10-16T02:00:00Z')]
-        self.download.side_effect = voice.VoiceError('voice_media_unavailable')
-        await self.process({**JOB, 'payload': {'message_id': 'latest'}})
-        self.transcribe.assert_not_called()
-        self.send.assert_called_once()
-        self.assertIn('Audio unavailable', str(self.generate.call_args.args[3]))
-
-    async def test_audio_failures_do_not_handoff_or_block_later_text(self):
-        for code in ('voice_media_unavailable', 'voice_invalid_audio', 'voice_unsupported',
-                     'voice_duration_limit', 'voice_size_limit'):
-            with self.subTest(code=code):
-                self.reserved.clear()
-                self.claims.clear()
-                self.rows = [row()]
-                self.download.side_effect = voice.VoiceError(code)
-                self.generate.reset_mock()
-                await self.process()
-                self.generate.assert_not_called()
-                self.assertEqual(self.failed.call_args.args[2], code)
-                self.rows.append(row('later', 'text', 'Hello', '2026-10-16T02:00:00Z'))
-                await self.process({**JOB, 'payload': {'message_id': 'later'}})
-                self.generate.assert_called_once()
-                self.handoff.assert_not_called()
-
-    async def test_duplicate_delivery_does_not_transcribe_or_reply_twice(self):
-        await self.process()
-        await self.process()
-        self.transcribe.assert_called_once()
-        self.send.assert_called_once()
-
-    async def test_operator_takeover_during_transcription_stops_generation(self):
-        def takeover(*args, **kwargs):
-            self.active = False
-            return 'real transcript', {}
-        self.transcribe.side_effect = takeover
-        await self.process()
-        self.generate.assert_not_called()
-        self.send.assert_not_called()
-        self.superseded.assert_called_once()
-        self.assertEqual(self.rows[0]['transcript'], 'real transcript')
-
-    async def test_pause_before_start_prevents_any_paid_call(self):
-        self.active = False
-        await self.process()
-        self.transcribe.assert_not_called()
-        self.generate.assert_not_called()
-        self.send.assert_not_called()
-
-    async def test_provider_failure_has_no_invented_transcript(self):
-        self.transcribe.side_effect = ChatAIProviderError(429, 'rate_limit')
-        await self.process()
-        self.assertEqual(self.rows[0]['body'], '')
-        self.assertEqual(self.failed.call_args.args[2], 'voice_http_429_rate_limit')
-        self.generate.assert_not_called()
-        self.send.assert_not_called()
-
-    async def test_timeout_after_submission_is_not_retried(self):
-        self.transcribe.side_effect = TimeoutError('secret response')
-        await self.process()
-        self.reserved.clear()  # even a later run cannot repeat the claimed media
-        await self.process()
-        self.transcribe.assert_called_once()
-        self.send.assert_not_called()
-
-    async def test_outgoing_audio_does_not_enter_transcription(self):
-        self.rows[0]['direction'] = 'outgoing'
-        await self.process()
-        self.download.assert_not_called()
+        assert 'media_unavailable' in str(self.generate.call_args.args[3])
+        assert self.generate.call_args.kwargs['extra_context']['unprocessed_media_count']==1
+        assert 'Salam, qiyməti' not in str(self.generate.call_args.args[3])
         self.transcribe.assert_not_called()
 
-    async def test_budget_exhausted_by_audio_prevents_generation(self):
-        with patch.object(voice, 'generation_budget_available', return_value=False):
-            await self.process()
-        self.audio_usage.assert_called_once()
-        self.generate.assert_not_called()
-
-    async def test_same_message_identifier_is_not_cached_across_tenants(self):
+    async def test_takeover_during_media_stops_generation_and_send(self):
+        def takeover(execution,rows):
+            self.active=False
+            raise TenantLinearError('job inactive',409)
+        self.prepare_media.side_effect=takeover
         await self.process()
-        self.rows = [row()]
-        await self.process({**JOB, 'tenant_id': CHANNEL})
-        self.assertEqual(self.transcribe.call_count, 2)
+        self.generate.assert_not_called();self.send.assert_not_called()
+
+    async def test_media_budget_denial_stops_generation_and_send(self):
+        self.prepare_media.side_effect=TenantLinearError('budget exhausted',429)
+        await self.process()
+        self.generate.assert_not_called();self.send.assert_not_called()
+
+    async def test_manual_run_remains_a_draft_without_client_send(self):
+        self.reserve.side_effect=lambda *a,**k:{**RESERVATION,'mode':'manual'}
+        await self.process()
+        self.generate.assert_called_once();self.send.assert_not_called()
+
+    async def test_pause_before_start_prevents_media_and_generation(self):
+        self.active=False;await self.process()
+        self.prepare_media.assert_not_called();self.generate.assert_not_called();self.send.assert_not_called()
+
+    async def test_pre_resume_voice_is_skipped_before_media(self):
+        self.rows[0]['voice_eligible']=False;await self.process()
+        self.prepare_media.assert_not_called();self.generate.assert_not_called();self.send.assert_not_called()
+
+    async def test_outgoing_audio_cannot_start_media(self):
+        self.rows[0]['direction']='outgoing';await self.process()
+        self.prepare_media.assert_not_called();self.generate.assert_not_called()
 
 
 class VoiceBoundaries(unittest.TestCase):

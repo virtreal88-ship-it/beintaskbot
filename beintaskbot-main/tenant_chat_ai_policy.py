@@ -123,6 +123,13 @@ def history(rows, transcripts, *, analyzed_media=None, focus_media_ids=None, doc
             transcript = transcripts.get(str(row['external_id']))
             if transcript:
                 text += '\n[Audio transcript] ' + transcript[:6000]
+            elif ((row.get('media_evidence') or {}).get('has_audio_result')
+                  and (row.get('media_evidence') or {}).get('status') in {'processed','partial'} and receipt_context):
+                text += '\n'+receipt_context
+                if (row.get('media_evidence') or {}).get('status')=='partial':
+                    missing += 1
+                    text += '\n[Audio evidence is partial; do not infer omitted speech]'
+                receipt_context=''
             else:
                 missing += 1
                 text += '\n[Audio unavailable: do not infer its contents]'
