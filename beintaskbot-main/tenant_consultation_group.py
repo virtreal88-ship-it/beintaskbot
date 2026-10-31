@@ -456,7 +456,7 @@ def enqueue_pilot_customer_followup(cur,tenant,group_channel,group_conversation,
     cur.execute('''SELECT r.consultation_id::text AS consultation_id,r.body,
         c.case_id::text AS case_id,c.channel_id::text AS channel_id,c.conversation_id,
         d.channel_id::text AS group_channel_id,d.conversation_id AS group_conversation_id,
-        t.status AS ticket_status
+        t.status AS ticket_status,t.completion_outcome AS ticket_outcome
       FROM saas_consultation_group_replies r
       JOIN saas_internal_consultations c ON c.tenant_id=r.tenant_id AND c.id=r.consultation_id
       JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
@@ -467,7 +467,7 @@ def enqueue_pilot_customer_followup(cur,tenant,group_channel,group_conversation,
         AND r.message_id=%s ORDER BY d.created_at DESC LIMIT 1''',
       (tenant,group_channel,group_conversation,group_message_id))
     row=cur.fetchone()
-    if not row or row.get('ticket_status')=='resolved':
+    if not row or row.get('ticket_status')=='resolved' or row.get('ticket_outcome')=='test_stopped':
         return False
     job={'provider':'connect','tenant_id':tenant,'channel_id':row['channel_id'],
          'conversation_id':row['conversation_id']}

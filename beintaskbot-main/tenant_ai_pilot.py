@@ -37,6 +37,33 @@ def schema(cur):
           OR (owner_approved_by IS NOT NULL AND owner_approved_at IS NOT NULL
               AND kwid_confirmed_by IS NOT NULL AND owner_expires_at>owner_approved_at
                   AND owner_expires_at<=kwid_expires_at)))""")
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_pilot_episode_cutoffs(
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,
+      reset_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),reset_by BIGINT NOT NULL,
+      PRIMARY KEY(tenant_id,channel_id,conversation_id))''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_pilot_episode_resets(
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      request_id UUID NOT NULL,channel_id UUID NOT NULL,
+      conversation_id TEXT NOT NULL,reset_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+      reset_by BIGINT NOT NULL,PRIMARY KEY(tenant_id,request_id))''')
+
+
+def episode_cutoff(job):
+    """Return the reset boundary for the exact configured customer pilot."""
+    scope=configured_scope()
+    if not scope or not manual_live_job(job) or any(str(job.get(k) or '')!=scope[k]
+            for k in ('tenant_id','channel_id','conversation_id')):
+        return None
+    from tenant_platform import _connect
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute('''SELECT reset_at FROM saas_ai_pilot_episode_cutoffs
+              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s''',
+              (scope['tenant_id'],scope['channel_id'],scope['conversation_id']))
+            row=cur.fetchone() or {}
+        conn.commit()
+    return row.get('reset_at')
 
 
 def _enabled(name):
@@ -537,6 +564,103 @@ def resume_pilot_dialog(profile, data):
     set_conversation_state(profile, scope['conversation_id'], 'active',
         'pilot_preparation_resume', 'connect', scope['channel_id'])
     return preflight(profile)
+
+
+def reset_pilot_test_dialog(profile, data):
+    """Close the current exact pilot episode without deleting its evidence.
+
+    Reset is deliberately owner-only and derives every target from server
+    configuration. It never replays events, contacts a provider, or publishes
+    knowledge. The conversation revision and job revisions fence workers that
+    were already claimed when the reset began.
+    """
+    if not isinstance(data,dict) or set(data)!={'confirmed','reset_id'} or data.get('confirmed') is not True:
+        raise TenantLinearError('Explicit confirmation is required to reset the test dialogue.', 400)
+    try:request_id=str(uuid.UUID(str(data.get('reset_id') or '')))
+    except (ValueError,TypeError):raise TenantLinearError('A valid reset request ID is required.',400) from None
+    scope=configured_scope(); group=configured_group_scope()
+    if not scope or not group or scope['tenant_id'] != SCOPED_LIVE_TENANT or group['tenant_id'] != scope['tenant_id']:
+        raise TenantLinearError('The exact two-target pilot scope is not configured.', 409)
+    from tenant_platform import _connect
+    from tenant_ai_agents_schema import ensure_schema
+    from tenant_consultation_group import schema as ensure_group_schema
+    from tenant_ai_agents_store import _authorize, _audit
+    from tenant_internal_consultations import schema as ensure_consultation_schema
+    with _connect() as conn:
+        ensure_schema(conn)
+        ensure_consultation_schema(conn)
+        ensure_group_schema(conn)
+        with conn.cursor() as cur:
+            tenant,actor=_authorize(cur,profile)
+            if str(tenant)!=scope['tenant_id']:
+                raise TenantLinearError('The configured pilot belongs to another company.',403)
+            cur.execute('''SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid
+              AND telegram_id=%s AND active=TRUE FOR UPDATE''',(tenant,actor))
+            if (cur.fetchone() or {}).get('role')!='owner':
+                raise TenantLinearError('Only the company owner can reset the configured test dialogue.',403)
+            # Serialize against the send boundary and make every claimed send
+            # stale before touching the episode's durable records.
+            cur.execute('''SELECT revision FROM saas_ai_conversation_state
+              WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+                AND conversation_id=%s FOR UPDATE''',(tenant,scope['channel_id'],scope['conversation_id']))
+            if not cur.fetchone():
+                raise TenantLinearError('The configured test dialogue is unavailable.',409)
+            schema(cur)
+            cur.execute('''SELECT 1 FROM saas_ai_pilot_episode_resets
+              WHERE tenant_id=%s::uuid AND request_id=%s::uuid''',(tenant,request_id))
+            if cur.fetchone():
+                conn.commit()
+                return {'reset':True,'scope':scope,'preserved_messages_and_media':True,
+                        'new_attestations_required':True,'old_events_replayed':False,'idempotent_replay':True}
+            cur.execute('''INSERT INTO saas_ai_pilot_episode_resets
+              (tenant_id,request_id,channel_id,conversation_id,reset_by)
+              VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s)''',
+              (tenant,request_id,scope['channel_id'],scope['conversation_id'],actor))
+            cur.execute('''INSERT INTO saas_ai_pilot_episode_cutoffs
+              (tenant_id,channel_id,conversation_id,reset_at,reset_by)
+              VALUES(%s::uuid,%s::uuid,%s,clock_timestamp(),%s)
+              ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE
+              SET reset_at=clock_timestamp(),reset_by=EXCLUDED.reset_by''',
+              (tenant,scope['channel_id'],scope['conversation_id'],actor))
+            cur.execute('''UPDATE saas_ai_conversation_state SET state='active',reason='pilot_test_reset',
+              revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='connect'
+              AND channel_id=%s AND conversation_id=%s''',(tenant,scope['channel_id'],scope['conversation_id']))
+            cur.execute('''UPDATE saas_ai_pilot_confirmations SET kwid_confirmed_by=NULL,
+              kwid_confirmed_at=NULL,kwid_expires_at=NULL,owner_approved_by=NULL,
+              owner_approved_at=NULL,owner_expires_at=NULL,updated_at=now()
+              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s''',
+              (tenant,scope['channel_id'],scope['conversation_id']))
+            cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',error_code='pilot_test_reset',
+              revision=revision+1,lease_token=NULL,lease_until=NULL,updated_at=now()
+              WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+                AND conversation_id=%s AND state IN ('queued','processing')
+              RETURNING event_fingerprint''',(tenant,scope['channel_id'],scope['conversation_id']))
+            fingerprints=[r['event_fingerprint'] for r in cur.fetchall()]
+            if fingerprints:
+                cur.execute('''UPDATE saas_tenant_webhook_events SET state='skipped',
+                  error_code='pilot_test_reset',completed_at=now(),lease_token=NULL,lease_until=NULL
+                  WHERE tenant_id=%s::uuid AND fingerprint=ANY(%s) AND state IN ('queued','processing')''',
+                  (tenant,fingerprints))
+            cur.execute('''UPDATE saas_ai_pilot_followups SET state='blocked',
+              error_code='pilot_test_reset',awaiting_customer=FALSE,updated_at=now()
+              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
+                AND state IN ('queued','linked')''',(tenant,scope['channel_id'],scope['conversation_id']))
+            cur.execute('''UPDATE saas_internal_consultations SET status='closed',
+              delivery_state='test_reset' WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
+                AND conversation_id=%s AND status<>'closed' ''',
+              (tenant,scope['channel_id'],scope['conversation_id']))
+            cur.execute('''UPDATE saas_support_tickets SET status='waiting',resolved_at=NULL,
+              completion_outcome='test_stopped',completion_note='Pilot test episode reset; not a customer resolution.',
+              knowledge_candidate_requested=FALSE,summary_state='unavailable',updated_at=now()
+              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
+                AND source='ai_handoff' AND status<>'resolved' ''',
+              (tenant,scope['channel_id'],scope['conversation_id']))
+            _audit(cur,tenant,actor,'pilot_test_episode_reset','connect_dialog',scope['conversation_id'],
+              {'channel_id':scope['channel_id'],'developer_group':group['conversation_id'],
+               'preserved_messages_and_media':True,'jobs_fenced':len(fingerprints)})
+        conn.commit()
+    return {'reset':True,'scope':scope,'preserved_messages_and_media':True,
+            'new_attestations_required':True,'old_events_replayed':False,'idempotent_replay':False}
 
 
 def preflight(profile):
