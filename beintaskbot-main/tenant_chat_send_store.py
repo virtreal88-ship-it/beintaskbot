@@ -64,9 +64,11 @@ def reserve(session, command):
                 if row['input_hash'] != fingerprint(command):
                     raise TenantLinearError('Eyni sorğu kodu ilə fərqli mesaj göndərilib.', 409)
                 if row['state'] == 'accepted':
-                    if row.get('resolution'):
-                        return {'cached_result': {'state': 'accepted', 'message_id': row['message_id'], 'manual_review': True}}
-                    return {'cached_result': {'state': 'accepted', 'message_id': row['message_id']}}
+                    cached={'state':'accepted','message_id':row['message_id'],**({'manual_review':True} if row.get('resolution') else {})}
+                    return {'cached_result':cached,**({'key':key,'command':command,'connection':connection,'profile':profile,'quote':quote} if command.get('quote_message_id') else {})}
+                from tenant_connect_transport import quoted_once_scope
+                if quote and connection[0]=='connect' and quoted_once_scope(key[0],connection[1]) and row['state'] in {'sending','unknown'}:
+                    return {'check_only':True,'key':key,'command':command,'connection':connection,'profile':profile,'quote':quote}
                 error = TenantLinearError('Bu sorğu təkrarlanmır. Göndərilmə vəziyyətini Kommo-da yoxlayın.', 409)
                 error.keep_request = row['state'] != 'blocked'
                 conn.commit()  # Persist stale receipt transitions before returning the refusal.
@@ -137,4 +139,52 @@ def finish(item, state, message_id=None):
                 cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
                   VALUES(%s,%s::uuid,%s,'chat_message_accepted','lead',%s,%s::jsonb)''',
                   (uuid.uuid4(), item['key'][0], item['key'][1], str(row['lead_id']), json.dumps({'message_id': message_id})))
+        conn.commit()
+
+
+def quoted_status_credentials(item):
+    """Fresh employee/tenant/source authority for a read-only receipt lookup."""
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            profile,connection,integration=authority(cur,{'tenant_id':item['key'][0],'telegram_id':item['key'][1]},item['command']['lead_id'])
+            if connection!=item['connection'] or integration.get('provider')!='connect':
+                raise TenantLinearError('İstinad edilən dialoq dəyişib.',409)
+            if quote_target(cur,profile['tenant_id'],item['command'],connection)!=item.get('quote'):
+                raise TenantLinearError('İstinad edilən mesaj dəyişib.',409)
+            return integration['route']
+
+
+def record_quoted_delivery(item,message_id,status):
+    """Persist a scoped read receipt for history; never change send idempotency."""
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            profile,connection,_=authority(cur,{'tenant_id':item['key'][0],'telegram_id':item['key'][1]},item['command']['lead_id'])
+            if connection!=item['connection'] or connection[0]!='connect':
+                raise TenantLinearError('İstinad edilən dialoq dəyişib.',409)
+            cur.execute("UPDATE saas_chat_send_receipts SET route=route||%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid AND state='accepted' AND message_id=%s",
+                (json.dumps(status),*item['key'],message_id))
+            provider=status.get('provider_message_id')
+            metadata={'status':status['delivery_state'],**({'externalMessageId':provider} if provider else {})}
+            cur.execute('''UPDATE saas_crm_messages SET raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb||jsonb_build_object('status',
+              CASE WHEN raw->>'status'='read' THEN 'read'
+                WHEN raw->>'status'='delivered' AND %s<>'read' THEN 'delivered'
+                WHEN raw->>'status'='sent' AND %s IN ('pending','retrying','unknown') THEN 'sent' ELSE %s END)
+              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND external_id=%s AND direction='outgoing'
+                AND (%s::text IS NULL OR raw->>'externalMessageId' IS NULL OR raw->>'externalMessageId'=%s)''',
+              (json.dumps(metadata),status['delivery_state'],status['delivery_state'],status['delivery_state'],item['key'][0],item['command']['lead_id'],
+               'connect:'+connection[1],'connect:'+message_id,provider,provider))
+        conn.commit()
+
+
+def accept_quoted_lookup(item,message_id):
+    """Bind an already-existing Connect receipt; this function never dispatches."""
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            profile,connection,_=authority(cur,{'tenant_id':item['key'][0],'telegram_id':item['key'][1]},item['command']['lead_id'])
+            if connection!=item['connection'] or quote_target(cur,profile['tenant_id'],item['command'],connection)!=item['quote']:
+                raise TenantLinearError('İstinad edilən dialoq dəyişib.',409)
+            cur.execute("UPDATE saas_chat_send_receipts SET state='accepted',message_id=%s,updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid AND state IN ('sending','unknown')",(message_id,*item['key']))
         conn.commit()
