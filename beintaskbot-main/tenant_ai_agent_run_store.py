@@ -540,6 +540,7 @@ def record_pilot_initial_rejection(job, reservation, reason_code):
     code = str(reason_code or '')
     if code not in PARSER_REJECTIONS:
         code = 'invalid_schema'
+    persisted_code = 'pilot_initial_' + code
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -551,7 +552,7 @@ def record_pilot_initial_rejection(job, reservation, reason_code):
                   AND j.agent_id=saas_ai_agent_runs.agent_id AND j.provider=%s AND j.conversation_id=%s
                   AND j.scope_channel_id=%s AND j.lease_token=%s AND j.revision=%s
                   AND j.lease_until>now() AND j.state='processing') RETURNING id''',
-              (code,job['tenant_id'],reservation['run_id'],job['provider'],job['conversation_id'],
+              (persisted_code,job['tenant_id'],reservation['run_id'],job['provider'],job['conversation_id'],
                job_scope(job),job['lease_token'],job['revision']))
             saved = bool(cur.fetchone())
         conn.commit()

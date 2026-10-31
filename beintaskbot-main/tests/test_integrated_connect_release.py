@@ -242,7 +242,13 @@ def test_initial_parser_fallback_is_receipt_backed_and_duplicate_inbound_is_idem
     stored=db.execute("""SELECT result->>'send_state' AS send_state,
       result->>'pilot_initial_triage_rejection' AS rejection,error_code
       FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 1""",(A,))[0]
-    assert stored=={'send_state':'accepted','rejection':'invalid_json','error_code':''}
+    assert stored=={'send_state':'accepted','rejection':'pilot_initial_invalid_json','error_code':''}
+    import tenant_ai_reliability as reliability
+    mapped=reliability._message({'message_id':message_id,'provider':'connect','sent':True,
+        'job_state':'sent','run_state':'completed','triage_rejection_code':stored['rejection']})
+    assert mapped['status']=='sent'
+    assert mapped['diagnostic_code']=='pilot_initial_invalid_json'
+    assert mapped['diagnostic']=='Ответ модели для начального разбора отклонён: некорректный JSON'
     replay=connect_ai.enqueue(A,channel_id=CA,conversation_id='client',lead_id=41,
         message_id=message_id,event_id=message_id,text='The app still shows an unexpected value.',message_type='text')
     assert replay==0
