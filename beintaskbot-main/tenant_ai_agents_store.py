@@ -983,7 +983,12 @@ def save_knowledge(profile, data, *, source_id=None, connection=None):
     with (nullcontext(connection) if connection is not None else _connect()) as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant, actor = _authorize(cur, profile)
+            from tenant_operator_copilot_learning import _SUBMISSION_CAPABILITY, authorize_creation
+            if (creating and isinstance(profile, dict)
+                    and profile.get('_copilot_teaching_capability') is _SUBMISSION_CAPABILITY):
+                tenant, actor = authorize_creation(cur, profile, data)
+            else:
+                tenant, actor = _authorize(cur, profile)
             if creating:
                 bound_agent = identifier(data['agent_id']) if data.get('agent_id') else None
                 if retry_key and not bound_agent:

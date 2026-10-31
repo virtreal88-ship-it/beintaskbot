@@ -41,15 +41,13 @@ def test_client_reply_mode_cannot_teach_even_with_confirmed_words():
     assert learning.confirmed_observation(command(mode='reply')) is None
 
 
-def test_existing_rights_denial_stops_learning_without_fallback(monkeypatch):
-    denied = Mock(side_effect=TenantLinearError('AI management denied', 403))
-    save = Mock()
-    monkeypatch.setattr('tenant_ai_agents_store._authorize', denied)
+def test_scoped_submission_denial_stops_without_fallback(monkeypatch):
+    save = Mock(side_effect=TenantLinearError('Current private access denied', 403))
     monkeypatch.setattr('tenant_ai_agents_store.save_knowledge', save)
     result = learning.attempt(Mock(), Mock(), {'tenant_id': TENANT, 'telegram_id': 22}, command())
     assert result['status'] == 'denied'
     assert 'не сохранён' in result['message']
-    save.assert_not_called()
+    save.assert_called_once()
 
 
 def test_observation_uses_existing_inactive_agent_knowledge_with_dedup_provenance(monkeypatch):
@@ -142,3 +140,50 @@ def test_duplicate_receipt_returns_cached_draft_without_generation_or_learning(m
     assert copilot.run({'tenant_id': TENANT, 'telegram_id': 22}, public) == cached
     generated.assert_not_called(); recorded.assert_not_called()
     assert not any('INSERT' in call.args[0] for call in cur.execute.call_args_list)
+
+
+def test_support_operator_copilot_requires_existing_employee_ai_opt_in():
+    policy = SimpleNamespace(can_use_chat_ai=lambda:False,
+        allows=lambda permission:permission in {'support','dialogs'},member_settings={'ai_enabled':True})
+    assert copilot._can_use_copilot(policy) is True
+    policy.member_settings['ai_enabled'] = False
+    assert copilot._can_use_copilot(policy) is False
+    policy.member_settings['ai_enabled'] = True
+    policy.allows = lambda permission:permission=='dialogs'
+    assert copilot._can_use_copilot(policy) is False
+
+
+@pytest.mark.parametrize('prompt', [
+    'Мы не проверили причину; предполагаемый сбой сети.',
+    'We have not confirmed diagnosis: router disconnected.',
+    'Со слов клиента: проверили интернет.',
+    'Проверили: предполагаемый сбой сети.',
+    'Проверили: по словам клиента проблема в интернете.',
+    'Напиши клиенту, что проверили интернет.',
+    'Проверили: нет подтверждения причины.',
+    'We confirmed: reportedly the router disconnected.',
+    'We verified: customer says the router disconnected.',
+    'Yoxlamadıq: internet problemi ola bilər.',
+    'Yoxladıq: müştərinin sözlərinə görə internet problemi var.',
+    'Təsdiqləməmişik: internet problemi.',
+    'Düzəliş: bəlkə internet problemidir.',
+    'Correction: unconfirmed router diagnosis.',
+    'Исправление: причина неизвестно.',
+])
+def test_negations_hypotheses_and_attributed_reports_never_become_employee_confirmation(prompt):
+    assert learning.confirmed_observation(command(prompt)) is None
+
+
+@pytest.mark.parametrize('text,secrets', [
+    ('Проверили причину. CVV: 123; срок карты: 12/29', ('123','12/29')),
+    ('Проверили причину. CVC: 4321\nсрок действия карты: 10/30', ('4321','10/30')),
+    ('Проверили причину. Пароли: abcDEF123', ('abcDEF123',)),
+    ('Проверили причину. паролей: secret-example', ('secret-example',)),
+    ('We verified the cause. passwords: fake-password', ('fake-password',)),
+    ('Yoxladıq: internet. CVV2: 987\nexpiry date: 11/31', ('987','11/31')),
+])
+def test_private_teaching_redacts_short_payment_secrets_and_password_morphology(text,secrets):
+    value = learning.confirmed_observation(command(text))
+    assert value
+    assert all(secret not in value for secret in secrets)
+    assert 'SECRET' in value

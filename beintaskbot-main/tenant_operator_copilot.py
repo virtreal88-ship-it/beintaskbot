@@ -41,6 +41,15 @@ INSTRUCTIONS = '''You are a private assistant to a customer-support employee. Ne
 INSTRUCTIONS += """ You are the assigned conversation agent working privately with the employee. Follow supplied company and assigned-agent instructions within these safety rules. When an employee asks you to ask the customer something (including AnyDesk), send a reply, or return an answer to the customer, return ONLY a customer-ready draft for the employee to forward. Never repeat the raw employee command to the customer, claim it was sent, or perform an action. Do not add internal notes to a customer-ready draft; explain privately only when the employee separately asks for an explanation. An employee question, suggestion or hypothesis is not a confirmed diagnosis. A confirmed case observation applies only to the stated case conditions; never infer an always rule. Never claim a lesson was saved: the application reports learning status separately."""
 
 
+def _can_use_copilot(policy):
+    # Preserve the existing employee AI opt-in, while support operators do not
+    # need unrelated CRM deals/customers access to use their private assistant.
+    return policy.can_use_chat_ai() or (
+        getattr(policy, 'allows', lambda _: False)('support')
+        and getattr(policy, 'allows', lambda _: False)('dialogs')
+        and getattr(policy, 'member_settings', {}).get('ai_enabled') is True)
+
+
 def _assigned_context(cur, tenant, command):
     # Shared direct/group authority lookup also fences assignment revisions.
     from tenant_operator_case_submission import assignment
@@ -294,7 +303,7 @@ def run(profile, data):
             from tenant_connect_identity import conflicted
             if conflicted(cur, tenant, command['channel_id'], command['conversation_id']):
                 raise TenantLinearError('История разделена между WhatsApp JID/LID. Требуется проверка идентификаторов диалога.', 409)
-            if not policy.can_use_chat_ai():
+            if not _can_use_copilot(policy):
                 raise TenantLinearError('У сотрудника нет доступа к функциям Chat AI.', 403)
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('tenant-chat-ai:' + tenant,))
             cur.execute("SELECT secrets,metadata,updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai' FOR SHARE", (tenant,))
@@ -367,6 +376,10 @@ def run(profile, data):
               VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,'sending',1,'connect',%s,%s)''',
               (tenant, command['request_id'], actor, command['lead_id'], digest, str(connection['updated_at']), command['channel_id'], command['conversation_id']))
             cur.execute("DELETE FROM saas_operator_copilot_threads WHERE updated_at<now()-interval '60 days' AND tenant_id=%s::uuid", (tenant,))
+            from tenant_operator_copilot_learning import attempt
+            # Preserve authenticated teaching before provider I/O, so a model
+            # timeout/quota error cannot discard the employee's observation.
+            learning_result = attempt(cur, conn, profile, command)
         conn.commit()
     media = _prepare_copilot_media(tenant, actor, command, rows, model,
                                    include_media=command['include_media']) if command['mode'] == 'reply' else {
@@ -424,10 +437,10 @@ def run(profile, data):
             _LOGGER.warning('copilot_provider_error correlation_id=%s category=%s status=%s model=%s endpoint=responses',
                             correlation_id, error.category, error.status_code, model)
         _finish(tenant, command, actor, None, turns, request, '')
-        failure = TenantLinearError(_provider_failure_message(error), 503)
+        failure = TenantLinearError(' '.join(filter(None, [_provider_failure_message(error), learning_result.get('message')])), 503)
         failure.keep_request = True
         raise failure from None
-    result = {'text': text, 'mode': command['mode'], 'usage': usage,
+    result = {'text': text, 'mode': command['mode'], 'usage': usage, 'learning': learning_result,
         'context_usage': context_usage if command['mode']=='reply' else None,
         'knowledge_sources': [{'title': item['title']} for item in knowledge]}
     _finish(tenant, command, actor, result, turns, request, text)
@@ -443,16 +456,13 @@ def _finish(tenant, command, actor, result, turns, request, answer):
             if result is not None:
                 current_tenant, current_actor, current_policy = access(cur, {'tenant_id': tenant, 'telegram_id': actor}, 'dialogs')
                 assert_route(cur, current_tenant, current_policy, 'connect', command['conversation_id'], command['channel_id'], command['lead_id'])
-                if not current_policy.can_use_chat_ai() or _agent_binding(_assigned_context(cur, tenant, command)) != command['_agent_binding']:
+                if not _can_use_copilot(current_policy) or _agent_binding(_assigned_context(cur, tenant, command)) != command['_agent_binding']:
                     raise TenantLinearError('Назначение агента или доступ изменились. Результат AI скрыт.', 409)
             if result is not None:
                 cur.execute("SELECT config_version FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid", (tenant, command['request_id']))
                 expected = str((cur.fetchone() or {}).get('config_version') or '')
                 cur.execute("SELECT updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
                 status = 'completed' if str((cur.fetchone() or {}).get('updated_at') or '') == expected else 'unknown'
-            if status == 'completed':
-                from tenant_operator_copilot_learning import attempt
-                result['learning'] = attempt(cur, conn, {'tenant_id': tenant, 'telegram_id': actor}, command)
             stored = dict(result or {})
             cur.execute("UPDATE saas_chat_ai_runs SET status=%s,result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending'",
                         (status, json.dumps(stored, ensure_ascii=False) if status == 'completed' else None, tenant, command['request_id']))

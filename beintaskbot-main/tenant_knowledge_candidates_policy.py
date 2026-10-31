@@ -26,7 +26,14 @@ def redact(text,names=(),*,owner_payment_link=False):
     for name in sorted(known,key=len,reverse=True):
         if len(name)>=2: text=re.sub(r'(?<!\w)'+re.escape(name)+r'(?!\w)','[PERSON]',text,flags=re.I)
     text=re.sub(r'-----BEGIN [\s\S]*?-----END [^-]+-----','[SECRET]',text)
-    text=re.sub(r'(?im)\b(?:api[_ -]?key|authorization|bearer|password|passwd|пароль|парол|ключ|секрет|код сопряжения|şifrə|token|токен|pairing|pin|cookie|secret)\b\s*(?:[:=]|\bis\b|—|-)?\s*[^\n]+','[SECRET]',text)
+    # Short card security codes/expiry fields are sensitive even though they
+    # are too short for the general account/phone-number redactor below.
+    text=re.sub(r'(?im)\b(?:cvv2?|cvc2?|cid|card\s+(?:security\s+code|expiry|expiration)|'
+                r'exp(?:iry|iration)?(?:\s+date)?|valid\s+(?:thru|through)|'
+                r'срок(?:\s+действия)?\s+карт\w*|код\s+безопасности\s+карт\w*|'
+                r'kart(?:ın)?\s+(?:bitmə|təhlükəsizlik)(?:\s+tarixi|\s+kodu)?)'
+                r'\s*(?:[:=]|\bis\b|—|-)?\s*[^\n]+','[PAYMENT SECRET]',text)
+    text=re.sub(r'(?im)\b(?:api[_ -]?key|authorization|bearer|passwords?|passwd|парол\w*|ключ(?:и|ей|ам|ами|ах|а|у|ом)?|секрет\w*|код сопряжения|şifrə\w*|parol\w*|token|токен|pairing|pin|cookie|secret)\b\s*(?:[:=]|\bis\b|—|-)?\s*[^\n]+','[SECRET]',text)
     def safe_url(match):
         value=match.group(0)
         # Sentence punctuation is harmless, but query strings, fragments,
