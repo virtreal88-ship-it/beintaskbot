@@ -118,10 +118,13 @@ def _audio_diagnostic(status, code, result, at):
 
 def _attach_saved_audio_transcripts(cur, tenant, rows, *, conversation_id=None):
     """Read only exact-version ASR evidence for already-authorized message rows."""
-    from tenant_media_evidence import media_version, source_hash, _body_hash
+    from tenant_media_evidence import media_version, source_hash, _body_hash, retryable_audio_download_failure
     audio=[row for row in rows if str(row.get('message_type') or '').lower() in {'audio','voice','voice_message','ptt'}
            and str(row.get('channel') or '').startswith('connect:') and row.get('external_id')]
     if not audio:return
+    for row in audio:
+        for field in ('_saved_audio_transcript','_saved_audio_state','_saved_audio_diagnostic','_saved_audio_receipt_diagnostic'):
+            row.pop(field,None)
     cur.execute("SELECT to_regclass('public.saas_media_evidence_receipts') AS relation")
     if not (cur.fetchone() or {}).get('relation'):return
     keys=[]
@@ -131,7 +134,7 @@ def _attach_saved_audio_transcripts(cur, tenant, rows, *, conversation_id=None):
              'media_kind':kind,'media_version':media_version(row.get('raw'))}
         keys.append((channel,str(row['external_id']),source_hash(ref),kind))
     placeholders=','.join(['(%s::uuid,%s,%s,%s)']*len(keys))
-    cur.execute("""SELECT channel_id::text AS channel_id,external_id,source_hash,media_kind,status,code,result,updated_at
+    cur.execute("""SELECT channel_id::text AS channel_id,external_id,source_hash,media_kind,status,code,result,provenance,updated_at
       FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid
         AND (channel_id,external_id,source_hash,media_kind) IN ("""+placeholders+")",
       (tenant,*[value for key in keys for value in key]))
@@ -140,7 +143,12 @@ def _attach_saved_audio_transcripts(cur, tenant, rows, *, conversation_id=None):
         receipt=receipts.get(key) or {};result=receipt.get('result') if isinstance(receipt.get('result'),dict) else {}
         text=result.get('transcript')
         diagnostic=_audio_diagnostic(receipt.get('status'),receipt.get('code'),result,receipt.get('updated_at'))
-        if diagnostic:row['_saved_audio_diagnostic']=diagnostic
+        if diagnostic:
+            row['_saved_audio_diagnostic']=diagnostic
+            ref={'external_id':row['external_id'],'body_hash':_body_hash(row.get('body')),
+                 'media_kind':str(row['message_type']).lower(),'media_version':media_version(row.get('raw'))}
+            row['_saved_audio_receipt_diagnostic']={**diagnostic,
+                'pre_dispatch_proven':retryable_audio_download_failure(receipt,ref)}
         if receipt.get('status')=='error':row['_saved_audio_state']='failed'
         if receipt.get('status')=='processed' and isinstance(text,str) and text.strip():
             row['_saved_audio_transcript']=text
@@ -182,6 +190,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     saved_audio_transcript=value.pop('_saved_audio_transcript',None)
     saved_audio_state=value.pop('_saved_audio_state',None)
     audio_diagnostic=value.pop('_saved_audio_diagnostic',None)
+    receipt_diagnostic=value.pop('_saved_audio_receipt_diagnostic',None)
     raw = value.pop('raw', None) or {}
     direction = str(value.get('direction') or '')
     if direction not in {'incoming', 'outgoing'}:
@@ -257,6 +266,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
                 value['audio_transcript']=text
                 value['has_transcription']=True
         if value.get('message_type') in {'audio','voice','voice_message','ptt'}:
+            if receipt_diagnostic:value['analysis_receipt_diagnostic']=receipt_diagnostic
             if audio_diagnostic:
                 value['analysis_diagnostic']=audio_diagnostic
                 if audio_diagnostic['status']!='processed' and not value.get('has_transcription'):
