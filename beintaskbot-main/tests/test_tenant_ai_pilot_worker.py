@@ -20,8 +20,7 @@ async def test_initial_consultation_runs_through_worker_and_requires_delivery_re
     source = {'external_id': 'source-1', 'direction': 'incoming', 'body': 'Alış 1 qutu 50 AZN, ekranda 49,9992 göstərilir.',
         'message_type': 'text', 'happened_at': '2026-10-31T04:43:44+00:00', 'media_url': '', 'has_attachment': False}
     config = {'scopes': ['channel-1'], 'schedule': {}, 'chat_model': 'test-model', 'agent_model': '',
-        'response_policy': {'enabled': True, 'action': 'consult_developer', 'developer_id': 11,
-            'fallback_action': 'stop', 'max_clarifications': 1, 'stop_reply': ''}}
+        'response_policy': {}}
     reservation = {'run_id': 'run-1', 'mode': 'automatic', 'auto_send_enabled': True,
         'conversation_revision': 3, 'response_policy': config['response_policy'],
         'agent_language': 'az', 'agent_style': '', 'api_key': 'fixture', 'company_instructions': '',
@@ -57,11 +56,12 @@ async def test_initial_consultation_runs_through_worker_and_requires_delivery_re
     monkeypatch.setattr(videos, 'prepare', empty_videos)
     monkeypatch.setattr(worker, 'history', lambda *_a, **_k: ([{'speaker': 'CLIENT', 'text': source['body']}], 0))
     monkeypatch.setattr(pilot, 'manual_live_job', lambda _job: True)
+    monkeypatch.setattr(pilot, 'configured_group_scope', lambda: {'tenant_id':'tenant-1','channel_id':'channel-1','conversation_id':'developers@g.us'})
     async def guarded_handoff(*_a, **_k): events.append('handoff'); return True
     monkeypatch.setattr(worker, '_handoff_current_connect', guarded_handoff)
-    monkeypatch.setattr(consultations, 'recipient_available', lambda *_: True)
-    monkeypatch.setattr(consultations, 'create_from_ai', lambda *_a, **_k:
-        events.append('case') or {'id': 'case-1', 'status': 'waiting_specialist'})
+    create_calls=[]
+    monkeypatch.setattr(consultations, 'create_from_ai', lambda *_a, **kwargs:
+        create_calls.append(kwargs) or events.append('case') or {'id': 'case-1', 'status': 'waiting_specialist'})
     monkeypatch.setattr(group_flow, 'deliver_pilot_consultation_to_group', lambda *_a, **_k:
         events.append('group') or {'state': group_state})
     monkeypatch.setattr(group_flow, 'acknowledge_pilot_consultation_to_customer', lambda *_a, **_k:
@@ -80,4 +80,5 @@ async def test_initial_consultation_runs_through_worker_and_requires_delivery_re
     await worker.process_connect_one(job, Logger())
     assert events == (['handoff', 'case', 'group', 'customer_ack'] if group_state == 'sent'
         else ['handoff', 'case', 'group'])
+    assert create_calls and create_calls[0]['destination']=='pilot_group' and create_calls[0]['recipient_id'] is None
     assert finishes == [expected_finish]

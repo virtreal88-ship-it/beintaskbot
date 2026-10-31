@@ -124,7 +124,7 @@ def test_preflight_marks_kwid_as_unknown_until_fresh_manual_attestation(monkeypa
         def __enter__(self): return self
         def __exit__(self, *_): return False
         def execute(self, sql, _params=None): self.sql.append(sql)
-        def fetchone(self): return {}
+        def fetchone(self): return {'lead_id':123,'state':'paused','no_pending_jobs':True}
 
     class Connection:
         def __init__(self): self.cur = Cursor()
@@ -137,13 +137,16 @@ def test_preflight_marks_kwid_as_unknown_until_fresh_manual_attestation(monkeypa
     monkeypatch.setattr('tenant_ai_agents_store._authorize', lambda _cur, _profile: (TENANT, 7))
     monkeypatch.setattr(pilot, '_snapshot', lambda *_: (row, 'fingerprint'))
     monkeypatch.setattr(pilot, '_confirmation', lambda *_: ({}, {}))
+    monkeypatch.setattr(pilot, 'scoped_live_enabled', lambda: True)
+    monkeypatch.setattr(pilot, 'configured_group_scope', lambda: {
+        'tenant_id':TENANT,'channel_id':CHANNEL,'conversation_id':'developers@g.us'})
     with patch.dict('os.environ', pilot_env(), clear=True):
         result = pilot.preflight({'tenant_id': TENANT, 'telegram_id': 7})
     assert result['competing_handler'] == {'state': 'unknown', 'source': 'manual_confirmation_required'}
     assert result['kwid_confirmation']['state'] == 'missing'
     assert result['separate_owner_approval']['state'] == 'missing'
-    assert result['scoped_live']['developer_consultation_recipient']=='unavailable'
-    assert 'developer_consult_recipient_unconfigured_or_unavailable' in result['blockers']
+    assert result['scoped_live']['consultation_destination']=='pilot_group'
+    assert 'developer_consult_recipient_unconfigured_or_unavailable' not in result['blockers']
     assert not result['ready'] and 'kwid_confirmation_missing_expired_or_scope_changed' in result['blockers']
     assert all(sql.lstrip().upper().startswith('SELECT') for sql in conn.cur.sql)
 

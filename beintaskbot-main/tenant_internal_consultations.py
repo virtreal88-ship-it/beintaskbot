@@ -80,7 +80,7 @@ def create(profile,data):
             _audit(cur,tenant,actor,'internal_consultation_created','support_case',data['case_id'],{'status':status,'recipient_id':recipient['telegram_id'],'delivery':'internal_inbox'})
         conn.commit();return {'id':str(ident),'status':status,'created':True,'recipient':recipient['display_name'] or str(recipient['telegram_id']),'delivery':'internal_inbox','customer_message_sent':False}
 
-def create_from_ai(job, *, recipient_id, reason, evidence, run_id=None):
+def create_from_ai(job, *, recipient_id=None, reason, evidence, run_id=None, destination='employee'):
     """Create a durable internal-only consultation after the AI has handed off.
 
     The caller is a worker, so it has no browser profile.  It is deliberately
@@ -88,10 +88,26 @@ def create_from_ai(job, *, recipient_id, reason, evidence, run_id=None):
     webhook fingerprint are taken solely from the claimed job.
     """
     if job.get('provider')!='connect': return {'created':False,'reason':'provider_not_supported'}
+    if destination not in {'employee','pilot_group'}:
+        return {'created':False,'reason':'consultation_destination_invalid'}
+    group_target=None
+    if destination=='pilot_group':
+        # Group consultations are valid only inside the owner-attested single
+        # customer pilot and only when the separately validated group route
+        # exists. They never impersonate or notify a tenant employee.
+        from tenant_ai_pilot import manual_live_job,configured_group_scope
+        group_target=configured_group_scope()
+        if (not manual_live_job(job) or not group_target
+                or group_target['tenant_id']!=str(job.get('tenant_id'))
+                or group_target['channel_id']!=str(job.get('channel_id'))):
+            return {'created':False,'reason':'pilot_group_destination_unavailable'}
+    elif recipient_id is None:
+        return {'created':False,'reason':'consultation_recipient_invalid'}
     with _connect() as conn:
         schema(conn)
         with conn.cursor() as cur:
-            tenant=str(job['tenant_id']);recipient=_recipient(cur,tenant,recipient_id)
+            tenant=str(job['tenant_id'])
+            recipient=_recipient(cur,tenant,recipient_id) if destination=='employee' else None
             # Bind to the ticket recorded by this exact handoff event. A
             # newer ticket in the same dialog can belong to a different issue.
             cur.execute('''SELECT t.id FROM saas_support_events e JOIN saas_support_tickets t
@@ -101,39 +117,48 @@ def create_from_ai(job, *, recipient_id, reason, evidence, run_id=None):
               (tenant,'handoff:'+str(job.get('event_fingerprint') or ''),job['channel_id'],job['conversation_id']))
             case=cur.fetchone()
             if not case: return {'created':False,'reason':'support_case_missing'}
+            if destination=='pilot_group':
+                from tenant_ai_pilot import pilot_group_handoff_allowed
+                if not pilot_group_handoff_allowed(job,connection=conn):
+                    return {'created':False,'reason':'pilot_group_authorization_expired_or_scope_changed'}
             key='ai:'+str(job['agent_id'])+':'+str(job.get('event_fingerprint') or '')
             cur.execute('SELECT id,status FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND request_key=%s FOR UPDATE',(tenant,key));old=cur.fetchone()
             if old: return {'id':str(old['id']),'status':old['status'],'created':False,'customer_message_sent':False}
             status='waiting_specialist' if _hours() else 'queued_after_hours';ident=uuid.uuid4()
-            cur.execute('''INSERT INTO saas_internal_consultations(tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,evidence,status,recipient_id,ai_run_id,created_by)
-              VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb,%s,%s,%s::uuid,NULL)''',
-              (tenant,ident,case['id'],job['channel_id'],job['conversation_id'],key,str(reason)[:1000],_json(evidence if isinstance(evidence,dict) else {}),status,recipient['telegram_id'],run_id))
-            cur.execute('''INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body,target_url)
-              VALUES(%s,%s::uuid,%s,%s,'AI: требуется консультация разработчика',%s,'/app?view=support')
-              ON CONFLICT DO NOTHING''',(uuid.uuid4(),tenant,recipient['telegram_id'],'ai_consultation:'+key,str(reason)[:500]))
-            # The member key is an application actor id for login accounts;
-            # only a separately verified chat binding may enter this queue.
-            from tenant_member_store import member
-            from tenant_policy import TenantPolicy
-            from tenant_notifications import notification_channels
-            from tenant_telegram_binding import binding_snapshot
-            try:
-                profile=member(tenant,int(recipient['telegram_id']))
-                binding=binding_snapshot(tenant_id=tenant,actor_id=int(recipient['telegram_id']))
-                # After-hours consultations stay queued; their delivery row is
-                # claimed only in the next 08:00–20:00 Baku window.
-                enabled=bool(profile and binding and 'telegram' in notification_channels(TenantPolicy(profile),event='ai_developer_consultation',tenant_id=tenant))
-            except Exception:
-                # The in-app consultation is durable even if the optional
-                # Telegram preference/binding store is temporarily unavailable.
-                enabled=False;binding=None
+            cur.execute('''INSERT INTO saas_internal_consultations(tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,evidence,status,recipient_id,ai_run_id,created_by,delivery_state)
+              VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb,%s,%s,%s::uuid,NULL,%s)''',
+              (tenant,ident,case['id'],job['channel_id'],job['conversation_id'],key,str(reason)[:1000],_json(evidence if isinstance(evidence,dict) else {}),status,
+               recipient['telegram_id'] if recipient else None,run_id,'pilot_group_pending' if destination=='pilot_group' else 'internal_inbox'))
+            if destination=='employee':
+                cur.execute('''INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body,target_url)
+                  VALUES(%s,%s::uuid,%s,%s,'AI: требуется консультация разработчика',%s,'/app?view=support')
+                  ON CONFLICT DO NOTHING''',(uuid.uuid4(),tenant,recipient['telegram_id'],'ai_consultation:'+key,str(reason)[:500]))
+            # Group delivery has no employee binding or personal notification.
+            # Employee delivery remains the existing separately verified path.
+            enabled=False;binding=None
+            if destination=='employee':
+                from tenant_member_store import member
+                from tenant_policy import TenantPolicy
+                from tenant_notifications import notification_channels
+                from tenant_telegram_binding import binding_snapshot
+                try:
+                    profile=member(tenant,int(recipient['telegram_id']))
+                    binding=binding_snapshot(tenant_id=tenant,actor_id=int(recipient['telegram_id']))
+                    # After-hours consultations stay queued; their delivery row is
+                    # claimed only in the next 08:00–20:00 Baku window.
+                    enabled=bool(profile and binding and 'telegram' in notification_channels(TenantPolicy(profile),event='ai_developer_consultation',tenant_id=tenant))
+                except Exception:
+                    # Durable consultation remains even if the optional
+                    # Telegram preference/binding store is temporarily unavailable.
+                    enabled=False;binding=None
             if enabled:
                 cur.execute('''INSERT INTO saas_consultation_telegram_deliveries(tenant_id,consultation_id,recipient_id,chat_id,binding_verified_at)
                   VALUES(%s::uuid,%s::uuid,%s,%s,%s::timestamptz) ON CONFLICT DO NOTHING''',(tenant,ident,recipient['telegram_id'],binding['chat_id'],binding['verified_at']))
                 cur.execute('UPDATE saas_internal_consultations SET delivery_state=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',('telegram_pending',tenant,ident))
-            _audit(cur,tenant,None,'ai_internal_consultation_created','consultation',ident,{'case_id':str(case['id']),'recipient_id':recipient['telegram_id'],'status':status,'internal_only':True})
+            _audit(cur,tenant,None,'ai_internal_consultation_created','consultation',ident,{'case_id':str(case['id']),'recipient_id':recipient['telegram_id'] if recipient else None,'destination':destination,'status':status,'internal_only':True})
         conn.commit();return {'id':str(ident),'status':status,'created':True,'customer_message_sent':False,
-                              'delivery':'telegram_pending' if enabled else 'internal_inbox'}
+                              'recipient_id':recipient['telegram_id'] if recipient else None,
+                              'delivery':'pilot_group_pending' if destination=='pilot_group' else ('telegram_pending' if enabled else 'internal_inbox')}
 
 def listing(profile,case_id):
     with _connect() as conn:
@@ -154,8 +179,11 @@ def reply(profile,consultation_id,data):
             tenant,actor=authorize(cur,profile)
             cur.execute('SELECT * FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,consultation_id));row=cur.fetchone()
             if not row: raise TenantLinearError('consultation_unavailable',404)
-            cur.execute('SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE',(tenant,actor));member=cur.fetchone()
-            if row.get('recipient_id') not in (None,actor) and (not member or member.get('role') not in {'owner','admin'}):
+            cur.execute('SELECT role,permissions FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s FOR SHARE',(tenant,actor));member=cur.fetchone()
+            if row.get('recipient_id') is None:
+                if not member or (member.get('role') not in {'owner','admin'} and 'support' not in (member.get('permissions') or [])):
+                    raise TenantLinearError('consultation_reply_forbidden',403)
+            elif row.get('recipient_id') != actor and (not member or member.get('role') not in {'owner','admin'}):
                 raise TenantLinearError('consultation_reply_forbidden',403)
             text=str(data['response']).strip()
             if not text: raise TenantLinearError('consultation_reply_invalid',400)

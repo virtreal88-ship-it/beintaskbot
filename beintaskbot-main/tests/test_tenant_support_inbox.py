@@ -1248,6 +1248,36 @@ def test_ai_consultation_uses_handoff_case_notifies_recipient_and_never_sends_cu
     assert db.execute('SELECT knowledge_candidate_requested FROM saas_support_tickets WHERE tenant_id=%s::uuid',(A,))[0]['knowledge_candidate_requested'] is True
 
 
+def test_pilot_group_consultation_is_a_case_destination_without_employee_identity(db, monkeypatch):
+    monkeypatch.setattr(consultations, '_connect', lambda: db)
+    monkeypatch.setattr(consultations, '_hours', lambda: False)
+    import tenant_ai_pilot as pilot
+    monkeypatch.setattr(pilot, 'manual_live_job', lambda _job: True)
+    monkeypatch.setattr(pilot, 'configured_group_scope', lambda: {
+        'tenant_id': A, 'channel_id': CA, 'conversation_id': 'developers@g.us'})
+    monkeypatch.setattr(pilot, 'pilot_group_handoff_allowed', lambda *_a, **_k: True)
+    ticket=manual()['ticket']['id']
+    job={'tenant_id':A,'agent_id':AGENT,'provider':'connect','channel_id':CA,
+        'conversation_id':'client','event_fingerprint':'webhook-group-consult-1'}
+    db.execute('INSERT INTO saas_support_events(tenant_id,event_key,ticket_id) VALUES(%s::uuid,%s,%s::uuid)',
+        (A,'handoff:webhook-group-consult-1',ticket));db.commit()
+    first=consultations.create_from_ai(job,recipient_id=None,destination='pilot_group',
+        reason='ai_developer_consultation:unsupported_evidence',evidence={'source_external_id':'m1'})
+    second=consultations.create_from_ai(job,recipient_id=None,destination='pilot_group',
+        reason='ai_developer_consultation:unsupported_evidence',evidence={'source_external_id':'m1'})
+    assert first['created'] and first['recipient_id'] is None
+    assert first['delivery']=='pilot_group_pending' and first['customer_message_sent'] is False
+    assert not second['created'] and second['id']==first['id']
+    row=db.execute('SELECT recipient_id,delivery_state FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid',
+        (A,first['id']))[0]
+    assert row=={'recipient_id':None,'delivery_state':'pilot_group_pending'}
+    assert db.execute("SELECT count(*) AS n FROM saas_tenant_notifications WHERE tenant_id=%s::uuid",(A,))[0]['n']==0
+    db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,permissions) VALUES(%s::uuid,33,'operator','[]'::jsonb)",(A,));db.commit()
+    monkeypatch.setattr(consultations,'authorize',lambda _cur,profile:(A,profile['telegram_id']))
+    with pytest.raises(TenantLinearError,match='consultation_reply_forbidden'):
+        consultations.reply({'telegram_id':33},first['id'],{'response':'unverified','kind':'diagnosis'})
+
+
 def test_ai_consultation_does_not_select_newer_unrelated_ticket(db, monkeypatch):
     monkeypatch.setattr(consultations, '_connect', lambda: db)
     old=manual()['ticket']['id']
