@@ -24,7 +24,7 @@ const {chromium}=require('../.support-test-deps/node_modules/playwright');
   await page.waitForFunction(()=>document.querySelector('[data-group-draft]')&&!document.querySelector('[data-group-draft]').disabled);
   assert.equal(await panel.locator('textarea').inputValue(),'We are checking.');
   assert.equal((await page.request.post(origin+'/simulate/client-attachment')).status(),200);
-  await page.reload();await page.locator('[data-support-id="'+ticket+'"]').click();
+  await page.reload();await page.locator('#supportTicketTitle').waitFor();assert.equal(new URL(page.url()).searchParams.get('support_ticket_id'),ticket,'reload restores the ticket through its deep link without a second row click');
   const again=page.locator('[data-consult-id="'+consult+'"] details');await again.locator('summary').click();
   await again.getByRole('button',{name:'Передать уточнение'}).click();
   assert.equal(await again.locator('textarea').inputValue(),''); // never reuse an earlier remote-access code
