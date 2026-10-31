@@ -536,7 +536,7 @@ def analyze(profile,data,*,before_provider=None,training=None):
         if live_enabled is not None and not live_enabled():
             raise LiveExtractionDisabled()
     check_live_enabled()
-    item=prepare(profile,data,training=training)
+    item=prepare(profile,data,training=training) if training is not None else prepare(profile,data)
     if 'existing' in item:
         response=store.request_detail(profile,item['existing'])
         if 'next_before' in item: response['request']['next_before']=item['next_before']
