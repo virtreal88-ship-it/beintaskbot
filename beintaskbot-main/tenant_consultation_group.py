@@ -43,6 +43,12 @@ def schema(conn):
         cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS customer_draft TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS draft_reply_id TEXT NULL")
         cur.execute("ALTER TABLE saas_consultation_group_deliveries ADD COLUMN IF NOT EXISTS draft_revision BIGINT NOT NULL DEFAULT 0")
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_consultation_group_media_deliveries(
+          tenant_id UUID NOT NULL,case_id UUID NOT NULL,consultation_id UUID NOT NULL,source_external_id TEXT NOT NULL,
+          channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,request_id UUID NOT NULL,state TEXT NOT NULL,
+          connect_message_id TEXT NULL,provider_message_id TEXT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(tenant_id,case_id,source_external_id,channel_id,conversation_id),
+          UNIQUE(tenant_id,request_id))''')
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_pilot_followups(
           tenant_id UUID NOT NULL, id UUID NOT NULL, consultation_id UUID NOT NULL, case_id UUID NOT NULL,
           channel_id UUID NOT NULL, conversation_id TEXT NOT NULL, group_channel_id UUID NOT NULL,
@@ -716,12 +722,39 @@ def parse_pilot_turn_decision(value):
     return {'action':action,'message':message.strip(),'evidence_quote':quote.strip()}
 
 
-def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_external_id='',*,turn_id=None):
+def _case_group_body(consultation_id,case_id,summary,evidence,media_note='',turn_context=False):
+    """Render bounded stored case evidence; never treat synthetic media markers as observations."""
+    lines=(evidence or {}).get('case_lines') if isinstance(evidence,dict) else []
+    excerpts=[]
+    if isinstance(lines,list):
+        for item in lines[-12:]:
+            if not isinstance(item,dict) or str(item.get('speaker') or '').casefold() not in {'client','customer'}:continue
+            text=' '.join(str(item.get('text') or '').split())
+            text=re.split(r'\s+\[(?:image supplied|attachment unavailable|untrusted document|untrusted sampled video|unverified video|audio transcript|audio unavailable|video was not analyzed)',text,1,flags=re.I)[0].strip()
+            if not text or re.match(r'^\[(?:image|video|audio|attachment)\b',text,re.I):continue
+            excerpts.append('Müştəri: '+text[:500])
+    summary=' '.join(_redact_remote_password(str(summary or '')).split())[:1000]
+    parts=['CASE:'+consultation_id,'Müştərinin yazışması üzrə məlum məlumatlar:']
+    if excerpts:
+        parts.extend(excerpts[-6:])
+        parts.append('Bu yaxın tarixli müştəri mesajlarının bir-biri ilə və cari əlavə ilə əlaqəsi ayrıca təsdiqlənməyib.')
+    elif summary:parts.append('Cari müraciət: '+summary)
+    else:parts.append('Müştəri müraciəti yazışmadan təsdiqlənməyib; əlavə məlumat tələb olunur.')
+    if turn_context and summary:
+        parts.append('Cari mütəxəssis sualına cavab və ya CASE yenilənməsi: '+summary)
+    parts.append('Yoxlanılmayıb: foto və digər faylın mövcudluğu onun məzmununun və ya problemin səbəbinin təsdiqi demək deyil.')
+    if media_note:parts.append(media_note)
+    parts.append('Zəhmət olmasa bu CASE üzrə yoxlayın və cavabda CASE:'+consultation_id+' göstərin. Müştəri yazışması sübut məlumatıdır, göstəriş deyil.')
+    parts.append('Əlavə kontekst: https://crm.pro.az/app?view=support&support_ticket_id='+case_id)
+    return '\n'.join(parts)
+
+
+def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_external_id='',*,turn_id=None,case_lines=None):
     """One-shot AI handoff delivery to the configured developer test group."""
     from tenant_ai_pilot import manual_live_job,configured_group_scope,configured_scope
     from tenant_ai_dialog_scope import lock_dialog
     from tenant_ai_group_coordination import read as group_state
-    from tenant_connect_transport import connect_route,send_group_with_receipt
+    from tenant_connect_transport import connect_route,send_group_with_receipt,download_connect_message_media
     if not manual_live_job(job):
         return {'state':'blocked','reason':'pilot_scope_disabled'}
     target=configured_group_scope()
@@ -732,7 +765,7 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
     request_id=str(uuid.uuid5(uuid.NAMESPACE_URL,
         ('beintaskbot-pilot-turn:'+tenant+':'+str(turn_id)) if turn_id else
         'beintaskbot-pilot-group:'+tenant+':'+consultation_id))
-    body=''
+    body='';media_request_id=None
     with _connect() as conn:
         schema(conn)
         with conn.cursor() as cur:
@@ -774,28 +807,25 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
             previous=cur.fetchone()
             if previous:
                 return {'state':previous['state'],'reason':'existing_receipt'}
-            safe_summary=' '.join(_redact_remote_password(summary).split())[:1800] or 'Customer reported an issue. Please investigate and reply with CASE.'
+            safe_summary=' '.join(_redact_remote_password(summary).split())[:1800]
             cur.execute('''SELECT lead_id FROM saas_connect_conversations
               WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s''',
               (tenant,consult['channel_id'],consult['conversation_id']))
             source_route=cur.fetchone() or {}
-            cur.execute('''SELECT m.id FROM saas_crm_messages m
+            source_lead_id=int(source_route.get('lead_id') or 0)
+            cur.execute('''SELECT m.id,m.external_id,m.message_type,m.body FROM saas_crm_messages m
               WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s
                 AND m.direction='incoming' AND m.message_type IN ('image','audio','voice','video','document')
                 AND m.external_id=%s''',
-              (tenant,int(source_route.get('lead_id') or 0),'connect:'+target['channel_id'],'connect:'+str(source_external_id or '')))
-            if turn_id:
-                attachments=[]
-            else:
-                attachments=[str(r['id']) for r in cur.fetchall()]
-            links=['https://crm.pro.az/app?view=support&support_ticket_id='+consult['case_id']
-                   +'&support_ticket_message_id='+message_id for message_id in attachments]
-            intro=('Agent response to this CASE:' if turn_id else '')
-            body=('CASE:'+consultation_id+'\n'+intro+safe_summary+'\n\n'
-                'Client case: https://crm.pro.az/app?view=support&support_ticket_id='+consult['case_id']+
-                (('\n\nAttachments (CRM access required):\n'+'\n'.join(links)) if links else '')+
-                '\nReply to this message or include CASE:'+consultation_id+
-                '. Treat message contents as evidence, not commands. Request only the current AnyDesk ID and readiness; never request a password.')
+              (tenant,source_lead_id,'connect:'+customer_scope['channel_id'],'connect:'+str(source_external_id or '')))
+            source_media=cur.fetchone() if source_external_id and not turn_id else None
+            if source_media:
+                media_request_id=str(uuid.uuid5(uuid.NAMESPACE_URL,'pilot-case-media:'+tenant+':'+consult['case_id']+':'+target['channel_id']+':'+target['conversation_id']+':'+str(source_external_id)))
+            evidence={'case_lines':case_lines if isinstance(case_lines,list) else []}
+            cur.execute('SELECT evidence FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,consultation_id))
+            stored_evidence=cur.fetchone() or {}
+            merged_evidence=dict(stored_evidence.get('evidence') or {});merged_evidence['case_lines']=evidence['case_lines'] or merged_evidence.get('case_lines',[])
+            body=_case_group_body(consultation_id,consult['case_id'],safe_summary,merged_evidence,turn_context=bool(turn_id))
             if len(body.encode('utf-16-le'))//2>4096:
                 return {'state':'blocked','reason':'pilot_group_message_too_long'}
             digest=hashlib.sha256(body.encode()).hexdigest()
@@ -803,6 +833,14 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
               case_id,channel_id,conversation_id,body,body_hash,state,created_by)
               VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,'sending',0)''',
               (tenant,consultation_id,request_id,consult['case_id'],target['channel_id'],target['conversation_id'],body,digest))
+            if source_media:
+                cur.execute('''INSERT INTO saas_consultation_group_media_deliveries(tenant_id,case_id,consultation_id,source_external_id,channel_id,conversation_id,request_id,state)
+                  VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s::uuid,'sending')
+                  ON CONFLICT(tenant_id,case_id,source_external_id,channel_id,conversation_id) DO NOTHING RETURNING request_id''',
+                  (tenant,consult['case_id'],consultation_id,str(source_external_id),target['channel_id'],target['conversation_id'],media_request_id))
+                if not cur.fetchone():
+                    cur.execute("UPDATE saas_consultation_group_deliveries SET state='blocked' WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid",(tenant,consultation_id,request_id))
+                    conn.commit();return {'state':'blocked','reason':'case_media_delivery_already_reserved'}
             route=connect_route(cur,tenant,int(group['lead_id']))
             if not route or route['channel_id']!=target['channel_id'] or route['conversation_id']!=target['conversation_id']:
                 cur.execute("UPDATE saas_consultation_group_deliveries SET state='blocked' WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid",
@@ -853,8 +891,31 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
                     latest=cur.fetchone() or {}
                     if latest.get('external_id')!='connect:'+str(source_external_id):
                         raise TenantLinearError('A newer customer message replaced this consultation.',409)
+                media_payload=None
+                if source_media and source_media.get('message_type') in {'image','audio','voice','video','document'}:
+                    cur.execute("SELECT state FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND request_id=%s::uuid FOR UPDATE",(tenant,media_request_id))
+                    media_receipt=cur.fetchone()
+                    if not media_receipt or media_receipt['state']!='sending':raise TenantLinearError('Case media delivery is already reserved or needs review.',409)
+                    attachment_route=connect_route(cur,tenant,source_lead_id)
+                    if not attachment_route or attachment_route['channel_id']!=customer_scope['channel_id'] or attachment_route['conversation_id']!=customer_scope['conversation_id']:
+                        raise TenantLinearError('Case attachment route changed.',409)
+                    media_type='image' if source_media['message_type']=='image' else 'video' if source_media['message_type']=='video' else 'audio' if source_media['message_type'] in {'audio','voice'} else 'document'
+                    try:
+                        media_payload=download_connect_message_media(attachment_route,str(source_media['external_id']).removeprefix('connect:'),media_type)
+                    except Exception:
+                        cur.execute("UPDATE saas_consultation_group_media_deliveries SET state='blocked',updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid",(tenant,media_request_id))
+                        body=_case_group_body(consultation_id,consult['case_id'],safe_summary,merged_evidence,'Fayl qrupa əlavə edilə bilmədi; məzmunu yoxlanılmayıb. Müştəridən faylı yenidən göndərməsini istəyin.',bool(turn_id))
+                if media_payload:
+                    body=_case_group_body(consultation_id,consult['case_id'],safe_summary,merged_evidence,'Qoşma: müştərinin bu CASE-də göndərdiyi fayl; faylın məzmunu təhlil edilməyib və problemin səbəbi təsdiqlənməyib.',bool(turn_id))
+                cur.execute('''UPDATE saas_consultation_group_deliveries SET body=%s,body_hash=%s,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='sending' ''',
+                  (body,hashlib.sha256(body.encode()).hexdigest(),tenant,consultation_id,request_id))
                 attempted=True
-                receipt=send_group_with_receipt(current_route,body,request_id)
+                receipt=(send_group_with_receipt(current_route,body,media_request_id,media=media_payload)
+                         if media_payload else send_group_with_receipt(current_route,body,request_id))
+                if media_request_id and media_payload:
+                    cur.execute("UPDATE saas_consultation_group_media_deliveries SET state='sent',connect_message_id=%s,provider_message_id=%s,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid",
+                      (receipt['message_id'],receipt['external_message_id'],tenant,media_request_id))
                 cur.execute('''UPDATE saas_consultation_group_deliveries SET state='sent',
                   connect_message_id=%s,provider_message_id=%s,updated_at=now()
                   WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='sending'
@@ -868,10 +929,11 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
                 from tenant_platform import _json
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,
                   channel,author_name,body,message_type,raw)
-                  VALUES(%s::uuid,%s::uuid,%s,%s,'outgoing',%s,'AI Agent',%s,'text',%s::jsonb)
+                  VALUES(%s::uuid,%s::uuid,%s,%s,'outgoing',%s,'AI Agent',%s,%s,%s::jsonb)
                   ON CONFLICT(tenant_id,external_id) DO NOTHING''',
                   (uuid.uuid4(),tenant,int(group['lead_id']),'connect:'+receipt['message_id'],
-                   'connect:'+target['channel_id'],body,_json({'source':'connect','pilot_consultation_id':consultation_id})))
+                   'connect:'+target['channel_id'],body,media_payload['type'] if media_payload else 'text',
+                   _json({'source':'connect','pilot_consultation_id':consultation_id,'media_attached':bool(media_payload)})))
                 if turn_id:
                     cur.execute('''UPDATE saas_ai_conversation_state SET state='human',
                       reason='ai_developer_consultation:awaiting_specialist',revision=revision+1,updated_at=now()
@@ -885,6 +947,8 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
                 cur.execute('''UPDATE saas_consultation_group_deliveries SET state=%s,updated_at=now()
                   WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='sending' ''',
                   ('unknown' if attempted else 'blocked',tenant,consultation_id,request_id))
+                cur.execute("UPDATE saas_consultation_group_media_deliveries SET state=%s,updated_at=now() WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND state='sending'",
+                  ('unknown' if attempted else 'blocked',tenant,consultation_id))
                 cur.execute('''UPDATE saas_internal_consultations SET delivery_state=
                   CASE WHEN recipient_id IS NULL THEN %s ELSE 'group_delivery_needs_review' END
                   WHERE tenant_id=%s::uuid AND id=%s::uuid AND delivery_state='pilot_group_pending' ''',

@@ -30,6 +30,106 @@ def request():
       'summary':'A synthetic question','confirm_group':True,'attachment_ids':[]}
 
 
+def test_case_group_body_uses_prior_case_text_but_never_synthetic_media_as_observation():
+    body=flow._case_group_body('case-123','ticket-123','',{'case_lines':[
+      {'speaker':'CLIENT','text':'The upload still shows the wrong amount.'},
+      {'speaker':'CLIENT','text':'[Image supplied for analysis: attachment-456]'},
+      {'speaker':'CLIENT','text':'50.00 expected; display says 49.99.'}]})
+    assert 'The upload still shows the wrong amount.' in body
+    assert '50.00 expected; display says 49.99.' in body
+    assert 'Image supplied for analysis' not in body
+    assert '49.9992' not in body
+    assert 'Yoxlanılmayıb' in body and 'CASE:case-123' in body
+
+
+def test_connect_media_download_uses_scoped_api_and_returns_bytes_without_storage_url(monkeypatch):
+    import base64
+    class Response:
+        status_code=200;is_redirect=False
+        headers={'Content-Type':'image/png','Content-Length':'8'}
+        def iter_content(self,_size):yield b'\x89PNG\r\n\x1a\n'
+        def close(self):pass
+    calls=[]
+    monkeypatch.setattr(transport.requests,'get',lambda *args,**kwargs:(calls.append((args,kwargs)) or Response()))
+    result=transport.download_connect_message_media({'channel_id':CA,'api_key':'test-only'},'message-123','image')
+    assert result=={'type':'image','base64':base64.b64encode(b'\x89PNG\r\n\x1a\n').decode(),
+      'mimeType':'image/png','fileName':'case-attachment'}
+    assert calls[0][0][0].endswith('/v1/channels/'+CA+'/messages/message-123/media')
+    assert calls[0][1]['allow_redirects'] is False and calls[0][1]['headers']['x-api-key']=='test-only'
+    assert not any('http' in str(value).lower() for value in result.values())
+
+
+def test_actual_pilot_handoff_sends_exact_case_photo_bytes_with_prior_complaint(db,monkeypatch):
+    import base64
+    import tenant_ai_pilot as pilot
+    consult,_case=setup_case(db,monkeypatch)
+    _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch)
+    db.execute("UPDATE saas_crm_messages SET body='',message_type='image' WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,));db.commit()
+    assert db.execute("SELECT lead_id FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CA))
+    assert db.execute("SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41 AND channel=%s AND external_id='connect:customer-message' AND message_type='image'",(A,'connect:'+CA))
+    monkeypatch.setattr(transport,'connect_route',lambda cur,tenant,lead_id,**kw:
+      {'api_key':'synthetic','channel_id':CA,'conversation_id':GROUP if int(lead_id)==99 else 'client'})
+    media={'type':'image','base64':base64.b64encode(b'local-test-image-bytes').decode(),
+      'mimeType':'image/png','fileName':'case-attachment'}
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:media)
+    sent=[]
+    def send(route,body,request_id,**kwargs):
+        sent.append({'body':body,'request_id':request_id,'media':kwargs.get('media')})
+        return {'message_id':'group-media-message','external_message_id':'GROUP_MEDIA_REF'}
+    monkeypatch.setattr(transport,'send_group_with_receipt',send)
+    job={'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client','agent_id':AGENT,'event_fingerprint':event_fingerprint}
+    lines=[{'speaker':'CLIENT','text':'The upload still shows the wrong amount.'},
+      {'speaker':'CLIENT','text':'[Image supplied for analysis: attachment-456]'}]
+    unrelated=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'connect:unrelated-photo','incoming',%s,'image',now()-interval '2 seconds')",(unrelated,A,'connect:'+CA));db.commit()
+    fetched=[]
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:(fetched.append(message_id) or media))
+    result=flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message',case_lines=lines)
+    assert result['state']=='sent' and len(sent)==1, result
+    assert sent[0]['media']==media and sent[0]['request_id']!='' and fetched==['customer-message']
+    assert 'The upload still shows the wrong amount.' in sent[0]['body']
+    assert 'Yoxlanılmayıb' in sent[0]['body']
+    assert 'Image supplied for analysis' not in sent[0]['body']
+    assert db.execute("SELECT state,provider_message_id FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]=={'state':'sent','provider_message_id':'GROUP_MEDIA_REF'}
+    assert flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message',case_lines=lines)['state']=='sent'
+    assert len(sent)==1 and fetched==['customer-message']
+
+
+def test_unknown_case_media_send_is_quarantined_and_never_retried(db,monkeypatch):
+    import tenant_ai_pilot as pilot
+    consult,_case=setup_case(db,monkeypatch)
+    _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch)
+    db.execute("UPDATE saas_crm_messages SET body='',message_type='image' WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,));db.commit()
+    monkeypatch.setattr(transport,'connect_route',lambda cur,tenant,lead_id,**kw:
+      {'api_key':'synthetic','channel_id':CA,'conversation_id':GROUP if int(lead_id)==99 else 'client'})
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda *_:{'type':'image','base64':'aW1hZ2U=','mimeType':'image/png'})
+    calls=[]
+    def unknown(*_args,**_kwargs):calls.append('attempt');raise TimeoutError()
+    monkeypatch.setattr(transport,'send_group_with_receipt',unknown)
+    job={'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client','agent_id':AGENT,'event_fingerprint':event_fingerprint}
+    assert flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')['state']=='unknown'
+    assert flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')['state']=='unknown'
+    assert calls==['attempt']
+    assert db.execute("SELECT state FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['state']=='unknown'
+
+
+def test_unavailable_case_attachment_is_reported_and_text_fallback_has_no_false_media_claim(db,monkeypatch):
+    consult,_case=setup_case(db,monkeypatch)
+    _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch)
+    db.execute("UPDATE saas_crm_messages SET body='',message_type='image' WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,));db.commit()
+    monkeypatch.setattr(transport,'connect_route',lambda cur,tenant,lead_id,**kw:
+      {'api_key':'synthetic','channel_id':CA,'conversation_id':GROUP if int(lead_id)==99 else 'client'})
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda *_:(_ for _ in ()).throw(RuntimeError('synthetic unavailable')))
+    sent=[]
+    monkeypatch.setattr(transport,'send_group_with_receipt',lambda route,body,key:(sent.append({'body':body,'id':key}) or {'message_id':'text-case-message','external_message_id':'CASE_TEXT_REF'}))
+    job={'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client','agent_id':AGENT,'event_fingerprint':event_fingerprint}
+    result=flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')
+    assert result['state']=='sent' and len(sent)==1
+    assert 'Fayl qrupa əlavə edilə bilmədi' in sent[0]['body']
+    assert 'fayl bu WhatsApp mesajına əlavə olunub' not in sent[0]['body']
+    assert db.execute("SELECT state FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['state']=='blocked'
+
+
 def setup_real_pilot_gate(db,monkeypatch,*,customer_state='human',reason='ai_developer_consultation:missing_knowledge'):
     import tenant_ai_pilot as pilot
     scope={'tenant_id':A,'channel_id':CA,'conversation_id':'client'}
@@ -566,7 +666,7 @@ def test_full_agent_worker_answers_developer_in_group_from_case_fact(db,monkeypa
     assert db.execute("SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id='client'",(A,CA))[0]=={'state':'human','reason':'ai_developer_consultation:awaiting_specialist'}
 
 
-def test_ai_handoff_delivery_uses_only_configured_paused_group_and_saved_attachment(db,monkeypatch):
+def test_ai_handoff_delivery_sends_saved_attachment_bytes_with_case_summary(db,monkeypatch):
     consult,case=setup_case(db,monkeypatch)
     group=GROUP
     monkeypatch.setattr('tenant_ai_pilot.manual_live_job',lambda job:
@@ -577,7 +677,7 @@ def test_ai_handoff_delivery_uses_only_configured_paused_group_and_saved_attachm
         'tenant_id':A,'channel_id':CA,'conversation_id':'client'})
     monkeypatch.setattr('tenant_ai_pilot.pilot_group_handoff_allowed',lambda *_args,**_kwargs:True)
     monkeypatch.setattr('tenant_ai_group_coordination._connect',lambda:db)
-    monkeypatch.setattr(transport,'connect_route',lambda *_:{'api_key':'synthetic','channel_id':CA,'conversation_id':group})
+    monkeypatch.setattr(transport,'connect_route',lambda cur,tenant,lead_id,**kw:{'api_key':'synthetic','channel_id':CA,'conversation_id':group if int(lead_id)==99 else 'client'})
     db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets) VALUES(%s::uuid,'connect','connected',%s)",(A,b'synthetic'))
     db.execute("INSERT INTO saas_ai_agent_settings(tenant_id,enabled,emergency_stop,auto_send_enabled) VALUES(%s::uuid,TRUE,FALSE,FALSE)",(A,))
     attachment=str(uuid.uuid4())
@@ -585,14 +685,18 @@ def test_ai_handoff_delivery_uses_only_configured_paused_group_and_saved_attachm
       VALUES(%s::uuid,%s::uuid,41,'connect:customer-issue','incoming',%s,'image')""",
       (attachment,A,'connect:'+CA))
     db.commit();sent=[]
-    monkeypatch.setattr(transport,'send_group_with_receipt',lambda route,body,key:
-        sent.append((route['conversation_id'],body,key)) or {'message_id':'pilot-handoff','external_message_id':'PILOT_HANDOFF'})
+    media={'type':'image','base64':'c3ludGhldGljLWltYWdl','mimeType':'image/png','fileName':'case-attachment'}
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:media)
+    def send(route,body,key,**kwargs):
+        sent.append((route['conversation_id'],body,key,kwargs.get('media')))
+        return {'message_id':'pilot-handoff','external_message_id':'PILOT_HANDOFF'}
+    monkeypatch.setattr(transport,'send_group_with_receipt',send)
     result=flow.deliver_pilot_consultation_to_group(
         {'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client'},
         consult,'The upload crashes when the customer selects a photo.','customer-issue')
     assert result['state']=='sent' and len(sent)==1 and sent[0][0]==group, result
-    assert 'CASE:'+consult in sent[0][1] and 'support_ticket_id='+case+'&support_ticket_message_id='+attachment in sent[0][1]
-    assert 'password' in sent[0][1].lower() and 'pass' in sent[0][1].lower()
+    assert 'CASE:'+consult in sent[0][1] and 'The upload crashes when the customer selects a photo.' in sent[0][1]
+    assert sent[0][3]==media and 'Yoxlanılmayıb' in sent[0][1]
     assert db.execute("SELECT state FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['state']=='sent'
 
 

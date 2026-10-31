@@ -342,13 +342,17 @@ async def _apply_no_answer_policy(job,reservation,policy,signal,source,query,lin
             receipt=await asyncio.to_thread(create_from_ai,job,
                 recipient_id=None if pilot_group_destination else policy['developer_id'],
                 destination='pilot_group' if pilot_group_destination else 'employee',reason=reason,
-                evidence={'query':str(query or '')[:1500],'signal':str(signal),'source_external_id':str(source.get('external_id') or '')},run_id=(reservation or {}).get('run_id'))
+                evidence={'query':str(query or '')[:1500],'signal':str(signal),'source_external_id':str(source.get('external_id') or ''),
+                    **({'case_lines':[{'speaker':str(item.get('speaker') or '')[:30],'text':str(item.get('text') or '')[:700],
+                        'at':str(item.get('at') or '')[:50]} for item in (lines or [])[-12:] if isinstance(item,dict)]}
+                       if pilot_group_destination else {})},
+                run_id=(reservation or {}).get('run_id'))
             if receipt.get('id'):
                 from tenant_ai_pilot import manual_live_job
-                if manual_live_job(job):
+                if pilot_group_destination and manual_live_job(job):
                     from tenant_consultation_group import deliver_pilot_consultation_to_group
                     group_delivery=await asyncio.to_thread(deliver_pilot_consultation_to_group,job,
-                        receipt['id'],str(query or ''),str(source.get('external_id') or ''))
+                        receipt['id'],str(query or ''),str(source.get('external_id') or ''),case_lines=lines)
                     receipt['pilot_group_delivery']=group_delivery
                     if group_delivery.get('state')=='sent':
                         from tenant_consultation_group import acknowledge_pilot_consultation_to_customer
