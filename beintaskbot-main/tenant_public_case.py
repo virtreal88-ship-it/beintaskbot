@@ -20,6 +20,7 @@ _RATE = {}
 _RATE_LIMIT = 60
 _RATE_WINDOW = 60
 _SECRET_LINE = re.compile(r"(?i)(anydesk|password|passcode|парол|şifrə|пароль|api[_ -]?key|token\s*[:=])")
+_MEDIA_SECRET_MARKER = re.compile(r"(?i)(password|passcode|парол|şifrə|пароль|api[_ -]?key|token\s*[:=]|secret\s*[:=]|private\s+key|recovery\s+phrase|otp\s*[:=])")
 _SYNTHETIC_MEDIA = re.compile(r"(?is)\[(?:image supplied for analysis|attachment unavailable|untrusted document|untrusted sampled video|unverified video|audio transcript|audio unavailable|video was not analyzed)[^\]]*\]")
 _MEDIA_TYPES = {'image','video','audio','voice','document'}
 
@@ -58,10 +59,10 @@ def create_for_pilot_handoff(cur, *, tenant_id, ticket_id, group_channel_id,
                              source_conversation_id, evidence_quote,case_message_ids,
                              source_external_id,
                              revision_key, origin, authorization_job):
-    """Create one hash-only, text-only snapshot for a fenced pilot handoff.
+    """Create one hash-only CASE snapshot for a fenced pilot handoff.
 
-    The quote must resolve to an incoming message in the exact ticket scope.
-    Media remains private because this service has no content-safety classifier.
+    Text and media come only from explicit ticket membership. Ordinary linked
+    media is served on click; captions marked as credentials are withheld.
     """
     quote=_public_text(evidence_quote)
     if len(quote)<8 or not revision_key:
@@ -123,33 +124,40 @@ def create_for_pilot_handoff(cur, *, tenant_id, ticket_id, group_channel_id,
       (tenant_id,group_channel_id,group_conversation_id))
     if not cur.fetchone():raise TenantLinearError('CASE share group is not active.',409)
     token=secrets.token_urlsafe(32);share_id=str(uuid.uuid4())
-    public_messages=[]
+    public_messages=[];selected_message_ids=[];selected_media_ids=[];partial=False
     media_types={'image','video','audio','voice','document'}
     for message in messages:
+        message_id=str(message['id']);selected_message_ids.append(message_id)
         kind=str(message.get('message_type') or 'text').casefold()
         if kind in media_types:
-            text='Müştəri fayl əlavə edib. Fayl bu snapshot-da paylaşılmır; məzmunu yoxlanılmayıb.'
+            if _MEDIA_SECRET_MARKER.search(str(message.get('body') or '')):
+                text='Müştəri fayl əlavə edib. Məxfi məlumat işarəsinə görə fayl açılmır.'
+                partial=True
+            else:
+                text=_public_text(message.get('body')) or 'Müştəri fayl əlavə edib.'
+                selected_media_ids.append(message_id)
         else:
             text=_public_text(message.get('body'))
-        public_messages.append({'id':str(message['id']),'speaker':'Müştəri','text':text,
-          'type':'text','at':message['happened_at'].isoformat() if message.get('happened_at') else ''})
+        public_messages.append({'id':message_id,'speaker':'Müştəri','text':text,
+          'type':kind if message_id in selected_media_ids else 'text',
+          'at':message['happened_at'].isoformat() if message.get('happened_at') else ''})
     cur.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,channel_id,conversation_id,
       group_channel_id,group_conversation_id,token_hash,selected_message_ids,selected_media_ids,
       public_messages,created_by,expires_at,revision_key,is_partial)
-      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,'[]'::jsonb,
-        %s::jsonb,%s,now()+interval '24 hours',%s,TRUE)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,
+        %s::jsonb,%s,now()+interval '24 hours',%s,%s)
       ON CONFLICT DO NOTHING RETURNING id''',
       (share_id,tenant_id,ticket_id,source_channel_id,source_conversation_id,group_channel_id,
-       group_conversation_id,hashlib.sha256(token.encode()).hexdigest(),json.dumps([str(message['id'])]),
-       json.dumps(public_messages),None,revision_key))
+       group_conversation_id,hashlib.sha256(token.encode()).hexdigest(),json.dumps(selected_message_ids),
+       json.dumps(selected_media_ids),json.dumps(public_messages),None,revision_key,partial))
     if not cur.fetchone():raise TenantLinearError('CASE share revision already exists.',409)
     from tenant_ai_agents_store import _audit
     _audit(cur,tenant_id,None,'public_case_share_create','support_ticket',ticket_id,
-      {'share_id':share_id,'selected_message_ids':[str(message['id']) for message in messages],'selected_media_ids':[],
+      {'share_id':share_id,'selected_message_ids':selected_message_ids,'selected_media_ids':selected_media_ids,
        'group_channel_id':str(group_channel_id),'group_conversation_id':str(group_conversation_id),
        'expires_in_hours':24,'revision_key':revision_key,'created_by':'pilot_handoff'})
     return {'id':share_id,'url':str(origin).rstrip('/')+'/public/case/'+token,
-      'selected_message_ids':[str(message['id']) for message in messages]}
+      'selected_message_ids':selected_message_ids,'selected_media_ids':selected_media_ids,'is_partial':partial}
 
 
 def append_pilot_followup(cur, *, tenant_id, ticket_id, consultation_id,
@@ -161,27 +169,39 @@ def append_pilot_followup(cur, *, tenant_id, ticket_id, consultation_id,
     cur.execute('''SELECT m.id::text AS id,m.body,m.message_type,m.direction,
         COALESCE(m.happened_at,m.created_at) AS happened_at
       FROM saas_support_ticket_messages cm JOIN saas_crm_messages m ON m.id=cm.message_id
+      JOIN saas_support_tickets t ON t.tenant_id=cm.tenant_id AND t.id=cm.ticket_id
+      JOIN saas_connect_conversations c ON c.tenant_id=t.tenant_id AND c.connect_channel_id=t.channel_id
+        AND c.conversation_id=t.conversation_id
       WHERE cm.tenant_id=%s::uuid AND cm.ticket_id=%s::uuid AND m.tenant_id=%s::uuid
+        AND m.kommo_lead_id=c.lead_id AND m.channel='connect:'||t.channel_id::text
         AND m.external_id=ANY(%s::text[]) AND m.direction='incoming' LIMIT 1''',
       (tenant_id,ticket_id,tenant_id,['connect:'+external_id,external_id]))
     message=cur.fetchone()
     if not message:return False
-    kind=str(message.get('message_type') or 'text').casefold()
-    text=('Müştəri fayl əlavə edib. Fayl bu snapshot-da paylaşılmır; məzmunu yoxlanılmayıb.'
-          if kind in _MEDIA_TYPES else _public_text(message.get('body')))
+    kind=str(message.get('message_type') or 'text').casefold();selected_media=[]
+    withheld=kind in _MEDIA_TYPES and bool(_MEDIA_SECRET_MARKER.search(str(message.get('body') or '')))
+    if withheld:
+        text='Müştəri fayl əlavə edib. Məxfi məlumat işarəsinə görə fayl açılmır.'
+    elif kind in _MEDIA_TYPES:
+        text=_public_text(message.get('body')) or 'Müştəri fayl əlavə edib.'
+        selected_media=[str(message['id'])]
+    else:
+        text=_public_text(message.get('body'))
     if not text:return False
-    item={'id':str(message['id']),'speaker':'Müştəri','text':text,'type':'text',
+    item={'id':str(message['id']),'speaker':'Müştəri','text':text,
+      'type':kind if selected_media else 'text',
       'at':message['happened_at'].isoformat() if message.get('happened_at') else ''}
     cur.execute('''UPDATE saas_public_case_shares SET
         selected_message_ids=selected_message_ids||jsonb_build_array(%s::text),
+        selected_media_ids=selected_media_ids||%s::jsonb,
         public_messages=public_messages||jsonb_build_array(%s::jsonb),
-        snapshot_revision=snapshot_revision+1,updated_at=now()
+        snapshot_revision=snapshot_revision+1,is_partial=is_partial OR %s,updated_at=now()
       WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid
         AND group_channel_id=%s::uuid AND group_conversation_id=%s
         AND revision_key=%s AND token_hash IS NOT NULL AND revoked_at IS NULL
         AND expires_at>now() AND NOT (selected_message_ids ? %s)
       RETURNING id''',
-      (str(message['id']),json.dumps(item),tenant_id,ticket_id,group_channel_id,
+      (str(message['id']),json.dumps(selected_media),json.dumps(item),withheld,tenant_id,ticket_id,group_channel_id,
        group_conversation_id,'pilot:'+str(consultation_id),str(message['id'])) )
     return bool(cur.fetchone())
 
@@ -210,8 +230,6 @@ def create(profile,ticket_id,payload,origin):
     message_ids=_valid_ids(payload.get('message_ids'),required=True)
     media_ids=_valid_ids(payload.get('media_message_ids',[]))
     if not set(media_ids).issubset(message_ids): raise TenantLinearError('Файл должен входить в выбранные сообщения.',400)
-    if media_ids and payload.get('confirm_media_review') is not True:
-        raise TenantLinearError('Подтвердите просмотр каждого выбранного файла.',400)
     group_channel=identifier(payload.get('group_channel_id'))
     group_conversation=str(payload.get('group_conversation_id') or '').strip()
     from tenant_ai_group_coordination import group_jid
@@ -247,10 +265,15 @@ def create(profile,ticket_id,payload,origin):
             rows=cur.fetchall()
             if len(rows)!=len(message_ids):raise TenantLinearError('Одно или несколько сообщений не принадлежат этому обращению.',409)
             by_id={str(row['id']):row for row in rows}
+            blocked_media_ids={key for key in media_ids if _MEDIA_SECRET_MARKER.search(str(by_id[key].get('body') or ''))}
+            media_ids=[key for key in media_ids if key not in blocked_media_ids]
             messages=[]
             for key in message_ids:
                 row=by_id[key];kind=str(row.get('message_type') or 'text').casefold()
-                if kind in _MEDIA_TYPES and key not in media_ids:
+                if kind in _MEDIA_TYPES and key in blocked_media_ids:
+                    messages.append({'id':key,'speaker':'Müştəri' if row['direction']=='incoming' else 'Texniki komanda',
+                      'text':'Müştəri fayl əlavə edib. Məxfi məlumat işarəsinə görə fayl açılmır.','at':row['happened_at'].isoformat() if row.get('happened_at') else ''})
+                elif kind in _MEDIA_TYPES and key not in media_ids:
                     messages.append({'id':key,'speaker':'Müştəri' if row['direction']=='incoming' else 'Texniki komanda',
                       'text':_public_text(row['body']) or 'Fayl paylaşılmayıb.','at':row['happened_at'].isoformat() if row.get('happened_at') else ''})
                 else:
@@ -258,10 +281,10 @@ def create(profile,ticket_id,payload,origin):
                       'text':_public_text(row['body']) or ('Əlavə fayl' if kind in _MEDIA_TYPES else ''),
                       'type':kind if key in media_ids else 'text','at':row['happened_at'].isoformat() if row.get('happened_at') else ''})
             cur.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,channel_id,conversation_id,group_channel_id,group_conversation_id,
-              token_hash,selected_message_ids,selected_media_ids,public_messages,created_by,expires_at,revision_key)
-              VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,now()+interval '24 hours',%s)''',
+              token_hash,selected_message_ids,selected_media_ids,public_messages,created_by,expires_at,revision_key,is_partial)
+              VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,now()+interval '24 hours',%s,%s)''',
               (share_id,tenant,ticket_id,route['channel_id'],route['conversation_id'],group_channel,group_conversation,token_hash,
-                json.dumps(message_ids),json.dumps(media_ids),json.dumps(messages),actor,'owner:'+share_id))
+                json.dumps(message_ids),json.dumps(media_ids),json.dumps(messages),actor,'owner:'+share_id,bool(blocked_media_ids)))
             from tenant_ai_agents_store import _audit
             _audit(cur,tenant,actor,'public_case_share_create','support_ticket',ticket_id,
               {'share_id':share_id,'selected_message_ids':message_ids,'selected_media_ids':media_ids,

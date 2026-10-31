@@ -31,7 +31,7 @@ def add_message(db, tenant, channel, lead, text, kind='text', external='syntheti
 def share(db, monkeypatch, ticket_id, messages, media=None, **extra):
     monkeypatch.setattr(cases,'_authorize',lambda cur,profile:(A,11))
     return cases.create(PROFILE,ticket_id,{'message_ids':messages,'media_message_ids':media or [],
-      'confirm_media_review':bool(media),'group_channel_id':CA,'group_conversation_id':GROUP,**extra},'https://example.test')
+      'group_channel_id':CA,'group_conversation_id':GROUP,**extra},'https://example.test')
 
 
 def test_share_hash_expiry_revoke_and_tamper_are_enforced(db,monkeypatch):
@@ -83,14 +83,60 @@ def test_selected_media_is_resolved_by_scoped_message_id_and_bytes_are_server_fe
     assert saved['group_channel_id']==CA and saved['group_conversation_id']==GROUP and all(key in saved['selected_message_ids'] for key in media_ids)
 
 
-def test_secret_lines_are_removed_and_media_requires_explicit_review(db,monkeypatch):
+def test_secret_lines_are_removed_and_case_media_is_allowed_without_per_file_review(db,monkeypatch):
     ticket=create_case(db,monkeypatch);text=add_message(db,A,CA,41,'Issue persists.\nAnyDesk password: supersecret\n[Image supplied for analysis: fake-media-id]\nPlease check.')
     result=share(db,monkeypatch,ticket,[text]);token=result['url'].rsplit('/',1)[1]
     body=cases.read(token)['public_messages'][0]['text']
     assert 'Issue persists.' in body and 'Please check.' in body and 'supersecret' not in body and 'AnyDesk' not in body and 'fake-media-id' not in body
-    image=add_message(db,A,CA,41,'[Image supplied for analysis: fake]','image','image-review')
-    with pytest.raises(TenantLinearError):cases.create(PROFILE,ticket,{'message_ids':[image],'media_message_ids':[image],
+    image=add_message(db,A,CA,41,'Receipt photo','image','image-review')
+    result=cases.create(PROFILE,ticket,{'message_ids':[image],'media_message_ids':[image],
       'group_channel_id':CA,'group_conversation_id':GROUP},'https://example.test')
+    token=result['url'].rsplit('/',1)[1]
+    assert cases.read(token)['selected_media_ids']==[image]
+
+
+def test_secret_marked_media_is_withheld_but_ordinary_media_is_exposed_and_unlinked_case_is_not(db,monkeypatch):
+    ticket=create_case(db,monkeypatch)
+    ordinary=add_message(db,A,CA,41,'Receipt photo','image','ordinary-photo')
+    secret=add_message(db,A,CA,41,'Password: client-secret','document','secret-doc')
+    unrelated=add_message(db,A,CA,41,'Different case photo','image','other-case-photo')
+    result=share(db,monkeypatch,ticket,[ordinary,secret],[ordinary,secret]);token=result['url'].rsplit('/',1)[1]
+    page=cases.read(token)
+    assert page['selected_media_ids']==[ordinary]
+    assert [item['id'] for item in page['public_messages']]==[ordinary,secret]
+    assert 'məxfi məlumat işarəsinə görə fayl açılmır' in page['public_messages'][1]['text'].casefold()
+    with pytest.raises(TenantLinearError):cases.media(token,secret)
+    with pytest.raises(TenantLinearError):cases.media(token,unrelated)
+
+
+def test_case_bound_media_followups_extend_only_the_same_share_revision(db,monkeypatch):
+    import tenant_public_case as public_case
+    ticket=create_case(db,monkeypatch);consultation=str(uuid.uuid4())
+    original=add_message(db,A,CA,41,'Complaint','text','original-case')
+    with db.cursor() as cur:tickets.record_case_message_membership(cur,A,ticket,CA,'client',['original-case'],'followup-test-base')
+    db.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,channel_id,conversation_id,
+      group_channel_id,group_conversation_id,token_hash,selected_message_ids,selected_media_ids,
+      public_messages,created_by,expires_at,revision_key)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s,%s,%s::jsonb,'[]'::jsonb,%s::jsonb,NULL,now()+interval '24 hours',%s)''',
+      (str(uuid.uuid4()),A,ticket,CA,CA,GROUP,'f'*64,json.dumps([original]),
+       json.dumps([{'id':original,'speaker':'Müştəri','text':'Complaint','type':'text','at':''}]),'pilot:'+consultation));db.commit()
+    photo=add_message(db,A,CA,41,'Receipt image','image','case-followup-photo')
+    secret=add_message(db,A,CA,41,'Private key: hidden','document','case-followup-secret')
+    with db.cursor() as cur:
+        tickets.record_case_message_membership(cur,A,ticket,CA,'client',['case-followup-photo','case-followup-secret'],'followup-test-new')
+        assert public_case.append_pilot_followup(cur,tenant_id=A,ticket_id=ticket,consultation_id=consultation,
+          group_channel_id=CA,group_conversation_id=GROUP,message_external_id='case-followup-photo')
+        assert public_case.append_pilot_followup(cur,tenant_id=A,ticket_id=ticket,consultation_id=consultation,
+          group_channel_id=CA,group_conversation_id=GROUP,message_external_id='case-followup-secret')
+    db.commit()
+    row=db.execute('SELECT selected_message_ids,selected_media_ids,public_messages,snapshot_revision,is_partial FROM saas_public_case_shares WHERE revision_key=%s',('pilot:'+consultation,))[0]
+    assert row['snapshot_revision']==3 and row['selected_media_ids']==[photo] and secret not in row['selected_media_ids']
+    assert [item['id'] for item in row['public_messages']]==[original,photo,secret]
+    assert row['public_messages'][1]['type']=='image' and row['is_partial'] is True
+    assert 'məxfi məlumat işarəsinə görə fayl açılmır' in row['public_messages'][2]['text'].casefold()
+    with db.cursor() as cur:
+        assert not public_case.append_pilot_followup(cur,tenant_id=B,ticket_id=ticket,consultation_id=consultation,
+          group_channel_id=CA,group_conversation_id=GROUP,message_external_id='case-followup-photo')
 
 
 def test_public_page_renders_media_kinds_read_only_and_never_uses_old_deal_endpoints():

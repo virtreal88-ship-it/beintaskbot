@@ -138,11 +138,10 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  await settle();const shareDoc=publicUi.window.document;shareDoc.querySelector('[data-support-id]').click();await settle();const sharePanel=shareDoc.querySelector('#publicCaseShare');assert.ok(sharePanel);
  const shareChecks=[...sharePanel.querySelectorAll('[data-share-message]')];shareChecks[0].checked=true;shareChecks[1].checked=true;
  sharePanel.querySelector('#publicCaseGroup').value='0';sharePanel.querySelector('button').click();await settle();
- assert.ok(!shareCalls.some(x=>x.url===shareUrl&&x.init.method==='POST'),'media selection requires an explicit review attestation');
- sharePanel.querySelector('#publicCaseMediaReviewed').checked=true;sharePanel.querySelector('button').click();await settle();
  const shareRequest=shareCalls.find(x=>x.url===shareUrl&&x.init.method==='POST');assert.deepEqual(shareRequest.body.message_ids,['safe-text-id',messageId]);
- assert.deepEqual(shareRequest.body.media_message_ids,[messageId]);assert.equal(shareRequest.body.confirm_media_review,true);
+ assert.deepEqual(shareRequest.body.media_message_ids,[messageId]);assert.ok(!('confirm_media_review' in shareRequest.body));
+ assert.match(sharePanel.textContent,/Linki əldə edən hər kəs 24 saat/);assert.equal(sharePanel.querySelector('#publicCaseMediaReviewed'),null);
  assert.equal(shareRequest.body.group_conversation_id,gid);assert.match(shareDoc.querySelector('#publicCaseShare').textContent,/WhatsApp-a yalnız istədiyiniz halda özünüz göndərin/);
  assert.equal(shareCalls.filter(x=>x.init.method==='POST').length,1,'creating a page does not send a WhatsApp message');publicUi.window.close();
- console.log('PASS: inbox renders safely, filters and assigns; public shares require explicit CASE messages, group and reviewed-media attestation without sending WhatsApp.');
+ console.log('PASS: inbox renders safely; public shares scope explicitly selected CASE messages/media, disclose link access, and do not send WhatsApp.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

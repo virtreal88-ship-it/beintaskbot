@@ -61,7 +61,7 @@ def test_connect_media_download_uses_scoped_api_and_returns_bytes_without_storag
     assert not any('http' in str(value).lower() for value in result.values())
 
 
-def test_actual_pilot_handoff_keeps_unreviewed_case_photo_private_and_sends_case_link(db,monkeypatch):
+def test_actual_pilot_handoff_publishes_linked_case_photo_without_eager_download(db,monkeypatch):
     import tenant_ai_pilot as pilot
     consult,_case=setup_case(db,monkeypatch)
     _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch)
@@ -98,8 +98,17 @@ def test_actual_pilot_handoff_keeps_unreviewed_case_photo_private_and_sends_case
     assert result['state']=='sent' and len(sent)==1, result
     assert sent[0]['media'] is None and sent[0]['request_id']!='' and fetched==[]
     assert 'The purchase receipt total should be 50.00.' in sent[0]['body']
-    assert 'Fayl məzmunu yoxlanılmadığı üçün qrupa əlavə edilmədi.' in sent[0]['body']
+    assert 'Fayl məzmunu yoxlanılmadığı üçün qrupa əlavə edilmədi.' not in sent[0]['body']
     assert 'Image supplied for analysis' not in sent[0]['body']
+    import tenant_public_case as public_case
+    monkeypatch.setattr(public_case,'_connect',lambda:db)
+    token=sent[0]['body'].split('https://crm.pro.az/public/case/',1)[1].split()[0].split('/',1)[0]
+    page=public_case.read(token)
+    photo_id=db.execute("SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,))[0]['id']
+    assert page['selected_media_ids']==[photo_id]
+    assert any(item['id']==photo_id and item['type']=='image' for item in page['public_messages'])
+    assert 'unrelated-photo' not in [item['id'] for item in page['public_messages']]
+    assert fetched==[], 'media bytes remain click-to-load; link creation does not download them'
     assert db.execute("SELECT state,provider_message_id FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]=={'state':'blocked','provider_message_id':None}
     assert flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')['state']=='sent'
     assert len(sent)==1 and fetched==[]
@@ -186,7 +195,7 @@ def test_actual_worker_creates_case_snapshot_then_sends_same_revision_link_once(
     asyncio.run(worker.process_connect_one(job,Logger()))
     assert len(sent)==1 and sent[0]['media'] is None and source_text in sent[0]['body'], (finishes,logs,
       db.execute('SELECT state,body FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid',(A,consult)))
-    assert 'snapshot' in sent[0]['body'].casefold() and 'https://crm.pro.az/public/case/' in sent[0]['body']
+    assert 'case dialoqu' in sent[0]['body'].casefold() and 'https://crm.pro.az/public/case/' in sent[0]['body']
     assert '[one-time case share URL omitted from logs]' in db.execute(
       'SELECT body FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid',(A,consult))[0]['body']
     link=sent[0]['body'].split('https://crm.pro.az/public/case/',1)[1].split()[0]
@@ -233,7 +242,7 @@ def test_unknown_case_media_send_is_quarantined_and_never_retried(db,monkeypatch
     assert media_attempts==[]
 
 
-def test_unavailable_case_attachment_is_reported_and_text_fallback_has_no_false_media_claim(db,monkeypatch):
+def test_unlinked_case_attachment_is_not_public_or_downloaded(db,monkeypatch):
     consult,_case=setup_case(db,monkeypatch)
     _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch)
     db.execute("UPDATE saas_crm_messages SET body='',message_type='image' WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,));db.commit()
@@ -246,7 +255,7 @@ def test_unavailable_case_attachment_is_reported_and_text_fallback_has_no_false_
     job={'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client','agent_id':AGENT,'event_fingerprint':event_fingerprint}
     result=flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')
     assert result['state']=='sent' and len(sent)==1
-    assert 'Fayl məzmunu yoxlanılmadığı üçün qrupa əlavə edilmədi.' in sent[0]['body']
+    assert 'Fayl CASE linkinə daxil edilməyib, çünki onun CASE üzvlüyü təsdiqlənməyib.' in sent[0]['body']
     assert 'fayl bu WhatsApp mesajına əlavə olunub' not in sent[0]['body']
     assert db.execute("SELECT state FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['state']=='blocked'
     assert media_attempts==[]
@@ -824,7 +833,7 @@ def test_full_agent_worker_answers_developer_in_group_from_case_fact(db,monkeypa
     assert db.execute("SELECT state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id='client'",(A,CA))[0]=={'state':'human','reason':'ai_developer_consultation:awaiting_specialist'}
 
 
-def test_ai_handoff_delivery_sends_saved_attachment_bytes_with_case_summary(db,monkeypatch):
+def test_ai_handoff_delivery_links_case_media_without_eager_download(db,monkeypatch):
     consult,case=setup_case(db,monkeypatch)
     group=GROUP
     monkeypatch.setattr('tenant_ai_pilot.manual_live_job',lambda job:
@@ -847,7 +856,8 @@ def test_ai_handoff_delivery_sends_saved_attachment_bytes_with_case_summary(db,m
     with db.cursor() as cur:tickets.record_case_message_membership(cur,A,case,CA,'client',['customer-issue'],'test-ai-handoff-case-source')
     db.commit();sent=[]
     media={'type':'image','base64':'c3ludGhldGljLWltYWdl','mimeType':'image/png','fileName':'case-attachment'}
-    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:media)
+    fetched=[]
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:(fetched.append(message_id) or media))
     def send(route,body,key,**kwargs):
         sent.append((route['conversation_id'],body,key,kwargs.get('media')))
         return {'message_id':'pilot-handoff','external_message_id':'PILOT_HANDOFF'}
@@ -858,7 +868,13 @@ def test_ai_handoff_delivery_sends_saved_attachment_bytes_with_case_summary(db,m
     assert result['state']=='sent' and len(sent)==1 and sent[0][0]==group, result
     assert 'CASE:'+consult in sent[0][1] and 'Internet is down' in sent[0][1]
     assert '[one-time case share URL omitted from logs]' in db.execute("SELECT body FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['body']
-    assert sent[0][3] is None and 'Fayl məzmunu yoxlanılmadığı üçün qrupa əlavə edilmədi.' in sent[0][1]
+    assert sent[0][3] is None and 'Fayl məzmunu yoxlanılmadığı üçün qrupa əlavə edilmədi.' not in sent[0][1]
+    token=sent[0][1].split('https://crm.pro.az/public/case/',1)[1].split()[0].split('/',1)[0]
+    import tenant_public_case as public_case
+    monkeypatch.setattr(public_case,'_connect',lambda:db)
+    page=public_case.read(token)
+    attachment=db.execute("SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='connect:customer-issue'",(A,))[0]['id']
+    assert attachment in page['selected_media_ids'] and fetched==[]
     assert db.execute("SELECT state FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['state']=='sent'
 
 

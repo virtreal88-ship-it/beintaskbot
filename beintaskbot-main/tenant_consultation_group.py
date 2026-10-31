@@ -853,7 +853,7 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
             merged_evidence=consult.get('evidence') if isinstance(consult.get('evidence'),dict) else {}
             media_unverified=bool(source_media and source_media.get('message_type') in {'image','audio','voice','video','document'})
             body=_case_group_body(consultation_id,consult['case_id'],safe_summary if turn_id else '',
-                merged_evidence,'Fayl məzmunu yoxlanılmadığı üçün qrupa əlavə edilmədi.' if media_unverified else '',bool(turn_id))
+                merged_evidence,'',bool(turn_id))
             public_url=''
             if (not turn_id and len(str(merged_evidence.get('query') or '').strip())>=8
                     and isinstance(merged_evidence.get('case_message_ids'),list)):
@@ -871,9 +871,13 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
                     conn.rollback()
                     return {'state':'blocked','reason':'case_share_or_pilot_guard'}
                 public_url=share['url']
-                body+='\nCASE snapshot (24 saat, qismən): '+public_url
+                body+='\nCASE dialoqu (24 saat): '+public_url
+                if share.get('is_partial'):
+                    body+='\nBəzi fayllar məxfi məlumat işarəsinə görə CASE linkində açılmır.'
             elif not turn_id:
                 body+='\nCASE snapshot yaradılmadı: bu müraciət üçün açıq mesaj üzvlüyü yoxdur.'
+                if media_unverified:
+                    body+='\nFayl CASE linkinə daxil edilməyib, çünki onun CASE üzvlüyü təsdiqlənməyib.'
             if len(body.encode('utf-16-le'))//2>4096:
                 conn.rollback()
                 return {'state':'blocked','reason':'pilot_group_message_too_long'}
