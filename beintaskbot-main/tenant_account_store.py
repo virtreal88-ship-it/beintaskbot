@@ -182,11 +182,11 @@ def notification_preferences(*, tenant_id: str, actor_id: int, value: dict | Non
             _ensure_schema(conn)
             with conn.cursor() as cur:
                 cur.execute('''INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value,updated_by)
-                    VALUES(%s::uuid,'members',jsonb_build_object(%s,jsonb_build_object('notifications',%s::jsonb)),%s)
+                    VALUES(%s::uuid,'members',jsonb_build_object(%s::text,jsonb_build_object('notifications',%s::jsonb)),%s)
                     ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=jsonb_set(
-                        jsonb_set(saas_tenant_workflow_policies.value,ARRAY[%s]::text[],
-                                  COALESCE(saas_tenant_workflow_policies.value->%s,'{}'::jsonb),TRUE),
-                        ARRAY[%s,'notifications']::text[],%s::jsonb,TRUE),updated_by=%s,updated_at=now()''',
+                        jsonb_set(saas_tenant_workflow_policies.value,ARRAY[%s::text]::text[],
+                                  COALESCE(saas_tenant_workflow_policies.value->(%s::text),'{}'::jsonb),TRUE),
+                        ARRAY[%s::text,'notifications']::text[],%s::jsonb,TRUE),updated_by=%s,updated_at=now()''',
                     (tenant_id,actor_key,_json(normalized),int(actor_id),actor_key,actor_key,actor_key,_json(normalized),int(actor_id)))
             conn.commit()
         existing=normalized
