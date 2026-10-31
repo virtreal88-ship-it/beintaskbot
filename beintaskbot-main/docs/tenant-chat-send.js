@@ -1,17 +1,17 @@
 /* Chat composer outside the page shell; durable UUIDs and stale-view guards. */
 (()=>{
   const copy=(key,fallback)=>window.tenantI18n?.t(key)||fallback;
-  function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo',onAccepted=()=>{},getQuote=()=>null}){
+  function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo',onAccepted=()=>{},getQuote=()=>null,onPending=()=>{},onDiscard=()=>{},isQuoteCurrent=()=>true}){
     const button=document.getElementById('sendChat'),input=document.getElementById('chatText');
     const key='tenant-chat-send:'+identity+':'+leadId;
-    try{if(sessionStorage.getItem(key))button.textContent=copy('checkSend','Vəziyyəti yoxla');}catch(e){button.disabled=true;}
+    try{const saved=JSON.parse(sessionStorage.getItem(key)||'null');if(saved){button.textContent=copy('checkSend','Vəziyyəti yoxla');if(!saved.quote_message_id||isQuoteCurrent(saved))onPending(saved);}}catch(e){button.disabled=true;}
     button.onclick=async()=>{
       if(button.disabled||!isCurrent())return;
       let pending;try{pending=JSON.parse(sessionStorage.getItem(key)||'null');}catch(e){alert('Göndərmə yaddaşı oxunmadı.');return;}
       const text=input.value.trim();if(!pending&&!text)return;
       if(pending&&text&&text!==pending.text){alert('Əvvəlki mesajın vəziyyəti yoxlanmalıdır. Yeni mesaj göndərilmədi.');return;}
       const quote=getQuote();
-      if(pending&&JSON.stringify(pending.quote_message_id||null)!==JSON.stringify(quote?.quote_message_id||null)){alert('Əvvəlki mesajın vəziyyəti yoxlanmalıdır.');return;}
+      if(pending?.quote_message_id&&!isQuoteCurrent(pending)){alert('Əvvəlki mesaj başqa dialoqa aiddir.');return;}
       if(!pending){pending={lead_id:leadId,text,request_id:crypto.randomUUID(),expected_tenant_id:me.tenant_id,expected_user_id:me.telegram_id,...(quote||{})};try{sessionStorage.setItem(key,JSON.stringify(pending));}catch(e){alert('Göndərmə yaddaşı əlçatan deyil.');return;}}
       button.disabled=true;button.classList.add('loading');
       try{
@@ -19,7 +19,7 @@
         sessionStorage.removeItem(key);onAccepted(pending.text);if(!isCurrent())return;
         if(input.value.trim()===pending.text){input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));}button.textContent=copy('send','Göndər');
         alert(sent.manual_review?'Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.':copy('sendAccepted','Mesaj qəbul edildi. Tarixçədə çatdırılmanı yoxlayın.'));await reload();
-      }catch(e){if(e.keepRequest===false)sessionStorage.removeItem(key);if(isCurrent()){button.textContent=e.keepRequest===false?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');alert(e.message);}}
+      }catch(e){if(e.keepRequest===false){sessionStorage.removeItem(key);if(isCurrent())onDiscard();}else if(isCurrent())onPending(pending);if(isCurrent()){button.textContent=e.keepRequest===false?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');alert(e.message);}}
       finally{button.disabled=false;button.classList.remove('loading');}
     };
     if(provider!=='connect')bindFile({identity,leadId,me,isCurrent,reload,input,button});
