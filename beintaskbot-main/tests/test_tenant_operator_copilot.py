@@ -15,6 +15,7 @@ def identity_policy_boundary(monkeypatch):
     # has its own real-PostgreSQL coverage; its internal reads must not consume
     # the mocked integration/usage rows intended for Copilot.
     monkeypatch.setattr('tenant_connect_identity.conflicted',Mock(return_value=False))
+    monkeypatch.setattr('tenant_ai_agent_run_store.knowledge_context', Mock(return_value=[]))
 
 
 def request(**overrides):
@@ -71,7 +72,7 @@ def test_reply_context_resolves_open_customer_question_instead_of_closing_conver
         'copilot_enabled':True,'copilot_model':'dedicated-copilot-model','daily_limit':100,'copilot_daily_limit':8},'updated_at':'v1'}
     conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
     cur=conn.cursor.return_value.__enter__.return_value
-    cur.fetchone.side_effect=[connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
+    cur.fetchone.side_effect=[connection,{'agent_id':'bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb','version':1,'instructions':'Assigned support agent rules'},None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
     transcript=[
         {'external_id':'m1','direction':'incoming','body':'Sifariş hazır olacaq?','message_type':'text','happened_at':'1'},
         {'external_id':'m2','direction':'outgoing','body':'Yoxlayıb məlumat verəcəyəm.','message_type':'text','happened_at':'2'},
@@ -128,7 +129,7 @@ def test_copilot_uses_its_own_model_and_never_sends_a_message(monkeypatch):
         'updated_at':'v1'}
     conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
     cur=conn.cursor.return_value.__enter__.return_value
-    cur.fetchone.side_effect=[connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
+    cur.fetchone.side_effect=[connection,{'agent_id':'bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb','version':1,'instructions':'Assigned support agent rules'},None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
     cur.fetchall.side_effect=[[
         {'external_id':'m1','direction':'incoming','body':'Salam','message_type':'text','happened_at':'now'}
     ],[]]
@@ -143,6 +144,10 @@ def test_copilot_uses_its_own_model_and_never_sends_a_message(monkeypatch):
     result=copilot.run({'tenant_id':tenant,'telegram_id':actor},request())
     assert result['text']=='Salam, kömək edək.'
     assert generate.call_args.args[1]=='dedicated-copilot-model'
+    assert generate.call_args.kwargs['extra_context']['assigned_agent_instructions']=='Assigned support agent rules'
+    assert generate.call_args.kwargs['extra_context']['assigned_agent_id']=='bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb'
+    from tenant_ai_agent_run_store import knowledge_context
+    assert knowledge_context.call_args.kwargs['agent_id']=='bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb'
     assert finish.called
     sql=' '.join(call.args[0] for call in cur.execute.call_args_list)
     assert "provider='connect' AND usage_day" in sql
@@ -155,7 +160,7 @@ def test_provider_failure_logs_only_allowlisted_metadata(monkeypatch):
         'copilot_enabled':True,'copilot_model':'gpt-4o-mini','daily_limit':100,'copilot_daily_limit':8},'updated_at':'v1'}
     conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
     cur=conn.cursor.return_value.__enter__.return_value
-    cur.fetchone.side_effect=[connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
+    cur.fetchone.side_effect=[connection,{'agent_id':'bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb','version':1,'instructions':'Assigned support agent rules'},None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
     cur.fetchall.side_effect=[[{'external_id':'m1','direction':'incoming','body':'private customer text','message_type':'text','happened_at':'now'}],[]]
     monkeypatch.setattr(copilot,'_connect',lambda:conn);monkeypatch.setattr(copilot,'ensure_schema',Mock())
     monkeypatch.setattr(copilot,'access',Mock(return_value=(tenant,actor,SimpleNamespace(can_use_chat_ai=lambda:True))))
@@ -264,7 +269,7 @@ def test_reply_with_voice_photo_and_open_question_passes_confirmed_media_to_one_
         'copilot_model':'vision-model','daily_limit':100,'copilot_daily_limit':8},'updated_at':'v1'}
     conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
     cur=conn.cursor.return_value.__enter__.return_value
-    cur.fetchone.side_effect=[connection,None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
+    cur.fetchone.side_effect=[connection,{'agent_id':'bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb','version':1,'instructions':'Assigned support agent rules'},None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
     transcript=[
         {'external_id':'voice-1','direction':'incoming','body':'Printer label does not print; error appears.',
          'message_type':'voice','raw':{'voice_transcription':{'status':'completed'}},'happened_at':'1'},

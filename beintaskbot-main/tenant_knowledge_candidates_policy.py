@@ -26,7 +26,7 @@ def redact(text,names=(),*,owner_payment_link=False):
     for name in sorted(known,key=len,reverse=True):
         if len(name)>=2: text=re.sub(r'(?<!\w)'+re.escape(name)+r'(?!\w)','[PERSON]',text,flags=re.I)
     text=re.sub(r'-----BEGIN [\s\S]*?-----END [^-]+-----','[SECRET]',text)
-    text=re.sub(r'(?im)(?:api[_ -]?key|authorization|bearer|password|passwd|пароль|парол|ключ|секрет|код сопряжения|şifrə|token|токен|pairing|pin|cookie|secret)\s*(?:[:=]|\bis\b|—|-)?\s*[^\n]+','[SECRET]',text)
+    text=re.sub(r'(?im)\b(?:api[_ -]?key|authorization|bearer|password|passwd|пароль|парол|ключ|секрет|код сопряжения|şifrə|token|токен|pairing|pin|cookie|secret)\b\s*(?:[:=]|\bis\b|—|-)?\s*[^\n]+','[SECRET]',text)
     def safe_url(match):
         value=match.group(0)
         # Sentence punctuation is harmless, but query strings, fragments,
