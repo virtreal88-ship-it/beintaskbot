@@ -975,7 +975,8 @@ async def process_connect_one(job, logger):
                 for row in context[-30:])
             media_usable=bool(analyzed_images or video_observations or video_transcripts)
             pilot_decision=parse_initial_triage(str(draft),lines=lines,knowledge=knowledge,
-                media_usable=media_usable,media_present=media_present)
+                media_usable=media_usable,media_present=media_present,
+                language=reservation.get('agent_language') or 'auto')
             if pilot_decision is None:
                 await asyncio.to_thread(finish_superseded,job,reservation,'pilot_initial_decision_unverified')
                 return

@@ -35,6 +35,28 @@ def test_real_case_quote_does_not_authorize_unrelated_registration_or_diagnosis_
         'A rounding issue can display 49.9992.'), lines=lines, knowledge=knowledge) is None
 
 
+def test_similar_kb_quote_cannot_be_repeated_as_a_diagnosis_for_this_case():
+    lines = [{'speaker': 'CLIENT', 'text': 'The total is 50 AZN but shown as 49.9992.'}]
+    kb_text = 'The mismatch is caused by a rounding defect.'
+    assert parse(decision('reply', kb_text, kb_text), lines=lines,
+        knowledge=[{'source_id': 'similar-case', 'content': kb_text}]) is None
+
+
+def test_clarification_discards_model_authored_delivery_claim_and_renders_safe_question():
+    lines = [{'speaker': 'CLIENT', 'text': 'Alış 1 qutu 50 AZN, ekranda 49,9992 göstərilir.'}]
+    result = parse(decision('clarify', 'Müraciətinizi proqramçılara ötürdüm. Hansı versiyadan istifadə edirsiniz?',
+        missing_items=['version']), lines=lines, knowledge=[], language='az')
+    assert result and result['action'] == 'clarify'
+    assert result['message'] == 'Zəhmət olmasa, istifadə etdiyiniz proqramın versiyasını yaza bilərsiniz?'
+    assert 'ötürdüm' not in result['message']
+
+
+def test_supplied_version_is_not_requested_again():
+    lines = [{'speaker': 'CLIENT', 'text': 'I use app v2.4.1 and see the wrong total.'}]
+    assert parse(decision('clarify', 'Müraciətinizi proqramçılara ötürdüm. Hansı versiyadan istifadə edirsiniz?',
+        missing_items=['version']), lines=lines, knowledge=[], language='az') is None
+
+
 def test_supplied_document_detail_cannot_be_requested_again():
     lines = [{'speaker': 'CLIENT', 'text': 'Alış 1 qutu 50 AZN, qaimədə göstərilib.'}]
     assert parse(decision('clarify', 'Hansı alış sənədidir?', missing_items=['Alış']),
@@ -71,7 +93,7 @@ def test_initial_clarification_is_structured_and_does_not_require_evidence_claim
     result = parse(decision('clarify', 'Could you share a screenshot of the displayed amount?',
         request_media=True), lines=[{'speaker': 'CLIENT', 'text': 'It looks wrong.'}], knowledge=[])
     assert result == {'action': 'clarify',
-        'message': 'Could you share a screenshot of the displayed amount?', 'evidence_quote': '',
+        'message': 'Please share an interface screenshot showing the issue or a short video reproducing it.', 'evidence_quote': '',
         'missing_items': [], 'request_media': True}
 
 
@@ -85,8 +107,9 @@ def test_unreadable_existing_image_allows_only_targeted_better_media_request():
     lines=[{'speaker':'CLIENT','text':'See attached.'}]
     assert parse(decision('clarify','Please share a screenshot.',request_media=True),
         lines=lines,knowledge=[],media_present=True) is None
-    assert parse(decision('clarify','Please share a clearer screenshot of the amount.',request_media=True),
+    result = parse(decision('clarify','Please share a clearer screenshot of the amount.',request_media=True),
         lines=lines,knowledge=[],media_present=True)
+    assert result and result['message'] == 'Please share a clearer screenshot of that screen or a short video reproducing the issue.'
 
 
 def test_initial_prompt_forbids_false_registration_and_resolution_claims():
