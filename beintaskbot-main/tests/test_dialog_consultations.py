@@ -429,3 +429,44 @@ def test_consultation_cannot_reuse_ordinary_manual_send_uuid(ready):
       VALUES(%s::uuid,11,%s::uuid,99,'synthetic','accepted','ordinary-message')''',(A,data['request_id']));db.commit()
     with pytest.raises(TenantLinearError):flow.prepare(PROFILE,data,'https://crm.test')
     assert not flow.inbox(PROFILE)['consultations']
+
+
+def test_real_http_ui_preview_destinations_and_pending_reply_inbox(ready):
+    """Actual HTTP handler and services: UI field names must bind to real scope."""
+    import asyncio
+    import logging
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient,TestServer
+    from tenant_dialog_consultations_api import handler
+    db,data,sender=ready
+    sender.return_value={'state':'pending','message_id':'queue-contract','external_message_id':None}
+    async def scenario():
+        app=web.Application()
+        for method,path,resource in [('POST','/preview','preview'),('GET','/destinations','destinations'),
+            ('POST','/','prepare'),('POST','/{id}/dispatch','dispatch'),('GET','/replies','replies')]:
+            app.router.add_route(method,path,handler(lambda _:PROFILE,'https://crm.test',logging.getLogger(__name__),resource))
+        async with TestClient(TestServer(app)) as client:
+            identity={'expected_tenant_id':A,'expected_user_id':11}
+            headers={'Origin':'https://crm.test'}
+            response=await client.post('/preview',json={**identity,'channel_id':CA,'conversation_id':'client'},headers=headers)
+            assert response.status==200,await response.text()
+            assert (await response.json())['result']['messages'][0]['body']=='Internet is down'
+            response=await client.get('/destinations');assert response.status==200,await response.text()
+            assert TARGET in [r['conversation_id'] for r in (await response.json())['result']['destinations']]
+            assert db.execute('SELECT count(*) AS n FROM saas_internal_consultations')[0]['n']==0
+            response=await client.post('/',json={**identity,**data},headers=headers)
+            assert response.status==200,await response.text()
+            result=(await response.json())['result']
+            response=await client.post('/'+result['id']+'/dispatch',json={**identity,'request_id':data['request_id']},headers=headers)
+            assert (await response.json())['result']['state']=='pending'
+            with db.cursor() as cur:
+                assert flow.observe_outbound_receipt(cur,A,CA,TARGET,{'id':'queue-contract','externalMessageId':'HTTP_PROVIDER',
+                  'originClientMessageId':data['request_id'],'fromMe':True,'_crm_signed_outbound_receipt':True,'text':sender.call_args.args[1]})
+            db.commit()
+            assert reply(db,result,quoted='HTTP_PROVIDER')
+            response=await client.get('/replies');assert response.status==200,await response.text()
+            inbox=(await response.json())['result'];assert len(inbox['replies'])==1
+            assert not inbox['replies'][0]['handled_at']
+            assert sender.call_count==1
+            assert db.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
+    asyncio.run(scenario())

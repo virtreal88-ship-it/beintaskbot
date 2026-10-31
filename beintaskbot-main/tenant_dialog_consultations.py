@@ -128,7 +128,7 @@ def preview(profile,data):
     with _connect() as conn:
         schema(conn)
         with conn.cursor() as cur:
-            tenant,_,_,source=_scope(cur,profile,**data,manual=True)
+            tenant,_,_,source=_scope(cur,profile,data['channel_id'],data['conversation_id'],manual=True)
             cur.execute('''SELECT id::text,body,message_type,direction,COALESCE(happened_at,created_at) AS happened_at
               FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
               ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 80''',
