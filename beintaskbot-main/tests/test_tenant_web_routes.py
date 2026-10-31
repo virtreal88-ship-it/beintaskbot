@@ -131,6 +131,7 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         expected.add(('POST',base+'/{campaign_id}/current-media-check'))
 
         expected.add(('POST','/api/platform/ai/knowledge-candidates/{candidate_id}/improve'))
+        expected |= {('POST','/api/platform/ai/knowledge-candidates/'+name) for name in ('operator-preview','operator-submit')}
         expected |= {('HEAD', path) for method, path in EXPECTED_API if method == 'GET'}
         expected |= set(AI_API)
         expected |= set(MCP_API)

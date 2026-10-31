@@ -1531,3 +1531,99 @@ def test_reconcile_legacy_requires_one_unchanged_binding_and_provenance(ready,mo
     request={'expected_version':2,'source_id':source_id,'expected_source_hash':source['content_hash']}
     with pytest.raises(TenantLinearError):store.mutate(PROFILE,case['id'],request,'reconcile_approved_publication')
     assert store.detail(PROFILE,case['id'])['candidate']['publications']==approved['publications']
+
+
+def test_employee_case_submission_uses_assigned_agent_and_is_idempotent(ready,monkeypatch):
+    import tenant_operator_case_submission as submission
+    db,generation,_=ready
+    monkeypatch.setattr(submission,'_connect',lambda:db)
+    preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'})
+    agent=preview['agent'];ids=[m['id'] for m in preview['messages']]
+    before=db.execute("SELECT state,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid",(A,))[0]
+    data={'channel_id':CA,'conversation_id':'client','message_ids':ids,**{k:agent[k] for k in ('agent_id','agent_version','assignment_revision')}}
+    first=submission.submit(PROFILE,data)
+    second=submission.submit(PROFILE,data)
+    assert second['already_submitted'] is True
+    assert generation.call_count==1
+    assert first['candidates'][0]['source_message_ids']==ids
+    assert first['candidates'][0]['training_target']['agent_id']==AGENT
+    assert db.execute("SELECT state,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid",(A,))[0]==before
+    assert len(db.execute("SELECT id FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid",(A,)))==1
+    db.execute("UPDATE saas_ai_conversation_state SET revision=revision+1 WHERE tenant_id=%s::uuid",(A,));db.commit()
+    with pytest.raises(TenantLinearError,match='изменилось'):
+        submission.submit(PROFILE,data)
+
+
+def test_employee_case_fences_changed_assignment_before_saving(ready,monkeypatch):
+    import tenant_operator_case_submission as submission
+    db,generation,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
+    preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'})
+    agent=preview['agent'];ids=[m['id'] for m in preview['messages']]
+    data={'channel_id':CA,'conversation_id':'client','message_ids':ids,**{k:agent[k] for k in ('agent_id','agent_version','assignment_revision')}}
+    original=generation.side_effect
+    def changed(*args,**kwargs):
+        db.execute("UPDATE saas_ai_conversation_state SET agent_id=%s::uuid,revision=revision+1 WHERE tenant_id=%s::uuid",(EXPERT,A));db.commit()
+        return json.dumps({'cards':[model_card()]},ensure_ascii=False),{'input_tokens':40,'output_tokens':20,'total_tokens':60}
+    generation.side_effect=changed
+    result=submission.submit(PROFILE,data)
+    assert result['request']['status']=='failed'
+    assert result['candidates']==[]
+
+
+def test_employee_case_rejects_noncontiguous_and_cross_tenant_selection(ready,monkeypatch):
+    import tenant_operator_case_submission as submission
+    db,generation,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
+    preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'})
+    ids=[m['id'] for m in preview['messages']];agent=preview['agent']
+    data={'channel_id':CA,'conversation_id':'client','message_ids':[ids[0],ids[-1]],**{k:agent[k] for k in ('agent_id','agent_version','assignment_revision')}}
+    with pytest.raises(TenantLinearError):submission.submit(PROFILE,data)
+    with pytest.raises(TenantLinearError):submission.preview({'tenant_id':B,'telegram_id':22},{'channel_id':CA,'conversation_id':'client'})
+    assert generation.call_count==0
+
+
+def test_employee_case_keeps_attachment_evidence_without_paid_media(ready,monkeypatch):
+    import tenant_operator_case_submission as submission
+    db,generation,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
+    message=db.execute("SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41 ORDER BY id LIMIT 1",(A,))[0]['id']
+    db.execute("UPDATE saas_crm_messages SET message_type='image',raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps({'mediaId':'test'}),A,message));db.commit()
+    preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'});agent=preview['agent'];ids=[m['id'] for m in preview['messages']]
+    data={'channel_id':CA,'conversation_id':'client','message_ids':ids,**{k:agent[k] for k in ('agent_id','agent_version','assignment_revision')}}
+    result=submission.submit(PROFILE,data)
+    assert result['candidates'][0]['source_message_ids']==ids
+    assert any(x['id']==str(message) and x['media_kind']=='image' for x in db.execute("SELECT source_refs FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid",(A,))[0]['source_refs'])
+    assert result['candidates'][0]['media_analysis_status']!='complete'
+
+
+def test_support_employee_may_submit_but_not_use_general_knowledge_api(ready,monkeypatch):
+    import tenant_operator_case_submission as submission
+    db,generation,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
+    db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions) VALUES(%s::uuid,33,'worker','Staff',%s::jsonb)",(A,json.dumps(['dialogs','support'])));db.commit()
+    employee={'tenant_id':A,'telegram_id':33}
+    preview=submission.preview(employee,{'channel_id':CA,'conversation_id':'client'});agent=preview['agent']
+    data={'channel_id':CA,'conversation_id':'client','message_ids':[m['id'] for m in preview['messages']],**{k:agent[k] for k in ('agent_id','agent_version','assignment_revision')}}
+    result=submission.submit(employee,data)
+    assert result['candidates'] and generation.call_count==1
+    with db.cursor() as cur:
+        with pytest.raises(TenantLinearError):store.authorize(cur,employee)
+    with pytest.raises(TenantLinearError):store.detail(employee,result['candidates'][0]['id'])
+
+
+def test_employee_case_requires_current_assignment_and_support_permission(ready,monkeypatch):
+    import tenant_operator_case_submission as submission
+    db,generation,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid",(A,));db.commit()
+    with pytest.raises(TenantLinearError,match='назначьте агента'):
+        submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'})
+    db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions) VALUES(%s::uuid,33,'worker','Staff',%s::jsonb)",(A,json.dumps(['dialogs'])));db.commit()
+    with pytest.raises(TenantLinearError):submission.preview({'tenant_id':A,'telegram_id':33},{'channel_id':CA,'conversation_id':'client'})
+    assert generation.call_count==0
+
+
+def test_employee_case_group_uses_unique_group_assignment(ready,monkeypatch):
+    import tenant_operator_case_submission as submission
+    db,_,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}]),A,AGENT))
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name) VALUES(%s::uuid,%s::uuid,%s,43,'Group')",(A,CA,GROUP))
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,43,'group-message',%s,'incoming','Need help')",(str(uuid.uuid4()),A,'connect:'+CA))
+    db.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,assignments) VALUES(%s::uuid,%s,%s::jsonb)",(A,GROUP,json.dumps([{'agent_id':AGENT,'channel_id':CA,'priority':0}])));db.commit()
+    assert submission.preview(PROFILE,{'channel_id':CA,'conversation_id':GROUP})['agent']['agent_id']==AGENT

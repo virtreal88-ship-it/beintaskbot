@@ -33,7 +33,7 @@ class LiveExtractionDisabled(Exception):
     """A live queue job was safely stopped before its next provider call."""
 
 
-def prepare(profile,data,review=None):
+def prepare(profile,data,review=None,training=None):
     allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','case_extension_id','photo_model','campaign_photo_model','video_model','media_grant_id','owner_retry_unknown','owner_retry_basis','case_source_sha256'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректные параметры анализа.')
     for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
@@ -126,6 +126,18 @@ def prepare(profile,data,review=None):
                 if any(data.get(k)!=photo_consent['route'].get(k) for k in ('message_ids','channel_id','conversation_id','source_version','analysis_agent_id','retry_of','allow_external_media','allow_paid_asr','allow_vision')):
                     raise TenantLinearError('Exact photo selection changed.',409)
             item=review['snapshot'] if review else store.snapshot(cur,profile,data)
+            if training:
+                from tenant_operator_case_submission import validate
+                target=validate(cur,profile,data,training)
+                if [ref['id'] for ref in item['refs']]!=data['message_ids']:
+                    raise TenantLinearError('Фрагмент слишком большой или изменился. Выберите меньше сообщений.',409)
+                cur.execute("SELECT id FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND route->'training_target'->>'submission_key'=%s LIMIT 1",(tenant,target['submission_key']))
+                previous=cur.fetchone()
+                if previous:return {'existing':str(previous['id']),'training_existing':True}
+                if len((_json(item['messages'])+PROMPT+'{}').encode())+512>MAX_TOKENS-2000:
+                    raise TenantLinearError('Фрагмент слишком большой. Выберите меньше сообщений.',413)
+                item['route']['training_target']=target
+                item['training']=target
             item['_failed_media_recovery']=failed_media_recovery
             media_grant_id=data.get('media_grant_id')
             if any(ref.get('media_kind') for ref in item['refs']):
@@ -217,15 +229,16 @@ def prepare(profile,data,review=None):
             content_route={'provider':'connect','conversation_id':item['route']['conversation_id'],'history_mode':item['route']['history_mode']}
             if item['route']['history_mode']=='channel': content_route['channel_id']=item['route']['channel_id']
             content_route.update({flag:data[flag] for flag in ('allow_external_media','allow_paid_asr','allow_vision') if flag in data})
+            if training:content_route['training_submission_key']=target['submission_key']
             if data.get('case_source_sha256'):content_route['case_source_sha256']=data['case_source_sha256']
             if data.get('retry_of'):content_route['retry_of']=identifier(data['retry_of'])
             if photo_only:content_route['photo_model']=model
             if campaign_photo_model:content_route['campaign_photo_model']=campaign_photo_model
             fingerprint=store.digest([content_route,item['refs'],item['source_digest'],str(agent['id']),model,data['language'],review['key'] if review else None])
             cur.execute("""SELECT e.* FROM saas_knowledge_extractions e WHERE tenant_id=%s::uuid AND
-              (id=%s::uuid OR fingerprint=%s OR (source_refs=%s::jsonb AND source_digest=%s AND route->>'history_mode'=%s AND (%s='unified_group' OR route->>'channel_id'=%s) AND COALESCE(route->>'language','ru')=%s AND COALESCE(route->'review','null'::jsonb)=%s::jsonb AND COALESCE(route->>'photo_model','')=%s AND COALESCE(route->>'campaign_photo_model','')=%s AND COALESCE(route->>'case_source_sha256','')=%s AND COALESCE(route->>'allow_external_media','false')=%s AND COALESCE(route->>'allow_paid_asr','false')=%s AND COALESCE(route->>'retry_of','')=%s AND COALESCE(route->>'allow_vision','false')=%s AND COALESCE(route->'approved_channel_ids','null'::jsonb)=%s::jsonb AND EXISTS(
+              (id=%s::uuid OR fingerprint=%s OR (source_refs=%s::jsonb AND source_digest=%s AND COALESCE(route->'training_target'->>'submission_key','')=%s AND route->>'history_mode'=%s AND (%s='unified_group' OR route->>'channel_id'=%s) AND COALESCE(route->>'language','ru')=%s AND COALESCE(route->'review','null'::jsonb)=%s::jsonb AND COALESCE(route->>'photo_model','')=%s AND COALESCE(route->>'campaign_photo_model','')=%s AND COALESCE(route->>'case_source_sha256','')=%s AND COALESCE(route->>'allow_external_media','false')=%s AND COALESCE(route->>'allow_paid_asr','false')=%s AND COALESCE(route->>'retry_of','')=%s AND COALESCE(route->>'allow_vision','false')=%s AND COALESCE(route->'approved_channel_ids','null'::jsonb)=%s::jsonb AND EXISTS(
                 SELECT 1 FROM saas_ai_agent_runs r WHERE r.tenant_id=e.tenant_id AND r.id=e.id AND r.agent_id=%s::uuid AND r.model=%s)))
-              ORDER BY id=%s::uuid DESC LIMIT 1""",(tenant,request_id,fingerprint,_json(item['refs']),item['source_digest'],item['route']['history_mode'],item['route']['history_mode'],item['route']['channel_id'],data['language'],_json(review['key']) if review else 'null',str(data.get('photo_model') or ''),campaign_photo_model,str(data.get('case_source_sha256') or ''),str(data.get('allow_external_media',False)).lower(),str(data.get('allow_paid_asr',False)).lower(),str(data.get('retry_of') or ''),str(data.get('allow_vision',False)).lower(),_json(data.get('approved_channel_ids')),agent['id'],model,request_id))
+              ORDER BY id=%s::uuid DESC LIMIT 1""",(tenant,request_id,fingerprint,_json(item['refs']),item['source_digest'],target['submission_key'] if training else '',item['route']['history_mode'],item['route']['history_mode'],item['route']['channel_id'],data['language'],_json(review['key']) if review else 'null',str(data.get('photo_model') or ''),campaign_photo_model,str(data.get('case_source_sha256') or ''),str(data.get('allow_external_media',False)).lower(),str(data.get('allow_paid_asr',False)).lower(),str(data.get('retry_of') or ''),str(data.get('allow_vision',False)).lower(),_json(data.get('approved_channel_ids')),agent['id'],model,request_id))
             existing=cur.fetchone()
             if existing:
                 if str(existing['id'])==request_id and existing['fingerprint']!=fingerprint: raise TenantLinearError('request_id уже использован для другого фрагмента.',409)
@@ -400,6 +413,9 @@ def finish(profile,item,values,usage,error,attempted,proposal=None,accounting_us
             try:
                 if item.get('media_results'): row={**row,'media_results':item['media_results']}
                 evidence=store.evidence(cur,profile,row)
+                if item.get('training'):
+                    from tenant_operator_case_submission import assignment
+                    assignment(cur,tenant,row['route']['channel_id'],row['route']['conversation_id'],item['training'])
                 cur.execute('SELECT emergency_stop,enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid',(tenant,))
                 settings=cur.fetchone()
                 if item.get('review'):
@@ -426,11 +442,21 @@ def finish(profile,item,values,usage,error,attempted,proposal=None,accounting_us
                 cur.execute('UPDATE saas_ai_agent_token_usage SET reserved_tokens=GREATEST(reserved_tokens,%s) WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(unknown_tokens,tenant,request_id))
             if not attempted: cur.execute('UPDATE saas_ai_agent_token_usage SET reserved_tokens=0 WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(tenant,request_id))
             if values is not None:
+                if item.get('training') and not values:
+                    ids=[ref['id'] for ref in item['refs']]
+                    values=[card({'title':'Əməkdaşın göndərdiyi müraciət','symptoms':['Yoxlama tələb olunur'],
+                        'cause':{'status':'unknown','text':''},'resolution_steps':[],
+                        'outcome':{'status':'unknown','text':'','message_ids':[]},
+                        'source_message_ids':ids,'product':'','product_version':'',
+                        'clarification_note':'Müraciəti və nəticəni yoxlayın.'},ids)]
                 for value in values:
+                    if item.get('training'):
+                        ids=[r['id'] for r in item['refs']]
+                        value={**value,'source_message_ids':ids,'start_message_id':ids[0],'end_message_id':ids[-1]}
                     value=store.enforce_confirmation(value,evidence)
                     from tenant_knowledge_quality_policy import check as check_quality
                     duplicate,flags=check_quality(cur,tenant,item['route'],value,item['refs'])
-                    if duplicate:continue
+                    if duplicate and not item.get('training'):continue
                     cur.execute("INSERT INTO saas_knowledge_candidates(tenant_id,id,extraction_id,content,content_hash,status,quality_flags) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::jsonb,%s,%s,%s::jsonb) ON CONFLICT(tenant_id,extraction_id,content_hash) DO NOTHING",
                         (tenant,str(uuid.uuid4()),request_id,_json(value),store.digest(value),'needs_clarification' if approval_reason(value) else 'pending_review',_json(flags)))
             if proposal is not None and status=='completed':
@@ -504,16 +530,17 @@ def check_active(profile,item):
             check_fence(cur,item['tenant'],item['id'])
 
 
-def analyze(profile,data,*,before_provider=None):
+def analyze(profile,data,*,before_provider=None,training=None):
     live_enabled=before_provider
     def check_live_enabled():
         if live_enabled is not None and not live_enabled():
             raise LiveExtractionDisabled()
     check_live_enabled()
-    item=prepare(profile,data)
+    item=prepare(profile,data,training=training)
     if 'existing' in item:
         response=store.request_detail(profile,item['existing'])
         if 'next_before' in item: response['request']['next_before']=item['next_before']
+        if item.get('training_existing'):response['already_submitted']=True
         return response
     values=None;usage=None;error='extraction_preflight_failed';attempted=False;stage='preflight'
     try:

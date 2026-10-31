@@ -1,0 +1,24 @@
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const {JSDOM}=require(process.env.SUPPORT_CASES_JSDOM||'jsdom');
+const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(resolve=>setTimeout(resolve,0));
+(async()=>{
+ const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://example.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window,d=w.document;
+ const tenant='00000000-0000-4000-8000-000000000001',channel='00000000-0000-4000-8000-000000000002',agent='00000000-0000-4000-8000-000000000003',id='00000000-0000-4000-8000-000000000004';
+ let route={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'client',agent_id:agent,agent_name:'Agent',state:'human',can_send:true,controls_allowed:true,available_actions:[]};
+ const profile={member:{tenant_id:tenant,telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true}}};
+ const calls=[];w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};
+ w.fetch=async(url,options={})=>{url=String(url);calls.push({url,options});let result;
+ if(url.includes('operator-preview'))result={agent:{agent_id:agent,agent_version:1,assignment_revision:2,agent_name:'Agent'},messages:[{id,role:'customer',text:'Help'}]};
+ else if(url.includes('operator-submit'))result={request:{execution_status:'completed'},candidates:[{id}]};
+ else if(url.includes('/dialogs/history'))result={dialog:route,messages:[],next_before:null};
+ else if(url.includes('/dialogs?'))result={dialogs:[route],channels:[],agents:[],attention_count:0,next_offset:null};
+ else if(url.includes('/api/platform/me'))return{ok:true,json:async()=>profile};
+ else throw Error('Unexpected request '+url);
+ return {ok:true,json:async()=>({success:true,result})};};
+ w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await tick();await tick();await w.tenantOperator.openDialog(route);await tick();
+ const button=d.getElementById('operatorTraining');assert(button);assert.equal(button.disabled,false);button.click();await tick();await tick();const submit=d.querySelector('[data-submit]');assert(submit&&submit.disabled);for(const select of d.querySelectorAll('.operator-complete-modal select')){select.value='0';select.dispatchEvent(new w.Event('change'));}assert(!submit.disabled);submit.click();submit.click();await tick();await tick();
+ assert.equal(calls.filter(x=>x.url.includes('operator-submit')).length,1);assert(!calls.some(x=>x.url.includes('/chat/send')));assert(d.querySelector('.operator-complete-modal [role=status]').textContent);
+ const post=JSON.parse(calls.find(x=>x.url.includes('operator-submit')).options.body);assert.deepEqual(post.message_ids,[id]);assert.equal(post.agent_id,agent);
+ route={...route,agent_id:null};await w.tenantOperator.openDialog(route);await tick();assert(d.getElementById('operatorTraining').disabled);assert(d.getElementById('operatorTraining').title);
+ dom.window.close();console.log('PASS: bounded employee case action');
+})().catch(error=>{console.error(error);process.exitCode=1;});
