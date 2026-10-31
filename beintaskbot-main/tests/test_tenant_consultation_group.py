@@ -135,6 +135,61 @@ def test_pilot_turn_media_observation_schema_is_backward_compatible_and_source_b
       {**observation,'relevance':'irrelevant'}]}),expected_media_ids=['photo-12345'])['media_observations'][0]['relevance']=='irrelevant'
 
 
+def _persistable_case_photo(db,monkeypatch):
+    import tenant_connect_images as photos
+    _consult,case=setup_case(db,monkeypatch)
+    message_id='case-photo-persist-1'
+    message_uuid=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,
+      message_type,raw,happened_at) VALUES(%s::uuid,%s::uuid,41,%s,'incoming',%s,'synthetic screenshot','image',
+      %s::jsonb,now()-interval '60 days')''',
+      (message_uuid,A,'connect:'+message_id,'connect:'+CA,'{"mediaId":"synthetic-version-1"}'))
+    db.commit()
+    with db.cursor() as cur:
+        assert tickets.record_case_message_membership(cur,A,case,CA,'client',[message_id],'persist-case-photo-test')==1
+    db.commit()
+    monkeypatch.setattr(photos,'_connect',lambda:db)
+    job={'tenant_id':A,'channel_id':CA,'conversation_id':'client','lead_id':41}
+    refs=photos._case_image_refs(job,case)
+    assert [ref['message_id'] for ref in refs]==[message_id]
+    artifact={**refs[0],'analysis_expected':True,'content_sha256':'synthetic-byte-hash'}
+    observation={'message_id':message_id,'relevance':'relevant',
+      'observation':'The screenshot shows an upload error banner.'}
+    return photos,job,case,message_id,artifact,observation
+
+
+def test_case_visual_receipt_is_persisted_only_while_exact_ticket_member_and_source_version_remain(db,monkeypatch):
+    photos,job,case,message_id,artifact,observation=_persistable_case_photo(db,monkeypatch)
+    saved=photos.persist_case_observations(job,case,[artifact],[observation],'gpt-4o-mini')
+    assert saved==[message_id]
+    receipt=db.execute('''SELECT result,provenance FROM saas_media_evidence_receipts
+      WHERE tenant_id=%s::uuid AND external_id=%s AND source_hash=%s''',
+      (A,artifact['ref']['external_id'],artifact['source_hash']))[0]
+    note=receipt['result']['case_observations'][0]
+    assert note['case_id']==case and note['message_id']==message_id and note['untrusted'] is True
+    assert note['source_hash']==artifact['source_hash']
+    assert receipt['provenance']['case_followups'][0]['model']=='gpt-4o-mini'
+
+
+@pytest.mark.parametrize('stale_change',['removed_membership','changed_source_version'])
+def test_stale_case_visual_generation_cannot_return_persisted_evidence_id(db,monkeypatch,stale_change):
+    photos,job,case,message_id,artifact,observation=_persistable_case_photo(db,monkeypatch)
+    if stale_change=='removed_membership':
+        row=db.execute('''SELECT id::text AS message_id FROM saas_crm_messages
+          WHERE tenant_id=%s::uuid AND external_id=%s''',(A,artifact['ref']['external_id']))[0]
+        db.execute('''DELETE FROM saas_support_ticket_messages WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid
+          AND message_id=%s::uuid''',(A,case,row['message_id']))
+    else:
+        db.execute('''UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND external_id=%s''',
+          ('{"mediaId":"synthetic-version-2"}',A,artifact['ref']['external_id']))
+    db.commit()
+    assert photos.persist_case_observations(job,case,[artifact],[observation],'gpt-4o-mini')==[]
+    assert photos._case_image_refs(job,case)==[] if stale_change=='removed_membership' else True
+    from tenant_ai_agent_worker import _pilot_case_media_quote_lines,_pilot_quote_supported
+    alleged=_pilot_case_media_quote_lines([observation],persisted_ids=[])
+    assert alleged==[] and not _pilot_quote_supported(observation['observation'],alleged,[])
+
+
 def test_actual_pilot_handoff_publishes_linked_case_photo_without_eager_download(db,monkeypatch):
     import tenant_ai_pilot as pilot
     consult,_case=setup_case(db,monkeypatch)

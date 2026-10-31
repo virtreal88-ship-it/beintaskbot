@@ -46,11 +46,12 @@ def _pilot_quote_supported(quote,lines,knowledge):
     return any(q in norm(source) for source in sources)
 
 
-def _pilot_case_media_quote_lines(observations,persisted=True):
+def _pilot_case_media_quote_lines(observations,persisted_ids=()):
     """Only a validated, persisted relevant observation can support a photo quote."""
-    if not persisted:return []
+    persisted={str(item) for item in persisted_ids or []}
     return [{'speaker':'CASE IMAGE OBSERVATION','text':str(item['observation'])}
       for item in (observations or []) if isinstance(item,dict) and item.get('relevance')=='relevant'
+      and str(item.get('message_id') or '') in persisted
       and isinstance(item.get('observation'),str) and item['observation'].strip()]
 
 
@@ -1127,12 +1128,14 @@ async def process_connect_one(job, logger):
             from tenant_consultation_group import parse_pilot_turn_decision,record_pilot_followup_action,record_group_turn_action
             from tenant_connect_images import persist_case_observations
             pilot_decision=parse_pilot_turn_decision(str(draft),expected_media_ids=case_media_observation_ids)
-            media_saved=bool(pilot_decision and await asyncio.to_thread(persist_case_observations,
-                job,pilot_case_id,case_media_artifacts,pilot_decision.get('media_observations') or [],model))
+            persisted_media_ids=[]
+            if pilot_decision:
+                persisted_media_ids=await asyncio.to_thread(persist_case_observations,
+                    job,pilot_case_id,case_media_artifacts,pilot_decision.get('media_observations') or [],model)
             media_evidence_lines=[line for line in lines if line.get('speaker') not in {'UNCLASSIFIED MEDIA NOTE','SYSTEM MEDIA STATUS'}]
             if pilot_decision:
                 media_evidence_lines.extend(_pilot_case_media_quote_lines(
-                    pilot_decision.get('media_observations'),persisted=media_saved))
+                    pilot_decision.get('media_observations'),persisted_ids=persisted_media_ids))
             if (pilot_decision and pilot_decision['action']=='group_answer'
                     and not _pilot_quote_supported(pilot_decision['evidence_quote'],media_evidence_lines,knowledge)):
                 pilot_decision=None

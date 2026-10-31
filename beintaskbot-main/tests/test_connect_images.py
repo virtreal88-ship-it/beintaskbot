@@ -46,8 +46,10 @@ class PhotoWorker(WorkerVoice):
   assert self.generate.call_args.kwargs['images']==[];assert self.generate.call_args.kwargs['extra_context']['unprocessed_media_count']==1
  async def test_human_takeover_after_download_no_model_or_send(self):
   self.photo_live.return_value=False;await self.process();self.generate.assert_not_called();self.send.assert_not_called();self.superseded.assert_called_once()
- async def test_manual_photo_keeps_draft(self):
-  self.reserve.side_effect=lambda *a,**k:{**RESERVATION,'mode':'manual'};await self.process();self.send.assert_not_called();self.draft.assert_called_once()
+ async def test_manual_photo_never_auto_sends(self):
+  self.reserve.side_effect=lambda *a,**k:{**RESERVATION,'mode':'manual'}
+  await self.process()
+  self.generate.assert_called_once();self.send.assert_not_called();self.superseded.assert_called_once()
  async def test_group_foreign_copy_resolves_only_local_replica(self):
   foreign={**row(mid='00000000-0000-0000-0000-000000000099',kind='image'), 'channel':CHANNEL,'photo_message_id':MESSAGE,'author_name':'Synthetic participant','source_channels':['one','two']}
   with patch.object(adapter,'group_context',return_value=[foreign]):await self.process()
@@ -186,6 +188,30 @@ def test_case_photo_unavailable_is_not_marked_analyzed_or_asserted_as_evidence()
  asyncio.run(run())
 
 
+def test_cached_legacy_cat_observation_cannot_be_promoted_to_new_visual_bug_evidence():
+ import json
+ async def run():
+  selected=_case_image_ref()
+  with patch.object(photos,'supports_images',return_value=True),patch.object(photos,'generation_budget_available',return_value=True),\
+       patch.object(photos,'_case_image_refs',return_value=[selected]),patch('tenant_media_evidence.reusable',return_value={
+         'status':'processed','result':{'observation':'The photo shows a cat on a chair.'}}),\
+       patch.object(photos,'resolve') as resolve,patch.object(photos,'download_media',new=AsyncMock()) as download:
+   images,_,artifacts=await photos.prepare_case(JOB,RESERVATION,'case-original','gpt-4o-mini',Mock())
+  assert images==[] and artifacts[0]['analysis_expected'] is False
+  assert artifacts[0]['cached_observation']['text']=='The photo shows a cat on a chair.'
+  resolve.assert_not_called();download.assert_not_awaited()
+  evidence=[{'speaker':'UNCLASSIFIED MEDIA NOTE','text':artifacts[0]['cached_observation']['text']}]
+  assert not worker._pilot_quote_supported('The photo shows a cat on a chair.',
+      [line for line in evidence if line['speaker']!='UNCLASSIFIED MEDIA NOTE'],[])
+  fabricated={'action':'group_answer','message':'The photo confirms an upload defect.',
+      'evidence_quote':'The photo confirms an upload defect.','media_observations':[
+        {'message_id':'case-photo-1','relevance':'relevant','observation':'The photo confirms an upload defect.'}]}
+  from tenant_consultation_group import parse_pilot_turn_decision
+  assert parse_pilot_turn_decision(json.dumps(fabricated),expected_media_ids=[]) is None
+  assert worker._pilot_case_media_quote_lines(fabricated['media_observations'],persisted_ids=[])==[]
+ asyncio.run(run())
+
+
 def test_irrelevant_case_photo_cannot_support_a_bug_claim():
  import json
  from tenant_consultation_group import parse_pilot_turn_decision
@@ -206,6 +232,7 @@ def test_relevant_case_photo_can_support_only_its_validated_persisted_observatio
    'evidence_quote':observation,'media_observations':[{'message_id':'case-photo-1','relevance':'relevant','observation':observation}]})
  decision=parse_pilot_turn_decision(raw,expected_media_ids=['case-photo-1'])
  assert decision
- lines=worker._pilot_case_media_quote_lines(decision['media_observations'])
+ assert worker._pilot_case_media_quote_lines(decision['media_observations'])==[]
+ lines=worker._pilot_case_media_quote_lines(decision['media_observations'],persisted_ids=['case-photo-1'])
  assert worker._pilot_quote_supported(observation,lines,[])
- assert worker._pilot_case_media_quote_lines(decision['media_observations'],persisted=False)==[]
+ assert worker._pilot_case_media_quote_lines(decision['media_observations'],persisted_ids=[])==[]

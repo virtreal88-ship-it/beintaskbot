@@ -157,7 +157,11 @@ async def prepare_case(job,reservation,case_id,model,logger):
             if cached:
                 analyzed.add(message_id)
                 artifacts.append({**selected,'state':'cached_observation','cached_observation':cached,
-                                  'analysis_expected':cached.get('source')!='case_receipt',
+                                  # A legacy receipt has text, not its original
+                                  # image bytes. It may be shown as an
+                                  # unclassified note, but a new model turn must
+                                  # not invent a fresh visual observation from it.
+                                  'analysis_expected':False,
                                   'content_sha256':cached.get('content_sha256','')})
             else:
                 # A terminal receipt without usable visuals is not retried
@@ -186,23 +190,24 @@ async def prepare_case(job,reservation,case_id,model,logger):
     return images,analyzed,artifacts
 
 def persist_case_observations(job,case_id,artifacts,observations,model):
-    """Persist validated visual notes against the exact CASE and source version."""
+    """Persist validated visual notes and return only IDs durably saved for this CASE/version."""
     try:case_id=str(uuid.UUID(str(case_id)))
-    except (ValueError,TypeError,AttributeError):return False
+    except (ValueError,TypeError,AttributeError):return []
     from tenant_media_evidence import create_schema,media_version,source_hash,_body_hash,_safe_text
     from tenant_platform import _json
     selected={str(item.get('message_id')):item for item in artifacts or []
               if isinstance(item,dict) and item.get('analysis_expected') is True}
     pending=[]
     for observation in observations or []:
-        if not isinstance(observation,dict):return False
+        if not isinstance(observation,dict):return []
         source=selected.get(str(observation.get('message_id') or ''))
         relevance=observation.get('relevance');text=str(observation.get('observation') or '').strip()
         if not source or relevance not in {'relevant','irrelevant','unclear'} or not text or len(text)>500:
-            return False
+            return []
         pending.append((source,relevance,_safe_text(text)[:500]))
-    if not pending:return True
+    if not pending:return []
     tenant=str(job['tenant_id']);channel=str(job['channel_id']);conversation=str(job['conversation_id'])
+    persisted=[]
     try:
         with _connect() as conn:
             create_schema(conn)
@@ -250,7 +255,8 @@ def persist_case_observations(job,case_id,artifacts,observations,model):
                         result=EXCLUDED.result,provenance=EXCLUDED.provenance,updated_at=now()''',
                       (tenant,channel,external,version,_json({'kind':'image','complete':True}),
                        _json(result),_json(provenance)))
+                    persisted.append(source['message_id'])
             conn.commit()
-        return True
+        return persisted
     except Exception:
-        return False
+        return []
