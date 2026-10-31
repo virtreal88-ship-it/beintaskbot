@@ -260,3 +260,60 @@ def persist_case_observations(job,case_id,artifacts,observations,model):
         return persisted
     except Exception:
         return []
+
+
+def validate_cached_case_observations(job,case_id,artifacts):
+    """Revalidate cached CASE evidence after generation before it may support a reply."""
+    try:case_id=str(uuid.UUID(str(case_id)))
+    except (ValueError,TypeError,AttributeError):return []
+    from tenant_media_evidence import media_version,source_hash,_body_hash
+    tenant=str(job['tenant_id']);channel=str(job['channel_id']);conversation=str(job['conversation_id'])
+    candidates=[]
+    for artifact in artifacts or []:
+        if not isinstance(artifact,dict):continue
+        cached=artifact.get('cached_observation')
+        if (isinstance(cached,dict) and cached.get('source')=='case_receipt'
+                and cached.get('relevance')=='relevant' and isinstance(cached.get('text'),str)
+                and cached.get('text').strip()):
+            candidates.append((artifact,cached))
+    if not candidates:return []
+    validated=[]
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                for artifact,cached in candidates:
+                    message_id=str(artifact.get('message_id') or '')
+                    expected_hash=str(artifact.get('source_hash') or '')
+                    external=str((artifact.get('ref') or {}).get('external_id') or '')
+                    if not message_id or not expected_hash or not external:continue
+                    cur.execute('''SELECT m.external_id,m.body,m.raw,m.message_type
+                      FROM saas_support_tickets t JOIN saas_connect_conversations c
+                        ON c.tenant_id=t.tenant_id AND c.connect_channel_id=t.channel_id AND c.conversation_id=t.conversation_id
+                      JOIN saas_support_ticket_messages cm ON cm.tenant_id=t.tenant_id AND cm.ticket_id=t.id
+                      JOIN saas_crm_messages m ON m.tenant_id=cm.tenant_id AND m.id=cm.message_id
+                      WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.channel_id=%s::uuid AND t.conversation_id=%s
+                        AND c.lead_id=%s AND m.external_id=%s AND m.channel='connect:'||t.channel_id::text
+                        AND m.direction='incoming' AND m.message_type='image' FOR SHARE OF t,c,cm,m''',
+                      (tenant,case_id,channel,conversation,int(job['lead_id']),external))
+                    current=cur.fetchone()
+                    if not current:continue
+                    current_ref={'external_id':current['external_id'],'body_hash':_body_hash(current.get('body')),
+                      'media_kind':'image','media_version':media_version(current.get('raw'))}
+                    version=source_hash(current_ref)
+                    if version!=expected_hash:continue
+                    cur.execute('''SELECT result FROM saas_media_evidence_receipts
+                      WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s AND source_hash=%s
+                        AND media_kind='image' AND direction='incoming' FOR SHARE''',
+                      (tenant,channel,external,version))
+                    receipt=cur.fetchone()
+                    result=receipt.get('result') if isinstance(receipt,dict) and isinstance(receipt.get('result'),dict) else {}
+                    saved=result.get('case_observations') if isinstance(result.get('case_observations'),list) else []
+                    exact=any(isinstance(item,dict) and item.get('case_id')==case_id
+                      and item.get('message_id')==message_id and item.get('source_hash')==version
+                      and item.get('relevance')=='relevant' and item.get('text')==cached.get('text')
+                      and item.get('untrusted') is True for item in saved)
+                    if exact:validated.append(message_id)
+            conn.commit()
+        return validated
+    except Exception:
+        return []

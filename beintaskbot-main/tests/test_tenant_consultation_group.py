@@ -2,7 +2,7 @@
 import asyncio
 import uuid
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from test_tenant_support_inbox import database, db, A, B, CA, AGENT, PROFILE, manual
 import tenant_consultation_group as flow
 import tenant_support_inbox_store as tickets
@@ -188,6 +188,36 @@ def test_stale_case_visual_generation_cannot_return_persisted_evidence_id(db,mon
     from tenant_ai_agent_worker import _pilot_case_media_quote_lines,_pilot_quote_supported
     alleged=_pilot_case_media_quote_lines([observation],persisted_ids=[])
     assert alleged==[] and not _pilot_quote_supported(observation['observation'],alleged,[])
+
+
+@pytest.mark.parametrize('stale_change',['removed_membership','changed_source_version'])
+def test_cached_case_receipt_is_revalidated_after_generation_before_it_supports_a_reply(db,monkeypatch,stale_change):
+    import tenant_media_evidence as evidence
+    from unittest.mock import AsyncMock,patch
+    photos,job,case,message_id,artifact,observation=_persistable_case_photo(db,monkeypatch)
+    assert photos.persist_case_observations(job,case,[artifact],[observation],'gpt-4o-mini')==[message_id]
+    monkeypatch.setattr(evidence,'_connect',lambda:db)
+    download=AsyncMock()
+    with patch.object(photos,'supports_images',return_value=True),\
+         patch.object(photos,'generation_budget_available',return_value=True),\
+         patch.object(photos,'download_media',new=download):
+        _images,_analyzed,cached_artifacts=asyncio.run(
+          photos.prepare_case(job,{'synthetic':'reservation'},case,'gpt-4o-mini',Mock()))
+    assert len(cached_artifacts)==1
+    assert cached_artifacts[0]['cached_observation']['source']=='case_receipt'
+    assert photos.validate_cached_case_observations(job,case,cached_artifacts)==[message_id]
+    download.assert_not_awaited()
+
+    if stale_change=='removed_membership':
+        row=db.execute('''SELECT id::text AS message_id FROM saas_crm_messages
+          WHERE tenant_id=%s::uuid AND external_id=%s''',(A,artifact['ref']['external_id']))[0]
+        db.execute('''DELETE FROM saas_support_ticket_messages WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid
+          AND message_id=%s::uuid''',(A,case,row['message_id']))
+    else:
+        db.execute('''UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND external_id=%s''',
+          ('{"mediaId":"synthetic-version-2"}',A,artifact['ref']['external_id']))
+    db.commit()
+    assert photos.validate_cached_case_observations(job,case,cached_artifacts)==[]
 
 
 def test_actual_pilot_handoff_publishes_linked_case_photo_without_eager_download(db,monkeypatch):

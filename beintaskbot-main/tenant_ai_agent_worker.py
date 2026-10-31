@@ -1126,13 +1126,25 @@ async def process_connect_one(job, logger):
                 draft=pilot_decision['message']
         if pilot_case_turn:
             from tenant_consultation_group import parse_pilot_turn_decision,record_pilot_followup_action,record_group_turn_action
-            from tenant_connect_images import persist_case_observations
+            from tenant_connect_images import persist_case_observations,validate_cached_case_observations
             pilot_decision=parse_pilot_turn_decision(str(draft),expected_media_ids=case_media_observation_ids)
             persisted_media_ids=[]
+            validated_cached_media_ids=[]
             if pilot_decision:
                 persisted_media_ids=await asyncio.to_thread(persist_case_observations,
                     job,pilot_case_id,case_media_artifacts,pilot_decision.get('media_observations') or [],model)
-            media_evidence_lines=[line for line in lines if line.get('speaker') not in {'UNCLASSIFIED MEDIA NOTE','SYSTEM MEDIA STATUS'}]
+                validated_cached_media_ids=await asyncio.to_thread(validate_cached_case_observations,
+                    job,pilot_case_id,case_media_artifacts)
+            media_evidence_lines=[line for line in lines if line.get('speaker') not in {
+                'UNCLASSIFIED MEDIA NOTE','SYSTEM MEDIA STATUS','CASE IMAGE OBSERVATION'}]
+            for artifact in case_media_artifacts:
+                cached=artifact.get('cached_observation') if isinstance(artifact.get('cached_observation'),dict) else None
+                message_id=str(artifact.get('message_id') or '')
+                if (cached and message_id in validated_cached_media_ids
+                        and cached.get('source')=='case_receipt' and cached.get('relevance')=='relevant'):
+                    media_evidence_lines.append({'speaker':'CASE IMAGE OBSERVATION',
+                      'text':'[Saved untrusted CASE-linked photo observation; source '+message_id+'] '+str(cached.get('text') or ''),
+                      'at':str(artifact.get('happened_at') or '')})
             if pilot_decision:
                 media_evidence_lines.extend(_pilot_case_media_quote_lines(
                     pilot_decision.get('media_observations'),persisted_ids=persisted_media_ids))
