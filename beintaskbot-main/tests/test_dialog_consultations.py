@@ -265,3 +265,42 @@ def test_historical_draft_does_not_hide_unknown_regeneration(ready,monkeypatch):
     item=flow.inbox(PROFILE)['replies'][0]
     assert item['draft_state']=='unknown' and item['historical_draft']=='Historical draft' and item['draft']==''
     with pytest.raises(TenantLinearError):flow.draft(PROFILE,ident,{'request_id':str(uuid.uuid4())})
+
+
+@pytest.mark.parametrize('variant',['channel_case','destination_case','message_case','summary_space'])
+def test_normalized_unknown_send_cannot_be_repeated(ready,variant):
+    db,data,sender=ready;result,_=prepared(ready)
+    changed={**data}
+    if variant=='channel_case':changed['channel_id']=data['channel_id'].upper()
+    elif variant=='destination_case':changed['destination_channel_id']=data['destination_channel_id'].upper()
+    elif variant=='message_case':changed['message_ids']=[value.upper() for value in data['message_ids']]
+    else:changed['summary']='  '+data['summary']+'  '
+    assert flow.prepare(PROFILE,changed,'https://crm.test')['created'] is False
+    sender.side_effect=TimeoutError();flow.dispatch(PROFILE,result['id'],data['request_id'])
+    with pytest.raises(TenantLinearError):flow.prepare(PROFILE,{**changed,'request_id':str(uuid.uuid4())},'https://crm.test')
+    assert sender.call_count==1
+
+
+def test_media_order_and_withheld_flags_do_not_bypass_scope_dedup(ready):
+    db,data,sender=ready
+    first=data['message_ids'][0];second=str(uuid.uuid4())
+    db.execute("UPDATE saas_crm_messages SET message_type='image' WHERE tenant_id=%s::uuid",(A,))
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,message_type,body,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,'second-image','incoming',%s,'image','Second image',now()+interval '1 second')""",(second,A,'connect:'+CA));db.commit()
+    data.update(message_ids=[first,second],media_ids=[first,second])
+    result,_=prepared(ready)
+    assert flow.prepare(PROFILE,{**data,'media_ids':[second,first]},'https://crm.test')['created'] is False
+    sender.side_effect=TimeoutError();flow.dispatch(PROFILE,result['id'],data['request_id'])
+    with pytest.raises(TenantLinearError):flow.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4()),'media_ids':[second,first]},'https://crm.test')
+
+
+def test_text_media_selection_is_rejected(ready):
+    _,data,_=ready
+    with pytest.raises(TenantLinearError):flow.prepare(PROFILE,{**data,'media_ids':data['message_ids']},'https://crm.test')
+
+
+def test_withheld_file_has_same_effective_scope_as_no_file(ready):
+    db,data,sender=ready
+    db.execute("UPDATE saas_crm_messages SET message_type='image',body='password screenshot' WHERE tenant_id=%s::uuid",(A,));db.commit()
+    result,_=prepared(ready);sender.side_effect=TimeoutError();flow.dispatch(PROFILE,result['id'],data['request_id'])
+    with pytest.raises(TenantLinearError):flow.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4()),'media_ids':data['message_ids']},'https://crm.test')
