@@ -523,7 +523,7 @@ def _unread_counts(cur,tenant,telegram_id,rows):
     return sum(counts.values())
 
 
-def listing(profile,search='',channel='',agent='',state='',offset=0):
+def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False):
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
     with _connect() as conn:
@@ -587,10 +587,10 @@ def listing(profile,search='',channel='',agent='',state='',offset=0):
             rows=[r for r in rows if not state or r.get('agent_status')==state]
             agents.sort(key=lambda item:str(item.get('name') or '').casefold())
             total_count=len(rows)
-            rows=rows[offset:offset+51]
-    return {'dialogs':rows[:50],'channels':channels,'agents':agents,
+            if not all_rows:rows=rows[offset:offset+51]
+    return {'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,
             'attention_count':count,'unread_count':unread_total,'total_count':total_count,
-            'next_offset':offset+50 if len(rows)>50 else None}
+            'next_offset':None if all_rows else offset+50 if len(rows)>50 else None}
 
 
 def mark_read(profile,payload):
@@ -634,6 +634,21 @@ def mark_read(profile,payload):
                         (saas_operator_dialog_reads.last_read_at,COALESCE(saas_operator_dialog_reads.last_read_message_id,'00000000-0000-0000-0000-000000000000'::uuid))""",
                   (tenant,int(profile['telegram_id']),provider,channel,identity,lead,last['at'],str(last['id'])))
     return {'read_through_message_id':str(message_id),'updated':True}
+
+
+def mark_all_read(profile):
+    """Mark each currently accessible unread dialog through its captured latest message."""
+    snapshot=listing(profile,all_rows=True)
+    targets=[row for row in snapshot.get('dialogs',[])
+             if int(row.get('unread_count') or 0)>0 and row.get('last_message_id')]
+    updated=0
+    for row in targets:
+        mark_read(profile,{'provider':row.get('provider'),'lead_id':row.get('lead_id'),
+                           'channel_id':row.get('channel_id'),'conversation_id':row.get('conversation_id'),
+                           'message_id':row.get('last_message_id')})
+        updated+=1
+    return {'updated_dialogs':updated,'captured_dialogs':len(snapshot.get('dialogs',[])),
+            'unread_before':int(snapshot.get('unread_count') or 0)}
 
 
 def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None):

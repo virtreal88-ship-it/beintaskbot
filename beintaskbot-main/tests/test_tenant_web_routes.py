@@ -30,6 +30,7 @@ EXPECTED_ASSETS += ['/assets/tenant-ai-administrator-approvals.js','/assets/tena
 
 AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialogs/read', ('POST',)),
+    ('dialogs/read-all', ('POST',)),
     ('testing/sessions', ('GET','POST')),
     ('testing/historical-replay', ('GET','POST')),
     ('testing/sessions/{session_id}', ('GET',)), ('testing/sessions/{session_id}/turn', ('POST',)),

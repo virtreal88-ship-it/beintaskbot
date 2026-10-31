@@ -2,6 +2,9 @@
 (()=>{
   const copy={
     receivedVia:['Получено','Qəbul edilib','Received'],
+    markAllRead:['Отметить все диалоги прочитанными','Bütün dialoqları oxunmuş kimi işarələ','Mark all dialogues as read'],
+    markAllReadConfirm:['Отметить прочитанными все непрочитанные диалоги в доступном вам списке? Новые сообщения после снимка операции останутся непрочитанными.','Əlçatan siyahıdakı bütün oxunmamış dialoqlar oxunmuş kimi işarələnsin? Əməliyyatın başlanğıcındakı vəziyyətdən sonra gələn mesajlar oxunmamış qalacaq.','Mark all unread dialogues in your accessible inbox as read? Messages arriving after the operation snapshot will remain unread.'],
+    markAllReadDone:['Отмечено диалогов: {count}.','Oxunmuş kimi işarələnən dialoqlar: {count}.','Dialogues marked read: {count}.'],
     sentVia:['Отправлено','Göndərilib','Sent'],
     groupChannelResume:['Выбранный канал ранее остановлен. Требуется явное включение AI.','Seçilmiş kanal əvvəl dayandırılıb. AI-ni ayrıca aktivləşdirin.','The selected channel was previously stopped. Enable AI explicitly.'],
     groupMissing:['Назначение отсутствует или неоднозначно','Təyinat yoxdur və ya qeyri-müəyyəndir','Assignment missing or ambiguous'],
