@@ -470,3 +470,66 @@ def test_real_http_ui_preview_destinations_and_pending_reply_inbox(ready):
             assert sender.call_count==1
             assert db.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
     asyncio.run(scenario())
+
+
+def test_actual_browser_ui_real_http_services_isolated_db(ready,monkeypatch):
+    import asyncio
+    import logging
+    import os
+    import socket
+    from pathlib import Path
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    from tenant_dialog_consultations_api import handler
+    db,data,sender=ready
+    import hashlib,hmac
+    from types import SimpleNamespace
+    monkeypatch.setattr(transport,'send_consultation_with_receipt',REAL_QUEUE_SEND)
+    sender=Mock(return_value=SimpleNamespace(status_code=202,json=lambda:{'id':'browser-queue','status':'pending'}))
+    monkeypatch.setattr(transport.requests,'request',sender)
+    monkeypatch.setattr(transport,'_connect',lambda:db)
+    monkeypatch.setattr(transport,'_fernet',lambda:SimpleNamespace(decrypt=lambda _:b'{"webhook_secret":"synthetic-secret"}'))
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets,metadata) VALUES(%s::uuid,'connect','connected',%s,'{}'::jsonb)",(A,b'synthetic-cipher'));db.commit()
+    def signed(event):
+        raw=json.dumps(event).encode()
+        signature='sha256='+hmac.new(b'synthetic-secret',raw,hashlib.sha256).hexdigest()
+        assert transport.ingest(raw,signature,event)
+
+    async def scenario():
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+        origin=f'http://127.0.0.1:{port}'
+        app=web.Application()
+        prefix='/api/platform/ai/dialog-consultations'
+        for method,path,resource in [('POST','/preview','preview'),('GET','/destinations','destinations'),
+            ('POST','','prepare'),('POST','/{id}/dispatch','dispatch'),('GET','/replies','replies')]:
+            app.router.add_route(method,prefix+path,handler(lambda _:PROFILE,origin,logging.getLogger(__name__),resource))
+        async def index(_):
+            return web.Response(content_type='text/html',text='''<!doctype html><meta charset="utf-8">
+              <style>@media(max-width:900px){.app-topbar{display:none}}</style>
+              <div class="app-topbar"><select data-app-language></select></div>
+              <details id="operatorMoreActions"><summary>⋯</summary><div id="operatorMenuExtra"></div></details>
+              <aside id="operatorCopilot"></aside><script>
+              window.tenantI18n={language:'ru'};window.tenantOperator={member:MEMBER,hasRight:()=>true,
+              currentDialog:{provider:'connect',channel_id:'CHANNEL',conversation_id:'client',customer_name:'Customer'}};
+              </script><script src="/ui.js"></script>'''.replace('MEMBER',json.dumps(PROFILE)).replace('CHANNEL',CA))
+        async def js(_):return web.Response(content_type='application/javascript',text=Path('docs/tenant-dialog-consultations.js').read_text())
+        async def stats(_):
+            return web.json_response({'created':db.execute('SELECT count(*) AS n FROM saas_internal_consultations')[0]['n'],
+              'sends':sender.call_count,'tickets':db.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']})
+        async def receipt(_):
+            request=db.execute('SELECT request_id::text FROM saas_consultation_group_deliveries')[0]['request_id']
+            signed({'id':'browser-outbound','type':'message.outbound.observed','data':{
+              'id':'browser-queue','channelId':CA,'conversationId':TARGET,'fromMe':True,'type':'text',
+              'externalMessageId':'BROWSER_PROVIDER','originClientMessageId':request,'text':'Delivered consultation'}})
+            signed({'id':'browser-inbound','type':'message.inbound.received','data':{
+              'id':'browser-developer','channelId':CA,'conversationId':TARGET,'fromMe':False,'type':'text',
+              'quotedExternalMessageId':'BROWSER_PROVIDER','participantName':'Developer','text':'Synthetic developer reply'}})
+            return web.json_response({'success':True})
+        app.router.add_get('/',index);app.router.add_get('/ui.js',js);app.router.add_get('/stats',stats);app.router.add_post('/receipt',receipt)
+        async with TestServer(app,port=port) as server:
+            process=await asyncio.create_subprocess_exec('node','tests/test_dialog_consultations_browser.cjs',str(server.make_url('/')),
+              stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT,env=os.environ.copy())
+            output,_=await asyncio.wait_for(process.communicate(),60)
+            assert process.returncode==0,output.decode()
+    asyncio.run(scenario())

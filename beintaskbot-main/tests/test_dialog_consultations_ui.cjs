@@ -18,7 +18,7 @@ const settle=async()=>{for(let i=0;i<15;i++)await new Promise(resolve=>setImmedi
  assert.equal(read,true);assert.match(d.querySelector('#dialogConsultationBell').getAttribute('aria-label'),/Не обработано 1, Не прочитано 0/);
  const draftButton=[...d.querySelectorAll('#dialogConsultationReplies button')].find(b=>b.textContent.includes('AI-черновик'));draftButton.click();await settle();
  assert.match(d.querySelector('#dialogConsultationReplies').textContent,/AZ customer draft/);assert.equal(d.querySelector('#chatText').value,'');assert.equal(handled,false);
- inboxFail=true;d.dispatchEvent(new w.CustomEvent('tenant-chat-attachments-ready'));await settle();
+ inboxFail=true;d.querySelector('#dialogConsultationBell').click();await settle();d.dispatchEvent(new w.CustomEvent('tenant-chat-attachments-ready'));await settle();
  assert.match(d.querySelector('#dialogConsultationBell').textContent,/!/);assert.match(d.querySelector('#dialogConsultationMenu [role=alert]').textContent,/Synthetic failure/);
  inboxFail=false;[...d.querySelectorAll('#dialogConsultationMenu button')].find(b=>b.textContent==='Повторить').click();await settle();assert.doesNotMatch(d.querySelector('#dialogConsultationBell').textContent,/!/);
  assert.ok(d.querySelector('#dialogConsultationMobileBell'));d.querySelector('#dialogConsultationMobileBell').click();assert.equal(d.querySelector('#dialogConsultationMenu').hidden,false);
