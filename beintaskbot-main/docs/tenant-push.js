@@ -2,6 +2,7 @@
 (() => {
   let profile, generation=0, readVersion=0, busy=false;
   window.tenantPushConnected=false;
+  window.tenantPushConnectionState='loading';
   const words={
     title:['Push-уведомления','Push bildirişləri','Push notifications'],help:['Подключите устройство для уведомлений этой компании. Типы событий выбираются в настройках сотрудников.','Bu şirkət üçün cihazı qoşun. Hansı hadisələrin gələcəyini şirkət sahibi seçir.','Connect this device for company notifications. Event categories are set in employee settings.'],
     connect:['Включить уведомления','Bu cihazı qoş','Enable notifications'],connecting:['Подключаем…','Qoşulur…','Connecting…'],device:['Устройство','Cihaz','Device'],disconnect:['Отключить','Ayır','Disconnect'],
@@ -11,7 +12,7 @@
     startFailed:['Служба уведомлений не запустилась. Повторите попытку.','Push xidməti başlamadı. Yenidən yoxlayın.','Notification service did not start. Try again.'],
     denied:['Уведомления запрещены. Откройте настройки сайта рядом с адресом Chrome и разрешите уведомления.','Brauzerdə bildiriş icazəsi verilməyib. Chrome ünvanının yanındakı sayt ayarlarında bildirişlərə icazə verin.','Notifications are blocked. Open site settings next to the Chrome address and allow notifications.'],
     connected:['Устройство подключено. Типы уведомлений выбираются в настройках сотрудников.','Cihaz qoşuldu. Bildiriş növləri əməkdaş ayarlarından seçilir.','Device connected. Select event categories in employee settings.'],
-    wait:['Дождитесь завершения настройки уведомлений.','Push əməliyyatı bitsin, sonra çıxış edin.','Wait for notification setup to finish.']
+    wait:['Дождитесь завершения настройки уведомлений.','Push əməliyyatı bitsin, sonra çıxış edin.','Wait for notification setup to finish.'],checking:['Проверяем подключение…','Qoşulma yoxlanılır…','Checking connection…']
   };
   const text=key=>words[key][({ru:0,az:1,en:2})[window.tenantI18n?.language||document.documentElement?.lang]??1];
   const panel=document.createElement('article');panel.className='panel';
@@ -46,7 +47,7 @@
     try {
       const result=await api();if(!current(person,version)||read!==readVersion)return;
       const connected=await browserDeviceIsConnected(result.devices);if(!current(person,version)||read!==readVersion)return;
-      window.tenantPushConnected=connected;window.tenantOperatorUpdateBrowserNotice?.();
+      window.tenantPushConnected=connected;window.tenantPushConnectionState=connected?'connected':'disconnected';window.tenantOperatorUpdateBrowserNotice?.();
       list.replaceChildren();
       for(const device of result.devices||[]) {
         const row=document.createElement('div');row.className='member';
@@ -57,7 +58,7 @@
       }
       if(!result.delivery_enabled)status.textContent=text('server');
       else if(!supported())status.textContent=text('unsupported');
-    }catch(error){if(current(person,version)&&read===readVersion)status.textContent=error.message;}
+    }catch(error){if(current(person,version)&&read===readVersion){window.tenantPushConnectionState='error';window.tenantOperatorUpdateBrowserNotice?.();status.textContent=error.message;}}
   }
   async function activeRegistration() {
     const reg=await navigator.serviceWorker.register('/app/push-sw.js',{scope:'/app/'});
@@ -97,7 +98,7 @@
     if(!reg||new URL(reg.scope).pathname!=='/app/')return;
     const sub=await reg.pushManager.getSubscription();if(sub)await sub.unsubscribe();
   };
-  function apply(data){profile=data.member;generation++;window.tenantPushConnected=false;window.tenantOperatorUpdateBrowserNotice?.();list.replaceChildren();status.textContent='';button.disabled=busy||!supported();refresh();}
+  function apply(data){profile=data.member;generation++;window.tenantPushConnected=false;window.tenantPushConnectionState='loading';window.tenantOperatorUpdateBrowserNotice?.();list.replaceChildren();status.textContent='';button.disabled=busy||!supported();refresh();}
   let received=false;
   document.addEventListener('tenant-profile',event=>{received=true;apply(event.detail);});
   fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(response=>response.json()).then(data=>{if(data.success&&!received)apply(data);}).catch(()=>{});
