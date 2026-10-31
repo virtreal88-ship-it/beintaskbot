@@ -143,6 +143,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('support-tickets/{ticket_id}', support_handler(member, origin, logger, 'ticket'), ('GET', 'PATCH')),
         ('support-tickets/{ticket_id}/attachments', support_handler(member, origin, logger, 'ticket_attachments'), ('GET', 'POST')),
         ('support-tickets/{ticket_id}/summary', support_handler(member, origin, logger, 'summary'), ('POST',)),
+        ('dialog-consultations/developer-marker', dialog_consultations_handler(member, origin, logger, 'developer_marker'), ('POST',)),
         ('dialog-consultations/destinations', dialog_consultations_handler(member, origin, logger, 'destinations'), ('GET',)),
         ('dialog-consultations/preview', dialog_consultations_handler(member, origin, logger, 'preview'), ('POST',)),
         ('dialog-consultations', dialog_consultations_handler(member, origin, logger, 'prepare'), ('POST',)),

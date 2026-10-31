@@ -29,7 +29,8 @@ def handler(member,origin,logger,resource):
                 _expected(data,profile)
                 payload={k:v for k,v in data.items() if k not in {'expected_tenant_id','expected_user_id'}}
                 key=request.match_info.get('id')
-                if resource=='prepare':result=await asyncio.to_thread(flow.prepare,profile,payload,origin)
+                if resource=='developer_marker':result=await asyncio.to_thread(flow.developer_marker,profile,payload)
+                elif resource=='prepare':result=await asyncio.to_thread(flow.prepare,profile,payload,origin)
                 elif resource=='preview':result=await asyncio.to_thread(flow.preview,profile,payload)
                 elif resource=='dispatch':
                     if set(payload)!={'request_id'}:raise TenantLinearError('Некорректный запрос.',400)
