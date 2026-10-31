@@ -102,8 +102,10 @@ def _flight(authority, ref):
                   tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s AND source_hash=%s''',key)
                 prior=cur.fetchone() or {}
         if prior.get('state')=='completed':return key,None,prior['result']
+        if not prior:
+            return key,None,{'status':'unavailable','code':'pre_dispatch_retryable'}
         if prior.get('state')!='running':
-            return key,None,{'status':'unknown','code':'media_result_unknown'}
+            return key,None,prior.get('result') or {'status':'unknown','code':'media_result_unknown'}
         if time.monotonic()>=deadline:
             error=TenantLinearError('Attachment analysis is still running; no second analysis was started.',409)
             error.keep_request=True
@@ -111,21 +113,31 @@ def _flight(authority, ref):
         time.sleep(.25)
 
 
-def _finish(authority, ref, key, token, receipt):
-    authority.check()
+def _finish(authority, ref, key, token, receipt, *, retryable=False):
+    # Complete the already-admitted claim even when its reply has been
+    # superseded. This grants no new dispatch/read/publication authority.
     with _connect() as conn:
         with conn.cursor() as cur:
-            cur.execute('''SELECT external_id,body,message_type,raw FROM saas_crm_messages
-              WHERE tenant_id=%s::uuid AND channel=%s AND kommo_lead_id=%s AND external_id=%s FOR SHARE''',
-              (authority.tenant,'connect:'+authority.channel,authority.lead,ref['external_id']))
-            current=cur.fetchone()
-            if not current or source_hash(reference(current,authority.channel,authority.lead))!=source_hash(ref):
-                raise TenantLinearError('Attachment changed before evidence was saved.',409)
-            persist(cur,authority.tenant,[ref],[receipt],processor='conversation_episode')
-            cur.execute('''UPDATE saas_episode_media_flights SET state=%s,result=%s::jsonb
-              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s
-              AND source_hash=%s AND token=%s::uuid AND state='running' ''',
-              ('unknown' if receipt.get('status')=='unknown' else 'completed',_json(receipt),*key,token))
+            cur.execute('''SELECT token FROM saas_episode_media_flights WHERE
+              tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s
+              AND source_hash=%s AND token=%s::uuid AND state='running' FOR UPDATE''',(*key,token))
+            if not cur.fetchone():return
+            if retryable:
+                cur.execute('''DELETE FROM saas_episode_media_flights WHERE tenant_id=%s::uuid
+                  AND channel_id=%s::uuid AND external_id=%s AND source_hash=%s AND token=%s::uuid''',(*key,token))
+            else:
+                # The frozen ref is the version validated before dispatch,
+                # not a reconstruction from a possibly replaced attachment.
+                saved=receipt
+                if receipt.get('status') in {'unknown','error'} and any(receipt.get(k) for k in ('transcript','observation','observations')):
+                    # Preserve known successful components even if a later
+                    # component was interrupted or has an unknown paid result.
+                    saved={**receipt,'status':'partial'}
+                persist(cur,authority.tenant,[ref],[saved],processor='conversation_episode')
+                cur.execute('''UPDATE saas_episode_media_flights SET state=%s,result=%s::jsonb
+                  WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s
+                  AND source_hash=%s AND token=%s::uuid AND state='running' ''',
+                  ('unknown' if receipt.get('status')=='unknown' else 'completed',_json(receipt),*key,token))
         conn.commit()
 
 
@@ -155,16 +167,21 @@ def prepare(authority, rows):
             key,token,receipt=_flight(authority,ref)
             if token:
                 item=authority.item(ref,message)
+                authority.media_attempts=0
                 try:
                     _,receipts=collect(profile,item,execution=authority)
                     receipt=receipts[0]
                     receipt['coverage']={'kind':ref['media_kind'],'complete':receipt.get('status')=='processed' and ref['media_kind']!='video'}
                     if ref['media_kind']=='video':receipt['coverage'].update(audio=receipt.get('audio_status','not_requested'),sampled_frames=receipt.get('visuals',[]))
-                    # Do not publish under an old metadata identity after a fetch.
-                    authority.validate(ref)
-                    _finish(authority,ref,key,token,receipt)
+                    retryable=(not authority.media_attempts and receipt.get('status') not in {'processed','partial'})
+                    _finish(authority,ref,key,token,receipt,retryable=retryable)
                 except Exception:
-                    # Leave the committed flight held on authority loss/unknown.
+                    # Known pre-dispatch stops release the claim. Any paid
+                    # ambiguity stays terminal unknown and is never reclaimed.
+                    _finish(authority,ref,key,token,{'id':ref['id'],
+                        'status':'unknown' if authority.media_attempts else 'unavailable',
+                        'code':'media_result_unknown' if authority.media_attempts else 'pre_dispatch_retryable'},
+                        retryable=not authority.media_attempts)
                     raise
             elif receipt:
                 saved={'status':receipt.get('status'),'code':receipt.get('code'),
@@ -221,6 +238,7 @@ class Execution:
         try:
             self.validate(self.current_ref)
             attempted=True
+            self.media_attempts=getattr(self,'media_attempts',0)+1
             result=invoke()
             self.record_usage(result[1] if isinstance(result,tuple) and len(result)>1 else {})
             settle_media(self.tenant,call_key,operation=operation,attempted_units=1,reserved_units=1)
@@ -398,7 +416,12 @@ def extend_episode(cur,tenant,leads,channel,rows,history_limit):
     dialogs or media before the last employee reply/ten-minute episode fence.
     """
     if len(rows)<history_limit:return rows
-    cur.execute('''SELECT external_id,direction,body,message_type,happened_at,created_at,channel,raw
+    cur.execute('''SELECT external_id,direction,body,message_type,happened_at,created_at,channel,raw,
+        NOT EXISTS(SELECT 1 FROM saas_connect_conversations c JOIN saas_ai_conversation_state cs
+          ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id
+            AND cs.channel_id=c.connect_channel_id::text
+          WHERE c.tenant_id=m.tenant_id AND 'connect:'||c.connect_channel_id::text=m.channel
+            AND c.lead_id=m.kommo_lead_id AND m.created_at<=cs.resumed_at) AS voice_eligible
       FROM saas_crm_messages m WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[])
         AND channel=%s AND direction='incoming'
         AND COALESCE(happened_at,created_at)>=(SELECT max(COALESCE(happened_at,created_at))-interval '10 minutes'

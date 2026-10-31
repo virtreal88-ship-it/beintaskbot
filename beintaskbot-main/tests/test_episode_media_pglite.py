@@ -10,7 +10,8 @@ from tenant_linear_policy import TenantLinearError
 @pytest.fixture
 def flights(db,monkeypatch):
     runtime._schema(db)
-    db.execute('DELETE FROM saas_episode_media_flights');db.commit()
+    db.execute('DELETE FROM saas_episode_media_flights')
+    db.execute('DELETE FROM saas_media_evidence_receipts');db.commit()
     monkeypatch.setattr(runtime,'_connect',lambda:db)
     return db
 
@@ -54,7 +55,7 @@ def test_same_attachment_in_other_tenant_or_channel_is_not_reused(flights):
     assert different_channel[1] and different_tenant[1]
 
 
-def test_receipt_publication_revalidates_source_and_is_reusable(flights):
+def test_paid_receipt_finishes_for_frozen_version_even_if_current_source_changes(flights):
     import uuid
     import tenant_media_evidence as evidence
     row={'external_id':'connect:unit','body':'caption','message_type':'image','raw':{'mediaId':'media1'}}
@@ -70,10 +71,16 @@ def test_receipt_publication_revalidates_source_and_is_reusable(flights):
     saved=flights.execute('SELECT status,result FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid',(A,))[0]
     assert saved['status']=='processed' and saved['result']['observation']=='Visible E17'
     flights.commit()
-    # A later changed source cannot be published under the original metadata key.
     changed=runtime.reference({**row,'raw':{'mediaId':'media2'}},CA,41)
     key,token,_=runtime._flight(auth,changed)
-    with pytest.raises(TenantLinearError):runtime._finish(auth,changed,key,token,{**result,'id':changed['id']})
+    flights.execute("UPDATE saas_crm_messages SET raw='{\"mediaId\":\"media3\"}' WHERE tenant_id=%s::uuid AND external_id='connect:unit'",(A,));flights.commit()
+    auth.check.side_effect=TenantLinearError('superseded',409)
+    runtime._finish(auth,changed,key,token,{**result,'id':changed['id']})
+    terminal=flights.execute('SELECT state FROM saas_episode_media_flights WHERE tenant_id=%s::uuid AND source_hash=%s',(A,key[3]))[0]
+    assert terminal['state']=='completed'
+    saved=flights.execute('SELECT source_hash FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid',(A,))
+    assert {r['source_hash'] for r in saved}=={runtime.source_hash(selected),runtime.source_hash(changed)}
+    flights.commit()
 
 
 def test_manual_media_budget_denied_rolls_back_extra_call_and_never_invokes(flights,monkeypatch):
@@ -137,3 +144,53 @@ def test_media_tokens_are_summed_once_with_generation_without_repricing_media_as
     result=flights.execute('SELECT input_tokens,output_tokens,total_tokens FROM saas_ai_agent_token_usage WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(A,run_id))[0]
     assert result=={'input_tokens':35,'output_tokens':7,'total_tokens':42}
     flights.commit()
+
+
+def test_known_pre_dispatch_stop_releases_claim_but_unknown_paid_result_never_does(flights):
+    auth=authority();selected=ref()
+    key,token,_=runtime._flight(auth,selected)
+    runtime._finish(auth,selected,key,token,{'status':'unavailable','code':'asr_authorization_required'},retryable=True)
+    assert flights.execute('SELECT count(*) AS n FROM saas_episode_media_flights')[0]['n']==0
+    assert flights.execute('SELECT count(*) AS n FROM saas_media_evidence_receipts')[0]['n']==0
+    flights.commit()
+    key,token,_=runtime._flight(auth,selected)
+    runtime._finish(auth,selected,key,token,{'status':'unknown','code':'media_result_unknown'})
+    _,again,result=runtime._flight(auth,selected)
+    assert again is None and result['status']=='unknown'
+
+
+def test_overflow_page_preserves_resume_fence(flights,monkeypatch):
+    import uuid,json
+    import tenant_ai_agent_connect as connect
+    from test_tenant_support_inbox import seed_job
+    seed_job(flights)
+    flights.execute("UPDATE saas_ai_conversation_state SET resumed_at=now() WHERE tenant_id=%s::uuid",(A,))
+    # An old attachment is still within the ten-minute window and unanswered.
+    flights.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type,raw,created_at,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,'connect:old-voice',%s,'incoming','','voice','{"mediaId":"old"}',now()-interval '1 second',now()-interval '1 second')''',
+      (str(uuid.uuid4()),A,'connect:'+CA))
+    for number in range(85):
+        flights.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,created_at,happened_at)
+          VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','new',now()+interval '1 second',now()+interval '1 second')''',
+          (str(uuid.uuid4()),A,'connect:new-'+str(number),'connect:'+CA))
+    flights.commit()
+    history=connect.history(A,41,CA)
+    old=next(r for r in history if r['external_id']=='old-voice')
+    assert old['voice_eligible'] is False
+    selected=runtime.episode(history)
+    assert selected and all(r['external_id']!='old-voice' for r in selected)
+
+
+def test_successful_video_component_is_saved_when_later_paid_component_is_unknown(flights):
+    auth=authority();selected={**ref(),'id':'source','media_kind':'video'}
+    key,token,_=runtime._flight(auth,selected)
+    runtime._finish(auth,selected,key,token,{'id':'source','status':'unknown','code':'media_result_unknown',
+        'observations':[{'origin':{'second':0},'text':'Visible E17'}],'visuals':[{'second':0}],
+        'audio_status':'unknown'})
+    saved=flights.execute('SELECT status,result FROM saas_media_evidence_receipts')[0]
+    assert saved['status']=='partial' and saved['result']['observations'][0]['text']=='Visible E17'
+    flight=flights.execute('SELECT state FROM saas_episode_media_flights')[0]
+    assert flight['state']=='unknown'
+    flights.commit()
+    _,token,result=runtime._flight(auth,selected)
+    assert token is None and result['observations'][0]['text']=='Visible E17'

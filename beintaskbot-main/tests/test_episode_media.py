@@ -29,6 +29,7 @@ class Authority(runtime.Execution):
         selected=next(r for r in self.rows if r['external_id']==external)
         return {'provider':'connect','route':{'channel_id':self.channel,'conversation_id':self.conversation},'row':copy.deepcopy(selected)}
     def dispatch(self,model,operation,invoke):
+        self.media_attempts=getattr(self,'media_attempts',0)+1
         self.calls.append((model,operation));return invoke()
 
 
@@ -47,8 +48,13 @@ def sandbox(monkeypatch):
             current=flights[key]
         assert current['done'].wait(3)
         return key,None,current['result']
-    def finish(authority,ref,key,token,result):
+    def finish(authority,ref,key,token,result,*,retryable=False):
         saved={**result}
+        if retryable:
+            current=flights.pop(key)
+            current['result']={'status':'unavailable','code':'pre_dispatch_retryable'}
+            current['done'].set()
+            return
         flights[key]['result']=saved
         receipts[key]={'status':saved['status'],'code':saved['code'],'result':saved,
                        'coverage':{'complete':saved['status']=='processed' and ref['media_kind']!='video'}}
@@ -287,3 +293,39 @@ def test_scanned_pdf_with_only_two_of_three_pages_read_remains_partial(sandbox,m
     assert receipt['document_pages']==3 and receipt['rendered_pages']==2
     again=Authority([row('document')]);runtime.prepare(again,again.rows)
     assert again.rows[0]['_episode_receipt']['status']=='partial' and not again.calls
+
+
+@pytest.mark.parametrize('kind',['voice','video'])
+def test_policy_denial_before_provider_can_be_retried_after_authorized_setting_change(sandbox,kind):
+    rows=[row(kind)];auth=Authority(rows)
+    auth.config={**Authority.config,'audio_enabled':False,'video_enabled':False}
+    core.download_media.return_value=(b'audio','audio/wav') if kind=='voice' else (PNG,'video/mp4')
+    runtime.prepare(auth,rows)
+    assert not auth.calls and rows[0]['_episode_receipt']['status']=='unavailable'
+    assert not sandbox[0] and not sandbox[1]
+    allowed=Authority([row(kind)])
+    runtime.prepare(allowed,allowed.rows)
+    assert allowed.calls
+    assert allowed.rows[0]['_episode_receipt']['status'] in {'processed','partial'}
+
+
+def test_budget_denial_before_provider_releases_flight_without_poisoning_receipt(sandbox):
+    auth=Authority([row('image')])
+    auth.dispatch=Mock(side_effect=TenantLinearError('budget exhausted',429))
+    runtime.prepare(auth,auth.rows)
+    assert not sandbox[0] and not sandbox[1]
+    allowed=Authority([row('image')]);runtime.prepare(allowed,allowed.rows)
+    assert len(allowed.calls)==1
+
+
+def test_successful_evidence_completes_before_reply_authority_is_rechecked(sandbox,monkeypatch):
+    auth=Authority([row('voice')]);core.download_media.return_value=(b'audio','audio/wav')
+    def arrived(*args,**kw):
+        auth.check.side_effect=TenantLinearError('new inbound',409)
+        return 'Səs mənbəyi',{}
+    monkeypatch.setattr('tenant_chat_ai_provider.transcribe',Mock(side_effect=arrived))
+    runtime.prepare(auth,auth.rows)
+    assert sandbox[1][next(iter(sandbox[1]))]['done'].is_set()
+    with pytest.raises(TenantLinearError):auth.check()
+    later=Authority([row('voice')]);runtime.prepare(later,later.rows)
+    assert not later.calls and 'Səs mənbəyi' in later.rows[0]['_copilot_attachment_text']

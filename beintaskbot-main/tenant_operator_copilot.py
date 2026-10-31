@@ -372,13 +372,6 @@ def run(profile, data):
             turns_row = cur.fetchone() or {}
             turns = turns_row.get('turns') if isinstance(turns_row.get('turns'), list) else []
             turns = turns[-10:]
-            from tenant_ai_agent_run_store import knowledge_context
-            # Shared retrieval preserves source publication/provenance guards.
-            latest_customer = next((str(row.get('body') or '') for row in reversed(rows)
-                                    if row.get('direction') == 'incoming'), '')
-            knowledge = knowledge_context(tenant, latest_customer + '\n' + command['prompt'],
-                                          agent_id=command['_agent_id'], limit=4)
-            knowledge = [{**item, 'content': item['content'][:1200]} for item in knowledge]
             # A private thread from an older assignment must never become the
             # new agent's memory. Old rows lack a binding and are excluded.
             turns = [turn for turn in turns if isinstance(turn, dict)
@@ -396,6 +389,12 @@ def run(profile, data):
         media = _prepare_copilot_media(tenant, actor, command, rows, model,
                                        include_media=True,execution=execution) if command['mode'] == 'reply' else {
             'images': [], 'voice_transcriptions': set(), 'documents': set(), 'skipped': []}
+        if any(row.get('_episode_receipt') for row in rows):execution.check()
+        from tenant_ai_agent_run_store import knowledge_context
+        latest_row=next((row for row in reversed(rows) if row.get('direction')=='incoming'),{})
+        latest_customer=str(latest_row.get('_copilot_attachment_text') or latest_row.get('body') or '')
+        knowledge=knowledge_context(tenant,latest_customer+'\n'+command['prompt'],agent_id=command['_agent_id'],limit=4)
+        knowledge=[{**item,'content':item['content'][:1200]} for item in knowledge]
     except Exception as error:
         _finish(tenant,command,actor,None,turns,command['prompt'],'')
         if isinstance(error,TenantLinearError):raise
