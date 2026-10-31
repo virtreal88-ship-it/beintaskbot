@@ -490,6 +490,9 @@ def test_actual_browser_ui_real_http_services_isolated_db(ready,monkeypatch):
     monkeypatch.setattr(transport,'_connect',lambda:db)
     monkeypatch.setattr(transport,'_fernet',lambda:SimpleNamespace(decrypt=lambda _:b'{"webhook_secret":"synthetic-secret"}'))
     db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets,metadata) VALUES(%s::uuid,'connect','connected',%s,'{}'::jsonb)",(A,b'synthetic-cipher'));db.commit()
+    ai=Mock();learning=Mock()
+    monkeypatch.setattr('tenant_ai_agent_connect.enqueue',ai)
+    monkeypatch.setattr('tenant_knowledge_live_queue.enqueue',learning)
     def signed(event):
         raw=json.dumps(event).encode()
         signature='sha256='+hmac.new(b'synthetic-secret',raw,hashlib.sha256).hexdigest()
@@ -532,4 +535,5 @@ def test_actual_browser_ui_real_http_services_isolated_db(ready,monkeypatch):
               stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT,env=os.environ.copy())
             output,_=await asyncio.wait_for(process.communicate(),60)
             assert process.returncode==0,output.decode()
+            assert not ai.called and not learning.called
     asyncio.run(scenario())

@@ -21,6 +21,8 @@ const assert=require('node:assert/strict');
  await page.locator('#dialogConsultationMobileBell').click();
  await page.locator('#dialogConsultationMenu').getByText('Synthetic developer reply',{exact:true}).waitFor();
  assert.equal(await page.locator('.app-topbar').isVisible(),false);
+ await page.locator('#dialogConsultationMenu').getByRole('button',{name:'Закрыть',exact:true}).click();
+ assert.equal(await page.locator('#dialogConsultationMenu').isVisible(),false);
  const stats=await (await page.request.get(process.argv[2]+'stats')).json();assert.deepEqual(stats,{created:1,sends:1,tickets:0});
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
