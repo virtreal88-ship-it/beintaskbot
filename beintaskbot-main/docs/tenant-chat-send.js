@@ -1,7 +1,7 @@
 /* Chat composer outside the page shell; durable UUIDs and stale-view guards. */
 (()=>{
   const copy=(key,fallback)=>window.tenantI18n?.t(key)||fallback;
-  function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo',onAccepted=()=>{}}){
+  function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo',onAccepted=()=>{},getQuote=()=>null}){
     const button=document.getElementById('sendChat'),input=document.getElementById('chatText');
     const key='tenant-chat-send:'+identity+':'+leadId;
     try{if(sessionStorage.getItem(key))button.textContent=copy('checkSend','Vəziyyəti yoxla');}catch(e){button.disabled=true;}
@@ -10,7 +10,9 @@
       let pending;try{pending=JSON.parse(sessionStorage.getItem(key)||'null');}catch(e){alert('Göndərmə yaddaşı oxunmadı.');return;}
       const text=input.value.trim();if(!pending&&!text)return;
       if(pending&&text&&text!==pending.text){alert('Əvvəlki mesajın vəziyyəti yoxlanmalıdır. Yeni mesaj göndərilmədi.');return;}
-      if(!pending){pending={lead_id:leadId,text,request_id:crypto.randomUUID(),expected_tenant_id:me.tenant_id,expected_user_id:me.telegram_id};try{sessionStorage.setItem(key,JSON.stringify(pending));}catch(e){alert('Göndərmə yaddaşı əlçatan deyil.');return;}}
+      const quote=getQuote();
+      if(pending&&JSON.stringify(pending.quote_message_id||null)!==JSON.stringify(quote?.quote_message_id||null)){alert('Əvvəlki mesajın vəziyyəti yoxlanmalıdır.');return;}
+      if(!pending){pending={lead_id:leadId,text,request_id:crypto.randomUUID(),expected_tenant_id:me.tenant_id,expected_user_id:me.telegram_id,...(quote||{})};try{sessionStorage.setItem(key,JSON.stringify(pending));}catch(e){alert('Göndərmə yaddaşı əlçatan deyil.');return;}}
       button.disabled=true;button.classList.add('loading');
       try{
         const sent=await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify(pending)});

@@ -15,7 +15,17 @@ def command(data: dict) -> dict:
     text = data.get('text')
     if not isinstance(text, str) or not text.strip() or len(text.strip()) > 8000 or not 0 < lead_id < 2**63:
         raise TenantLinearError('Sövdələşmə və mesaj mətni tələb olunur (maksimum 8000 simvol).')
-    return {'request_id': request_id, 'lead_id': lead_id, 'text': text.strip()}
+    result={'request_id': request_id, 'lead_id': lead_id, 'text': text.strip()}
+    if data.get('quote_message_id') is not None:
+        try:
+            result['quote_message_id']=str(uuid.UUID(str(data['quote_message_id'])))
+            result['quote_channel_id']=str(uuid.UUID(str(data['quote_channel_id'])))
+        except (ValueError,TypeError,KeyError):raise TenantLinearError('İstinad edilən mesaj düzgün deyil.',400) from None
+        conversation=data.get('quote_conversation_id')
+        if not isinstance(conversation,str) or not conversation or len(conversation)>180:
+            raise TenantLinearError('İstinad edilən dialoq düzgün deyil.',400)
+        result['quote_conversation_id']=conversation
+    return result
 
 
 def fingerprint(value: dict) -> str:

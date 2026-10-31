@@ -1,4 +1,5 @@
 """Read projection over existing conversations, AI state, tickets and cached messages. No new inbox tables."""
+import re
 import uuid
 from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agents_store import _decorate_conversation_state
@@ -146,6 +147,11 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     value['participant_alt'] = participant_alt
     value['source'] = 'connect' if str(value.get('channel') or '').startswith('connect:') else 'kommo'
     if value['source'] == 'connect':
+        # Only validated provider identifiers leave the server; raw webhook data stays private.
+        for key,target in (('externalMessageId','provider_message_id'),('quotedExternalMessageId','quoted_provider_message_id')):
+            identifier_value=raw.get(key) if isinstance(raw,dict) else None
+            if isinstance(identifier_value,str) and re.fullmatch(r'[A-Za-z0-9_-]{5,200}',identifier_value):
+                value[target]=identifier_value
         # No provider URL or raw webhook payload crosses the browser boundary.
         value['media_url'] = ''
         if value.get('message_type') in {'image','audio','voice','video','document'}:

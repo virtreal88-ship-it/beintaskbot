@@ -886,6 +886,15 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 if stored and (stored.get('channel') != 'connect:' + channel_id or
                                stored.get('kommo_lead_id') not in lead_members(cur,tenant,channel_id,lead_id)):
                     raise ConnectWebhookError('message_scope_conflict', 'Connect message scope mismatch.', 409)
+                # A signed provider echo can fill the canonical provider ID for
+                # an earlier locally recorded Connect send. Preserve all local
+                # authorship and delivery metadata; never infer IDs from text.
+                if stored and not message_inserted:
+                    facts={key:data[key] for key in ('externalMessageId','quotedExternalMessageId')
+                           if isinstance(data.get(key),str) and re.fullmatch(r'[A-Za-z0-9_-]{5,200}',data[key])}
+                    if facts:
+                        cur.execute("UPDATE saas_crm_messages SET raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+                                    (_json(facts),tenant,str(stored['id'])))
                 if (stored and not coordinated and _direct_identity(conversation)
                         and data.get('fromMe') is not False and not _outbound_is_ai(data, stored)
                         and data.get('conversationIdentityConflict') is not True):
@@ -1084,8 +1093,9 @@ def connect_route(cur, tenant: str, lead_id: int, *, historical_read: bool = Fal
     return {'provider':'connect','channel_id':str(row['connect_channel_id']),'conversation_id':str(row['conversation_id']),'api_key':str(secret.get('api_key') or '')}
 
 
-def send(route: dict, text: str, client_message_id: str) -> str:
+def send(route: dict, text: str, client_message_id: str, *, quoted_message_id=None) -> str:
     body = {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':client_message_id}
+    if quoted_message_id: body['quotedExternalMessageId']=quoted_message_id
     result = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + '/messages', body)
     return str(result.get('id') or client_message_id)
 
@@ -1306,7 +1316,7 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
     return message_id
 
 
-def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_id: str, author: str = 'Operator', *, actor=None) -> None:
+def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_id: str, author: str = 'Operator', *, actor=None, quoted_message_id=None) -> None:
     with _connect() as conn:
         if author != 'AI Agent':
             from tenant_ai_agents_schema import ensure_schema
@@ -1319,7 +1329,7 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
             lock_dialog(cur, tenant, "connect", route["channel_id"], route["conversation_id"])
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING RETURNING id''',
-                        (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending'})))
+                        (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending',**({'quotedExternalMessageId':quoted_message_id} if quoted_message_id else {})})))
             saved=cur.fetchone()
             if author != 'AI Agent' and saved:
                 from tenant_ai_agent_connect import mark_operator_reply
