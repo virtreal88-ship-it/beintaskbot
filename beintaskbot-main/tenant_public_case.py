@@ -19,8 +19,8 @@ from tenant_ai_agents_schema import ensure_schema
 _RATE = {}
 _RATE_LIMIT = 60
 _RATE_WINDOW = 60
-_SECRET_LINE = re.compile(r"(?i)(anydesk|password|passcode|парол|şifrə|пароль|api[_ -]?key|token\s*[:=])")
 _MEDIA_SECRET_MARKER = re.compile(r"(?i)(password|passcode|парол|şifrə|пароль|api[_ -]?key|token\s*[:=]|secret\s*[:=]|private\s+key|recovery\s+phrase|otp\s*[:=])")
+_SECRET_LINE = _MEDIA_SECRET_MARKER
 _SYNTHETIC_MEDIA = re.compile(r"(?is)\[(?:image supplied for analysis|attachment unavailable|untrusted document|untrusted sampled video|unverified video|audio transcript|audio unavailable|video was not analyzed)[^\]]*\]")
 _MEDIA_TYPES = {'image','video','audio','voice','document'}
 
@@ -105,7 +105,7 @@ def create_for_pilot_handoff(cur, *, tenant_id, ticket_id, group_channel_id,
         COALESCE(m.happened_at,m.created_at) AS happened_at
       FROM saas_support_ticket_messages cm JOIN saas_crm_messages m ON m.id=cm.message_id
       WHERE cm.tenant_id=%s::uuid AND cm.ticket_id=%s::uuid AND m.tenant_id=%s::uuid
-        AND m.kommo_lead_id=%s AND m.channel=%s AND m.direction='incoming'
+        AND m.kommo_lead_id=%s AND m.channel=%s AND m.direction IN ('incoming','outgoing')
         AND m.external_id=ANY(%s::text[])
       ORDER BY COALESCE(m.happened_at,m.created_at),m.id''',
       (tenant_id,ticket_id,tenant_id,int(route['lead_id']),'connect:'+str(source_channel_id),
@@ -113,9 +113,9 @@ def create_for_pilot_handoff(cur, *, tenant_id, ticket_id, group_channel_id,
     messages=cur.fetchall()
     if len(messages)!=len(external_ids):
         raise TenantLinearError('One or more CASE messages are not explicitly linked to this ticket.',409)
-    if not any(m['external_id'] in {'connect:'+source_external_id,source_external_id} for m in messages):
+    if not any(m['external_id'] in {'connect:'+source_external_id,source_external_id} and m['direction']=='incoming' for m in messages):
         raise TenantLinearError('CASE current source is not linked to this ticket.',409)
-    evidence_messages=[m for m in messages if m['message_type']=='text' and quote in str(m.get('body') or '')]
+    evidence_messages=[m for m in messages if m['direction']=='incoming' and m['message_type']=='text' and quote in str(m.get('body') or '')]
     if len(evidence_messages)!=1 or quote not in _public_text(evidence_messages[0].get('body')):
         raise TenantLinearError('CASE statement is not uniquely supported by its linked messages.',409)
     cur.execute('''SELECT 1 FROM saas_connect_conversations c JOIN saas_connect_channels ch
@@ -138,7 +138,7 @@ def create_for_pilot_handoff(cur, *, tenant_id, ticket_id, group_channel_id,
                 selected_media_ids.append(message_id)
         else:
             text=_public_text(message.get('body'))
-        public_messages.append({'id':message_id,'speaker':'Müştəri','text':text,
+        public_messages.append({'id':message_id,'speaker':'Müştəri' if message['direction']=='incoming' else 'BeinSystems','text':text,
           'type':kind if message_id in selected_media_ids else 'text',
           'at':message['happened_at'].isoformat() if message.get('happened_at') else ''})
     cur.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,channel_id,conversation_id,
@@ -174,7 +174,7 @@ def append_pilot_followup(cur, *, tenant_id, ticket_id, consultation_id,
         AND c.conversation_id=t.conversation_id
       WHERE cm.tenant_id=%s::uuid AND cm.ticket_id=%s::uuid AND m.tenant_id=%s::uuid
         AND m.kommo_lead_id=c.lead_id AND m.channel='connect:'||t.channel_id::text
-        AND m.external_id=ANY(%s::text[]) AND m.direction='incoming' LIMIT 1''',
+        AND m.external_id=ANY(%s::text[]) AND m.direction IN ('incoming','outgoing') LIMIT 1''',
       (tenant_id,ticket_id,tenant_id,['connect:'+external_id,external_id]))
     message=cur.fetchone()
     if not message:return False
@@ -188,7 +188,7 @@ def append_pilot_followup(cur, *, tenant_id, ticket_id, consultation_id,
     else:
         text=_public_text(message.get('body'))
     if not text:return False
-    item={'id':str(message['id']),'speaker':'Müştəri','text':text,
+    item={'id':str(message['id']),'speaker':'Müştəri' if message.get('direction')=='incoming' else 'BeinSystems','text':text,
       'type':kind if selected_media else 'text',
       'at':message['happened_at'].isoformat() if message.get('happened_at') else ''}
     cur.execute('''UPDATE saas_public_case_shares SET
@@ -203,6 +203,43 @@ def append_pilot_followup(cur, *, tenant_id, ticket_id, consultation_id,
       RETURNING id''',
       (str(message['id']),json.dumps(selected_media),json.dumps(item),withheld,tenant_id,ticket_id,group_channel_id,
        group_conversation_id,'pilot:'+str(consultation_id),str(message['id'])) )
+    return bool(cur.fetchone())
+
+
+def append_pilot_developer_message(cur, *, tenant_id, ticket_id, consultation_id,
+                                   group_channel_id, group_conversation_id,
+                                   group_message_id):
+    """Append only the signed, case-linked developer message to the share."""
+    cur.execute('''SELECT f.group_reply,f.group_message_id,f.case_id::text AS case_id,
+        f.group_channel_id::text AS group_channel_id,f.group_conversation_id
+      FROM saas_ai_pilot_followups f
+      WHERE f.tenant_id=%s::uuid AND f.case_id=%s::uuid AND f.consultation_id=%s::uuid
+        AND f.group_channel_id=%s::uuid AND f.group_conversation_id=%s
+        AND f.group_message_id=%s AND f.state IN ('queued','linked')
+      ORDER BY f.created_at DESC LIMIT 1''',
+      (tenant_id,ticket_id,consultation_id,group_channel_id,group_conversation_id,str(group_message_id)))
+    row=cur.fetchone()
+    if not row or row['case_id']!=str(ticket_id):return False
+    text=_public_text(row.get('group_reply'))
+    item={'id':'developer:'+str(row['group_message_id']),'speaker':'Texniki komanda',
+      'text':text,'type':'text','at':''}
+    if not text:
+        cur.execute('''UPDATE saas_public_case_shares SET is_partial=TRUE,updated_at=now()
+          WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND group_channel_id=%s::uuid
+            AND group_conversation_id=%s AND revision_key=%s AND token_hash IS NOT NULL
+            AND revoked_at IS NULL AND expires_at>now()''',
+          (tenant_id,ticket_id,group_channel_id,group_conversation_id,'pilot:'+str(consultation_id)))
+        return False
+    cur.execute('''UPDATE saas_public_case_shares SET
+        public_messages=public_messages||jsonb_build_array(%s::jsonb),
+        snapshot_revision=snapshot_revision+1,updated_at=now()
+      WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND group_channel_id=%s::uuid
+        AND group_conversation_id=%s AND revision_key=%s AND token_hash IS NOT NULL
+        AND revoked_at IS NULL AND expires_at>now()
+        AND NOT (public_messages @> %s::jsonb)
+      RETURNING id''',
+      (json.dumps(item),tenant_id,ticket_id,group_channel_id,group_conversation_id,
+       'pilot:'+str(consultation_id),json.dumps([{'id':item['id']}])) )
     return bool(cur.fetchone())
 
 

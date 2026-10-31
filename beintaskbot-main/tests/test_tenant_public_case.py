@@ -109,6 +109,18 @@ def test_secret_marked_media_is_withheld_but_ordinary_media_is_exposed_and_unlin
     with pytest.raises(TenantLinearError):cases.media(token,unrelated)
 
 
+def test_all_known_secret_markers_are_redacted_from_public_text_and_media(db,monkeypatch):
+    ticket=create_case(db,monkeypatch)
+    markers=['secret: opaque-value','private key: opaque-value','recovery phrase: opaque-value','otp: opaque-value']
+    ids=[add_message(db,A,CA,41,value,'text','secret-text-'+str(i)) for i,value in enumerate(markers)]
+    file_id=add_message(db,A,CA,41,'recovery phrase: opaque-value','document','secret-file')
+    result=share(db,monkeypatch,ticket,ids+[file_id],[file_id]);page=cases.read(result['url'].rsplit('/',1)[1])
+    assert page['selected_media_ids']==[]
+    assert page['is_partial'] is True
+    assert all(not any(marker.split(':',1)[0] in item['text'].casefold() for item in page['public_messages']) for marker in markers)
+    assert 'məxfi məlumat işarəsinə görə fayl açılmır' in page['public_messages'][-1]['text'].casefold()
+
+
 def test_case_bound_media_followups_extend_only_the_same_share_revision(db,monkeypatch):
     import tenant_public_case as public_case
     ticket=create_case(db,monkeypatch);consultation=str(uuid.uuid4())

@@ -26,6 +26,8 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db,monkeypatc
         pytest.skip('Install Playwright and Chromium to run browser integration')
     consult,case=setup_case(db,monkeypatch);image=str(uuid.uuid4());image2=str(uuid.uuid4())
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type) VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','image')",(image,A,'connect:'+str(uuid.uuid4()),'connect:'+CA))
+    from tenant_support_inbox_store import record_case_message_membership
+    with db.cursor() as cur:record_case_message_membership(cur,A,case,CA,'client',[db.execute('SELECT external_id FROM saas_crm_messages WHERE id=%s::uuid',(image,))[0]['external_id']],'support-group-e2e-initial-photo')
     db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets) VALUES(%s::uuid,'connect','connected',%s)",(A,b'synthetic'));db.commit()
     monkeypatch.setattr(consultations,'_connect',lambda:db)
     monkeypatch.setattr(transport,'_connect',lambda:db)

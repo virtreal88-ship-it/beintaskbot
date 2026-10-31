@@ -49,6 +49,19 @@ def test_case_group_body_uses_prior_case_text_but_never_synthetic_media_as_obser
     assert 'Photo supplied; content unverified.' in body and 'CASE:case-123' in body
 
 
+def test_worker_case_membership_is_the_quote_anchored_bounded_dialogue_episode():
+    import tenant_ai_agent_worker as worker
+    rows=[
+      {'external_id':'unrelated-earlier','direction':'incoming','message_type':'text','body':'Old receipt dispute.','happened_at':'2026-10-01T00:00:00Z'},
+      {'external_id':'complaint','direction':'incoming','message_type':'text','body':'The app still shows the wrong total.','happened_at':'2026-10-02T00:00:00Z'},
+      {'external_id':'agent-question','direction':'outgoing','message_type':'text','body':'Could you tell me what total appears?','happened_at':'2026-10-03T00:00:00Z'},
+      {'external_id':'client-answer','direction':'incoming','message_type':'text','body':'It says 49.9992 after saving.','happened_at':'2026-10-04T00:00:00Z'},
+    ]
+    assert worker._pilot_case_message_ids(rows,'The app still shows the wrong total.','client-answer')==[
+      'complaint','agent-question','client-answer']
+    assert worker._pilot_case_message_ids(rows,'The app still shows the wrong total.','unrelated-earlier')==[]
+
+
 def test_connect_media_download_uses_scoped_api_and_returns_bytes_without_storage_url(monkeypatch):
     import base64
     class Response:
@@ -89,12 +102,14 @@ def test_actual_pilot_handoff_publishes_linked_case_photo_without_eager_download
     monkeypatch.setattr(transport,'send_group_with_receipt',send)
     job={'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client','agent_id':AGENT,'event_fingerprint':event_fingerprint}
     source_at=db.execute("SELECT COALESCE(happened_at,created_at) AS at FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,))[0]['at']
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'connect:agent-clarification','outgoing',%s,'AI Agent','Could you tell me what total appears?','text',%s::timestamptz-interval '30 seconds')",
+      (str(uuid.uuid4()),A,'connect:'+CA,source_at));db.commit()
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'connect:prior-case-complaint','incoming',%s,'The purchase receipt total should be 50.00.','text',%s::timestamptz-interval '1 minute')",(str(uuid.uuid4()),A,'connect:'+CA,source_at));db.commit()
     from tenant_support_inbox_store import record_case_message_membership
     with db.cursor() as cur:
-      record_case_message_membership(cur,A,_case,CA,'client',['prior-case-complaint','customer-message'],'test-case-membership')
+      record_case_message_membership(cur,A,_case,CA,'client',['prior-case-complaint','agent-clarification','customer-message'],'test-case-membership')
     db.execute("UPDATE saas_internal_consultations SET evidence=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
-      ('{"query":"The purchase receipt total should be 50.00.","case_message_ids":["prior-case-complaint","customer-message"]}',A,consult));db.commit()
+      ('{"query":"The purchase receipt total should be 50.00.","case_message_ids":["prior-case-complaint","agent-clarification","customer-message"]}',A,consult));db.commit()
     unrelated=str(uuid.uuid4())
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'connect:unrelated-photo','incoming',%s,'image',now()-interval '2 seconds')",(unrelated,A,'connect:'+CA));db.commit()
     fetched=[]
@@ -112,6 +127,9 @@ def test_actual_pilot_handoff_publishes_linked_case_photo_without_eager_download
     photo_id=db.execute("SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,))[0]['id']
     assert page['selected_media_ids']==[photo_id]
     assert any(item['id']==photo_id and item['type']=='image' for item in page['public_messages'])
+    assert [item['text'] for item in page['public_messages'] if item['type']=='text']==[
+      'The purchase receipt total should be 50.00.','Could you tell me what total appears?']
+    assert [item['speaker'] for item in page['public_messages'][:2]]==['Müştəri','BeinSystems']
     assert 'unrelated-photo' not in [item['id'] for item in page['public_messages']]
     assert fetched==[], 'media bytes remain click-to-load; link creation does not download them'
     assert db.execute("SELECT state,provider_message_id FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]=={'state':'blocked','provider_message_id':None}
@@ -281,6 +299,64 @@ def test_developer_followup_includes_saved_case_facts_without_resending_the_orig
     assert 'The purchase receipt total does not match.' in sent[0]['body']
     assert 'The specialist asked which total appears on screen.' in sent[0]['body']
     assert 'Image supplied for analysis' not in sent[0]['body'] and 'CASE:'+consult in sent[0]['body']
+
+
+def test_blocked_followup_retry_preserves_existing_public_case_share(db,monkeypatch):
+    import json
+    import tenant_public_case as public_case
+    consult,case=setup_case(db,monkeypatch)
+    setup_real_pilot_gate(db,monkeypatch)
+    public_case._schema(db)
+    original=db.execute("SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))[0]['id']
+    db.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,channel_id,conversation_id,
+      group_channel_id,group_conversation_id,token_hash,selected_message_ids,selected_media_ids,
+      public_messages,created_by,expires_at,revision_key)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s,%s,%s::jsonb,'[]'::jsonb,%s::jsonb,NULL,now()+interval '24 hours',%s)''',
+      (str(uuid.uuid4()),A,case,CA,CA,GROUP,'a'*64,json.dumps([original]),
+       json.dumps([{'id':original,'speaker':'Müştəri','text':'Complaint','type':'text','at':''}]),'pilot:'+consult))
+    turn='followup-retry'
+    request_id=str(uuid.uuid5(uuid.NAMESPACE_URL,'beintaskbot-pilot-turn:'+A+':'+turn))
+    db.execute('''INSERT INTO saas_consultation_group_deliveries(tenant_id,consultation_id,request_id,
+      case_id,channel_id,conversation_id,body,body_hash,state,created_by)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,'120363411822115409@g.us','blocked','hash','blocked',0)''',
+      (A,consult,request_id,case,CA));db.commit()
+    monkeypatch.setattr('tenant_ai_dialog_scope.lock_dialog',lambda *_args:(_ for _ in ()).throw(RuntimeError('synthetic stale fence')))
+    result=flow.deliver_pilot_consultation_to_group(
+      {'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client','agent_id':AGENT},
+      consult,'A scoped developer follow-up','',turn_id=turn)
+    assert result['state']=='blocked'
+    assert db.execute("SELECT count(*) AS n FROM saas_public_case_shares WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND revision_key=%s",(A,case,'pilot:'+consult))[0]['n']==1
+
+
+def test_confirmed_agent_clarification_is_added_once_to_case_dialogue(db,monkeypatch):
+    import hashlib,json
+    import tenant_public_case as public_case
+    consult,case=setup_case(db,monkeypatch)
+    public_case._schema(db)
+    token='synthetic-agent-reply-token-12345678901234567890'
+    db.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,channel_id,conversation_id,
+      group_channel_id,group_conversation_id,token_hash,selected_message_ids,selected_media_ids,
+      public_messages,created_by,expires_at,revision_key)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s,%s,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,NULL,now()+interval '24 hours',%s)''',
+      (str(uuid.uuid4()),A,case,CA,CA,GROUP,hashlib.sha256(token.encode()).hexdigest(),'pilot:'+consult))
+    db.execute('''INSERT INTO saas_ai_pilot_followups(tenant_id,id,consultation_id,case_id,channel_id,
+      conversation_id,group_channel_id,group_conversation_id,group_message_id,group_reply,agent_id,state,
+      event_fingerprint,reply_action)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s,'developer-q',
+        'What amount appears on screen?',%s::uuid,'linked','agent-clarification-fp','customer_question')''',
+      (A,str(uuid.uuid4()),consult,case,CA,CA,GROUP,AGENT))
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,
+      author_name,body,message_type) VALUES(%s::uuid,%s::uuid,41,'connect:customer-clarification-out','outgoing',%s,
+      'AI Agent','Please send a photo of the result.','text')''',(str(uuid.uuid4()),A,'connect:'+CA));db.commit()
+    with db.cursor() as cur:
+      assert flow.record_customer_send_receipt(cur,A,'agent-clarification-fp','customer-clarification-out')
+      assert flow.record_customer_send_receipt(cur,A,'agent-clarification-fp','customer-clarification-out')
+    db.commit()
+    snapshot=db.execute("SELECT selected_message_ids,public_messages FROM saas_public_case_shares WHERE tenant_id=%s::uuid AND revision_key=%s",(A,'pilot:'+consult))[0]
+    assert len(snapshot['selected_message_ids'])==1
+    assert len(snapshot['public_messages'])==1
+    assert snapshot['public_messages'][0]['speaker']=='BeinSystems'
+    assert snapshot['public_messages'][0]['text']=='Please send a photo of the result.'
 
 
 def setup_real_pilot_gate(db,monkeypatch,*,customer_state='human',reason='ai_developer_consultation:missing_knowledge'):
@@ -571,10 +647,31 @@ def test_exact_group_reply_queues_one_budgeted_followup_for_its_case(db,monkeypa
     db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type)
       VALUES(%s::uuid,%s::uuid,41,'connect:customer-issue','incoming',%s,'The app crashes when I upload a photo.','text')""",
       (str(uuid.uuid4()),A,'connect:'+CA))
+    clarification_id=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type)
+      VALUES(%s::uuid,%s::uuid,41,'connect:agent-clarification','outgoing',%s,'AI Agent','Could you send a photo of the result?','text')""",
+      (clarification_id,A,'connect:'+CA))
     db.commit()
     payload=request();flow.prepare(PROFILE,consult,payload)
     monkeypatch.setattr(transport,'send_group_with_receipt',lambda *_:{'message_id':'pilot-group-send','external_message_id':'PILOT_QUOTE_1'})
     assert flow.dispatch(PROFILE,consult,payload['request_id'])['state']=='sent'
+    import tenant_public_case as public_case
+    import hashlib
+    import json
+    public_case._schema(db)
+    share_token='synthetic-dialog-token-12345678901234567890'
+    complaint_id=db.execute("SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='connect:customer-issue'",(A,))[0]['id']
+    from tenant_support_inbox_store import record_case_message_membership
+    with db.cursor() as cur:
+      record_case_message_membership(cur,A,case,CA,'client',['customer-issue','agent-clarification'],'case-sequence-start')
+    db.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,channel_id,conversation_id,
+      group_channel_id,group_conversation_id,token_hash,selected_message_ids,selected_media_ids,
+      public_messages,created_by,expires_at,revision_key)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s,%s,%s::jsonb,'[]'::jsonb,%s::jsonb,NULL,now()+interval '24 hours',%s)''',
+      (str(uuid.uuid4()),A,case,CA,CA,GROUP,hashlib.sha256(share_token.encode()).hexdigest(),
+       json.dumps([complaint_id,clarification_id]),json.dumps([
+         {'id':complaint_id,'speaker':'Müştəri','text':'The app crashes when I upload a photo.','type':'text','at':''},
+         {'id':clarification_id,'speaker':'BeinSystems','text':'Could you send a photo of the result?','type':'text','at':''}]),'pilot:'+consult));db.commit()
     with db.cursor() as cur:
         linked=flow.record_group_reply(cur,A,CA,GROUP,'pilot-group-reply','CASE:'+consult+' The upload issue is fixed in the new build. Please ask the customer to retry.','PILOT_QUOTE_1')
         assert linked==consult
@@ -582,6 +679,25 @@ def test_exact_group_reply_queues_one_budgeted_followup_for_its_case(db,monkeypa
         assert not flow.enqueue_pilot_customer_followup(cur,A,CA,GROUP,'pilot-group-reply')
         assert flow.materialize_pilot_followup(cur)
     db.commit()
+    photo=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type)
+      VALUES(%s::uuid,%s::uuid,41,'connect:customer-photo-after-question','incoming',%s,'Customer supplied another photo.','image')""",
+      (photo,A,'connect:'+CA));db.commit()
+    with db.cursor() as cur:
+      assert db.execute("SELECT t.channel_id::text AS channel_id,t.conversation_id,c.lead_id FROM saas_support_tickets t JOIN saas_connect_conversations c ON c.tenant_id=t.tenant_id AND c.connect_channel_id=t.channel_id AND c.conversation_id=t.conversation_id WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid",(A,case))[0]=={'channel_id':CA,'conversation_id':'client','lead_id':41}
+      assert db.execute("SELECT tenant_id::text,kommo_lead_id,channel,direction,external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='connect:customer-photo-after-question'",(A,))[0]=={'tenant_id':A,'kommo_lead_id':41,'channel':'connect:'+CA,'direction':'incoming','external_id':'connect:customer-photo-after-question'}
+      record_case_message_membership(cur,A,case,CA,'client',['customer-photo-after-question'],'customer-reply-to-developer-question')
+      assert db.execute("SELECT count(*) AS n FROM saas_support_ticket_messages cm JOIN saas_crm_messages m ON m.id=cm.message_id WHERE cm.tenant_id=%s::uuid AND cm.ticket_id=%s::uuid AND m.external_id='connect:customer-photo-after-question'",(A,case))[0]['n']==1
+      assert public_case.append_pilot_followup(cur,tenant_id=A,ticket_id=case,consultation_id=consult,
+        group_channel_id=CA,group_conversation_id=GROUP,message_external_id='customer-photo-after-question')
+    db.commit()
+    monkeypatch.setattr(public_case,'_connect',lambda:db)
+    page=public_case.read(share_token)
+    assert [item['speaker'] for item in page['public_messages']]==['Müştəri','BeinSystems','Texniki komanda','Müştəri']
+    assert page['public_messages'][1]['text']=='Could you send a photo of the result?'
+    assert page['public_messages'][2]['id']=='developer:pilot-group-reply'
+    assert page['public_messages'][3]['id']==photo and page['public_messages'][3]['type']=='image'
+    assert page['selected_media_ids']==[photo]
     followup=db.execute('''SELECT consultation_id::text,case_id::text,source_message_id,agent_id::text,state
       FROM saas_ai_pilot_followups WHERE tenant_id=%s::uuid''',(A,))[0]
     assert followup=={'consultation_id':consult,'case_id':case,'source_message_id':'customer-issue',

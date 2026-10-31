@@ -430,9 +430,22 @@ def record_customer_send_receipt(cur,tenant,event_fingerprint,message_id):
           THEN NULL ELSE customer_reply_message_id END,updated_at=now()
       WHERE tenant_id=%s::uuid AND event_fingerprint=%s AND state='linked'
         AND reply_action IN ('customer_question','customer_update')
-      RETURNING id''',
+      RETURNING id,case_id::text AS case_id,channel_id::text AS channel_id,conversation_id,
+        consultation_id::text AS consultation_id,group_channel_id::text AS group_channel_id,
+        group_conversation_id''',
       (str(message_id)[:200],tenant,str(event_fingerprint or '')))
-    return bool(cur.fetchone())
+    row=cur.fetchone()
+    if not row:return False
+    from tenant_support_inbox_store import record_case_message_membership
+    record_case_message_membership(cur,tenant,row['case_id'],row['channel_id'],row['conversation_id'],
+      ['connect:'+str(message_id)],'pilot-case-agent-reply:'+str(message_id))
+    cur.execute("SELECT to_regclass('saas_public_case_shares') IS NOT NULL AS available")
+    if (cur.fetchone() or {}).get('available'):
+        from tenant_public_case import append_pilot_followup
+        append_pilot_followup(cur,tenant_id=tenant,ticket_id=row['case_id'],
+          consultation_id=row['consultation_id'],group_channel_id=row['group_channel_id'],
+          group_conversation_id=row['group_conversation_id'],message_external_id='connect:'+str(message_id))
+    return True
 
 
 def enqueue_pilot_customer_followup(cur,tenant,group_channel,group_conversation,group_message_id):
@@ -509,7 +522,15 @@ def enqueue_pilot_customer_followup(cur,tenant,group_channel,group_conversation,
       ON CONFLICT DO NOTHING RETURNING id''',(tenant,uuid.uuid4(),row['consultation_id'],row['case_id'],
       row['channel_id'],row['conversation_id'],group_channel,group_conversation,group_message_id,text,
       source_id,state['agent_id']))
-    return bool(cur.fetchone())
+    inserted=cur.fetchone()
+    if not inserted:return False
+    cur.execute("SELECT to_regclass('saas_public_case_shares') IS NOT NULL AS available")
+    if (cur.fetchone() or {}).get('available'):
+        from tenant_public_case import append_pilot_developer_message
+        append_pilot_developer_message(cur,tenant_id=tenant,ticket_id=row['case_id'],
+          consultation_id=row['consultation_id'],group_channel_id=group_channel,
+          group_conversation_id=group_conversation,group_message_id=group_message_id)
+    return True
 
 
 def materialize_pilot_followup(cur):
@@ -822,8 +843,9 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
                 cur.execute('''DELETE FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid
                   AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='blocked' ''',
                   (tenant,consultation_id,request_id))
-                cur.execute("DELETE FROM saas_public_case_shares WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND revision_key=%s",
-                  (tenant,consult['case_id'],'pilot:'+consultation_id))
+                if not turn_id:
+                    cur.execute("DELETE FROM saas_public_case_shares WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND revision_key=%s",
+                      (tenant,consult['case_id'],'pilot:'+consultation_id))
                 if source_external_id:
                     cur.execute("DELETE FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND source_external_id=%s AND channel_id=%s::uuid AND conversation_id=%s AND state='blocked'",
                       (tenant,consultation_id,str(source_external_id),target['channel_id'],target['conversation_id']))
@@ -979,8 +1001,9 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
                 cur.execute("UPDATE saas_consultation_group_media_deliveries SET state='blocked',updated_at=now() WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND state='sending'",
                   (tenant,consultation_id))
                 if not attempted:
-                    cur.execute("DELETE FROM saas_public_case_shares WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND revision_key=%s",
-                      (tenant,consult.get('case_id'),'pilot:'+consultation_id))
+                    if not turn_id:
+                        cur.execute("DELETE FROM saas_public_case_shares WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND revision_key=%s",
+                          (tenant,consult.get('case_id'),'pilot:'+consultation_id))
                     cur.execute("DELETE FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND state='blocked'",
                       (tenant,consultation_id))
                 cur.execute('''UPDATE saas_internal_consultations SET delivery_state=

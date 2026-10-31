@@ -94,7 +94,7 @@ def create_in_transaction(cur, tenant, channel, conversation, reason, event_key,
 
 def record_case_message_membership(cur, tenant, ticket_id, channel_id, conversation_id,
                                   external_message_ids, event_key):
-    """Attach an explicitly bounded set of incoming Connect messages to one ticket."""
+    """Attach an explicitly bounded set of inbound and agent-reply messages to one ticket."""
     if not isinstance(external_message_ids,(list,tuple)) or not external_message_ids:
         return 0
     values=[]
@@ -112,7 +112,7 @@ def record_case_message_membership(cur, tenant, ticket_id, channel_id, conversat
     cur.execute('''INSERT INTO saas_support_ticket_messages(tenant_id,ticket_id,message_id,event_key)
       SELECT %s::uuid,%s::uuid,m.id,%s FROM saas_crm_messages m
       WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s
-        AND m.direction='incoming' AND m.message_type IN ('text','image','video','audio','voice','document')
+        AND m.direction IN ('incoming','outgoing') AND m.message_type IN ('text','image','video','audio','voice','document')
         AND m.external_id=ANY(%s::text[])
       ON CONFLICT(tenant_id,ticket_id,message_id) DO NOTHING RETURNING message_id''',
       (tenant,ticket_id,str(event_key or '')[:500],tenant,int(route['lead_id']),
