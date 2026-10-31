@@ -257,6 +257,59 @@ def test_handoff_creates_one_waiting_ticket_and_event_receipt(db):
     assert store.listing(PROFILE)['tickets']==[]
 
 
+def handoff_claim(db, job, source=None):
+    source=source or str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,
+      channel,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,%s,'incoming',%s,'Issue details','text',now())''',
+      (str(uuid.uuid4()),A,'connect:'+source,'connect:'+CA))
+    db.execute("UPDATE saas_ai_agent_jobs SET state='processing',lease_token=%s,lease_until=now()+interval '3 minutes',revision=1 WHERE tenant_id=%s::uuid AND event_fingerprint='evt'",
+      (job['lease_token'],A))
+    db.commit()
+    return source
+
+
+def test_generated_handoff_rechecks_latest_inbound_under_dialog_lock(db):
+    job=seed_job(db);source=handoff_claim(db,job)
+    job['revision']=1
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,
+      channel,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'connect:source-2','incoming',%s,'Correction','text',now()+interval '1 minute')''',
+      (str(uuid.uuid4()),A,'connect:'+CA));db.commit()
+    assert not actions.handoff(job,'Investigate current issue',source_message_id=source,
+        expected_conversation_revision=1)
+    assert store.listing(PROFILE)['tickets']==[]
+    state=db.execute("SELECT state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    assert state['state']=='active'
+
+
+def test_generated_handoff_does_not_overwrite_takeover_or_expired_conversation_revision(db):
+    job=seed_job(db);source=handoff_claim(db,job);job['revision']=1
+    db.execute("UPDATE saas_ai_conversation_state SET state='human',reason='operator_takeover',revision=revision+1 WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA));db.commit()
+    assert not actions.handoff(job,'Stale generated handoff',source_message_id=source,
+        expected_conversation_revision=1)
+    ticket_rows=store.listing(PROFILE)['tickets']
+    assert len(ticket_rows)==0
+    assert db.execute("SELECT reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]['reason']=='operator_takeover'
+
+
+def test_generated_handoff_current_event_creates_one_case_and_skips_queued_jobs(db):
+    job=seed_job(db);source=handoff_claim(db,job);job['revision']=1
+    claimed=db.execute("SELECT state,lease_token,revision,lease_until>clock_timestamp() AS live FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint='evt'",(A,))[0]
+    state=db.execute("SELECT state,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
+    latest=db.execute("SELECT external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41 AND channel=%s AND direction='incoming' ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 1",(A,'connect:'+CA))[0]
+    assert claimed['state']=='processing' and claimed['lease_token']==job['lease_token'] and claimed['revision']==1 and claimed['live'] is True
+    assert state=={'state':'active','revision':1}
+    assert latest['external_id']=='connect:'+source
+    with patch.object(store,'summarize_created'):
+        assert actions.handoff(job,'Current issue needs investigation',source_message_id=source,
+            expected_conversation_revision=1)
+        assert not actions.handoff(job,'Current issue needs investigation',source_message_id=source,
+            expected_conversation_revision=1)
+    tickets=store.listing(PROFILE)['tickets']
+    assert len(tickets)==1 and tickets[0]['reason']=='Current issue needs investigation'
+    state=db.execute("SELECT state,error_code FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint='evt'",(A,))[0]
+    assert state=={'state':'skipped','error_code':'human_handoff'}
+
+
 def test_reply_then_handoff_creates_ticket(db):
     job=seed_job(db)
     with patch.object(store,'summarize_created'):

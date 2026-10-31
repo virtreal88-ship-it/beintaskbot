@@ -23,10 +23,30 @@ def test_similar_knowledge_issue_cannot_establish_customer_case_cause():
         'Alış 1 qutu 50 AZN'), lines=lines, knowledge=knowledge) is None
 
 
+def test_real_case_quote_does_not_authorize_unrelated_registration_or_diagnosis_claim():
+    lines = [{'speaker': 'CLIENT', 'text': 'Alış 1 qutu 50 AZN'}]
+    false_delivery_claim = 'Müraciət qeydə alındı və proqramçılara göndərildi.'
+    assert parse(decision('reply', false_delivery_claim, 'Alış 1 qutu 50 AZN'),
+        lines=lines, knowledge=[]) is None
+    # Even when the requested evidence excerpt is real, the reply itself must
+    # be grounded, so a separate bug article cannot substantiate this claim.
+    knowledge = [{'source_id': 'known-bug', 'content': 'A rounding issue can display 49.9992.'}]
+    assert parse(decision('reply', 'The shown value proves this rounding bug is the cause.',
+        'A rounding issue can display 49.9992.'), lines=lines, knowledge=knowledge) is None
+
+
 def test_supplied_document_detail_cannot_be_requested_again():
     lines = [{'speaker': 'CLIENT', 'text': 'Alış 1 qutu 50 AZN, qaimədə göstərilib.'}]
     assert parse(decision('clarify', 'Hansı alış sənədidir?', missing_items=['Alış']),
         lines=lines, knowledge=[]) is None
+
+
+@pytest.mark.parametrize('missing', ['sənəd', 'qaimə', 'invoice', 'alış', 'məhsul', 'məbləğ', 'amount'])
+def test_document_product_and_amount_families_are_not_requested_again(missing):
+    lines = [{'speaker': 'CLIENT', 'text': 'Alış 1 qutu 50 AZN, qaimədə göstərilib.'}]
+    result = parse(decision('clarify', 'Could you clarify the missing detail?', missing_items=[missing]),
+        lines=lines, knowledge=[])
+    assert result is None
 
 
 def test_existing_document_details_and_media_are_explicitly_protected_from_repeat_requests():
@@ -57,7 +77,16 @@ def test_initial_clarification_is_structured_and_does_not_require_evidence_claim
 
 def test_existing_media_cannot_be_requested_again():
     assert parse(decision('clarify', 'Please share a screenshot.', request_media=True),
-        lines=[{'speaker': 'CLIENT', 'text': 'See attached.'}], knowledge=[], media_available=True) is None
+        lines=[{'speaker': 'CLIENT', 'text': 'See attached.'}], knowledge=[], media_usable=True,
+        media_present=True) is None
+
+
+def test_unreadable_existing_image_allows_only_targeted_better_media_request():
+    lines=[{'speaker':'CLIENT','text':'See attached.'}]
+    assert parse(decision('clarify','Please share a screenshot.',request_media=True),
+        lines=lines,knowledge=[],media_present=True) is None
+    assert parse(decision('clarify','Please share a clearer screenshot of the amount.',request_media=True),
+        lines=lines,knowledge=[],media_present=True)
 
 
 def test_initial_prompt_forbids_false_registration_and_resolution_claims():

@@ -176,7 +176,9 @@ async def test_manual_developer_consultation_handoffs_then_uses_internal_only_re
     calls=[]
     async def fake_to_thread(fn,*args,**kwargs): return fn(*args,**kwargs)
     monkeypatch.setattr(worker.asyncio,'to_thread',fake_to_thread)
-    monkeypatch.setattr(worker,'handoff',lambda job,reason:calls.append(('handoff',reason)) or True)
+    async def current_handoff(job,reservation,source,reason):
+        calls.append(('handoff',reason));return True
+    monkeypatch.setattr(worker,'_handoff_current_connect',current_handoff)
     monkeypatch.setattr(consultations,'create_from_ai',lambda job,**kwargs:calls.append(('consultation',kwargs)) or {'created':True,'status':'waiting_specialist','customer_message_sent':False})
     class Logger:
         def info(self,*args,**kwargs): pass
@@ -185,4 +187,66 @@ async def test_manual_developer_consultation_handoffs_then_uses_internal_only_re
     assert result['handled'] and result['consultation']['customer_message_sent'] is False
     assert [item[0] for item in calls]==['handoff','consultation']
     assert calls[1][1]['recipient_id']==11 and calls[1][1]['evidence']['source_external_id']=='m1'
+
+
+@pytest.mark.asyncio
+async def test_stale_generated_consultation_never_creates_case_or_group_delivery(monkeypatch):
+    import tenant_ai_agent_worker as worker
+    import tenant_internal_consultations as consultations
+    import tenant_ai_agent_run_store as run_store
+    async def fake_to_thread(fn,*args,**kwargs): return fn(*args,**kwargs)
+    monkeypatch.setattr(worker.asyncio,'to_thread',fake_to_thread)
+    async def stale_handoff(*_a,**_k): return False
+    monkeypatch.setattr(worker,'_handoff_current_connect',stale_handoff)
+    monkeypatch.setattr(run_store,'finish_superseded',lambda *_a,**_k: True)
+    monkeypatch.setattr(consultations,'create_from_ai',lambda *_a,**_k:
+        pytest.fail('Stale generated consultation must not create a case'))
+    class Logger:
+        def info(self,*args,**kwargs): pass
+    job={'tenant_id':'00000000-0000-0000-0000-000000000101','agent_id':'00000000-0000-0000-0000-000000000301',
+        'provider':'connect','channel_id':'00000000-0000-0000-0000-000000000201','conversation_id':'client',
+        'event_fingerprint':'webhook-stale'}
+    result=await worker._apply_no_answer_policy(job,{'run_id':'run','conversation_revision':3},
+        {'enabled':True,'action':'consult_developer','developer_id':11,'fallback_action':'stop',
+         'max_clarifications':1,'stop_reply':''},'unsupported_evidence',{'external_id':'source-1'},
+        'reported issue',[],[],None,None,Logger())
+    assert result=={'handled':True,'stale':True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('group_state,expected_ack',[('sent','sent'),('unknown',None)])
+async def test_initial_consultation_ack_requires_group_receipt(monkeypatch,group_state,expected_ack):
+    import tenant_ai_agent_worker as worker
+    import tenant_internal_consultations as consultations
+    import tenant_ai_pilot as pilot
+    import tenant_consultation_group as group_flow
+    calls=[]
+    async def fake_to_thread(fn,*args,**kwargs): return fn(*args,**kwargs)
+    monkeypatch.setattr(worker.asyncio,'to_thread',fake_to_thread)
+    async def current_handoff(*_args):calls.append('handoff');return True
+    monkeypatch.setattr(worker,'_handoff_current_connect',current_handoff)
+    monkeypatch.setattr(pilot,'manual_live_job',lambda _job:True)
+    monkeypatch.setattr(consultations,'create_from_ai',lambda *_args,**_kwargs:
+        calls.append('case') or {'id':'consultation','status':'waiting_specialist','customer_message_sent':False})
+    monkeypatch.setattr(group_flow,'deliver_pilot_consultation_to_group',lambda *_args,**_kwargs:
+        calls.append('group') or {'state':group_state})
+    monkeypatch.setattr(group_flow,'acknowledge_pilot_consultation_to_customer',lambda *_args,**_kwargs:
+        calls.append('ack') or {'state':'sent'})
+    class Logger:
+        def info(self,*args,**kwargs):pass
+    job={'tenant_id':'00000000-0000-0000-0000-000000000101','agent_id':'00000000-0000-0000-0000-000000000301',
+        'provider':'connect','channel_id':'00000000-0000-0000-0000-000000000201','conversation_id':'client',
+        'event_fingerprint':'webhook-ack'}
+    policy={'enabled':True,'action':'consult_developer','developer_id':11,'fallback_action':'stop',
+        'max_clarifications':1,'stop_reply':''}
+    result=await worker._apply_no_answer_policy(job,{'run_id':'run','conversation_revision':1},policy,
+        'unsupported_evidence',{'external_id':'source-1'},'customer report',[],[],None,None,Logger())
+    receipt=result['consultation']
+    assert receipt['pilot_group_delivery']['state']==group_state
+    assert ('pilot_customer_ack' in receipt)==(expected_ack is not None)
+    if expected_ack:
+        assert receipt['pilot_customer_ack']['state']==expected_ack
+        assert calls==['handoff','case','group','ack']
+    else:
+        assert calls==['handoff','case','group']
 

@@ -7,7 +7,32 @@ INITIAL_ACTIONS = {'clarify', 'consult_developer', 'reply'}
 _UNVERIFIED_ADMISSION = re.compile(
     r'\b(?:our fault|we are at fault|we caused this|our bug|we made this mistake|'
     r'наша вина|мы виноваты|это наша ошибка|bizim səhvimiz|səhv bizdədir|biz günahkarıq)\b', re.I)
+_UNVERIFIED_OPERATION_CLAIM = re.compile(
+    r'(?:\b(?:registered|logged|created|escalated|forwarded|sent to (?:the )?(?:developer|programmer|team)|'
+    r'confirmed bug|root cause|the cause is|we found the cause|fixed|resolved|solved)\b|'
+    r'\b(?:зарегистрирован[аоы]?|передан[аоы]?|отправлен[аоы]?|подтвержд[её]нная ошибка|'
+    r'исправлен[аоы]?|причина в|причину нашли)\b|'
+    r'\b(?:qeyd(?:ə|e) alındı|qeydiyyata alındı|proqramçılara göndərildi|'
+    r'proqramçılara yönləndirildi|təsdiqlənmiş xətadır|səbəb budur|həll olundu)\b)', re.I)
 _MEDIA_REQUEST = re.compile(r'\b(?:photo|image|picture|screenshot|screen shot|video|foto|şəkil|sekil|скриншот|фото|видео)\b', re.I)
+_BETTER_MEDIA_REQUEST = re.compile(r'(?:clearer|clear|readable|legible|closer|closer photo|higher quality|better|new screenshot|new photo|нов(?:ый|ую)|чётче|четче|сфотографируйте ближе|daha aydın|daha yaxın|aydın şəkil|daha keyfiyyətli)', re.I)
+_DETAIL_FAMILIES = (
+    (re.compile(r'\b(?:document|invoice|receipt|purchase|product|order|item|sənəd|sened|qaimə|qayime|alış|alis|məhsul|mehsul|sifariş|sifaris|товар|заказ|документ|чек|покупк)\w*\b', re.I),
+     re.compile(r'\b(?:document|invoice|receipt|purchase|product|order|item|sənəd|sened|qaimə|qayime|alış|alis|məhsul|mehsul|sifariş|sifaris|товар|заказ|документ|чек|покупк)\w*\b', re.I)),
+    (re.compile(r'\b(?:amount|price|cost|total|məbləğ|mebleg|qiymət|qiymet|стоимость|сумм|цен)\w*\b', re.I),
+     re.compile(r'(?:\b\d+(?:[.,]\d+)?\s*(?:azn|₼|manat|usd|eur)\b|\b(?:amount|price|cost|total|məbləğ|mebleg|qiymət|qiymet|стоимость|сумм|цен)\w*\b)', re.I)),
+)
+
+
+def _already_supplied(missing, sources):
+    """Catch semantic repeats (e.g. 'invoice' after the client said 'qaimə')."""
+    normalized = ' '.join(str(missing or '').casefold().split())
+    if any(normalized and normalized in ' '.join(str(source or '').casefold().split()) for source in sources):
+        return True
+    for label_pattern, evidence_pattern in _DETAIL_FAMILIES:
+        if label_pattern.search(normalized) and any(evidence_pattern.search(str(source or '')) for source in sources):
+            return True
+    return False
 
 
 def instructions():
@@ -30,7 +55,7 @@ def instructions():
     )
 
 
-def parse(value, *, lines, knowledge, media_available=False):
+def parse(value, *, lines, knowledge, media_usable=False, media_present=False):
     """Validate a model triage decision and its evidence before routing."""
     try:
         item = json.loads(str(value or ''))
@@ -45,19 +70,20 @@ def parse(value, *, lines, knowledge, media_available=False):
             or type(item.get('request_media')) is not bool):
         return None
     action, quote = item['action'], item['evidence_quote'].strip()
-    if _UNVERIFIED_ADMISSION.search(item['message']):
+    if _UNVERIFIED_ADMISSION.search(item['message']) or _UNVERIFIED_OPERATION_CLAIM.search(item['message']):
         return None
     if action == 'clarify':
         if quote or (not item['missing_items'] and not item['request_media']):
             return None
-        norm = lambda text: ' '.join(str(text or '').casefold().split())
         client_sources = [line.get('text', '') for line in (lines or [])
             if isinstance(line, dict) and line.get('speaker') == 'CLIENT']
-        if any(norm(missing) in norm(source) for missing in item['missing_items'] for source in client_sources):
+        if any(_already_supplied(missing, client_sources) for missing in item['missing_items']):
             return None
-        if item['request_media'] and media_available:
+        if item['request_media'] and media_usable:
             return None
-        if media_available and _MEDIA_REQUEST.search(item['message']):
+        if media_present and item['request_media'] and not _BETTER_MEDIA_REQUEST.search(item['message']):
+            return None
+        if media_usable and _MEDIA_REQUEST.search(item['message']):
             return None
     else:
         if item['missing_items'] or item['request_media']:
@@ -71,6 +97,11 @@ def parse(value, *, lines, knowledge, media_available=False):
         if not any(norm(quote) in norm(source) for source in case_sources + kb_sources):
             return None
         if action == 'consult_developer' and not any(norm(quote) in norm(source) for source in case_sources):
+            return None
+        if action == 'reply' and not any(norm(item['message']) in norm(source)
+                for source in case_sources + kb_sources):
+            # A quote alone does not substantiate an unrelated answer. Initial
+            # factual replies must be directly present in trusted evidence.
             return None
     return {'action': action, 'message': item['message'].strip(), 'evidence_quote': quote,
         'missing_items': item['missing_items'], 'request_media': item['request_media']}

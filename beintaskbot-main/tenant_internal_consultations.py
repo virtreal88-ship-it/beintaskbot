@@ -48,6 +48,18 @@ def _recipient(cur, tenant, recipient):
         raise TenantLinearError('consultation_recipient_forbidden',403)
     return row
 
+
+def recipient_available(tenant_id, recipient_id):
+    """Read-only preflight for the existing named consultation recipient."""
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                _recipient(cur,str(tenant_id),recipient_id)
+            conn.commit()
+        return True
+    except Exception:
+        return False
+
 def create(profile,data):
     if not isinstance(data,dict) or set(data)-{'case_id','reason','evidence','request_key','recipient_id'}: raise TenantLinearError('consultation_request_invalid',400)
     with _connect() as conn:

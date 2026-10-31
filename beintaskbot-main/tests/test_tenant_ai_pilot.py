@@ -142,6 +142,8 @@ def test_preflight_marks_kwid_as_unknown_until_fresh_manual_attestation(monkeypa
     assert result['competing_handler'] == {'state': 'unknown', 'source': 'manual_confirmation_required'}
     assert result['kwid_confirmation']['state'] == 'missing'
     assert result['separate_owner_approval']['state'] == 'missing'
+    assert result['scoped_live']['developer_consultation_recipient']=='unavailable'
+    assert 'developer_consult_recipient_unconfigured_or_unavailable' in result['blockers']
     assert not result['ready'] and 'kwid_confirmation_missing_expired_or_scope_changed' in result['blockers']
     assert all(sql.lstrip().upper().startswith('SELECT') for sql in conn.cur.sql)
 
