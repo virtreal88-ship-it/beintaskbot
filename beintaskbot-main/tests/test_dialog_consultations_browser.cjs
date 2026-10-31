@@ -12,6 +12,7 @@ const assert=require('node:assert/strict');
  await page.getByRole('dialog').getByRole('combobox').first().waitFor();
  assert.doesNotMatch(await page.getByRole('dialog').getByRole('combobox').first().textContent(),/@g\.us/);
  await page.getByRole('dialog').getByRole('textbox').fill('Synthetic browser consultation');
+ await page.getByRole('dialog').getByRole('checkbox',{name:'Получатель и фрагмент проверены',exact:true}).check();
  await page.getByRole('dialog').getByRole('button',{name:/Отправить выбранному/}).click();
  await page.getByRole('dialog').getByText(/Connect принял в очередь/).waitFor();
  await page.getByRole('dialog').getByText('Закрыть',{exact:true}).click();
