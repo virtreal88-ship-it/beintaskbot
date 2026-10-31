@@ -268,3 +268,25 @@ def test_cached_reply_is_hidden_after_new_inbound_without_repeating_model(ready)
       (A,str(uuid.uuid4()),'connect:'+CA));db.commit()
     with pytest.raises(TenantLinearError):copilot.run(PROFILE,data)
     generated.assert_called_once()
+
+
+def test_async_consultation_uses_current_assigned_agent_and_long_original_evidence(ready):
+    import tenant_dialog_consultations as consultations
+    db,other,generated,data=ready
+    consultations.schema(db)
+    consult=str(uuid.uuid4());reply=str(uuid.uuid4())
+    db.execute("UPDATE saas_ai_agents SET language='az' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
+    db.execute("""INSERT INTO saas_internal_consultations(tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,status,created_by)
+      VALUES(%s::uuid,%s::uuid,NULL,%s::uuid,'client','manual-consult','Printer','waiting_specialist',11)""",(A,consult,CA))
+    db.execute("""INSERT INTO saas_dialog_consultation_replies(tenant_id,id,consultation_id,channel_id,conversation_id,message_id,author,body,happened_at)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'developers','quote','Developer',%s,now())""",(A,reply,consult,CA,'Long developer evidence '+('x'*5000)))
+    db.commit()
+    copilot.run(PROFILE,{**data,'mode':'instruction','prompt':'Подготовь ответ клиенту'},consultation_reply_id=reply)
+    context=generated.call_args.kwargs['extra_context']
+    assert context['language_preference']=='az'
+    assert context['assigned_agent_id']==AGENT
+    assert context['assigned_agent_instructions']=='ASSIGNED_AGENT_RULES'
+    assert len(context['untrusted_developer_consultation_evidence']['body'])>5000
+    assert db.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
+    assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
+    with pytest.raises(TenantLinearError):copilot.run(PROFILE,{**data,'request_id':str(uuid.uuid4())},consultation_reply_id=str(uuid.uuid4()))

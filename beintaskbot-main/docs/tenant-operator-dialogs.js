@@ -655,6 +655,6 @@
     history.replaceState({...history.state,operatorCaseHandled:key},'');
     return true;
   }
-  window.tenantOperator={messageMarkup,openDialog,openCaseLink,openLearningReviewLink,openLocationCaseLink,closeDialog,changeState,refresh,hasRight,get member(){return member}};
+  window.tenantOperator={messageMarkup,openDialog,openCaseLink,openLearningReviewLink,openLocationCaseLink,closeDialog,changeState,refresh,hasRight,get member(){return member},get currentDialog(){return currentDialog?{...currentDialog}:null}};
   if(window.tenantProfileSnapshot)profileChanged(window.tenantProfileSnapshot);else fetch(window.TENANT_AI_AGENTS_CONFIG?.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(!member&&data?.member)profileChanged(data);}).catch(()=>{});
 })();

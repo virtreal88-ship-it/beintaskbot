@@ -987,6 +987,20 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     # not create new AI/case work on the canonical route.
                     conn.commit()
                     return accepted
+            if not outbound and message_inserted and not ai_origin and data.get('type')=='text':
+                cur.execute('SAVEPOINT dialog_consultation_reply')
+                try:
+                    from tenant_dialog_consultations import record_reply
+                    record_reply(cur,tenant,channel_id,conversation,str(data.get('id') or event_id),
+                        str(data.get('text') or ''),data.get('quotedExternalMessageId'),
+                        str(metadata.get('participant_name') or _phone_from_jid(metadata.get('participant_jid')) or metadata.get('display_name') or metadata.get('participant_jid') or conversation),
+                        event.get('occurred_at'))
+                    cur.execute('RELEASE SAVEPOINT dialog_consultation_reply')
+                except Exception:
+                    cur.execute('ROLLBACK TO SAVEPOINT dialog_consultation_reply')
+                    cur.execute('RELEASE SAVEPOINT dialog_consultation_reply')
+                    import logging
+                    logging.getLogger(__name__).warning('Dialogue consultation correlation deferred; original evidence preserved')
             if (not outbound and message_inserted and coordinated and not ai_origin and data.get('type')=='text'
                     and ('CASE:' in str(data.get('text') or '').upper() or data.get('quotedExternalMessageId'))):
                 # Optional consultation correlation must never alter the normal
@@ -1150,6 +1164,21 @@ def send_group_with_receipt(route: dict, text: str, request_id: str, *, media: d
     # Without a usable provider receipt the caller must quarantine the outcome.
     if not isinstance(external,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',external):
         raise TenantPlatformError('Connect group provider receipt is unavailable.')
+    return {'message_id':str(result['id']),'external_message_id':external}
+
+
+def send_consultation_with_receipt(route, text, request_id):
+    """Existing Connect delivery semantics, with a usable quote receipt for direct chats too."""
+    from tenant_ai_group_coordination import group_jid
+    if group_jid(route.get('conversation_id')):
+        return send_group_with_receipt(route,text,request_id)
+    key=str(uuid.UUID(str(request_id)))
+    result=_request(route['api_key'],'POST','/v1/channels/'+route['channel_id']+'/messages',
+        {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':key})
+    external=result.get('externalMessageId') if isinstance(result,dict) else None
+    if (not isinstance(result,dict) or not result.get('id') or
+            not isinstance(external,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',external)):
+        raise TenantPlatformError('Connect consultation receipt is unavailable.')
     return {'message_id':str(result['id']),'external_message_id':external}
 
 

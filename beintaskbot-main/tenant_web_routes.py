@@ -31,6 +31,7 @@ from tenant_ai_historical_replay_api import handler as historical_replay_handler
 from tenant_ai_simulation_api import handler as simulation_handler
 from tenant_ai_state_api import handler as ai_state_handler
 from tenant_operator_api import handler as operator_handler
+from tenant_dialog_consultations_api import handler as dialog_consultations_handler
 from tenant_instruction_library_api import handler as instruction_handler
 from tenant_night_report_api import handler as night_report_handler
 from tenant_ai_instructor_api import handler as ai_instructor_handler
@@ -142,6 +143,15 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('support-tickets/{ticket_id}', support_handler(member, origin, logger, 'ticket'), ('GET', 'PATCH')),
         ('support-tickets/{ticket_id}/attachments', support_handler(member, origin, logger, 'ticket_attachments'), ('GET', 'POST')),
         ('support-tickets/{ticket_id}/summary', support_handler(member, origin, logger, 'summary'), ('POST',)),
+        ('dialog-consultations/destinations', dialog_consultations_handler(member, origin, logger, 'destinations'), ('GET',)),
+        ('dialog-consultations/preview', dialog_consultations_handler(member, origin, logger, 'preview'), ('POST',)),
+        ('dialog-consultations', dialog_consultations_handler(member, origin, logger, 'prepare'), ('POST',)),
+        ('dialog-consultations/replies', dialog_consultations_handler(member, origin, logger, 'replies'), ('GET',)),
+        ('dialog-consultations/{id}/dispatch', dialog_consultations_handler(member, origin, logger, 'dispatch'), ('POST',)),
+        ('dialog-consultations/{id}/revoke', dialog_consultations_handler(member, origin, logger, 'revoke'), ('POST',)),
+        ('dialog-consultations/replies/{id}/customer-replies', dialog_consultations_handler(member, origin, logger, 'customer_replies'), ('GET',)),
+        ('dialog-consultations/replies/{id}/action', dialog_consultations_handler(member, origin, logger, 'action'), ('POST',)),
+        ('dialog-consultations/replies/{id}/draft', dialog_consultations_handler(member, origin, logger, 'draft'), ('POST',)),
         ('internal-consultations', support_handler(member, origin, logger, 'consultation'), ('GET','POST')),
         ('internal-consultations/groups', support_handler(member, origin, logger, 'consultation_groups'), ('GET',)),
         ('internal-consultations/{consultation_id}/group', support_handler(member, origin, logger, 'consultation_group'), ('GET','POST')),
