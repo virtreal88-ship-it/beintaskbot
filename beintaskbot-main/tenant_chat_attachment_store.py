@@ -31,7 +31,7 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
             allowed = policy.allows('dialogs') if is_connect else policy.can_access_deal(deal)
             if not allowed:
                 raise TenantLinearError('Bu çat üçün icazəniz yoxdur.', 403)
-            cur.execute('''SELECT id,external_id,channel,direction,media_url,message_type,raw FROM saas_crm_messages
+            cur.execute('''SELECT id,external_id,channel,direction,body,media_url,message_type,raw FROM saas_crm_messages
               WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND external_id=%s''', (tenant, lead, message_id))
             row = cur.fetchone()
             if not row:

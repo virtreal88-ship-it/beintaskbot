@@ -262,7 +262,7 @@ def test_connect_rate_limit_stops_later_attachment_reads(monkeypatch):
     assert [item['reason'] for item in media['skipped']]==['rate_limited','rate_limited']
 
 
-def test_reply_with_voice_photo_and_open_question_passes_confirmed_media_to_one_generation(monkeypatch):
+def test_reply_does_not_reanalyse_historical_voice_photo_after_employee_reply(monkeypatch):
     tenant='aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';actor=22
     channel=str(uuid.uuid4());conversation='group-or-private-conversation'
     command=request(channel_id=channel,conversation_id=conversation,include_media=True)
@@ -295,11 +295,14 @@ def test_reply_with_voice_photo_and_open_question_passes_confirmed_media_to_one_
     generated=Mock(return_value=('Sifarişi indi yoxlayıram və təsdiqlənmiş məlumatı sizə bildirəcəyəm.',{'total_tokens':40}))
     monkeypatch.setattr(copilot,'generate',generated)
     result=copilot.run({'tenant_id':tenant,'telegram_id':actor},command)
-    assert result['context_usage']=={'messages':4,'voice_transcriptions':1,'images':1,'documents':0,'skipped':[]}
+    assert result['context_usage']=={'messages':4,'voice_transcriptions':0,'images':0,'documents':0,'skipped':[]}
     args,kwargs=generated.call_args
-    assert len(kwargs['images'])==1 and kwargs['images'][0]['content']==b'bounded-image'
+    assert kwargs['images']==[]
     assert [line['speaker'] for line in args[3]]==['CLIENT','CLIENT','EMPLOYEE','CLIENT']
-    assert args[3][0]['text'].startswith('Printer label does not print')
+    assert 'Historical attachment' in args[3][0]['text']
+    assert 'Printer label does not print' not in args[3][0]['text']
+    assert args[3][0]['source_id']=='voice-1'
+    assert args[3][0]['media_kind']=='voice'
     assert args[3][-2]['text']=='Yoxlayıb məlumat verəcəyəm.'
     assert args[3][-1]['text']=='Hazırdı?'
     assert args[4].startswith('Prepare a concise reply to the latest unresolved customer question')

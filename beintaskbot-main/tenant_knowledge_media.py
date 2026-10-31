@@ -67,7 +67,14 @@ def cached_transcript(item,ref):
     return row['text'] if row else ''
 
 
-def collect(profile,item,check_before_ai=None):
+def collect(profile,item,check_before_ai=None,*,execution=None):
+    # Runtime callers supply real manual/leased-job authority and dispatch.
+    # Candidate extraction keeps its original authorization and cache path.
+    loader = execution.load if execution else load
+    def check_active(profile, item):
+        if execution: return execution.check()
+        from tenant_knowledge_candidates_service import check_active as candidate_check
+        return candidate_check(profile,item)
     images=[];results=[];seen={};size=0;deadline=time.monotonic()+65
     consent=item['route'].get('allow_external_media') is True
     names=item.get('redaction_names',[])
@@ -106,10 +113,10 @@ def collect(profile,item,check_before_ai=None):
         stage='source_validation'
         try:
             # Re-check employee access to the exact historical source, never current channel substitution.
-            current=load(profile,ref['lead_id'],ref['external_id'])
+            current=loader(profile,ref['lead_id'],ref['external_id'])
             if current.get('provider')!='connect' or current['route']['channel_id']!=ref['channel_id'] or current['route']['conversation_id']!=item['route']['conversation_id']: raise TenantLinearError('scope',403)
             if kind in {'audio','voice'}:
-                text='' if item['route'].get('case_source_sha256') else cached_transcript(item,ref)
+                text='' if execution or item['route'].get('case_source_sha256') else cached_transcript(item,ref)
                 if text:
                     message['text']+='\n[Existing transcript] '+redact(text,names)[:4000]
                     receipt.update(status='processed',code='existing_transcript');continue
@@ -127,18 +134,21 @@ def collect(profile,item,check_before_ai=None):
                 validate_media_size(kind,len(data))
                 if size>MAX_BYTES: receipt.update(status='unavailable',code='byte_budget');continue
                 stage='media_validation'
-                media=validate_audio(data,FORMATS[mime],mime,max_seconds=60)
+                media=validate_audio(data,FORMATS[mime],mime,max_seconds=300 if execution else 60)
                 # Extraction is already durably reserved and is never replayed automatically.
-                if load(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
-                from tenant_knowledge_candidates_service import check_active
+                if loader(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
                 check_active(profile,item)
                 if check_before_ai: check_before_ai()
                 asr_used=True
                 from tenant_knowledge_media_cache import transcribe_once
+                if execution: transcribe_once=execution.transcribe_once
                 text,usage,asr_used=transcribe_once(profile,item,model,media,transcribe,check_before_ai=check_before_ai)
                 item['asr_usage']=usage
-                text=redact(text,names)[:4000]
-                receipt.update(status='processed',code='transcribed',transcript=text,model=model)
+                safe_text=redact(text,names)
+                truncated=len(safe_text)>4000
+                text=safe_text[:4000]
+                receipt.update(status='partial' if truncated else 'processed',
+                    code='transcript_truncated' if truncated else 'transcribed',transcript=text,model=model)
                 message['text']+='\n[Transcript] '+text
                 continue
             if kind=='video' and video_used:
@@ -148,7 +158,7 @@ def collect(profile,item,check_before_ai=None):
                 receipt.update(status='unavailable',code='byte_budget');continue
             stage='media_download'
             data,mime=asyncio.run(asyncio.wait_for(download_media(current,max_bytes=cap),timeout=min(10,max(.1,deadline-time.monotonic()))))
-            if load(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
+            if loader(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
             _check_case_bytes(item,data)
             stage='media_validation'
             validate_media_size(kind,len(data))
@@ -186,6 +196,8 @@ def collect(profile,item,check_before_ai=None):
                     if reader.is_encrypted or len(reader.pages)>100 or any((p.extract_text() or '').strip() for p in reader.pages): raise ValueError('invalid_pdf')
                     if not consent: receipt.update(status='unavailable',code='external_media_permission_required');continue
                     visuals=pdf_pages(data)
+                    receipt['document_pages']=len(reader.pages)
+                    receipt['rendered_pages']=len(visuals)
             elif kind=='video':
                 if not consent: receipt.update(status='unavailable',code='external_media_permission_required');continue
                 from tenant_ai_video_model import require_video_tariff
@@ -200,15 +212,15 @@ def collect(profile,item,check_before_ai=None):
                     try:
                         from tenant_connect_voice import transcription_model
                         from tenant_chat_ai_provider import transcribe_video
-                        from tenant_knowledge_candidates_service import check_active
                         stage='audio_transcription'
                         track=video_audio(data,mime);model=transcription_model(item)
                         if not model: raise LookupError('asr_model_unavailable')
-                        if load(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
+                        if loader(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
                         check_active(profile,item)
                         if check_before_ai: check_before_ai()
                         asr_used=True
                         from tenant_knowledge_media_cache import transcribe_once
+                        if execution: transcribe_once=execution.transcribe_once
                         invoke=lambda key,selected,*args,**kwargs: transcribe_video(
                             key,selected,*args,expected_language=item['route'].get('language'),**kwargs)
                         text,usage,asr_used,diagnostics=transcribe_once(
@@ -243,6 +255,7 @@ def collect(profile,item,check_before_ai=None):
             if item['route'].get('allow_vision') is True:
                 stage='visual_analysis'
                 from tenant_knowledge_media_cache import observe_once
+                if execution: observe_once=execution.observe_once
                 from tenant_chat_ai_provider import generate
                 observation_route={**item['route']}
                 if kind=='video':
@@ -266,7 +279,10 @@ def collect(profile,item,check_before_ai=None):
                         item['vision_usage']=list(observation_item.get('vision_usage') or [])
                     message['text']+='\n[Untrusted visual observation; not a confirmed solution] '+text
                     receipt.setdefault('observations',[]).append({'origin':origin,'text':text})
-                receipt.update(status='partial' if kind=='video' else 'processed',code='vision_observation',visuals=[origin for _,_,origin in visuals])
+                partial=(kind=='video' or receipt.get('document_pages',0)>receipt.get('rendered_pages',0))
+                receipt.update(status='partial' if partial else 'processed',
+                    code='document_pages_sampled' if kind=='document' and partial else 'vision_observation',
+                    visuals=[origin for _,_,origin in visuals])
                 continue
             stage='visual_input_prepare'
             for content,content_type,origin in visuals:

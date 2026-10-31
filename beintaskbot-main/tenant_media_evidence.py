@@ -90,7 +90,7 @@ def reusable(profile, ref):
     return dict(row) if row and row.get('status') in _TERMINAL else None
 
 
-def persist(cur, tenant, refs, receipts, *, skip_unverified_source_ids=()):
+def persist(cur, tenant, refs, receipts, *, skip_unverified_source_ids=(), processor="knowledge_extraction"):
     """Persist terminal outcomes after the extraction's source revalidation.
 
     This accepts neither URLs nor provider payloads.  The selected extraction
@@ -135,7 +135,7 @@ def persist(cur, tenant, refs, receipts, *, skip_unverified_source_ids=()):
         # permanently prevent a later separately-authorized analysis.
         if status in {'processed', 'partial'} and not result:
             continue
-        provenance = {'processor': 'knowledge_extraction', 'source_version': source_hash(ref),
+        provenance = {'processor': processor if processor in {'knowledge_extraction','conversation_episode'} else 'knowledge_extraction', 'source_version': source_hash(ref),
                       'untrusted': True}
         cur.execute("""INSERT INTO saas_media_evidence_receipts
           (tenant_id,channel_id,external_id,source_hash,media_kind,direction,status,code,coverage,result,provenance)
@@ -159,7 +159,9 @@ def apply_reusable(message, receipt):
     if result.get('observation'): observations.append({'text':result['observation']})
     observations += [x for x in result.get('observations',[]) if isinstance(x,dict) and isinstance(x.get('text'),str)]
     for observed in observations:
-        label = 'partial sampled video observation' if coverage.get('complete') is False else 'saved visual observation'
+        label = ('saved document text' if coverage.get('kind')=='document' or str(receipt.get('code') or '').startswith('document_text')
+                 else 'partial sampled video observation' if coverage.get('kind')=='video' or coverage.get('complete') is False
+                 else 'saved visual observation')
         origin=observed.get('origin') if isinstance(observed.get('origin'),dict) else {}
         suffix=(' frame '+str(origin.get('second'))) if 'second' in origin else ''
         message['text'] += '\n[Untrusted ' + label + suffix + '; not a confirmed solution] ' + _safe_text(observed['text'])

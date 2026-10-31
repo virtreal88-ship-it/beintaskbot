@@ -171,8 +171,13 @@ def _claim(job, reservation, source, model):
         with conn.cursor() as cur:
             external='connect:'+source['external_id']
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('voice-source:'+str(job['tenant_id'])+':'+str(job['channel_id'])+':'+external,))
-            cur.execute("SELECT to_regclass('public.saas_knowledge_media_cache') AS relation")
-            if cur.fetchone().get('relation'):
+            cur.execute("SELECT to_regclass('public.saas_knowledge_media_cache') AS relation, to_regclass('public.saas_episode_media_flights') AS episode_relation")
+            relations=cur.fetchone() or {}
+            if relations.get('episode_relation'):
+                cur.execute('''SELECT 1 FROM saas_episode_media_flights WHERE tenant_id=%s::uuid
+                  AND channel_id=%s::uuid AND external_id=%s LIMIT 1''',(job['tenant_id'],job['channel_id'],external))
+                if cur.fetchone():raise VoiceError('voice_already_claimed')
+            if relations.get('relation'):
                 cur.execute("""SELECT 1 FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND state='running'
                   AND metadata->>'owner_retry_component'='asr' AND metadata->'owner_retry_source'->>'channel_id'=%s
                   AND metadata->'owner_retry_source'->>'external_id'=%s LIMIT 1""",(job['tenant_id'],str(job['channel_id']),external))
@@ -206,6 +211,7 @@ def _claim(job, reservation, source, model):
 
 
 def _finish(job, reservation, source, *, text='', code=''):
+    from tenant_media_evidence import media_version
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute("""UPDATE saas_connect_voice_receipts SET state=%s,error_code=%s,updated_at=now()
@@ -217,7 +223,8 @@ def _finish(job, reservation, source, *, text='', code=''):
                 cur.execute("""UPDATE saas_crm_messages SET body=%s,raw=raw || %s::jsonb
                   WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND external_id=%s""",
                             (text, _json({'voice_transcription': {'status': 'failed' if code else 'completed',
-                             'error_code': code, 'source': 'whatsapp_audio'}}), job['tenant_id'],
+                             'error_code': code, 'source': 'whatsapp_audio',
+                             'media_version':media_version(source.get('raw'))}}), job['tenant_id'],
                              int(job['lead_id']), 'connect:' + job['channel_id'], 'connect:' + source['external_id']))
         conn.commit()
 

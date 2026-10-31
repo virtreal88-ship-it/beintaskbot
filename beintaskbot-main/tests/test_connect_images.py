@@ -25,45 +25,33 @@ def test_exact_model_capabilities(model,expected):
 class PhotoWorker(WorkerVoice):
  def setUp(self):
   super().setUp();self.rows=[row(kind='image',text='Synthetic error caption')]
-  self.stack.enter_context(patch.object(photos,'supports_images',return_value=True))
-  self.stack.enter_context(patch.object(photos,'resolve',return_value={'synthetic':True}))
-  self.stack.enter_context(patch.object(photos,'generation_budget_available',return_value=True))
-  self.photo_live=self.stack.enter_context(patch.object(photos,'live',return_value=True))
-  self.photo_download=self.stack.enter_context(patch.object(photos,'download_media',new=AsyncMock(return_value=(PNG,'image/png'))))
- async def test_photo_reaches_model_caption_author_and_low_budget(self):
-  await self.process();kw=self.generate.call_args.kwargs
-  assert len(kw['images'])==1 and kw['images'][0]['detail']=='low'
-  assert kw['extra_context']['unprocessed_media_count']==0
-  assert 'Synthetic error caption' in str(self.generate.call_args.args[3]);assert self.generate.call_args.args[3][0]['speaker']=='CLIENT'
-  self.transcribe.assert_not_called();self.reserve.assert_called_once();self.send.assert_called_once()
- async def test_nizam_snapshot_uses_real_capability_gate(self):
-  with patch.dict(os.environ,{},clear=True),patch.object(photos,'supports_images',side_effect=REAL_SUPPORTS_IMAGES),patch.dict(CONFIG,{'agent_model':'gpt-4.1-2025-04-14'}):
-   await self.process()
-  assert self.generate.call_args.args[1]=='gpt-4.1-2025-04-14'
-  assert len(self.generate.call_args.kwargs['images'])==1
- async def test_unavailable_photo_explicit_and_no_images(self):
-  self.photo_download.side_effect=ValueError('unavailable');await self.process()
-  assert self.generate.call_args.kwargs['images']==[];assert self.generate.call_args.kwargs['extra_context']['unprocessed_media_count']==1
- async def test_human_takeover_after_download_no_model_or_send(self):
-  self.photo_live.return_value=False;await self.process();self.generate.assert_not_called();self.send.assert_not_called();self.superseded.assert_called_once()
- async def test_manual_photo_never_auto_sends(self):
-  self.reserve.side_effect=lambda *a,**k:{**RESERVATION,'mode':'manual'}
+  self.evidence={'status':'processed','code':'vision_observation','observation':'Visible error E17',
+                 'observations':[{'origin':{},'text':'Visible error E17'}]}
+ async def test_saved_observation_reaches_agent_without_resending_image_bytes(self):
   await self.process()
-  self.generate.assert_called_once();self.send.assert_not_called();self.superseded.assert_called_once()
- async def test_group_foreign_copy_resolves_only_local_replica(self):
-  foreign={**row(mid='00000000-0000-0000-0000-000000000099',kind='image'), 'channel':CHANNEL,'photo_message_id':MESSAGE,'author_name':'Synthetic participant','source_channels':['one','two']}
-  with patch.object(adapter,'group_context',return_value=[foreign]):await self.process()
-  assert photos.resolve.call_args.args[2]==MESSAGE
-  assert self.generate.call_args.args[3][0]['sender']=='Synthetic participant'
+  assert 'Visible error E17' in str(self.generate.call_args.args[3])
+  assert self.generate.call_args.kwargs['images']==[]
   assert self.generate.call_args.kwargs['extra_context']['unprocessed_media_count']==0
- async def test_foreign_only_photo_not_downloaded(self):
-  foreign={**row(kind='image'),'channel':'00000000-0000-0000-0000-000000000088'}
+  self.prepare_media.assert_called_once();self.send.assert_called_once()
+ async def test_failed_photo_is_explicit_without_invented_image_content(self):
+  self.evidence={'status':'error','code':'media_unavailable'}
+  await self.process()
+  assert 'media_unavailable' in str(self.generate.call_args.args[3])
+  assert self.generate.call_args.kwargs['extra_context']['unprocessed_media_count']==1
+ async def test_manual_photo_remains_draft(self):
+  self.reserve.side_effect=lambda *a,**k:{**RESERVATION,'mode':'manual'}
+  await self.process();self.generate.assert_called_once();self.send.assert_not_called()
+ async def test_group_local_replica_keeps_attribution(self):
+  foreign={**row(mid='other-copy',kind='image'),'channel':CHANNEL,'photo_message_id':MESSAGE,
+           'author_name':'Synthetic participant','source_channels':['one','two']}
   with patch.object(adapter,'group_context',return_value=[foreign]):await self.process()
-  self.photo_download.assert_not_called();assert self.generate.call_args.kwargs['extra_context']['unprocessed_media_count']==1
- async def test_three_photos_bounded_two_and_deduplicated(self):
-  context=[row(mid=str(i),kind='image') for i in range(3)]
-  with patch.object(adapter,'group_context',return_value=context):await self.process()
-  assert self.photo_download.await_count==2;assert len(self.generate.call_args.kwargs['images'])==1;assert self.generate.call_args.kwargs['extra_context']['unprocessed_media_count']==1
+  assert 'Visible error E17' in str(self.generate.call_args.args[3])
+  assert self.generate.call_args.args[3][0]['sender']=='Synthetic participant'
+ async def test_foreign_channel_cannot_reuse_local_message_receipt(self):
+  foreign={**row(kind='image'),'channel':'different-channel'}
+  with patch.object(adapter,'group_context',return_value=[foreign]):await self.process()
+  assert 'Visible error E17' not in str(self.generate.call_args.args[3])
+  assert self.generate.call_args.kwargs['extra_context']['unprocessed_media_count']==1
 
 # Inherit no unrelated voice assertions in the photo-specific fixture.
 for _name in list(WorkerVoice.__dict__):
