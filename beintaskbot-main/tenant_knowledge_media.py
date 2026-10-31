@@ -142,6 +142,7 @@ def collect(profile,item,check_before_ai=None,*,execution=None):
                 asr_used=True
                 from tenant_knowledge_media_cache import transcribe_once
                 if execution: transcribe_once=execution.transcribe_once
+                stage='audio_transcription'
                 text,usage,asr_used=transcribe_once(profile,item,model,media,transcribe,check_before_ai=check_before_ai)
                 item['asr_usage']=usage
                 safe_text=redact(text,names)

@@ -139,3 +139,32 @@ def test_missing_optional_receipt_table_does_not_abort_history_transaction(recei
     # the same transaction after a rolling node has not created the table yet.
     assert receipt_db.execute('SELECT 1 AS ok')[0]['ok'] == 1
     assert 'media_evidence' not in row
+
+
+@pytest.mark.parametrize('kind',['audio','voice'])
+def test_old_download_failure_can_be_rechecked_without_deleting_receipt(receipt_db,kind):
+    ref=_ref('audio-row',CA,'connect:download-failed','',kind=kind)
+    evidence.persist(receipt_db.cursor(),A,[ref],[{'id':ref['id'],'kind':kind,
+        'status':'unsupported','code':'media_unavailable','failure_stage':'media_download',
+        'failure_code':'media_processing_failed'}])
+    receipt_db.commit()
+    assert evidence.reusable({'tenant_id':A},ref) is None
+    assert receipt_db.execute('SELECT count(*) AS n FROM saas_media_evidence_receipts')[0]['n']==1
+
+
+@pytest.mark.parametrize('change',[
+    {'status':'processed','result':{'transcript':'paid transcript'}},
+    {'status':'partial','result':{'transcript':'known part'}},
+    {'code':'media_result_unknown'},
+    {'result':{'failure_stage':'media_validation','failure_code':'media_processing_failed'}},
+    {'result':{'failure_stage':'audio_transcription','failure_code':'media_processing_failed'}},
+    {'result':{'failure_stage':'media_download'}},
+    {'result':{'failure_stage':'media_download','failure_code':'media_processing_failed','transcript':'keep'}},
+    {'provenance':{}},
+])
+def test_download_recovery_never_reclaims_paid_unknown_or_ambiguous(change):
+    ref=_ref('audio-row',CA,'connect:failed','',kind='voice')
+    receipt={'status':'unsupported','code':'media_unavailable',
+        'result':{'failure_stage':'media_download','failure_code':'media_processing_failed'},
+        'provenance':{'processor':'knowledge_extraction','source_version':evidence.source_hash(ref)},**change}
+    assert not evidence.retryable_audio_download_failure(receipt,ref)

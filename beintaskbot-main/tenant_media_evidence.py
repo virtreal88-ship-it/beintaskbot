@@ -65,6 +65,28 @@ def publication_fingerprint(cur,tenant,row):
     snapshot=json.dumps(dict(saved) if saved else None,sort_keys=True,default=str,ensure_ascii=False,separators=(',',':'))
     return {'source_hash':version,'receipt_hash':hashlib.sha256(snapshot.encode()).hexdigest()}
 
+def retryable_audio_download_failure(receipt, ref):
+    """Old download-only failures are not evidence and did not reach ASR.
+
+    Do not infer safety from an error code alone. In older collectors even ASR
+    exceptions carried media_validation, so that stage is deliberately excluded.
+    This merely permits a NEW authorized request to use the normal flight/budget
+    gates; it never retries a provider, deletes a receipt or reclaims a flight.
+    """
+    if ref.get('media_kind') not in {'audio', 'voice'} or not isinstance(receipt, dict):
+        return False
+    result = receipt.get('result') or {}
+    provenance = receipt.get('provenance') or {}
+    return (receipt.get('status') in {'unavailable', 'unsupported', 'error'}
+        and receipt.get('code') in {'media_unavailable', 'source_fetch_unavailable',
+                                   'source_rate_limited', 'source_check_failed'}
+        and isinstance(result, dict) and result.get('failure_stage') == 'media_download'
+        and result.get('failure_code') == 'media_processing_failed'
+        and not any(result.get(key) for key in ('transcript', 'observation', 'observations'))
+        and isinstance(provenance, dict) and provenance.get('processor') == 'knowledge_extraction'
+        and provenance.get('source_version') == source_hash(ref))
+
+
 def reusable(profile, ref):
     """Return only the exact-tenant/channel/version terminal receipt, if any."""
     if not isinstance(profile, dict) or not profile.get('tenant_id'):
@@ -87,6 +109,7 @@ def reusable(profile, ref):
         # must continue their existing authorization path, not mark media as
         # analysed or leave the surrounding request transaction poisoned.
         return None
+    if row and retryable_audio_download_failure(dict(row), ref): return None
     return dict(row) if row and row.get('status') in _TERMINAL else None
 
 
