@@ -19,8 +19,14 @@ def setup_case(db, monkeypatch):
     with db.cursor() as cur:
         ticket=tickets.create_in_transaction(cur,A,CA,'client','Synthetic issue','test-group',actor=11)
     case=ticket['id']; consult=str(uuid.uuid4())
-    db.execute("""INSERT INTO saas_internal_consultations(tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,status,recipient_id)
-      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s,'Synthetic issue','waiting_specialist',11)""",(A,consult,case,CA,'consult-'+consult))
+    db.execute("""INSERT INTO saas_internal_consultations(tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,status,recipient_id,evidence)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s,'Synthetic issue','waiting_specialist',11,%s::jsonb)""",
+      (A,consult,case,CA,'consult-'+consult,'{"query":"Internet is down"}'))
+    source=db.execute("SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))[0]
+    db.execute("INSERT INTO saas_support_ticket_messages(tenant_id,ticket_id,message_id,event_key) VALUES(%s::uuid,%s::uuid,%s::uuid,'test-case-source') ON CONFLICT DO NOTHING",
+      (A,case,source['id']))
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type) VALUES(%s::uuid,%s::uuid,41,'connect:customer-message','incoming',%s,'The image upload still fails.','text') ON CONFLICT(tenant_id,external_id) DO NOTHING",
+      (str(uuid.uuid4()),A,'connect:'+CA))
     db.commit()
     monkeypatch.setattr(transport,'connect_route',lambda *_: {'api_key':'synthetic','channel_id':CA,'conversation_id':GROUP})
     return consult,case
@@ -31,11 +37,11 @@ def request():
 
 
 def test_case_group_body_uses_prior_case_text_but_never_synthetic_media_as_observation():
-    body=flow._case_group_body('case-123','ticket-123','',{'query':'The upload still shows the wrong amount.'})
+    body=flow._case_group_body('case-123','ticket-123','',{'query':'The upload still shows the wrong amount.'},'Photo supplied; content unverified.')
     assert 'The upload still shows the wrong amount.' in body
     assert '50.00 expected; display says 49.99.' not in body
     assert '49.9992' not in body
-    assert 'Yoxlanılmayıb' in body and 'CASE:case-123' in body
+    assert 'Photo supplied; content unverified.' in body and 'CASE:case-123' in body
 
 
 def test_connect_media_download_uses_scoped_api_and_returns_bytes_without_storage_url(monkeypatch):
@@ -55,18 +61,21 @@ def test_connect_media_download_uses_scoped_api_and_returns_bytes_without_storag
     assert not any('http' in str(value).lower() for value in result.values())
 
 
-def test_actual_pilot_handoff_sends_exact_case_photo_bytes_with_prior_complaint(db,monkeypatch):
-    import base64
+def test_actual_pilot_handoff_keeps_unreviewed_case_photo_private_and_sends_case_link(db,monkeypatch):
     import tenant_ai_pilot as pilot
     consult,_case=setup_case(db,monkeypatch)
     _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch)
     db.execute("UPDATE saas_crm_messages SET body='',message_type='image' WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,));db.commit()
+    db.execute("UPDATE saas_internal_consultations SET evidence=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      ('{"query":"Internet is down","case_message_ids":["m1","customer-message"]}',A,consult));db.commit()
+    from tenant_support_inbox_store import record_case_message_membership
+    with db.cursor() as cur:record_case_message_membership(cur,A,_case,CA,'client',['customer-message'],'unknown-send-test')
+    db.commit()
     assert db.execute("SELECT lead_id FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CA))
     assert db.execute("SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41 AND channel=%s AND external_id='connect:customer-message' AND message_type='image'",(A,'connect:'+CA))
     monkeypatch.setattr(transport,'connect_route',lambda cur,tenant,lead_id,**kw:
       {'api_key':'synthetic','channel_id':CA,'conversation_id':GROUP if int(lead_id)==99 else 'client'})
-    media={'type':'image','base64':base64.b64encode(b'local-test-image-bytes').decode(),
-      'mimeType':'image/png','fileName':'case-attachment'}
+    media={'type':'image','base64':'bG9jYWwtdGVzdC1pbWFnZS1ieXRlcw==','mimeType':'image/png','fileName':'case-attachment'}
     monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:media)
     sent=[]
     def send(route,body,request_id,**kwargs):
@@ -76,39 +85,152 @@ def test_actual_pilot_handoff_sends_exact_case_photo_bytes_with_prior_complaint(
     job={'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client','agent_id':AGENT,'event_fingerprint':event_fingerprint}
     source_at=db.execute("SELECT COALESCE(happened_at,created_at) AS at FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,))[0]['at']
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'connect:prior-case-complaint','incoming',%s,'The purchase receipt total should be 50.00.','text',%s::timestamptz-interval '1 minute')",(str(uuid.uuid4()),A,'connect:'+CA,source_at));db.commit()
+    from tenant_support_inbox_store import record_case_message_membership
+    with db.cursor() as cur:
+      record_case_message_membership(cur,A,_case,CA,'client',['prior-case-complaint','customer-message'],'test-case-membership')
     db.execute("UPDATE saas_internal_consultations SET evidence=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
-      ('{"query":"The purchase receipt total should be 50.00."}',A,consult));db.commit()
+      ('{"query":"The purchase receipt total should be 50.00.","case_message_ids":["prior-case-complaint","customer-message"]}',A,consult));db.commit()
     unrelated=str(uuid.uuid4())
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'connect:unrelated-photo','incoming',%s,'image',now()-interval '2 seconds')",(unrelated,A,'connect:'+CA));db.commit()
     fetched=[]
     monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:(fetched.append(message_id) or media))
     result=flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')
     assert result['state']=='sent' and len(sent)==1, result
-    assert sent[0]['media']==media and sent[0]['request_id']!='' and fetched==['customer-message']
+    assert sent[0]['media'] is None and sent[0]['request_id']!='' and fetched==[]
     assert 'The purchase receipt total should be 50.00.' in sent[0]['body']
-    assert 'Yoxlanılmayıb' in sent[0]['body']
+    assert 'Fayl məzmunu yoxlanılmadığı üçün qrupa əlavə edilmədi.' in sent[0]['body']
     assert 'Image supplied for analysis' not in sent[0]['body']
-    assert db.execute("SELECT state,provider_message_id FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]=={'state':'sent','provider_message_id':'GROUP_MEDIA_REF'}
+    assert db.execute("SELECT state,provider_message_id FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]=={'state':'blocked','provider_message_id':None}
     assert flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')['state']=='sent'
-    assert len(sent)==1 and fetched==['customer-message']
+    assert len(sent)==1 and fetched==[]
+
+
+def test_actual_worker_creates_case_snapshot_then_sends_same_revision_link_once(db,monkeypatch):
+    import json
+    import tenant_ai_agent_worker as worker
+    import tenant_ai_agent_connect as connect
+    import tenant_ai_agent_run_store as run_store
+    import tenant_ai_pilot as pilot
+    import tenant_connect_images as images
+    import tenant_connect_documents as documents
+    import tenant_connect_videos as videos
+    import tenant_internal_consultations as consultations
+    import tenant_public_case as public_case
+    consult,case=setup_case(db,monkeypatch)
+    _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch)
+    source_text='The customer reports that the receipt total differs.'
+    source_id='worker-case-event'
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type)
+      VALUES(%s::uuid,%s::uuid,41,%s,'incoming',%s,%s,'text')''',
+      (str(uuid.uuid4()),A,'connect:'+source_id,'connect:'+CA,source_text));db.commit()
+    source={'external_id':source_id,'direction':'incoming','body':source_text,'message_type':'text',
+      'happened_at':'2026-10-31T04:43:44+00:00','media_url':'','has_attachment':False}
+    config={'scopes':[CA],'schedule':{},'chat_model':'test-model','agent_model':'','response_policy':{}}
+    reservation={'run_id':'run-1','mode':'automatic','auto_send_enabled':True,'conversation_revision':3,
+      'response_policy':{},'agent_language':'az','agent_style':'','api_key':'synthetic',
+      'company_instructions':'','agent_instructions':'','scope_instructions':''}
+    async def inline_to_thread(fn,*args,**kwargs):return fn(*args,**kwargs)
+    monkeypatch.setattr(worker.asyncio,'to_thread',inline_to_thread)
+    monkeypatch.setattr(worker,'assert_job_allowed',lambda *_:None)
+    monkeypatch.setattr(connect,'history',lambda *_:[source])
+    monkeypatch.setattr(connect,'scope_matches',lambda scopes,channel:channel in scopes)
+    monkeypatch.setattr(connect,'group_context',lambda *_:[source])
+    monkeypatch.setattr(connect,'finish_sent_after_reply_handoff',lambda *_:None)
+    monkeypatch.setattr(run_store,'load_agent_config',lambda *_a,**_k:(config,None))
+    monkeypatch.setattr(worker,'reserve_run',lambda *_a,**_k:reservation)
+    monkeypatch.setattr(worker,'enabled_triggers',lambda *_:[])
+    monkeypatch.setattr(worker,'matching_triggers',lambda *_a,**_k:[])
+    monkeypatch.setattr(worker,'handoff_reason',lambda *_:'')
+    monkeypatch.setattr(worker,'_next_open',lambda *_:None)
+    monkeypatch.setattr(worker,'knowledge_context',lambda *_a,**_k:[])
+    monkeypatch.setattr(worker,'record_token_usage',lambda *_a,**_k:None)
+    monkeypatch.setattr(worker,'generate',lambda *_a,**_k:(json.dumps({
+      'action':'consult_developer','message':'Please investigate this report.',
+      'evidence_quote':source_text,'missing_items':[],'request_media':False}),
+      {'input_tokens':1,'output_tokens':1,'total_tokens':2}))
+    async def empty_images(*_a,**_k):return [],set()
+    async def empty_documents(*_a,**_k):return []
+    async def empty_videos(*_a,**_k):return {},{},{}
+    monkeypatch.setattr(images,'prepare',empty_images);monkeypatch.setattr(documents,'prepare',empty_documents)
+    monkeypatch.setattr(videos,'prepare',empty_videos)
+    monkeypatch.setattr(worker,'history',lambda *_a,**_k:([{'speaker':'CLIENT','text':source_text}],0))
+    monkeypatch.setattr(pilot,'manual_live_job',lambda job:job.get('tenant_id')==A)
+    monkeypatch.setattr(pilot,'configured_group_scope',lambda:{'tenant_id':A,'channel_id':CA,'conversation_id':GROUP})
+    monkeypatch.setattr(pilot,'pilot_group_handoff_allowed',lambda *_a,**_k:True)
+    async def guarded_handoff(*_a,**_k):return True
+    monkeypatch.setattr(worker,'_handoff_current_connect',guarded_handoff)
+    def create_consultation(*_a,**_k):
+      db.execute('UPDATE saas_internal_consultations SET evidence=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+        (json.dumps({'query':source_text,'source_external_id':source_id,'case_message_ids':[source_id]}),A,consult))
+      with db.cursor() as cur:
+        from tenant_support_inbox_store import record_case_message_membership
+        record_case_message_membership(cur,A,case,CA,'client',[source_id],'worker-case-event')
+      db.commit()
+      return {'id':consult,'status':'waiting_specialist'}
+    monkeypatch.setattr(consultations,'create_from_ai',create_consultation)
+    monkeypatch.setattr(flow,'_connect',lambda:db)
+    monkeypatch.setattr(public_case,'_connect',lambda:db)
+    acks=[];monkeypatch.setattr(flow,'acknowledge_pilot_consultation_to_customer',lambda *_a,**_k:acks.append('ack') or {'state':'sent'})
+    sent=[]
+    monkeypatch.setattr(transport,'send_group_with_receipt',lambda route,body,key,**kw:
+      sent.append({'body':body,'key':key,'media':kw.get('media')}) or
+      {'message_id':'worker-case-group-message','external_message_id':'WORKER_CASE_GROUP_REF'})
+    finishes=[];monkeypatch.setattr(worker,'finish_superseded',lambda *_a,**_k:finishes.append(('superseded',_a)))
+    monkeypatch.setattr(worker,'finish_unknown',lambda *_a,**_k:finishes.append(('unknown',_a)))
+    job={'tenant_id':A,'agent_id':AGENT,'provider':'connect','lead_id':41,'channel_id':CA,
+      'conversation_id':'client','event_fingerprint':event_fingerprint,'payload':{'message_id':source_id}}
+    logs=[]
+    class Logger:
+      def info(self,*_a,**_k):logs.append((_a,_k))
+      def warning(self,*_a,**_k):logs.append((_a,_k))
+    asyncio.run(worker.process_connect_one(job,Logger()))
+    assert len(sent)==1 and sent[0]['media'] is None and source_text in sent[0]['body'], (finishes,logs,
+      db.execute('SELECT state,body FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid',(A,consult)))
+    assert 'snapshot' in sent[0]['body'].casefold() and 'https://crm.pro.az/public/case/' in sent[0]['body']
+    assert '[one-time case share URL omitted from logs]' in db.execute(
+      'SELECT body FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid',(A,consult))[0]['body']
+    link=sent[0]['body'].split('https://crm.pro.az/public/case/',1)[1].split()[0]
+    token=link.split('/',1)[0]
+    assert token not in db.execute('SELECT body FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid',(A,consult))[0]['body']
+    assert token not in db.execute("SELECT body FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='connect:worker-case-group-message'",(A,))[0]['body']
+    page=public_case.read(token)
+    assert [m['text'] for m in page['public_messages']]==[source_text]
+    assert page['selected_media_ids']==[] and page['snapshot_at']
+    assert db.execute('SELECT COUNT(*) AS n FROM saas_public_case_shares WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid',(A,case))[0]['n']==1
+    assert len(finishes)==1 and finishes[0][0]=='superseded' and acks==['ack']
+    again=flow.deliver_pilot_consultation_to_group(job,consult,'',source_id)
+    assert again['state']=='sent' and len(sent)==1
+    assert db.execute('SELECT COUNT(*) AS n FROM saas_public_case_shares WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid',(A,case))[0]['n']==1
 
 
 def test_unknown_case_media_send_is_quarantined_and_never_retried(db,monkeypatch):
     import tenant_ai_pilot as pilot
     consult,_case=setup_case(db,monkeypatch)
     _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch)
+    monkeypatch.setattr(pilot,'pilot_group_handoff_allowed',lambda *_a,**_k:True)
     db.execute("UPDATE saas_crm_messages SET body='',message_type='image' WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,));db.commit()
+    db.execute("UPDATE saas_internal_consultations SET evidence=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      ('{"query":"Internet is down","case_message_ids":["m1","customer-message"]}',A,consult));db.commit()
+    from tenant_support_inbox_store import record_case_message_membership
+    with db.cursor() as cur:record_case_message_membership(cur,A,_case,CA,'client',['customer-message'],'attachment-fallback-test')
+    db.commit()
+    assert db.execute('''SELECT m.external_id FROM saas_support_ticket_messages cm JOIN saas_crm_messages m ON m.id=cm.message_id
+      WHERE cm.tenant_id=%s::uuid AND cm.ticket_id=%s::uuid ORDER BY m.external_id''',(A,_case))
     monkeypatch.setattr(transport,'connect_route',lambda cur,tenant,lead_id,**kw:
       {'api_key':'synthetic','channel_id':CA,'conversation_id':GROUP if int(lead_id)==99 else 'client'})
-    monkeypatch.setattr(transport,'download_connect_message_media',lambda *_:{'type':'image','base64':'aW1hZ2U=','mimeType':'image/png'})
+    media_attempts=[]
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda *args:media_attempts.append(args))
     calls=[]
-    def unknown(*_args,**_kwargs):calls.append('attempt');raise TimeoutError()
+    def unknown(_route,body,*_args,**_kwargs):calls.append(body);raise TimeoutError()
     monkeypatch.setattr(transport,'send_group_with_receipt',unknown)
     job={'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client','agent_id':AGENT,'event_fingerprint':event_fingerprint}
+    first=flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')
+    assert first['state']=='unknown',first
     assert flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')['state']=='unknown'
-    assert flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')['state']=='unknown'
-    assert calls==['attempt']
-    assert db.execute("SELECT state FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['state']=='unknown'
+    assert len(calls)==1 and 'https://crm.pro.az/public/case/' in calls[0]
+    assert db.execute('SELECT COUNT(*) AS n FROM saas_public_case_shares WHERE tenant_id=%s::uuid AND ticket_id=(SELECT case_id FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid)',(A,A,consult))[0]['n']==1
+    assert db.execute("SELECT state FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['state']=='blocked'
+    assert media_attempts==[]
 
 
 def test_unavailable_case_attachment_is_reported_and_text_fallback_has_no_false_media_claim(db,monkeypatch):
@@ -117,15 +239,17 @@ def test_unavailable_case_attachment_is_reported_and_text_fallback_has_no_false_
     db.execute("UPDATE saas_crm_messages SET body='',message_type='image' WHERE tenant_id=%s::uuid AND external_id='connect:customer-message'",(A,));db.commit()
     monkeypatch.setattr(transport,'connect_route',lambda cur,tenant,lead_id,**kw:
       {'api_key':'synthetic','channel_id':CA,'conversation_id':GROUP if int(lead_id)==99 else 'client'})
-    monkeypatch.setattr(transport,'download_connect_message_media',lambda *_:(_ for _ in ()).throw(RuntimeError('synthetic unavailable')))
+    media_attempts=[]
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda *args:media_attempts.append(args))
     sent=[]
     monkeypatch.setattr(transport,'send_group_with_receipt',lambda route,body,key:(sent.append({'body':body,'id':key}) or {'message_id':'text-case-message','external_message_id':'CASE_TEXT_REF'}))
     job={'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client','agent_id':AGENT,'event_fingerprint':event_fingerprint}
     result=flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')
     assert result['state']=='sent' and len(sent)==1
-    assert 'Fayl qrupa əlavə edilə bilmədi' in sent[0]['body']
+    assert 'Fayl məzmunu yoxlanılmadığı üçün qrupa əlavə edilmədi.' in sent[0]['body']
     assert 'fayl bu WhatsApp mesajına əlavə olunub' not in sent[0]['body']
     assert db.execute("SELECT state FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['state']=='blocked'
+    assert media_attempts==[]
 
 
 def test_developer_followup_includes_saved_case_facts_without_resending_the_original_photo(db,monkeypatch):
@@ -270,6 +394,9 @@ def test_selected_attachment_must_belong_to_exact_ticket_conversation(db,monkeyp
     assert str(focused['focus_message']['id'])==image
     assert focused['focus_message']['media_evidence_context']=='Saved synthetic observation'
     assert 'raw' not in focused['focus_message'] and 'body' not in focused['focus_message']
+    scoped=tickets.detail(PROFILE,case)
+    assert {str(row['id']) for row in scoped['messages']}=={image,str(db.execute("SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))[0]['id'])}
+    assert all(row['external_id']!='connect:customer-message' for row in scoped['messages'])
     with pytest.raises(TenantLinearError):tickets.detail(PROFILE,case,None,str(uuid.uuid4()))
     other=str(uuid.uuid4());db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type)
       VALUES(%s::uuid,%s::uuid,99,'connect:other-group-image',%s,'incoming','image')""",(other,A,'connect:'+CA));db.commit()
@@ -288,6 +415,7 @@ def test_focused_attachment_reuses_only_matching_saved_receipt_without_ai(db,mon
     evidence.create_schema(db)
     ref={'id':image,'channel_id':CA,'external_id':external,'media_kind':'image','media_version':evidence.media_version({'mediaId':'v1'}),'body_hash':evidence._body_hash('')}
     with db.cursor() as cur:evidence.persist(cur,A,[ref],[{'id':image,'status':'processed','kind':'image','observation':'Synthetic saved detail'}])
+    with db.cursor() as cur:tickets.record_case_selected_message_ids(cur,A,case,[image],'test-explicit-media-selection')
     db.commit()
     focused=tickets.detail(PROFILE,case,None,image)['focus_message']
     assert 'Synthetic saved detail' in focused['media_evidence_context']
@@ -452,11 +580,14 @@ def test_exact_group_reply_queues_one_budgeted_followup_for_its_case(db,monkeypa
 
 
 def test_pilot_turn_decision_and_customer_reply_stay_in_same_case(db,monkeypatch):
+    import json
     consult,case=setup_case(db,monkeypatch)
     monkeypatch.setattr('tenant_ai_pilot.manual_live_job',lambda _job:True)
     monkeypatch.setattr('tenant_ai_pilot.is_pilot_customer_target',lambda tenant,channel,conversation:
         tenant==A and channel==CA and conversation=='client')
     flow.schema(db)
+    import tenant_public_case as public_case
+    public_case._schema(db)
     followup=str(uuid.uuid4())
     db.execute("""INSERT INTO saas_ai_pilot_followups(tenant_id,id,consultation_id,case_id,channel_id,
       conversation_id,group_channel_id,group_conversation_id,group_message_id,group_reply,agent_id,state,
@@ -464,6 +595,13 @@ def test_pilot_turn_decision_and_customer_reply_stay_in_same_case(db,monkeypatch
       VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s,'group-q',
         'Which amount did the customer report?',%s::uuid,'linked','question-id','customer_question',TRUE)""",
       (A,followup,consult,case,CA,CA,GROUP,AGENT));db.commit()
+    source_row=db.execute("SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))[0]
+    share_id=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,channel_id,conversation_id,
+      group_channel_id,group_conversation_id,token_hash,selected_message_ids,public_messages,created_by,expires_at,revision_key)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client',%s::uuid,%s,%s,%s::jsonb,%s::jsonb,NULL,now()+interval '24 hours',%s)''',
+      (share_id,A,case,CA,CA,GROUP,'f'*64,json.dumps([source_row['id']]),
+       json.dumps([{'id':source_row['id'],'speaker':'Müştəri','text':'Original complaint','type':'text','at':''}]),'pilot:'+consult));db.commit()
     known=flow.parse_pilot_turn_decision('{"action":"group_answer","message":"The customer reported 50 versus 49.9992.","evidence_quote":"entered 50; system showed 49.9992"}')
     assert known and known['action']=='group_answer'
     assert flow.parse_pilot_turn_decision('{"action":"group_answer","message":"The bug is fixed.","evidence_quote":""}') is None
@@ -474,6 +612,8 @@ def test_pilot_turn_decision_and_customer_reply_stay_in_same_case(db,monkeypatch
     assert flow.parse_pilot_turn_decision('{"action":"group_answer","message":"The password is abc12345.","evidence_quote":"entered 50; system showed 49.9992"}') is None
     assert flow.parse_pilot_turn_decision('{"action":"no_action","message":"","evidence_quote":""}')['action']=='no_action'
     customer_message='new-customer-answer'
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type) VALUES(%s::uuid,%s::uuid,41,%s,'incoming',%s,'The same issue still happens.','text')",
+      (str(uuid.uuid4()),A,'connect:'+customer_message,'connect:'+CA));db.commit()
     with db.cursor() as cur:
         attached=flow.attach_pilot_customer_reply(cur,A,CA,'client',customer_message)
         assert attached['followup_id']==followup and attached['case_id']==case
@@ -484,6 +624,9 @@ def test_pilot_turn_decision_and_customer_reply_stay_in_same_case(db,monkeypatch
     assert row['customer_reply_message_id']==customer_message and row['turn_number']==1 and not row['awaiting_customer']
     assert row['event_fingerprint']
     assert db.execute('SELECT ticket_id::text FROM saas_support_events WHERE tenant_id=%s::uuid AND event_key=%s',(A,'pilot-case-turn:'+customer_message))[0]['ticket_id']==case
+    snapshot=db.execute('SELECT selected_message_ids,public_messages,snapshot_revision FROM saas_public_case_shares WHERE id=%s::uuid',(share_id,))[0]
+    assert snapshot['snapshot_revision']==2 and len(snapshot['public_messages'])==2
+    assert customer_message in db.execute("SELECT external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,snapshot['selected_message_ids'][-1]))[0]['external_id']
     with db.cursor() as cur:
         assert flow.attach_pilot_customer_reply(cur,A,CA,'client',customer_message) is None
     db.commit()
@@ -699,6 +842,9 @@ def test_ai_handoff_delivery_sends_saved_attachment_bytes_with_case_summary(db,m
     db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,message_type)
       VALUES(%s::uuid,%s::uuid,41,'connect:customer-issue','incoming',%s,'image')""",
       (attachment,A,'connect:'+CA))
+    db.execute("UPDATE saas_internal_consultations SET evidence=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      ('{"query":"Internet is down","case_message_ids":["m1","customer-issue"]}',A,consult))
+    with db.cursor() as cur:tickets.record_case_message_membership(cur,A,case,CA,'client',['customer-issue'],'test-ai-handoff-case-source')
     db.commit();sent=[]
     media={'type':'image','base64':'c3ludGhldGljLWltYWdl','mimeType':'image/png','fileName':'case-attachment'}
     monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:media)
@@ -710,8 +856,9 @@ def test_ai_handoff_delivery_sends_saved_attachment_bytes_with_case_summary(db,m
         {'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client'},
         consult,'The upload crashes when the customer selects a photo.','customer-issue')
     assert result['state']=='sent' and len(sent)==1 and sent[0][0]==group, result
-    assert 'CASE:'+consult in sent[0][1] and 'The upload crashes when the customer selects a photo.' in sent[0][1]
-    assert sent[0][3]==media and 'Yoxlanılmayıb' in sent[0][1]
+    assert 'CASE:'+consult in sent[0][1] and 'Internet is down' in sent[0][1]
+    assert '[one-time case share URL omitted from logs]' in db.execute("SELECT body FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['body']
+    assert sent[0][3] is None and 'Fayl məzmunu yoxlanılmadığı üçün qrupa əlavə edilmədi.' in sent[0][1]
     assert db.execute("SELECT state FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['state']=='sent'
 
 

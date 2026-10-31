@@ -98,7 +98,7 @@ def matching_triggers(triggers,text,*,first_inquiry=False,phone=''):
     return matches
 
 
-def handoff(job,reason,*,source_message_id='',expected_conversation_revision=None):
+def handoff(job,reason,*,source_message_id='',expected_conversation_revision=None,case_message_ids=None):
     from tenant_support_inbox_store import handoff_ticket, summarize_created, handoff_recorded
     ticket = None
     tenant=str(job['tenant_id']);chat=str(job['chat_id'])
@@ -151,7 +151,8 @@ def handoff(job,reason,*,source_message_id='',expected_conversation_revision=Non
               WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND channel_id=%s AND state<>'human' RETURNING agent_id''',
               (str(reason)[:240],tenant,job['provider'],chat,job_scope(job)))
             changed=cur.fetchone()
-            ticket = handoff_ticket(cur, job, reason)
+            ticket = handoff_ticket(cur,{**job,'source_message_id':source_message_id,
+                'case_message_ids':case_message_ids or []},reason)
             if changed:
                 cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='human_handoff',updated_at=now() WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s AND state IN ('queued','processing')",(tenant,job['provider'],chat,job_scope(job)))
                 cur.execute("UPDATE saas_ai_agent_runs SET state='superseded',updated_at=now() WHERE tenant_id=%s::uuid AND event_fingerprint=%s AND state='generating'",(tenant,job['event_fingerprint']))

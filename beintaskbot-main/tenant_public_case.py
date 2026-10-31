@@ -32,8 +32,11 @@ def _schema(conn):
           group_channel_id UUID NOT NULL, group_conversation_id TEXT NOT NULL,
           token_hash TEXT NOT NULL UNIQUE, selected_message_ids JSONB NOT NULL,
           selected_media_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-          public_messages JSONB NOT NULL, created_by BIGINT NOT NULL,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT now(), expires_at TIMESTAMPTZ NOT NULL,
+          public_messages JSONB NOT NULL, created_by BIGINT NULL,
+          revision_key TEXT NOT NULL DEFAULT '',
+          snapshot_revision INTEGER NOT NULL DEFAULT 1,
+          is_partial BOOLEAN NOT NULL DEFAULT FALSE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), expires_at TIMESTAMPTZ NOT NULL,
           revoked_at TIMESTAMPTZ NULL,
           FOREIGN KEY(tenant_id,ticket_id) REFERENCES saas_support_tickets(tenant_id,id) ON DELETE CASCADE,
           FOREIGN KEY(tenant_id,group_channel_id,group_conversation_id)
@@ -41,7 +44,146 @@ def _schema(conn):
           FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
         cur.execute('''CREATE INDEX IF NOT EXISTS saas_public_case_shares_expiry_idx
           ON saas_public_case_shares(expires_at) WHERE revoked_at IS NULL''')
+        cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS revision_key TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_public_case_shares ALTER COLUMN created_by DROP NOT NULL")
+        cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS snapshot_revision INTEGER NOT NULL DEFAULT 1")
+        cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS is_partial BOOLEAN NOT NULL DEFAULT FALSE")
+        cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS saas_public_case_shares_revision_idx ON saas_public_case_shares(tenant_id,ticket_id,group_channel_id,group_conversation_id,revision_key) WHERE revision_key<>''")
     conn.commit()
+
+
+def create_for_pilot_handoff(cur, *, tenant_id, ticket_id, group_channel_id,
+                             group_conversation_id, source_channel_id,
+                             source_conversation_id, evidence_quote,case_message_ids,
+                             source_external_id,
+                             revision_key, origin, authorization_job):
+    """Create one hash-only, text-only snapshot for a fenced pilot handoff.
+
+    The quote must resolve to an incoming message in the exact ticket scope.
+    Media remains private because this service has no content-safety classifier.
+    """
+    quote=_public_text(evidence_quote)
+    if len(quote)<8 or not revision_key:
+        raise TenantLinearError('CASE does not have a publishable client statement.',409)
+    from tenant_ai_group_coordination import group_jid
+    from tenant_ai_pilot import configured_group_scope, configured_scope, pilot_group_handoff_allowed
+    target=configured_group_scope();customer=configured_scope()
+    if (not target or not customer or str(target.get('tenant_id'))!=str(tenant_id)
+            or str(target.get('channel_id'))!=str(group_channel_id)
+            or str(target.get('conversation_id'))!=str(group_conversation_id)
+            or str(customer.get('tenant_id'))!=str(tenant_id)
+            or str(customer.get('channel_id'))!=str(source_channel_id)
+            or str(customer.get('conversation_id'))!=str(source_conversation_id)
+            or not group_jid(str(group_conversation_id))):
+        raise TenantLinearError('CASE share destination is outside the configured pilot scope.',409)
+    fenced_job={**(authorization_job if isinstance(authorization_job,dict) else {}),
+      'tenant_id':str(tenant_id),'provider':'connect','channel_id':str(source_channel_id),
+      'conversation_id':str(source_conversation_id)}
+    if not pilot_group_handoff_allowed(fenced_job,connection=cur.connection):
+        raise TenantLinearError('CASE share authorization is no longer active.',409)
+    cur.execute('''SELECT t.channel_id::text AS channel_id,t.conversation_id,c.lead_id
+      FROM saas_support_tickets t JOIN saas_connect_conversations c
+        ON c.tenant_id=t.tenant_id AND c.connect_channel_id=t.channel_id AND c.conversation_id=t.conversation_id
+      WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.channel_id=%s::uuid AND t.conversation_id=%s
+      FOR SHARE OF t,c''',(tenant_id,ticket_id,source_channel_id,source_conversation_id))
+    route=cur.fetchone()
+    if not route:raise TenantLinearError('CASE source no longer matches its ticket.',409)
+    if not isinstance(case_message_ids,(list,tuple)) or not 1<=len(case_message_ids)<=30:
+        raise TenantLinearError('CASE has no explicit bounded message membership.',409)
+    external_ids=[]
+    for value in case_message_ids:
+        value=str(value or '').strip().removeprefix('connect:')
+        if not value or len(value)>200 or value in external_ids:
+            raise TenantLinearError('CASE message membership is invalid.',409)
+        external_ids.append(value)
+    source_external_id=str(source_external_id or '').strip().removeprefix('connect:')
+    if not source_external_id or source_external_id not in external_ids:
+        raise TenantLinearError('CASE source message is not in its explicit membership.',409)
+    cur.execute('''SELECT m.id::text AS id,m.external_id,m.body,m.message_type,m.direction,
+        COALESCE(m.happened_at,m.created_at) AS happened_at
+      FROM saas_support_ticket_messages cm JOIN saas_crm_messages m ON m.id=cm.message_id
+      WHERE cm.tenant_id=%s::uuid AND cm.ticket_id=%s::uuid AND m.tenant_id=%s::uuid
+        AND m.kommo_lead_id=%s AND m.channel=%s AND m.direction='incoming'
+        AND m.external_id=ANY(%s::text[])
+      ORDER BY COALESCE(m.happened_at,m.created_at),m.id''',
+      (tenant_id,ticket_id,tenant_id,int(route['lead_id']),'connect:'+str(source_channel_id),
+       list(dict.fromkeys([item for value in external_ids for item in ('connect:'+value,value)]))))
+    messages=cur.fetchall()
+    if len(messages)!=len(external_ids):
+        raise TenantLinearError('One or more CASE messages are not explicitly linked to this ticket.',409)
+    if not any(m['external_id'] in {'connect:'+source_external_id,source_external_id} for m in messages):
+        raise TenantLinearError('CASE current source is not linked to this ticket.',409)
+    evidence_messages=[m for m in messages if m['message_type']=='text' and quote in str(m.get('body') or '')]
+    if len(evidence_messages)!=1 or quote not in _public_text(evidence_messages[0].get('body')):
+        raise TenantLinearError('CASE statement is not uniquely supported by its linked messages.',409)
+    cur.execute('''SELECT 1 FROM saas_connect_conversations c JOIN saas_connect_channels ch
+      ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id
+      WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s AND ch.active=TRUE''',
+      (tenant_id,group_channel_id,group_conversation_id))
+    if not cur.fetchone():raise TenantLinearError('CASE share group is not active.',409)
+    token=secrets.token_urlsafe(32);share_id=str(uuid.uuid4())
+    public_messages=[]
+    media_types={'image','video','audio','voice','document'}
+    for message in messages:
+        kind=str(message.get('message_type') or 'text').casefold()
+        if kind in media_types:
+            text='Müştəri fayl əlavə edib. Fayl bu snapshot-da paylaşılmır; məzmunu yoxlanılmayıb.'
+        else:
+            text=_public_text(message.get('body'))
+        public_messages.append({'id':str(message['id']),'speaker':'Müştəri','text':text,
+          'type':'text','at':message['happened_at'].isoformat() if message.get('happened_at') else ''})
+    cur.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,channel_id,conversation_id,
+      group_channel_id,group_conversation_id,token_hash,selected_message_ids,selected_media_ids,
+      public_messages,created_by,expires_at,revision_key,is_partial)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,'[]'::jsonb,
+        %s::jsonb,%s,now()+interval '24 hours',%s,TRUE)
+      ON CONFLICT DO NOTHING RETURNING id''',
+      (share_id,tenant_id,ticket_id,source_channel_id,source_conversation_id,group_channel_id,
+       group_conversation_id,hashlib.sha256(token.encode()).hexdigest(),json.dumps([str(message['id'])]),
+       json.dumps(public_messages),None,revision_key))
+    if not cur.fetchone():raise TenantLinearError('CASE share revision already exists.',409)
+    from tenant_ai_agents_store import _audit
+    _audit(cur,tenant_id,None,'public_case_share_create','support_ticket',ticket_id,
+      {'share_id':share_id,'selected_message_ids':[str(message['id']) for message in messages],'selected_media_ids':[],
+       'group_channel_id':str(group_channel_id),'group_conversation_id':str(group_conversation_id),
+       'expires_in_hours':24,'revision_key':revision_key,'created_by':'pilot_handoff'})
+    return {'id':share_id,'url':str(origin).rstrip('/')+'/public/case/'+token,
+      'selected_message_ids':[str(message['id']) for message in messages]}
+
+
+def append_pilot_followup(cur, *, tenant_id, ticket_id, consultation_id,
+                          group_channel_id, group_conversation_id,
+                          message_external_id):
+    """Append one separately linked inbound CASE follow-up to its pilot snapshot."""
+    external_id=str(message_external_id or '').strip().removeprefix('connect:')
+    if not external_id or len(external_id)>200:return False
+    cur.execute('''SELECT m.id::text AS id,m.body,m.message_type,m.direction,
+        COALESCE(m.happened_at,m.created_at) AS happened_at
+      FROM saas_support_ticket_messages cm JOIN saas_crm_messages m ON m.id=cm.message_id
+      WHERE cm.tenant_id=%s::uuid AND cm.ticket_id=%s::uuid AND m.tenant_id=%s::uuid
+        AND m.external_id=ANY(%s::text[]) AND m.direction='incoming' LIMIT 1''',
+      (tenant_id,ticket_id,tenant_id,['connect:'+external_id,external_id]))
+    message=cur.fetchone()
+    if not message:return False
+    kind=str(message.get('message_type') or 'text').casefold()
+    text=('Müştəri fayl əlavə edib. Fayl bu snapshot-da paylaşılmır; məzmunu yoxlanılmayıb.'
+          if kind in _MEDIA_TYPES else _public_text(message.get('body')))
+    if not text:return False
+    item={'id':str(message['id']),'speaker':'Müştəri','text':text,'type':'text',
+      'at':message['happened_at'].isoformat() if message.get('happened_at') else ''}
+    cur.execute('''UPDATE saas_public_case_shares SET
+        selected_message_ids=selected_message_ids||jsonb_build_array(%s::text),
+        public_messages=public_messages||jsonb_build_array(%s::jsonb),
+        snapshot_revision=snapshot_revision+1,updated_at=now()
+      WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid
+        AND group_channel_id=%s::uuid AND group_conversation_id=%s
+        AND revision_key=%s AND token_hash IS NOT NULL AND revoked_at IS NULL
+        AND expires_at>now() AND NOT (selected_message_ids ? %s)
+      RETURNING id''',
+      (str(message['id']),json.dumps(item),tenant_id,ticket_id,group_channel_id,
+       group_conversation_id,'pilot:'+str(consultation_id),str(message['id'])) )
+    return bool(cur.fetchone())
 
 
 def _public_text(value):
@@ -90,6 +232,8 @@ def create(profile,ticket_id,payload,origin):
               WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid FOR SHARE OF t,c''',(tenant,ticket_id))
             route=cur.fetchone()
             if not route:raise TenantLinearError('Обращение недоступно.',404)
+            from tenant_support_inbox_store import record_case_selected_message_ids
+            record_case_selected_message_ids(cur,tenant,ticket_id,message_ids,'public-case-selection:'+share_id)
             cur.execute('''SELECT 1 FROM saas_connect_conversations c JOIN saas_connect_channels ch
               ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id
               WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s AND ch.active=TRUE''',
@@ -114,10 +258,10 @@ def create(profile,ticket_id,payload,origin):
                       'text':_public_text(row['body']) or ('Əlavə fayl' if kind in _MEDIA_TYPES else ''),
                       'type':kind if key in media_ids else 'text','at':row['happened_at'].isoformat() if row.get('happened_at') else ''})
             cur.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,channel_id,conversation_id,group_channel_id,group_conversation_id,
-              token_hash,selected_message_ids,selected_media_ids,public_messages,created_by,expires_at)
-              VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,now()+interval '24 hours')''',
+              token_hash,selected_message_ids,selected_media_ids,public_messages,created_by,expires_at,revision_key)
+              VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,now()+interval '24 hours',%s)''',
               (share_id,tenant,ticket_id,route['channel_id'],route['conversation_id'],group_channel,group_conversation,token_hash,
-                json.dumps(message_ids),json.dumps(media_ids),json.dumps(messages),actor))
+                json.dumps(message_ids),json.dumps(media_ids),json.dumps(messages),actor,'owner:'+share_id))
             from tenant_ai_agents_store import _audit
             _audit(cur,tenant,actor,'public_case_share_create','support_ticket',ticket_id,
               {'share_id':share_id,'selected_message_ids':message_ids,'selected_media_ids':media_ids,
@@ -175,13 +319,15 @@ def read(token,client=''):
     if not isinstance(token,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,100}',token):raise TenantLinearError('Страница недоступна.',404)
     digest=hashlib.sha256(token.encode()).hexdigest();_rate_limit(hashlib.sha256(str(client or 'unknown').encode()).hexdigest())
     with _connect() as conn:
-        ensure_schema(conn);_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT id::text,public_messages,selected_media_ids FROM saas_public_case_shares
+            cur.execute('''SELECT id::text,public_messages,selected_media_ids,updated_at,revision_key,snapshot_revision,is_partial FROM saas_public_case_shares
               WHERE token_hash=%s AND revoked_at IS NULL AND expires_at>now()''',(digest,))
             row=cur.fetchone()
     if not row:raise TenantLinearError('Страница недоступна.',404)
-    return dict(row)
+    result=dict(row)
+    result['snapshot_at']=result.pop('updated_at').isoformat()
+    result.pop('revision_key',None)
+    return result
 
 
 def media(token,message_id,client=''):
@@ -190,7 +336,6 @@ def media(token,message_id,client=''):
     except (ValueError,TypeError,AttributeError):raise TenantLinearError('Файл недоступен.',404) from None
     digest=hashlib.sha256(token.encode()).hexdigest();_rate_limit(hashlib.sha256(str(client or 'unknown').encode()).hexdigest())
     with _connect() as conn:
-        ensure_schema(conn);_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''SELECT s.tenant_id::text,s.channel_id::text,s.conversation_id,c.lead_id,
                 m.external_id,m.message_type,s.id::text AS share_id
@@ -199,6 +344,7 @@ def media(token,message_id,client=''):
               JOIN saas_connect_conversations c ON c.tenant_id=t.tenant_id AND c.connect_channel_id=t.channel_id AND c.conversation_id=t.conversation_id
               JOIN saas_crm_messages m ON m.tenant_id=s.tenant_id AND m.kommo_lead_id=c.lead_id
                 AND m.channel='connect:'||s.channel_id::text AND m.id=%s::uuid
+              JOIN saas_support_ticket_messages cm ON cm.tenant_id=s.tenant_id AND cm.ticket_id=s.ticket_id AND cm.message_id=m.id
               WHERE s.token_hash=%s AND s.revoked_at IS NULL AND s.expires_at>now()
                 AND s.selected_message_ids ? %s AND s.selected_media_ids ? %s
                 AND m.message_type IN ('image','audio','voice','video','document')''',

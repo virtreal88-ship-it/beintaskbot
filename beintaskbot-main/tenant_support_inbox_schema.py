@@ -35,3 +35,11 @@ def create_schema(conn):
           tenant_id UUID NOT NULL,event_key TEXT NOT NULL,ticket_id UUID NOT NULL,
           PRIMARY KEY(tenant_id,event_key),
           FOREIGN KEY(tenant_id,ticket_id) REFERENCES saas_support_tickets(tenant_id,id) ON DELETE CASCADE)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_support_ticket_messages(
+          tenant_id UUID NOT NULL,ticket_id UUID NOT NULL,message_id UUID NOT NULL,
+          event_key TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,ticket_id,message_id),
+          FOREIGN KEY(tenant_id,ticket_id) REFERENCES saas_support_tickets(tenant_id,id) ON DELETE CASCADE,
+          FOREIGN KEY(message_id) REFERENCES saas_crm_messages(id) ON DELETE CASCADE)''')
+        cur.execute('''CREATE INDEX IF NOT EXISTS saas_support_ticket_messages_order_idx
+          ON saas_support_ticket_messages(tenant_id,ticket_id,created_at,message_id)''')
