@@ -176,6 +176,66 @@ def test_manual_ticket_survives_unavailable_ai(db):
     assert store.listing(PROFILE)['tickets'][0]['status']=='new'
 
 
+def test_owner_can_attach_old_source_media_idempotently_without_delivery(db,monkeypatch):
+    monkeypatch.setattr(store,'_connect',lambda:db)
+    consultations.schema(db)
+    db.commit()
+    ticket=manual()['ticket']['id']
+    media_id=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type)
+      VALUES(%s::uuid,%s::uuid,41,'old-image','connect:'||%s,'incoming','','image')""",(media_id,A,CA));db.commit()
+    first=store.attach_case_media(PROFILE,ticket,[media_id])
+    second=store.attach_case_media(PROFILE,ticket,[media_id])
+    assert first['attached_count']==second['attached_count']==1
+    assert second['attached_message_ids']==[media_id]
+    assert db.execute('SELECT count(*) AS n FROM saas_support_ticket_messages WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND message_id=%s::uuid',(A,ticket,media_id))[0]['n']==1
+    detail=store.detail(PROFILE,ticket)
+    assert any(str(row['id'])==media_id for row in detail['attached_media'])
+    assert db.execute('SELECT count(*) AS n FROM saas_internal_consultations WHERE tenant_id=%s::uuid',(A,))[0]['n']==0
+
+
+def test_available_case_media_paginates_only_metadata_from_exact_source(db,monkeypatch):
+    monkeypatch.setattr(store,'_connect',lambda:db)
+    ticket=manual()['ticket']['id']
+    ids=[]
+    for n in range(1,53):
+        media_id=str(uuid.UUID(int=1000+n));ids.append(media_id)
+        db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type)
+          VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','do not return message body','image')""",
+          (media_id,A,'connect:media-'+str(n),'connect:'+CA))
+    db.commit()
+    first=store.available_case_media(PROFILE,ticket)
+    assert len(first['messages'])==50 and first['next_before']
+    assert all('body' not in row and row['message_type']=='image' for row in first['messages'])
+    second=store.available_case_media(PROFILE,ticket,first['next_before'])
+    assert len(second['messages'])==2 and second['next_before'] is None
+    assert set(row['id'] for row in first['messages']).isdisjoint(row['id'] for row in second['messages'])
+
+
+def test_attach_media_rejects_same_channel_message_from_another_conversation(db,monkeypatch):
+    monkeypatch.setattr(store,'_connect',lambda:db)
+    ticket=manual()['ticket']['id']
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name) VALUES(%s::uuid,%s::uuid,'other-client',99,'Other')",(A,CA))
+    media_id=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type)
+      VALUES(%s::uuid,%s::uuid,99,'foreign-image','connect:'||%s,'incoming','','image')""",(media_id,A,CA));db.commit()
+    with pytest.raises(TenantLinearError) as error:store.attach_case_media(PROFILE,ticket,[media_id])
+    assert error.value.status==404
+    assert db.execute('SELECT count(*) AS n FROM saas_support_ticket_messages WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND message_id=%s::uuid',(A,ticket,media_id))[0]['n']==0
+
+
+def test_attach_media_is_owner_only_even_with_dialog_grant(db,monkeypatch):
+    monkeypatch.setattr(store,'_connect',lambda:db)
+    ticket=manual()['ticket']['id']
+    media_id=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type)
+      VALUES(%s::uuid,%s::uuid,41,'owner-only-image',%s,'incoming','','image')""",(media_id,A,'connect:'+CA))
+    db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions) VALUES(%s::uuid,77,'operator','Staff','[\"support\",\"dialogs\"]'::jsonb)",(A,));db.commit()
+    with pytest.raises(TenantLinearError) as error:store.attach_case_media({'tenant_id':A,'telegram_id':77},ticket,[media_id])
+    assert error.value.status==403
+    assert db.execute('SELECT count(*) AS n FROM saas_support_ticket_messages WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND message_id=%s::uuid',(A,ticket,media_id))[0]['n']==0
+
+
 def test_route_and_event_dedup_even_after_resolution(db):
     with patch.object(store,'summarize_created'):
         data={'request_id':str(uuid.uuid4()),'lead_id':41}

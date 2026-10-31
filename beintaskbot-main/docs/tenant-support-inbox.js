@@ -66,6 +66,8 @@
     const state=ticket.ai_state||'unmanaged',canOpen=window.tenantOperator?.hasRight('dialogs'),canControl=canOpen&&ticket.channel_active!==false&&ticket.unambiguous!==false;
     const route={provider:'connect',channel_id:ticket.channel_id,conversation_id:ticket.conversation_id,lead_id:ticket.lead_id};
     host.innerHTML=`<div class="support-heading"><div><small title="${esc(ticket.id)}">#${esc(ticket.id.slice(0,8).toUpperCase())}</small><h2 data-user-content>${esc(displayName(ticket))}</h2></div><button type="button" class="outline" id="supportClose">${t('close')}</button></div><div class="support-meta"><div><small>${t('channel')}</small><b data-user-content>${esc(ticket.channel_name||ticket.channel_id)}</b></div><div><small>${t('status')}</small><b>${t(ticket.status)}</b></div><div><small>${t('assignee')}</small><b data-user-content>${esc(ticket.assignee_name||t('unassigned'))}</b></div><div><small>${t('created')} / ${t('updated')}</small>${esc(i18n.date(ticket.created_at))}<br>${esc(i18n.date(ticket.updated_at))}</div></div><p>${t('reason')}: <span data-user-content>${esc(t(ticket.reason))}</span></p><div class="support-ai-state" role="status"><b>${t('status')}: ${t(state==='active'&&!ticket.agent_id?'unmanaged':state)}</b><br>${state==='active'&&ticket.agent_id?t('aiStillActive'):state==='unmanaged'||!ticket.agent_id?t('noAgent'):t('aiStopped')}</div><h3>${t('summary')}</h3><p data-user-content>${esc(ticket.summary||t({pending:'summaryPending',generating:'summaryGenerating',unavailable:'summaryUnavailable'}[ticket.summary_state]||'summaryPending'))}</p>${['pending','unavailable'].includes(ticket.summary_state)?`<button type="button" class="outline" id="supportSummary">${t('generateSummary')}</button>`:''}<div class="support-edit"><label>${t('description')}<textarea id="supportDescription" maxlength="4000" rows="2">${esc(ticket.description)}</textarea></label><label>${t('suggestions')}<textarea id="supportSuggestions" maxlength="4000" rows="3">${esc(ticket.suggestions)}</textarea></label><label>${t('nextSteps')}<textarea id="supportNextSteps" maxlength="4000" rows="3">${esc(ticket.next_steps)}</textarea></label><div class="support-meta"><label>${t('status')}<select id="supportEditStatus">${statuses.map(key=>`<option value="${key}" ${key===ticket.status?'selected':''}>${t(key)}</option>`).join('')}</select></label><label>${t('assignee')}<select id="supportEditAssignee">${assigneeOptions(ticket.assigned_to)}</select></label></div></div><div class="support-actions"><button type="button" class="primary" id="supportTake" title="${t('takeHelp')}">${t('take')}</button><button type="button" class="outline" id="supportTakeover" ${canControl&&state!=='human'?'':'disabled'} title="${t('takeoverHelp')}">${t('takeover')}</button><button type="button" class="outline" id="supportOpenChat" ${canOpen?'':'disabled'}>${t('openChat')}</button><button type="button" class="outline" id="supportResolve">${t('resolve')}</button><button type="button" class="outline" id="supportSave">${t('save')}</button></div><p class="sub">${t('takeHelp')}</p>${!canControl?`<p class="sub">${t(!canOpen?'noAccess':ticket.channel_active===false?'channel_inactive':'ambiguous_channel')}</p>`:''}<h3>${t('history')}</h3><button type="button" class="outline" id="supportEarlier" ${nextBefore?'':'hidden'}>${t('earlier')}</button><div id="supportHistory">${messages(result.messages)||t('emptyHistory')}</div>`;
+    const attachedMedia=[...(result.attached_media||[])];
+    const mediaPickerHost=document.createElement('div');mediaPickerHost.id='supportExistingMedia';$('supportHistory').before(mediaPickerHost);
     const expertStates={running:'Диагностика выполняется',completed:'Диагностика завершена',failed:'Диагностика недоступна',timeout:'Время ожидания эксперта истекло',stale:'Результат устарел: состояние диалога изменилось'};
     const expertErrors={expert_model_error:'Модель недоступна; повторный платный запрос автоматически не выполняется.',expert_invalid_result:'Ответ модели не прошёл проверку формата или безопасности.',expert_context_budget:'Инструкции и контекст не помещаются в выбранный бюджет токенов.',expert_parent_inactive:'Основной диалог остановлен или изменён.',expert_timeout:'Поздний ответ не будет использован для клиентской отправки.'};
     const expertPanel=document.createElement('section');expertPanel.dataset.expertDiagnostics='';
@@ -80,7 +82,64 @@
     $('supportTakeover').onclick=async()=>{const button=$('supportTakeover'),version=epoch;button.disabled=true;try{await window.tenantOperator.changeState(route,'handoff');if(version===epoch&&selected===ticket.id)await open(ticket.id);}catch(error){if(version===epoch){notice(error.message);button.disabled=false;}}};
     if($('supportSummary'))$('supportSummary').onclick=()=>action(ticket.id,'/summary','POST',{});
     $('supportEarlier').onclick=async()=>{const revision=detailRevision,version=epoch,button=$('supportEarlier');button.disabled=true;try{const page=await api('/'+encodeURIComponent(ticket.id)+'?before='+encodeURIComponent(nextBefore));if(selected!==ticket.id||revision!==detailRevision)return;$('supportHistory').insertAdjacentHTML('afterbegin',messages(page.messages));nextBefore=page.next_before;button.hidden=!nextBefore;}catch(error){if(version===epoch)notice(error.message);}finally{if(button.isConnected)button.disabled=false;}};
-    renderConsultations(ticket,result.messages||[]);
+    renderExistingMediaPicker(ticket,attachedMedia,async selectedMedia=>{
+      for(const item of selectedMedia)if(!attachedMedia.some(row=>String(row.id)===String(item.id)))attachedMedia.push(item);
+      await renderConsultations(ticket,result.messages||[],attachedMedia);
+    });
+    renderConsultations(ticket,result.messages||[],attachedMedia);
+  }
+
+  function renderExistingMediaPicker(ticket,attachedMedia,onAttached){
+    const host=$('supportExistingMedia');
+    if(!host||member?.role!=='owner'||!window.tenantOperator?.hasRight('dialogs'))return;
+    const section=document.createElement('section'),heading=document.createElement('h3'),help=document.createElement('p'),load=document.createElement('button'),rows=document.createElement('div'),earlier=document.createElement('button'),attach=document.createElement('button'),status=document.createElement('p');
+    section.className='support-ai-state';section.dataset.existingCaseMedia='';heading.textContent=t('caseMediaTitle');help.textContent=t('caseMediaHint');
+    load.type='button';load.id='caseMediaLoad';load.className='outline';load.textContent=t('caseMediaLoad');earlier.type='button';earlier.id='caseMediaEarlier';earlier.className='outline';earlier.textContent=t('caseMediaEarlier');earlier.hidden=true;
+    attach.type='button';attach.className='outline';attach.dataset.caseMediaAttach='';attach.textContent=t('caseMediaAttach');attach.disabled=true;status.setAttribute('role','status');
+    section.append(heading,help,load,rows,earlier,attach,status);host.append(section);
+    const mediaTypes=new Set(['image','audio','voice','video','document']),uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const media=new Map(),selectedIds=new Set(),attachedIds=new Set(attachedMedia.map(row=>String(row.id)));
+    let before=null,loaded=false,busy=false,revision=detailRevision;
+    const render=()=>{
+      rows.replaceChildren();
+      for(const item of media.values()){
+        const label=document.createElement('label'),check=document.createElement('input'),caption=document.createElement('span');
+        check.type='checkbox';check.value=String(item.id);check.checked=selectedIds.has(check.value)||attachedIds.has(check.value);check.disabled=attachedIds.has(check.value);
+        caption.textContent=`${item.message_type} · ${i18n.date(item.happened_at||item.created_at)}${check.disabled?' · '+t('caseMediaAlready'):''}`;
+        check.onchange=()=>{if(check.checked&&selectedIds.size>=10){check.checked=false;status.textContent=t('caseMediaMax');return;}if(check.checked)selectedIds.add(check.value);else selectedIds.delete(check.value);attach.disabled=selectedIds.size===0;};
+        label.append(check,document.createTextNode(' '),caption);
+        const open=document.createElement('button'),fileStatus=document.createElement('small');open.type='button';open.className='outline';open.dataset.caseMediaOpen='';open.textContent=t('caseMediaOpen');fileStatus.setAttribute('role','status');
+        open.onclick=()=>{if(!window.tenantDownloadAttachment){fileStatus.textContent=t('error');return;}
+          const query=new URLSearchParams({lead_id:String(ticket.lead_id),message_id:String(item.external_id||''),channel_id:String(ticket.channel_id),conversation_id:String(ticket.conversation_id),expected_tenant_id:String(member?.tenant_id||''),expected_user_id:String(member?.telegram_id||''),download:'1'});
+          void window.tenantDownloadAttachment(open,'/api/platform/crm/chat/attachment?'+query,fileStatus);
+        };
+        label.append(document.createTextNode(' '),open,fileStatus);rows.append(label);
+      }
+      attach.disabled=selectedIds.size===0;
+    };
+    const loadPage=async()=>{
+      if(busy||(!loaded&&load.disabled))return;
+      busy=true;load.disabled=true;earlier.disabled=true;status.textContent='';
+      try{
+        const page=await api('/'+encodeURIComponent(ticket.id)+'/attachments'+(before?'?before='+encodeURIComponent(before):''));
+        if(revision!==detailRevision||selected!==ticket.id)return;
+        for(const item of page.messages||[])if(mediaTypes.has(String(item.message_type||'').toLowerCase())&&uuid.test(String(item.id||'')))media.set(String(item.id),item);
+        before=page.next_before||null;loaded=true;render();earlier.hidden=!before;load.hidden=true;
+        if(!media.size&&!before)status.textContent=t('caseMediaNone');
+      }catch(error){if(revision===detailRevision&&selected===ticket.id)status.textContent=error.message||t('error');}
+      finally{busy=false;load.disabled=false;earlier.disabled=false;}
+    };
+    load.onclick=()=>void loadPage();earlier.onclick=()=>void loadPage();
+    attach.onclick=async()=>{
+      const ids=[...selectedIds];if(!ids.length)return;attach.disabled=true;
+      try{
+        const result=await api('/'+encodeURIComponent(ticket.id)+'/attachments','POST',{message_ids:ids});
+        const selectedMedia=ids.map(id=>media.get(id)).filter(Boolean);
+        for(const id of result.attached_message_ids||ids)attachedIds.add(String(id));
+        selectedIds.clear();render();status.textContent=t('caseMediaAdded');
+        await onAttached(selectedMedia);
+      }catch(error){status.textContent=error.message||t('error');attach.disabled=selectedIds.size===0;}
+    };
   }
   function renderPublicShareControls(ticket,caseMessages,host){
     const section=document.createElement('section');section.id='publicCaseShare';section.className='support-ai-state';
@@ -100,14 +159,14 @@
     create.onclick=async()=>{const selected=[...choices.querySelectorAll('[data-share-message]:checked')].map(node=>node.value);if(!selected.length){status.textContent='Ən azı bir mesaj seçin.';return;}const selectedGroup=groupRows[Number(group.value)];if(group.value===''||!selectedGroup){status.textContent='Developer qrupunu seçin.';return;}const media=[...choices.querySelectorAll('[data-share-message]:checked')].filter(node=>['image','video','audio','voice','document'].includes(String(caseMessages.find(row=>String(row.id)===node.value)?.message_type||'').toLowerCase())).map(node=>node.value);create.disabled=true;try{const result=await publicShareApi(ticketPath+'/public-share','POST',{message_ids:selected,media_message_ids:media,group_channel_id:selectedGroup.channel_id,group_conversation_id:selectedGroup.conversation_id});const link=document.createElement('a');link.href=result.url;link.rel='noopener noreferrer';link.target='_blank';link.textContent='İctimai CASE linkini aç';status.replaceChildren(link,document.createTextNode(' · 24 saat etibarlıdır. WhatsApp-a yalnız istədiyiniz halda özünüz göndərin.'));choices.querySelectorAll('input').forEach(input=>input.checked=false);await refresh();}catch(error){status.textContent=error.message;}finally{create.disabled=false;}};
     void refresh();
   }
-  async function renderConsultations(ticket,caseMessages=[]){
+  async function renderConsultations(ticket,caseMessages=[],attachedMedia=[]){
     const host=$('supportDetail'),revision=detailRevision;if(!host)return;
     $('supportConsultations')?.remove();
     const section=document.createElement('section');section.id='supportConsultations';section.innerHTML=`<h3>${t('consultations')}</h3><p class="sub">${t('consultDeveloperHint')}</p><div class="support-edit"><label>${t('consultRecipient')}<select id="consultRecipient">${members.map(m=>`<option value="${esc(m.telegram_id)}">${esc(m.display_name||m.telegram_id)}</option>`).join('')}</select></label><label>${t('consultReason')}<textarea id="consultReason" maxlength="1000" rows="2"></textarea></label><button type="button" class="outline" id="consultCreate">${t('consultDeveloper')}</button></div><div id="consultRows"></div>`;host.append(section);
-    const show=items=>{const rows=$('consultRows');if(!rows)return;rows.innerHTML=(items||[]).map(item=>`<article class="support-message" data-consult-id="${esc(item.id)}"><small>${esc(item.recipient_name)} · ${esc(i18n.date(item.created_at))}</small><div data-user-content>${esc(item.reason)}</div><small>${item.status==='queued_after_hours'?t('consultQueued'):t('consultWaiting')}</small>${item.response?`<hr><b>${t('consultAnswer')}</b><div data-user-content>${esc(item.response)}</div><small>${t('consultNoCustomerSend')}</small>`:`<small>${t('consultNoAnswer')}</small><label>${t('consultAnswer')}<textarea data-consult-answer="${esc(item.id)}" maxlength="4000" rows="2"></textarea></label><button type="button" class="outline" data-consult-reply="${esc(item.id)}">${t('save')}</button>`}</article>`).join('');rows.querySelectorAll('[data-consult-reply]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{const field=Array.from(rows.querySelectorAll('[data-consult-answer]')).find(node=>node.dataset.consultAnswer===button.dataset.consultReply);const response=field?.value||'';await consultationApi('/'+encodeURIComponent(button.dataset.consultReply)+'/reply','POST',{response,kind:'diagnosis'});await renderConsultations(ticket,caseMessages);}catch(error){notice(error.message);button.disabled=false;}});if(member?.role==='owner'&&window.tenantOperator?.hasRight('dialogs'))for(const item of items||[]){const article=Array.from(rows.children).find(el=>el.dataset.consultId===item.id);if(article)void renderGroupFlow(article,item,caseMessages);}};
+    const show=items=>{const rows=$('consultRows');if(!rows)return;rows.innerHTML=(items||[]).map(item=>`<article class="support-message" data-consult-id="${esc(item.id)}"><small>${esc(item.recipient_name)} · ${esc(i18n.date(item.created_at))}</small><div data-user-content>${esc(item.reason)}</div><small>${item.status==='queued_after_hours'?t('consultQueued'):t('consultWaiting')}</small>${item.response?`<hr><b>${t('consultAnswer')}</b><div data-user-content>${esc(item.response)}</div><small>${t('consultNoCustomerSend')}</small>`:`<small>${t('consultNoAnswer')}</small><label>${t('consultAnswer')}<textarea data-consult-answer="${esc(item.id)}" maxlength="4000" rows="2"></textarea></label><button type="button" class="outline" data-consult-reply="${esc(item.id)}">${t('save')}</button>`}</article>`).join('');rows.querySelectorAll('[data-consult-reply]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{const field=Array.from(rows.querySelectorAll('[data-consult-answer]')).find(node=>node.dataset.consultAnswer===button.dataset.consultReply);const response=field?.value||'';await consultationApi('/'+encodeURIComponent(button.dataset.consultReply)+'/reply','POST',{response,kind:'diagnosis'});await renderConsultations(ticket,caseMessages,attachedMedia);}catch(error){notice(error.message);button.disabled=false;}});if(member?.role==='owner'&&window.tenantOperator?.hasRight('dialogs'))for(const item of items||[]){const article=Array.from(rows.children).find(el=>el.dataset.consultId===item.id);if(article)void renderGroupFlow(article,item,ticket,caseMessages,attachedMedia);}};
     try{const result=await consultationApi('?case_id='+encodeURIComponent(ticket.id));if(revision!==detailRevision||selected!==ticket.id)return;show(result.consultations);$('consultCreate').onclick=async()=>{const button=$('consultCreate');button.disabled=true;try{await consultationApi('','POST',{case_id:ticket.id,recipient_id:$('consultRecipient').value,reason:$('consultReason').value,evidence:{ticket_id:ticket.id,conversation_id:ticket.conversation_id},request_key:crypto.randomUUID()});await renderConsultations(ticket);}catch(error){notice(error.message);button.disabled=false;}};}catch(error){section.querySelector('#consultRows').textContent=error.message;section.querySelector('#consultCreate').disabled=true;}
   }
-  async function renderGroupFlow(article,item,caseMessages){
+  async function renderGroupFlow(article,item,ticket,caseMessages,attachedMedia=[]){
     const path='/'+encodeURIComponent(item.id)+'/group',box=document.createElement('details'),title=document.createElement('summary'),host=document.createElement('div');
     title.textContent=t('groupConsult');box.append(title,host);article.append(box);
     const element=(tag,text)=>{const node=document.createElement(tag);if(text)node.textContent=text;return node;};
@@ -126,7 +185,8 @@
           // currently relevant details for this specific transmission.
           const summary=element('textarea');summary.maxLength=2600;summary.value='';summary.setAttribute('aria-label',t('groupSummary'));
           host.append(element('p',t('groupSummary')),summary,element('small',t('groupRemoteHint')),element('p',t('groupChoose')),select,element('p',t('groupAttachments')));
-          const checks=[];for(const message of caseMessages.filter(row=>['image','audio','voice','video','document'].includes(row.message_type))){
+          const selectableMedia=[...new Map([...caseMessages,...attachedMedia].filter(row=>['image','audio','voice','video','document'].includes(String(row.message_type||'').toLowerCase())).map(row=>[String(row.id),row])).values()];
+          const checks=[];for(const message of selectableMedia){
             const label=element('label'),check=element('input');check.type='checkbox';check.value=message.id;
             label.append(check,document.createTextNode(' '+message.message_type+' · '+i18n.date(message.happened_at||message.created_at)));host.append(label);checks.push(check);
           }
