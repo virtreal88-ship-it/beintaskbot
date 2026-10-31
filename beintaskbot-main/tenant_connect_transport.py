@@ -799,11 +799,24 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
             inserted_event = bool(cur.fetchone())
             outbound = event_type == 'message.outbound.observed' or data.get('fromMe') is True
+            independent_consultation_receipt=False
+            # Only this verified ingestion boundary can attest provider receipts.
+            data={k:v for k,v in data.items() if k!='_crm_signed_outbound_receipt'}
+            if outbound and not identity_conflict:
+                data={**data,'_crm_signed_outbound_receipt':True}
+                cur.execute('SAVEPOINT independent_consultation_receipt')
+                try:
+                    from tenant_dialog_consultations import observe_outbound_receipt
+                    independent_consultation_receipt=observe_outbound_receipt(cur,tenant,channel_id,conversation,data)
+                    cur.execute('RELEASE SAVEPOINT independent_consultation_receipt')
+                except Exception:
+                    cur.execute('ROLLBACK TO SAVEPOINT independent_consultation_receipt')
+                    cur.execute('RELEASE SAVEPOINT independent_consultation_receipt')
             from tenant_ai_group_coordination import group_jid, known_ai_origin, verified_employee, stop as stop_group
             coordinated = bool(group_jid(conversation))
             ai_origin = coordinated and known_ai_origin(cur,tenant,data)
-            consultation_origin=False
-            if coordinated and outbound and not ai_origin:
+            consultation_origin=independent_consultation_receipt
+            if coordinated and outbound and not ai_origin and not consultation_origin:
                 from tenant_consultation_group import known_outbound
                 consultation_origin=known_outbound(cur,tenant,channel_id,conversation,data)
             uncertain_origin = coordinated and data.get('authorshipUncertain') is True and not ai_origin and not consultation_origin
@@ -890,12 +903,14 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 # an earlier locally recorded Connect send. Preserve all local
                 # authorship and delivery metadata; never infer IDs from text.
                 if stored and not message_inserted:
-                    facts={key:data[key] for key in ('externalMessageId','quotedExternalMessageId')
+                    facts={key:data[key] for key in ('externalMessageId','quotedExternalMessageId','id','originClientMessageId','clientMessageId')
                            if isinstance(data.get(key),str) and re.fullmatch(r'[A-Za-z0-9_-]{5,200}',data[key])}
                     if facts:
+                        if data.get('_crm_signed_outbound_receipt') is True:facts['_crm_signed_outbound_receipt']=True
                         cur.execute("UPDATE saas_crm_messages SET raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
                                     (_json(facts),tenant,str(stored['id'])))
                 if (stored and not coordinated and _direct_identity(conversation)
+                        and not independent_consultation_receipt
                         and data.get('fromMe') is not False and not _outbound_is_ai(data, stored)
                         and data.get('conversationIdentityConflict') is not True):
                     # An outbound observation can be the first event that
@@ -906,7 +921,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     bind_unassigned_direct_agent(cur,tenant,channel_id,conversation)
                 # A malformed outbound event with ``fromMe:false`` is kept as
                 # an observable outbound record, but cannot take over a chat.
-                if message_inserted and data.get('fromMe') is not False and data.get('source') != 'unknown' and not _outbound_is_ai(data, stored) and not ai_origin and (not coordinated or employee is not None):
+                if message_inserted and not independent_consultation_receipt and data.get('fromMe') is not False and data.get('source') != 'unknown' and not _outbound_is_ai(data, stored) and not ai_origin and (not coordinated or employee is not None):
                     from tenant_ai_agent_connect import mark_operator_reply
                     mark_operator_reply(tenant, lead_id, channel_id, conversation, connection=conn, actor=employee)
                     if stored and stored.get('id') and data.get('conversationIdentityConflict') is not True:
@@ -987,20 +1002,28 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     # not create new AI/case work on the canonical route.
                     conn.commit()
                     return accepted
-            if not outbound and message_inserted and not ai_origin and data.get('type')=='text':
+            independent_consultation_reply=False
+            if not outbound and not ai_origin and data.get('type')=='text':
                 cur.execute('SAVEPOINT dialog_consultation_reply')
                 try:
-                    from tenant_dialog_consultations import record_reply
-                    record_reply(cur,tenant,channel_id,conversation,str(data.get('id') or event_id),
+                    from tenant_dialog_consultations import record_reply,known_reply
+                    linked=record_reply(cur,tenant,channel_id,conversation,str(data.get('id') or event_id),
                         str(data.get('text') or ''),data.get('quotedExternalMessageId'),
                         str(metadata.get('participant_name') or _phone_from_jid(metadata.get('participant_jid')) or metadata.get('display_name') or metadata.get('participant_jid') or conversation),
                         event.get('occurred_at'))
+                    independent_consultation_reply=bool(linked) or known_reply(cur,tenant,channel_id,conversation,str(data.get('id') or event_id))
                     cur.execute('RELEASE SAVEPOINT dialog_consultation_reply')
                 except Exception:
                     cur.execute('ROLLBACK TO SAVEPOINT dialog_consultation_reply')
                     cur.execute('RELEASE SAVEPOINT dialog_consultation_reply')
                     import logging
                     logging.getLogger(__name__).warning('Dialogue consultation correlation deferred; original evidence preserved')
+            if independent_consultation_reply:
+                # The original CRM evidence and private reply notification are
+                # durable. This is developer evidence, not a new customer turn
+                # for destination AI, extraction, learning or simulation.
+                conn.commit()
+                return accepted
             if (not outbound and message_inserted and coordinated and not ai_origin and data.get('type')=='text'
                     and ('CASE:' in str(data.get('text') or '').upper() or data.get('quotedExternalMessageId'))):
                 # Optional consultation correlation must never alter the normal
@@ -1168,18 +1191,23 @@ def send_group_with_receipt(route: dict, text: str, request_id: str, *, media: d
 
 
 def send_consultation_with_receipt(route, text, request_id):
-    """Existing Connect delivery semantics, with a usable quote receipt for direct chats too."""
+    """Accept Connect's durable queue receipt without claiming provider delivery."""
     from tenant_ai_group_coordination import group_jid
-    if group_jid(route.get('conversation_id')):
-        return send_group_with_receipt(route,text,request_id)
     key=str(uuid.UUID(str(request_id)))
-    result=_request(route['api_key'],'POST','/v1/channels/'+route['channel_id']+'/messages',
+    endpoint='/group-messages' if group_jid(route.get('conversation_id')) else '/messages'
+    result=_request(route['api_key'],'POST','/v1/channels/'+route['channel_id']+endpoint,
         {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':key})
+    message_id=result.get('id') if isinstance(result,dict) else None
     external=result.get('externalMessageId') if isinstance(result,dict) else None
-    if (not isinstance(result,dict) or not result.get('id') or
-            not isinstance(external,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',external)):
-        raise TenantPlatformError('Connect consultation receipt is unavailable.')
-    return {'message_id':str(result['id']),'external_message_id':external}
+    if not isinstance(message_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}',message_id):
+        raise TenantPlatformError('Connect consultation queue receipt is unavailable.')
+    if result.get('status') in {'failed','rejected','cancelled','canceled','error'}:
+        raise TenantPlatformError('Connect consultation was not delivered.')
+    if isinstance(external,str) and re.fullmatch(r'[A-Za-z0-9_-]{5,200}',external):
+        return {'state':'sent','message_id':message_id,'external_message_id':external}
+    if result.get('status') in {None,'pending','queued','accepted','sent'}:
+        return {'state':'pending','message_id':message_id,'external_message_id':None}
+    raise TenantPlatformError('Connect consultation outcome is unavailable.')
 
 
 def download_connect_message_media(route: dict, message_id: str, expected_type: str,

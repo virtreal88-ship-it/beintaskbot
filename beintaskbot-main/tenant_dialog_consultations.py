@@ -173,7 +173,7 @@ def prepare(profile,data,origin):
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('dialog-consultation-scope:'+tenant+':'+scope_hash,))
             cur.execute('''SELECT d.state FROM saas_internal_consultations c JOIN saas_consultation_group_deliveries d
               ON d.tenant_id=c.tenant_id AND d.consultation_id=c.id WHERE c.tenant_id=%s::uuid
-              AND c.case_id IS NULL AND c.evidence->>'scope_hash'=%s AND d.state IN ('ready','sending','unknown','sent') LIMIT 1''',(tenant,scope_hash))
+              AND c.case_id IS NULL AND c.evidence->>'scope_hash'=%s AND d.state IN ('ready','sending','pending','unknown','sent') LIMIT 1''',(tenant,scope_hash))
             if cur.fetchone():raise TenantLinearError('Этот фрагмент уже подготовлен или отправлен. Проверьте существующую консультацию; повтор отключён.',409)
             # Prevent collision with unrelated legacy delivery / AI request identities.
             cur.execute('''SELECT 1 FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND request_id=%s::uuid
@@ -181,6 +181,10 @@ def prepare(profile,data,origin):
               UNION ALL SELECT 1 FROM saas_ai_agent_drafts WHERE tenant_id=%s::uuid AND id=%s::uuid''',
               (tenant,request,tenant,request,tenant,request))
             if cur.fetchone():raise TenantLinearError('Код запроса уже использован.',409)
+            cur.execute("SELECT to_regclass('saas_chat_send_receipts') AS ready")
+            if (cur.fetchone() or {}).get('ready'):
+                cur.execute('SELECT 1 FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND request_id=%s::uuid LIMIT 1',(tenant,request))
+                if cur.fetchone():raise TenantLinearError('Код запроса уже использован для отправки сообщения.',409)
             # Explicit subset, immutable snapshot. Original evidence is never rewritten.
             public=[{'id':r['id'],'speaker':'Müştəri' if r['direction']=='incoming' else 'Əməkdaş',
               'text':_public_text(r['body']),'type':r['message_type'] if r['id'] in allowed else 'text','at':str(r['happened_at'])} for r in rows]
@@ -221,7 +225,7 @@ def dispatch(profile,key,request):
             tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True)
             cur.execute('SELECT * FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid FOR UPDATE',(tenant,key,request));delivery=cur.fetchone()
             if not delivery or delivery['created_by']!=actor:raise TenantLinearError('Отправка недоступна.',404)
-            if delivery['state']=='sent':return {'state':'sent','message_id':delivery['connect_message_id']}
+            if delivery['state'] in {'sent','pending'}:return {'state':delivery['state'],'message_id':delivery['connect_message_id']}
             if delivery['state']!='ready':raise TenantLinearError('Результат отправки неизвестен. Повтор отключён.',409)
             route(cur,tenant,policy,str(delivery['channel_id']),delivery['conversation_id'])
             cur.execute("UPDATE saas_consultation_group_deliveries SET state='sending',updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid",(tenant,request))
@@ -241,6 +245,13 @@ def dispatch(profile,key,request):
                 if not current or current['channel_id']!=str(delivery['channel_id']) or current['conversation_id']!=delivery['conversation_id']:
                     raise TenantLinearError('Получатель изменился.',409)
                 attempted=True;receipt=send_consultation_with_receipt(current,delivery['body'],request)
+                if receipt.get('state')=='pending':
+                    cur.execute('''UPDATE saas_consultation_group_deliveries SET state='pending',connect_message_id=%s,updated_at=now()
+                      WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND state='sending' RETURNING consultation_id''',
+                      (receipt['message_id'],tenant,request))
+                    if not cur.fetchone():raise TenantLinearError('Квитанция очереди требует проверки.',409)
+                    conn.commit()
+                    return {'state':'pending','message_id':receipt['message_id']}
                 cur.execute("""UPDATE saas_consultation_group_deliveries SET state='sent',connect_message_id=%s,provider_message_id=%s,updated_at=now()
                   WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND state='sending' RETURNING consultation_id""",
                   (receipt['message_id'],receipt['external_message_id'],tenant,request))
@@ -505,6 +516,8 @@ def _customer_replies(cur,tenant,reply_id):
       JOIN saas_chat_send_receipts receipt ON receipt.tenant_id=m.tenant_id AND receipt.lead_id=v.lead_id
         AND receipt.message_id=substring(m.external_id from 9) AND receipt.state='accepted'
       WHERE r.tenant_id=%s::uuid AND r.id=%s::uuid AND m.direction='outgoing' AND m.external_id LIKE 'connect:%%'
+        AND m.raw->>'_crm_signed_outbound_receipt'='true'
+        AND m.raw->>'externalMessageId' ~ '^[A-Za-z0-9_-]{5,200}$'
         AND m.created_at>=r.created_at AND m.author_name<>'AI Agent'
       ORDER BY happened_at DESC LIMIT 50""",(tenant,reply_id))
     return [{**dict(row),'happened_at':str(row['happened_at'])} for row in cur.fetchall()]
@@ -538,3 +551,46 @@ def original_evidence(cur,tenant,reply_id,channel,conversation,lead):
     if any(key not in by_id or version(by_id[key])!=snapshot['source_versions'].get(key) for key in snapshot['selected_message_ids']):
         raise TenantLinearError('Исходный фрагмент изменился. Требуется проверка сотрудником.',409)
     return [by_id[key] for key in snapshot['selected_message_ids']],snapshot['reason'],snapshot['source_versions']
+
+
+def observe_outbound_receipt(cur,tenant,channel,conversation,data):
+    """Only verified signed echoes or their server-marked durable CRM evidence.
+
+    Exact scope plus a known Connect ID and/or original request UUID is required.
+    This updates receipts; it never sends, grants a link or runs AI.
+    """
+    if not isinstance(data,dict) or data.get('_crm_signed_outbound_receipt') is not True or data.get('fromMe') is False:return False
+    external=data.get('externalMessageId');message=data.get('id');token=data.get('originClientMessageId') or data.get('clientMessageId')
+    if not isinstance(external,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',external):return False
+    if not isinstance(message,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}',message):return False
+    if token:
+        try:token=str(uuid.UUID(str(token)))
+        except (TypeError,ValueError,AttributeError):return False
+    else:token=None
+    cur.execute("SELECT to_regclass('saas_dialog_consultation_replies') AS ready")
+    if not (cur.fetchone() or {}).get('ready'):return False
+    cur.execute('''SELECT d.* FROM saas_consultation_group_deliveries d JOIN saas_internal_consultations c
+      ON c.tenant_id=d.tenant_id AND c.id=d.consultation_id AND c.case_id IS NULL
+      WHERE d.tenant_id=%s::uuid AND d.channel_id=%s::uuid AND d.conversation_id=%s
+        AND d.state IN ('sending','pending','unknown','sent')
+        AND (d.connect_message_id=%s OR (%s::text IS NOT NULL AND d.request_id::text=%s)) FOR UPDATE OF d''',
+      (tenant,channel,conversation,message,token,token))
+    rows=cur.fetchall()
+    if len(rows)!=1:return False
+    row=rows[0]
+    if token and str(row['request_id'])!=token:return False
+    if row.get('connect_message_id') and row['connect_message_id']!=message:return False
+    if not row.get('connect_message_id') and hashlib.sha256(str(data.get('text') or '').encode()).hexdigest()!=row['body_hash']:return False
+    if row.get('provider_message_id') and row['provider_message_id']!=external:return False
+    cur.execute('''UPDATE saas_consultation_group_deliveries SET state='sent',connect_message_id=%s,provider_message_id=%s,updated_at=now()
+      WHERE tenant_id=%s::uuid AND request_id=%s::uuid''',(message,external,tenant,row['request_id']))
+    return True
+
+
+def known_reply(cur,tenant,channel,conversation,message_id):
+    """Recognize an already recorded reply during signed webhook retries."""
+    cur.execute("SELECT to_regclass('saas_dialog_consultation_replies') AS ready")
+    if not (cur.fetchone() or {}).get('ready'):return False
+    cur.execute('''SELECT 1 FROM saas_dialog_consultation_replies WHERE tenant_id=%s::uuid
+      AND channel_id=%s::uuid AND conversation_id=%s AND message_id=%s''',(tenant,channel,conversation,message_id))
+    return bool(cur.fetchone())

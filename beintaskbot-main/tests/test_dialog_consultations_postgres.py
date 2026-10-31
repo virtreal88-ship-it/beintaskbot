@@ -25,12 +25,12 @@ def child(dsn,kind,consult,request,reply,barrier,results):
     def send(*_):
         with factory() as db:db.execute("INSERT INTO test_external_sends VALUES('consultation',%s)",(request,))
         time.sleep(.15)
-        return {'message_id':'connect-id','external_message_id':'PROVIDER_123'}
+        return {'state':'pending','message_id':'connect-id','external_message_id':None} if kind=='dispatch_queued' else {'message_id':'connect-id','external_message_id':'PROVIDER_123'}
     transport.send_consultation_with_receipt=send
     copilot.run=lambda *a,**kw:{'text':'Private draft'}
     try:
         barrier.wait(20)
-        if kind=='dispatch':value=local.dispatch(PROFILE,consult,request)
+        if kind in {'dispatch','dispatch_queued'}:value=local.dispatch(PROFILE,consult,request)
         elif kind=='handled':value=local.action(PROFILE,reply,{'action':'handled'})
         elif kind=='draft':value=local.draft(PROFILE,reply,{'request_id':str(uuid.uuid4())})
         else:
@@ -72,13 +72,16 @@ def prepared(database,monkeypatch):
     return db,consult,data['request_id']
 
 
-def test_double_click_dispatch_has_exactly_one_provider_attempt(prepared):
+@pytest.mark.parametrize('queued',[False,True])
+def test_double_click_dispatch_has_exactly_one_provider_attempt(prepared,queued):
     db,consult,request=prepared
-    results=race(db,['dispatch','dispatch'],consult,request)
-    assert sum(value[0]=='ok' and value[1]['state']=='sent' for value in results)>=1,results
+    kind='dispatch_queued' if queued else 'dispatch'
+    expected='pending' if queued else 'sent'
+    results=race(db,[kind,kind],consult,request)
+    assert sum(value[0]=='ok' and value[1]['state']==expected for value in results)>=1,results
     assert all(value[0]=='ok' or value[1]=='TenantLinearError' for value in results),results
     assert len(db.execute('SELECT * FROM test_external_sends'))==1
-    assert db.execute('SELECT state FROM saas_consultation_group_deliveries')[0]['state']=='sent'
+    assert db.execute('SELECT state FROM saas_consultation_group_deliveries')[0]['state']==expected
 
 
 def sent(prepared):

@@ -10,6 +10,7 @@ import tenant_connect_transport as transport
 from tenant_linear_policy import TenantLinearError
 
 TARGET='120363411822115409@g.us'
+REAL_QUEUE_SEND=transport.send_consultation_with_receipt
 
 @pytest.fixture
 def ready(db,monkeypatch):
@@ -182,6 +183,8 @@ def test_direct_receipt_uses_connect_and_quarantines_unusable_quote(monkeypatch)
     assert transport.send_consultation_with_receipt(route,'summary',str(uuid.uuid4()))['external_message_id']=='PROVIDER_123'
     assert request.call_args[0][2].endswith('/messages')
     request.return_value={'id':'connect-id'}
+    assert transport.send_consultation_with_receipt(route,'summary',str(uuid.uuid4()))['state']=='pending'
+    request.return_value={}
     with pytest.raises(TenantPlatformError):transport.send_consultation_with_receipt(route,'summary',str(uuid.uuid4()))
 
 
@@ -215,6 +218,11 @@ def test_confirmed_linked_customer_reply_requires_source_and_accepted_receipt(re
     with pytest.raises(TenantLinearError):flow.action(PROFILE,ident,{'action':'link_customer_reply','customer_message_id':message})
     assert flow.inbox(PROFILE)['unhandled']==1
     db.execute("UPDATE saas_chat_send_receipts SET state='accepted' WHERE tenant_id=%s::uuid",(A,));db.commit()
+    # CRM accepted means Connect queued the message, not provider delivery.
+    assert flow.customer_replies(PROFILE,ident)['messages']==[]
+    with pytest.raises(TenantLinearError):flow.action(PROFILE,ident,{'action':'link_customer_reply','customer_message_id':message})
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      (json.dumps({'_crm_signed_outbound_receipt':True,'externalMessageId':'CUSTOMER_PROVIDER_123'}),A,message));db.commit()
     assert flow.customer_replies(PROFILE,ident)['messages'][0]['id']==message
     with pytest.raises(TenantLinearError):flow.action(PROFILE,ident,{'action':'link_customer_reply','customer_message_id':str(uuid.uuid4())})
     flow.action(PROFILE,ident,{'action':'link_customer_reply','customer_message_id':message})
@@ -304,3 +312,114 @@ def test_withheld_file_has_same_effective_scope_as_no_file(ready):
     db.execute("UPDATE saas_crm_messages SET message_type='image',body='password screenshot' WHERE tenant_id=%s::uuid",(A,));db.commit()
     result,_=prepared(ready);sender.side_effect=TimeoutError();flow.dispatch(PROFILE,result['id'],data['request_id'])
     with pytest.raises(TenantLinearError):flow.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4()),'media_ids':data['message_ids']},'https://crm.test')
+
+
+@pytest.mark.parametrize('group',[False,True])
+def test_connect_202_queue_then_signed_receipt_and_delayed_reply(ready,monkeypatch,group):
+    import hashlib
+    import hmac
+    from types import SimpleNamespace
+    db,data,_=ready
+    destination=TARGET if group else '994501234567@s.whatsapp.net'
+    if not group:
+        db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name) VALUES(%s::uuid,%s::uuid,%s,100,'Developer')",(A,CA,destination));db.commit()
+        data['destination_conversation_id']=destination
+    result,_=prepared(ready)
+    monkeypatch.setattr(transport,'send_consultation_with_receipt',REAL_QUEUE_SEND)
+    monkeypatch.setattr(transport,'connect_route',lambda *_:{'api_key':'synthetic','channel_id':CA,'conversation_id':destination})
+    connect_id=str(uuid.uuid4())
+    http=Mock(return_value=SimpleNamespace(status_code=202,json=lambda:{'id':connect_id,'status':'pending'}))
+    monkeypatch.setattr(transport.requests,'request',http)
+    assert flow.dispatch(PROFILE,result['id'],data['request_id'])=={'state':'pending','message_id':connect_id}
+    assert flow.dispatch(PROFILE,result['id'],data['request_id'])['state']=='pending'
+    assert http.call_count==1
+    assert http.call_args.args[1].endswith('/group-messages' if group else '/messages')
+    assert flow.inbox(PROFILE)['consultations'][0]['state']=='pending'
+    assert reply(db,result,conversation=destination,quoted='PROVIDER_QUEUE_123') is None
+    # Real verified ingestion boundary; no provider request or production key.
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets,metadata) VALUES(%s::uuid,'connect','connected',%s,'{}'::jsonb)",(A,b'synthetic-cipher'));db.commit()
+    monkeypatch.setattr(transport,'_connect',lambda:db)
+    monkeypatch.setattr(transport,'_fernet',lambda:SimpleNamespace(decrypt=lambda _:b'{"webhook_secret":"synthetic-secret"}'))
+    event={'id':'queue-echo-'+str(uuid.uuid4()),'type':'message.outbound.observed','data':{
+        'id':connect_id,'channelId':CA,'conversationId':destination,'fromMe':True,'type':'text','text':'Delivered consultation',
+        'externalMessageId':'PROVIDER_QUEUE_123','originClientMessageId':data['request_id']}}
+    raw=json.dumps(event).encode();signature='sha256='+hmac.new(b'synthetic-secret',raw,hashlib.sha256).hexdigest()
+    extraction=Mock();ai=Mock();operator=Mock();bind=Mock()
+    monkeypatch.setattr('tenant_knowledge_live_queue.enqueue',extraction)
+    monkeypatch.setattr('tenant_ai_agent_connect.enqueue',ai)
+    monkeypatch.setattr('tenant_ai_agent_connect.mark_operator_reply',operator)
+    monkeypatch.setattr('tenant_ai_agent_connect.bind_unassigned_direct_agent',bind)
+    db.execute("UPDATE saas_ai_agent_settings SET support_case_extraction_mode='automatic' WHERE tenant_id=%s::uuid",(A,));db.commit()
+    assert transport.ingest(raw,signature,event)
+    assert flow.inbox(PROFILE)['consultations'][0]['state']=='sent'
+    assert not extraction.called and not ai.called and not operator.called and not bind.called
+    incoming={'id':'reply-event-'+str(uuid.uuid4()),'type':'message.inbound.received','data':{
+      'id':'developer-correlated','channelId':CA,'conversationId':destination,'fromMe':False,'type':'text',
+      'text':'Developer answer','participantName':'Developer','quotedExternalMessageId':'PROVIDER_QUEUE_123'}}
+    raw=json.dumps(incoming).encode();signature='sha256='+hmac.new(b'synthetic-secret',raw,hashlib.sha256).hexdigest()
+    assert transport.ingest(raw,signature,incoming)
+    assert transport.ingest(raw,signature,incoming)
+    assert len(flow.inbox(PROFILE)['replies'])==1
+    assert not extraction.called and not ai.called and not operator.called
+    unrelated={'id':'unrelated-event-'+str(uuid.uuid4()),'type':'message.inbound.received','data':{
+      'id':'unrelated-message','channelId':CA,'conversationId':destination,'fromMe':False,'type':'text',
+      'text':'An unrelated ordinary message','_crm_signed_outbound_receipt':True}}
+    raw=json.dumps(unrelated).encode();signature='sha256='+hmac.new(b'synthetic-secret',raw,hashlib.sha256).hexdigest()
+    assert transport.ingest(raw,signature,unrelated)
+    assert extraction.call_count==1 and ai.call_count==1
+    stored=db.execute("SELECT raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='connect:unrelated-message'",(A,))[0]['raw']
+    assert '_crm_signed_outbound_receipt' not in stored
+    assert http.call_count==1
+
+
+def test_signed_receipt_scope_identity_and_unknown_recovery(ready):
+    db,data,sender=ready;result,_=prepared(ready)
+    sender.side_effect=TimeoutError();flow.dispatch(PROFILE,result['id'],data['request_id'])
+    echo={'id':'queued-connect-id','externalMessageId':'PROVIDER_456','originClientMessageId':data['request_id'],
+        'fromMe':True,'_crm_signed_outbound_receipt':True,'text':sender.call_args.args[1]}
+    with db.cursor() as cur:
+        assert not flow.observe_outbound_receipt(cur,B,CB,TARGET,echo)
+        assert not flow.observe_outbound_receipt(cur,A,CA,'other-chat',echo)
+        assert not flow.observe_outbound_receipt(cur,A,CA,TARGET,{**echo,'originClientMessageId':str(uuid.uuid4())})
+        assert not flow.observe_outbound_receipt(cur,A,CA,TARGET,{**echo,'_crm_signed_outbound_receipt':False})
+        assert not flow.observe_outbound_receipt(cur,A,CA,TARGET,{**echo,'text':'An unrelated send with reused UUID'})
+        assert flow.observe_outbound_receipt(cur,A,CA,TARGET,echo)
+        assert not flow.observe_outbound_receipt(cur,A,CA,TARGET,{**echo,'externalMessageId':'DIFFERENT_PROVIDER'})
+    db.commit()
+    assert flow.inbox(PROFILE)['consultations'][0]['state']=='sent'
+    assert flow.dispatch(PROFILE,result['id'],data['request_id'])['state']=='sent'
+    assert sender.call_count==1
+
+
+def test_durable_queue_echo_reconciles_reply_that_arrived_first(ready,monkeypatch):
+    import tenant_dialog_consultations_worker as worker
+    db,data,sender=ready;result,_=prepared(ready)
+    sender.return_value={'state':'pending','message_id':'queue-id','external_message_id':None}
+    assert flow.dispatch(PROFILE,result['id'],data['request_id'])['state']=='pending'
+    monkeypatch.setattr(worker,'_connect',lambda:db)
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,raw)
+      VALUES(%s::uuid,%s::uuid,99,'connect:delayed-developer',%s,'incoming','Delayed answer',%s::jsonb)''',
+      (uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'delayed-developer','quotedExternalMessageId':'PROVIDER_LATE'})))
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,raw)
+      VALUES(%s::uuid,%s::uuid,99,'connect:queue-id',%s,'outgoing','Observed send',%s::jsonb)''',
+      (uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'queue-id','externalMessageId':'PROVIDER_LATE','originClientMessageId':data['request_id'],'_crm_signed_outbound_receipt':True,'fromMe':True})));db.commit()
+    assert worker.reconcile()==1
+    assert flow.inbox(PROFILE)['consultations'][0]['state']=='sent'
+    assert flow.inbox(PROFILE)['replies'][0]['body']=='Delayed answer'
+    assert worker.reconcile()==0 and sender.call_count==1
+
+
+@pytest.mark.parametrize('status',['failed','rejected','cancelled','canceled','error'])
+def test_explicit_connect_failure_cannot_be_claimed_sent(monkeypatch,status):
+    from tenant_platform import TenantPlatformError
+    monkeypatch.setattr(transport,'_request',Mock(return_value={'id':'connect-id','status':status,'externalMessageId':'PROVIDER_123'}))
+    with pytest.raises(TenantPlatformError):REAL_QUEUE_SEND({'api_key':'synthetic','channel_id':CA,'conversation_id':TARGET},'summary',str(uuid.uuid4()))
+
+
+def test_consultation_cannot_reuse_ordinary_manual_send_uuid(ready):
+    from tenant_chat_send_schema import ensure_schema
+    db,data,_=ready;ensure_schema(db)
+    db.execute('''INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,message_id)
+      VALUES(%s::uuid,11,%s::uuid,99,'synthetic','accepted','ordinary-message')''',(A,data['request_id']));db.commit()
+    with pytest.raises(TenantLinearError):flow.prepare(PROFILE,data,'https://crm.test')
+    assert not flow.inbox(PROFILE)['consultations']

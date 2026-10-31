@@ -77,3 +77,20 @@ Real PostgreSQL multiprocess tests cover dispatch double-click, handling versus
 new developer reply, and handling versus draft. GitHub Actions runs these with
 a disposable PostgreSQL service and mocked providers in the dedicated dialogue
 consultation regression workflow.
+
+Connect queue contract: an accepted HTTP202 with a Connect message ID remains
+`pending`, for both personal chats and groups, until a verified provider receipt
+exists. The HMAC-verified outbound echo matches the exact tenant/channel/chat and
+original request or accepted Connect ID. Token-only unknown recovery additionally
+checks the exact intended body hash. Persisted server-marked echoes are reconciled
+before delayed inbound replies, without another POST. Explicit failure statuses
+never become `sent`. Accepted CRM customer-send receipts alone also cannot clear
+pending consultation replies: the selected customer message needs its signed
+provider receipt.
+
+Positively correlated consultation echoes and replies, including webhook retries,
+preserve CRM evidence but skip ordinary destination-agent, extraction, learning,
+and simulation hooks. Unrelated messages retain normal admission. A quote without
+any mapped provider receipt is preserved and can be correlated only when verified
+outbound evidence arrives; the implementation does not guess its relationship or
+silently consume unrelated traffic.

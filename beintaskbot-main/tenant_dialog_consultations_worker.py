@@ -29,6 +29,19 @@ def reconcile():
         with conn.cursor() as cur:
             cur.execute("SELECT to_regclass('saas_dialog_consultation_replies') AS ready")
             if not (cur.fetchone() or {}).get('ready'):return 0
+            # Recover pending/unknown sends only from server-marked signed
+            # outbound evidence. Never POST again and never infer from body.
+            cur.execute('''SELECT DISTINCT d.tenant_id::text,d.channel_id::text,d.conversation_id,m.raw,m.body AS observed_body
+              FROM saas_consultation_group_deliveries d JOIN saas_internal_consultations c
+                ON c.tenant_id=d.tenant_id AND c.id=d.consultation_id AND c.case_id IS NULL
+              JOIN saas_connect_conversations v ON v.tenant_id=d.tenant_id AND v.connect_channel_id=d.channel_id AND v.conversation_id=d.conversation_id
+              JOIN saas_crm_messages m ON m.tenant_id=d.tenant_id AND m.kommo_lead_id=v.lead_id AND m.channel='connect:'||d.channel_id::text
+              WHERE d.state IN ('sending','pending','unknown') AND m.direction='outgoing'
+                AND m.raw->>'_crm_signed_outbound_receipt'='true'
+                AND (m.raw->>'id'=d.connect_message_id OR lower(m.raw->>'originClientMessageId')=d.request_id::text OR lower(m.raw->>'clientMessageId')=d.request_id::text)
+              LIMIT 100''')
+            for row in cur.fetchall():
+                flow.observe_outbound_receipt(cur,row['tenant_id'],row['channel_id'],row['conversation_id'],{**row['raw'],'text':row['raw'].get('text') or row['observed_body']})
             cur.execute('''SELECT DISTINCT d.tenant_id::text,d.channel_id::text,d.conversation_id,
               m.external_id,m.body,m.raw,m.author_name,COALESCE(m.happened_at,m.created_at) AS happened_at
               FROM saas_consultation_group_deliveries d JOIN saas_internal_consultations c
