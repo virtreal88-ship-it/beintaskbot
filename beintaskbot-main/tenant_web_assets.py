@@ -50,6 +50,7 @@ ASSETS = (
     ('/assets/tenant-request-coordinator.js', 'tenant-request-coordinator.js', 'no-store'),
     ('/assets/tenant-view-demand.js', 'tenant-view-demand.js', 'no-store'),
     ('/assets/tenant-operator-dialogs.js', 'tenant-operator-dialogs.js', 'no-store'),
+    ('/assets/tenant-dialog-consultations.js', 'tenant-dialog-consultations.js', 'no-store'),
     ('/assets/tenant-knowledge-campaigns.js', 'tenant-knowledge-campaigns.js', 'no-store'),
     ('/assets/tenant-knowledge-candidates.js', 'tenant-knowledge-candidates.js', 'no-store'),
     ('/assets/tenant-knowledge-pilot-admin.js', 'tenant-knowledge-pilot-admin.js', 'no-store'),

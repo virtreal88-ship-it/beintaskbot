@@ -309,3 +309,34 @@ def test_manual_kb_uses_customer_evidence_after_incoming_employee_reply(ready,mo
 def test_three_voice_customer_request_after_staff_answer_reuses_all_receipts(ready,monkeypatch):
     test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receipt_without_send(
         ready,monkeypatch,'voice','answered',burst=True)
+def test_async_consultation_uses_current_assigned_agent_and_long_original_evidence(ready):
+    import tenant_dialog_consultations as consultations
+    db,other,generated,data=ready
+    consultations.schema(db)
+    consult=str(uuid.uuid4());reply=str(uuid.uuid4())
+    db.execute("UPDATE saas_ai_agents SET language='az' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
+    db.execute("""INSERT INTO saas_internal_consultations(tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,status,created_by)
+      VALUES(%s::uuid,%s::uuid,NULL,%s::uuid,'client','manual-consult','Printer','waiting_specialist',11)""",(A,consult,CA))
+    db.execute("""INSERT INTO saas_dialog_consultation_replies(tenant_id,id,consultation_id,channel_id,conversation_id,message_id,author,body,happened_at)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'developers','quote','Developer',%s,now())""",(A,reply,consult,CA,'Long developer evidence '+('x'*5000)))
+    db.commit()
+    original=db.execute("SELECT id::text,external_id,body,message_type,direction,raw,COALESCE(happened_at,created_at) AS happened_at FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41 AND channel=%s",(A,'connect:'+CA))
+    selected=[row['id'] for row in original]
+    db.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,consultation_id,channel_id,conversation_id,group_channel_id,group_conversation_id,
+      token_hash,selected_message_ids,public_messages,source_versions,expires_at)
+      VALUES(%s::uuid,%s::uuid,NULL,%s::uuid,%s::uuid,'client',%s::uuid,'client',%s,%s::jsonb,'[]'::jsonb,%s::jsonb,now()+interval '1 day')''',
+      (uuid.uuid4(),A,consult,CA,CA,str(uuid.uuid4()),json.dumps(selected),json.dumps({row['id']:consultations.version(row) for row in original})))
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,'NEW-INCIDENT',%s,'incoming','Completely different new issue',now()+interval '1 day')''',(uuid.uuid4(),A,'connect:'+CA));db.commit()
+    copilot.run(PROFILE,{**data,'mode':'instruction','prompt':'Подготовь ответ клиенту'},consultation_reply_id=reply)
+    context=generated.call_args.kwargs['extra_context']
+    assert 'Completely different new issue' not in str(generated.call_args.args)
+    assert context['untrusted_developer_consultation_evidence']['original_summary']=='Printer'
+    assert context['prior_internal_copilot_turns']==[]
+    assert context['language_preference']=='az'
+    assert context['assigned_agent_id']==AGENT
+    assert context['assigned_agent_instructions']=='ASSIGNED_AGENT_RULES'
+    assert len(context['untrusted_developer_consultation_evidence']['body'])>5000
+    assert db.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
+    assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
+    with pytest.raises(TenantLinearError):copilot.run(PROFILE,{**data,'request_id':str(uuid.uuid4())},consultation_reply_id=str(uuid.uuid4()))

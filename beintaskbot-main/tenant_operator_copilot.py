@@ -301,7 +301,7 @@ def _hash(command):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
-def run(profile, data):
+def run(profile, data, *, consultation_reply_id=None):
     command = _clean(data)
     with _connect() as conn:
         ensure_schema(conn)
@@ -310,6 +310,24 @@ def run(profile, data):
             route = assert_route(cur, tenant, policy, 'connect', command['conversation_id'], command['channel_id'], command['lead_id'])
             if int(route.get('lead_id') or 0) != command['lead_id']:
                 raise TenantLinearError('Диалог изменился. Обновите его.', 409)
+            consultation_evidence=None
+            if consultation_reply_id is not None:
+                # Internal worker argument; never accepted from a browser's JSON.
+                # Fetch evidence by its actual source mapping, not caller text.
+                cur.execute("""SELECT r.id::text,r.body,r.author,r.happened_at
+                  FROM saas_dialog_consultation_replies r JOIN saas_internal_consultations c
+                  ON c.tenant_id=r.tenant_id AND c.id=r.consultation_id
+                  WHERE r.tenant_id=%s::uuid AND r.id=%s::uuid AND c.channel_id=%s::uuid AND c.conversation_id=%s""",
+                  (tenant,identifier(consultation_reply_id),command['channel_id'],command['conversation_id']))
+                evidence=cur.fetchone()
+                if not evidence:raise TenantLinearError('Ответ разработчика недоступен в этом диалоге.',404)
+                consultation_evidence={**dict(evidence),'happened_at':str(evidence['happened_at'])}
+                consultation_evidence['body']=evidence['body'][:12000]
+                consultation_evidence['is_partial']=len(evidence['body'])>12000
+                from tenant_dialog_consultations import original_evidence
+                original_rows,summary,source_versions=original_evidence(cur,tenant,str(evidence['id']),command['channel_id'],command['conversation_id'],command['lead_id'])
+                consultation_evidence.update(original_summary=summary,source_versions=source_versions)
+                command['_consultation_evidence']=consultation_evidence
             thread_key = (tenant, actor, command['channel_id'], command['conversation_id'])
             if command['mode'] == 'clear':
                 cur.execute('DELETE FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s', thread_key)
@@ -386,16 +404,16 @@ def run(profile, data):
               (tenant, command['lead_id'], 'connect:' + command['channel_id']))
             rows = list(reversed(cur.fetchall()))
             from tenant_episode_media import extend_episode
-            rows=extend_episode(cur,tenant,[command['lead_id']],command['channel_id'],rows,20,latest_request=command['mode']=='reply')
+            rows=original_rows if consultation_evidence is not None else extend_episode(cur,tenant,[command['lead_id']],command['channel_id'],rows,20,latest_request=command['mode']=='reply')
             if not rows:
                 raise TenantLinearError('В диалоге пока нет сообщений.', 409)
-            command['_latest_source_id']=str(rows[-1].get('external_id') or '')
+            if consultation_evidence is None:command['_latest_source_id']=str(rows[-1].get('external_id') or '')
             from tenant_media_evidence import annotate_rows
             annotate_rows(cur, tenant, rows)
             cur.execute('SELECT turns FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE', thread_key)
             turns_row = cur.fetchone() or {}
             turns = turns_row.get('turns') if isinstance(turns_row.get('turns'), list) else []
-            turns = turns[-10:]
+            turns = turns[-10:] if consultation_evidence is None else []
             # A private thread from an older assignment must never become the
             # new agent's memory. Old rows lack a binding and are excluded.
             turns = [turn for turn in turns if isinstance(turn, dict)
@@ -422,7 +440,7 @@ def run(profile, data):
                 and (row.get('raw') if isinstance(row.get('raw'),dict) else {}).get('verified_employee_id') is None
                 and (row.get('raw') if isinstance(row.get('raw'),dict) else {}).get('ai_authored') is not True),{})
         latest_customer=str(latest_row.get('_copilot_attachment_text') or latest_row.get('body') or '')
-        knowledge=knowledge_context(tenant,latest_customer+'\n'+command['prompt'],agent_id=command['_agent_id'],limit=4)
+        knowledge=knowledge_context(tenant,latest_customer+'\n'+command['prompt']+'\n'+str((consultation_evidence or {}).get('body') or '')[:2000],agent_id=command['_agent_id'],limit=4)
         knowledge=[{**item,'content':item['content'][:1200]} for item in knowledge]
     except Exception as error:
         _finish(tenant,command,actor,None,turns,command['prompt'],'')
@@ -459,6 +477,7 @@ def run(profile, data):
     # Published knowledge is supplied in extra_context below.
     turns=[{'role':str(turn.get('role') or '')[:20],'text':str(turn.get('text') or '')[:800], 'agent_binding':turn.get('agent_binding')} for turn in turns[-6:] if isinstance(turn,dict)]
     extra = {'copilot_action': command['mode'], 'employee_request': request,
+             'untrusted_developer_consultation_evidence':consultation_evidence,
              'company_instructions':str(agent_context.get('company_instructions') or '')[:20000],
              'assigned_agent_id': command['_agent_id'],
              'assigned_agent_instructions':str(agent_context.get('instructions') or '')[:20000],
@@ -495,6 +514,7 @@ def run(profile, data):
         'source_versions':command.get('_source_versions',[]),
         'context_usage': context_usage if command['mode']=='reply' else None,
         'knowledge_sources': [{'title': item['title']} for item in knowledge]}
+    if consultation_evidence is not None:result['consultation_agent_binding']=command['_agent_binding']
     _finish(tenant, command, actor, result, turns, request, text)
     return result
 
@@ -510,6 +530,9 @@ def _finish(tenant, command, actor, result, turns, request, answer):
                 assert_route(cur, current_tenant, current_policy, 'connect', command['conversation_id'], command['channel_id'], command['lead_id'])
                 if not current_policy.can_use_chat_ai() or _agent_binding(_assigned_context(cur, tenant, command)) != command['_agent_binding']:
                     raise TenantLinearError('Назначение агента или доступ изменились. Результат AI скрыт.', 409)
+                if command.get('_consultation_evidence'):
+                    from tenant_dialog_consultations import original_evidence
+                    original_evidence(cur,tenant,command['_consultation_evidence']['id'],command['channel_id'],command['conversation_id'],command['lead_id'])
                 from tenant_episode_media import revalidate_sources
                 revalidate_sources(cur,tenant,command.get('_source_versions',[]))
                 if command.get('_latest_source_id'):
@@ -527,7 +550,7 @@ def _finish(tenant, command, actor, result, turns, request, answer):
             stored = dict(result or {})
             cur.execute("UPDATE saas_chat_ai_runs SET status=%s,result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending'",
                         (status, json.dumps(stored, ensure_ascii=False) if status == 'completed' else None, tenant, command['request_id']))
-            if status == 'completed':
+            if status == 'completed' and not command.get('_consultation_evidence'):
                 new_turns = (turns + [{'role':'employee','text':request[:1600],'agent_binding':command['_agent_binding']}, {'role':'copilot','text':answer[:6000],'agent_binding':command['_agent_binding']}])[-20:]
                 cur.execute('''INSERT INTO saas_operator_copilot_threads(tenant_id,requested_by,channel_id,conversation_id,turns)
                   VALUES(%s::uuid,%s,%s,%s,%s::jsonb) ON CONFLICT(tenant_id,requested_by,channel_id,conversation_id)
