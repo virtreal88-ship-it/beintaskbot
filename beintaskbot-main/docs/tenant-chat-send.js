@@ -1,6 +1,7 @@
 /* Chat composer outside the page shell; durable UUIDs and stale-view guards. */
 (()=>{
   const copy=(key,fallback)=>window.tenantI18n?.t(key)||fallback;
+  const quoteCopy=state=>({ru:{pending:'Принято в очередь. Доставка ещё не подтверждена.',retrying:'Подготовка отправки. Доставка ещё не подтверждена.',unknown:'Результат требует проверки. Повторная отправка отключена.',failed:'Отправка не подтверждена. Проверьте статус перед новым действием.',sent:'Провайдер принял сообщение. Доставка клиенту ещё не подтверждена.',delivered:'Доставка подтверждена.',read:'Сообщение прочитано.'},az:{pending:'Növbəyə qəbul edildi. Çatdırılma təsdiqlənməyib.',retrying:'Göndərmə hazırlanır. Çatdırılma təsdiqlənməyib.',unknown:'Nəticə yoxlanmalıdır. Təkrar göndərmə söndürülüb.',failed:'Göndərmə təsdiqlənməyib. Yeni əməliyyatdan əvvəl vəziyyəti yoxlayın.',sent:'Provayder qəbul etdi. Müştəriyə çatdırılma təsdiqlənməyib.',delivered:'Çatdırılma təsdiqləndi.',read:'Mesaj oxunub.'},en:{pending:'Queued. Delivery is not confirmed.',retrying:'Preparing send. Delivery is not confirmed.',unknown:'Outcome needs checking. Resend disabled.',failed:'Send not confirmed. Check status before another action.',sent:'Provider accepted. Customer delivery is not confirmed.',delivered:'Delivery confirmed.',read:'Message read.'}}[window.tenantI18n?.language]||{})[state]||'Delivery is not confirmed.';
   function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo',onAccepted=()=>{},getQuote=()=>null,onPending=()=>{},onDiscard=()=>{},isQuoteCurrent=()=>true}){
     const button=document.getElementById('sendChat'),input=document.getElementById('chatText');
     const key='tenant-chat-send:'+identity+':'+leadId;
@@ -16,10 +17,15 @@
       button.disabled=true;button.classList.add('loading');
       try{
         const sent=await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify(pending)});
+        if(pending.quote_message_id&&sent.provider_accepted!==true&&sent.manual_review!==true){
+          if(sent.delivery_state==='failed'&&sent.retry_safe===true&&!sent.provider_message_id){sessionStorage.removeItem(key);if(isCurrent()){onDiscard();button.textContent=copy('send','Göndər');}}
+          else if(isCurrent()){onPending(pending);button.textContent=copy('checkSend','Vəziyyəti yoxla');}
+          if(isCurrent()){alert(quoteCopy(sent.delivery_state||'unknown'));await reload();}return;
+        }
         sessionStorage.removeItem(key);onAccepted(pending.text);if(!isCurrent())return;
         if(input.value.trim()===pending.text){input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));}button.textContent=copy('send','Göndər');
-        alert(sent.manual_review?'Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.':copy('sendAccepted','Mesaj qəbul edildi. Tarixçədə çatdırılmanı yoxlayın.'));await reload();
-      }catch(e){if(e.keepRequest===false){sessionStorage.removeItem(key);if(isCurrent())onDiscard();}else if(isCurrent())onPending(pending);if(isCurrent()){button.textContent=e.keepRequest===false?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');alert(e.message);}}
+        alert(sent.manual_review?'Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.':pending.quote_message_id?quoteCopy(sent.delivered===true?(sent.delivery_state==='read'?'read':'delivered'):'sent'):copy('sendAccepted','Mesaj qəbul edildi. Tarixçədə çatdırılmanı yoxlayın.'));await reload();
+      }catch(e){const discard=e.keepRequest===false&&!pending?.quote_message_id;if(discard){sessionStorage.removeItem(key);if(isCurrent())onDiscard();}else if(isCurrent())onPending(pending);if(isCurrent()){button.textContent=discard?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');alert(e.message);}}
       finally{button.disabled=false;button.classList.remove('loading');}
     };
     if(provider!=='connect')bindFile({identity,leadId,me,isCurrent,reload,input,button});
