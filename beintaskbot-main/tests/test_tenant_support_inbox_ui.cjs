@@ -134,7 +134,7 @@ function setup(fetch,url='https://crm.test/app',rights=true){
    if(url==='/api/platform/support-cases/ticket-1/public-shares')return response([]);
    if(url===shareUrl&&init.method==='POST')return response({id:'share-a',url:'https://crm.test/public/case/synthetic-token',expires_in_hours:24});
    return response({tickets:[ticket],members,next_offset:null});
- },'https://crm.test/app?view=support&support_ticket_id=ticket-1');
+ });
  await settle();const shareDoc=publicUi.window.document;shareDoc.querySelector('[data-support-id]').click();await settle();const sharePanel=shareDoc.querySelector('#publicCaseShare');assert.ok(sharePanel);
  const shareChecks=[...sharePanel.querySelectorAll('[data-share-message]')];shareChecks[0].checked=true;shareChecks[1].checked=true;
  sharePanel.querySelector('#publicCaseGroup').value='0';sharePanel.querySelector('button').click();await settle();
@@ -143,5 +143,29 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  assert.match(sharePanel.textContent,/Linki əldə edən hər kəs 24 saat/);assert.equal(sharePanel.querySelector('#publicCaseMediaReviewed'),null);
  assert.equal(shareRequest.body.group_conversation_id,gid);assert.match(shareDoc.querySelector('#publicCaseShare').textContent,/WhatsApp-a yalnız istədiyiniz halda özünüz göndərin/);
  assert.equal(shareCalls.filter(x=>x.init.method==='POST').length,1,'creating a page does not send a WhatsApp message');publicUi.window.close();
+ const oldMediaId='afdf2239-babc-44cc-a703-3d1df394e099',historyCalls=[],attachCalls=[];
+ const picker=setup(async(url,init={})=>{
+   const body=init.body?JSON.parse(init.body):{};historyCalls.push({url,init,body});
+   if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
+   if(url.startsWith('/api/platform/ai/internal-consultations'))return response({consultations:[]});
+   if(url==='/api/platform/ai/support-tickets/ticket-1')return response({ticket:{...ticket,channel_id:'channel-a'},messages:[{id:'case-text',direction:'incoming',body:'Ticket message',message_type:'text'}],attached_media:[],expert_results:[],next_before:null});
+   if(url.startsWith('/api/platform/ai/support-tickets/ticket-1/attachments')&&init.method!=='POST')return response(url.includes('before=')?{messages:[{id:oldMediaId,external_id:'connect:old-photo',message_type:'image',direction:'incoming',created_at:'2026-09-01T00:00:00Z'}],next_before:null}:{messages:Array.from({length:50},(_,i)=>({id:`00000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`,message_type:'image',direction:'incoming'})),next_before:'history-49'});
+   if(url==='/api/platform/ai/support-tickets/ticket-1/attachments'&&init.method==='POST'){attachCalls.push({url,init,body});return response({ticket_id:'ticket-1',attached_message_ids:[oldMediaId],attached_count:1});}
+   if(url==='/api/platform/support-cases/ticket-1/public-shares')return response([]);
+   return response({tickets:[ticket],members,next_offset:null});
+ },'https://crm.test/app?view=support&support_ticket_id=ticket-1');
+ let downloaded='';picker.window.tenantDownloadAttachment=(_button,url)=>{downloaded=url;};await settle();const pickerDoc=picker.window.document;
+ pickerDoc.querySelector('[data-support-id]').click();await settle();
+ assert.ok(pickerDoc.querySelector('#supportExistingMedia'),pickerDoc.querySelector('#supportDetail').textContent);assert.ok(pickerDoc.querySelector('#caseMediaLoad'));
+ pickerDoc.querySelector('#caseMediaLoad').click();await settle();assert.equal(pickerDoc.querySelectorAll('#supportExistingMedia input').length,50);assert.equal(pickerDoc.querySelector(`#supportExistingMedia input[value="${oldMediaId}"]`),null);
+ pickerDoc.querySelector('#caseMediaEarlier').click();await settle();
+ const oldCheck=pickerDoc.querySelector(`#supportExistingMedia input[value="${oldMediaId}"]`);assert.ok(oldCheck,'media older than the first 50 history rows is selectable');
+ oldCheck.checked=true;oldCheck.dispatchEvent(new picker.window.Event('change'));
+ const attachButton=pickerDoc.querySelector('#supportExistingMedia [data-case-media-attach]');
+ assert.ok(attachButton);const beforeAttach=historyCalls.length;attachButton.click();await settle();
+ assert.equal(attachCalls.length,1);assert.deepEqual(attachCalls[0].body.message_ids,[oldMediaId]);assert.deepEqual(historyCalls.filter(call=>call.init.method==='POST').map(call=>call.url),['/api/platform/ai/support-tickets/ticket-1/attachments'],'attach makes no consultation, share, model or delivery call');
+ assert.ok(!historyCalls.some(call=>/\/dialogs\/send|group$|public-share/.test(call.url)&&call.init.method==='POST'));
+ const openButton=pickerDoc.querySelector('#supportExistingMedia [data-case-media-open]');
+ assert.ok(openButton);openButton.click();assert.match(downloaded,/conversation_id=client/);assert.equal(attachCalls.length,1);picker.window.close();
  console.log('PASS: inbox renders safely; public shares scope explicitly selected CASE messages/media, disclose link access, and do not send WhatsApp.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

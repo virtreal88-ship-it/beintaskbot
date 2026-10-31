@@ -4,7 +4,7 @@ import json
 from aiohttp import web
 from tenant_ai_agents_api import _origin, _expected, _json_dumps
 from tenant_linear_policy import TenantLinearError
-from tenant_support_inbox_store import listing, detail, create, update, complete
+from tenant_support_inbox_store import listing, detail, create, update, complete, attach_case_media, available_case_media
 from tenant_support_inbox_summary import regenerate
 
 
@@ -26,6 +26,8 @@ def handler(member_from_request, origin, logger, resource):
                 elif resource=='consultation_groups':
                     from tenant_consultation_group import destinations
                     result=await asyncio.to_thread(destinations,profile)
+                elif resource=='ticket_attachments':
+                    result=await asyncio.to_thread(available_case_media,profile,request.match_info['ticket_id'],request.query.get('before'))
                 else:
                     result = await asyncio.to_thread(detail,profile,request.match_info['ticket_id'],request.query.get('before'),request.query.get('message_id'))
             else:
@@ -44,6 +46,8 @@ def handler(member_from_request, origin, logger, resource):
                     result = await asyncio.to_thread(create,profile,payload)
                 elif resource=='ticket' and request.method=='PATCH':
                     result = await asyncio.to_thread(update,profile,request.match_info['ticket_id'],payload)
+                elif resource=='ticket_attachments' and request.method=='POST' and set(payload)=={'message_ids'}:
+                    result = await asyncio.to_thread(attach_case_media,profile,request.match_info['ticket_id'],payload['message_ids'])
                 elif resource=='summary' and request.method=='POST':
                     result = await asyncio.to_thread(regenerate,profile,request.match_info['ticket_id'])
                 elif resource=='consultation' and request.method=='POST':
