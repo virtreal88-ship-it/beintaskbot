@@ -434,6 +434,30 @@ def test_ai_summary_fields_and_shared_budget_receipt(db):
     db.commit()
 
 
+def test_russian_support_history_produces_azerbaijani_ticket_fields_without_translating_evidence(db):
+    cipher=config_company(db)
+    db.execute("UPDATE saas_crm_messages SET body='Не работает интернет после перезагрузки модема' WHERE external_id='m1'")
+    db.commit()
+    output={
+        'description':'İnternet bağlantısı işləmir',
+        'summary':'Müştəri modemi yenidən başlatdıqdan sonra internetə qoşula bilmir.',
+        'suggestions':'Agent modemi yenidən başlatmağı təklif edib.',
+        'next_steps':'İnternet xəttini və modemin bağlantısını yoxlayın.',
+    }
+    with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate',return_value=(json.dumps(output,ensure_ascii=False),{'total_tokens':12})) as provider:
+        result=manual()
+
+    for key,value in output.items():
+        assert result['ticket'][key]==value
+    # Prompting is fixed to Azerbaijani even when the evidence is Russian.
+    assert 'Azərbaycan dilində' in provider.call_args.kwargs['instructions']
+    assert any('Не работает интернет после перезагрузки модема' in line['text'] for line in provider.call_args.args[3])
+    # Persisted correspondence remains in the language actually sent by the customer.
+    assert any(message['body']=='Не работает интернет после перезагрузки модема' for message in result['messages'])
+    assert db.execute('SELECT description,summary,suggestions,next_steps FROM saas_support_tickets WHERE id=%s::uuid',(result['ticket']['id'],))[0]==output
+    db.commit()
+
+
 def test_ai_failure_keeps_ticket_and_consumes_reservation(db):
     cipher=config_company(db)
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate',side_effect=RuntimeError('unavailable')):
