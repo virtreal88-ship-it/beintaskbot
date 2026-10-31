@@ -288,7 +288,7 @@ async def _apply_no_answer_policy(job,reservation,policy,signal,source,query,lin
     if pilot_group_destination:
         decision={'action':'consult_developer','reason':str(signal)} if signal in {
             'missing_knowledge','unsupported_evidence','conflicting_evidence','expert_failed','customer_unsolved'} else {
-            {'action':'stop','reason':'not_a_no_answer_signal'}}
+            'action':'stop','reason':'not_a_no_answer_signal'}
     else:
         decision=selected_action(policy,signal,expert_result=expert_result)
     _ai_diag(logger,job,'no_answer_policy',str(decision.get('action') or 'stop')+':'+str(decision.get('reason') or signal))
