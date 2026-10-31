@@ -861,6 +861,10 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
                   RETURNING consultation_id''',(receipt['message_id'],receipt['external_message_id'],tenant,consultation_id,request_id))
                 if not cur.fetchone():
                     raise TenantLinearError('Pilot group receipt needs review.',409)
+                cur.execute('''UPDATE saas_internal_consultations SET delivery_state=
+                  CASE WHEN recipient_id IS NULL THEN 'pilot_group_sent' ELSE 'group_sent' END
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND delivery_state IN ('pilot_group_pending','internal_inbox','telegram_pending')''',
+                  (tenant,consultation_id))
                 from tenant_platform import _json
                 cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,
                   channel,author_name,body,message_type,raw)
@@ -881,6 +885,10 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
                 cur.execute('''UPDATE saas_consultation_group_deliveries SET state=%s,updated_at=now()
                   WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='sending' ''',
                   ('unknown' if attempted else 'blocked',tenant,consultation_id,request_id))
+                cur.execute('''UPDATE saas_internal_consultations SET delivery_state=
+                  CASE WHEN recipient_id IS NULL THEN %s ELSE 'group_delivery_needs_review' END
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND delivery_state='pilot_group_pending' ''',
+                  ('pilot_group_unknown' if attempted else 'pilot_group_blocked',tenant,consultation_id))
             conn.commit()
         return {'state':'unknown' if attempted else 'blocked','reason':'pilot_group_delivery_needs_review'}
     return {'state':'sent','request_id':request_id,'message_id':receipt['message_id']}

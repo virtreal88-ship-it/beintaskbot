@@ -270,12 +270,12 @@ async def _send_policy_reply(job,reservation,source,text,kommo_request,wait_slot
 
 
 async def _apply_no_answer_policy(job,reservation,policy,signal,source,query,lines,knowledge,kommo_request,wait_slot,logger,
-                                  *,assessment=None,expert_result=None):
+                                  *,assessment=None,expert_result=None,pilot_group_destination=False):
     """Run one configured missing-evidence action, then stop or continue safely."""
     from tenant_ai_agent_no_answer import (selected_action, clarification_decision,
         clear_clarifications, stop_without_answer)
     from tenant_ai_agent_run_store import finish_superseded
-    if not isinstance(policy,dict) or policy.get('enabled') is not True:
+    if not pilot_group_destination and (not isinstance(policy,dict) or policy.get('enabled') is not True):
         return {'handled':False,'knowledge':knowledge,'expert_result':expert_result}
     if policy.get('action')=='call_expert' and expert_result is None:
         trigger={'name':'Configured no-answer Expert','actions':['call_expert'],'condition':{}}
@@ -285,7 +285,12 @@ async def _apply_no_answer_policy(job,reservation,policy,signal,source,query,lin
                 previous_actions=[])
         except Exception:
             expert_result={'status':'unavailable','error_code':'expert_unavailable'}
-    decision=selected_action(policy,signal,expert_result=expert_result)
+    if pilot_group_destination:
+        decision={'action':'consult_developer','reason':str(signal)} if signal in {
+            'missing_knowledge','unsupported_evidence','conflicting_evidence','expert_failed','customer_unsolved'} else {
+            'action':'stop','reason':'not_a_no_answer_signal'}
+    else:
+        decision=selected_action(policy,signal,expert_result=expert_result)
     _ai_diag(logger,job,'no_answer_policy',str(decision.get('action') or 'stop')+':'+str(decision.get('reason') or signal))
     if decision['action']=='continue' and decision['reason']=='expert_evidence_available':
         evidence=_expert_evidence(expert_result)
@@ -333,7 +338,9 @@ async def _apply_no_answer_policy(job,reservation,policy,signal,source,query,lin
                 await asyncio.to_thread(finish_superseded,job,reservation,'connect_handoff_turn_stale')
                 return {'handled':True,'stale':True}
             from tenant_internal_consultations import create_from_ai
-            receipt=await asyncio.to_thread(create_from_ai,job,recipient_id=policy['developer_id'],reason=reason,
+            receipt=await asyncio.to_thread(create_from_ai,job,
+                recipient_id=None if pilot_group_destination else policy['developer_id'],
+                destination='pilot_group' if pilot_group_destination else 'employee',reason=reason,
                 evidence={'query':str(query or '')[:1500],'signal':str(signal),'source_external_id':str(source.get('external_id') or '')},run_id=(reservation or {}).get('run_id'))
             if receipt.get('id'):
                 from tenant_ai_pilot import manual_live_job
@@ -982,17 +989,12 @@ async def process_connect_one(job, logger):
                 return
             pilot_action=pilot_decision['action']
             if pilot_action=='consult_developer':
-                # Initial escalation reuses the durable support case and the
-                # configured recipient/group path. Missing policy or recipient
-                # fails closed; the model's text is never sent as a promise.
-                policy=response_policy if isinstance(response_policy,dict) else {}
-                if (policy.get('enabled') is not True or policy.get('action')!='consult_developer'
-                        or type(policy.get('developer_id')) is not int or policy['developer_id']<=0):
-                    recipient_ready=False
-                else:
-                    from tenant_internal_consultations import recipient_available
-                    recipient_ready=await asyncio.to_thread(recipient_available,tenant,policy['developer_id'])
-                if not recipient_ready:
+                # The owner-attested pilot's configured WhatsApp group is the
+                # recipient. This path does not depend on the global employee
+                # no-answer policy or invent a tenant member identity.
+                from tenant_ai_pilot import manual_live_job,configured_group_scope
+                group_scope=configured_group_scope() if manual_live_job(job) else None
+                if not group_scope:
                     _ai_diag(logger,job,'initial_developer_consultation','blocked_missing_recipient')
                     lang=str(reservation.get('agent_language') or 'auto')
                     draft={
@@ -1002,8 +1004,9 @@ async def process_connect_one(job, logger):
                       'en':'I can’t confirm routing this report to the technical team right now, so I can’t say they have received it.',
                     }.get(lang,'I can’t confirm routing this report to the technical team right now, so I can’t say they have received it.')
                 else:
-                    outcome=await _apply_no_answer_policy(job,reservation,policy,'unsupported_evidence',source,
-                        query,lines,knowledge,None,None,logger)
+                    group_policy={}
+                    outcome=await _apply_no_answer_policy(job,reservation,group_policy,'unsupported_evidence',source,
+                        query,lines,knowledge,None,None,logger,pilot_group_destination=True)
                     if outcome.get('stale'):
                         return
                     receipt=outcome.get('consultation') if isinstance(outcome,dict) else None

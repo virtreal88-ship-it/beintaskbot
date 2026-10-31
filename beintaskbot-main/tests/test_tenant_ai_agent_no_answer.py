@@ -250,3 +250,23 @@ async def test_initial_consultation_ack_requires_group_receipt(monkeypatch,group
     else:
         assert calls==['handoff','case','group']
 
+
+@pytest.mark.asyncio
+async def test_pilot_group_consultation_uses_safe_stop_for_non_escalation_signal(monkeypatch):
+    import tenant_ai_agent_worker as worker
+    import tenant_ai_agent_run_store as run_store
+    calls=[]
+    async def fake_to_thread(fn,*args,**kwargs): return fn(*args,**kwargs)
+    monkeypatch.setattr(worker.asyncio,'to_thread',fake_to_thread)
+    monkeypatch.setattr(run_store,'finish_superseded',lambda *_a,**_k:True)
+    monkeypatch.setattr('tenant_ai_agent_no_answer.stop_without_answer',lambda *_a,**_k:calls.append('stop'))
+    class Logger:
+        def info(self,*args,**kwargs): pass
+    result=await worker._apply_no_answer_policy(
+        {'tenant_id':'tenant','agent_id':'agent','provider':'connect','channel_id':'channel',
+         'conversation_id':'client','event_fingerprint':'not-a-triage-signal'},
+        {'run_id':'run','agent_language':'az'}, {}, 'not_a_no_answer_signal',
+        {'external_id':'source'},'customer report',[],[],None,None,Logger(),pilot_group_destination=True)
+    assert result=={'handled':True}
+    assert calls==['stop']
+

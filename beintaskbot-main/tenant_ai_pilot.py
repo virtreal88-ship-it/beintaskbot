@@ -556,16 +556,10 @@ def preflight(profile):
                 group_row=cur.fetchone() or {}
             result['scoped_live']['developer_group_route']='verified' if group_row else 'unavailable'
             result['scoped_live']['developer_group_state']=group_row.get('state') or 'uninitialized'
-            policy=row.get('response_policy') if isinstance(row.get('response_policy'),dict) else {}
-            developer_id=policy.get('developer_id')
-            recipient_ready=False
-            if policy.get('enabled') is True and policy.get('action')=='consult_developer' and type(developer_id) is int and developer_id>0:
-                cur.execute('''SELECT 1 FROM saas_tenant_members WHERE tenant_id=%s::uuid
-                  AND telegram_id=%s AND active=TRUE
-                  AND (role IN ('owner','admin') OR COALESCE(permissions,'[]'::jsonb) ? 'support')''',
-                  (tenant,developer_id))
-                recipient_ready=bool(cur.fetchone())
-            result['scoped_live']['developer_consultation_recipient']='verified' if recipient_ready else 'unavailable'
+            # In the scoped pilot the owner-attested WhatsApp group is the
+            # consultation destination. A tenant employee ID is not required.
+            group_ready=bool(group_scope and group_row.get('lead_id'))
+            result['scoped_live']['consultation_destination']='pilot_group' if group_ready else 'unavailable'
             result['auto_send']['company'] = row.get('auto_send_enabled') is True
             result['channel'] = 'active' if row.get('active') is True and row.get('integration_status') == 'connected' else 'unavailable'
             result['conversation'] = 'verified' if row.get('conversation_id') else 'unavailable'
@@ -596,8 +590,8 @@ def preflight(profile):
             if scoped_live and (not group_row or group_row.get('state') not in {'human','paused',None}
                     or group_row.get('no_pending_jobs') is not True):
                 result['blockers'].append('developer_group_route_not_stopped_and_verified')
-            if not recipient_ready:
-                result['blockers'].append('developer_consult_recipient_unconfigured_or_unavailable')
+            if scoped_live and not group_ready:
+                result['blockers'].append('developer_group_route_unconfigured_or_unavailable')
             if row.get('conversation_state') != 'active': result['blockers'].append('conversation_not_active_or_handed_off')
             if not result['pilot_guard_enabled']: result['blockers'].append('pilot_guard_not_armed')
             if result['kwid_confirmation']['state'] != 'confirmed': result['blockers'].append('kwid_confirmation_missing_expired_or_scope_changed')
