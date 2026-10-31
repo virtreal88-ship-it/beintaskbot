@@ -1416,7 +1416,9 @@ def _validate_quoted_once(result,route,request_id,quoted_message_id,message_id=N
     try:valid_id=str(uuid.UUID(str(result.get('id'))))
     except (ValueError,TypeError,AttributeError):raise TenantPlatformError('Quoted delivery receipt unavailable.') from None
     if (result.get('channelId')!=route['channel_id'] or result.get('conversationId')!=route['conversation_id']
-        or result.get('clientMessageId')!=request_id or result.get('quotedExternalMessageId')!=quoted_message_id
+        or result.get('clientMessageId')!=request_id
+        or not isinstance(result.get('quotedExternalMessageId'),str) or re.fullmatch(r'[A-Za-z0-9_-]{5,200}',result['quotedExternalMessageId']) is None
+        or (quoted_message_id is not None and result.get('quotedExternalMessageId')!=quoted_message_id)
         or (message_id and valid_id!=message_id) or result.get('protocol') not in {'quoted-once-v1','legacy-read-only'}):
         raise TenantPlatformError('Quoted delivery receipt scope mismatch.')
     return valid_id
@@ -1426,10 +1428,11 @@ def quoted_delivery_status(route,message_id,request_id,quoted_message_id):
     """Exact-scope request lookup recovers timed-out responses without another POST."""
     if not quoted_once_scope(route.get('tenant_id'),route['channel_id']):
         raise TenantPlatformError('Quoted receipt scope unavailable.')
+    if not message_id and not quoted_message_id:raise TenantPlatformError('Exact quoted receipt identity required.')
     request_id=str(uuid.UUID(str(request_id)))
     if message_id:message_id=str(uuid.UUID(str(message_id)))
     result=_request(route['api_key'],'GET','/v1/channels/'+route['channel_id']+'/quoted-once/requests/'+request_id+'?'+
-        urlencode({'conversationId':route['conversation_id'],'quotedExternalMessageId':quoted_message_id,**({'messageId':message_id} if message_id else {})}))
+        urlencode({'conversationId':route['conversation_id'],**({'quotedExternalMessageId':quoted_message_id} if quoted_message_id else {}),**({'messageId':message_id} if message_id else {})}))
     found_id=_validate_quoted_once(result,route,request_id,quoted_message_id,message_id)
     state=result.get('status')
     if state not in {'pending','retrying','sent','delivered','read','failed','unknown'}:
@@ -1440,6 +1443,8 @@ def quoted_delivery_status(route,message_id,request_id,quoted_message_id):
     if state in {'sent','delivered','read'} and not accepted:state='unknown'
     if state in {'delivered','read'} and result.get('delivered') is not True:state='sent' if accepted else 'unknown'
     return {'message_id':found_id,'quote_protocol':True,'delivery_state':state,'provider_accepted':accepted,
+        'delivery_phase':result.get('phase') if result.get('phase') in {'reserved','unknown','accepted','not_sent','legacy'} else 'unavailable',
+        **({'error_code':result['errorCode']} if result.get('errorCode') in {'quoted_message_unavailable','quoted_source_scope_conflict','quoted_source_lookup_unavailable','quoted_provider_unavailable'} else {}),
         'delivered':accepted and state in {'delivered','read'} and result.get('delivered') is True,
         'retry_safe':state=='failed' and result.get('protocol')=='quoted-once-v1' and result.get('retrySafe') is True and not provider_id
             and result.get('errorCode') in {'quoted_message_unavailable','quoted_source_scope_conflict','quoted_source_lookup_unavailable','quoted_provider_unavailable'},

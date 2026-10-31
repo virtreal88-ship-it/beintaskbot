@@ -217,3 +217,93 @@ def test_real_http_old_server_404_has_no_old_queue_fallback(monkeypatch):
         with pytest.raises(TenantPlatformError):transport.send(ROUTE,'reply',REQUEST,quoted_message_id='SOURCE123')
         assert calls==['/v1/channels/'+CA+'/quoted-once']
     finally:server.shutdown();server.server_close();worker.join(timeout=2)
+
+
+def test_diagnostic_fields_are_bounded_and_exact_message_can_replace_missing_quote(monkeypatch):
+    response=result(phase='not_sent',status='failed',retrySafe=True,errorCode='quoted_message_unavailable')
+    request=Mock(return_value=response);monkeypatch.setattr(transport,'_request',request)
+    status=transport.quoted_delivery_status(ROUTE,MID,REQUEST,None)
+    assert status['delivery_phase']=='not_sent' and status['error_code']=='quoted_message_unavailable'
+    assert 'messageId='+MID in request.call_args.args[2] and 'quotedExternalMessageId' not in request.call_args.args[2]
+    request.return_value={**response,'phase':'secret arbitrary payload','errorCode':'private body'}
+    status=transport.quoted_delivery_status(ROUTE,MID,REQUEST,None)
+    assert status['delivery_phase']=='unavailable' and 'error_code' not in status
+    with pytest.raises(TenantPlatformError):transport.quoted_delivery_status(ROUTE,None,REQUEST,None)
+
+
+def test_get_latest_existing_quote_is_actor_bound_and_never_dispatches(db,monkeypatch):
+    import logging
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient,TestServer
+    import tenant_chat_send_store as store
+    from tenant_chat_send_api import receipt_handler
+    monkeypatch.setattr(store,'_connect',lambda:db);monkeypatch.setattr(store,'connect_route',lambda *_:ROUTE)
+    source=db.execute('SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid',(A,))[0]['id']
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid",('{"externalMessageId":"SOURCE123"}',A));db.commit()
+    item=store.reserve(PROFILE,{**PAYLOAD,'quote_message_id':source});store.mark_sending(item,{'origin':'connect'});store.finish(item,'accepted',MID)
+    store.record_quoted_delivery(item,MID,{'quote_protocol':True,'message_id':MID,'delivery_state':'failed','provider_accepted':False,'delivered':False,'retry_safe':True})
+    before=db.execute('SELECT state,route,message_id FROM saas_chat_send_receipts WHERE request_id=%s::uuid',(REQUEST,))[0]
+    calls=[]
+    def request(_key,method,path,payload=None):
+        calls.append(method);assert method=='GET'
+        return result(phase='not_sent',status='failed',retrySafe=True,errorCode='quoted_message_unavailable')
+    monkeypatch.setattr(transport,'_request',request)
+    send=Mock(side_effect=AssertionError('GET must not dispatch'));monkeypatch.setattr(service,'send_connect',send)
+    async def scenario():
+        app=web.Application();app.router.add_get('/status',receipt_handler(lambda _:PROFILE,logging.getLogger(__name__)))
+        async with TestClient(TestServer(app)) as client:
+            query={'lead_id':41,'expected_tenant_id':A,'expected_user_id':11}
+            for _ in range(2):
+                response=await client.get('/status',params=query);assert response.status==200
+                status=await response.json();assert status['error_code']=='quoted_message_unavailable' and status['delivery_phase']=='not_sent'
+            wrong=await client.get('/status',params={**query,'expected_user_id':12});assert wrong.status==409
+            other=await client.get('/status',params={**query,'lead_id':42});assert other.status!=200
+        assert calls==['GET','GET'];send.assert_not_called()
+    asyncio.run(scenario())
+    assert db.execute('SELECT state,route,message_id FROM saas_chat_send_receipts WHERE request_id=%s::uuid',(REQUEST,))[0]==before
+    assert db.execute("SELECT count(*) AS n FROM saas_crm_messages WHERE direction='outgoing' AND tenant_id=%s::uuid",(A,))[0]['n']==0
+
+
+def test_latest_status_finds_unknown_checkpoint_without_browser_storage(db,monkeypatch):
+    import tenant_chat_send_store as store
+    monkeypatch.setattr(store,'_connect',lambda:db);monkeypatch.setattr(store,'connect_route',lambda *_:ROUTE)
+    source=db.execute('SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid',(A,))[0]['id']
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid",('{"externalMessageId":"SOURCE123"}',A));db.commit()
+    item=store.reserve(PROFILE,{**PAYLOAD,'quote_message_id':source});store.mark_sending(item,{'origin':'connect'});store.finish(item,'unknown')
+    found=store.read_quoted_receipt(PROFILE,41)
+    assert found['key'][2]==REQUEST and found['quote']=='SOURCE123' and found['receipt_state']=='unknown'
+    with pytest.raises(Exception):store.read_quoted_receipt({**PROFILE,'telegram_id':12},41)
+
+
+def test_get_unknown_receipt_reconciles_only_explicit_uuid_and_rechecks_revocation(db,monkeypatch):
+    import logging
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient,TestServer
+    import tenant_chat_send_store as store
+    from tenant_chat_send_api import receipt_handler
+    monkeypatch.setattr(store,'_connect',lambda:db);monkeypatch.setattr(store,'connect_route',lambda *_:ROUTE)
+    source=db.execute('SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid',(A,))[0]['id']
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid",('{"externalMessageId":"SOURCE123"}',A));db.commit()
+    item=store.reserve(PROFILE,{**PAYLOAD,'quote_message_id':source});store.mark_sending(item,{'origin':'connect'});store.finish(item,'unknown')
+    calls=[];revoke={'value':False}
+    def request(_key,method,path,payload=None):
+        calls.append(method);assert method=='GET'
+        if revoke['value']:
+            db.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=11',(A,));db.commit()
+        return result(phase='unknown',status='unknown')
+    monkeypatch.setattr(transport,'_request',request)
+    async def scenario():
+        app=web.Application();app.router.add_get('/status',receipt_handler(lambda _:PROFILE,logging.getLogger(__name__)))
+        async with TestClient(TestServer(app)) as client:
+            query={'lead_id':41,'expected_tenant_id':A,'expected_user_id':11}
+            response=await client.get('/status',params=query);assert response.status==200
+            assert db.execute('SELECT state FROM saas_chat_send_receipts WHERE request_id=%s::uuid',(REQUEST,))[0]['state']=='unknown'
+            revoke['value']=True
+            response=await client.get('/status',params={**query,'request_id':REQUEST});assert response.status==403
+            assert db.execute('SELECT state FROM saas_chat_send_receipts WHERE request_id=%s::uuid',(REQUEST,))[0]['state']=='unknown'
+            db.execute('UPDATE saas_tenant_members SET active=TRUE WHERE tenant_id=%s::uuid AND telegram_id=11',(A,));db.commit();revoke['value']=False
+            response=await client.get('/status',params={**query,'request_id':REQUEST});assert response.status==200
+            assert db.execute('SELECT state FROM saas_chat_send_receipts WHERE request_id=%s::uuid',(REQUEST,))[0]['state']=='accepted'
+        assert calls==['GET','GET','GET']
+    asyncio.run(scenario())
+    assert db.execute("SELECT count(*) AS n FROM saas_crm_messages WHERE direction='outgoing' AND tenant_id=%s::uuid",(A,))[0]['n']==0

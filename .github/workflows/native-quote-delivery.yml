@@ -4,6 +4,8 @@ on:
     paths:
       - '.github/workflows/native-quote-delivery.yml'
       - 'beintaskbot-main/tenant_chat_send*.py'
+      - 'beintaskbot-main/tenant_web_routes.py'
+      - 'beintaskbot-main/tests/test_quote_receipt_get_ui.cjs'
       - 'beintaskbot-main/tenant_connect_transport.py'
       - 'beintaskbot-main/docs/tenant-chat-send.js'
       - 'beintaskbot-main/tests/test_native_quote_delivery*'
@@ -30,6 +32,7 @@ jobs:
           node-version: '22'
       - run: python -m pip install -r requirements.txt pytest
       - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0
-      - run: python -m pytest -q tests/test_native_quote_delivery_status.py tests/test_tenant_native_reply.py tests/test_tenant_chat_send.py tests/test_tenant_chat_send_store.py tests/test_tenant_chat_send_api.py
+      - run: python -m pytest -q tests/test_native_quote_delivery_status.py tests/test_tenant_native_reply.py tests/test_tenant_chat_send.py tests/test_tenant_chat_send_store.py tests/test_tenant_chat_send_api.py tests/test_tenant_web_routes.py
+      - run: node tests/test_quote_receipt_get_ui.cjs
       - run: node tests/test_native_quote_delivery_ui.cjs
       - run: node tests/test_tenant_native_reply_ui.cjs
