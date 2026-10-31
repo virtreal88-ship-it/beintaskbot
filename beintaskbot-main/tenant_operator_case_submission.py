@@ -46,7 +46,9 @@ def preview(profile,data):
             item=store.snapshot(cur,profile,{'channel_id':channel,'conversation_id':conversation})
             agent=assignment(cur,item['tenant'],channel,conversation)
             return {'agent':agent,'messages':[{'id':ref['id'],'role':ref['role'],'text':msg['text'],
-                       'media_kind':ref.get('media_kind')} for ref,msg in zip(item['refs'],item['messages'])],
+                       'media_kind':ref.get('media_kind'),'message_type':meta['message_type'],
+                       'happened_at':meta['happened_at']}
+                    for ref,msg,meta in zip(item['refs'],item['messages'],item['preview_metadata'])],
                     'has_earlier':bool(item['next_before'])}
 
 

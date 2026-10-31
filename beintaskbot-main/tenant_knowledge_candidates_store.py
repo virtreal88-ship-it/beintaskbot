@@ -132,7 +132,7 @@ def snapshot(cur,profile,data):
             if channel not in route_cache: route_cache[channel]=assert_route(cur,tenant,policy,'connect',binding['conversation_id'],channel)
             source=route_cache[channel]
             names.extend([source.get('contact_name'),source.get('phone')]);channels.add(channel)
-    refs=[];messages=[];remaining=MAX_CONTEXT
+    refs=[];messages=[];preview_metadata=[];remaining=MAX_CONTEXT
     for row in rows:
         body=redact(row.get('body'),names)[:min(1500,remaining)]
         kind=row.get('message_type') or 'text'
@@ -147,17 +147,19 @@ def snapshot(cur,profile,data):
             # without storing a URL or raw provider payload.
             media_version=digest({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')})
             ref.update(media_kind=kind,external_id=row.get('external_id'),media_version=media_version,happened_at=str(row.get('happened_at') or row.get('created_at') or ''))
-        refs.append(ref);messages.append({'ref':'m'+str(len(refs)),'role':role,'text':body});remaining-=len(body)
+        refs.append(ref);messages.append({'ref':'m'+str(len(refs)),'role':role,'text':body})
+        preview_metadata.append({'message_type':str(kind),'happened_at':str(row.get('happened_at') or row.get('created_at') or '')})
+        remaining-=len(body)
         if remaining<=0: break
     if not refs:
         error=TenantLinearError('В выбранном фрагменте нет доступного текста.',409)
         error.next_before=next_before
         raise error
-    refs.reverse();messages.reverse()
+    refs.reverse();messages.reverse();preview_metadata.reverse()
     for index,message in enumerate(messages): message['ref']='m'+str(index+1)
     if remaining<=0 and len(refs)<len(rows): next_before=refs[0]['id']
     binding['source_channels']=sorted(channels)
-    return {'tenant':tenant,'actor':actor,'route':binding,'refs':refs,'messages':messages,'source_digest':digest(messages),'next_before':next_before,'ticket':{'status':ticket['status'],'completion_outcome':ticket.get('completion_outcome') or '','completion_note':ticket.get('completion_note') or ''} if ticket else None}
+    return {'tenant':tenant,'actor':actor,'route':binding,'refs':refs,'messages':messages,'preview_metadata':preview_metadata,'source_digest':digest(messages),'next_before':next_before,'ticket':{'status':ticket['status'],'completion_outcome':ticket.get('completion_outcome') or '','completion_note':ticket.get('completion_note') or ''} if ticket else None}
 
 
 _MEDIA_IDENTITY_FIELDS=('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')

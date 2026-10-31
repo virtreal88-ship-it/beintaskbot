@@ -1539,6 +1539,7 @@ def test_employee_case_submission_uses_assigned_agent_and_is_idempotent(ready,mo
     monkeypatch.setattr(submission,'_connect',lambda:db)
     preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'})
     agent=preview['agent'];ids=[m['id'] for m in preview['messages']]
+    assert all(message['message_type']=='text' and message['happened_at'] for message in preview['messages'])
     before=db.execute("SELECT state,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid",(A,))[0]
     data={'channel_id':CA,'conversation_id':'client','message_ids':ids,**{k:agent[k] for k in ('agent_id','agent_version','assignment_revision')}}
     first=submission.submit(PROFILE,data)
@@ -1587,6 +1588,8 @@ def test_employee_case_keeps_attachment_evidence_without_paid_media(ready,monkey
     message=db.execute("SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41 ORDER BY id LIMIT 1",(A,))[0]['id']
     db.execute("UPDATE saas_crm_messages SET message_type='image',raw=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps({'mediaId':'test'}),A,message));db.commit()
     preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'});agent=preview['agent'];ids=[m['id'] for m in preview['messages']]
+    selected=next(row for row in preview['messages'] if row['id']==str(message))
+    assert selected['message_type']=='image' and selected['media_kind']=='image' and selected['happened_at']
     data={'channel_id':CA,'conversation_id':'client','message_ids':ids,**{k:agent[k] for k in ('agent_id','agent_version','assignment_revision')}}
     result=submission.submit(PROFILE,data)
     assert result['candidates'][0]['source_message_ids']==ids
