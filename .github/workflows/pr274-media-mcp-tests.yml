@@ -73,6 +73,11 @@ jobs:
           tests/test_connect_videos.py
           tests/test_episode_media.py
           tests/test_episode_media_pglite.py
+          tests/test_integrated_connect_release.py::test_real_sql_text_voice_text_and_central_key
+          tests/test_integrated_connect_release.py::test_resume_only_new_messages_and_replayed_webhook
+          tests/test_integrated_connect_release.py::test_newest_message_without_provider_timestamp_uses_created_at_for_current_turn
+          tests/test_integrated_connect_release.py::test_same_id_media_edit_keeps_paid_old_receipt_but_never_sends_stale_reply
+          tests/test_integrated_connect_release.py::test_voice_handoff_creates_one_ticket_with_trusted_transcript_and_survives_summary_failure
           tests/test_media_dispatch.py
           tests/test_ai_learning_mcp.py
           tests/test_ai_training_policy.py

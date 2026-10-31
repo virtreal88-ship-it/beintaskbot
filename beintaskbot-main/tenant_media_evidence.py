@@ -251,6 +251,7 @@ def annotate_rows(cur, tenant, rows):
         media_meta = {'status':str(saved['status']), 'code':str(saved.get('code') or ''),
                       'source':'saved_knowledge_extraction_receipt',
                       'has_visual_result':has_visual_result(result),
+                      'has_audio_result':isinstance(result.get('transcript'),str) and bool(result['transcript'].strip()),
                       'coverage':{'complete':coverage.get('complete') is True}}
         if kind == 'video':
             audio_status = coverage.get('audio')

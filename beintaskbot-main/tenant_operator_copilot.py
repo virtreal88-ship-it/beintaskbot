@@ -331,6 +331,20 @@ def run(profile, data):
                 if int(existing['requested_by']) != actor or existing['input_hash'] != digest:
                     raise TenantLinearError('Код запроса уже использован для другой операции.', 409)
                 if existing['status'] == 'completed' and existing.get('result') and str(existing['config_version']) == str(connection['updated_at']):
+                    if command['mode']=='reply' and not existing['result'].get('source_versions'):
+                        error=TenantLinearError('Сохранённый черновик не привязан к версии сообщений. Запросите новый черновик.',409)
+                        error.keep_request=True
+                        raise error
+                    from tenant_episode_media import revalidate_sources
+                    saved_refs=existing['result'].get('source_versions',[])
+                    revalidate_sources(cur,tenant,saved_refs)
+                    if command['mode']=='reply' and saved_refs:
+                        cur.execute('''SELECT external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid
+                          AND kommo_lead_id=%s AND channel=%s
+                          ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 1''',
+                          (tenant,command['lead_id'],'connect:'+command['channel_id']))
+                        if str((cur.fetchone() or {}).get('external_id') or '')!=saved_refs[0]['external_id']:
+                            raise TenantLinearError('В диалоге появились новые сообщения. Запросите актуальный черновик.',409)
                     return existing['result']
                 error = TenantLinearError('Результат предыдущего AI-запроса неизвестен; он не будет отправлен повторно.', 409)
                 error.keep_request = True
@@ -352,7 +366,7 @@ def run(profile, data):
                     raise ValueError()
             except Exception:
                 raise TenantLinearError('Проверьте настройки Chat AI компании.', 503) from None
-            cur.execute('''SELECT external_id,direction,body,message_type,happened_at,channel,raw,
+            cur.execute('''SELECT external_id,direction,body,message_type,COALESCE(happened_at,created_at) AS happened_at,channel,raw,
                                   raw->'voice_transcription' AS voice_transcription,
                   EXISTS(SELECT 1 FROM saas_crm_messages h WHERE h.tenant_id=m.tenant_id AND h.channel=m.channel
                     AND h.kommo_lead_id=m.kommo_lead_id AND (h.direction='outgoing' OR h.raw->>'verified_employee_id' IS NOT NULL)) AS has_prior_employee
@@ -389,7 +403,8 @@ def run(profile, data):
         media = _prepare_copilot_media(tenant, actor, command, rows, model,
                                        include_media=True,execution=execution) if command['mode'] == 'reply' else {
             'images': [], 'voice_transcriptions': set(), 'documents': set(), 'skipped': []}
-        if any(row.get('_episode_receipt') for row in rows):execution.check()
+        command['_source_versions']=getattr(execution,'source_refs',[])
+        if any(row.get('_episode_receipt') for row in rows):execution.check_sources()
         from tenant_ai_agent_run_store import knowledge_context
         latest_row=next((row for row in reversed(rows) if row.get('direction')=='incoming'),{})
         latest_customer=str(latest_row.get('_copilot_attachment_text') or latest_row.get('body') or '')
@@ -443,7 +458,7 @@ def run(profile, data):
     text = None
     try:
         mode = 'reply' if command['mode'] == 'reply' else 'summary'
-        if any(row.get('_episode_receipt') for row in rows):execution.check()
+        if any(row.get('_episode_receipt') for row in rows):execution.check_sources()
         text, usage = generate(secret['api_key'], model, mode, lines, request,
                                instructions=INSTRUCTIONS, extra_context=extra,
                                images=images,
@@ -463,6 +478,7 @@ def run(profile, data):
         failure.keep_request = True
         raise failure from None
     result = {'text': text, 'mode': command['mode'], 'usage': usage,
+        'source_versions':command.get('_source_versions',[]),
         'context_usage': context_usage if command['mode']=='reply' else None,
         'knowledge_sources': [{'title': item['title']} for item in knowledge]}
     _finish(tenant, command, actor, result, turns, request, text)
@@ -480,6 +496,8 @@ def _finish(tenant, command, actor, result, turns, request, answer):
                 assert_route(cur, current_tenant, current_policy, 'connect', command['conversation_id'], command['channel_id'], command['lead_id'])
                 if not current_policy.can_use_chat_ai() or _agent_binding(_assigned_context(cur, tenant, command)) != command['_agent_binding']:
                     raise TenantLinearError('Назначение агента или доступ изменились. Результат AI скрыт.', 409)
+                from tenant_episode_media import revalidate_sources
+                revalidate_sources(cur,tenant,command.get('_source_versions',[]))
                 if command.get('_latest_source_id'):
                     cur.execute('''SELECT external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid
                       AND kommo_lead_id=%s AND channel=%s

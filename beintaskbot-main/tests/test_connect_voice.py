@@ -85,7 +85,7 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
         mocked(worker, '_next_open', return_value=None)
         mocked(worker, 'runtime_flag', return_value=True)
         mocked(worker, 'enabled_triggers', return_value=[])
-        mocked(worker, 'knowledge_context', return_value=[])
+        self.knowledge=mocked(worker, 'knowledge_context', return_value=[])
         self.reserve = mocked(worker, 'reserve_run', side_effect=reserve)
         self.handoff = mocked(worker, 'handoff')
         self.send = mocked(transport, 'send_ai_reply_if_active', return_value='sent-id')
@@ -119,6 +119,7 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
                     item['_copilot_attachment_text']=self.evidence.get('transcript') or self.evidence.get('observation') or ''
         self.prepare_media=mocked(media,'prepare',side_effect=prepare)
         mocked(media.AutoExecution,'check',side_effect=lambda: None if self.active else (_ for _ in ()).throw(TenantLinearError('inactive',409)))
+        mocked(media.AutoExecution,'check_sources',side_effect=lambda: None if self.active else (_ for _ in ()).throw(TenantLinearError('inactive',409)))
 
     async def process(self, job=None):
         await worker.process_connect_one(job or JOB, Mock())
@@ -132,6 +133,17 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
         self.transcribe.assert_not_called()  # legacy worker must not spend again
         self.send.assert_called_once()
         self.completed.assert_called_once()
+
+    async def test_captionless_photo_document_video_query_assigned_kb_after_analysis(self):
+        for kind in ('image','document','video'):
+            self.rows=[row(mid='source-'+kind,kind=kind,text='')]
+            self.evidence={'status':'partial' if kind=='video' else 'processed',
+                           'code':'vision_observation','observation':'Visible E17 '+kind}
+            await self.process({**JOB,'payload':{'message_id':'source-'+kind}})
+            query=self.knowledge.call_args.args[1]
+            assert 'Visible E17 '+kind in query
+            assert 'source-'+kind in query and kind in query and len(query)<=1000
+            assert self.knowledge.call_args.kwargs['agent_id']==JOB['agent_id']
 
     async def test_duplicate_event_never_starts_a_second_media_preparation_or_reply(self):
         await self.process();await self.process()

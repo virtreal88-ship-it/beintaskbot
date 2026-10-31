@@ -157,9 +157,25 @@ def record_case_selected_message_ids(cur,tenant,ticket_id,message_ids,event_key)
 def handoff_ticket(cur, job, reason):
     if job.get('provider') != 'connect':
         return None
+    description=''
+    source_id=str(job.get('source_message_id') or '')
+    if source_id:
+        cur.execute('''SELECT external_id,body,raw,message_type,channel FROM saas_crm_messages
+          WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND external_id=%s
+            AND direction='incoming'
+          ''',
+          (job['tenant_id'],job['lead_id'],'connect:'+str(job['channel_id']),
+           source_id if source_id.startswith('connect:') else 'connect:'+source_id))
+        source=cur.fetchone()
+        if source:
+            from tenant_media_evidence import annotate_rows
+            annotate_rows(cur,str(job['tenant_id']),[source])
+            if ((source.get('media_evidence') or {}).get('has_audio_result')
+                and (source.get('media_evidence') or {}).get('status') in {'processed','partial'}):
+                description=str(source.get('media_evidence_context') or '')[:1000]
     receipt=create_in_transaction(cur, str(job['tenant_id']), job['channel_id'],
         job.get('conversation_id') or job.get('chat_id'), reason,
-        'handoff:' + str(job['event_fingerprint']))
+        'handoff:' + str(job['event_fingerprint']),description=description)
     ids=job.get('case_message_ids') if isinstance(job.get('case_message_ids'),(list,tuple)) else []
     source_id=str(job.get('source_message_id') or '')
     if source_id and source_id not in ids:ids=[*ids,source_id]

@@ -32,9 +32,11 @@ def episode(rows):
 
 def reference(row, channel, lead):
     external=str(row.get('external_id') or '')
-    if not external.startswith('connect:'): external='connect:'+external
+    if not external.startswith('connect:') and not str(row.get('channel') or '').startswith('connect:'):
+        external='connect:'+external
     return {'id':external,'external_id':external,'channel_id':str(channel),
-            'lead_id':int(lead),'role':'client','happened_at':row.get('happened_at'),
+            'lead_id':int(lead),'role':'client','happened_at':(row['happened_at'].isoformat()
+                if hasattr(row.get('happened_at'),'isoformat') else str(row.get('happened_at') or '')),
             'body_hash':_body_hash(row.get('body')),
             'media_kind':str(row.get('message_type') or '').lower(),
             'media_version':media_version(row.get('raw'))}
@@ -146,6 +148,7 @@ def prepare(authority, rows):
     from tenant_knowledge_media import collect
     profile={'tenant_id':authority.tenant}
     selected=episode(rows)
+    authority.source_refs=([reference(rows[-1],authority.channel,authority.lead)] if rows else [])
     selected_ids={str(row.get('external_id')) for row in selected}
     for row in rows:
         if str(row.get('message_type') or '').lower() not in KINDS:continue
@@ -153,11 +156,21 @@ def prepare(authority, rows):
         row['_episode_channel']=authority.channel
         row['_copilot_context_body']=''
         row['_copilot_attachment_text']=''
-        row.pop('media_evidence_context',None)
+        historical_context=row.pop('media_evidence_context',None)
         row['_copilot_media_notice']='[Historical attachment; not evidence for the current request]'
-        if str(row.get('external_id')) not in selected_ids:continue
+        if str(row.get('external_id')) not in selected_ids:
+            # Previously saved exact-version evidence remains useful history;
+            # it must not be confused with analysis of a new attachment.
+            if historical_context:
+                row['_copilot_attachment_text']=historical_context
+                row['_historical_media_status']=(row.get('media_evidence') or {}).get('status')
+                partial=row['_historical_media_status']=='partial'
+                row['_copilot_media_notice']=('[Historical attachment; saved partial evidence; incomplete, do not infer omitted contents; not the latest attachment]'
+                    if partial else '[Historical attachment; saved evidence from an earlier turn, not the latest attachment]')
+            continue
         authority.check()
         ref=reference(row,authority.channel,authority.lead)
+        if not any(source_hash(saved)==source_hash(ref) and saved['external_id']==ref['external_id'] for saved in authority.source_refs):authority.source_refs.append(ref)
         authority.validate(ref)
         prior=reusable(profile,ref)
         message={'text':'','ref':ref['id']}
@@ -223,6 +236,11 @@ class Execution:
         # Loader returns the persisted body as well as the raw media identity.
         if source_hash(reference(row,self.channel,self.lead))!=source_hash(ref):
             raise TenantLinearError('Attachment changed during analysis.',409)
+
+    def check_sources(self):
+        self.check()
+        with _connect() as conn:
+            with conn.cursor() as cur:revalidate_sources(cur,self.tenant,getattr(self,'source_refs',[]))
 
     def dispatch(self,model,operation,invoke):
         self.validate(self.current_ref)
@@ -379,6 +397,39 @@ class AutoExecution(Execution):
         record_token_usage(self.job,self.reservation,total,cumulative=True)
 
 
+def revalidate_sources(cur,tenant,refs):
+    """Read-only publication fence for the frozen, previously authorized refs."""
+    for ref in refs or []:
+        cur.execute('''SELECT external_id,body,message_type,raw,channel FROM saas_crm_messages
+          WHERE tenant_id=%s::uuid AND channel=%s AND kommo_lead_id=%s AND external_id=%s FOR SHARE''',
+          (tenant,'connect:'+ref['channel_id'],ref['lead_id'],ref['external_id']))
+        current=cur.fetchone()
+        if not current or source_hash(reference(current,ref['channel_id'],ref['lead_id']))!=source_hash(ref):
+            raise TenantLinearError('Attachment or message version changed. Request a fresh draft.',409)
+
+
+def evidence_query(rows,source_id,*,max_chars=1000):
+    """Bound KB lookup to current-episode text/evidence, with exact attribution."""
+    selected=episode(rows)
+    source_id=str(source_id or '').removeprefix('connect:')
+    selected.sort(key=lambda row:str(row.get('external_id') or '').removeprefix('connect:')==source_id)
+    parts=[];used=0
+    for row in reversed(selected):
+        kind=str(row.get('message_type') or 'text')
+        body=str(row.get('body') or '').strip()
+        receipt=row.get('_episode_receipt') or {}
+        evidence=str(row.get('_copilot_attachment_text') or '').strip() if receipt.get('status') in {'processed','partial'} else ''
+        content=(evidence if body and body in evidence else (body+'\n'+evidence).strip())
+        if not content:continue
+        # Put actual evidence first, preserving its ID/type in the same bound.
+        attribution=' [source '+str(row.get('external_id') or '')+'; '+kind+']'
+        room=max_chars-used
+        if room<=len(attribution):break
+        part=content[:min(700,room-len(attribution))]+attribution
+        parts.append(part);used+=len(part)+1
+    return '\n'.join(parts)
+
+
 def context_lines(context,local_rows):
     """One normalized evidence representation, with latest/historical provenance."""
     own={str(r.get('external_id')):r for r in local_rows}
@@ -396,7 +447,7 @@ def context_lines(context,local_rows):
         if kind in KINDS:
             body=local.get('_copilot_media_notice') or '[Historical or other-channel attachment; not analyzed for this request]'
             body+='\n'+str(local.get('_copilot_attachment_text') or '')[:10000]
-            if receipt.get('status')!='processed':missing+=1
+            if receipt.get('status')!='processed' and local.get('_historical_media_status')!='processed':missing+=1
         if used>=24000:break
         available=min(4000,24000-used)
         if len(body)>available:body=body[:max(0,available-70)]+'\n[Evidence shortened; do not infer omitted contents]'

@@ -756,7 +756,7 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
             from tenant_connect_dialog_equivalence import lead_members
             history_leads=lead_members(cur,tenant,channel_id,lead_id)
             cur.execute('''SELECT * FROM (
-              SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,m.id,m.channel,m.raw,
+              SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,m.created_at,m.id,m.channel,m.raw,
                 EXISTS(SELECT 1 FROM saas_crm_messages h WHERE h.tenant_id=m.tenant_id AND h.channel=m.channel
                   AND h.kommo_lead_id=m.kommo_lead_id AND (h.direction='outgoing' OR h.raw->>'verified_employee_id' IS NOT NULL)) AS has_prior_employee,
                 COALESCE(v.state,'') AS voice_state,
@@ -769,8 +769,8 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
               FROM saas_crm_messages m LEFT JOIN saas_connect_voice_receipts v
                 ON v.tenant_id=m.tenant_id AND 'connect:' || v.channel_id::text=m.channel AND v.external_id=m.external_id
               WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=ANY(%s::bigint[])
-                AND m.channel=%s ORDER BY m.happened_at DESC,m.id DESC LIMIT 80
-              ) recent ORDER BY happened_at,id''', (tenant, history_leads, 'connect:' + channel_id))
+                AND m.channel=%s ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 80
+              ) recent ORDER BY COALESCE(happened_at,created_at),id''', (tenant, history_leads, 'connect:' + channel_id))
             rows = cur.fetchall()
             from tenant_episode_media import extend_episode
             rows=extend_episode(cur,tenant,history_leads,channel_id,rows,80)
@@ -780,7 +780,7 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
              'direction': str(row.get('direction') or ''), 'body': str(row.get('body') or ''),
              'message_type': str(row.get('message_type') or 'text'), 'media_url': str(row.get('media_url') or ''),
              'has_attachment': bool(row.get('media_url')) or str(row.get('message_type') or 'text') != 'text',
-             'happened_at': row['happened_at'].isoformat() if row.get('happened_at') else '',
+             'happened_at': (row.get('happened_at') or row.get('created_at')).isoformat() if row.get('happened_at') or row.get('created_at') else '',
              'raw': row.get('raw') or {},'has_prior_employee':row.get('has_prior_employee') is True,
              'transcript': str(row.get('transcript') or ''), 'voice_state': str(row.get('voice_state') or ''),
              'media_evidence': row.get('media_evidence') if isinstance(row.get('media_evidence'),dict) else None,

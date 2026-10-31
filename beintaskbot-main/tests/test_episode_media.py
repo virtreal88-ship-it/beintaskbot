@@ -329,3 +329,33 @@ def test_successful_evidence_completes_before_reply_authority_is_rechecked(sandb
     with pytest.raises(TenantLinearError):auth.check()
     later=Authority([row('voice')]);runtime.prepare(later,later.rows)
     assert not later.calls and 'Səs mənbəyi' in later.rows[0]['_copilot_attachment_text']
+
+
+@pytest.mark.parametrize('status,missing',[('processed',0),('partial',1)])
+def test_exact_saved_transcript_remains_labelled_history_without_new_analysis(sandbox,status,missing):
+    rows=[row('voice',1,media_evidence={'status':status},media_evidence_context='[Saved media transcript] Original speech'),
+          row('text',2,direction='outgoing',body='Checking'),row('text',3,body='Any update?')]
+    auth=Authority(rows);runtime.prepare(auth,rows)
+    assert not auth.calls
+    lines,count=runtime.context_lines(rows,rows)
+    assert 'Original speech' in lines[0]['text'] and lines[0]['evidence_scope']=='historical'
+    assert 'not the latest attachment' in lines[0]['text'] and count==missing
+    if status=='partial':assert 'incomplete' in lines[0]['text']
+
+
+def test_shared_history_reads_exact_partial_audio_once_without_unavailable_contradiction():
+    from tenant_chat_ai_policy import history
+    item=row('voice',media_evidence={'status':'partial','has_audio_result':True},
+             media_evidence_context='[Saved media transcript] Original speech')
+    lines,missing=history([item],{})
+    assert lines[0]['text'].count('Original speech')==1
+    assert 'Audio unavailable' not in lines[0]['text']
+    assert 'partial' in lines[0]['text'] and missing==1
+
+
+def test_source_versions_are_json_serializable_with_native_postgres_datetime():
+    import json
+    from datetime import datetime,timezone
+    ref=runtime.reference(row('voice',happened_at=datetime(2026,10,31,17,0,tzinfo=timezone.utc)),'channel',17)
+    encoded=json.dumps({'source_versions':[ref]},ensure_ascii=False)
+    assert '2026-10-31T17:00:00+00:00' in encoded

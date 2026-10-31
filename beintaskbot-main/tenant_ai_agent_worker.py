@@ -284,6 +284,13 @@ async def _send_policy_reply(job,reservation,source,text,kommo_request,wait_slot
         assert_job_allowed(job)
         if job.get('provider')=='connect':
             from tenant_connect_transport import send_ai_reply_if_active
+            if reservation.get('_source_versions'):
+                from tenant_ai_agent_run_store import _connect as source_connect
+                from tenant_episode_media import revalidate_sources
+                def validate_policy_sources():
+                    with source_connect() as conn:
+                        with conn.cursor() as cur:revalidate_sources(cur,str(job['tenant_id']),reservation['_source_versions'])
+                await asyncio.to_thread(validate_policy_sources)
             message_id=await asyncio.to_thread(send_ai_reply_if_active,str(job['tenant_id']),int(job['lead_id']),
                 str(job['channel_id']),str(job['conversation_id']),str(text)[:8000],str(reservation['run_id']),
                 int(reservation.get('conversation_revision') or 0),pilot_scope_fenced=job.get('_pilot_scope_fenced') is True,
@@ -896,6 +903,8 @@ async def process_connect_one(job, logger):
                 video_requested=any(row.get('message_type')=='video' for row in episode(rows)))
             episode_execution=AutoExecution(job,reservation)
             await asyncio.to_thread(prepare_episode,episode_execution,rows)
+            reservation['_source_versions']=getattr(episode_execution,'source_refs',[])
+            await asyncio.to_thread(episode_execution.check_sources)
             receipt=source.get('_episode_receipt') or {}
             if receipt.get('transcript'):
                 source['body']=receipt['transcript']
@@ -924,6 +933,8 @@ async def process_connect_one(job, logger):
         if not pilot_media_turn and episode_execution is None:
             episode_execution=AutoExecution(job,reservation)
             await asyncio.to_thread(prepare_episode,episode_execution,rows)
+            reservation['_source_versions']=getattr(episode_execution,'source_refs',[])
+            await asyncio.to_thread(episode_execution.check_sources)
         # Cached voice text is used in later text/voice turns without another
         # provider call. The history formatter preserves the audio marker.
         from tenant_ai_agent_connect import group_context
@@ -1004,11 +1015,13 @@ async def process_connect_one(job, logger):
         query = str(source.get('body') or '')[:6000]
         from tenant_ai_pilot import manual_live_job
         pilot_initial_turn=manual_live_job(job) and not pilot_case_turn
-        knowledge_query=query
+        from tenant_episode_media import evidence_query
+        knowledge_query=(evidence_query(rows,source_id) or query) if not pilot_case_turn else query
         if pilot_developer_turn:
             knowledge_query=str(pilot_payload.get('developer_reply') or query)[:1000]
         elif pilot_customer_turn:
             knowledge_query=(str(pilot_payload.get('developer_reply') or '')+' '+query)[:1000]
+        if not pilot_case_turn:await asyncio.to_thread(episode_execution.check_sources)
         knowledge = await asyncio.to_thread(knowledge_context, tenant, knowledge_query, agent_id=job['agent_id'])
         response_policy=reservation.get('response_policy') or {}
         rules = '\n'.join((str(reservation.get('company_instructions') or ''),
@@ -1056,12 +1069,14 @@ async def process_connect_one(job, logger):
                    'If an attachment was unavailable or unreadable, state that and ask for clarification.')
         if response_policy.get('enabled') is True and not pilot_case_turn and not pilot_initial_turn:
             if not knowledge:
+                await asyncio.to_thread(episode_execution.check_sources)
                 no_answer=await _apply_no_answer_policy(job,reservation,response_policy,'missing_knowledge',source,
                     query,lines,knowledge,None,None,logger)
                 if no_answer.get('handled'): return
             from tenant_ai_agent_no_answer import prompt_instructions
             prompt += '\n\n' + prompt_instructions()
         assert_job_allowed(job)
+        if not pilot_case_turn:await asyncio.to_thread(episode_execution.check_sources)
         expert_result = await request_expert(job, reservation, problem=query, lines=lines, triggers=matched,
             checks=['Exact Connect channel and conversation verified', 'Unavailable media count: '+str(missing)],
             previous_actions=['Voice transcription available'] if transcripts else [])
@@ -1080,7 +1095,7 @@ async def process_connect_one(job, logger):
         phase = 'connect_generation'
         if images and not await asyncio.to_thread(image_live,job,reservation):
             await asyncio.to_thread(finish_superseded,job,reservation,'image_parent_inactive');return
-        if not pilot_case_turn:await asyncio.to_thread(episode_execution.check)
+        if not pilot_case_turn:await asyncio.to_thread(episode_execution.check_sources)
         draft, usage = await asyncio.to_thread(generate, reservation['api_key'], model, 'reply', lines, '',
                                         instructions=prompt,
                                         extra_context={'language':reservation['agent_language'], 'style':reservation['agent_style'],
@@ -1097,6 +1112,7 @@ async def process_connect_one(job, logger):
             await asyncio.to_thread(record_token_usage, job, reservation, combined, cumulative=True, generated=True)
         else:
             await asyncio.to_thread(record_token_usage, job, reservation, usage, cumulative=bool(reservation.get('episode_media_usage')),generated=True)
+        if not pilot_case_turn:await asyncio.to_thread(episode_execution.check_sources)
         pilot_decision=None
         pilot_action=''
         if pilot_initial_turn:
@@ -1308,6 +1324,7 @@ async def process_connect_one(job, logger):
             if handoff_after_reply:
                 send_options['handoff_fingerprint'] = job['event_fingerprint']
             def route_and_send():
+                if not pilot_case_turn:episode_execution.check_sources()
                 return send_ai_reply_if_active(tenant, int(job['lead_id']), str(job['channel_id']),
                                                str(job['conversation_id']), draft[:8000], reservation['run_id'],
                                                int(reservation.get('conversation_revision') or 0), **send_options)

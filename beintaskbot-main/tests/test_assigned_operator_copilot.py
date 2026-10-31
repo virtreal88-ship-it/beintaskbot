@@ -118,7 +118,7 @@ def test_other_tenant_cannot_use_dialog_context(ready):
     generated.assert_not_called()
 
 
-@pytest.mark.parametrize('interrupt',[False,True])
+@pytest.mark.parametrize('interrupt',[False,True,'media_version','body'])
 @pytest.mark.parametrize('kind',['voice','audio','image','document','video'])
 def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receipt_without_send(ready,monkeypatch,kind,interrupt):
     from unittest.mock import AsyncMock
@@ -167,9 +167,15 @@ def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receip
             def invoke(*args,**kwargs):
                 if not fired:
                     fired.append(True)
-                    db.execute('''INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,happened_at)
-                      VALUES(%s::uuid,%s::uuid,41,'after-paid',%s,'incoming','New detail',now()+interval '3 seconds')''',
-                      (A,str(uuid.uuid4()),'connect:'+CA));db.commit()
+                    if interrupt=='media_version':
+                        db.execute("UPDATE saas_crm_messages SET raw='{\"mediaId\":\"replacement\"}' WHERE tenant_id=%s::uuid AND external_id=%s",(A,source))
+                    elif interrupt=='body':
+                        db.execute("UPDATE saas_crm_messages SET body='edited caption' WHERE tenant_id=%s::uuid AND external_id=%s",(A,source))
+                    else:
+                        db.execute('''INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,happened_at)
+                          VALUES(%s::uuid,%s::uuid,41,'after-paid',%s,'incoming','New detail',now()+interval '3 seconds')''',
+                          (A,str(uuid.uuid4()),'connect:'+CA))
+                    db.commit()
                 return response
             return invoke
         for provider_mock in (visual,speech,video_speech):provider_mock.side_effect=newer(provider_mock.return_value)
@@ -177,6 +183,12 @@ def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receip
         generated.assert_not_called()
         assert db.execute("SELECT state FROM saas_episode_media_flights WHERE tenant_id=%s::uuid AND external_id=%s",(A,source))[0]['state']!='running'
         assert db.execute("SELECT count(*) AS n FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid AND external_id=%s",(A,source))[0]['n']==1
+        # An invalidated request cannot dispatch again. Restore only the
+        # synthetic source to prove the old exact-version receipt remains free.
+        before=(visual.call_count,speech.call_count,video_speech.call_count)
+        with pytest.raises(TenantLinearError):copilot.run(PROFILE,data)
+        assert (visual.call_count,speech.call_count,video_speech.call_count)==before
+        db.execute("UPDATE saas_crm_messages SET raw='{\"mediaId\":\"version1\"}',body='' WHERE tenant_id=%s::uuid AND external_id=%s",(A,source))
         db.execute("DELETE FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='after-paid'",(A,));db.commit()
         before=(visual.call_count,speech.call_count,video_speech.call_count)
         data['request_id']=str(uuid.uuid4())
@@ -193,6 +205,10 @@ def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receip
     assert first['context_usage']['evidence'][0]['status']==('partial' if kind=='video' else 'processed')
     assert generated.call_args.kwargs['extra_context']['assigned_agent_id']==AGENT
     before=(visual.call_count,speech.call_count,video_speech.call_count)
+    db.execute("UPDATE saas_crm_messages SET body='edited after completed draft' WHERE tenant_id=%s::uuid AND external_id=%s",(A,source));db.commit()
+    with pytest.raises(TenantLinearError):copilot.run(PROFILE,data)
+    assert (visual.call_count,speech.call_count,video_speech.call_count)==before
+    db.execute("UPDATE saas_crm_messages SET body='' WHERE tenant_id=%s::uuid AND external_id=%s",(A,source));db.commit()
     data['request_id']=str(uuid.uuid4())
     second=copilot.run(PROFILE,data)
     assert second['text']==first['text']
@@ -233,3 +249,22 @@ def test_new_inbound_during_generation_hides_stale_draft(ready):
     with pytest.raises(TenantLinearError):copilot.run(PROFILE,data)
     generated.assert_called_once()
     assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
+
+
+def test_reply_cache_without_source_versions_fails_closed_without_model_retry(ready):
+    db,other,generated,data=ready
+    copilot.run(PROFILE,data)
+    db.execute("UPDATE saas_chat_ai_runs SET result=result-'source_versions' WHERE tenant_id=%s::uuid AND request_id=%s::uuid",(A,data['request_id']));db.commit()
+    with pytest.raises(TenantLinearError) as error:copilot.run(PROFILE,data)
+    assert error.value.keep_request is True
+    generated.assert_called_once()
+
+
+def test_cached_reply_is_hidden_after_new_inbound_without_repeating_model(ready):
+    db,other,generated,data=ready
+    copilot.run(PROFILE,data)
+    db.execute('''INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,'after-cached',%s,'incoming','New request',now()+interval '2 seconds')''',
+      (A,str(uuid.uuid4()),'connect:'+CA));db.commit()
+    with pytest.raises(TenantLinearError):copilot.run(PROFILE,data)
+    generated.assert_called_once()

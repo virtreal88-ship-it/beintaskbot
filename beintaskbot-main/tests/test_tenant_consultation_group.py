@@ -299,7 +299,7 @@ def test_actual_worker_creates_case_snapshot_then_sends_same_revision_link_once(
     source={'external_id':source_id,'direction':'incoming','body':source_text,'message_type':'text',
       'happened_at':'2026-10-31T04:43:44+00:00','media_url':'','has_attachment':False}
     config={'scopes':[CA],'schedule':{},'chat_model':'test-model','agent_model':'','response_policy':{}}
-    reservation={'run_id':'run-1','mode':'automatic','auto_send_enabled':True,'conversation_revision':3,
+    reservation={'model':'test-model','run_id':'run-1','mode':'automatic','auto_send_enabled':True,'conversation_revision':3,
       'response_policy':{},'agent_language':'az','agent_style':'','api_key':'synthetic',
       'company_instructions':'','agent_instructions':'','scope_instructions':''}
     async def inline_to_thread(fn,*args,**kwargs):return fn(*args,**kwargs)
@@ -311,6 +311,10 @@ def test_actual_worker_creates_case_snapshot_then_sends_same_revision_link_once(
     monkeypatch.setattr(connect,'finish_sent_after_reply_handoff',lambda *_:None)
     monkeypatch.setattr(run_store,'load_agent_config',lambda *_a,**_k:(config,None))
     monkeypatch.setattr(worker,'reserve_run',lambda *_a,**_k:reservation)
+    # This fixture tests consultation publication with an admitted text turn;
+    # real media/lease/version admission is covered by the SQL integration flow.
+    from tenant_episode_media import AutoExecution
+    monkeypatch.setattr(AutoExecution,'check_sources',lambda *_:None)
     monkeypatch.setattr(worker,'enabled_triggers',lambda *_:[])
     monkeypatch.setattr(worker,'matching_triggers',lambda *_a,**_k:[])
     monkeypatch.setattr(worker,'handoff_reason',lambda *_:'')
