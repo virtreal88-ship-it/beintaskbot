@@ -11,6 +11,7 @@ from tenant_ai_agent_actions import handoff_reason, enabled_triggers, matching_t
 from tenant_ai_agent_crm_actions import execute_matching_actions
 from tenant_ai_agent_run_store import (claim_next, defer_job,
     finish_unknown, finish_superseded, finish_sent, knowledge_context, record_token_usage,
+    record_pilot_initial_rejection,
     reserve_run, retry_or_fail, skip_job)
 from tenant_ai_agent_send import send_agent
 from tenant_chat_ai_policy import history
@@ -990,8 +991,12 @@ async def process_connect_one(job, logger):
                 from tenant_ai_pilot_initial import PARSER_REJECTIONS
                 safe_reason=rejection_reason if rejection_reason in PARSER_REJECTIONS else 'invalid_schema'
                 _ai_diag(logger,job,'initial_triage_rejected','pilot_initial_'+safe_reason)
+                stored=await asyncio.to_thread(record_pilot_initial_rejection,job,reservation,safe_reason)
+                if not stored:
+                    await asyncio.to_thread(finish_superseded,job,reservation,'pilot_initial_diagnostic_stale')
+                    return
                 pilot_action='clarify'
-                draft=fallback_clarification(reservation.get('agent_language') or 'auto')
+                draft=fallback_clarification(reservation.get('agent_language') or 'auto',lines=lines)
             else:
                 pilot_action=pilot_decision['action']
             if pilot_decision is not None and pilot_action=='consult_developer':

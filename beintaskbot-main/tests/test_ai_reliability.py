@@ -133,6 +133,19 @@ def test_unknown_errors_are_redacted_and_metrics_survive_job_replacement(system)
     assert reliability.reason('voice_http_429_rate_limit')[0]=='voice_http_429_rate_limit'
 
 
+def test_parser_diagnostic_is_separate_from_send_status_and_unknown_outcome():
+    sent=reliability._message({'message_id':'m1','provider':'connect','sent':True,
+        'job_state':'sent','run_state':'completed','triage_rejection_code':'pilot_initial_invalid_json'})
+    assert sent['status']=='sent'
+    assert sent['diagnostic_code']=='pilot_initial_invalid_json'
+    assert 'отклонён' in sent['diagnostic'] and 'задан безопасный вопрос' not in sent['diagnostic']
+    unknown=reliability._message({'message_id':'m2','provider':'connect','sent':False,
+        'job_state':'unknown','job_error':'pilot_group_send_unknown',
+        'triage_rejection_code':'pilot_initial_invalid_json'})
+    assert unknown['status']=='error' and unknown['reason_code']=='internal_error'
+    assert unknown['diagnostic_code']=='pilot_initial_invalid_json'
+
+
 def test_heartbeat_missing_or_stale_is_not_healthy(system):
     db=system['db'];db.execute('DELETE FROM saas_ai_worker_health');db.commit()
     assert reliability.snapshot(PROFILE)['health']['state']=='unavailable'

@@ -133,6 +133,7 @@ def _install_initial_worker_fakes(monkeypatch, *, generated, send_result='sent-1
     monkeypatch.setattr(worker,'_next_open',lambda *_:None)
     monkeypatch.setattr(worker,'knowledge_context',lambda *_a,**_k:knowledge or [])
     monkeypatch.setattr(worker,'record_token_usage',lambda *_a,**_k:None)
+    monkeypatch.setattr(worker,'record_pilot_initial_rejection',lambda *_a,**_k:True)
     monkeypatch.setattr(worker,'generate',lambda *_a,**_k:(generated,{'input_tokens':1,'output_tokens':1,'total_tokens':2}))
     monkeypatch.setattr(worker,'history',lambda *_a,**_k:([{'speaker':'CLIENT','text':source['body']}],0))
     monkeypatch.setattr(worker,'_handoff_current_connect',lambda *_a,**_k:True)

@@ -534,6 +534,30 @@ def finish_unknown(job, reservation, error_code='provider_result_unknown'):
         settle(job['tenant_id'],reservation['spend_call_key'],{},unknown=True)
 
 
+def record_pilot_initial_rejection(job, reservation, reason_code):
+    """Persist an allowlisted parser diagnostic without changing send state/errors."""
+    from tenant_ai_pilot_initial import PARSER_REJECTIONS
+    code = str(reason_code or '')
+    if code not in PARSER_REJECTIONS:
+        code = 'invalid_schema'
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''UPDATE saas_ai_agent_runs SET result=
+                COALESCE(result,'{}'::jsonb) || jsonb_build_object('pilot_initial_triage_rejection',%s::text),
+                updated_at=now()
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'
+                AND EXISTS (SELECT 1 FROM saas_ai_agent_jobs j WHERE j.tenant_id=saas_ai_agent_runs.tenant_id
+                  AND j.agent_id=saas_ai_agent_runs.agent_id AND j.provider=%s AND j.conversation_id=%s
+                  AND j.scope_channel_id=%s AND j.lease_token=%s AND j.revision=%s
+                  AND j.lease_until>now() AND j.state='processing') RETURNING id''',
+              (code,job['tenant_id'],reservation['run_id'],job['provider'],job['conversation_id'],
+               job_scope(job),job['lease_token'],job['revision']))
+            saved = bool(cur.fetchone())
+        conn.commit()
+    return saved
+
+
 def finish_superseded(job,reservation,error_code='conversation_changed'):
     with _connect() as conn:
         ensure_schema(conn)
@@ -557,7 +581,7 @@ def finish_sent(job, reservation, message_id: str) -> bool:
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("UPDATE saas_ai_agent_runs SET state='completed',result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",
+            cur.execute("UPDATE saas_ai_agent_runs SET state='completed',result=COALESCE(result,'{}'::jsonb)||%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",
                         (_json({'send_state':'accepted','message_id':str(message_id)}),job['tenant_id'],reservation['run_id']))
             cur.execute("UPDATE saas_ai_agent_jobs SET state='sent',lease_token=NULL,lease_until=NULL,error_code='',updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider='connect' AND conversation_id=%s AND scope_channel_id=%s AND lease_token=%s AND revision=%s",
                         (job['tenant_id'],job['agent_id'],job['conversation_id'],job_scope(job),job['lease_token'],job['revision']))

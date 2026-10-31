@@ -147,3 +147,16 @@ def test_fallback_clarification_is_server_owned_and_never_requests_media(languag
     assert 'video' not in text.casefold()
     assert 'sent' not in text.casefold()
     assert 'göndərildi' not in text.casefold()
+
+
+def test_auto_fallback_uses_azerbaijani_client_text_without_phone_or_model_inference():
+    text=fallback_clarification('auto',lines=[{'speaker':'CLIENT',
+        'text':'Problem hələ də qalır? Yoxlamaq üçün nə etməliyəm?'}])
+    assert text.startswith('Zəhmət olmasa')
+    assert fallback_clarification('auto',lines=[{'speaker':'CLIENT','text':'Still broken?'}]).startswith('Please')
+
+
+@pytest.mark.parametrize('raw', ['{"action":[]}', '{"action":{}}'])
+def test_unhashable_action_is_a_typed_schema_rejection(raw):
+    parsed,reason=parse_with_reason(raw,lines=[],knowledge=[])
+    assert parsed is None and reason=='invalid_schema'

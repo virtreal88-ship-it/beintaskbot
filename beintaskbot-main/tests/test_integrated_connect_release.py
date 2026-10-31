@@ -233,12 +233,16 @@ def test_initial_parser_fallback_is_receipt_backed_and_duplicate_inbound_is_idem
     message_id,count=f['inbound']('text','The app still shows an unexpected value.')
     assert count==1, db.execute("SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid ORDER BY received_at DESC LIMIT 1",(A,))
     job=f['process']()
-    assert job and f['send'].call_count==1
+    assert job and f['send'].call_count==1, db.execute("SELECT state,error_code FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid",(A,))
     body=db.execute("""SELECT body FROM saas_crm_messages WHERE tenant_id=%s::uuid
       AND channel=%s AND direction='outgoing' AND author_name='AI Agent'""",
       (A,'connect:'+CA))[0]['body']
     assert body not in ('not json','The app still shows an unexpected value.')
     assert 'rounding' not in body.casefold() and 'programmer' not in body.casefold()
+    stored=db.execute("""SELECT result->>'send_state' AS send_state,
+      result->>'pilot_initial_triage_rejection' AS rejection,error_code
+      FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 1""",(A,))[0]
+    assert stored=={'send_state':'accepted','rejection':'invalid_json','error_code':''}
     replay=connect_ai.enqueue(A,channel_id=CA,conversation_id='client',lead_id=41,
         message_id=message_id,event_id=message_id,text='The app still shows an unexpected value.',message_type='text')
     assert replay==0

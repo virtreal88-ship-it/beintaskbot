@@ -157,10 +157,26 @@ PARSER_REJECTIONS = {
 }
 
 
-def fallback_clarification(language='en'):
+def fallback_clarification(language='en', *, lines=None):
     """Server-owned, neutral clarification; never includes model output or requests media."""
-    lang = str(language or 'en').casefold().split('-', 1)[0]
+    lang = resolve_clarification_language(language, lines)
     return _FALLBACK_CLARIFICATION.get(lang, _FALLBACK_CLARIFICATION['en'])
+
+
+def resolve_clarification_language(language='en', lines=None):
+    """Resolve auto from client text only; ambiguous text safely defaults to English."""
+    lang = str(language or 'en').casefold().split('-', 1)[0]
+    if lang != 'auto':
+        return lang if lang in _CLARIFICATION_QUESTIONS else 'en'
+    client_text = ' '.join(str(line.get('text') or '') for line in (lines or [])
+        if isinstance(line, dict) and line.get('speaker') == 'CLIENT').casefold()
+    if re.search(r'[əƏ]', client_text) or re.search(r'\b(?:hələ|üçün|yoxlamaq|problem|zəhmət|istifadə)\b', client_text, re.I):
+        return 'az'
+    if re.search(r'[а-яё]', client_text, re.I):
+        return 'ru'
+    if re.search(r'\b(?:lütfen|sorun|için|kullan|tekrarla)\b|[ğş]', client_text, re.I):
+        return 'tr'
+    return 'en'
 
 
 def parse_with_reason(value, *, lines, knowledge, media_usable=False, media_present=False, language='en'):
@@ -170,7 +186,7 @@ def parse_with_reason(value, *, lines, knowledge, media_usable=False, media_pres
     except (TypeError, ValueError):
         return None, 'invalid_json'
     if (not isinstance(item, dict) or set(item) != {'action', 'message', 'evidence_quote', 'missing_items', 'request_media'}
-            or item.get('action') not in INITIAL_ACTIONS
+            or not isinstance(item.get('action'), str) or item.get('action') not in INITIAL_ACTIONS
             or not isinstance(item.get('message'), str) or not 2 <= len(item['message'].strip()) <= 1800
             or not isinstance(item.get('evidence_quote'), str) or len(item['evidence_quote']) > 500
             or not isinstance(item.get('missing_items'), list) or len(item['missing_items']) > 4

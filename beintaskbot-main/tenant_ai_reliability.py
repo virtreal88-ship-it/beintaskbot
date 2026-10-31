@@ -30,16 +30,16 @@ REASONS = {
     'ai_limit_reached': 'Достигнут лимит AI', 'voice_token_limit': 'Достигнут лимит AI',
     'connect_admission_blocked': 'Канал или настройки компании не разрешают обработку',
     'connect_policy_blocked': 'Проверка безопасности не разрешила обработку',
-    'pilot_initial_invalid_json': 'Начальный разбор отклонён: модель вернула некорректный JSON; задан безопасный вопрос',
-    'pilot_initial_invalid_schema': 'Начальный разбор отклонён: структура ответа не прошла проверку; задан безопасный вопрос',
-    'pilot_initial_forbidden_claim': 'Начальный разбор отклонён: неподтверждённое утверждение; задан безопасный вопрос',
-    'pilot_initial_unsupported_clarification': 'Начальный разбор отклонён: недопустимый формат уточнения; задан безопасный вопрос',
-    'pilot_initial_redundant_missing_detail': 'Начальный разбор отклонён: повторный запрос уже известных данных; задан безопасный вопрос',
-    'pilot_initial_unavailable_media_request': 'Начальный разбор отклонён: повторный запрос доступного медиа; задан безопасный вопрос',
-    'pilot_initial_media_request_not_specific': 'Начальный разбор отклонён: запрос медиа не уточняет требуемое качество; задан безопасный вопрос',
-    'pilot_initial_unknown_missing_label': 'Начальный разбор отклонён: неизвестный тип недостающих данных; задан безопасный вопрос',
-    'pilot_initial_unverified_evidence': 'Начальный разбор отклонён: цитата не подтверждена материалами обращения; задан безопасный вопрос',
-    'pilot_initial_unverified_paraphrase': 'Начальный разбор отклонён: ответ не подтверждён дословными материалами; задан безопасный вопрос',
+    'pilot_initial_invalid_json': 'Ответ модели для начального разбора отклонён: некорректный JSON',
+    'pilot_initial_invalid_schema': 'Ответ модели для начального разбора отклонён: структура не прошла проверку',
+    'pilot_initial_forbidden_claim': 'Ответ модели для начального разбора отклонён: неподтверждённое утверждение',
+    'pilot_initial_unsupported_clarification': 'Ответ модели для начального разбора отклонён: недопустимый формат уточнения',
+    'pilot_initial_redundant_missing_detail': 'Ответ модели для начального разбора отклонён: повторный запрос известных данных',
+    'pilot_initial_unavailable_media_request': 'Ответ модели для начального разбора отклонён: повторный запрос доступного медиа',
+    'pilot_initial_media_request_not_specific': 'Ответ модели для начального разбора отклонён: неконкретный запрос медиа',
+    'pilot_initial_unknown_missing_label': 'Ответ модели для начального разбора отклонён: неизвестная категория данных',
+    'pilot_initial_unverified_evidence': 'Ответ модели для начального разбора отклонён: цитата не подтверждена материалами обращения',
+    'pilot_initial_unverified_paraphrase': 'Ответ модели для начального разбора отклонён: ответ не подтверждён материалами обращения',
     'no_connect_scope': 'Канал не входит в область работы агента',
     'connect_channel_outside_agent_scope': 'Канал не входит в область работы агента',
     'worker_interrupted': 'Worker прерван до вызова AI; безопасное восстановление',
@@ -186,7 +186,8 @@ def _message(row):
     state = item.get('job_state') or item.get('event_state') or 'received'
     if state in {'unknown','failed'} and not code: code = 'provider_result_unknown'
     if sent:
-        status,code = 'sent',''
+        status = 'sent'
+        code = item.get('triage_rejection_code') or ''
     elif item.get('draft_state') in {'unknown','sending'}:
         status,code = 'error' if item['draft_state']=='unknown' else 'processing', 'connect_send_unknown' if item['draft_state']=='unknown' else 'send_in_progress'
     elif state in {'unknown','failed'}:
@@ -210,8 +211,10 @@ def _message(row):
     if item.get('legacy_scope_unresolved') and not sent and state in {'queued','processing','skipped'}:
         code = 'legacy_channel_ambiguous'
     safe_code,label = reason(code)
+    diagnostic_code,diagnostic_label = reason(item.get('triage_rejection_code') or '')
     return {'message_id':item['message_id'], 'provider':item['provider'], 'channel_id':item.get('channel_id') or '',
             'agent_id':str(item.get('agent_id') or ''), 'status':status,'reason_code':safe_code,'reason':label,
+            'diagnostic_code':diagnostic_code,'diagnostic':diagnostic_label,
             'received_at':str(item.get('received_at') or ''), 'next_attempt_at':str(item.get('due_at') or ''),
             'attempts':int(item.get('attempts') or 0),
             'checkpoints':{'received':True,'queued':bool(item.get('run_state') or item.get('job_state') or state in {'queued','processing','completed','superseded'}),
@@ -264,6 +267,7 @@ def read_snapshot(cur, tenant, limit=50):
         s.enabled AS company_enabled,s.emergency_stop,s.auto_send_enabled,cs.state AS conversation_state,
         (e.provider='connect' AND ai_legacy_blocked(e.tenant_id,e.payload->>'channel_id',e.payload->>'conversation_id',e.fingerprint)) AS legacy_scope_unresolved,
         r.state AS run_state,r.error_code AS run_error,r.generated_at,
+        r.result->>'pilot_initial_triage_rejection' AS triage_rejection_code,
         (SELECT d.state FROM saas_ai_agent_drafts d WHERE d.tenant_id=e.tenant_id AND d.source_fingerprint=e.fingerprint AND d.agent_id=COALESCE(j.agent_id,r.agent_id) ORDER BY d.created_at DESC LIMIT 1) AS draft_state,
         EXISTS(SELECT 1 FROM saas_ai_agent_drafts d WHERE d.tenant_id=e.tenant_id AND d.source_fingerprint=e.fingerprint AND d.agent_id=COALESCE(j.agent_id,r.agent_id)) AS drafted,
         EXISTS(SELECT 1 FROM saas_ai_agent_runs sr WHERE sr.tenant_id=e.tenant_id AND sr.event_fingerprint=e.fingerprint
