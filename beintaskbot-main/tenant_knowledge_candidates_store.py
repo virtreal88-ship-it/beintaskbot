@@ -25,7 +25,14 @@ def schema(conn):
 
 
 def authorize(cur,profile):
-    tenant,actor=_authorize(cur,profile)
+    # This unforgeable in-process capability is only created by the narrow
+    # employee submission endpoint. It does not grant case listing, editing,
+    # publication, or the general extraction API to support staff.
+    from tenant_operator_case_submission import _SUBMISSION_CAPABILITY
+    if isinstance(profile,dict) and profile.get('_case_submission_capability') is _SUBMISSION_CAPABILITY:
+        tenant,actor,_=access(cur,profile,'support')
+    else:
+        tenant,actor=_authorize(cur,profile)
     checked,_,policy=access(cur,profile,'dialogs')
     if checked!=tenant: raise TenantLinearError('Нет доступа.',403)
     return tenant,actor,policy
@@ -433,6 +440,7 @@ def public_card(cur,row,content_language='az',source_route=None,tenant=None,dial
     value.setdefault('case_relation','unknown')
     route=source_route or {}
     value['source_route']={key:route[key] for key in ('provider','channel_id','conversation_id','phone') if route.get(key)}
+    if route.get('training_target'): value['training_target']=route['training_target']
     if media_results is not None:
         value['media_processing']=_public_media_processing(media_results,sources,extraction_status,source_refs)
         if tenant and dialog and source_route is not None:

@@ -72,7 +72,13 @@ def handler(member_from_request,canonical_origin,logger,resource='collection'):
                 if not isinstance(data,dict): raise TenantLinearError('Некорректный запрос.')
                 _expected(data,profile)
                 data={k:v for k,v in data.items() if k not in ('expected_tenant_id','expected_user_id')}
-                if resource=='campaigns':
+                if resource=='operator_preview':
+                    from tenant_operator_case_submission import preview
+                    result=await asyncio.to_thread(preview,profile,data)
+                elif resource=='operator_submit':
+                    from tenant_operator_case_submission import submit
+                    result=await asyncio.to_thread(submit,profile,data)
+                elif resource=='campaigns':
                     key=await asyncio.to_thread(campaigns.prepare,profile,data)
                     result=await asyncio.to_thread(campaigns.get,profile,key)
                 elif resource=='campaign_start': result=await asyncio.to_thread(campaigns.approve,profile,request.match_info['campaign_id'],data)

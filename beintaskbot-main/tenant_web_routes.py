@@ -160,6 +160,8 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('conversations/{conversation_id}/pause', ai_agents_handler(member, origin, logger, 'pause'), ('POST',)),
         ('conversations/{conversation_id}/resume', ai_agents_handler(member, origin, logger, 'resume'), ('POST',)),
         ('knowledge-candidates', knowledge_candidates_handler(member, origin, logger), ('GET','POST')),
+        ('knowledge-candidates/operator-preview', knowledge_candidates_handler(member, origin, logger, 'operator_preview'), ('POST',)),
+        ('knowledge-candidates/operator-submit', knowledge_candidates_handler(member, origin, logger, 'operator_submit'), ('POST',)),
         ('knowledge-candidates/campaigns', knowledge_candidates_handler(member, origin, logger, 'campaigns'), ('GET','POST')),
         ('knowledge-candidates/campaigns/preview', knowledge_candidates_handler(member, origin, logger, 'campaign_preview'), ('GET',)),
         ('knowledge-candidates/campaigns/{campaign_id}', knowledge_candidates_handler(member, origin, logger, 'campaign'), ('GET',)),
