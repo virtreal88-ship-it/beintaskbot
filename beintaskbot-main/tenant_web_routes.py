@@ -15,7 +15,7 @@ from tenant_news_api import news_handler
 from tenant_news_telegram_api import handler as news_telegram_handler
 from tenant_chat_ai_api import handler as chat_ai_handler
 from tenant_chat_ai_api import model_management_handler as chat_ai_model_handler
-from tenant_chat_send_api import handler as chat_send_handler
+from tenant_chat_send_api import handler as chat_send_handler, receipt_handler as chat_receipt_handler
 from tenant_chat_upload_api import handler as chat_upload_handler
 from tenant_chat_history_api import handler as chat_history_handler
 from tenant_chat_attachment_api import handler as chat_attachment_handler
@@ -75,6 +75,7 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
         ('/api/platform/news/telegram/settings', news_telegram_handler(member, origin, context.bot, logger, configuration=True), ('GET', 'POST')),
         ('/api/platform/news/telegram', news_telegram_handler(member, origin, context.bot, logger), ('GET', 'POST')),
         ('/api/platform/news/public/{company}', news_handler(member, origin, logger, public=True), ('GET',)),
+        ('/api/platform/crm/chat/quote-receipt', chat_receipt_handler(member,logger), ('GET',)),
         ('/api/platform/crm/chat/send', chat_send_handler(member, origin, context.crm_request, context.wait_slot, logger), ('POST',)),
         ('/api/platform/crm/chat/send-file', chat_upload_handler(member, origin, context.crm_request, context.wait_slot, logger), ('POST',)),
         ('/api/platform/crm/chat/history', chat_history_handler(member, logger), ('GET',)),

@@ -106,6 +106,10 @@ def mark_sending(item, route):
                 if not isinstance(tokens, dict) or not tokens.get('access_token'):
                     raise TenantLinearError('Kommo bağlantısını yeniləyin.', 409)
                 credentials = {'account_domain': integration['account_domain'], 'access_token': tokens['access_token']}
+            from tenant_connect_transport import quoted_once_scope
+            if item.get('quote') and connection[0]=='connect' and quoted_once_scope(profile['tenant_id'],connection[1]):
+                route={**route,'quote_protocol':True,'quote_message_id':item['command']['quote_message_id'],'quote_channel_id':connection[1],
+                    'quote_conversation_id':connection[2],'quoted_external_message_id':item['quote']}
             cur.execute("UPDATE saas_chat_send_receipts SET state='sending',route=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid AND state='preparing' RETURNING request_id", (json.dumps(route), *item['key']))
             if not cur.fetchone():
                 raise TenantLinearError('Göndərmə artıq işlənir.', 409)
@@ -188,3 +192,31 @@ def accept_quoted_lookup(item,message_id):
                 raise TenantLinearError('İstinad edilən dialoq dəyişib.',409)
             cur.execute("UPDATE saas_chat_send_receipts SET state='accepted',message_id=%s,updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid AND state IN ('sending','unknown')",(message_id,*item['key']))
         conn.commit()
+
+
+def read_quoted_receipt(session,lead_id,request_id=None):
+    """Read an existing own receipt only. No reservation or send transition."""
+    from tenant_connect_transport import quoted_once_scope
+    lead_id=int(lead_id)
+    if not 0<lead_id<2**63:raise TenantLinearError('Sorğu düzgün deyil.',400)
+    if request_id:request_id=str(uuid.UUID(str(request_id)))
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            profile,connection,integration=authority(cur,session,lead_id)
+            if connection[0]!='connect' or not quoted_once_scope(profile['tenant_id'],connection[1]):
+                raise TenantLinearError('İstinad vəziyyəti bu çat üçün əlçatan deyil.',404)
+            cur.execute("""SELECT request_id::text,lead_id,state,message_id,route FROM saas_chat_send_receipts
+              WHERE tenant_id=%s::uuid AND actor_id=%s AND lead_id=%s """+
+              ("AND request_id=%s::uuid" if request_id else "AND route->>'quote_protocol'='true'")+" ORDER BY created_at DESC,request_id DESC LIMIT 1",
+              (profile['tenant_id'],profile['telegram_id'],lead_id,*([request_id] if request_id else [])))
+            row=cur.fetchone()
+            if not row:raise TenantLinearError('Bu çatda əvvəlki istinad sorğusu tapılmadı.',404)
+            route=row['route'] if isinstance(row['route'],dict) else {}
+            if route.get('origin')!='connect':raise TenantLinearError('Sorğunun mənbəyi dəyişib.',409)
+            if route.get('quote_channel_id') and [route['quote_channel_id'],route.get('quote_conversation_id')]!=connection[1:]:
+                raise TenantLinearError('İstinad edilən dialoq dəyişib.',409)
+            command={'lead_id':lead_id,'request_id':row['request_id'],**{key:route[key] for key in ('quote_message_id','quote_channel_id','quote_conversation_id') if key in route}}
+            quote=quote_target(cur,profile['tenant_id'],command,connection) if command.get('quote_message_id') else None
+            if quote and quote!=route.get('quoted_external_message_id'):raise TenantLinearError('İstinad edilən mesaj dəyişib.',409)
+            return {'key':(profile['tenant_id'],profile['telegram_id'],row['request_id']),'command':command,'connection':connection,
+                'quote':quote,'message_id':row['message_id'],'receipt_state':row['state'],'credentials':{**integration['route'],'tenant_id':profile['tenant_id']}}
