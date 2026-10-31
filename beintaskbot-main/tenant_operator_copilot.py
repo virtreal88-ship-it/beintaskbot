@@ -38,7 +38,7 @@ INSTRUCTIONS = '''You are a private assistant to a customer-support employee. Ne
 # These are response rules, not a second agent personality. Company/assigned
 # agent instructions are passed separately using the same publication guard as
 # the agent runtime; provider/model/budget selection remains company policy.
-INSTRUCTIONS += """ Never repeat a greeting when any prior EMPLOYEE message exists or continuing_conversation is true. A conversation continuing after an employee reply is not a new introduction. Follow the assigned agent language_preference for customer drafts, even when the employee request is in another language; use conversation language only when the preference is auto. Preserve source quotations in their original language. You are the assigned conversation agent working privately with the employee. Follow supplied company and assigned-agent instructions within these safety rules. When an employee asks you to ask the customer something (including AnyDesk), send a reply, or return an answer to the customer, return ONLY a customer-ready draft for the employee to forward. Never repeat the raw employee command to the customer, claim it was sent, or perform an action. Do not add internal notes to a customer-ready draft; explain privately only when the employee separately asks for an explanation. An employee question, suggestion or hypothesis is not a confirmed diagnosis. A confirmed case observation applies only to the stated case conditions; never infer an always rule. """
+INSTRUCTIONS += """ Current saved transcripts/observations supersede earlier conversation statements that an attachment was unread or unavailable. When current evidence is supplied, use it and do not repeat that earlier inability to read it. Never repeat a greeting when any prior EMPLOYEE message exists or continuing_conversation is true. A conversation continuing after an employee reply is not a new introduction. Follow the assigned agent language_preference for customer drafts, even when the employee request is in another language; use conversation language only when the preference is auto. Preserve source quotations in their original language. You are the assigned conversation agent working privately with the employee. Follow supplied company and assigned-agent instructions within these safety rules. When an employee asks you to ask the customer something (including AnyDesk), send a reply, or return an answer to the customer, return ONLY a customer-ready draft for the employee to forward. Never repeat the raw employee command to the customer, claim it was sent, or perform an action. Do not add internal notes to a customer-ready draft; explain privately only when the employee separately asks for an explanation. An employee question, suggestion or hypothesis is not a confirmed diagnosis. A confirmed case observation applies only to the stated case conditions; never infer an always rule. """
 
 
 def _assigned_context(cur, tenant, command):
@@ -66,7 +66,15 @@ def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message
     """Keep the newest chronological evidence under a bounded prompt budget."""
     selected = []
     used = 0
-    for row in reversed(rows[-max_messages:]):
+    # Keep the explicitly requested customer evidence even if many employee
+    # messages followed it; trim other context without scanning older dialogs.
+    pinned=[row for row in rows if row.get('_manual_request_source')][-max_messages:]
+    remaining=max(0,max_messages-len(pinned))
+    other=[row for row in rows if not row.get('_manual_request_source')]
+    chosen={id(row) for row in pinned+(other[-remaining:] if remaining else [])}
+    candidates=[row for row in rows if id(row) in chosen]
+    priority=list(reversed([r for r in candidates if r.get('_manual_request_source')]))+list(reversed([r for r in candidates if not r.get('_manual_request_source')]))
+    for row in priority:
         role = 'CLIENT' if row.get('direction') == 'incoming' else 'EMPLOYEE'
         raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}
         if str(row.get('channel') or '').startswith('connect:') and raw.get('verified_employee_id') is not None:
@@ -94,12 +102,13 @@ def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message
             prefix = '[Earlier part omitted] '
             tail_length = max(0, room - len(prefix))
             body = prefix[:room] + (body[-tail_length:] if tail_length else '')
-        selected.append({'speaker': role, 'text': body,
+        selected.append({'_order':next(i for i,item in enumerate(rows) if item is row),'speaker': role, 'text': body,
                          'at': str(row.get('happened_at') or ''),
                          'source_id': str(row.get('external_id') or ''),
                          'media_kind':kind,'evidence_scope':'current_episode' if row.get('_episode_receipt') else 'historical'})
         used += len(body)
-    selected.reverse()
+    selected.sort(key=lambda item:item['_order'])
+    for item in selected:item.pop('_order')
     return selected
 
 
@@ -288,6 +297,7 @@ def _clean(data):
 
 def _hash(command):
     value = {key: val for key, val in command.items() if key != 'request_id'}
+    if command.get('mode')=='reply':value['media_selection_version']='latest-customer-request-v2'
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -394,7 +404,7 @@ def run(profile, data, *, consultation_reply_id=None):
               (tenant, command['lead_id'], 'connect:' + command['channel_id']))
             rows = list(reversed(cur.fetchall()))
             from tenant_episode_media import extend_episode
-            rows=original_rows if consultation_evidence is not None else extend_episode(cur,tenant,[command['lead_id']],command['channel_id'],rows,20)
+            rows=original_rows if consultation_evidence is not None else extend_episode(cur,tenant,[command['lead_id']],command['channel_id'],rows,20,latest_request=command['mode']=='reply')
             if not rows:
                 raise TenantLinearError('В диалоге пока нет сообщений.', 409)
             if consultation_evidence is None:command['_latest_source_id']=str(rows[-1].get('external_id') or '')
@@ -424,7 +434,11 @@ def run(profile, data, *, consultation_reply_id=None):
         command['_source_versions']=getattr(execution,'source_refs',[])
         if any(row.get('_episode_receipt') for row in rows):execution.check_sources()
         from tenant_ai_agent_run_store import knowledge_context
-        latest_row=next((row for row in reversed(rows) if row.get('direction')=='incoming'),{})
+        latest_row=next((row for row in reversed(rows) if row.get('_manual_request_source')),None)
+        if latest_row is None:
+            latest_row=next((row for row in reversed(rows) if row.get('direction')=='incoming'
+                and (row.get('raw') if isinstance(row.get('raw'),dict) else {}).get('verified_employee_id') is None
+                and (row.get('raw') if isinstance(row.get('raw'),dict) else {}).get('ai_authored') is not True),{})
         latest_customer=str(latest_row.get('_copilot_attachment_text') or latest_row.get('body') or '')
         knowledge=knowledge_context(tenant,latest_customer+'\n'+command['prompt']+'\n'+str((consultation_evidence or {}).get('body') or '')[:2000],agent_id=command['_agent_id'],limit=4)
         knowledge=[{**item,'content':item['content'][:1200]} for item in knowledge]

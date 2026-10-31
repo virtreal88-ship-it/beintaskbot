@@ -194,3 +194,19 @@ def test_successful_video_component_is_saved_when_later_paid_component_is_unknow
     flights.commit()
     _,token,result=runtime._flight(auth,selected)
     assert token is None and result['observations'][0]['text']=='Visible E17'
+
+
+def test_manual_overflow_loads_latest_answered_request_only(flights):
+    import uuid
+    flights.execute('DELETE FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41',(A,))
+    for external,direction,kind,stamp in [('old','incoming','image','15:00:00'),('boundary','outgoing','text','16:00:00'),('tie-before','incoming','image','16:15:09'),('tie-boundary','outgoing','text','16:15:09'),('voice','incoming','voice','16:15:09')]+[(f'staff-{n}','outgoing','text',f'16:19:{n:02d}') for n in range(25)]:
+        flights.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type,raw,happened_at)
+          VALUES(%s::uuid,%s::uuid,41,%s,%s,%s,'',%s,'{}',%s::timestamptz)''',
+          (str(uuid.uuid4()),A,'connect:'+external,'connect:'+CA,direction,kind,'2026-10-31T'+stamp+'Z'))
+    flights.commit()
+    rows=list(reversed(flights.execute('''SELECT external_id,direction,body,message_type,happened_at,raw FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid AND kommo_lead_id=41 ORDER BY happened_at DESC LIMIT 20''',(A,))))
+    full=runtime.extend_episode(flights.cursor(),A,[41],CA,rows,20,latest_request=True)
+    assert [r['external_id'] for r in runtime.episode(full,latest_request=True)]==['connect:voice']
+    assert runtime.episode(full)==[]
+    assert all(r['external_id']!='connect:old' for r in full)

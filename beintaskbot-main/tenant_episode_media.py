@@ -15,12 +15,21 @@ from tenant_media_evidence import (source_hash, media_version, _body_hash, reusa
 KINDS = {'audio', 'voice', 'image', 'video', 'document'}
 
 
-def episode(rows):
-    """Unanswered inbound media within ten minutes of the latest channel turn."""
+def episode(rows, *, latest_request=False):
+    """Latest inbound burst; manual may explicitly revisit an answered request."""
+    if latest_request:
+        # Manual regeneration addresses the latest customer's request even
+        # after an employee replied. Auto keeps its unanswered/resume fence.
+        index=next((i for i in range(len(rows)-1,-1,-1)
+            if rows[i].get('direction')=='incoming'
+            and (rows[i].get('raw') if isinstance(rows[i].get('raw'),dict) else {}).get('verified_employee_id') is None
+            and (rows[i].get('raw') if isinstance(rows[i].get('raw'),dict) else {}).get('ai_authored') is not True),None)
+        if index is None:return []
+        rows=rows[:index+1]
     selected=[];end=None
     for row in reversed(rows):
         raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
-        if row.get('direction')=='outgoing' or raw.get('verified_employee_id') is not None or row.get('voice_eligible') is False:
+        if row.get('direction')=='outgoing' or raw.get('verified_employee_id') is not None or (latest_request and raw.get('ai_authored') is True) or (not latest_request and row.get('voice_eligible') is False):
             break
         try: stamp=datetime.fromisoformat(str(row.get('happened_at') or '').replace('Z','+00:00'))
         except ValueError: stamp=None
@@ -147,8 +156,12 @@ def prepare(authority, rows):
     """Process every selected episode attachment before draft generation."""
     from tenant_knowledge_media import collect
     profile={'tenant_id':authority.tenant}
-    selected=episode(rows)
+    manual=getattr(authority,'latest_request',False)
+    selected=episode(rows,latest_request=manual)
+    if manual:
+        for row in selected:row['_manual_request_source']=True
     authority.source_refs=([reference(rows[-1],authority.channel,authority.lead)] if rows else [])
+    if manual and selected and selected[-1] is not rows[-1]:authority.source_refs.append(reference(selected[-1],authority.channel,authority.lead))
     selected_ids={str(row.get('external_id')) for row in selected}
     for row in rows:
         if str(row.get('message_type') or '').lower() not in KINDS:continue
@@ -306,6 +319,7 @@ class Execution:
 
 
 class ManualExecution(Execution):
+    latest_request=True
     def __init__(self,tenant,actor,command,config,version,key,model,language,rows):
         self.tenant,self.actor,self.command=tenant,actor,command
         self.channel,self.conversation,self.lead=command['channel_id'],command['conversation_id'],command['lead_id']
@@ -460,13 +474,40 @@ def context_lines(context,local_rows):
     return lines,missing
 
 
-def extend_episode(cur,tenant,leads,channel,rows,history_limit):
+def extend_episode(cur,tenant,leads,channel,rows,history_limit,*,latest_request=False):
     """Keep prompt history bounded while loading all attachments in this episode.
 
     Only needed when the history page is full. This query cannot reach older
     dialogs or media before the last employee reply/ten-minute episode fence.
     """
     if len(rows)<history_limit:return rows
+    if latest_request:
+        cur.execute('''WITH latest_customer AS (
+          SELECT COALESCE(happened_at,created_at) AS at,external_id FROM saas_crm_messages
+          WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s
+            AND direction='incoming' AND raw->>'verified_employee_id' IS NULL
+            AND raw->>'ai_authored' IS DISTINCT FROM 'true'
+          ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 1
+        ), previous_employee AS (
+          SELECT COALESCE(happened_at,created_at) AS at,external_id FROM saas_crm_messages
+          WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s
+            AND (direction='outgoing' OR raw->>'verified_employee_id' IS NOT NULL OR raw->>'ai_authored'='true')
+            AND (COALESCE(happened_at,created_at),external_id)<(SELECT at,external_id FROM latest_customer)
+          ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 1
+        ) SELECT m.external_id,direction,body,message_type,COALESCE(happened_at,created_at) AS happened_at,
+            created_at,channel,raw FROM saas_crm_messages m,latest_customer latest
+          WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s
+            AND direction='incoming' AND raw->>'verified_employee_id' IS NULL
+            AND raw->>'ai_authored' IS DISTINCT FROM 'true'
+            AND COALESCE(happened_at,created_at) BETWEEN latest.at-interval '10 minutes' AND latest.at
+            AND (COALESCE(happened_at,created_at),m.external_id)<=(latest.at,latest.external_id)
+            AND (NOT EXISTS(SELECT 1 FROM previous_employee) OR
+              (COALESCE(happened_at,created_at),m.external_id)>(SELECT at,external_id FROM previous_employee))
+          ORDER BY COALESCE(happened_at,created_at),m.external_id''',
+          (tenant,leads,'connect:'+channel,tenant,leads,'connect:'+channel,tenant,leads,'connect:'+channel))
+        by_id={str(row['external_id']):row for row in rows}
+        for row in cur.fetchall():by_id.setdefault(str(row['external_id']),row)
+        return sorted(by_id.values(),key=lambda row:(str(row.get('happened_at') or row.get('created_at') or ''),str(row['external_id'])))
     cur.execute('''SELECT external_id,direction,body,message_type,happened_at,created_at,channel,raw,
         NOT EXISTS(SELECT 1 FROM saas_connect_conversations c JOIN saas_ai_conversation_state cs
           ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id

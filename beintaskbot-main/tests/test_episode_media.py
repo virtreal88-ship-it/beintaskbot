@@ -359,3 +359,49 @@ def test_source_versions_are_json_serializable_with_native_postgres_datetime():
     ref=runtime.reference(row('voice',happened_at=datetime(2026,10,31,17,0,tzinfo=timezone.utc)),'channel',17)
     encoded=json.dumps({'source_versions':[ref]},ensure_ascii=False)
     assert '2026-10-31T17:00:00+00:00' in encoded
+
+
+@pytest.mark.parametrize('kind',['voice','audio','image','document','video'])
+def test_manual_latest_answered_customer_media_is_processed_once(sandbox,kind):
+    source=row(kind)
+    staff=row('text',2,direction='outgoing',body='Earlier response',happened_at='2026-10-31T16:19:47Z')
+    rows=[source,staff]
+    core.download_media.return_value=(PNG,{'voice':'audio/wav','audio':'audio/wav','image':'image/png','document':'text/plain','video':'video/mp4'}[kind])
+    automatic=actual_authority('automatic',rows)
+    runtime.prepare(automatic,rows)
+    assert not automatic.calls and core.download_media.await_count==0
+    manual=actual_authority('manual',rows)
+    runtime.prepare(manual,rows)
+    assert source['_episode_receipt']['status'] in {'processed','partial'}
+    assert source['_manual_request_source']
+    assert {r['external_id'] for r in manual.source_refs}=={'connect:1','connect:2'}
+    calls=core.download_media.await_count
+    runtime.prepare(actual_authority('manual',rows),rows)
+    assert core.download_media.await_count==calls==1
+
+
+def test_manual_request_preserves_previous_employee_and_ten_minute_boundaries():
+    old=row('image',0,happened_at='2026-10-31T15:00:00Z')
+    staff=row('text',2,direction='outgoing',happened_at='2026-10-31T16:00:00Z')
+    latest=row('voice',3,voice_eligible=False)
+    trailing=row('text',4,direction='outgoing',happened_at='2026-10-31T16:19:47Z')
+    assert runtime.episode([old,staff,latest,trailing])==[]
+    assert runtime.episode([old,staff,latest,trailing],latest_request=True)==[latest]
+    assert runtime.episode([old,latest,trailing],latest_request=True)==[latest]
+
+
+def test_manual_prompt_keeps_requested_transcript_before_long_staff_history():
+    from tenant_operator_copilot import _bounded_conversation
+    source=row('voice',_manual_request_source=True,_copilot_attachment_text='Səs mənbəyi',_copilot_media_notice='Analyzed voice')
+    rows=[source]+[row('text',n,direction='outgoing',body='x'*1200) for n in range(2,32)]
+    prompt=_bounded_conversation(rows,max_chars=2000)
+    assert prompt[0]['source_id']=='connect:1' and 'Səs mənbəyi' in prompt[0]['text']
+    assert sum(len(item['text']) for item in prompt)<=2000
+
+
+@pytest.mark.parametrize('staff_raw',[{'verified_employee_id':7},{'ai_authored':True}])
+def test_manual_latest_request_stops_at_incoming_staff_reply(staff_raw):
+    old=row('image',0)
+    staff=row('text',2,raw=staff_raw)
+    latest=row('voice',3)
+    assert runtime.episode([old,staff,latest],latest_request=True)==[latest]

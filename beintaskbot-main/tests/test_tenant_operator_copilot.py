@@ -332,3 +332,12 @@ def test_existing_responses_provider_sends_confirmed_photo_as_input_image(monkey
     content=request_body['input'][0]['content']
     assert content[0]['type']=='input_text'
     assert content[1]=={'type':'input_image','image_url':'data:image/jpeg;base64,'+base64.b64encode(image).decode(),'detail':'low'}
+
+
+def test_reply_selection_version_invalidates_old_cached_request_hash():
+    import hashlib,json
+    from tenant_operator_copilot import _hash
+    command={'mode':'reply','request_id':'same','prompt':''}
+    legacy=hashlib.sha256(json.dumps({'mode':'reply','prompt':''},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    assert _hash(command)!=legacy
+    assert _hash(command)==_hash({**command,'request_id':'different'})
