@@ -161,6 +161,21 @@ def test_owner_approval_is_a_separate_step_and_not_a_runtime_switch(monkeypatch)
     assert pilot.CONFIRMATION_MINUTES <= 15
 
 
+def test_episode_cutoff_excludes_old_history_but_keeps_fresh_inbound():
+    from datetime import datetime, timezone
+    from tenant_ai_agent_worker import _after_pilot_cutoff
+    cutoff=datetime(2026,10,31,14,0,tzinfo=timezone.utc)
+    rows=[{'external_id':'old','happened_at':'2026-10-31T13:59:59+00:00','body':'old case'},
+          {'external_id':'new','happened_at':'2026-10-31T14:00:01+00:00','body':'fresh question'}]
+    assert _after_pilot_cutoff(rows,cutoff)==[rows[1]]
+    assert rows[0]['body']=='old case'  # cutoff filtering does not mutate stored/history data
+
+
+def test_reset_requires_exact_confirmation_and_is_owner_only():
+    with pytest.raises(TenantLinearError):
+        pilot.reset_pilot_test_dialog({}, {'confirmed':False})
+
+
 def _exact_pilot_env(**extra):
     return {
         'AI_AGENTS_PILOT_TENANT_ID': pilot.SCOPED_LIVE_TENANT,

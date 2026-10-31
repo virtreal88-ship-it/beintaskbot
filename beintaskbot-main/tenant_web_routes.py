@@ -109,6 +109,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('agents/settings', ai_agents_handler(member, origin, logger, 'settings'), ('GET', 'PATCH')),
         ('agents/pilot-preflight', ai_agents_handler(member, origin, logger, 'pilot_preflight'), ('GET',)),
         ('agents/pilot/resume', ai_agents_handler(member, origin, logger, 'pilot_resume'), ('POST',)),
+        ('agents/pilot/reset', ai_agents_handler(member, origin, logger, 'pilot_reset'), ('POST',)),
         ('agents/pilot/kwid-confirmation', ai_agents_handler(member, origin, logger, 'pilot_kwid_confirmation'), ('POST',)),
         ('agents/pilot/owner-approval', ai_agents_handler(member, origin, logger, 'pilot_owner_approval'), ('POST',)),
         ('administrator/approvals', administrator_handler(member, origin, logger), ('GET','POST')),

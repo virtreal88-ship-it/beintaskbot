@@ -100,6 +100,17 @@ def _history_row(message, channel):
       'happened_at':stamp, 'channel':channel}
 
 
+def _after_pilot_cutoff(rows, cutoff):
+    """Keep pre-reset history out of model context while retaining it in storage/UI."""
+    if not cutoff:return rows
+    if isinstance(cutoff,str):
+        try:cutoff=datetime.fromisoformat(cutoff.replace('Z','+00:00'))
+        except ValueError:return []
+    if cutoff.tzinfo is None:cutoff=cutoff.replace(tzinfo=timezone.utc)
+    return [row for row in rows if row.get('happened_at') and
+        datetime.fromisoformat(row['happened_at'].replace('Z','+00:00'))>=cutoff]
+
+
 def _context_for_source(rows, source_id):
     """Keep the conversation through the current message, and focus media on it."""
     ordered = [row for _, row in sorted(enumerate(rows),
@@ -489,6 +500,9 @@ async def process_one(job, kommo_request, wait_slot, logger):
         messages = await read_messages(tenant,talk,kommo_request)
         source_id = str((job.get('payload') or {}).get('message_id') or '')
         normalized = [_history_row(row,channel) for row in messages]
+        if str(job.get('provider') or '')=='connect':
+            from tenant_ai_pilot import episode_cutoff
+            normalized=_after_pilot_cutoff(normalized,await asyncio.to_thread(episode_cutoff,job))
         source = next((item for item in normalized if item['external_id']==source_id),None)
         if not source or source['direction']!='incoming':
             await asyncio.to_thread(skip_job,job,'source_message_not_incoming')
@@ -676,6 +690,9 @@ async def process_one(job, kommo_request, wait_slot, logger):
         # client message invalidates this draft even if its webhook is delayed.
         current_messages = await read_messages(tenant,talk,kommo_request)
         latest_current = [_history_row(row,channel) for row in current_messages]
+        if str(job.get('provider') or '')=='connect':
+            from tenant_ai_pilot import episode_cutoff
+            latest_current=_after_pilot_cutoff(latest_current,await asyncio.to_thread(episode_cutoff,job))
         current_source=next((item for item in latest_current if item['external_id']==source_id),None)
         if not current_source or current_source['direction']!='incoming' or any(item['external_id']!=source_id and item['happened_at']>=current_source['happened_at'] for item in latest_current):
             await asyncio.to_thread(finish_superseded,job,reservation,'conversation_advanced_during_generation')
@@ -713,6 +730,9 @@ async def process_one(job, kommo_request, wait_slot, logger):
         if any(item.get('state')=='accepted' for item in action_result.get('actions',[])):
             # A manager might intervene while Kommo accepts the CRM mutations.
             latest_current = [_history_row(row,channel) for row in await read_messages(tenant,talk,kommo_request)]
+            if str(job.get('provider') or '')=='connect':
+                from tenant_ai_pilot import episode_cutoff
+                latest_current=_after_pilot_cutoff(latest_current,await asyncio.to_thread(episode_cutoff,job))
             if any(item['external_id']!=source_id and item['happened_at']>=source['happened_at'] for item in latest_current):
                 await asyncio.to_thread(finish_superseded,job,reservation,'conversation_advanced_during_actions')
                 _ai_diag(logger, job, 'job_superseded', 'conversation_advanced_during_actions')
