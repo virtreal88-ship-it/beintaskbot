@@ -66,3 +66,14 @@ message in the original dialogue with an accepted send receipt, recorded after
 the developer reply, can be selected. Confirming that link clears pending and
 stores the association; unrelated sends never clear it automatically. This does
 not change the shared composer or resolve a SupportTicket.
+
+Review hardening: delayed follow-ups use only the selected original incident,
+its summary and source versions, never the latest incident or ordinary private
+thread history. Changed agent bindings make previous drafts visibly historical.
+Attachment versions are rechecked after provider I/O. Polling avoids repeated
+DDL, and employee operations consistently lock consultation before reply.
+
+Real PostgreSQL multiprocess tests cover dispatch double-click, handling versus
+new developer reply, and handling versus draft. GitHub Actions runs these with
+a disposable PostgreSQL service and mocked providers in the dedicated dialogue
+consultation regression workflow.

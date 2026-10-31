@@ -17,6 +17,10 @@ from tenant_public_case import _schema as share_schema, _public_text, _MEDIA_TYP
 
 
 def schema(conn):
+    with conn.cursor() as cur:
+        cur.execute('''SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='saas_dialog_consultation_replies'
+          AND column_name='draft_binding') AND EXISTS(SELECT 1 FROM pg_constraint WHERE conname='saas_public_snapshot_owner_check') AS ready''')
+        if (cur.fetchone() or {}).get('ready'):return
     legacy_schema(conn)
     share_schema(conn)
     with conn.cursor() as cur:
@@ -52,6 +56,8 @@ def schema(conn):
           REFERENCES saas_dialog_consultation_replies(tenant_id,id) ON DELETE CASCADE)''')
         cur.execute('ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS draft_retry_after TIMESTAMPTZ NULL')
         cur.execute('ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS linked_customer_message_id UUID NULL')
+        cur.execute("ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS draft_binding TEXT NOT NULL DEFAULT ''")
+        cur.execute('ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS draft_agent_id UUID NULL')
         cur.execute('CREATE INDEX IF NOT EXISTS saas_dialog_consultation_pending_idx ON saas_dialog_consultation_replies(tenant_id,created_at) WHERE handled_at IS NULL')
     conn.commit()
 
@@ -314,9 +320,32 @@ def inbox(profile,channel='',conversation=''):
                 try:source=route(cur,tenant,policy,row['source_channel'],row['source_conversation'])
                 except TenantLinearError:continue
                 value={k:str(v) if isinstance(v,uuid.UUID) or hasattr(v,'isoformat') else v for k,v in dict(row).items()}
+                if row.get('draft'):
+                    try:
+                        from tenant_operator_copilot import _assigned_context,_agent_binding
+                        current=_assigned_context(cur,tenant,{'channel_id':row['source_channel'],'conversation_id':row['source_conversation']})
+                        matches=row.get('draft_binding')==_agent_binding(current)
+                    except TenantLinearError:matches=False
+                    if not matches:
+                        value.update(historical_draft=value['draft'],draft='',draft_state='outdated' if row['draft_state']=='completed' else row['draft_state'])
                 value.update(customer=source['customer_name'],url=deep_link({'channel_id':row['source_channel'],'conversation_id':row['source_conversation'],'lead_id':source['lead_id']},row['id']))
                 result.append(value)
-            return {'replies':result,'unhandled':sum(r['handled_at'] is None for r in result),'unread':sum(r['read_at'] is None for r in result)}
+            cur.execute('''SELECT c.id::text,c.reason,c.created_at,c.channel_id::text AS source_channel,c.conversation_id AS source_conversation,
+              d.state,d.channel_id::text AS destination_channel,d.conversation_id AS destination_conversation,d.created_by,d.request_id::text,
+              s.expires_at,s.revoked_at,jsonb_array_length(s.selected_message_ids) AS message_count
+              FROM saas_internal_consultations c JOIN saas_consultation_group_deliveries d ON d.tenant_id=c.tenant_id AND d.consultation_id=c.id
+              JOIN saas_public_case_shares s ON s.tenant_id=c.tenant_id AND s.consultation_id=c.id
+              WHERE c.tenant_id=%s::uuid AND c.case_id IS NULL AND (%s='' OR (c.channel_id::text=%s AND c.conversation_id=%s))
+              ORDER BY c.created_at DESC''',(tenant,channel,channel,conversation))
+            consultations=[]
+            for row in cur.fetchall():
+                try:route(cur,tenant,policy,row['source_channel'],row['source_conversation'])
+                except TenantLinearError:continue
+                try:recipient=route(cur,tenant,policy,row['destination_channel'],row['destination_conversation'])['customer_name']
+                except TenantLinearError:recipient='Recipient unavailable'
+                consultations.append({**{k:str(v) if hasattr(v,'isoformat') else v for k,v in dict(row).items()},'recipient':recipient,
+                    'can_dispatch':row['state']=='ready' and row['created_by']==actor})
+            return {'replies':result,'consultations':consultations,'unhandled':sum(r['handled_at'] is None for r in result),'unread':sum(r['read_at'] is None for r in result)}
 
 
 def action(profile,reply_id,data):
@@ -364,11 +393,18 @@ def draft(profile,reply_id,data):
         schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy=access(cur,profile,'dialogs')
-            cur.execute('SELECT * FROM saas_dialog_consultation_replies WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,reply_id));reply=cur.fetchone()
+            cur.execute('SELECT consultation_id FROM saas_dialog_consultation_replies WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,reply_id));reply=cur.fetchone()
             if not reply:raise TenantLinearError('Ответ недоступен.',404)
             _,_,_,consult,source=_consult(cur,profile,reply['consultation_id'],manual=True)
-            if reply['draft_state']=='completed':return {'text':reply['draft'],'customer_message_sent':False}
-            if reply['draft_state']!='pending':raise TenantLinearError('Предыдущий AI-запрос требует проверки; повтор отключён.',409)
+            # All employee paths lock consultation before reply, including handling.
+            cur.execute('SELECT * FROM saas_dialog_consultation_replies WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,reply_id));reply=cur.fetchone()
+            from tenant_operator_copilot import _assigned_context,_agent_binding
+            assigned=_assigned_context(cur,tenant,{'channel_id':str(consult['channel_id']),'conversation_id':consult['conversation_id']})
+            binding=_agent_binding(assigned)
+            if reply['draft_state']=='completed' and reply.get('draft_binding')==binding:
+                original_evidence(cur,tenant,reply_id,str(consult['channel_id']),consult['conversation_id'],int(source['lead_id']))
+                return {'text':reply['draft'],'customer_message_sent':False}
+            if reply['draft_state'] not in {'pending','completed'}:raise TenantLinearError('Предыдущий AI-запрос требует проверки; повтор отключён.',409)
             cur.execute("UPDATE saas_dialog_consultation_replies SET draft_state='sending',draft_request_id=%s::uuid WHERE tenant_id=%s::uuid AND id=%s::uuid",(request,tenant,reply_id))
         conn.commit()
     try:
@@ -387,7 +423,7 @@ def draft(profile,reply_id,data):
                     current=_assigned_context(cur,tenant,{'channel_id':str(consult['channel_id']),'conversation_id':consult['conversation_id']})
                     if _agent_binding(current)!=result['consultation_agent_binding']:
                         raise TenantLinearError('Назначение агента изменилось. Черновик скрыт.',409)
-                cur.execute("UPDATE saas_dialog_consultation_replies SET draft_state='completed',draft=%s WHERE tenant_id=%s::uuid AND id=%s::uuid AND draft_request_id=%s::uuid AND draft_state='sending'",(result['text'],tenant,reply_id,request))
+                cur.execute("UPDATE saas_dialog_consultation_replies SET draft_state='completed',draft=%s,draft_binding=%s,draft_agent_id=%s::uuid WHERE tenant_id=%s::uuid AND id=%s::uuid AND draft_request_id=%s::uuid AND draft_state='sending'",(result['text'],result.get('consultation_agent_binding') or binding,current['agent_id'] if result.get('consultation_agent_binding') else assigned['agent_id'],tenant,reply_id,request))
             conn.commit()
     except Exception:
         with _connect() as conn:
@@ -440,6 +476,14 @@ def public_media(token,message_id,client='',connection_factory=None):
         with conn.cursor() as cur:
             cur.execute('SELECT 1 FROM saas_public_case_shares WHERE id=%s::uuid AND revoked_at IS NULL AND expires_at>now()',(share['id'],))
             if not cur.fetchone():raise TenantLinearError('Файл недоступен.',404)
+            cur.execute('''SELECT m.id::text,m.external_id,m.body,m.message_type,m.direction,m.raw,
+              COALESCE(m.happened_at,m.created_at) AS happened_at FROM saas_crm_messages m
+              JOIN saas_connect_conversations c ON c.tenant_id=m.tenant_id AND c.lead_id=m.kommo_lead_id
+                AND m.channel='connect:'||c.connect_channel_id::text
+              WHERE m.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s AND m.id=%s::uuid''',
+              (share['tenant_id'],share['channel_id'],share['conversation_id'],message_id))
+            latest=cur.fetchone()
+            if not latest or version(latest)!=share['source_versions'].get(message_id):raise TenantLinearError('Исходный файл изменился.',409)
     return result
 
 
@@ -468,3 +512,21 @@ def customer_replies(profile,reply_id):
             if not item:raise TenantLinearError('Ответ недоступен.',404)
             _consult(cur,profile,item['consultation_id'])
             return {'messages':_customer_replies(cur,tenant,reply_id)}
+
+
+def original_evidence(cur,tenant,reply_id,channel,conversation,lead):
+    """The original selected incident, never the latest incident in this chat."""
+    cur.execute('''SELECT s.selected_message_ids,s.source_versions,c.reason FROM saas_dialog_consultation_replies r
+      JOIN saas_internal_consultations c ON c.tenant_id=r.tenant_id AND c.id=r.consultation_id
+      JOIN saas_public_case_shares s ON s.tenant_id=c.tenant_id AND s.consultation_id=c.id
+      WHERE r.tenant_id=%s::uuid AND r.id=%s::uuid AND c.channel_id=%s::uuid AND c.conversation_id=%s''',
+      (tenant,reply_id,channel,conversation));snapshot=cur.fetchone()
+    if not snapshot:raise TenantLinearError('Исходный снимок консультации недоступен.',409)
+    cur.execute('''SELECT id::text,external_id,body,message_type,direction,raw,channel,
+      COALESCE(happened_at,created_at) AS happened_at FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=ANY(%s::uuid[])''',
+      (tenant,lead,'connect:'+channel,snapshot['selected_message_ids']))
+    by_id={r['id']:r for r in cur.fetchall()}
+    if any(key not in by_id or version(by_id[key])!=snapshot['source_versions'].get(key) for key in snapshot['selected_message_ids']):
+        raise TenantLinearError('Исходный фрагмент изменился. Требуется проверка сотрудником.',409)
+    return [by_id[key] for key in snapshot['selected_message_ids']],snapshot['reason'],snapshot['source_versions']

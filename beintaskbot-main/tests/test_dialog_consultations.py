@@ -221,3 +221,47 @@ def test_confirmed_linked_customer_reply_requires_source_and_accepted_receipt(re
     assert flow.inbox(PROFILE)['unhandled']==0
     assert flow.inbox(PROFILE)['replies'][0]['linked_customer_message_id']==message
     assert db.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
+
+
+def test_media_source_replaced_during_download_is_withheld(ready,monkeypatch):
+    db,data,_=ready
+    db.execute("UPDATE saas_crm_messages SET message_type='image',external_id='connect:MEDIA_123',raw='{}'::jsonb WHERE tenant_id=%s::uuid",(A,));db.commit()
+    data['media_ids']=data['message_ids'];_,token=prepared(ready)
+    def replace(*_):
+        db.execute("UPDATE saas_crm_messages SET raw='{"+'"version":2'+"}'::jsonb WHERE tenant_id=%s::uuid",(A,));db.commit()
+        return {'base64':'eA==','mimeType':'image/png'}
+    monkeypatch.setattr(transport,'download_connect_message_media',replace)
+    with pytest.raises(TenantLinearError):public.media(token,data['message_ids'][0])
+
+
+def test_old_draft_becomes_historical_after_agent_instruction_change(ready,monkeypatch):
+    db,data,_=ready;result,_=prepared(ready);flow.dispatch(PROFILE,result['id'],data['request_id']);ident=reply(db,result)
+    import tenant_operator_copilot as copilot
+    mock=Mock(return_value={'text':'First agent draft'});monkeypatch.setattr(copilot,'run',mock)
+    flow.draft(PROFILE,ident,{'request_id':str(uuid.uuid4())})
+    db.execute("UPDATE saas_ai_agents SET instructions='New agent instructions' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));db.commit()
+    row=flow.inbox(PROFILE)['replies'][0]
+    assert row['draft_state']=='outdated' and row['draft']=='' and row['historical_draft']=='First agent draft'
+    mock.return_value={'text':'New instructions draft'}
+    assert flow.draft(PROFILE,ident,{'request_id':str(uuid.uuid4())})['text']=='New instructions draft'
+    assert mock.call_count==2
+
+
+def test_prepared_and_unknown_consultation_remain_manageable_without_reply(ready):
+    db,data,sender=ready;result,_=prepared(ready)
+    listing=flow.inbox(PROFILE)['consultations'];assert listing[0]['id']==result['id'] and listing[0]['can_dispatch']
+    assert 'body' not in listing[0] and 'token_hash' not in listing[0]
+    sender.side_effect=TimeoutError();flow.dispatch(PROFILE,result['id'],data['request_id'])
+    item=flow.inbox(PROFILE)['consultations'][0];assert item['state']=='unknown' and not item['can_dispatch']
+    flow.revoke(PROFILE,result['id']);assert flow.inbox(PROFILE)['consultations'][0]['revoked_at']
+
+
+def test_historical_draft_does_not_hide_unknown_regeneration(ready,monkeypatch):
+    db,data,_=ready;result,_=prepared(ready);flow.dispatch(PROFILE,result['id'],data['request_id']);ident=reply(db,result)
+    import tenant_operator_copilot as copilot
+    monkeypatch.setattr(copilot,'run',Mock(return_value={'text':'Historical draft'}));flow.draft(PROFILE,ident,{'request_id':str(uuid.uuid4())})
+    db.execute("UPDATE saas_ai_agents SET instructions='New instructions' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
+    db.execute("UPDATE saas_dialog_consultation_replies SET draft_state='unknown' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,ident));db.commit()
+    item=flow.inbox(PROFILE)['replies'][0]
+    assert item['draft_state']=='unknown' and item['historical_draft']=='Historical draft' and item['draft']==''
+    with pytest.raises(TenantLinearError):flow.draft(PROFILE,ident,{'request_id':str(uuid.uuid4())})

@@ -281,8 +281,19 @@ def test_async_consultation_uses_current_assigned_agent_and_long_original_eviden
     db.execute("""INSERT INTO saas_dialog_consultation_replies(tenant_id,id,consultation_id,channel_id,conversation_id,message_id,author,body,happened_at)
       VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'developers','quote','Developer',%s,now())""",(A,reply,consult,CA,'Long developer evidence '+('x'*5000)))
     db.commit()
+    original=db.execute("SELECT id::text,external_id,body,message_type,direction,raw,COALESCE(happened_at,created_at) AS happened_at FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41 AND channel=%s",(A,'connect:'+CA))
+    selected=[row['id'] for row in original]
+    db.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,consultation_id,channel_id,conversation_id,group_channel_id,group_conversation_id,
+      token_hash,selected_message_ids,public_messages,source_versions,expires_at)
+      VALUES(%s::uuid,%s::uuid,NULL,%s::uuid,%s::uuid,'client',%s::uuid,'client',%s,%s::jsonb,'[]'::jsonb,%s::jsonb,now()+interval '1 day')''',
+      (uuid.uuid4(),A,consult,CA,CA,str(uuid.uuid4()),json.dumps(selected),json.dumps({row['id']:consultations.version(row) for row in original})))
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,'NEW-INCIDENT',%s,'incoming','Completely different new issue',now()+interval '1 day')''',(uuid.uuid4(),A,'connect:'+CA));db.commit()
     copilot.run(PROFILE,{**data,'mode':'instruction','prompt':'Подготовь ответ клиенту'},consultation_reply_id=reply)
     context=generated.call_args.kwargs['extra_context']
+    assert 'Completely different new issue' not in str(generated.call_args.args)
+    assert context['untrusted_developer_consultation_evidence']['original_summary']=='Printer'
+    assert context['prior_internal_copilot_turns']==[]
     assert context['language_preference']=='az'
     assert context['assigned_agent_id']==AGENT
     assert context['assigned_agent_instructions']=='ASSIGNED_AGENT_RULES'
