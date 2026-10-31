@@ -10,6 +10,7 @@
   document.addEventListener('tenant-chat-attachments-ready',bindNativeAudioErrors);
   let member=null,capabilities={},epoch=0,listRevision=0,openRevision=0,diagnosticRevision=0,groupSettingsRevision=0,rows=[],nextOffset=null,currentDialog=null,selectedDialog=null,selectedDialogOwner='',currentPage=null,diagnosticScroll=null,timer,bulkPreviewData=null,listScrollTop=0,autoRefreshTimer=null,autoRefreshBusy=false,pullRefreshBusy=false,pullStartY=null,hasInitialDialogSnapshot=false,lastDialogSnapshotAt=0;
   const dialogPageCache=new Map(),DIALOG_PAGE_CACHE_LIMIT=6;
+  let copilotDeferredPage=null;
   const latestMessageIds=new Map(),AUTO_REFRESH_MS=30000;
   let listFlight=null,lastListKey='',lastListAt=0,permissionScope='',pendingDialogRoute=null,caseLinkRevision=0,caseLinkPending=false;
   const readMarkers=new Map(),readInFlight=new Set(),readSyncKey=()=>`tenant.operator.read.${identity(member)}`;
@@ -470,7 +471,10 @@
     return {draft:composer?.value,focus,selection,quote:quoteTarget,copilotOpen:copilot&&!copilot.hidden,copilotPrompt:prompt?.value||'',copilotResult:result?.textContent||'',copilotResultHidden:result?.hidden??true,copilotMode:modeButton?.dataset.copilotMode||'chat'};
   }
   function renderDialog(page){
-    const route=page.dialog,host=$('operatorConversationContent');if(!host)return;const interactionState=captureDialogInteractionState(route,host);
+    const route=page.dialog,host=$('operatorConversationContent');if(!host)return;const existingShell=host.querySelector('[data-operator-dialog]');
+    if(existingShell?.dataset.dialogKey===dialogKey(route)&&existingShell.dataset.copilotBusy==='true'){copilotDeferredPage=page;return;}
+    if(copilotDeferredPage&&dialogKey(copilotDeferredPage.dialog)!==dialogKey(route))copilotDeferredPage=null;
+    const interactionState=captureDialogInteractionState(route,host);
     document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:route.lead_id,surface:'operator'}}));
     const revision=openRevision,version=epoch,who=identity(member);
     const same=()=>version===epoch&&revision===openRevision&&currentDialog?.lead_id===route.lead_id&&currentDialog?.channel_id===route.channel_id&&currentDialog?.conversation_id===route.conversation_id&&host.querySelector('[data-operator-dialog]');
@@ -508,12 +512,12 @@
     async function submitCopilot(mode=copilotMode){
       if(copilotBusy||!same())return;
       const prompt=$('operatorCopilotPrompt').value.trim();if(['chat','instruction'].includes(mode)&&!prompt){copilotStatus.textContent=copilotText('prompt');$('operatorCopilotPrompt').focus();return;}
-      const contextBox=$('operatorAIContextUsage');let hasIncomingMedia=false;if(mode==='reply'){contextBox.hidden=true;contextBox.replaceChildren();hasIncomingMedia=(currentPage?.messages||[]).some(message=>message.direction==='incoming'&&['image','document'].includes(String(message.message_type||'').toLowerCase()));if(hasIncomingMedia&&!window.confirm(copilotText('mediaConsent')))return;}copilotBusy=true;copilotAsk.disabled=true;$('operatorAIReply').disabled=true;if(mode==='reply'){$('chatText').disabled=true;$('operatorAIReplyStatus').textContent=copilotText('working');}else copilotStatus.textContent=copilotText('working');copilotResult.hidden=true;
-      if(mode==='reply'&&$('chatText').value.trim()&&!window.confirm(t('replaceDraftConfirm'))){copilotBusy=false;copilotAsk.disabled=false;$('operatorAIReply').disabled=false;return;}copilotRequestId=copilotRequestId||crypto.randomUUID();
+      const contextBox=$('operatorAIContextUsage');let hasIncomingMedia=false;if(mode==='reply'){contextBox.hidden=true;contextBox.replaceChildren();hasIncomingMedia=(currentPage?.messages||[]).some(message=>message.direction==='incoming'&&['image','document'].includes(String(message.message_type||'').toLowerCase()));if(hasIncomingMedia&&!window.confirm(copilotText('mediaConsent')))return;}copilotBusy=true;host.querySelector('[data-operator-dialog]')?.setAttribute('data-copilot-busy','true');copilotAsk.disabled=true;$('operatorAIReply').disabled=true;if(mode==='reply'){$('chatText').disabled=true;$('operatorAIReplyStatus').textContent=copilotText('working');}else copilotStatus.textContent=copilotText('working');copilotResult.hidden=true;
+      if(mode==='reply'&&$('chatText').value.trim()&&!window.confirm(t('replaceDraftConfirm'))){copilotBusy=false;host.querySelector('[data-operator-dialog]')?.removeAttribute('data-copilot-busy');copilotAsk.disabled=false;$('operatorAIReply').disabled=false;return;}copilotRequestId=copilotRequestId||crypto.randomUUID();
       try{const result=await api('dialogs/copilot','POST',{provider:'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id,mode,prompt:mode==='reply'?'':prompt,request_id:copilotRequestId,...(mode==='reply'?{include_media:hasIncomingMedia&&true}:{})});
         if(!same())return;copilotRequestId='';copilotAnswer=String(result.text||'');if(mode==='reply'){if(copilotAnswer.trim()){$('chatText').value=copilotAnswer;$('chatText').dispatchEvent(new Event('input',{bubbles:true}));$('chatText').focus();$('operatorAIReplyStatus').textContent=t('aiReplyReady');showCopilotContext(result.context_usage||{});}else $('operatorAIReplyStatus').textContent=t('aiReplyError');}else{copilotResult.textContent=copilotAnswer;copilotResult.hidden=false;copilotStatus.textContent=(result.knowledge_sources||[]).map(source=>source.title).filter(Boolean).length?copilotText('knowledge')+': '+result.knowledge_sources.map(source=>source.title).join(', '):'';}
       }catch(error){if(same()){if(mode==='reply')$('operatorAIReplyStatus').textContent=error.message||t('aiReplyError');else copilotStatus.textContent=error.message||copilotText('failed');if(error.keepRequest===false)copilotRequestId='';$('operatorAIContextUsage')?.replaceChildren();if($('operatorAIContextUsage'))$('operatorAIContextUsage').hidden=true;}}
-      finally{copilotBusy=false;if(copilotAsk.isConnected)copilotAsk.disabled=false;if($('operatorAIReply')?.isConnected)$('operatorAIReply').disabled=false;if($('chatText')?.isConnected)$('chatText').disabled=!sendAllowed;}
+      finally{copilotBusy=false;if(same()){host.querySelector('[data-operator-dialog]')?.removeAttribute('data-copilot-busy');if(copilotAsk.isConnected)copilotAsk.disabled=false;if($('operatorAIReply')?.isConnected)$('operatorAIReply').disabled=false;if($('chatText')?.isConnected)$('chatText').disabled=!sendAllowed;const deferred=copilotDeferredPage;copilotDeferredPage=null;if(deferred&&currentPage===deferred&&sameDialog(deferred.dialog,route))renderDialog(deferred);}}
     }
     copilotAsk.onclick=()=>submitCopilot(copilotMode==='instruction'?'instruction':'chat');
     $('operatorAIReply').onclick=()=>{if(copilotBusy)return;submitCopilot('reply');};
