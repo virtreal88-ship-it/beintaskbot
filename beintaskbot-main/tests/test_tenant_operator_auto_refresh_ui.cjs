@@ -40,8 +40,8 @@ let readThrough=new Map(),unreadValue=1,soundCalls=0;const latest=()=>({success:
  assert.equal(calls.filter(url=>url.includes('/dialogs?')).length,beforeOtherTab+1,'a read receipt from another tab refreshes the current tenant unread projection');
  w.dispatchEvent(new w.StorageEvent('storage',{key:'tenant.operator.read.other-tenant:33',newValue:'changed'}));await settle();
  assert.equal(calls.filter(url=>url.includes('/dialogs?')).length,beforeOtherTab+1,'a foreign tenant read receipt is ignored');
- view.classList.remove('active');w.document.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view:'home'}}));assert.equal(timers.size,0,'timer is stopped outside the dialogs view');
+ view.classList.remove('active');w.document.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view:'home'}}));assert.ok([...timers.values()].some(timer=>timer.delay===30000),'app-level timer keeps observing incoming messages outside the dialogs view');
  assert.ok(calls.filter(url=>url.includes('/dialogs?')).every(url=>url.includes('search=')&&url.includes('channel=')&&url.includes('agent=')&&url.includes('state=')),'refresh reuses current filter parameters');
  assert.ok(calls.every(url=>!url.includes('/conversations/')&&!url.includes('/copilot')),'refresh issues no mutations or AI requests');
- console.log('PASS: low-frequency active-view refresh, selected-chat incremental append, numeric unread count, server read marker, scroll/draft/Copilot preservation, request deduplication, existing API only.');dom.window.close();
+ console.log('PASS: app-level low-frequency refresh, selected-chat incremental append, numeric unread count, server read marker, scroll/draft/Copilot preservation, request deduplication, existing API only.');dom.window.close();
 })().catch(error=>{console.error(error);process.exitCode=1;});
