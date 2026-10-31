@@ -74,20 +74,23 @@ def test_observation_uses_existing_inactive_agent_knowledge_with_dedup_provenanc
     assert provenance['review_status'] == 'pending_review'
 
 
-def test_no_assigned_agent_is_blocked_and_context_lookup_is_tenant_route_scoped():
+def test_no_assigned_agent_is_blocked_and_context_lookup_is_tenant_route_scoped(monkeypatch):
     cur = Mock(); cur.fetchone.return_value = None
     cmd = command()
+    selected = Mock(return_value={'agent_id':AGENT,'assignment_revision':1})
+    monkeypatch.setattr('tenant_operator_case_submission.assignment', selected)
     with pytest.raises(TenantLinearError) as caught:
         copilot._assigned_context(cur, TENANT, cmd)
     assert caught.value.status == 409
     sql, args = cur.execute.call_args.args
-    assert args == (TENANT, cmd['channel_id'], cmd['conversation_id'])
-    assert 'a.tenant_id=cs.tenant_id' in sql and 'a.archived_at IS NULL' in sql
+    selected.assert_called_once_with(cur, TENANT, cmd['channel_id'], cmd['conversation_id'])
+    assert args == (TENANT, AGENT)
+    assert 'a.tenant_id=%s::uuid' in sql and 'a.archived_at IS NULL' in sql
 
 
 def test_assignment_and_instruction_changes_invalidate_receipts():
     original = {'agent_id': AGENT, 'version': 1, 'instructions': 'support', 'company_instructions': 'company'}
-    for change in ({'agent_id': str(uuid.uuid4())}, {'version': 2},
+    for change in ({'agent_id': str(uuid.uuid4())}, {'version': 2}, {'assignment_revision': 2},
                    {'instructions': 'updated'}, {'company_instructions': 'updated'}):
         assert copilot._agent_binding(original) != copilot._agent_binding({**original, **change})
 

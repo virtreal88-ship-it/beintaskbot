@@ -16,6 +16,7 @@ def identity_policy_boundary(monkeypatch):
     # the mocked integration/usage rows intended for Copilot.
     monkeypatch.setattr('tenant_connect_identity.conflicted',Mock(return_value=False))
     monkeypatch.setattr('tenant_ai_agent_run_store.knowledge_context', Mock(return_value=[]))
+    monkeypatch.setattr('tenant_operator_case_submission.assignment', Mock(return_value={'agent_id':'bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb','assignment_revision':1}))
 
 
 def request(**overrides):

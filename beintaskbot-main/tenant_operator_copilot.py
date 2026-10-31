@@ -42,24 +42,24 @@ INSTRUCTIONS += """ You are the assigned conversation agent working privately wi
 
 
 def _assigned_context(cur, tenant, command):
-    cur.execute('''SELECT cs.agent_id,a.version,a.instructions,a.language,a.style,s.company_instructions
-      FROM saas_ai_conversation_state cs JOIN saas_ai_agents a
-        ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
-      LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=cs.tenant_id
-      WHERE cs.tenant_id=%s::uuid AND cs.provider='connect'
-        AND cs.channel_id=%s AND cs.conversation_id=%s AND a.archived_at IS NULL FOR SHARE OF cs,a''',
-      (tenant, command['channel_id'], command['conversation_id']))
+    # Shared direct/group authority lookup also fences assignment revisions.
+    from tenant_operator_case_submission import assignment
+    selected = assignment(cur, tenant, command['channel_id'], command['conversation_id'])
+    cur.execute('''SELECT a.id AS agent_id,a.version,a.instructions,a.language,a.style,s.company_instructions
+      FROM saas_ai_agents a LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id
+      WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid AND a.archived_at IS NULL FOR SHARE OF a''',
+      (tenant, selected['agent_id']))
     context = cur.fetchone() or {}
     if not context.get('agent_id'):
         raise TenantLinearError('Назначьте агента этому диалогу перед использованием AI.', 409)
-    return context
+    return {**context, 'assignment_revision': selected['assignment_revision']}
 
 
 def _agent_binding(context):
     # Instructions/company instructions are included so a settings change also
     # invalidates cached results and in-flight responses.
     return hashlib.sha256(json.dumps({k: str(context.get(k) or '') for k in
-        ('agent_id', 'version', 'instructions', 'language', 'style', 'company_instructions')},
+        ('agent_id', 'version', 'assignment_revision', 'instructions', 'language', 'style', 'company_instructions')},
         sort_keys=True).encode()).hexdigest()
 
 def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message_chars=1200):
