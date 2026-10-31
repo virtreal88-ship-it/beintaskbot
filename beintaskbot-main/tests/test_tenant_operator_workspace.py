@@ -102,6 +102,20 @@ def test_dialogs_endpoint_lists_real_postgres_rows_and_detects_manual_handoff(op
     assert dialog['handoff_source']=='manual'
     assert dialog['handoff_event_id'].startswith('manual-handoff:')
 
+
+def test_mark_all_read_http_payload_reaches_bulk_handler(operator_db):
+    from tenant_operator_api import handler
+    body=json.dumps({'expected_tenant_id':PROFILE['tenant_id'],'expected_user_id':str(PROFILE['telegram_id'])}).encode()
+    class JsonPost:
+        method='POST';content_type='application/json';content_length=len(body);query={}
+        headers={'Origin':'https://crm.test'}
+        async def read(self):return body
+    response=asyncio.run(handler(lambda _request:PROFILE,'https://crm.test',Mock(),'dialogs_read_all')(JsonPost()))
+    assert response.status==200,response.text
+    result=json.loads(response.text)['result']
+    assert result['captured_dialogs']>=1
+    assert set(result)=={'updated_dialogs','captured_dialogs','unread_before'}
+
 def test_operator_rights_do_not_grant_configuration(operator_db):
     person=employee(operator_db,['dialogs','support'])
     assert dialogs.listing(person)['dialogs']
