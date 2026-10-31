@@ -130,6 +130,22 @@ def test_unavailable_case_attachment_is_reported_and_text_fallback_has_no_false_
     assert db.execute("SELECT state FROM saas_consultation_group_media_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid",(A,consult))[0]['state']=='blocked'
 
 
+def test_developer_followup_includes_saved_case_facts_without_resending_the_original_photo(db,monkeypatch):
+    consult,case=setup_case(db,monkeypatch)
+    _scope,event_fingerprint=setup_real_pilot_gate(db,monkeypatch)
+    db.execute("UPDATE saas_internal_consultations SET evidence=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      ('{"case_lines":[{"speaker":"CLIENT","text":"The purchase receipt total does not match."},{"speaker":"CLIENT","text":"[Image supplied for analysis: photo-1]"}]}',A,consult));db.commit()
+    sent=[]
+    monkeypatch.setattr(transport,'send_group_with_receipt',lambda route,body,key,**kw:
+      (sent.append({'body':body,'media':kw.get('media')}) or {'message_id':'followup-case-message','external_message_id':'FOLLOWUP_CASE_REF'}))
+    job={'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':'client','agent_id':AGENT,'event_fingerprint':event_fingerprint}
+    result=flow.deliver_pilot_consultation_to_group(job,consult,'The specialist asked which total appears on screen.','',turn_id='developer-turn-1')
+    assert result['state']=='sent' and len(sent)==1 and sent[0]['media'] is None
+    assert 'The purchase receipt total does not match.' in sent[0]['body']
+    assert 'The specialist asked which total appears on screen.' in sent[0]['body']
+    assert 'Image supplied for analysis' not in sent[0]['body'] and 'CASE:'+consult in sent[0]['body']
+
+
 def setup_real_pilot_gate(db,monkeypatch,*,customer_state='human',reason='ai_developer_consultation:missing_knowledge'):
     import tenant_ai_pilot as pilot
     scope={'tenant_id':A,'channel_id':CA,'conversation_id':'client'}
