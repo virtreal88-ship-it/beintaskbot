@@ -802,7 +802,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             independent_consultation_receipt=False
             # Only this verified ingestion boundary can attest provider receipts.
             data={k:v for k,v in data.items() if k!='_crm_signed_outbound_receipt'}
-            if outbound and not identity_conflict:
+            if outbound and not identity_conflict and data.get('fromMe') is not False:
                 data={**data,'_crm_signed_outbound_receipt':True}
                 cur.execute('SAVEPOINT independent_consultation_receipt')
                 try:
@@ -906,7 +906,9 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     facts={key:data[key] for key in ('externalMessageId','quotedExternalMessageId','id','originClientMessageId','clientMessageId')
                            if isinstance(data.get(key),str) and re.fullmatch(r'[A-Za-z0-9_-]{5,200}',data[key])}
                     if facts:
-                        if data.get('_crm_signed_outbound_receipt') is True:facts['_crm_signed_outbound_receipt']=True
+                        facts['_crm_signed_outbound_receipt']=data.get('_crm_signed_outbound_receipt') is True
+                        if data.get('_crm_signed_outbound_receipt') is True:
+                            facts['fromMe']=True
                         cur.execute("UPDATE saas_crm_messages SET raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
                                     (_json(facts),tenant,str(stored['id'])))
                 if (stored and not coordinated and _direct_identity(conversation)

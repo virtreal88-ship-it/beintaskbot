@@ -350,6 +350,12 @@ def test_connect_202_queue_then_signed_receipt_and_delayed_reply(ready,monkeypat
     monkeypatch.setattr('tenant_ai_agent_connect.mark_operator_reply',operator)
     monkeypatch.setattr('tenant_ai_agent_connect.bind_unassigned_direct_agent',bind)
     db.execute("UPDATE saas_ai_agent_settings SET support_case_extraction_mode='automatic' WHERE tenant_id=%s::uuid",(A,));db.commit()
+    malformed={**event,'id':'contradictory-echo-'+str(uuid.uuid4()),'data':{**event['data'],'fromMe':False,'_crm_signed_outbound_receipt':True}}
+    bad_raw=json.dumps(malformed).encode();bad_signature='sha256='+hmac.new(b'synthetic-secret',bad_raw,hashlib.sha256).hexdigest()
+    assert transport.ingest(bad_raw,bad_signature,malformed)
+    assert flow.inbox(PROFILE)['consultations'][0]['state']=='pending'
+    stored=db.execute('SELECT raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',(A,'connect:'+connect_id))[0]['raw']
+    assert '_crm_signed_outbound_receipt' not in stored
     assert transport.ingest(raw,signature,event)
     assert flow.inbox(PROFILE)['consultations'][0]['state']=='sent'
     assert not extraction.called and not ai.called and not operator.called and not bind.called
