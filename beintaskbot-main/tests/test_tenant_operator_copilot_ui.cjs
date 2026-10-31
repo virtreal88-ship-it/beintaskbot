@@ -14,6 +14,7 @@ const settle=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmedi
  w.fetch=async(url,options={})=>{const parsed=new URL(url,w.location),body=options.body?JSON.parse(options.body):null;calls.push({path:parsed.pathname,body});let result={};
   if(parsed.pathname.endsWith('/dialogs/history'))result={dialog:route,messages,next_before:null};
   else if(parsed.pathname.endsWith('/dialogs'))result={dialogs:[route],channels:[],agents:[],attention_count:0};
+  else if(parsed.pathname.endsWith('/dialogs/copilot')&&body.mode==='chat')result={text:'Zəhmət olmasa AnyDesk kodunu göndərin.',mode:'chat',knowledge_sources:[]};
   else if(parsed.pathname.endsWith('/dialogs/copilot'))result={text:'Sifarişi yoxlayıb təsdiqlənmiş məlumatı sizə bildirəcəyəm.',mode:'reply',context_usage:{messages:3,voice_transcriptions:1,images:1,documents:0,skipped:[{kind:'video',reason:'video_not_analyzed'}]},knowledge_sources:[]};
   return{ok:true,status:200,json:async()=>({success:true,result})};};
  w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await settle();await w.tenantOperator.openDialog(route);await settle();
@@ -23,5 +24,10 @@ const settle=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmedi
  assert.equal(d.querySelector('#chatText').value,'Sifarişi yoxlayıb təsdiqlənmiş məlumatı sizə bildirəcəyəm.');
  assert.match(d.querySelector('#operatorAIContextUsage').textContent,/1 фото/);assert.match(d.querySelector('#operatorAIContextUsage').textContent,/1 транскрипция аудио/);assert.match(d.querySelector('#operatorAIContextUsage').textContent,/видео не анализировалось/);
  assert.equal(calls.filter(call=>call.path.endsWith('/messages/send')).length,0,'generated answer is never sent automatically');
+ d.querySelector('#operatorCopilotToggle').click();d.querySelector('#operatorCopilotPrompt').value='Попроси AnyDesk';d.querySelector('#operatorCopilotAsk').click();d.querySelector('#operatorCopilotAsk').click();await settle();
+ assert.equal(calls.filter(call=>call.path.endsWith('/dialogs/copilot')&&call.body.mode==='chat').length,1,'rapid clicks generate once');
+ assert.equal(d.querySelector('#operatorCopilotResult').textContent,'Zəhmət olmasa AnyDesk kodunu göndərin.');
+ assert.equal(d.querySelector('#chatText').value,'Sifarişi yoxlayıb təsdiqlənmiş məlumatı sizə bildirəcəyəm.','private command does not replace customer draft');
+ assert.equal(calls.filter(call=>call.path.endsWith('/messages/send')).length,0,'private commands never send to customer');
  dom.window.close();console.log('Copilot UI: media confirmation, localized context receipts and manual-only composer insertion passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
