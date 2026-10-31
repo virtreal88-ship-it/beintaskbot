@@ -26,6 +26,8 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db,monkeypatc
         pytest.skip('Install Playwright and Chromium to run browser integration')
     consult,case=setup_case(db,monkeypatch);image=str(uuid.uuid4());image2=str(uuid.uuid4())
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type) VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','image')",(image,A,'connect:'+str(uuid.uuid4()),'connect:'+CA))
+    from tenant_support_inbox_store import record_case_message_membership
+    with db.cursor() as cur:record_case_message_membership(cur,A,case,CA,'client',[db.execute('SELECT external_id FROM saas_crm_messages WHERE id=%s::uuid',(image,))[0]['external_id']],'support-group-e2e-initial-photo')
     db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets) VALUES(%s::uuid,'connect','connected',%s)",(A,b'synthetic'));db.commit()
     monkeypatch.setattr(consultations,'_connect',lambda:db)
     monkeypatch.setattr(transport,'_connect',lambda:db)
@@ -49,7 +51,11 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db,monkeypatc
             raw=json.dumps(event).encode();sig='sha256='+hmac.new(b'synthetic-secret',raw,hashlib.sha256).hexdigest()
             return web.json_response({'accepted':await asyncio.to_thread(transport.ingest,raw,sig,event)})
         async def client_attachment(_):
-            db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type) VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','image')",(image2,A,'connect:'+str(uuid.uuid4()),'connect:'+CA));db.commit()
+            external_id='connect:'+str(uuid.uuid4())
+            db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type) VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','image')",(image2,A,external_id,'connect:'+CA))
+            from tenant_support_inbox_store import record_case_message_membership
+            with db.cursor() as cur:record_case_message_membership(cur,A,case,CA,'client',[external_id],'support-group-e2e-followup')
+            db.commit()
             return web.json_response({'accepted':True})
         app.router.add_get('/app',index);app.router.add_get('/i18n.js',asset);app.router.add_get('/support.js',asset);app.router.add_get('/api/platform/me',profile);app.router.add_post('/simulate/reply',reply);app.router.add_post('/simulate/client-attachment',client_attachment)
         import logging

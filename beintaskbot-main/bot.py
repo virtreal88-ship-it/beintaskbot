@@ -18738,6 +18738,14 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_route('*', '/api/platform/support-case-pilot', support_case_pilot_admin_handler(
         _tenant_member_from_request, lambda profile: is_admin(profile.get('telegram_id')),
         CANONICAL_WEB_ORIGIN, logger))
+    from tenant_public_case_api import owner_handler as public_case_owner_handler, public_handlers as public_case_handlers
+    public_case_owner_api=public_case_owner_handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN)
+    app_web.router.add_post('/api/platform/support-cases/{ticket_id}/public-share',public_case_owner_api)
+    app_web.router.add_get('/api/platform/support-cases/{ticket_id}/public-shares',public_case_owner_api)
+    app_web.router.add_delete('/api/platform/support-cases/public-share/{share_id}',public_case_owner_api)
+    public_case_page,public_case_media=public_case_handlers(logger)
+    app_web.router.add_get('/public/case/{token}/media/{message_id}',public_case_media)
+    app_web.router.add_get('/public/case/{token}',public_case_page)
     from tenant_company_admin_api import handler as tenant_company_admin_handler
     company_admin_api = tenant_company_admin_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
     app_web.router.add_get('/api/platform/companies/manage', company_admin_api)

@@ -11,7 +11,12 @@ const {chromium}=require('../.support-test-deps/node_modules/playwright');
   const panel=page.locator('[data-consult-id="'+consult+'"] details');await panel.locator('summary').click();
   await panel.locator('select').selectOption('0');await panel.locator('textarea').fill('50 → 49,9992');await panel.locator('input[value="'+image+'"]').check();
   await panel.getByRole('button',{name:'Подготовить'}).click();
-  await panel.getByRole('button',{name:'Отправить в выбранную группу'}).click();
+  const initialSend=panel.getByRole('button',{name:'Отправить в выбранную группу'});
+  try{await initialSend.waitFor({timeout:4000});}catch{
+   throw new Error('Group preparation did not produce the send action. Notice: '+
+    await page.locator('#supportNotice').innerText()+'; panel: '+await panel.innerText());
+  }
+  await initialSend.click();
   await panel.getByText('Отправка подтверждена').waitFor();
   const response=await page.request.post(origin+'/simulate/reply');assert.equal(response.status(),200);
   await panel.getByRole('button',{name:'Обновить'}).click();await panel.getByText(/We are investigating/).waitFor();

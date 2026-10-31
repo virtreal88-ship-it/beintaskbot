@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import base64
 import os
 import re
 import secrets
@@ -1118,7 +1119,7 @@ def send_ai_reply_with_receipt(route: dict, text: str, request_id: str) -> str:
     return str(result['id'])
 
 
-def send_group_with_receipt(route: dict, text: str, request_id: str) -> dict:
+def send_group_with_receipt(route: dict, text: str, request_id: str, *, media: dict | None = None) -> dict:
     """One confirmed group delivery; expose provider reference only when valid.
 
     Callers must durably reserve the UUID before calling and quarantine unknown
@@ -1128,8 +1129,11 @@ def send_group_with_receipt(route: dict, text: str, request_id: str) -> dict:
     try: key=str(uuid.UUID(str(request_id)))
     except (ValueError,TypeError,AttributeError): raise TenantPlatformError('Invalid group request ID.') from None
     if not group_jid(route.get('conversation_id')): raise TenantPlatformError('Group route required.')
-    result=_request(route['api_key'],'POST','/v1/channels/'+route['channel_id']+'/group-messages',
-      {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':key})
+    payload={'conversationId':route['conversation_id'],'type':str(media['type']) if media else 'text',
+      'text':text,'clientMessageId':key}
+    if media:
+        payload['media']={k:media[k] for k in ('base64','mimeType','fileName') if k in media}
+    result=_request(route['api_key'],'POST','/v1/channels/'+route['channel_id']+'/group-messages',payload)
     if result.get('status')!='sent' or not result.get('id'): raise TenantPlatformError('Connect group delivery was not confirmed.')
     external=result.get('externalMessageId')
     # A Connect row alone does not prove the upstream accepted this message.
@@ -1137,6 +1141,44 @@ def send_group_with_receipt(route: dict, text: str, request_id: str) -> dict:
     if not isinstance(external,str) or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',external):
         raise TenantPlatformError('Connect group provider receipt is unavailable.')
     return {'message_id':str(result['id']),'external_message_id':external}
+
+
+def download_connect_message_media(route: dict, message_id: str, expected_type: str) -> dict:
+    """Fetch one tenant/channel-scoped Connect attachment without exposing its URL."""
+    limits={'image':8*1024*1024,'audio':8*1024*1024,'video':8*1024*1024,'document':5*1024*1024}
+    allowed={
+      'image':{'image/jpeg','image/png','image/webp','image/gif'},
+      'audio':{'audio/ogg','application/ogg','audio/mpeg','audio/mp3','audio/mp4','audio/wav','audio/x-wav','audio/webm','audio/flac','audio/x-flac','audio/aac'},
+      'video':{'video/mp4'},
+      'document':{'application/pdf','text/plain','application/vnd.openxmlformats-officedocument.wordprocessingml.document'},
+    }
+    if expected_type not in limits or not isinstance(message_id,str) or not message_id or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',message_id):
+        raise TenantPlatformError('Connect əlavəsi düzgün deyil.')
+    try:
+        response=requests.get(CONNECT_URL+'/v1/channels/'+str(route['channel_id'])+'/messages/'+message_id+'/media',
+          headers={'x-api-key':route['api_key'],'Accept':'application/octet-stream','Accept-Encoding':'identity'},
+          timeout=(5,20),allow_redirects=False,stream=True)
+    except requests.RequestException as exc:
+        raise TenantPlatformError('Connect əlavəsi əldə edilmədi.') from exc
+    try:
+        if response.status_code!=200 or response.is_redirect:
+            raise TenantPlatformError('Connect əlavəsi əldə edilmədi.')
+        mime=str(response.headers.get('Content-Type') or '').split(';',1)[0].strip().lower()
+        if mime not in allowed[expected_type]:raise TenantPlatformError('Connect əlavəsinin formatı uyğun deyil.')
+        length=response.headers.get('Content-Length')
+        if length and (not length.isdigit() or int(length)>limits[expected_type]):raise TenantPlatformError('Connect əlavəsi limitdən böyükdür.')
+        chunks=[];total=0
+        for chunk in response.iter_content(64*1024):
+            if not chunk:continue
+            total+=len(chunk)
+            if total>limits[expected_type]:raise TenantPlatformError('Connect əlavəsi limitdən böyükdür.')
+            chunks.append(chunk)
+        content=b''.join(chunks)
+        if not content:raise TenantPlatformError('Connect əlavəsi boşdur.')
+        return {'type':expected_type,'base64':base64.b64encode(content).decode('ascii'),
+          'mimeType':mime,'fileName':'case-attachment'}
+    finally:
+        response.close()
 
 
 def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversation_id: str,

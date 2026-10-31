@@ -46,6 +46,33 @@ def _pilot_quote_supported(quote,lines,knowledge):
     return any(q in norm(source) for source in sources)
 
 
+def _pilot_case_message_ids(context, quote, source_external_id):
+    """Select the bounded current-session episode from its exact complaint quote."""
+    quote=str(quote or '').strip();source_external_id=str(source_external_id or '').strip()
+    if len(quote)<8 or not source_external_id:return []
+    # _context_for_source may retain a few messages from a previous session to
+    # help the agent answer. That context is not CASE membership: never publish
+    # an older-session quote or any intervening messages/media from it.
+    current_rows=[row for row in (context or []) if isinstance(row,dict)
+      and row.get('segment')!='earlier']
+    source_rows=[row for row in current_rows if isinstance(row,dict)
+      and str(row.get('external_id') or '')==source_external_id and row.get('direction')=='incoming']
+    quote_rows=[row for row in current_rows if isinstance(row,dict)
+      and row.get('direction')=='incoming' and str(row.get('message_type') or 'text').casefold()=='text'
+      and quote in str(row.get('body') or '')]
+    if len(source_rows)!=1 or len(quote_rows)!=1:return []
+    ordered=[row for _,row in sorted(enumerate(current_rows),
+      key=lambda entry:(entry[1].get('happened_at') or '',entry[0]))]
+    start=next((i for i,row in enumerate(ordered) if row is quote_rows[0]),None)
+    end=next((i for i,row in enumerate(ordered) if row is source_rows[0]),None)
+    if start is None or end is None or start>end or end-start>=30:return []
+    ids=[]
+    for row in ordered[start:end+1]:
+        value=str(row.get('external_id') or '')
+        if value and value not in ids:ids.append(value)
+    return ids if source_external_id in ids else []
+
+
 def _history_row(message, channel):
     nested = message.get('message') if isinstance(message.get('message'),dict) else {}
     attachment = nested.get('attachment') if isinstance(nested.get('attachment'),dict) else message.get('attachment')
@@ -157,7 +184,7 @@ async def _settle_thread(task):
         raise
 
 
-async def _handoff_current_connect(job, reservation, source, reason):
+async def _handoff_current_connect(job, reservation, source, reason, *, case_message_ids=None):
     """Commit a generated Connect handoff only for the current leased turn."""
     if job.get('provider') != 'connect' or not isinstance(source, dict):
         return await asyncio.to_thread(handoff, job, reason)
@@ -167,7 +194,8 @@ async def _handoff_current_connect(job, reservation, source, reason):
         return False
     return await asyncio.to_thread(handoff, job, reason,
         source_message_id=str(source.get('external_id') or ''),
-        expected_conversation_revision=(reservation or {}).get('conversation_revision'))
+        expected_conversation_revision=(reservation or {}).get('conversation_revision'),
+        case_message_ids=case_message_ids)
 
 
 def _agent_output(raw, needs_task):
@@ -271,7 +299,8 @@ async def _send_policy_reply(job,reservation,source,text,kommo_request,wait_slot
 
 
 async def _apply_no_answer_policy(job,reservation,policy,signal,source,query,lines,knowledge,kommo_request,wait_slot,logger,
-                                  *,assessment=None,expert_result=None,pilot_group_destination=False):
+                                  *,assessment=None,expert_result=None,pilot_group_destination=False,
+                                  case_message_ids=None):
     """Run one configured missing-evidence action, then stop or continue safely."""
     from tenant_ai_agent_no_answer import (selected_action, clarification_decision,
         clear_clarifications, stop_without_answer)
@@ -334,7 +363,8 @@ async def _apply_no_answer_policy(job,reservation,policy,signal,source,query,lin
             action=str(policy.get('fallback_action') or 'stop')
         else:
             reason='ai_developer_consultation:'+str(decision.get('reason') or signal)
-            handed_off=await _handoff_current_connect(job,reservation,source,reason)
+            handed_off=await _handoff_current_connect(job,reservation,source,reason,
+                case_message_ids=case_message_ids)
             if not handed_off:
                 await asyncio.to_thread(finish_superseded,job,reservation,'connect_handoff_turn_stale')
                 return {'handled':True,'stale':True}
@@ -342,10 +372,13 @@ async def _apply_no_answer_policy(job,reservation,policy,signal,source,query,lin
             receipt=await asyncio.to_thread(create_from_ai,job,
                 recipient_id=None if pilot_group_destination else policy['developer_id'],
                 destination='pilot_group' if pilot_group_destination else 'employee',reason=reason,
-                evidence={'query':str(query or '')[:1500],'signal':str(signal),'source_external_id':str(source.get('external_id') or '')},run_id=(reservation or {}).get('run_id'))
+                evidence={'query':str(query or '')[:1500],'signal':str(signal),
+                    'source_external_id':str(source.get('external_id') or ''),
+                    'case_message_ids':list(case_message_ids or [])[:30]},
+                run_id=(reservation or {}).get('run_id'))
             if receipt.get('id'):
                 from tenant_ai_pilot import manual_live_job
-                if manual_live_job(job):
+                if pilot_group_destination and manual_live_job(job):
                     from tenant_consultation_group import deliver_pilot_consultation_to_group
                     group_delivery=await asyncio.to_thread(deliver_pilot_consultation_to_group,job,
                         receipt['id'],str(query or ''),str(source.get('external_id') or ''))
@@ -1016,8 +1049,15 @@ async def process_connect_one(job, logger):
                     }.get(lang,'I can’t confirm routing this report to the technical team right now, so I can’t say they have received it.')
                 else:
                     group_policy={}
+                    # Persist only the strict parser's exact client quote for
+                    # the case. Do not copy a generic recent-history window
+                    # into the developer handoff.
+                    handoff_query=str(pilot_decision.get('evidence_quote') or '').strip()
+                    case_message_ids=_pilot_case_message_ids(context,handoff_query,
+                        str(source.get('external_id') or ''))
                     outcome=await _apply_no_answer_policy(job,reservation,group_policy,'unsupported_evidence',source,
-                        query,lines,knowledge,None,None,logger,pilot_group_destination=True)
+                        handoff_query,lines,knowledge,None,None,logger,pilot_group_destination=True,
+                        case_message_ids=case_message_ids)
                     if outcome.get('stale'):
                         return
                     receipt=outcome.get('consultation') if isinstance(outcome,dict) else None
