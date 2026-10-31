@@ -102,6 +102,12 @@ def test_reset_commits_cutoff_fences_old_case_and_preserves_history(db,monkeypat
     assert db.execute('SELECT status,completion_outcome,knowledge_candidate_requested FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,ticket))[0]=={'status':'waiting','completion_outcome':'test_stopped','knowledge_candidate_requested':False}
     assert db.execute('SELECT count(*) AS n FROM saas_crm_messages WHERE tenant_id=%s::uuid',(A,))[0]['n']>=1
     assert db.execute('SELECT count(*) AS n FROM saas_ai_pilot_episode_cutoffs WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',(A,CA,CUSTOMER))[0]['n']==1
+    cutoff=pilot.episode_cutoff({'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':CUSTOMER})
+    from tenant_ai_agent_worker import _after_pilot_cutoff
+    old={'external_id':'old-history','happened_at':'2000-01-01T00:00:00+00:00','body':'preserved old text'}
+    fresh={'external_id':'fresh-history','happened_at':'2999-01-01T00:00:00+00:00','body':'fresh test text'}
+    assert _after_pilot_cutoff([old,fresh],cutoff)==[fresh]
+    assert old['body']=='preserved old text'
     assert db.execute('SELECT kwid_confirmed_by,owner_approved_by FROM saas_ai_pilot_confirmations WHERE tenant_id=%s::uuid',(A,))[0]=={'kwid_confirmed_by':None,'owner_approved_by':None}
     assert db.execute("SELECT revision,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='other-dialog'",(A,CA))[0]=={'revision':4,'state':'human','reason':'unrelated'}
     assert db.execute('SELECT state FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s',(A,'other-dialog-event'))[0]['state']=='queued'
