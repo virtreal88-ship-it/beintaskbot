@@ -11,6 +11,7 @@ from tenant_ai_agent_actions import handoff_reason, enabled_triggers, matching_t
 from tenant_ai_agent_crm_actions import execute_matching_actions
 from tenant_ai_agent_run_store import (claim_next, defer_job,
     finish_unknown, finish_superseded, finish_sent, knowledge_context, record_token_usage,
+    record_pilot_initial_rejection,
     reserve_run, retry_or_fail, skip_job)
 from tenant_ai_agent_send import send_agent
 from tenant_chat_ai_policy import history
@@ -976,19 +977,29 @@ async def process_connect_one(job, logger):
         pilot_decision=None
         pilot_action=''
         if pilot_initial_turn:
-            from tenant_ai_pilot_initial import parse as parse_initial_triage
+            from tenant_ai_pilot_initial import parse_with_reason as parse_initial_triage, fallback_clarification
             media_present=any(
                 row.get('direction')=='incoming' and str(row.get('message_type') or '').casefold() in {'image','video'}
                 for row in context[-30:])
             media_usable=bool(analyzed_images or video_observations or video_transcripts)
-            pilot_decision=parse_initial_triage(str(draft),lines=lines,knowledge=knowledge,
+            pilot_decision,rejection_reason=parse_initial_triage(str(draft),lines=lines,knowledge=knowledge,
                 media_usable=media_usable,media_present=media_present,
                 language=reservation.get('agent_language') or 'auto')
             if pilot_decision is None:
-                await asyncio.to_thread(finish_superseded,job,reservation,'pilot_initial_decision_unverified')
-                return
-            pilot_action=pilot_decision['action']
-            if pilot_action=='consult_developer':
+                # Keep parser detail in the content-free, server-owned diagnostic.
+                # The customer receives only this fixed clarification, never model prose.
+                from tenant_ai_pilot_initial import PARSER_REJECTIONS
+                safe_reason=rejection_reason if rejection_reason in PARSER_REJECTIONS else 'invalid_schema'
+                _ai_diag(logger,job,'initial_triage_rejected','pilot_initial_'+safe_reason)
+                stored=await asyncio.to_thread(record_pilot_initial_rejection,job,reservation,safe_reason)
+                if not stored:
+                    await asyncio.to_thread(finish_superseded,job,reservation,'pilot_initial_diagnostic_stale')
+                    return
+                pilot_action='clarify'
+                draft=fallback_clarification(reservation.get('agent_language') or 'auto',lines=lines)
+            else:
+                pilot_action=pilot_decision['action']
+            if pilot_decision is not None and pilot_action=='consult_developer':
                 # The owner-attested pilot's configured WhatsApp group is the
                 # recipient. This path does not depend on the global employee
                 # no-answer policy or invent a tenant member identity.
@@ -1022,7 +1033,7 @@ async def process_connect_one(job, logger):
                     else:
                         await asyncio.to_thread(finish_superseded,job,reservation,'pilot_initial_consultation_not_confirmed')
                     return
-            else:
+            elif pilot_decision is not None:
                 draft=pilot_decision['message']
         if pilot_case_turn:
             from tenant_consultation_group import parse_pilot_turn_decision,record_pilot_followup_action,record_group_turn_action

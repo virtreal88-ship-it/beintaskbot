@@ -192,6 +192,94 @@ def test_pilot_send_requires_fresh_exact_kwid_and_separate_owner_confirmation(fl
     assert not __import__('tenant_ai_pilot').automatic_send_allowed(
         {'tenant_id':A,'channel_id':CA,'conversation_id':'client'})
 
+
+def _arm_synthetic_initial_pilot(db,monkeypatch):
+    import tenant_ai_pilot as pilot
+    scope={'tenant_id':A,'channel_id':CA,'conversation_id':'client'}
+    monkeypatch.setenv('AI_AGENTS_PILOT_SCOPE_ENABLED','true')
+    monkeypatch.setenv('AI_AGENTS_PILOT_TENANT_ID',A)
+    monkeypatch.setenv('AI_AGENTS_PILOT_CHANNEL_ID',CA)
+    monkeypatch.setenv('AI_AGENTS_PILOT_CONVERSATION_ID','client')
+    monkeypatch.setattr(pilot,'scoped_live_enabled',lambda:True)
+    db.execute("UPDATE saas_ai_agents SET mode='manual' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
+    db.commit()
+    monkeypatch.setattr(pilot,'manual_live_job',lambda job:
+        job.get('provider')=='connect' and job.get('tenant_id')==A
+        and job.get('channel_id')==CA and job.get('conversation_id')=='client')
+    # Admission itself is separately covered by the pilot approval tests; keep
+    # this exercise focused on actual worker execution and the DB send boundary.
+    monkeypatch.setattr(pilot,'processing_allowed',lambda *_args,**_kwargs:True)
+    with db.cursor() as cur:
+        pilot.schema(cur)
+        _row,fingerprint=pilot._snapshot(cur,A,scope)
+        cur.execute('''INSERT INTO saas_ai_pilot_confirmations
+          (tenant_id,channel_id,conversation_id,scope_fingerprint,kwid_confirmed_by,
+           kwid_confirmed_at,kwid_expires_at,owner_approved_by,owner_approved_at,owner_expires_at)
+          VALUES(%s::uuid,%s::uuid,%s,%s,11,clock_timestamp()-interval '1 minute',
+           clock_timestamp()+interval '14 minutes',11,clock_timestamp()-interval '1 minute',
+           clock_timestamp()+interval '14 minutes')
+          ON CONFLICT(tenant_id) DO UPDATE SET channel_id=EXCLUDED.channel_id,
+           conversation_id=EXCLUDED.conversation_id,scope_fingerprint=EXCLUDED.scope_fingerprint,
+           kwid_confirmed_by=EXCLUDED.kwid_confirmed_by,kwid_confirmed_at=EXCLUDED.kwid_confirmed_at,
+           kwid_expires_at=EXCLUDED.kwid_expires_at,owner_approved_by=EXCLUDED.owner_approved_by,
+           owner_approved_at=EXCLUDED.owner_approved_at,owner_expires_at=EXCLUDED.owner_expires_at''',
+          (A,CA,'client',fingerprint))
+    db.commit()
+
+
+def test_initial_parser_fallback_is_receipt_backed_and_duplicate_inbound_is_idempotent(flow,monkeypatch):
+    f=flow;db=f['db'];_arm_synthetic_initial_pilot(db,monkeypatch)
+    f['generate'].return_value=('not json',{'input_tokens':4,'output_tokens':2,'total_tokens':6})
+    message_id,count=f['inbound']('text','The app still shows an unexpected value.')
+    assert count==1, db.execute("SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid ORDER BY received_at DESC LIMIT 1",(A,))
+    job=f['process']()
+    assert job and f['send'].call_count==1, db.execute("SELECT state,error_code FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid",(A,))
+    body=db.execute("""SELECT body FROM saas_crm_messages WHERE tenant_id=%s::uuid
+      AND channel=%s AND direction='outgoing' AND author_name='AI Agent'""",
+      (A,'connect:'+CA))[0]['body']
+    assert body not in ('not json','The app still shows an unexpected value.')
+    assert 'rounding' not in body.casefold() and 'programmer' not in body.casefold()
+    stored=db.execute("""SELECT result->>'send_state' AS send_state,
+      result->>'pilot_initial_triage_rejection' AS rejection,error_code
+      FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 1""",(A,))[0]
+    assert stored=={'send_state':'accepted','rejection':'pilot_initial_invalid_json','error_code':''}
+    import tenant_ai_reliability as reliability
+    mapped=reliability._message({'message_id':message_id,'provider':'connect','sent':True,
+        'job_state':'sent','run_state':'completed','triage_rejection_code':stored['rejection']})
+    assert mapped['status']=='sent'
+    assert mapped['diagnostic_code']=='pilot_initial_invalid_json'
+    assert mapped['diagnostic']=='Ответ модели для начального разбора отклонён: некорректный JSON'
+    replay=connect_ai.enqueue(A,channel_id=CA,conversation_id='client',lead_id=41,
+        message_id=message_id,event_id=message_id,text='The app still shows an unexpected value.',message_type='text')
+    assert replay==0
+    assert f['process']() is None
+    assert f['send'].call_count==1
+    assert db.execute("""SELECT count(*) AS n FROM saas_crm_messages WHERE tenant_id=%s::uuid
+      AND channel=%s AND direction='outgoing' AND author_name='AI Agent'""",
+      (A,'connect:'+CA))[0]['n']==1
+    db.commit()
+
+
+def test_initial_parser_fallback_is_blocked_by_database_human_takeover_revision(flow,monkeypatch):
+    import tenant_ai_agent_connect as connect
+    f=flow;db=f['db'];_arm_synthetic_initial_pilot(db,monkeypatch)
+    def take_over_during_generation(*_args,**_kwargs):
+        connect.mark_operator_reply(A,41,CA,'client')
+        return 'not json',{'input_tokens':4,'output_tokens':2,'total_tokens':6}
+    f['generate'].side_effect=take_over_during_generation
+    f['inbound']('text','The app still shows an unexpected value.')
+    before=db.execute("SELECT revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id='client'",(A,CA))[0]['revision']
+    job=f['process']()
+    assert job
+    assert f['send'].call_count==0
+    assert state(db)=='human'
+    after=db.execute("SELECT revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id='client'",(A,CA))[0]['revision']
+    assert after>before
+    saved=db.execute("SELECT state,error_code FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect'",
+        (A,))[0]
+    assert saved['state']=='skipped'
+    db.commit()
+
 def test_resume_only_new_messages_and_replayed_webhook(flow):
     f=flow;db=f['db']
     old,_=f['inbound']('audio','')
