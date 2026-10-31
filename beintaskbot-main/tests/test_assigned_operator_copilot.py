@@ -118,7 +118,7 @@ def test_other_tenant_cannot_use_dialog_context(ready):
     generated.assert_not_called()
 
 
-@pytest.mark.parametrize('interrupt',[False,True,'media_version','body'])
+@pytest.mark.parametrize('interrupt',[False,True,'media_version','body','answered'])
 @pytest.mark.parametrize('kind',['voice','audio','image','document','video'])
 def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receipt_without_send(ready,monkeypatch,kind,interrupt):
     from unittest.mock import AsyncMock
@@ -161,7 +161,11 @@ def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receip
     from tenant_ai_agent_run_store import knowledge_context as actual_knowledge
     retrieve=Mock(side_effect=actual_knowledge)
     monkeypatch.setattr('tenant_ai_agent_run_store.knowledge_context',retrieve)
-    if interrupt and kind!='document':
+    if interrupt=='answered':
+        db.execute('''INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,happened_at)
+          VALUES(%s::uuid,%s::uuid,41,'employee-after-media',%s,'outgoing','Earlier employee answer',now()+interval '3 seconds')''',
+          (A,str(uuid.uuid4()),'connect:'+CA));db.commit()
+    if interrupt and interrupt!='answered' and kind!='document':
         fired=[]
         def newer(response):
             def invoke(*args,**kwargs):
@@ -197,6 +201,9 @@ def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receip
         assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
         return
     first=copilot.run(PROFILE,data)
+    if interrupt=='answered':
+        assert copilot.run(PROFILE,data)==first
+        generated.assert_called_once()
     query=retrieve.call_args.args[1]
     expected={'voice':'Səs mənbəyi','audio':'Səs mənbəyi','image':'Visible E17','document':'Sənəd mənbəyi','video':'Video mənbəyi'}[kind]
     assert expected in query
