@@ -126,7 +126,7 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  panel.querySelector('textarea').value='We are checking.';panel.querySelector('[data-group-draft]').click();await settle();
  assert.equal(delivery.customer_draft,'We are checking.',JSON.stringify(synthetic));assert.ok(!synthetic.some(x=>/\/dialogs\/send/.test(x.url)));cycle.window.close();
  const shareCalls=[],shareUrl='/api/platform/support-cases/ticket-1/public-share';
- const publicUi=setup(async(url,init={})=>{const body=init.body?JSON.parse(init.body):{};shareCalls.push({url,init,body});
+ let copiedPublicUrl='';const publicUi=setup(async(url,init={})=>{const body=init.body?JSON.parse(init.body):{};shareCalls.push({url,init,body});
    if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
    if(url==='/api/platform/ai/internal-consultations/groups')return response({groups:[{channel_id:'channel-a',conversation_id:gid,contact_name:'Developer group'}]});
    if(url==='/api/platform/ai/internal-consultations?case_id=ticket-1')return response({consultations:[]});
@@ -135,6 +135,7 @@ function setup(fetch,url='https://crm.test/app',rights=true){
    if(url===shareUrl&&init.method==='POST')return response({id:'share-a',url:'https://crm.test/public/case/synthetic-token',expires_in_hours:24});
    return response({tickets:[ticket],members,next_offset:null});
  });
+ Object.defineProperty(publicUi.window.navigator,'clipboard',{value:{writeText:async value=>{copiedPublicUrl=value;}},configurable:true});
  await settle();const shareDoc=publicUi.window.document;shareDoc.querySelector('[data-support-id]').click();await settle();const sharePanel=shareDoc.querySelector('#publicCaseShare');assert.ok(sharePanel);
  const shareChecks=[...sharePanel.querySelectorAll('[data-share-message]')];shareChecks[0].checked=true;shareChecks[1].checked=true;
  sharePanel.querySelector('#publicCaseGroup').value='0';sharePanel.querySelector('button').click();await settle();
@@ -142,7 +143,7 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  assert.deepEqual(shareRequest.body.media_message_ids,[messageId]);assert.ok(!('confirm_media_review' in shareRequest.body));
  assert.match(sharePanel.textContent,/Linki əldə edən hər kəs 24 saat/);assert.equal(sharePanel.querySelector('#publicCaseMediaReviewed'),null);
  assert.equal(shareRequest.body.group_conversation_id,gid);assert.match(shareDoc.querySelector('#publicCaseShare').textContent,/WhatsApp-a yalnız istədiyiniz halda özünüz göndərin/);
- assert.equal(shareCalls.filter(x=>x.init.method==='POST').length,1,'creating a page does not send a WhatsApp message');publicUi.window.close();
+ assert.equal(shareCalls.filter(x=>x.init.method==='POST').length,1,'creating a page does not send a WhatsApp message');const copyButton=shareDoc.querySelector('[data-share-copy]');assert.ok(copyButton);copyButton.click();await settle();assert.equal(copiedPublicUrl,'https://crm.test/public/case/synthetic-token');assert.match(shareDoc.querySelector('#publicCaseShare').textContent,/əvvəlki linklər aktiv qalır/);publicUi.window.close();
  const oldMediaId='afdf2239-babc-44cc-a703-3d1df394e099',historyCalls=[],attachCalls=[];
  const picker=setup(async(url,init={})=>{
    const body=init.body?JSON.parse(init.body):{};historyCalls.push({url,init,body});
@@ -156,7 +157,7 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  },'https://crm.test/app?view=support&support_ticket_id=ticket-1');
  let downloaded='';picker.window.tenantDownloadAttachment=(_button,url)=>{downloaded=url;};await settle();const pickerDoc=picker.window.document;
  pickerDoc.querySelector('[data-support-id]').click();await settle();
- assert.ok(pickerDoc.querySelector('#supportExistingMedia'),pickerDoc.querySelector('#supportDetail').textContent);assert.ok(pickerDoc.querySelector('#caseMediaLoad'));
+ assert.equal(pickerDoc.querySelector('#supportDetail').getAttribute('role'),'dialog');assert.equal(pickerDoc.querySelector('#supportDetail').getAttribute('aria-modal'),'true');assert.equal(pickerDoc.querySelector('#supportDetail').parentElement,pickerDoc.body);assert.ok(pickerDoc.querySelector('#supportRows'),'the ticket modal leaves the filtered list mounted');assert.ok(pickerDoc.querySelector('#supportExistingMedia'),pickerDoc.querySelector('#supportDetail').textContent);assert.ok(pickerDoc.querySelector('#caseMediaLoad'));
  pickerDoc.querySelector('#caseMediaLoad').click();await settle();assert.equal(pickerDoc.querySelectorAll('#supportExistingMedia input').length,50);assert.equal(pickerDoc.querySelector(`#supportExistingMedia input[value="${oldMediaId}"]`),null);
  pickerDoc.querySelector('#caseMediaEarlier').click();await settle();
  const oldCheck=pickerDoc.querySelector(`#supportExistingMedia input[value="${oldMediaId}"]`);assert.ok(oldCheck,'media older than the first 50 history rows is selectable');
@@ -167,5 +168,23 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  assert.ok(!historyCalls.some(call=>/\/dialogs\/send|group$|public-share/.test(call.url)&&call.init.method==='POST'));
  const openButton=pickerDoc.querySelector('#supportExistingMedia [data-case-media-open]');
  assert.ok(openButton);openButton.click();assert.match(downloaded,/conversation_id=client/);assert.equal(attachCalls.length,1);picker.window.close();
+
+ const ticketA='10000000-0000-4000-8000-000000000001',ticketB='20000000-0000-4000-8000-000000000002',pendingCalls=[];let finishAttach;
+ const raced=setup(async(url,init={})=>{
+   const body=init.body?JSON.parse(init.body):{};pendingCalls.push({url,init,body});
+   if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
+   if(url.startsWith('/api/platform/ai/internal-consultations'))return response({consultations:[]});
+   if(url==='/api/platform/ai/support-tickets?status=unresolved&assignee=&search=&channel_id=&offset=0')return response({tickets:[{...ticket,id:ticketA,contact_name:'Case A'},{...ticket,id:ticketB,contact_name:'Case B'}],members,next_offset:null});
+   if(url==='/api/platform/ai/support-tickets/'+ticketA)return response({ticket:{...ticket,id:ticketA,contact_name:'Case A',channel_id:'channel-a'},messages:[],attached_media:[],expert_results:[],next_before:null});
+   if(url==='/api/platform/ai/support-tickets/'+ticketB)return response({ticket:{...ticket,id:ticketB,contact_name:'Case B',channel_id:'channel-a'},messages:[],attached_media:[],expert_results:[],next_before:null});
+   if(url==='/api/platform/ai/support-tickets/'+ticketA+'/attachments'&&init.method==='POST')return new Promise(resolve=>{finishAttach=()=>resolve(response({ticket_id:ticketA,attached_message_ids:[oldMediaId],attached_count:1}));});
+   if(url==='/api/platform/ai/support-tickets/'+ticketA+'/attachments')return response({messages:[{id:oldMediaId,external_id:'connect:old-photo',message_type:'image',direction:'incoming'}],next_before:null});
+   return response({tickets:[],members,next_offset:null});
+ });
+ await settle();const raceDoc=raced.window.document;raceDoc.querySelector(`[data-support-id="${ticketA}"]`).click();await settle();raceDoc.querySelector('#caseMediaLoad').click();await settle();
+ const raceCheck=raceDoc.querySelector('#supportExistingMedia input');assert.ok(raceCheck);raceCheck.checked=true;raceCheck.dispatchEvent(new raced.window.Event('change'));raceDoc.querySelector('[data-case-media-attach]').click();await settle();assert.equal(typeof finishAttach,'function');
+ raceDoc.querySelector(`[data-support-id="${ticketB}"]`).click();await settle();assert.equal(raceDoc.querySelector('#supportTicketTitle').textContent,'Case B');finishAttach();await settle();
+ assert.equal(raceDoc.querySelector('#supportTicketTitle').textContent,'Case B');assert.equal(pendingCalls.filter(x=>x.url==='/api/platform/ai/internal-consultations?case_id='+ticketA).length,1,'late attach completion must not redraw A consultation into B');raced.window.close();
+
  console.log('PASS: inbox renders safely; public shares scope explicitly selected CASE messages/media, disclose link access, and do not send WhatsApp.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
