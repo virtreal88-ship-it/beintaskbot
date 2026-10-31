@@ -636,8 +636,13 @@ def mark_read(profile,payload):
     return {'read_through_message_id':str(message_id),'updated':True}
 
 
-def mark_all_read(profile):
+def mark_all_read(profile, payload=None):
     """Mark each currently accessible unread dialog through its captured latest message."""
+    # The shared operator mutation handler always passes a payload after
+    # stripping the expected tenant/user scope fields. This action intentionally
+    # accepts no operation-specific fields or client-selected dialog IDs.
+    if payload not in (None, {}):
+        raise TenantLinearError('Некорректный запрос.')
     snapshot=listing(profile,all_rows=True)
     targets=[row for row in snapshot.get('dialogs',[])
              if int(row.get('unread_count') or 0)>0 and row.get('last_message_id')]
