@@ -13,7 +13,7 @@ import tenant_dialog_consultations as flow
 TARGET='120363411822115409@g.us'
 
 
-def child(dsn,kind,consult,request,reply,barrier,results):
+def child(dsn,kind,consult,request,reply,barrier,results,receipt_gate=None):
     import tenant_dialog_consultations as local
     import tenant_connect_transport as transport
     import tenant_operator_copilot as copilot
@@ -30,7 +30,21 @@ def child(dsn,kind,consult,request,reply,barrier,results):
     copilot.run=lambda *a,**kw:{'text':'Private draft'}
     try:
         barrier.wait(20)
-        if kind in {'dispatch','dispatch_queued'}:value=local.dispatch(PROFILE,consult,request)
+        if kind=='reconcile':
+            import tenant_dialog_consultations_worker as worker
+            worker._connect=factory
+            original=local.observe_outbound_receipt
+            def observe(*args):
+                value=original(*args)
+                if receipt_gate:
+                    receipt_gate.set()
+                    time.sleep(.2)
+                return value
+            local.observe_outbound_receipt=observe
+            value={'linked':worker.reconcile()}
+        elif kind in {'dispatch','dispatch_queued'}:
+            if receipt_gate:assert receipt_gate.wait(20)
+            value=local.dispatch(PROFILE,consult,request)
         elif kind=='handled':value=local.action(PROFILE,reply,{'action':'handled'})
         elif kind=='draft':value=local.draft(PROFILE,reply,{'request_id':str(uuid.uuid4())})
         else:
@@ -41,9 +55,10 @@ def child(dsn,kind,consult,request,reply,barrier,results):
     except Exception as error:results.put(('error',type(error).__name__,str(error)))
 
 
-def race(db,operations,consult,request,reply=None):
+def race(db,operations,consult,request,reply=None,receipt_gate=False):
     ctx=multiprocessing.get_context('spawn');barrier=ctx.Barrier(len(operations));results=ctx.Queue()
-    workers=[ctx.Process(target=child,args=(db.dsn,kind,consult,request,reply,barrier,results)) for kind in operations]
+    gate=ctx.Event() if receipt_gate else None
+    workers=[ctx.Process(target=child,args=(db.dsn,kind,consult,request,reply,barrier,results,gate)) for kind in operations]
     for worker in workers:worker.start()
     try:
         values=[results.get(timeout=40) for worker in workers]
@@ -106,3 +121,20 @@ def test_draft_and_handling_share_consultation_first_lock_order(prepared):
     assert all(value[0]=='ok' for value in results),results
     row=db.execute('SELECT draft_state,handled_at FROM saas_dialog_consultation_replies')[0]
     assert row['draft_state']=='completed' and row['handled_at'] is not None
+
+
+def test_pending_receipt_reconciliation_and_dispatch_do_not_invert_locks(prepared):
+    import json
+    db,consult,request=prepared
+    assert race(db,['dispatch_queued'],consult,request)[0][1]['state']=='pending'
+    for message,direction,body,raw in [
+      ('connect-id','outgoing','Observed consultation',{'id':'connect-id','externalMessageId':'PROVIDER_123','originClientMessageId':request,'fromMe':True,'_crm_signed_outbound_receipt':True}),
+      ('new-reply','incoming','Developer answer',{'id':'new-reply','quotedExternalMessageId':'PROVIDER_123'})]:
+        db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,raw)
+          VALUES(%s::uuid,%s::uuid,99,%s,%s,%s,%s,%s::jsonb)''',(uuid.uuid4(),A,'connect:'+message,'connect:'+CA,direction,body,json.dumps(raw)))
+    db.commit()
+    results=race(db,['reconcile','dispatch'],consult,request,receipt_gate=True)
+    assert all(value[0]=='ok' for value in results),results
+    assert len(db.execute('SELECT * FROM test_external_sends'))==1
+    assert db.execute('SELECT state FROM saas_consultation_group_deliveries')[0]['state']=='sent'
+    assert db.execute('SELECT message_id FROM saas_dialog_consultation_replies')[0]['message_id']=='new-reply'

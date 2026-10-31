@@ -42,6 +42,9 @@ def reconcile():
               LIMIT 100''')
             for row in cur.fetchall():
                 flow.observe_outbound_receipt(cur,row['tenant_id'],row['channel_id'],row['conversation_id'],{**row['raw'],'text':row['raw'].get('text') or row['observed_body']})
+            # Release delivery locks before derived replies lock consultations.
+            # Dispatch locks consultation -> delivery; never invert that order.
+            conn.commit()
             cur.execute('''SELECT DISTINCT d.tenant_id::text,d.channel_id::text,d.conversation_id,
               m.external_id,m.body,m.raw,m.author_name,COALESCE(m.happened_at,m.created_at) AS happened_at
               FROM saas_consultation_group_deliveries d JOIN saas_internal_consultations c
