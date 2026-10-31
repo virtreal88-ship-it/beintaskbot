@@ -1,16 +1,29 @@
 """Prepare, check source and authority, checkpoint, send once, record receipt."""
 import asyncio
 from tenant_chat_send_policy import command, resolve_route
-from tenant_chat_send_store import reserve, mark_sending, finish
+from tenant_chat_send_store import reserve, mark_sending, finish, quoted_status_credentials, record_quoted_delivery, accept_quoted_lookup
 from tenant_chat_send_provider import send
 from tenant_policy import TenantPolicy
 from tenant_linear_policy import TenantLinearError
-from tenant_connect_transport import send as send_connect, record_outbound as record_connect_outbound
+from tenant_connect_transport import send as send_connect, record_outbound as record_connect_outbound, quoted_delivery_status, quoted_once_scope
 
 
 async def run(session, data, request, wait_slot, logger):
-    item = await asyncio.to_thread(reserve, session, command(data))
+    try:
+        item=await asyncio.to_thread(reserve,session,command(data))
+    except TenantLinearError as error:
+        if isinstance(data,dict) and data.get('quote_message_id'):error.keep_request=True
+        raise
+    scoped_quote=bool(item.get('quote') and item.get('connection',[None])[0]=='connect' and quoted_once_scope(item['key'][0],item['connection'][1]))
+    if item.get('check_only'):
+        # Timeout/inflight recovery is a GET, never another provider POST.
+        status=await _quoted_status(item,None)
+        if status.get('message_id'):
+            await asyncio.to_thread(accept_quoted_lookup,item,status['message_id'])
+        return {'state':'accepted' if status.get('message_id') else 'unknown',**status}
     if 'cached_result' in item:
+        if scoped_quote:
+            return {**item['cached_result'],**await _quoted_status(item,item['cached_result']['message_id'])}
         return item['cached_result']
     external_started = False
     try:
@@ -30,10 +43,10 @@ async def run(session, data, request, wait_slot, logger):
                 raise TenantLinearError('Sövdələşmənin icraçısı və ya mərhələsi dəyişib.', 403)
         external_started = True
         message_id = await asyncio.to_thread(send_connect, credentials, item['command']['text'], item['command']['request_id'], **({'quoted_message_id':item['quote']} if item.get('quote') else {})) if is_connect else await asyncio.to_thread(send, credentials, route, item['command']['text'], wait_slot)
-        if is_connect:
+        if is_connect and not scoped_quote:
             await asyncio.to_thread(record_connect_outbound, tenant, lead_id, credentials, item['command']['text'], message_id, actor=profile['telegram_id'], **({'quoted_message_id':item['quote']} if item.get('quote') else {}))
         await asyncio.to_thread(finish, item, 'accepted', message_id)
-        return {'state': 'accepted', 'message_id': message_id, 'origin': route['origin']}
+        return {'state':'accepted','message_id':message_id,'origin':route['origin'],**(await _quoted_status(item,message_id) if scoped_quote else {})}
     except TenantLinearError:
         await asyncio.to_thread(finish, item, 'blocked')
         raise
@@ -46,3 +59,18 @@ async def run(session, data, request, wait_slot, logger):
         error = TenantLinearError('Nəticə məlum deyil. Yenidən göndərməyin; Kommo-da yoxlayın.' if external_started else 'Mesaj göndərilmədi. Çat mənbəyini və Kommo bağlantısını yoxlayın.', 503)
         error.keep_request = external_started
         raise error from None
+
+
+async def _quoted_status(item,message_id):
+    try:
+        credentials=await asyncio.to_thread(quoted_status_credentials,item)
+        credentials={**credentials,'tenant_id':item['key'][0]}
+        status=await asyncio.to_thread(quoted_delivery_status,credentials,message_id,item['command']['request_id'],item['quote'])
+        if status.get('message_id'):
+            if status.get('provider_accepted'):
+                await asyncio.to_thread(record_connect_outbound,item['key'][0],item['command']['lead_id'],credentials,item['command']['text'],status['message_id'],actor=item['key'][1],quoted_message_id=item['quote'])
+            await asyncio.to_thread(record_quoted_delivery,item,status['message_id'],status)
+        return status
+    except Exception:
+        # Acceptance/unknown outcomes are never replayed to check their status.
+        return {'quote_protocol':True,'delivery_state':'unknown','provider_accepted':False,'delivered':False,'retry_safe':False}

@@ -1129,13 +1129,24 @@ def connect_route(cur, tenant: str, lead_id: int, *, historical_read: bool = Fal
     if not row: return None
     try: secret = json.loads(_fernet().decrypt(bytes(row['secrets'])).decode())
     except Exception as exc: raise TenantPlatformError('Connect açarı oxunmadı.') from exc
-    return {'provider':'connect','channel_id':str(row['connect_channel_id']),'conversation_id':str(row['conversation_id']),'api_key':str(secret.get('api_key') or '')}
+    return {'tenant_id':str(tenant),'provider':'connect','channel_id':str(row['connect_channel_id']),'conversation_id':str(row['conversation_id']),'api_key':str(secret.get('api_key') or '')}
+
+
+QUOTED_ONCE_TENANT='e09a5c24-093f-4141-992d-532052e00c90'
+QUOTED_ONCE_CHANNEL='96863d75-d272-4c93-a25e-ffb2b16ecae3'
+
+def quoted_once_scope(tenant,channel):
+    return str(tenant)==QUOTED_ONCE_TENANT and str(channel)==QUOTED_ONCE_CHANNEL
 
 
 def send(route: dict, text: str, client_message_id: str, *, quoted_message_id=None) -> str:
     body = {'conversationId':route['conversation_id'],'type':'text','text':text,'clientMessageId':client_message_id}
     if quoted_message_id: body['quotedExternalMessageId']=quoted_message_id
-    result = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + '/messages', body)
+    endpoint='/quoted-once' if quoted_message_id and quoted_once_scope(route.get('tenant_id'),route['channel_id']) else '/messages'
+    result = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + endpoint, body)
+    # A missing endpoint, timeout or malformed receipt never falls back to the old queue.
+    if endpoint=='/quoted-once':
+        _validate_quoted_once(result,route,client_message_id,quoted_message_id)
     return str(result.get('id') or client_message_id)
 
 
@@ -1399,3 +1410,37 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
                         lead_id,str(saved['id']),actor_id=actor)
         conn.commit()
 
+
+
+def _validate_quoted_once(result,route,request_id,quoted_message_id,message_id=None):
+    try:valid_id=str(uuid.UUID(str(result.get('id'))))
+    except (ValueError,TypeError,AttributeError):raise TenantPlatformError('Quoted delivery receipt unavailable.') from None
+    if (result.get('channelId')!=route['channel_id'] or result.get('conversationId')!=route['conversation_id']
+        or result.get('clientMessageId')!=request_id or result.get('quotedExternalMessageId')!=quoted_message_id
+        or (message_id and valid_id!=message_id) or result.get('protocol') not in {'quoted-once-v1','legacy-read-only'}):
+        raise TenantPlatformError('Quoted delivery receipt scope mismatch.')
+    return valid_id
+
+
+def quoted_delivery_status(route,message_id,request_id,quoted_message_id):
+    """Exact-scope request lookup recovers timed-out responses without another POST."""
+    if not quoted_once_scope(route.get('tenant_id'),route['channel_id']):
+        raise TenantPlatformError('Quoted receipt scope unavailable.')
+    request_id=str(uuid.UUID(str(request_id)))
+    if message_id:message_id=str(uuid.UUID(str(message_id)))
+    result=_request(route['api_key'],'GET','/v1/channels/'+route['channel_id']+'/quoted-once/requests/'+request_id+'?'+
+        urlencode({'conversationId':route['conversation_id'],'quotedExternalMessageId':quoted_message_id,**({'messageId':message_id} if message_id else {})}))
+    found_id=_validate_quoted_once(result,route,request_id,quoted_message_id,message_id)
+    state=result.get('status')
+    if state not in {'pending','retrying','sent','delivered','read','failed','unknown'}:
+        raise TenantPlatformError('Quoted delivery receipt unavailable.')
+    provider_id=result.get('externalMessageId')
+    valid_provider_id=isinstance(provider_id,str) and re.fullmatch(r'[A-Za-z0-9_-]{5,200}',provider_id) is not None
+    accepted=result.get('providerAccepted') is True and valid_provider_id and state in {'sent','delivered','read'}
+    if state in {'sent','delivered','read'} and not accepted:state='unknown'
+    if state in {'delivered','read'} and result.get('delivered') is not True:state='sent' if accepted else 'unknown'
+    return {'message_id':found_id,'quote_protocol':True,'delivery_state':state,'provider_accepted':accepted,
+        'delivered':accepted and state in {'delivered','read'} and result.get('delivered') is True,
+        'retry_safe':state=='failed' and result.get('protocol')=='quoted-once-v1' and result.get('retrySafe') is True and not provider_id
+            and result.get('errorCode') in {'quoted_message_unavailable','quoted_source_scope_conflict','quoted_source_lookup_unavailable','quoted_provider_unavailable'},
+        **({'provider_message_id':provider_id} if valid_provider_id else {})}
