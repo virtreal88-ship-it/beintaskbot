@@ -4,7 +4,7 @@ const assert=require('node:assert/strict');
  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||(require('node:fs').existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),args:['--no-sandbox']});
  try{
  const page=await browser.newPage({viewport:{width:390,height:844}});page.on('dialog',()=>assert.fail('No native dialog'));
- await page.goto(process.argv[2]);await page.locator('#dialogConsultationStart').click();
+ await page.goto(process.argv[2]);await page.locator('#dialogHelperType').selectOption('Developer');await page.locator('#dialogConsultationStart').click();
  await page.getByRole('dialog').getByRole('combobox').first().waitFor();
  await page.getByRole('dialog').getByText('Закрыть',{exact:true}).click();
  assert.equal((await (await page.request.get(process.argv[2]+'stats')).json()).created,0);

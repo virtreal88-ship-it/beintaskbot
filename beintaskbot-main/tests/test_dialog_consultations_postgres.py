@@ -82,6 +82,7 @@ def prepared(database,monkeypatch):
     db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,agent_id,state) VALUES(%s::uuid,'connect',%s,'client',%s::uuid,'human')",(A,CA,AGENT))
     message=str(uuid.uuid4());db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,41,'source',%s,'incoming','Original problem')",(message,A,'connect:'+CA));db.commit()
     monkeypatch.setattr(flow,'_connect',lambda:psycopg.connect(db.dsn,row_factory=dict_row))
+    flow.developer_marker(PROFILE,{'channel_id':CA,'conversation_id':TARGET,'enabled':True})
     data={'request_id':str(uuid.uuid4()),'channel_id':CA,'conversation_id':'client','destination_channel_id':CA,'destination_conversation_id':TARGET,'message_ids':[message],'media_ids':[],'summary':'Original problem','confirm':True}
     consult=flow.prepare(PROFILE,data,'https://crm.test')['id']
     return db,consult,data['request_id']

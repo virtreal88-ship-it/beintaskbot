@@ -18,6 +18,13 @@ from tenant_public_case import _schema as share_schema, _public_text, _MEDIA_TYP
 
 def schema(conn):
     with conn.cursor() as cur:
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_dialog_developer_markers(
+          tenant_id UUID NOT NULL,channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,
+          enabled BOOLEAN NOT NULL DEFAULT FALSE,updated_by BIGINT NOT NULL,updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,channel_id,conversation_id),
+          FOREIGN KEY(tenant_id) REFERENCES saas_tenants(id) ON DELETE CASCADE)''')
+    conn.commit()
+    with conn.cursor() as cur:
         cur.execute('''SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='saas_dialog_consultation_replies'
           AND column_name='draft_binding') AND EXISTS(SELECT 1 FROM pg_constraint WHERE conname='saas_public_snapshot_owner_check') AS ready''')
         if (cur.fetchone() or {}).get('ready'):return
@@ -89,6 +96,36 @@ def _scope(cur,profile,channel,conversation,*,manual=False):
     return tenant,actor,policy,route(cur,tenant,policy,channel,conversation,manual=manual)
 
 
+def developer_marker(profile,data):
+    if not isinstance(data,dict) or set(data) not in ({'channel_id','conversation_id'},{'channel_id','conversation_id','enabled'}):
+        raise TenantLinearError('Некорректный запрос.',400)
+    if 'enabled' in data and type(data['enabled']) is not bool:raise TenantLinearError('Некорректный запрос.',400)
+    with _connect() as conn:
+        schema(conn)
+        with conn.cursor() as cur:
+            tenant,actor,_,_=_scope(cur,profile,data['channel_id'],data['conversation_id'])
+            from tenant_ai_dialog_scope import lock_dialog
+            lock_dialog(cur,tenant,'connect',data['channel_id'],data['conversation_id'])
+            if 'enabled' in data:
+                cur.execute('''INSERT INTO saas_dialog_developer_markers(tenant_id,channel_id,conversation_id,enabled,updated_by)
+                  VALUES(%s::uuid,%s::uuid,%s,%s,%s) ON CONFLICT(tenant_id,channel_id,conversation_id)
+                  DO UPDATE SET enabled=EXCLUDED.enabled,updated_by=EXCLUDED.updated_by,updated_at=now()''',
+                  (tenant,data['channel_id'],data['conversation_id'],data['enabled'],actor))
+            cur.execute('SELECT enabled FROM saas_dialog_developer_markers WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',
+                (tenant,data['channel_id'],data['conversation_id']))
+            enabled=bool((cur.fetchone() or {}).get('enabled'))
+        conn.commit()
+    return {'enabled':enabled}
+
+
+def developer_target(cur,tenant,policy,channel,conversation):
+    target=route(cur,tenant,policy,channel,conversation)
+    cur.execute('''SELECT enabled FROM saas_dialog_developer_markers WHERE tenant_id=%s::uuid
+      AND channel_id=%s::uuid AND conversation_id=%s AND enabled=TRUE FOR SHARE''',(tenant,channel,conversation))
+    if not cur.fetchone():raise TenantLinearError('Получатель больше не отмечен Developer. Обновите список.',409)
+    return target
+
+
 def destinations(profile):
     with _connect() as conn:
         schema(conn)
@@ -97,8 +134,8 @@ def destinations(profile):
             from tenant_operator_dialogs import projection
             from tenant_ai_agent_runtime_flags import enabled
             sql,params=projection(policy)
-            cur.execute(sql+"SELECT channel_id,conversation_id,customer_name,channel_name FROM visible WHERE provider='connect' AND channel_active=TRUE ORDER BY last_message_at DESC NULLS LAST",
-                (tenant,tenant,*params,enabled('AI_AGENTS_ENABLED')))
+            cur.execute(sql+"SELECT channel_id,conversation_id,customer_name,channel_name FROM visible v WHERE provider='connect' AND channel_active=TRUE AND EXISTS(SELECT 1 FROM saas_dialog_developer_markers m WHERE m.tenant_id=%s::uuid AND m.channel_id::text=v.channel_id AND m.conversation_id=v.conversation_id AND m.enabled=TRUE) ORDER BY last_message_at DESC NULLS LAST",
+                (tenant,tenant,*params,enabled('AI_AGENTS_ENABLED'),tenant))
             return {'destinations':[dict(r) for r in cur.fetchall()]}
 
 
@@ -153,7 +190,7 @@ def prepare(profile,data,origin):
         schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy,source=_scope(cur,profile,channel,data['conversation_id'],manual=True)
-            target=route(cur,tenant,policy,dest,data['destination_conversation_id'])
+            target=developer_target(cur,tenant,policy,dest,data['destination_conversation_id'])
             if channel==dest and source['conversation_id']==target['conversation_id']:raise TenantLinearError('Выберите другой диалог.',400)
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('dialog-consultation:'+tenant+':'+request,))
             cur.execute('SELECT id::text,evidence,created_by FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND request_key=%s',
@@ -227,7 +264,7 @@ def dispatch(profile,key,request):
             if not delivery or delivery['created_by']!=actor:raise TenantLinearError('Отправка недоступна.',404)
             if delivery['state'] in {'sent','pending'}:return {'state':delivery['state'],'message_id':delivery['connect_message_id']}
             if delivery['state']!='ready':raise TenantLinearError('Результат отправки неизвестен. Повтор отключён.',409)
-            route(cur,tenant,policy,str(delivery['channel_id']),delivery['conversation_id'])
+            developer_target(cur,tenant,policy,str(delivery['channel_id']),delivery['conversation_id'])
             cur.execute("UPDATE saas_consultation_group_deliveries SET state='sending',updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid",(tenant,request))
         conn.commit()
     attempted=False
@@ -237,7 +274,7 @@ def dispatch(profile,key,request):
                 tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True)
                 from tenant_ai_dialog_scope import lock_dialog
                 lock_dialog(cur,tenant,'connect',str(delivery['channel_id']),delivery['conversation_id'])
-                target=route(cur,tenant,policy,str(delivery['channel_id']),delivery['conversation_id'])
+                target=developer_target(cur,tenant,policy,str(delivery['channel_id']),delivery['conversation_id'])
                 cur.execute('''SELECT 1 FROM saas_public_case_shares WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid
                   AND revoked_at IS NULL AND expires_at>now() FOR SHARE''',(tenant,key))
                 if not cur.fetchone():raise TenantLinearError('Ссылка недоступна.',409)

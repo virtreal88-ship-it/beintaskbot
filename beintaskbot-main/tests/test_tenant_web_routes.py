@@ -30,6 +30,7 @@ EXPECTED_ASSETS += ['/assets/tenant-members-ui.js','/assets/tenant-members-ui.cs
 EXPECTED_ASSETS += ['/assets/tenant-ai-administrator-approvals.js','/assets/tenant-request-coordinator.js','/assets/tenant-view-demand.js']
 
 AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
+    ('dialog-consultations/developer-marker', ('POST',)),
     ('dialog-consultations/destinations', ('GET',)),
     ('dialog-consultations/preview', ('POST',)),
     ('dialog-consultations', ('POST',)),
