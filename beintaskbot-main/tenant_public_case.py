@@ -419,5 +419,5 @@ def media(token,message_id,client=''):
             if external.startswith('connect:'):external=external[len('connect:'):]
             kind={'voice':'audio'}.get(str(row['message_type']),str(row['message_type']))
         conn.commit()
-    try:return download_connect_message_media(route,external,kind)
+    try:return download_connect_message_media(route,external,kind,row['conversation_id'])
     except Exception:raise TenantLinearError('Файл временно недоступен.',503) from None

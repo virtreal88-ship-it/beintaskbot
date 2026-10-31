@@ -74,11 +74,11 @@ def test_selected_media_is_resolved_by_scoped_message_id_and_bytes_are_server_fe
     monkeypatch.setattr(transport,'connect_route',lambda cur,tenant,lead_id,**kw:
       {'channel_id':CA,'conversation_id':'client','api_key':'synthetic-test'})
     expected={'type':'image','base64':'c3ludGhldGljLWJ5dGVz','mimeType':'image/png','fileName':'case-attachment'}
-    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,external,kind:
-      (calls.append((route['channel_id'],route['conversation_id'],external,kind)) or {**expected,'type':kind}))
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,external,kind,conversation_id:
+      (calls.append((route['channel_id'],route['conversation_id'],external,kind,conversation_id)) or {**expected,'type':kind}))
     for media_id in media_ids:assert cases.media(token,media_id)['type'] in {'image','video','audio','document'}
-    assert calls==[(CA,'client','image-exact','image'),(CA,'client','video-exact','video'),
-      (CA,'client','audio-exact','audio'),(CA,'client','voice-exact','audio'),(CA,'client','document-exact','document')]
+    assert calls==[(CA,'client','image-exact','image','client'),(CA,'client','video-exact','video','client'),
+      (CA,'client','audio-exact','audio','client'),(CA,'client','voice-exact','audio','client'),(CA,'client','document-exact','document','client')]
     saved=db.execute('SELECT group_channel_id::text,group_conversation_id,selected_message_ids FROM saas_public_case_shares WHERE id=%s::uuid',(result['id'],))[0]
     assert saved['group_channel_id']==CA and saved['group_conversation_id']==GROUP and all(key in saved['selected_message_ids'] for key in media_ids)
 

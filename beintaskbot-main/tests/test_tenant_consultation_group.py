@@ -92,6 +92,7 @@ def test_selected_case_message_validation_is_idempotent_for_existing_membership(
 
 def test_connect_media_download_uses_scoped_api_and_returns_bytes_without_storage_url(monkeypatch):
     import base64
+    from urllib.parse import parse_qs,urlsplit
     class Response:
         status_code=200;is_redirect=False
         headers={'Content-Type':'image/png','Content-Length':'8'}
@@ -99,12 +100,39 @@ def test_connect_media_download_uses_scoped_api_and_returns_bytes_without_storag
         def close(self):pass
     calls=[]
     monkeypatch.setattr(transport.requests,'get',lambda *args,**kwargs:(calls.append((args,kwargs)) or Response()))
-    result=transport.download_connect_message_media({'channel_id':CA,'api_key':'test-only'},'message-123','image')
+    route={'channel_id':CA,'conversation_id':'client','api_key':'test-only'}
+    result=transport.download_connect_message_media(route,'message-123','image','client')
     assert result=={'type':'image','base64':base64.b64encode(b'\x89PNG\r\n\x1a\n').decode(),
       'mimeType':'image/png','fileName':'case-attachment'}
-    assert calls[0][0][0].endswith('/v1/channels/'+CA+'/messages/message-123/media')
+    parsed=urlsplit(calls[0][0][0])
+    assert parsed.path.endswith('/v1/channels/'+CA+'/messages/message-123/media')
+    assert parse_qs(parsed.query)=={'conversationId':['client']}
     assert calls[0][1]['allow_redirects'] is False and calls[0][1]['headers']['x-api-key']=='test-only'
     assert not any('http' in str(value).lower() for value in result.values())
+
+    # Current Connect contract requires a nonempty, strict conversationId query.
+    # Never send a request if the independently verified route disagrees.
+    with pytest.raises(transport.TenantPlatformError):
+        transport.download_connect_message_media(route,'message-123','image','other-conversation')
+    with pytest.raises(transport.TenantPlatformError):
+        transport.download_connect_message_media(route,'message-123','image','')
+    assert len(calls)==1
+
+
+def test_pilot_turn_media_observation_schema_is_backward_compatible_and_source_bound():
+    import json
+    # Existing no-image model responses remain accepted for initial and old followup runs.
+    legacy={'action':'customer_question','message':'Which value do you see?','evidence_quote':''}
+    assert flow.parse_pilot_turn_decision(json.dumps(legacy))['action']=='customer_question'
+    observation={'message_id':'photo-12345','relevance':'relevant',
+      'observation':'The screenshot shows an upload error banner.'}
+    with_media={**legacy,'media_observations':[observation]}
+    assert flow.parse_pilot_turn_decision(json.dumps(with_media),expected_media_ids=['photo-12345'])['media_observations']==[observation]
+    assert flow.parse_pilot_turn_decision(json.dumps(legacy),expected_media_ids=['photo-12345']) is None
+    assert flow.parse_pilot_turn_decision(json.dumps({**with_media,'media_observations':[
+      {**observation,'message_id':'foreign-photo'}]}),expected_media_ids=['photo-12345']) is None
+    assert flow.parse_pilot_turn_decision(json.dumps({**with_media,'media_observations':[
+      {**observation,'relevance':'irrelevant'}]}),expected_media_ids=['photo-12345'])['media_observations'][0]['relevance']=='irrelevant'
 
 
 def test_actual_pilot_handoff_publishes_linked_case_photo_without_eager_download(db,monkeypatch):
@@ -122,7 +150,7 @@ def test_actual_pilot_handoff_publishes_linked_case_photo_without_eager_download
     monkeypatch.setattr(transport,'connect_route',lambda cur,tenant,lead_id,**kw:
       {'api_key':'synthetic','channel_id':CA,'conversation_id':GROUP if int(lead_id)==99 else 'client'})
     media={'type':'image','base64':'bG9jYWwtdGVzdC1pbWFnZS1ieXRlcw==','mimeType':'image/png','fileName':'case-attachment'}
-    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:media)
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind,conversation_id:media)
     sent=[]
     def send(route,body,request_id,**kwargs):
         sent.append({'body':body,'request_id':request_id,'media':kwargs.get('media')})
@@ -141,7 +169,7 @@ def test_actual_pilot_handoff_publishes_linked_case_photo_without_eager_download
     unrelated=str(uuid.uuid4())
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'connect:unrelated-photo','incoming',%s,'image',now()-interval '2 seconds')",(unrelated,A,'connect:'+CA));db.commit()
     fetched=[]
-    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:(fetched.append(message_id) or media))
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind,conversation_id:(fetched.append(message_id) or media))
     result=flow.deliver_pilot_consultation_to_group(job,consult,'','customer-message')
     assert result['state']=='sent' and len(sent)==1, result
     assert sent[0]['media'] is None and sent[0]['request_id']!='' and fetched==[]
@@ -1006,7 +1034,7 @@ def test_ai_handoff_delivery_links_case_media_without_eager_download(db,monkeypa
     db.commit();sent=[]
     media={'type':'image','base64':'c3ludGhldGljLWltYWdl','mimeType':'image/png','fileName':'case-attachment'}
     fetched=[]
-    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind:(fetched.append(message_id) or media))
+    monkeypatch.setattr(transport,'download_connect_message_media',lambda route,message_id,kind,conversation_id:(fetched.append(message_id) or media))
     def send(route,body,key,**kwargs):
         sent.append((route['conversation_id'],body,key,kwargs.get('media')))
         return {'message_id':'pilot-handoff','external_message_id':'PILOT_HANDOFF'}

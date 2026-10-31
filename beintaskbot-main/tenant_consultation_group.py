@@ -731,14 +731,31 @@ def record_group_turn_action(job,action,message_id):
     return updated
 
 
-def parse_pilot_turn_decision(value):
+def parse_pilot_turn_decision(value,expected_media_ids=None):
     """Strictly decode the single-agent structured decision; fail closed."""
     import json
     if not isinstance(value,str) or len(value)>6000:return None
     try: result=json.loads(value)
     except (TypeError,ValueError):return None
-    if not isinstance(result,dict) or set(result)!={'action','message','evidence_quote'}:
+    if not isinstance(result,dict) or set(result) not in ({'action','message','evidence_quote'},
+            {'action','message','evidence_quote','media_observations'}):
         return None
+    expected=[str(item) for item in expected_media_ids or []]
+    raw_observations=result.get('media_observations',[])
+    if expected and 'media_observations' not in result:return None
+    if not isinstance(raw_observations,list) or len(raw_observations)>2:return None
+    media_observations=[];seen=set()
+    for item in raw_observations:
+        if not isinstance(item,dict) or set(item)!={'message_id','relevance','observation'}:return None
+        message_id=item.get('message_id');relevance=item.get('relevance');observation=item.get('observation')
+        if (not isinstance(message_id,str) or message_id not in expected or message_id in seen
+                or relevance not in {'relevant','irrelevant','unclear'} or not isinstance(observation,str)
+                or not observation.strip() or len(observation)>500
+                or (relevance=='relevant' and len(observation.strip())<8)):
+            return None
+        seen.add(message_id)
+        media_observations.append({'message_id':message_id,'relevance':relevance,'observation':observation.strip()})
+    if expected and seen!=set(expected):return None
     action=result.get('action');message=result.get('message');quote=result.get('evidence_quote')
     if action not in {'group_answer','customer_question','customer_update','no_action'}:
         return None
@@ -746,7 +763,7 @@ def parse_pilot_turn_decision(value):
         return None
     if not isinstance(quote,str) or len(quote)>500:return None
     if action=='no_action':
-        return {'action':action,'message':'','evidence_quote':''}
+        return {'action':action,'message':'','evidence_quote':'','media_observations':media_observations}
     if len(message.strip())<2:return None
     if action=='group_answer' and len(quote.strip())<8:return None
     if action!='group_answer' and quote.strip():return None
@@ -754,7 +771,8 @@ def parse_pilot_turn_decision(value):
     # the customer must ask them to test it, and cannot state that it worked.
     if _REMOTE_SECRET_MENTION.search(message) or _REMOTE_PASSWORD.search(message):return None
     if action=='customer_update' and _CLAIMS_RESOLVED.search(message):return None
-    return {'action':action,'message':message.strip(),'evidence_quote':quote.strip()}
+    return {'action':action,'message':message.strip(),'evidence_quote':quote.strip(),
+            'media_observations':media_observations}
 
 
 def _case_group_body(consultation_id,case_id,summary,evidence,media_note='',turn_context=False):

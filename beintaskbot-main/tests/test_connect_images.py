@@ -117,3 +117,95 @@ def test_no_unrelated_old_photos_or_photos_before_employee_reply():
    await photos.prepare(JOB,RESERVATION,[row(kind='image',at='2026-10-16T00:00:00Z'),row(kind='text',at='2026-10-16T01:00:00Z')],'gpt-4o',Mock())
    await photos.prepare(JOB,RESERVATION,[row(kind='image'),{**row(kind='text'),'direction':'outgoing'},row(kind='text')],'gpt-4o',Mock());download.assert_not_called()
  asyncio.run(run())
+
+
+def _case_image_ref(message_id='case-photo-1',media_version='version-1'):
+ from tenant_media_evidence import source_hash
+ ref={'external_id':'connect:'+message_id,'channel_id':CHANNEL,'body_hash':'body-hash',
+      'media_kind':'image','media_version':media_version}
+ return {'message_id':message_id,'ref':ref,'source_hash':source_hash(ref),
+         'case_id':'case-original','happened_at':'2026-10-01T00:00:00Z'}
+
+
+def test_case_photo_before_old_outgoing_ack_is_selected_by_case_membership_without_recency_filter():
+ async def run():
+  selected=_case_image_ref()
+  with patch.object(photos,'supports_images',return_value=True),patch.object(photos,'generation_budget_available',return_value=True),\
+       patch.object(photos,'_case_image_refs',return_value=[selected]),\
+       patch('tenant_media_evidence.reusable',return_value=None),patch.object(photos,'resolve',return_value={'synthetic':True}) as resolve,\
+       patch.object(photos,'download_media',new=AsyncMock(return_value=(PNG,'image/png'))) as download,\
+       patch.object(photos,'live',return_value=True):
+   images,analyzed,artifacts=await photos.prepare_case(JOB,RESERVATION,'case-original','gpt-4o-mini',Mock())
+  assert len(images)==1 and images[0]['message_id']=='case-photo-1'
+  assert analyzed=={'case-photo-1'} and artifacts[0]['state']=='image_attached'
+  resolve.assert_called_once_with(JOB,RESERVATION,'case-photo-1');download.assert_awaited_once()
+ asyncio.run(run())
+
+
+def test_case_image_reuses_exact_saved_receipt_without_media_download_or_analysis_call():
+ async def run():
+  selected=_case_image_ref();saved={'case_id':'case-original','message_id':'case-photo-1','relevance':'relevant',
+      'text':'The screenshot shows a blank upload error panel.','content_sha256':'content-hash'}
+  with patch.object(photos,'supports_images',return_value=True),patch.object(photos,'generation_budget_available',return_value=True),\
+       patch.object(photos,'_case_image_refs',return_value=[selected]),patch('tenant_media_evidence.reusable',return_value={
+         'status':'processed','result':{'case_observations':[saved]}}),patch.object(photos,'resolve') as resolve,\
+       patch.object(photos,'download_media',new=AsyncMock()) as download:
+   images,analyzed,artifacts=await photos.prepare_case(JOB,RESERVATION,'case-original','gpt-4o-mini',Mock())
+  assert images==[] and analyzed=={'case-photo-1'}
+  assert artifacts[0]['cached_observation']['relevance']=='relevant'
+  assert artifacts[0]['analysis_expected'] is False
+  resolve.assert_not_called();download.assert_not_awaited()
+ asyncio.run(run())
+
+
+def test_changed_case_media_source_hash_does_not_reuse_receipt():
+ async def run():
+  selected=_case_image_ref(media_version='replacement-version')
+  previous=_case_image_ref(media_version='version-1')
+  assert selected['source_hash']!=previous['source_hash']
+  reusable=Mock(return_value=None)
+  with patch.object(photos,'supports_images',return_value=True),patch.object(photos,'generation_budget_available',return_value=True),\
+       patch.object(photos,'_case_image_refs',return_value=[selected]),patch('tenant_media_evidence.reusable',reusable),\
+       patch.object(photos,'resolve',return_value={'synthetic':True}),patch.object(photos,'download_media',new=AsyncMock(return_value=(PNG,'image/png'))),\
+       patch.object(photos,'live',return_value=True):
+   images,_,artifacts=await photos.prepare_case(JOB,RESERVATION,'case-original','gpt-4o-mini',Mock())
+  assert len(images)==1 and artifacts[0]['source_hash']==selected['source_hash']
+  assert reusable.call_args.args[1]==selected['ref']
+ asyncio.run(run())
+
+
+def test_case_photo_unavailable_is_not_marked_analyzed_or_asserted_as_evidence():
+ async def run():
+  selected=_case_image_ref()
+  with patch.object(photos,'supports_images',return_value=True),patch.object(photos,'generation_budget_available',return_value=True),\
+       patch.object(photos,'_case_image_refs',return_value=[selected]),patch('tenant_media_evidence.reusable',return_value=None),\
+       patch.object(photos,'resolve',side_effect=ValueError('synthetic unavailable')),patch.object(photos,'download_media',new=AsyncMock()) as download:
+   images,analyzed,artifacts=await photos.prepare_case(JOB,RESERVATION,'case-original','gpt-4o-mini',Mock())
+  assert images==[] and analyzed==set() and artifacts[0]['state']=='unavailable'
+  assert artifacts[0]['analysis_expected'] is False;download.assert_not_awaited()
+ asyncio.run(run())
+
+
+def test_irrelevant_case_photo_cannot_support_a_bug_claim():
+ import json
+ from tenant_consultation_group import parse_pilot_turn_decision
+ observation='The photo shows a cat on a chair.'
+ raw=json.dumps({'action':'group_answer','message':'This confirms the upload defect.',
+   'evidence_quote':observation,'media_observations':[{'message_id':'case-photo-1','relevance':'irrelevant','observation':observation}]})
+ decision=parse_pilot_turn_decision(raw,expected_media_ids=['case-photo-1'])
+ assert decision and decision['media_observations'][0]['relevance']=='irrelevant'
+ evidence=worker._pilot_case_media_quote_lines(decision['media_observations'])
+ assert evidence==[] and not worker._pilot_quote_supported(observation,evidence,[])
+
+
+def test_relevant_case_photo_can_support_only_its_validated_persisted_observation():
+ import json
+ from tenant_consultation_group import parse_pilot_turn_decision
+ observation='The screenshot displays an upload failed banner.'
+ raw=json.dumps({'action':'group_answer','message':'The screenshot reports an upload error.',
+   'evidence_quote':observation,'media_observations':[{'message_id':'case-photo-1','relevance':'relevant','observation':observation}]})
+ decision=parse_pilot_turn_decision(raw,expected_media_ids=['case-photo-1'])
+ assert decision
+ lines=worker._pilot_case_media_quote_lines(decision['media_observations'])
+ assert worker._pilot_quote_supported(observation,lines,[])
+ assert worker._pilot_case_media_quote_lines(decision['media_observations'],persisted=False)==[]
