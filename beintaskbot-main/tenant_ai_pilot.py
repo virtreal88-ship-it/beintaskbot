@@ -41,6 +41,10 @@ def schema(cur):
       tenant_id UUID NOT NULL,channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,
       reset_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),reset_by BIGINT NOT NULL,
       PRIMARY KEY(tenant_id,channel_id,conversation_id))''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_pilot_episode_resets(
+      tenant_id UUID NOT NULL,request_id UUID NOT NULL,channel_id UUID NOT NULL,
+      conversation_id TEXT NOT NULL,reset_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+      reset_by BIGINT NOT NULL,PRIMARY KEY(tenant_id,request_id))''')
 
 
 def episode_cutoff(job):
@@ -568,8 +572,10 @@ def reset_pilot_test_dialog(profile, data):
     knowledge. The conversation revision and job revisions fence workers that
     were already claimed when the reset began.
     """
-    if data != {'confirmed': True}:
+    if not isinstance(data,dict) or set(data)!={'confirmed','reset_id'} or data.get('confirmed') is not True:
         raise TenantLinearError('Explicit confirmation is required to reset the test dialogue.', 400)
+    try:request_id=str(uuid.UUID(str(data.get('reset_id') or '')))
+    except (ValueError,TypeError):raise TenantLinearError('A valid reset request ID is required.',400) from None
     scope=configured_scope(); group=configured_group_scope()
     if not scope or not group or scope['tenant_id'] != SCOPED_LIVE_TENANT or group['tenant_id'] != scope['tenant_id']:
         raise TenantLinearError('The exact two-target pilot scope is not configured.', 409)
@@ -598,6 +604,16 @@ def reset_pilot_test_dialog(profile, data):
             if not cur.fetchone():
                 raise TenantLinearError('The configured test dialogue is unavailable.',409)
             schema(cur)
+            cur.execute('''SELECT 1 FROM saas_ai_pilot_episode_resets
+              WHERE tenant_id=%s::uuid AND request_id=%s::uuid''',(tenant,request_id))
+            if cur.fetchone():
+                conn.commit()
+                return {'reset':True,'scope':scope,'preserved_messages_and_media':True,
+                        'new_attestations_required':True,'old_events_replayed':False,'idempotent_replay':True}
+            cur.execute('''INSERT INTO saas_ai_pilot_episode_resets
+              (tenant_id,request_id,channel_id,conversation_id,reset_by)
+              VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s)''',
+              (tenant,request_id,scope['channel_id'],scope['conversation_id'],actor))
             cur.execute('''INSERT INTO saas_ai_pilot_episode_cutoffs
               (tenant_id,channel_id,conversation_id,reset_at,reset_by)
               VALUES(%s::uuid,%s::uuid,%s,clock_timestamp(),%s)
@@ -642,7 +658,7 @@ def reset_pilot_test_dialog(profile, data):
                'preserved_messages_and_media':True,'jobs_fenced':len(fingerprints)})
         conn.commit()
     return {'reset':True,'scope':scope,'preserved_messages_and_media':True,
-            'new_attestations_required':True,'old_events_replayed':False}
+            'new_attestations_required':True,'old_events_replayed':False,'idempotent_replay':False}
 
 
 def preflight(profile):

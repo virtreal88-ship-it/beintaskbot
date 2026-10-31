@@ -29,7 +29,7 @@ assert.doesNotMatch(ui.slice(ui.indexOf("api('agents/pilot/resume'"), ui.indexOf
 assert.match(app, /id="aiPilotReset"/,'pilot panel must expose the scoped reset action');
 assert.match(ui, /reset\.hidden=profile\?\.role!=='owner'\|\|!p\.scope/,
   'only the configured-scope owner can see the reset action');
-assert.match(ui, /api\('agents\/pilot\/reset','POST',\{confirmed:true\}\)/,
+assert.match(ui, /api\('agents\/pilot\/reset','POST',\{confirmed:true,reset_id:crypto\.randomUUID\(\)\}\)/,
   'reset action must use the dedicated confirmation endpoint');
 assert.match(routes, /agents\/pilot\/reset'.*'pilot_reset'.*\('POST',\)/,
   'reset endpoint must be registered only as POST');
