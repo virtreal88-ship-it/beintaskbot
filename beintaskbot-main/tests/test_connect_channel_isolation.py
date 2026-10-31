@@ -130,6 +130,48 @@ def test_unread_totals_cover_more_than_one_page_and_cap_only_in_the_ui(channels)
     assert first['unread_count']==101
     assert next(row for row in first['dialogs'] if row['lead_id']==41)['unread_count']==101
 
+
+def test_mark_all_read_covers_every_page_and_keeps_post_snapshot_arrivals_unread(channels,monkeypatch):
+    f=channels;db=f['db']
+    # More than one API page of accessible dialogs, each with an old message
+    # so the first list snapshot establishes its per-employee read cursor.
+    db.execute('''INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id)
+      SELECT %s::uuid,%s::uuid,'bulk-'||n||'@s.whatsapp.net',3000+n FROM generate_series(1,55) n''',(A,CA))
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type,happened_at)
+      SELECT md5('bulk-base-'||n)::uuid,%s::uuid,3000+n,'bulk-base-'||n,'connect:'||%s,'incoming','baseline','text',clock_timestamp()
+      FROM generate_series(1,55) n''',(A,CA));db.commit()
+    initial=dialogs.listing(PROFILE)
+    assert initial['total_count']>50 and len(initial['dialogs'])==50
+    all_rows=dialogs.listing(PROFILE,all_rows=True)
+    assert all_rows['next_offset'] is None and len(all_rows['dialogs'])>50
+    # Add one unread message to every bulk dialog, including rows beyond page 1.
+    db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type,happened_at)
+      SELECT md5('bulk-new-'||n)::uuid,%s::uuid,3000+n,'bulk-new-'||n,'connect:'||%s,'incoming','new','text',clock_timestamp()+n*interval '1 microsecond'
+      FROM generate_series(1,55) n''',(A,CA));db.commit()
+    # Inject a later arrival after the action has captured all route cursors.
+    real_listing=dialogs.listing;late=[]
+    def snapshot_then_insert(*args,**kwargs):
+        result=real_listing(*args,**kwargs)
+        if kwargs.get('all_rows') and not late:
+            late.append(f['incoming'](CA,'arrived after mark-all snapshot')[0])
+        return result
+    monkeypatch.setattr(dialogs,'listing',snapshot_then_insert)
+    result=dialogs.mark_all_read(PROFILE)
+    assert result['updated_dialogs']>=55
+    assert result['captured_dialogs']>50
+    assert dialogs.listing(PROFILE)['unread_count']==1,'later incoming message remains unread after captured messages are marked'
+    # A different authorized tenant can only clear its own inbox.
+    dialogs.listing({'tenant_id':B,'telegram_id':22})
+    f['incoming'](CA,'tenant A unread')
+    tenant_b_message=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,42,'tenant-b-new','connect:'||%s,'incoming','tenant B unread','text',clock_timestamp())",
+               (str(uuid.uuid4()),B,CB));db.commit()
+    connect.enqueue(B,channel_id=CB,conversation_id='client',lead_id=42,message_id=tenant_b_message,event_id=tenant_b_message,text='tenant B unread',message_type='text')
+    dialogs.listing(PROFILE)
+    dialogs.mark_all_read({'tenant_id':B,'telegram_id':22})
+    assert dialogs.listing({'tenant_id':B,'telegram_id':22})['unread_count']==0
+    assert dialogs.listing(PROFILE)['unread_count']==2,'tenant B bulk read leaves tenant A unread'
+
 def test_avatar_endpoint_is_tenant_scoped_and_claims_only_once(channels,monkeypatch):
     f=channels;db=f['db'];f['incoming'](CA)
     monkeypatch.setattr(avatars,'_connect',lambda:db)
