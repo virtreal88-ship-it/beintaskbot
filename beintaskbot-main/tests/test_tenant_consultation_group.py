@@ -82,6 +82,14 @@ def test_worker_does_not_publish_quote_or_media_from_previous_session():
     assert ids==[]
 
 
+def test_selected_case_message_validation_is_idempotent_for_existing_membership(db,monkeypatch):
+    _consult,case=setup_case(db,monkeypatch)
+    message=db.execute("SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))[0]['id']
+    with db.cursor() as cur:
+        assert tickets.record_case_selected_message_ids(cur,A,case,[message],'explicit-case-selection-1')==1
+        assert tickets.record_case_selected_message_ids(cur,A,case,[message],'explicit-case-selection-2')==1
+
+
 def test_connect_media_download_uses_scoped_api_and_returns_bytes_without_storage_url(monkeypatch):
     import base64
     class Response:

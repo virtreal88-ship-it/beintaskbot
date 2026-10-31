@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import threading
 import uuid
 from unittest.mock import patch
 import pytest
@@ -45,20 +46,25 @@ class Database:
         self.process=subprocess.Popen(['node',str(ROOT/'tests/support_pglite.cjs')],cwd=ROOT,
             stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8')
         self.transaction=False
+        self._query_lock=threading.Lock()
     def query(self,sql,params=()):
-        counter=iter(range(1,1000))
-        sql=re.sub(r'%s',lambda _:'$'+str(next(counter)),sql)
-        def encode(v):
-            if isinstance(v,(bytes,bytearray)): return {'__bytes':bytes(v).hex()}
-            return str(v)
-        self.process.stdin.write(json.dumps({'sql':sql,'params':params or []},default=encode)+'\n');self.process.stdin.flush()
-        line=self.process.stdout.readline()
-        if not line: raise RuntimeError(self.process.stderr.read())
-        result=json.loads(line,object_hook=lambda v:bytes.fromhex(v['__bytes']) if '__bytes' in v else v)
-        if 'error' in result:
-            raise pg_errors.lookup(result['code'])(result['error']) if result.get('code') else RuntimeError(result['error'])
-        return [{k: Timestamp(v) if k.endswith('_at') and isinstance(v,str) else v
-                 for k,v in row.items()} for row in result['rows']]
+        # aiohttp's local integration harness dispatches DB calls through
+        # asyncio.to_thread. Keep each pipe request/response pair atomic so a
+        # concurrent test request cannot consume another query's result.
+        with self._query_lock:
+            counter=iter(range(1,1000))
+            sql=re.sub(r'%s',lambda _:'$'+str(next(counter)),sql)
+            def encode(v):
+                if isinstance(v,(bytes,bytearray)): return {'__bytes':bytes(v).hex()}
+                return str(v)
+            self.process.stdin.write(json.dumps({'sql':sql,'params':params or []},default=encode)+'\n');self.process.stdin.flush()
+            line=self.process.stdout.readline()
+            if not line: raise RuntimeError(self.process.stderr.read())
+            result=json.loads(line,object_hook=lambda v:bytes.fromhex(v['__bytes']) if '__bytes' in v else v)
+            if 'error' in result:
+                raise pg_errors.lookup(result['code'])(result['error']) if result.get('code') else RuntimeError(result['error'])
+            return [{k: Timestamp(v) if k.endswith('_at') and isinstance(v,str) else v
+                     for k,v in row.items()} for row in result['rows']]
     def execute(self,sql,params=()):
         if not self.transaction:
             self.query('BEGIN');self.transaction=True

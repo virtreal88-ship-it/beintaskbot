@@ -139,9 +139,18 @@ def record_case_selected_message_ids(cur,tenant,ticket_id,message_ids,event_key)
       SELECT %s::uuid,%s::uuid,m.id,%s FROM saas_crm_messages m
       WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s AND m.id=ANY(%s::uuid[])
         AND m.direction IN ('incoming','outgoing') AND m.message_type IN ('text','image','video','audio','voice','document')
-      ON CONFLICT(tenant_id,ticket_id,message_id) DO NOTHING RETURNING message_id''',
+      ON CONFLICT(tenant_id,ticket_id,message_id) DO NOTHING''',
       (tenant,ticket_id,str(event_key or '')[:500],tenant,int(route['lead_id']),'connect:'+route['channel_id'],keys))
-    return len(cur.fetchall())
+    # Return the number of selected messages verified in this exact
+    # conversation, including IDs already linked to the CASE. Callers use
+    # this as validation; INSERT's RETURNING count would incorrectly reject an
+    # idempotent selection after the ticket renderer had already linked it.
+    cur.execute('''SELECT count(*) AS n FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=ANY(%s::uuid[])
+        AND direction IN ('incoming','outgoing')
+        AND message_type IN ('text','image','video','audio','voice','document')''',
+      (tenant,int(route['lead_id']),'connect:'+route['channel_id'],keys))
+    return int((cur.fetchone() or {}).get('n') or 0)
 
 
 def handoff_ticket(cur, job, reason):
