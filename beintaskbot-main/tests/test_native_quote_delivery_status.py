@@ -102,3 +102,9 @@ def test_actual_http_send_then_read_receipts_never_resends(db,monkeypatch):
         raw=db.execute('SELECT raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',(A,'connect:'+MID))[0]['raw']
         assert raw['status']=='delivered';assert raw['externalMessageId']=='OUT123'
     asyncio.run(scenario())
+
+
+def test_stale_prewrite_error_never_permits_retry_after_provider_receipt(monkeypatch):
+    monkeypatch.setattr(transport,'_request',Mock(return_value=result(status='failed',retrySafe=True,errorCode='quoted_source_lookup_unavailable',externalMessageId='OUT123')))
+    value=transport.quoted_delivery_status(ROUTE,MID,REQUEST,'SOURCE123')
+    assert value['retry_safe'] is False;assert value['provider_message_id']=='OUT123';assert not value['delivered']

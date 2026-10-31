@@ -1414,11 +1414,12 @@ def quoted_delivery_status(route, message_id, request_id, quoted_message_id):
     if state not in {'pending','retrying','sent','delivered','read','failed','unknown'}:
         raise TenantPlatformError('Quoted delivery receipt unavailable.')
     provider_id=result.get('externalMessageId')
+    valid_provider_id=isinstance(provider_id,str) and re.fullmatch(r'[A-Za-z0-9_-]{5,200}',provider_id) is not None
     accepted=(result.get('providerAccepted') is True and state in {'sent','delivered','read'}
         and isinstance(provider_id,str) and re.fullmatch(r'[A-Za-z0-9_-]{5,200}',provider_id) is not None)
     if state in {'sent','delivered','read'} and not accepted:state='unknown'
     if state in {'delivered','read'} and result.get('delivered') is not True:state='sent' if accepted else 'unknown'
     return {'delivery_state':state,'provider_accepted':accepted,
         'delivered':accepted and state in {'delivered','read'} and result.get('delivered') is True,
-        'retry_safe':state=='failed' and result.get('retrySafe') is True and result.get('errorCode') in {'quoted_message_unavailable','quoted_source_scope_conflict','quoted_source_lookup_unavailable'},
-        **({'provider_message_id':provider_id} if accepted else {})}
+        'retry_safe':state=='failed' and result.get('retrySafe') is True and not provider_id and result.get('errorCode') in {'quoted_message_unavailable','quoted_source_scope_conflict','quoted_source_lookup_unavailable'},
+        **({'provider_message_id':provider_id} if valid_provider_id else {})}

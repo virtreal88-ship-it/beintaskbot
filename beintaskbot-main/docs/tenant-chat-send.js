@@ -18,7 +18,7 @@
       try{
         const sent=await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify(pending)});
         if(pending.quote_message_id&&sent.provider_accepted!==true&&sent.manual_review!==true){
-          if(sent.delivery_state==='failed'&&sent.retry_safe===true){sessionStorage.removeItem(key);if(isCurrent()){onDiscard();button.textContent=copy('send','Göndər');}}
+          if(sent.delivery_state==='failed'&&sent.retry_safe===true&&!sent.provider_message_id){sessionStorage.removeItem(key);if(isCurrent()){onDiscard();button.textContent=copy('send','Göndər');}}
           else if(isCurrent()){onPending(pending);button.textContent=copy('checkSend','Vəziyyəti yoxla');}
           if(isCurrent()){alert(quoteCopy(sent.delivery_state||'unknown'));await reload();}return;
         }
