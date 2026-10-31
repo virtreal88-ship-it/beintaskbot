@@ -944,7 +944,11 @@ async def process_connect_one(job, logger):
         pilot_action=''
         if pilot_initial_turn:
             from tenant_ai_pilot_initial import parse as parse_initial_triage
-            pilot_decision=parse_initial_triage(str(draft),lines=lines,knowledge=knowledge)
+            media_available=bool(analyzed_images or video_observations or video_transcripts or any(
+                row.get('direction')=='incoming' and str(row.get('message_type') or '').casefold() in {'image','video'}
+                for row in context[-30:]))
+            pilot_decision=parse_initial_triage(str(draft),lines=lines,knowledge=knowledge,
+                media_available=media_available)
             if pilot_decision is None:
                 await asyncio.to_thread(finish_superseded,job,reservation,'pilot_initial_decision_unverified')
                 return
