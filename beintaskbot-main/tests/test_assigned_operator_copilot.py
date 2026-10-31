@@ -268,3 +268,20 @@ def test_cached_reply_is_hidden_after_new_inbound_without_repeating_model(ready)
       (A,str(uuid.uuid4()),'connect:'+CA));db.commit()
     with pytest.raises(TenantLinearError):copilot.run(PROFILE,data)
     generated.assert_called_once()
+
+
+def test_manual_kb_uses_customer_evidence_after_incoming_employee_reply(ready,monkeypatch):
+    db,other,generated,data=ready
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,raw,happened_at) VALUES(%s::uuid,%s::uuid,41,'staff-latest',%s,'incoming','STAFF_BODY','{\"verified_employee_id\":11}',now()+interval '1 second')",(str(uuid.uuid4()),A,'connect:'+CA))
+    db.commit()
+    def prepared(tenant,actor,command,rows,model,**kwargs):
+        customer=next(row for row in rows if row['external_id']=='m1')
+        customer['_manual_request_source']=True
+        customer['_copilot_attachment_text']='CUSTOMER_TRANSCRIPT'
+        return {'images':[],'voice_transcriptions':set(),'documents':set(),'skipped':[]}
+    monkeypatch.setattr(copilot,'_prepare_copilot_media',prepared)
+    lookup=Mock(return_value=[])
+    monkeypatch.setattr('tenant_ai_agent_run_store.knowledge_context',lookup)
+    copilot.run(PROFILE,data)
+    assert 'CUSTOMER_TRANSCRIPT' in lookup.call_args.args[1]
+    assert 'STAFF_BODY' not in lookup.call_args.args[1]
