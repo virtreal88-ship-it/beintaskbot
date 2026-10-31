@@ -1,6 +1,7 @@
 /* Browser opt-in only. Company permissions gate every delivered event. */
 (() => {
   let profile, generation=0, readVersion=0, busy=false;
+  window.tenantPushConnected=false;
   const words={
     title:['Push-уведомления','Push bildirişləri','Push notifications'],help:['Подключите устройство для уведомлений этой компании. Типы событий выбираются в настройках сотрудников.','Bu şirkət üçün cihazı qoşun. Hansı hadisələrin gələcəyini şirkət sahibi seçir.','Connect this device for company notifications. Event categories are set in employee settings.'],
     connect:['Включить уведомления','Bu cihazı qoş','Enable notifications'],connecting:['Подключаем…','Qoşulur…','Connecting…'],device:['Устройство','Cihaz','Device'],disconnect:['Отключить','Ayır','Disconnect'],
@@ -29,10 +30,22 @@
     if(result.tenant_id && (String(result.tenant_id)!==String(expected?.tenant_id)||String(result.user_id)!==String(expected?.telegram_id)))throw Error(text('changed'));
     return result;
   }
+  async function browserDeviceIsConnected(devices) {
+    try {
+      if(!supported()||!window.crypto?.subtle)return false;
+      const reg=await navigator.serviceWorker.getRegistration('/app/');
+      if(!reg||new URL(reg.scope).pathname!=='/app/')return false;
+      const sub=await reg.pushManager.getSubscription();if(!sub?.endpoint)return false;
+      const digest=await window.crypto.subtle.digest('SHA-256',new TextEncoder().encode(sub.endpoint));
+      const id=[...new Uint8Array(digest)].map(value=>value.toString(16).padStart(2,'0')).join('');
+      return (devices||[]).some(device=>device.device_id===id);
+    } catch { return false; }
+  }
   async function refresh() {
     const person=profile,version=generation;if(!person||busy)return;const read=++readVersion;
     try {
       const result=await api();if(!current(person,version)||read!==readVersion)return;
+      window.tenantPushConnected=await browserDeviceIsConnected(result.devices);window.tenantOperatorUpdateBrowserNotice?.();
       list.replaceChildren();
       for(const device of result.devices||[]) {
         const row=document.createElement('div');row.className='member';
@@ -74,7 +87,7 @@
     }catch(error){if(current(person,version))status.textContent=error.message;}
     finally{busy=false;button.disabled=!supported();button.textContent=text('connect');await refresh();}
   };
-  window.tenantPushEnable=async()=>{await button.onclick();return status.textContent;};
+  window.tenantPushEnable=async()=>{await button.onclick();return {connected:window.tenantPushConnected===true,message:status.textContent};};
   document.addEventListener('tenant-language',()=>{button.textContent=text('connect');const title=panel.querySelector('h2'),help=panel.querySelector('p');if(title)title.textContent=text('title');if(help)help.textContent=text('help');});
   window.tenantPushLogout=async()=>{
     if(busy)throw Error(text('wait'));
@@ -83,7 +96,7 @@
     if(!reg||new URL(reg.scope).pathname!=='/app/')return;
     const sub=await reg.pushManager.getSubscription();if(sub)await sub.unsubscribe();
   };
-  function apply(data){profile=data.member;generation++;list.replaceChildren();status.textContent='';button.disabled=busy||!supported();refresh();}
+  function apply(data){profile=data.member;generation++;window.tenantPushConnected=false;window.tenantOperatorUpdateBrowserNotice?.();list.replaceChildren();status.textContent='';button.disabled=busy||!supported();refresh();}
   let received=false;
   document.addEventListener('tenant-profile',event=>{received=true;apply(event.detail);});
   fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(response=>response.json()).then(data=>{if(data.success&&!received)apply(data);}).catch(()=>{});
