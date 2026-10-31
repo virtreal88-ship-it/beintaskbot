@@ -340,3 +340,68 @@ def test_async_consultation_uses_current_assigned_agent_and_long_original_eviden
     assert db.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
     assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
     with pytest.raises(TenantLinearError):copilot.run(PROFILE,{**data,'request_id':str(uuid.uuid4())},consultation_reply_id=str(uuid.uuid4()))
+
+
+@pytest.mark.parametrize('status,code,stage',[
+    ('unsupported','media_unavailable','media_download'),
+    ('error','media_processing_failed','media_validation'),
+    ('unknown','media_result_unknown','audio_transcription'),
+    ('unavailable','legacy_voice_version_unverified',None),
+    ('partial','transcript_truncated',None),
+    ('processed','transcribed',None),
+])
+@pytest.mark.parametrize('kind',['audio','voice'])
+def test_latest_unread_audio_never_generates_old_topic_or_queries_stale_body(ready,monkeypatch,status,code,stage,kind):
+    db,other,generated,data=ready
+    monkeypatch.setattr('tenant_episode_media._connect',lambda:db)
+    source='connect:'+str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,raw,happened_at)
+      VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','OLD_TOPIC_UNVERIFIED_BODY','voice','{"mediaId":"latest-not-old"}',now()+interval '2 seconds')''',
+      (A,str(uuid.uuid4()),source,'connect:'+CA))
+    db.execute('UPDATE saas_crm_messages SET message_type=%s WHERE tenant_id=%s::uuid AND external_id=%s',(kind,A,source));db.commit()
+    def failed_media(_tenant,_actor,_command,rows,_model,**kw):
+        latest=rows[-1];latest['_manual_request_source']=True;latest['_copilot_context_body']=''
+        latest['_episode_receipt']={'status':status,'code':code,**({'failure_stage':stage} if stage else {})}
+        from tenant_episode_media import reference
+        kw['execution'].source_refs=[reference(latest,CA,41)]
+        # A processed receipt without actual speech is not sufficient evidence.
+        if status=='partial':latest['_episode_receipt']['transcript']='only part of the speech'
+        return {'images':[],'voice_transcriptions':set(),'documents':set(),'skipped':[{'source_id':source,'kind':'voice','reason':code}]}
+    monkeypatch.setattr(copilot,'_prepare_copilot_media',failed_media)
+    knowledge=Mock(return_value=[]);monkeypatch.setattr('tenant_ai_agent_run_store.knowledge_context',knowledge)
+    with pytest.raises(TenantLinearError) as caught:copilot.run(PROFILE,data)
+    assert caught.value.status==409
+    assert 'OLD_TOPIC' not in str(caught.value)
+    assert (stage or 'unknown') in str(caught.value)
+    generated.assert_not_called();knowledge.assert_not_called()
+    assert db.execute('SELECT status FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(A,data['request_id']))[0]['status']=='unknown'
+    assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
+    # Same request stays quarantined instead of causing an implicit paid replay.
+    with pytest.raises(TenantLinearError):copilot.run(PROFILE,data)
+    generated.assert_not_called()
+
+
+def test_newer_text_question_is_not_blocked_by_an_older_failed_voice(ready,monkeypatch):
+    db,other,generated,data=ready
+    monkeypatch.setattr('tenant_episode_media._connect',lambda:db)
+    for index,(kind,body) in enumerate([('audio','OLD_VOICE_TOPIC'),('text','CURRENT_TEXT_QUESTION')],1):
+        db.execute('''INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,raw,happened_at)
+          VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming',%s,%s,'{}',now()+(%s * interval '1 second'))''',
+          (A,str(uuid.uuid4()),'connect:'+str(uuid.uuid4()),'connect:'+CA,body,kind,index))
+    db.commit()
+    def prepared(_tenant,_actor,_command,rows,_model,**kw):
+        from tenant_episode_media import reference
+        for row in rows[-2:]:
+            row['_manual_request_source']=True
+            if row['message_type']=='audio':
+                row['_copilot_context_body']='';row['_episode_receipt']={'status':'unsupported','code':'media_unavailable'}
+        kw['execution'].source_refs=[reference(rows[-1],CA,41),reference(rows[-2],CA,41)]
+        return {'images':[],'voice_transcriptions':set(),'documents':set(),'skipped':[]}
+    monkeypatch.setattr(copilot,'_prepare_copilot_media',prepared)
+    knowledge=Mock(return_value=[]);monkeypatch.setattr('tenant_ai_agent_run_store.knowledge_context',knowledge)
+    result=copilot.run(PROFILE,data)
+    generated.assert_called_once()
+    assert result['text'] and 'CURRENT_TEXT_QUESTION' in knowledge.call_args.args[1]
+    assert 'OLD_VOICE_TOPIC' not in knowledge.call_args.args[1]
+    assert 'OLD_VOICE_TOPIC' not in str(generated.call_args.args[3])
+    assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
