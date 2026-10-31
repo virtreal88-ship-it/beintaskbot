@@ -168,9 +168,10 @@ def resolve_clarification_language(language='en', lines=None):
     lang = str(language or 'en').casefold().split('-', 1)[0]
     if lang != 'auto':
         return lang if lang in _CLARIFICATION_QUESTIONS else 'en'
-    client_text = ' '.join(str(line.get('text') or '') for line in (lines or [])
-        if isinstance(line, dict) and line.get('speaker') == 'CLIENT').casefold()
-    if re.search(r'[əƏ]', client_text) or re.search(r'\b(?:hələ|üçün|yoxlamaq|problem|zəhmət|istifadə)\b', client_text, re.I):
+    client_lines = [str(line.get('text') or '') for line in (lines or [])
+        if isinstance(line, dict) and line.get('speaker') == 'CLIENT']
+    client_text = (client_lines[-1] if client_lines else '').casefold()
+    if re.search(r'[əƏ]', client_text) or re.search(r'\b(?:hələ|üçün|yoxlamaq|zəhmət|istifadə)\b', client_text, re.I):
         return 'az'
     if re.search(r'[а-яё]', client_text, re.I):
         return 'ru'

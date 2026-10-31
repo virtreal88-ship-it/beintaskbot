@@ -153,7 +153,14 @@ def test_auto_fallback_uses_azerbaijani_client_text_without_phone_or_model_infer
     text=fallback_clarification('auto',lines=[{'speaker':'CLIENT',
         'text':'Problem hələ də qalır? Yoxlamaq üçün nə etməliyəm?'}])
     assert text.startswith('Zəhmət olmasa')
-    assert fallback_clarification('auto',lines=[{'speaker':'CLIENT','text':'Still broken?'}]).startswith('Please')
+    assert fallback_clarification('auto',lines=[{'speaker':'CLIENT',
+        'text':'I have a problem with the invoice'}]).startswith('Please')
+
+
+def test_auto_fallback_uses_latest_customer_message_for_language():
+    lines=[{'speaker':'CLIENT','text':'Problem hələ də qalır? Yoxlamaq üçün nə etməliyəm?'},
+        {'speaker':'CLIENT','text':'I have a problem with the invoice'}]
+    assert fallback_clarification('auto',lines=lines).startswith('Please')
 
 
 @pytest.mark.parametrize('raw', ['{"action":[]}', '{"action":{}}'])
