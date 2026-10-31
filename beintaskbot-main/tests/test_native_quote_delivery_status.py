@@ -108,3 +108,37 @@ def test_stale_prewrite_error_never_permits_retry_after_provider_receipt(monkeyp
     monkeypatch.setattr(transport,'_request',Mock(return_value=result(status='failed',retrySafe=True,errorCode='quoted_source_lookup_unavailable',externalMessageId='OUT123')))
     value=transport.quoted_delivery_status(ROUTE,MID,REQUEST,'SOURCE123')
     assert value['retry_safe'] is False;assert value['provider_message_id']=='OUT123';assert not value['delivered']
+
+
+def test_accepted_uuid_survives_lost_quote_and_revoked_permission(db,monkeypatch):
+    import logging
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient,TestServer
+    import tenant_chat_send_store as store
+    from tenant_chat_send_api import handler
+    monkeypatch.setattr(store,'_connect',lambda:db);monkeypatch.setattr(store,'connect_route',lambda *_:ROUTE)
+    monkeypatch.setattr(transport,'_connect',lambda:db)
+    monkeypatch.setattr('tenant_ai_agent_connect.mark_operator_reply',Mock());monkeypatch.setattr('tenant_knowledge_live_queue.enqueue',Mock())
+    source=db.execute('SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid',(A,))[0]['id']
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid",('{"externalMessageId":"SOURCE123"}',A));db.commit()
+    calls=[]
+    def request(_key,method,path,payload=None):
+        calls.append(method);return {'id':MID,'status':'pending'} if method=='POST' else result()
+    monkeypatch.setattr(transport,'_request',request)
+    async def scenario():
+        app=web.Application();app.router.add_post('/send',handler(lambda _:PROFILE,'https://crm.test',Mock(),Mock(),logging.getLogger(__name__)))
+        data={**PAYLOAD,'quote_message_id':source,'expected_tenant_id':A,'expected_user_id':11};headers={'Origin':'https://crm.test'}
+        async with TestClient(TestServer(app)) as client:
+            response=await client.post('/send',json=data,headers=headers);assert response.status==200
+            db.execute('DELETE FROM saas_crm_messages WHERE id=%s::uuid',(source,));db.commit()
+            response=await client.post('/send',json=data,headers=headers);assert response.status==409
+            assert (await response.json())['keep_request'] is True
+            db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,raw) VALUES(%s::uuid,%s::uuid,41,'m1',%s,'incoming','source',%s::jsonb)",(source,A,'connect:'+CA,'{"externalMessageId":"SOURCE123"}'));db.commit()
+            db.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=11',(A,));db.commit()
+            response=await client.post('/send',json=data,headers=headers);assert response.status==403
+            assert (await response.json())['keep_request'] is True
+            db.execute('UPDATE saas_tenant_members SET active=TRUE WHERE tenant_id=%s::uuid AND telegram_id=11',(A,));db.commit()
+            response=await client.post('/send',json=data,headers=headers);assert response.status==200
+            assert (await response.json())['delivery_state']=='pending'
+        assert calls.count('POST')==1;assert calls.count('GET')==2
+    asyncio.run(scenario())

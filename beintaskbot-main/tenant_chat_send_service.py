@@ -9,7 +9,11 @@ from tenant_connect_transport import send as send_connect, record_outbound as re
 
 
 async def run(session, data, request, wait_slot, logger):
-    item = await asyncio.to_thread(reserve, session, command(data))
+    try:
+        item=await asyncio.to_thread(reserve,session,command(data))
+    except TenantLinearError as error:
+        if isinstance(data,dict) and data.get('quote_message_id'):error.keep_request=True
+        raise
     if 'cached_result' in item:
         if item.get('quote'):
             return {**item['cached_result'],**await _quoted_status(item,item['cached_result']['message_id'])}
