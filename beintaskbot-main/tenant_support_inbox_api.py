@@ -2,7 +2,7 @@
 import asyncio
 import json
 from aiohttp import web
-from tenant_ai_agents_api import _origin, _expected
+from tenant_ai_agents_api import _origin, _expected, _json_dumps
 from tenant_linear_policy import TenantLinearError
 from tenant_support_inbox_store import listing, detail, create, update, complete
 from tenant_support_inbox_summary import regenerate
@@ -60,7 +60,7 @@ def handler(member_from_request, origin, logger, resource):
                     elif action=='draft':result=await asyncio.to_thread(save_draft,profile,key,payload)
                     else:raise TenantLinearError('Некорректный запрос.',400)
                 else: raise TenantLinearError('Метод не поддерживается.',405)
-            return web.json_response({'success':True,'result':result},headers=headers)
+            return web.json_response({'success':True,'result':result},headers=headers,dumps=_json_dumps)
         except TenantLinearError as error:
             return web.json_response({'success':False,'error':str(error)},status=error.status,headers=headers)
         except (TypeError,ValueError,KeyError):

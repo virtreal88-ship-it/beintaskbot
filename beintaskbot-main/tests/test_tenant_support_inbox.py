@@ -1208,6 +1208,27 @@ def test_internal_consultation_is_tenant_scoped_idempotent_and_never_sends_custo
     with pytest.raises(TenantLinearError): consultations.reply(foreign,first['id'],{'response':'x','kind':'diagnosis'})
 
 
+def test_internal_consultation_listing_retains_recipientless_group_receipt(db,monkeypatch):
+    monkeypatch.setattr(consultations,'_connect',lambda:db)
+    ticket=manual()['ticket']['id']
+    consultations.schema(db)
+    consultation_id=str(uuid.uuid4())
+    db.execute('''INSERT INTO saas_internal_consultations
+      (tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,evidence,status,recipient_id,delivery_state)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'client','group-consultation',
+        'Developer group needs case context','{}'::jsonb,'waiting_specialist',NULL,'pilot_group_pending')''',
+      (A,consultation_id,ticket,CA))
+    db.commit()
+
+    listed=consultations.listing(PROFILE,ticket)['consultations']
+
+    assert len(listed)==1
+    assert listed[0]['id']==consultation_id
+    assert listed[0]['recipient_id'] is None
+    assert listed[0]['recipient_name'] is None
+    assert 'request_key' not in listed[0] and 'tenant_id' not in listed[0]
+
+
 def test_after_hours_ai_consultation_waits_for_in_hours_final_authorization(db, monkeypatch):
     monkeypatch.setattr(consultations, '_connect', lambda: db)
     monkeypatch.setattr(consultation_worker, '_connect', lambda: db)
