@@ -20,6 +20,7 @@ def ready(db,monkeypatch):
     db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions) VALUES(%s::uuid,33,'operator','Employee','[\"dialogs\"]'::jsonb)",(A,))
     db.commit()
     ids=[r['id'] for r in db.execute('SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid',(A,))];db.commit()
+    flow.developer_marker(PROFILE,{'channel_id':CA,'conversation_id':TARGET,'enabled':True})
     data={'request_id':str(uuid.uuid4()),'channel_id':CA,'conversation_id':'client','destination_channel_id':CA,
         'destination_conversation_id':TARGET,'message_ids':ids,'media_ids':[],'summary':'Printer is offline','confirm':True}
     sender=Mock(return_value={'message_id':'connect-id','external_message_id':'PROVIDER_123'})
@@ -324,6 +325,7 @@ def test_connect_202_queue_then_signed_receipt_and_delayed_reply(ready,monkeypat
     if not group:
         db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name) VALUES(%s::uuid,%s::uuid,%s,100,'Developer')",(A,CA,destination));db.commit()
         data['destination_conversation_id']=destination
+        flow.developer_marker(PROFILE,{'channel_id':CA,'conversation_id':destination,'enabled':True})
     result,_=prepared(ready)
     monkeypatch.setattr(transport,'send_consultation_with_receipt',REAL_QUEUE_SEND)
     monkeypatch.setattr(transport,'connect_route',lambda *_:{'api_key':'synthetic','channel_id':CA,'conversation_id':destination})
@@ -442,7 +444,7 @@ def test_real_http_ui_preview_destinations_and_pending_reply_inbox(ready):
     sender.return_value={'state':'pending','message_id':'queue-contract','external_message_id':None}
     async def scenario():
         app=web.Application()
-        for method,path,resource in [('POST','/preview','preview'),('GET','/destinations','destinations'),
+        for method,path,resource in [('POST','/developer-marker','developer_marker'),('POST','/preview','preview'),('GET','/destinations','destinations'),
             ('POST','/','prepare'),('POST','/{id}/dispatch','dispatch'),('GET','/replies','replies')]:
             app.router.add_route(method,path,handler(lambda _:PROFILE,'https://crm.test',logging.getLogger(__name__),resource))
         async with TestClient(TestServer(app)) as client:
@@ -504,7 +506,7 @@ def test_actual_browser_ui_real_http_services_isolated_db(ready,monkeypatch):
         origin=f'http://127.0.0.1:{port}'
         app=web.Application()
         prefix='/api/platform/ai/dialog-consultations'
-        for method,path,resource in [('POST','/preview','preview'),('GET','/destinations','destinations'),
+        for method,path,resource in [('POST','/developer-marker','developer_marker'),('POST','/preview','preview'),('GET','/destinations','destinations'),
             ('POST','','prepare'),('POST','/{id}/dispatch','dispatch'),('GET','/replies','replies')]:
             app.router.add_route(method,prefix+path,handler(lambda _:PROFILE,origin,logging.getLogger(__name__),resource))
         async def index(_):
