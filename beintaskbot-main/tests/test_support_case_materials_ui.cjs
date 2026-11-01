@@ -9,11 +9,11 @@ const video={id:'10000000-0000-4000-8000-000000000004',external_id:'connect:vide
 (async()=>{
  const dom=new JSDOM('<section id="view-support"><div id="operatorSupport"></div></section>',{url:'https://crm.test/app',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
  const member={tenant_id:'company-a',telegram_id:11,role:'owner'};w.tenantOperator={member,hasRight:()=>true};w.HTMLElement.prototype.scrollIntoView=function(){};
- let created=false,failCreate=false;
+ let created=false,failCreate=false,failDetail=false;
  w.fetch=async(url,init={})=>{
   calls.push({url,init});
   if(url==='/api/platform/me')return{ok:true,json:async()=>({member})};
-  if(url==='/api/platform/ai/support-tickets/'+ticket.id)return ok({ticket,messages:[text],attached_media:[],scope:{kind:'selected',message_count:2,media_count:1,has_earlier_source:true},expert_results:[],next_before:'older'});
+  if(url==='/api/platform/ai/support-tickets/'+ticket.id)return failDetail?{ok:false,status:503,json:async()=>({success:false,error:'Case history unavailable'})}:ok({ticket,messages:[text],attached_media:[],scope:{kind:'selected',message_count:2,media_count:1,has_earlier_source:true},expert_results:[],next_before:'older'});
   if(url.startsWith('/api/platform/ai/support-tickets/'+ticket.id+'?before='))return ok({ticket,messages:[audio,text],next_before:null});
   if(url==='/api/platform/ai/support-tickets/'+ticket.id+'/attachments')return init.method==='POST'?ok({attached_message_ids:[video.id]}):ok({messages:[video],next_before:null});
   if(url==='/api/platform/ai/internal-consultations/groups')return ok({groups:[{channel_id:'channel-a',conversation_id:'120363411822115409@g.us',contact_name:'Developers'}]});
@@ -49,5 +49,12 @@ const video={id:'10000000-0000-4000-8000-000000000004',external_id:'connect:vide
  failCreate=true;d.querySelector('#consultCreate').click();await settle();
  assert.equal(d.querySelector('#supportDetailNotice').textContent,'The request could not be saved');
  assert.equal(d.querySelector('#supportNotice').textContent,'');
+ Object.assign(ticket,{agent_id:'agent-a',summary_available:false,summary_state:'generating',summary_current:false,summary:''});
+ d.dispatchEvent(new w.CustomEvent('tenant-dialog-state'));await settle();
+ assert.equal(d.querySelector('#supportSummaryHistorical'),null,'a pending summary is not a historical result');
+ assert.equal(d.querySelector('#supportSummary'),null,'a generating summary cannot be retried');
+ failDetail=true;d.dispatchEvent(new w.CustomEvent('tenant-dialog-state'));await settle();
+ assert.equal(d.querySelector('#supportDetail').hidden,true);
+ assert.equal(d.querySelector('#supportNotice').textContent,'Case history unavailable','detail loading errors survive closing the loading modal');
  dom.window.close();console.log('PASS: case materials, pagination, selected files, assigned-agent UI and modal errors');
 })().catch(error=>{console.error(error);process.exitCode=1;});
