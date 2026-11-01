@@ -4,6 +4,7 @@ import uuid
 from unittest.mock import AsyncMock, Mock
 import pytest
 from tenant_assigned_agent_prompt import assigned_guidance, STYLE_GUIDANCE
+from tenant_dialog_greeting import GREETING_RULE, greeting_context
 from tenant_linear_policy import TenantLinearError
 from test_assigned_operator_copilot import ready, database, db
 from test_tenant_support_inbox import A, AGENT, PROFILE
@@ -13,6 +14,8 @@ import tenant_ai_agent_worker as worker
 
 
 def assert_prompt(prompt, style, *, scope=False):
+    assert prompt.count(GREETING_RULE) == 1
+    assert "Do not greet or introduce yourself again" not in prompt
     assert prompt.count(STYLE_GUIDANCE[style]) == 1
     assert prompt.index('COMPANY_RULE') < prompt.index('AGENT_RULE')
     if scope:
@@ -59,7 +62,8 @@ def test_style_change_invalidates_result_and_private_history_without_duplicate_p
 
 
 @pytest.mark.parametrize('style', ['precise','balanced','creative'])
-def test_connect_automatic_provider_uses_shared_guidance(monkeypatch,style):
+@pytest.mark.parametrize('acknowledged', [False, True])
+def test_connect_automatic_provider_uses_shared_guidance(monkeypatch,style,acknowledged):
     import asyncio
     import test_connect_voice as fixture
     case=fixture.WorkerVoice(methodName='runTest');case.setUp()
@@ -69,10 +73,16 @@ def test_connect_automatic_provider_uses_shared_guidance(monkeypatch,style):
             return {**original(*args,**kwargs),'company_instructions':'COMPANY_RULE',
                 'agent_instructions':'AGENT_RULE','scope_instructions':'SCOPE_RULE','agent_style':style}
         case.reserve.side_effect=reserve
-        case.rows=[fixture.row(kind='text',text='CUSTOMER_OVERRIDE_SYSTEM')]
+        case.rows=[fixture.row(mid='client-greeting',kind='text',text='Salam',at='2026-10-16T00:59:00Z')]
+        if acknowledged:case.rows.append({**fixture.row(mid='employee-greeting',kind='text',text='Salam, buyurun.',at='2026-10-16T00:59:30Z'),'direction':'outgoing'})
+        case.rows.append(fixture.row(kind='text',text='CUSTOMER_OVERRIDE_SYSTEM'))
         case.knowledge.return_value=[{'source_id':'k1','title':'KB','content':'KB_OVERRIDE_SYSTEM'}]
         asyncio.run(case.process())
         case.generate.assert_called_once()
+        supplied=case.generate.call_args.args[3]
+        assert any(line['speaker']=='CLIENT' and line['text']=='Salam' for line in supplied)
+        assert case.generate.call_args.kwargs['extra_context']['greeting_context']==greeting_context(supplied)
+        assert greeting_context(supplied)['client_messages']==(1 if acknowledged else 2)
         assert_prompt(case.generate.call_args.kwargs['instructions'],style,scope=True)
         assert 'KB_OVERRIDE_SYSTEM' in json.dumps(case.generate.call_args.kwargs['extra_context']['knowledge'])
         assert 'temperature' not in case.generate.call_args.kwargs
@@ -114,6 +124,7 @@ def test_ordinary_automatic_provider_uses_shared_guidance(monkeypatch,style):
     generated.assert_called_once()
     assert_prompt(generated.call_args.kwargs['instructions'],style,scope=True)
     assert 'KB_OVERRIDE_SYSTEM' in json.dumps(generated.call_args.kwargs['extra_context']['knowledge'])
+    assert generated.call_args.kwargs['extra_context']['greeting_context'] == greeting_context(generated.call_args.args[3])
     assert 'temperature' not in generated.call_args.kwargs
 
 

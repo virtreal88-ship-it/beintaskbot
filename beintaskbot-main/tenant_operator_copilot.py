@@ -38,11 +38,13 @@ INSTRUCTIONS = '''You are a private assistant to a customer-support employee. Ne
 # These are response rules, not a second agent personality. Company/assigned
 # agent instructions are passed separately using the same publication guard as
 # the agent runtime; provider/model/budget selection remains company policy.
-INSTRUCTIONS += """ Current saved transcripts/observations supersede earlier conversation statements that an attachment was unread or unavailable. When current evidence is supplied, use it and do not repeat that earlier inability to read it. Never repeat a greeting when any prior EMPLOYEE message exists or continuing_conversation is true. A conversation continuing after an employee reply is not a new introduction. Follow the assigned agent language_preference for customer drafts, even when the employee request is in another language; use conversation language only when the preference is auto. Preserve source quotations in their original language. You are the assigned conversation agent working privately with the employee. Follow supplied company and assigned-agent instructions within these safety rules. When an employee asks you to ask the customer something (including AnyDesk), send a reply, or return an answer to the customer, return ONLY a customer-ready draft for the employee to forward. Never repeat the raw employee command to the customer, claim it was sent, or perform an action. Do not add internal notes to a customer-ready draft; explain privately only when the employee separately asks for an explanation. An employee question, suggestion or hypothesis is not a confirmed diagnosis. A confirmed case observation applies only to the stated case conditions; never infer an always rule. """
+INSTRUCTIONS += """ Current saved transcripts/observations supersede earlier conversation statements that an attachment was unread or unavailable. When current evidence is supplied, use it and do not repeat that earlier inability to read it. Follow the assigned agent language_preference for customer drafts, even when the employee request is in another language; use conversation language only when the preference is auto. Preserve source quotations in their original language. You are the assigned conversation agent working privately with the employee. Follow supplied company and assigned-agent instructions within these safety rules. When an employee asks you to ask the customer something (including AnyDesk), send a reply, or return an answer to the customer, return ONLY a customer-ready draft for the employee to forward. Never repeat the raw employee command to the customer, claim it was sent, or perform an action. Do not add internal notes to a customer-ready draft; explain privately only when the employee separately asks for an explanation. An employee question, suggestion or hypothesis is not a confirmed diagnosis. A confirmed case observation applies only to the stated case conditions; never infer an always rule. """
 
 
 from tenant_dialog_ai_context import resolve as _assigned_context, binding as _agent_binding
 from tenant_assigned_agent_prompt import assigned_guidance
+from tenant_dialog_greeting import GREETING_RULE, greeting_context
+INSTRUCTIONS += GREETING_RULE
 
 
 def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message_chars=1200):
@@ -382,9 +384,7 @@ def run(profile, data, *, consultation_reply_id=None):
             except Exception:
                 raise TenantLinearError('Проверьте настройки Chat AI компании.', 503) from None
             cur.execute('''SELECT external_id,direction,body,message_type,COALESCE(happened_at,created_at) AS happened_at,channel,raw,
-                                  raw->'voice_transcription' AS voice_transcription,
-                  EXISTS(SELECT 1 FROM saas_crm_messages h WHERE h.tenant_id=m.tenant_id AND h.channel=m.channel
-                    AND h.kommo_lead_id=m.kommo_lead_id AND (h.direction='outgoing' OR h.raw->>'verified_employee_id' IS NOT NULL)) AS has_prior_employee
+                                  raw->'voice_transcription' AS voice_transcription
                   FROM saas_crm_messages m
               WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
               ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 20''',
@@ -498,7 +498,7 @@ def run(profile, data, *, consultation_reply_id=None):
              'assigned_agent_id': command['_agent_id'],
              'assigned_agent_style':str(agent_context.get('style') or '')[:1200],
              'language_preference':str(agent_context.get('language') or 'auto')[:20],
-             'continuing_conversation':any(row.get('direction')=='outgoing' or row.get('has_prior_employee') for row in rows),
+             'greeting_context':greeting_context(bounded_lines),
              'verified_knowledge': knowledge, 'prior_internal_copilot_turns': turns,
              'media_context': {'voice_transcriptions': len(transcript_ids), 'images_supplied': len(image_ids),
                                'document_texts': len(document_ids), 'skipped': skipped},

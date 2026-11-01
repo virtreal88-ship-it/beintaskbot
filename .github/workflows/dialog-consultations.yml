@@ -24,6 +24,8 @@ on:
       - 'beintaskbot-main/tests/test_dialog_audio_transcription*'
       - 'beintaskbot-main/tests/test_dialog_audio_result_durability.py'
       - 'beintaskbot-main/docs/dialog-audio-transcription-api.md'
+      - 'beintaskbot-main/tenant_dialog_greeting.py'
+      - 'beintaskbot-main/tests/test_dialog_greeting.py'
       - 'beintaskbot-main/tenant_operator_copilot.py'
       - 'beintaskbot-main/tenant_operator_dialogs.py'
       - 'beintaskbot-main/docs/tenant-chat-attachments.js'
@@ -136,6 +138,7 @@ jobs:
             tests/test_dialog_consultations_postgres.py \
             tests/test_assigned_operator_copilot.py \
             tests/test_assigned_agent_prompt_parity.py \
+            tests/test_dialog_greeting.py \
             tests/test_operator_audio_transcripts.py \
             tests/test_verified_dialog_phone.py \
             tests/test_tenant_operator_copilot.py \
