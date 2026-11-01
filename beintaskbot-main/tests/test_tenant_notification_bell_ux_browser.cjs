@@ -33,7 +33,7 @@ async function fixture(browser,width,height,{historyFailure=false,caseFailure=fa
  await page.locator('#dialogConsultationBell .notification-unread-badge').getByText('3',{exact:true}).waitFor();
  return{context,page,calls,rows,errors,releaseReplies:()=>releaseReplies?.(),async close(){await context.close();}};
 }
-async function openMenu(ctx){const bell=ctx.page.locator('#dialogConsultationBell');if(await bell.isVisible())await bell.click();else{await ctx.page.locator('#operatorMoreActions>summary').click();await ctx.page.locator('#dialogConsultationMobileBell').click();}await ctx.page.locator('[data-notification-id]').first().waitFor();}
+async function openMenu(ctx){const bell=ctx.page.locator('#dialogConsultationBell');if(await bell.isVisible())await bell.click();else{await ctx.page.locator('[data-operator-back]').click();await bell.waitFor();await bell.click();}await ctx.page.locator('[data-notification-id]').first().waitFor();}
 const reads=ctx=>ctx.calls.filter(c=>c.method==='POST'&&c.path.startsWith('/api/platform/notifications/')&&c.path.endsWith('/read'));
 (async()=>{const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||(fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),args:['--no-sandbox']});try{
  for(const [width,height]of [[1280,900],[390,844],[390,500]]){

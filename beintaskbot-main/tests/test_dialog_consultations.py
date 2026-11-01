@@ -535,7 +535,8 @@ def test_actual_browser_ui_real_http_services_isolated_db(ready,monkeypatch):
         app.router.add_post('/api/platform/notifications/{notification_id}/read',notification_handler(lambda _:PROFILE,origin,logging.getLogger(__name__),'read'))
         async def index(_):
             return web.Response(content_type='text/html',text='''<!doctype html><meta charset="utf-8">
-              <style>@media(max-width:900px){.app-topbar{display:none}}</style>
+              <style>@media(max-width:900px){body[data-dialog-open=true] .app-topbar{display:none}}</style>
+              <body data-dialog-open="true"><button type="button" data-operator-back onclick="document.body.dataset.dialogOpen='false'">Назад к списку</button>
               <div class="app-topbar"><select data-app-language></select></div>
               <details id="operatorMoreActions"><summary>⋯</summary><div id="operatorMenuExtra"></div></details>
               <aside id="operatorCopilot"></aside><script>
