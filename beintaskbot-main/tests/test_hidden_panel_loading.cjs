@@ -5,8 +5,9 @@ const {JSDOM,VirtualConsole}=require('jsdom');
 const root=path.join(__dirname,'..');
 const read=(name,ref)=>ref?execFileSync('git',['show',`${ref}:beintaskbot-main/${name}`],{cwd:root,encoding:'utf8'}):fs.readFileSync(path.join(root,name),'utf8');
 const tick=async()=>{for(let i=0;i<12;i++)await new Promise(r=>setImmediate(r));await new Promise(r=>setTimeout(r,70));};
+const until=async(predicate,label)=>{const deadline=Date.now()+5000;while(!predicate()){assert.ok(Date.now()<deadline,'Timed out waiting for '+label);await tick();}};
 const owner={success:true,member:{tenant_id:'tenant-a',telegram_id:11,role:'owner',active:true,permissions:['linear']},capabilities:{modules:{dialogs:true,linear:true,settings:true,integrations:true}},integrations:[],companies:[],members:[],account:{first_name:'Synthetic A'}};
-function fixture({view='dialogs',profile=owner,ref,core=false,workspace=false,hold=()=>false}={}){
+function fixture({view='dialogs',profile=owner,ref,core=false,workspace=false,hold=()=>false,reactDelay=0}={}){
  const errors=[],console=new VirtualConsole();console.on('jsdomError',e=>{if(e.type!=='css parsing')errors.push(e);});
  const dom=new JSDOM(read('docs/tenant-app.html',ref),{url:`https://fixture.test/app?view=${view}`,runScripts:'outside-only',pretendToBeVisual:true,virtualConsole:console});
  const w=dom.window,requests=[];let current=profile,clock=1000;
@@ -20,10 +21,11 @@ function fixture({view='dialogs',profile=owner,ref,core=false,workspace=false,ho
  for(const name of ['tenant-linear-rules.js','tenant-linear-settings.js','tenant-news.js','tenant-news-ai-settings.js','tenant-news-telegram-settings.js','tenant-chat-ai-settings.js'])run(name);
  if(workspace)run('tenant-workspace.js');
  if(core)w.eval([...w.document.scripts].find(s=>s.textContent.includes('const savedView=sessionStorage')).textContent);
+ if(reactDelay){const nativeTimeout=w.setTimeout.bind(w);w.setTimeout=(callback,delay,...args)=>nativeTimeout(callback,delay===0?reactDelay:delay,...args);}
  run('tenant-chakra-ui.js');
  const emit=(type,detail)=>w.document.dispatchEvent(new w.CustomEvent(type,{detail}));
  const show=view=>{if(core)w.tenantAppNavigate(view,true);else{w.document.querySelectorAll('.view').forEach(n=>n.classList.toggle('active',n.id==='view-'+view));emit('tenant-view',{view});}};
- return {w,requests,errors,emit,show,advance:ms=>clock+=ms,profile:data=>{current=data;emit('tenant-profile',data);},nonProfile:()=>requests.filter(r=>r.url!=='/api/platform/me'),close:()=>{w.close();assert.deepEqual(errors,[]);}};
+ return {w,requests,errors,emit,show,resumeReact:()=>{reactDelay=0;},advance:ms=>clock+=ms,profile:data=>{current=data;emit('tenant-profile',data);},nonProfile:()=>requests.filter(r=>r.url!=='/api/platform/me'),close:()=>{w.close();assert.deepEqual(errors,[]);}};
 }
 async function measurement(ref){const b=fixture({ref});try{await tick();await tick();const urls=b.nonProfile().map(r=>r.url);assert.equal(urls.length,ref?12:0);console.log(JSON.stringify({ref:ref||'working-tree',hiddenDataGets:urls.length,urls}));}finally{b.close();}}
 async function profileShape(){
@@ -155,7 +157,7 @@ async function isolation(){
   const worker={...owner,member:{...owner.member,role:'worker'},integrations:[{provider:'linear',status:'not_connected',metadata:{settings:{members:{11:{can_review_news:allowed}}}}}]};
   const b=fixture({profile:worker,core:true});try{await tick();assert.equal(b.w.document.getElementById('tnNav').hidden,!allowed);assert.equal(b.nonProfile().length,0);if(allowed){b.show('news');await tick();assert.match(b.w.document.getElementById('tnRows').textContent,/Synthetic/);}b.profile({...worker,integrations:[]});assert.equal(b.w.document.getElementById('tnNav').hidden,true);assert.doesNotMatch(b.w.document.getElementById('tnRows').textContent,/Synthetic/);}finally{b.close();}
  }
- const focus=fixture({view:'integrations',core:true});try{for(let i=0;i<10&&focus.nonProfile().length<5;i++)await tick();const before=focus.nonProfile().length;assert.equal(before,5);const search=focus.w.document.querySelector('#chakra-integrations-root input');search.value='OpenAI';search.dispatchEvent(new focus.w.Event('input',{bubbles:true}));focus.w.dispatchEvent(new focus.w.Event('focus'));await tick();await tick();assert.equal(focus.nonProfile().length,before+5,'same-scope reauthorization reloads visible integration status');focus.profile({...owner,member:{...owner.member,tenant_id:'tenant-b'},account:{first_name:'Synthetic B'}});await tick();assert.ok(!focus.w.document.body.textContent.includes('Synthetic A'));}finally{focus.close();}
+ const focus=fixture({view:'integrations',core:true,reactDelay:150});try{await until(()=>focus.nonProfile().length>=5&&focus.w.document.querySelector('#chakra-integrations-root input'),'integration form after asynchronous React commit');const before=focus.nonProfile().length;assert.equal(before,5);const search=focus.w.document.querySelector('#chakra-integrations-root input');focus.resumeReact();search.value='OpenAI';search.dispatchEvent(new focus.w.Event('input',{bubbles:true}));focus.w.dispatchEvent(new focus.w.Event('focus'));await until(()=>focus.nonProfile().length>=before+5,'same-scope integration refresh');assert.equal(focus.nonProfile().length,before+5,'same-scope reauthorization reloads visible integration status');focus.profile({...owner,member:{...owner.member,tenant_id:'tenant-b'},account:{first_name:'Synthetic B'}});await tick();assert.ok(!focus.w.document.body.textContent.includes('Synthetic A'));}finally{focus.close();}
  console.log('PASS tenant/user switch, delayed responses, logout, Linear-bound worker visibility/revocation, same-scope focus');
 }
 (async()=>{const index=process.argv.indexOf('--baseline-ref');if(index>=0)return measurement(process.argv[index+1]);await measurement();await profileShape();await delayedBootstrap();await navigation();await integrations();await marketplaceModal();await dirtyReauthorization();await isolation();})().catch(e=>{console.error(e);process.exitCode=1;});
