@@ -181,7 +181,11 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                         'action':'preview','canonical_id':request.query.get('canonical_id',''),
                         'duplicate_ids':[item for item in raw.split(',') if item]})
                 else:
-                    result = await asyncio.to_thread(list_knowledge, profile, request.query.get('id'))
+                    if request.query.get('create_request_id'):
+                        result = await asyncio.to_thread(list_knowledge, profile, request.query.get('id'),
+                            create_request_id=request.query['create_request_id'])
+                    else:
+                        result = await asyncio.to_thread(list_knowledge, profile, request.query.get('id'))
                 return web.json_response({'success': True, 'result': result}, headers=headers, dumps=_json_dumps)
             _origin(request, canonical_origin)
             if request.content_length is not None and request.content_length > 6 * 1024 * 1024:
@@ -225,7 +229,8 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 result = await asyncio.to_thread(save_knowledge, profile,
                     {'title': title, 'kind': kind, 'content': content, 'active': True,
                      **({'agent_id':fields['agent_id']} if fields.get('agent_id') else {}),
-                     **({'setup_key':fields['setup_key']} if fields.get('setup_key') else {})})
+                     **({'setup_key':fields['setup_key']} if fields.get('setup_key') else {}),
+                     **({'create_request_id':fields['create_request_id']} if fields.get('create_request_id') else {})})
             else:
                 if not _json_body(request):
                     raise TenantLinearError('JSON sorğusu tələb olunur.', 415)
