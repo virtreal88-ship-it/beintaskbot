@@ -158,6 +158,38 @@ def _finish(authority, ref, key, token, receipt, *, retryable=False):
         conn.commit()
 
 
+def initial_source_refs(authority,rows,selected):
+    refs=[reference(rows[-1],authority.channel,authority.lead)] if rows else []
+    if getattr(authority,'latest_request',False) and selected and selected[-1] is not rows[-1]:refs.append(reference(selected[-1],authority.channel,authority.lead))
+    return refs
+
+
+def normalize_media_row(row,channel):
+    row['_episode_channel']=channel
+    from tenant_dialog_evidence import caption
+    row['_copilot_context_body']=caption(row)
+    row['_copilot_attachment_text']=''
+    historical_context=row.pop('media_evidence_context',None)
+    row['_copilot_media_notice']='[Historical attachment; not evidence for the current request]'
+    return historical_context
+
+
+def apply_historical_context(row,context):
+    if context:
+        row['_copilot_attachment_text']=context
+        row['_historical_media_status']=(row.get('media_evidence') or {}).get('status')
+        partial=row['_historical_media_status']=='partial'
+        row['_copilot_media_notice']=('[Historical attachment; saved partial evidence; incomplete, do not infer omitted contents; not the latest attachment]'
+            if partial else '[Historical attachment; saved evidence from an earlier turn, not the latest attachment]')
+
+
+def apply_episode_receipt(row,message,receipt):
+    status=receipt.get('status','unknown');code=receipt.get('code','media_result_unknown')
+    row['_copilot_media_notice']='[Attachment '+status+': '+code+'; never infer unread contents]'
+    row['_copilot_attachment_text']=message['text']
+    row['_episode_receipt']=receipt
+
+
 def prepare(authority, rows):
     """Process every selected episode attachment before draft generation."""
     from tenant_knowledge_media import collect
@@ -166,29 +198,13 @@ def prepare(authority, rows):
     selected=episode(rows,latest_request=manual)
     if manual:
         for row in selected:row['_manual_request_source']=True
-    authority.source_refs=([reference(rows[-1],authority.channel,authority.lead)] if rows else [])
-    if manual and selected and selected[-1] is not rows[-1]:authority.source_refs.append(reference(selected[-1],authority.channel,authority.lead))
+    authority.source_refs=initial_source_refs(authority,rows,selected)
     selected_ids={str(row.get('external_id')) for row in selected}
     for row in rows:
         if str(row.get('message_type') or '').lower() not in KINDS:continue
-        # Normalize once: do not combine old legacy-body claims with receipts.
-        row['_episode_channel']=authority.channel
-        # Image/document/video bodies are the sender's caption, not extracted
-        # evidence. Audio bodies may be stale legacy ASR and remain excluded.
-        from tenant_dialog_evidence import caption
-        row['_copilot_context_body']=caption(row)
-        row['_copilot_attachment_text']=''
-        historical_context=row.pop('media_evidence_context',None)
-        row['_copilot_media_notice']='[Historical attachment; not evidence for the current request]'
+        historical_context=normalize_media_row(row,authority.channel)
         if str(row.get('external_id')) not in selected_ids:
-            # Previously saved exact-version evidence remains useful history;
-            # it must not be confused with analysis of a new attachment.
-            if historical_context:
-                row['_copilot_attachment_text']=historical_context
-                row['_historical_media_status']=(row.get('media_evidence') or {}).get('status')
-                partial=row['_historical_media_status']=='partial'
-                row['_copilot_media_notice']=('[Historical attachment; saved partial evidence; incomplete, do not infer omitted contents; not the latest attachment]'
-                    if partial else '[Historical attachment; saved evidence from an earlier turn, not the latest attachment]')
+            apply_historical_context(row,historical_context)
             continue
         authority.check()
         ref=reference(row,authority.channel,authority.lead)
@@ -222,10 +238,7 @@ def prepare(authority, rows):
                 saved={'status':receipt.get('status'),'code':receipt.get('code'),
                        'coverage':receipt.get('coverage',{}),'result':receipt}
                 apply_reusable(message,saved)
-        status=receipt.get('status','unknown');code=receipt.get('code','media_result_unknown')
-        row['_copilot_media_notice']='[Attachment '+status+': '+code+'; never infer unread contents]'
-        row['_copilot_attachment_text']=message['text']
-        row['_episode_receipt']=receipt
+        apply_episode_receipt(row,message,receipt)
     return rows
 
 
