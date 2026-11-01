@@ -1541,9 +1541,16 @@ def test_employee_case_submission_uses_assigned_agent_and_is_idempotent(ready,mo
     import tenant_operator_case_submission as submission
     db,generation,_=ready
     monkeypatch.setattr(submission,'_connect',lambda:db)
+    db.execute("UPDATE saas_connect_conversations SET contact_name='Aysel Məmmədova',phone='+994502072240' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CA));db.commit()
     preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'})
     agent=preview['agent'];ids=[m['id'] for m in preview['messages']]
     assert all(message['message_type']=='text' and message['happened_at'] for message in preview['messages'])
+    customer=next(message for message in preview['messages'] if message['role']=='customer')
+    assert customer['sender_name']=='Aysel Məmmədova','the operator-preview API returns the authorized direct-contact name'
+    db.execute("UPDATE saas_connect_conversations SET contact_name='',display_name='',phone='+994502072240' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CA));db.commit()
+    fallback=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'})
+    assert next(message for message in fallback['messages'] if message['role']=='customer')['sender_name']=='+994502072240','phone is used only as the direct-contact fallback when no name is available'
+    db.execute("UPDATE saas_connect_conversations SET contact_name='Aysel Məmmədova' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CA));db.commit()
     before=db.execute("SELECT state,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid",(A,))[0]
     data={'channel_id':CA,'conversation_id':'client','message_ids':ids,**{k:agent[k] for k in ('agent_id','agent_version','assignment_revision')}}
     first=submission.submit(PROFILE,data)
@@ -1557,6 +1564,22 @@ def test_employee_case_submission_uses_assigned_agent_and_is_idempotent(ready,mo
     db.execute("UPDATE saas_ai_conversation_state SET revision=revision+1 WHERE tenant_id=%s::uuid",(A,));db.commit()
     with pytest.raises(TenantLinearError,match='изменилось'):
         submission.submit(PROFILE,data)
+
+
+def test_employee_case_preview_uses_same_projected_contact_name_as_dialog_history(ready,monkeypatch):
+    import tenant_operator_case_submission as submission
+    from tenant_connect_dialog_equivalence import schema as ensure_dialog_links
+    db,_,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
+    with db.cursor() as cur: ensure_dialog_links(cur)
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,display_name) VALUES(%s::uuid,%s::uuid,'canonical',44,'','')",(A,CA))
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,display_name) VALUES(%s::uuid,%s::uuid,'source',45,'Aysel Məmmədova','')",(A,CA))
+    db.execute("INSERT INTO saas_connect_dialog_links(tenant_id,channel_id,source_id,canonical_id,source_lead,canonical_lead,pair_id,snapshot) VALUES(%s::uuid,%s::uuid,'source','canonical',45,44,'test-pair','{}'::jsonb)",(A,CA))
+    db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,channel_id,agent_id,state) VALUES(%s::uuid,'connect','canonical',%s,%s::uuid,'active')",(A,CA,AGENT))
+    message_id=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,author_name) VALUES(%s::uuid,%s::uuid,44,'canonical-incoming',%s,'incoming','Hello','customer')",(message_id,A,'connect:'+CA));db.commit()
+    preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'canonical'})
+    assert preview['messages'][0]['id']==message_id
+    assert preview['messages'][0]['sender_name']=='Aysel Məmmədova','training preview uses the same merged-route contact name shown in dialogue history'
 
 
 def test_employee_case_fences_changed_assignment_before_saving(ready,monkeypatch):
@@ -1631,9 +1654,11 @@ def test_employee_case_group_uses_unique_group_assignment(ready,monkeypatch):
     db,_,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
     db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}]),A,AGENT))
     db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name) VALUES(%s::uuid,%s::uuid,%s,43,'Group')",(A,CA,GROUP))
-    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,43,'group-message',%s,'incoming','Need help')",(str(uuid.uuid4()),A,'connect:'+CA))
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,raw) VALUES(%s::uuid,%s::uuid,43,'group-message',%s,'incoming','Need help','{\"participantName\":\"Gunay\"}'::jsonb)",(str(uuid.uuid4()),A,'connect:'+CA))
     db.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,assignments) VALUES(%s::uuid,%s,%s::jsonb)",(A,GROUP,json.dumps([{'agent_id':AGENT,'channel_id':CA,'priority':0}])));db.commit()
-    assert submission.preview(PROFILE,{'channel_id':CA,'conversation_id':GROUP})['agent']['agent_id']==AGENT
+    preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':GROUP})
+    assert preview['agent']['agent_id']==AGENT
+    assert preview['messages'][0]['sender_name']=='Gunay','group selector uses the message author, not the generic role'
 
 
 def test_dialog_extraction_without_assignment_cannot_select_first_agent_or_reserve(ready):

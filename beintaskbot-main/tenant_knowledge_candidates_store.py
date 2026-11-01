@@ -94,6 +94,94 @@ def author_role(row):
     return {'incoming':'customer','outgoing':'operator'}.get(row.get('direction'),'system')
 
 
+def _preview_sender_names(cur, tenant, policy, binding, chosen, rows):
+    """Resolve human-readable message authors for the bounded training preview.
+
+    Keep this projection tenant/route-local.  In particular, direct customer
+    names come from the already-authorized conversation row and group names
+    come only from the exact channel/conversation participant override.
+    """
+    from tenant_operator_dialogs import _message, _participant_fields
+
+    is_group=bool(group_jid(binding['conversation_id']))
+    direct_contact=''
+    if not is_group:
+        # Match the same tenant/route-local contact projection used by the
+        # ordinary dialogue history. It also resolves an approved direct-chat
+        # merge's source contact name, which is not stored on the canonical row.
+        from tenant_operator_dialogs import projection
+        from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+        sql,scopes=projection(policy)
+        cur.execute(sql+'''SELECT customer_name FROM visible WHERE provider='connect' AND lead_id=%s
+          AND channel_id=%s AND conversation_id=%s''',
+          (tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'),int(chosen['lead_id']),
+           binding['channel_id'],binding['conversation_id']))
+        projected=(cur.fetchone() or {}).get('customer_name')
+        projected=str(projected or '').strip()
+        if projected and '@' not in projected and projected!=str(binding['conversation_id']) and projected.casefold() not in {'customer','client','operator','whatsapp operator','employee'}:
+            direct_contact=projected[:180]
+        generic_names={'customer','client','operator','whatsapp operator','employee'}
+        for candidate in (() if direct_contact else (chosen.get('manual_display_name'),chosen.get('contact_name'),chosen.get('display_name'))):
+            value=str(candidate or '').strip()
+            if (value and value.casefold() not in generic_names and '@' not in value
+                and value!=str(binding['conversation_id']) and not re.fullmatch(r'[+\d\s().-]+',value)):
+                direct_contact=value[:180]
+                break
+        if not direct_contact:
+            phone=str(chosen.get('phone') or '').strip()
+            if phone and '@' not in phone: direct_contact=phone[:80]
+
+    participant_names={};employee_participants=set();employee_cache={}
+    if is_group:
+        participants=[]
+        for row in rows:
+            jid,_,_=_participant_fields(row.get('raw'))
+            if jid and jid not in participants: participants.append(jid)
+        channel_ids=sorted({str(row.get('source_channel_id') or binding['channel_id']) for row in rows})
+        if participants:
+            cur.execute("SELECT to_regclass('public.saas_connect_participant_display_names') AS relation")
+            if cur.fetchone().get('relation'):
+                cur.execute('''SELECT connect_channel_id::text AS channel_id,participant_jid,display_name
+                  FROM saas_connect_participant_display_names WHERE tenant_id=%s::uuid AND conversation_id=%s
+                    AND connect_channel_id::text=ANY(%s::text[]) AND participant_jid=ANY(%s::text[])''',
+                  (tenant,binding['conversation_id'],channel_ids,participants))
+                participant_names={(str(item['channel_id']),str(item['participant_jid'])):str(item['display_name'])
+                  for item in cur.fetchall() if str(item.get('display_name') or '')}
+            from tenant_ai_group_coordination import verified_employee
+            for row in rows:
+                jid,_,_=_participant_fields(row.get('raw'))
+                channel=str(row.get('source_channel_id') or binding['channel_id'])
+                key=(channel,jid)
+                if jid and key not in employee_cache:
+                    employee_cache[key]=verified_employee(cur,tenant,{'participantJid':jid,'channelId':channel})
+                if jid and employee_cache.get(key) is not None: employee_participants.add(key)
+
+    names={}
+    for row in rows:
+        safe_row={**row,'channel':'connect:'+str(row.get('source_channel_id') or binding['channel_id'])}
+        resolved=_message(safe_row,group=is_group,participant_names=participant_names,
+                          employee_participants=employee_participants,contact_name=direct_contact)
+        name=str(resolved.get('author_name') or '').strip()
+        raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
+        verified_id=raw.get('verified_employee_id')
+        if verified_id is not None and (not name or name.casefold() in {'operator','whatsapp operator','employee'}):
+            try: verified_id=int(verified_id)
+            except (TypeError,ValueError): verified_id=None
+            if verified_id is not None:
+                if verified_id not in employee_cache:
+                    cur.execute('''SELECT display_name FROM saas_tenant_members
+                      WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE''',(tenant,verified_id))
+                    employee_cache[verified_id]=(cur.fetchone() or {}).get('display_name')
+                staff=employee_cache.get(verified_id)
+                if staff: name=str(staff).strip()
+        phone_fallback=bool(not is_group and direct_contact and direct_contact==str(chosen.get('phone') or '').strip() and name==direct_contact)
+        if (not name or name.casefold() in {'customer','operator','whatsapp operator','employee'}
+            or '@' in name or (re.fullmatch(r'[+\d\s().-]+',name) and not phone_fallback)):
+            name=''
+        names[str(row['id'])]=name[:180]
+    return names
+
+
 def snapshot(cur,profile,data):
     tenant,actor,policy,chosen,binding,ticket=route(cur,profile,data)
     before=identifier(data['before']) if data.get('before') else None
@@ -132,6 +220,7 @@ def snapshot(cur,profile,data):
             if channel not in route_cache: route_cache[channel]=assert_route(cur,tenant,policy,'connect',binding['conversation_id'],channel)
             source=route_cache[channel]
             names.extend([source.get('contact_name'),source.get('phone')]);channels.add(channel)
+    preview_sender_names=_preview_sender_names(cur,tenant,policy,binding,chosen,rows)
     refs=[];messages=[];preview_metadata=[];remaining=MAX_CONTEXT
     for row in rows:
         body=redact(row.get('body'),names)[:min(1500,remaining)]
@@ -148,7 +237,8 @@ def snapshot(cur,profile,data):
             media_version=digest({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')})
             ref.update(media_kind=kind,external_id=row.get('external_id'),media_version=media_version,happened_at=str(row.get('happened_at') or row.get('created_at') or ''))
         refs.append(ref);messages.append({'ref':'m'+str(len(refs)),'role':role,'text':body})
-        preview_metadata.append({'message_type':str(kind),'happened_at':str(row.get('happened_at') or row.get('created_at') or '')})
+        preview_metadata.append({'message_type':str(kind),'happened_at':str(row.get('happened_at') or row.get('created_at') or ''),
+                                 'sender_name':preview_sender_names.get(str(row['id'])) or ''})
         remaining-=len(body)
         if remaining<=0: break
     if not refs:
