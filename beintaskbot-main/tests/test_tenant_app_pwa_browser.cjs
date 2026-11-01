@@ -58,6 +58,8 @@ const server = http.createServer((req, res) => {
     const pushScope=await pushSetupPage.evaluate(async()=>new URL((await navigator.serviceWorker.register('/app/push-sw.js',{scope:'/app/'})).scope).pathname);
     assert.equal(pushScope,'/app/');
     await pushSetupPage.waitForFunction(async()=>!!(await navigator.serviceWorker.getRegistration('/app/'))?.active);
+    const pushRegistration=await pushSetupPage.evaluate(async()=>{const reg=await navigator.serviceWorker.getRegistration('/app/');return {scope:new URL(reg.scope).pathname,script:new URL(reg.active.scriptURL).pathname};});
+    assert.equal(pushRegistration.script,'/app/push-sw.js');
     const pushBefore=await pushSetupPage.evaluate(()=>({permission:Notification.permission,hasPermissionApi:typeof Notification.requestPermission==='function'}));
     await pushSetupPage.close();
     const page = await context.newPage();
@@ -85,9 +87,11 @@ const server = http.createServer((req, res) => {
     assert.equal(criteria.manifest.display,'standalone');
     assert.deepEqual(criteria.manifest.icons.map(icon=>icon.sizes).sort(),['192x192','512x512']);
 
-    const pushAfter = await page.evaluate(async()=>({permission:Notification.permission,subscription:await (await navigator.serviceWorker.getRegistration('/app/')).pushManager.getSubscription()}));
+    const pushAfter = await page.evaluate(async()=>{const reg=await navigator.serviceWorker.getRegistration('/app/');return {permission:Notification.permission,subscription:await reg.pushManager.getSubscription(),scope:new URL(reg.scope).pathname,script:new URL(reg.active.scriptURL).pathname};});
     assert.equal(pushAfter.permission,pushBefore.permission,'PWA setup must not change notification permission');
     assert.equal(pushAfter.subscription,null,'PWA setup must not create a push subscription');
+    assert.equal(pushAfter.scope,pushRegistration.scope,'PWA worker must not replace the push worker scope');
+    assert.equal(pushAfter.script,pushRegistration.script,'PWA setup must preserve the existing push worker');
 
     await page.evaluate(()=>{const script=document.createElement('script');script.src='/assets/pwa-probe.js';document.body.append(script);});
     await page.waitForFunction(()=>window.__pwaProbeLoaded===1);
@@ -163,7 +167,7 @@ const server = http.createServer((req, res) => {
 
     const workerSource = source('tenant-app-pwa-sw.js');
     assert.match(workerSource,/startsWith\(APP_CACHE_PREFIX\)/);
-    console.log('tenant-app PWA browser regression passed: /app install surface, separate push registration, static-only cache fallback, API/media bypass, account freshness and isolated update cleanup');
+    console.log('tenant-app PWA browser regression passed: /app install surface, distinct push registration preserved, static-only cache fallback, API/media bypass, account freshness and isolated update cleanup');
   } finally {
     await browser.close();
     await new Promise(resolve=>server.close(resolve));
