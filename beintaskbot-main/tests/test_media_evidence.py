@@ -38,7 +38,8 @@ def test_reused_partial_is_explicit_and_never_claimed_complete():
     result=evidence.apply_reusable(message,{'status':'partial','code':'vision_observation',
         'coverage':{'complete':False},'result':{'observation':'frame detail'}})
     assert result['status']=='partial' and result['coverage']['complete'] is False
-    assert 'partial sampled video' in message['text']
+    assert 'partial visual observation' in message['text']
+    assert 'sampled video' not in message['text']
 
 
 def test_reused_multiframe_context_keeps_each_origin_and_redacts():

@@ -297,7 +297,8 @@ def test_reply_does_not_reanalyse_historical_voice_photo_after_employee_reply(mo
     generated=Mock(return_value=('Sifarişi indi yoxlayıram və təsdiqlənmiş məlumatı sizə bildirəcəyəm.',{'total_tokens':40}))
     monkeypatch.setattr(copilot,'generate',generated)
     result=copilot.run({'tenant_id':tenant,'telegram_id':actor},command)
-    assert result['context_usage']=={'messages':4,'voice_transcriptions':0,'images':0,'documents':0,'skipped':[]}
+    assert result['context_usage']=={'messages':4,'voice_transcriptions':0,'images':0,
+        'saved_visual_observations':0,'documents':0,'skipped':[]}
     args,kwargs=generated.call_args
     assert kwargs['images']==[]
     assert [line['speaker'] for line in args[3]]==['CLIENT','CLIENT','EMPLOYEE','CLIENT']

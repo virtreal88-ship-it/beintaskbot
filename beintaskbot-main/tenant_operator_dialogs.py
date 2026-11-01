@@ -191,8 +191,34 @@ def _attach_saved_audio_transcripts(cur, tenant, rows, *, conversation_id=None,v
                     if not prior or found[key]['at']>=prior.get('at',''):row['_saved_audio_diagnostic']=found[key]
 
 
+def _attach_saved_visual_status(cur, tenant, rows):
+    """Two bounded reads, no schema writes or OCR content in the UI projection."""
+    from tenant_media_evidence import source_hash, media_version, _body_hash, has_visual_result
+    selected=[r for r in rows if r.get('message_type') in {'image','video','document'}
+              and str(r.get('channel') or '').startswith('connect:') and r.get('external_id')]
+    if not selected:return
+    for row in selected:row.pop('media_evidence',None)
+    cur.execute("SELECT to_regclass('public.saas_media_evidence_receipts') AS relation")
+    if not (cur.fetchone() or {}).get('relation'):return
+    keys=[(str(row['channel']).removeprefix('connect:'),str(row['external_id']),
+           source_hash({'external_id':row['external_id'],'body_hash':_body_hash(row.get('body')),
+                        'media_kind':row['message_type'],'media_version':media_version(row.get('raw'))}),row['message_type']) for row in selected]
+    placeholders=','.join(['(%s::uuid,%s,%s,%s)']*len(keys))
+    cur.execute('''SELECT channel_id::text AS channel_id,external_id,source_hash,media_kind,status,coverage,result
+      FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid
+      AND (channel_id,external_id,source_hash,media_kind) IN ('''+placeholders+')',
+      (tenant,*[value for key in keys for value in key]))
+    receipts={(str(r['channel_id']),str(r['external_id']),str(r['source_hash']),r['media_kind']):r for r in cur.fetchall()}
+    for row,key in zip(selected,keys):
+        receipt=receipts.get(key) or {}
+        row['media_evidence']={'status':receipt.get('status'),
+            'coverage':receipt.get('coverage') or {},'has_visual_result':has_visual_result(receipt.get('result'))}
+
+
 def _message(item, *, group=False, participant_names=None, employee_participants=None, contact_name=''):
     value = dict(item)
+    media_evidence=value.pop('media_evidence',{}) or {}
+    value.pop('media_evidence_context',None)
     saved_audio_transcript=value.pop('_saved_audio_transcript',None)
     explicit_audio_transcript=value.pop('_explicit_audio_transcript',None)
     saved_audio_state=value.pop('_saved_audio_state',None)
@@ -269,6 +295,15 @@ def _message(item, *, group=False, participant_names=None, employee_participants
                     value['analysis_state']='unsupported'
                 elif code in {'voice_transcription_failed','voice_model_unavailable'}:
                     value['analysis_state']='transcription_unavailable'
+        if value.get('message_type') in {'image','video','document'}:
+            # Receipt metadata is exact tenant/channel/source-version scoped.
+            # Do not expose private OCR or infer vision from legacy ASR status.
+            value['analysis_state']='not_requested'
+            if media_evidence.get('status') in {'processed','partial'} and media_evidence.get('has_visual_result'):
+                complete=(media_evidence.get('coverage') or {}).get('complete') is True
+                value['analysis_state']='visual_completed' if complete and value['message_type']!='video' else 'visual_partial'
+            elif media_evidence.get('status') in {'error','unsupported','unavailable'}:
+                value['analysis_state']='failed'
         if value.get('message_type') in {'audio','voice','voice_message','ptt'}:
             text=explicit_audio_transcript or (str(value.get('body') or '') if isinstance(transcript,dict) and transcript.get('status')=='completed' else '') or saved_audio_transcript
             if isinstance(text,str) and text.strip():
@@ -838,7 +873,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     for message in messages:
                         message['source_conversation_id']=by_lead[int(message['source_lead_id'])]
                         message['source_channel_id']=channel
-            if provider=='connect':_attach_saved_audio_transcripts(cur,tenant,messages[:50],conversation_id=conversation,view_channel=channel)
+            if provider=='connect':
+                _attach_saved_audio_transcripts(cur,tenant,messages[:50],conversation_id=conversation,view_channel=channel)
+                _attach_saved_visual_status(cur,tenant,messages[:50])
             captured_group=[]
             if provider=='connect' and group_jid(conversation):
                 # A displayed group event can be represented by another channel's
