@@ -154,3 +154,33 @@ def test_v4_completed_cache_reuses_good_draft_without_provider_and_other_actor_c
     with pytest.raises(TenantLinearError) as caught:copilot.run(PROFILE,data)
     assert first['text'] not in str(caught.value)
     generated.assert_called_once()
+
+
+def test_real_operator_copilot_handler_serializes_only_explicit_boolean_keep_request(monkeypatch):
+    import asyncio
+    import logging
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient,TestServer
+    import tenant_operator_api as api
+    marker=object();current={'flag':marker}
+    def fail(*args):
+        error=TenantLinearError('Synthetic guarded request',409)
+        if current['flag'] is not marker:error.keep_request=current['flag']
+        raise error
+    monkeypatch.setattr(api,'run_copilot',fail);monkeypatch.setattr(api,'mark_read',fail)
+    async def scenario():
+        app=web.Application()
+        for resource in ['copilot','dialogs_read']:
+            app.router.add_post('/'+resource,api.handler(lambda _:PROFILE,'https://crm.test',logging.getLogger(__name__),resource))
+        async with TestClient(TestServer(app)) as client:
+            for flag in [False,True,marker,None]:
+                current['flag']=flag
+                response=await client.post('/copilot',json={'expected_tenant_id':A,'expected_user_id':11},headers={'Origin':'https://crm.test'})
+                assert response.status==409
+                body=await response.json()
+                if type(flag) is bool:assert body['keep_request'] is flag
+                else:assert 'keep_request' not in body
+            current['flag']=False
+            response=await client.post('/dialogs_read',json={'expected_tenant_id':A,'expected_user_id':11},headers={'Origin':'https://crm.test'})
+            assert response.status==409 and 'keep_request' not in await response.json()
+    asyncio.run(scenario())

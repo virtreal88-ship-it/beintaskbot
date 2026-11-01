@@ -30,6 +30,7 @@ on:
       - 'beintaskbot-main/tests/test_manual_knowledge_persistence_postgres.py'
       - 'beintaskbot-main/tests/test_manual_knowledge_scope_browser.cjs'
       - 'beintaskbot-main/docs/tenant-ai-agents.js'
+      - 'beintaskbot-main/tenant_operator_api.py'
       - 'beintaskbot-main/tenant_dialog_evidence.py'
       - 'beintaskbot-main/tenant_episode_media.py'
       - 'beintaskbot-main/tenant_media_evidence.py'
