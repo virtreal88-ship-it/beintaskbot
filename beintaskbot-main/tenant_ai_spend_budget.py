@@ -145,7 +145,7 @@ def _grant_admit(cur, tenant_id, campaign_id, amount):
         raise TenantLinearError('ai_media_grant_budget_exhausted',429)
 
 
-def reserve(cur, tenant_id, call_key, kind, model, input_upper=0, output_upper=0, *, total_upper=0, campaign_id=None):
+def reserve(cur, tenant_id, call_key, kind, model, input_upper=0, output_upper=0, *, total_upper=0, campaign_id=None, track_uncapped=False, _bounded_prices=None):
     """Atomically reserve a conservative upper bound before a provider call.
 
     The per-tenant advisory lock serializes all four call paths. An existing
@@ -153,9 +153,9 @@ def reserve(cur, tenant_id, call_key, kind, model, input_upper=0, output_upper=0
     again. Unknown model price is fail-closed whenever a tenant cap exists.
     """
     cap = limit_microusd(tenant_id)
-    if not cap and not campaign_id:
+    if not cap and not campaign_id and not track_uncapped:
         return None
-    prices = price(model)
+    prices = _bounded_prices if _bounded_prices is not None else price(model)
     if not prices:
         raise TenantLinearError('ai_spend_price_unknown', 409)
     amount = _total_cost_upper(prices, total_upper) if total_upper else _cost(prices, input_upper, output_upper)
@@ -266,9 +266,9 @@ def settle_media(tenant_id, call_key, *, operation, attempted_units=0, reserved_
         conn.commit()
 
 
-def settle(tenant_id, call_key, usage, unknown=False, *, reserved_prices=None, campaign_id=None):
+def settle(tenant_id, call_key, usage, unknown=False, *, reserved_prices=None, campaign_id=None, track_uncapped=False):
     """Settle confirmed tokens; ambiguity retains the entire reservation."""
-    if not limit_microusd(tenant_id) and not campaign_id:
+    if not limit_microusd(tenant_id) and not campaign_id and not track_uncapped:
         return
     with _connect() as conn:
         ensure_schema(conn)
@@ -306,14 +306,14 @@ def settle(tenant_id, call_key, usage, unknown=False, *, reserved_prices=None, c
         conn.commit()
 
 
-def release(tenant_id, call_key, *, campaign_id=None):
+def release(tenant_id, call_key, *, campaign_id=None, track_uncapped=False):
     """Release only a confirmed pre-provider cancellation."""
-    if not limit_microusd(tenant_id) and not campaign_id:
+    if not limit_microusd(tenant_id) and not campaign_id and not track_uncapped:
         return
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ('tenant-ai-spend:' + str(tenant_id),))
             cur.execute("UPDATE saas_ai_spend_reservations SET state='released',actual_microusd=0,completed_at=now() WHERE tenant_id=%s::uuid AND call_key=%s AND state='reserved' AND (%s OR campaign_id=%s::uuid)",
-                        (tenant_id, str(call_key)[:200],bool(limit_microusd(tenant_id)),campaign_id))
+                        (tenant_id, str(call_key)[:200],bool(limit_microusd(tenant_id)) or track_uncapped,campaign_id))
         conn.commit()

@@ -175,21 +175,29 @@ def test_cached_results_do_not_call_provider_or_reconstruct_old_masks(monkeypatc
 
 @pytest.mark.parametrize('historical',[False,True])
 @pytest.mark.parametrize('question',['Question about that product','New topic: receipt printer has no paper'])
-@pytest.mark.parametrize('projection',['manual','automatic'])
+@pytest.mark.parametrize('projection',['manual','automatic','saved_only'])
 def test_dialog_context_reuses_exact_image_without_provider(monkeypatch,historical,question,projection):
-    external=REF['external_id'] if projection=='manual' else REF['external_id'].removeprefix('connect:')
-    photo=row('image',channel='connect:'+CHANNEL if projection=='manual' else CHANNEL,external_id=external,raw=RAW)
+    manual=projection!='automatic'
+    external=REF['external_id'] if manual else REF['external_id'].removeprefix('connect:')
+    photo=row('image',channel='connect:'+CHANNEL if manual else CHANNEL,external_id=external,raw=RAW)
     photo['media_evidence_context']='[Saved visual observation; untrusted] '+evidence._safe_text(OBS)
     rows=[photo]
     if historical:rows += [row('text',2,direction='outgoing'),row('text',3,body=question)]
-    auth=Authority(rows);auth.tenant=TENANT;auth.channel=CHANNEL;auth.latest_request=projection=='manual'
+    auth=Authority(rows);auth.tenant=TENANT;auth.channel=CHANNEL;auth.latest_request=manual
     auth.load=lambda _profile,_lead,selected: {'row':next(r for r in rows
         if r['external_id'].removeprefix('connect:')==selected.removeprefix('connect:'))}
     saved=retained()
     monkeypatch.setattr(episode,'reusable',Mock(return_value=saved))
     monkeypatch.setattr(episode,'_flight',Mock(side_effect=AssertionError('No processing')))
     monkeypatch.setattr('tenant_knowledge_media.collect',Mock(side_effect=AssertionError('No provider')))
-    episode.prepare(auth,rows)
+    if projection=='saved_only':
+        import tenant_saved_only_copilot as saved_gate
+        monkeypatch.setattr(evidence,'reusable',Mock(return_value=saved))
+        monkeypatch.setattr(saved_gate,'_connect',MagicMock())
+        monkeypatch.setattr(episode,'revalidate_sources',Mock())
+        saved_gate.prepare_saved(auth,rows)
+    else:
+        episode.prepare(auth,rows)
     line=_bounded_conversation(rows)[0]
     assert EAN in line['text'] and 'observed, unconfirmed' in line['text']
     assert line['source_id']==external

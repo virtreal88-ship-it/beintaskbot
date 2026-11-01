@@ -120,3 +120,17 @@ No paid model call or production write is used to test this behavior.
 
 Real-site acceptance still belongs to the release coordinator. No synthetic
 production knowledge, arbitrary publication, message or paid AI request was made.
+# Concurrent unique-index follow-up
+
+The deployed request-ID INSERT targeted only the `id` primary key. Native CI
+exposed a real race against the separate `UNIQUE(tenant_id,id)` constraint. A local
+full-schema PostgreSQL reproduction, with both connections synchronized immediately
+before INSERT, raised the same `UniqueViolation` even for identical payloads.
+
+Request-ID creation now uses targetless `ON CONFLICT DO NOTHING`, so either unique
+collision reaches the existing exact tenant/actor/agent/payload receipt check.
+This is not exception swallowing or a retry: an unmatched receipt still returns
+409, and only the winning INSERT writes chunks/audit. Legacy creation is unchanged;
+no schema, DDL, permissions, browser storage or production-write changes are needed.
+The native regression runs 32 synchronized races each for identical and conflicting
+payloads and verifies one source, matching chunk set and creation audit per request.

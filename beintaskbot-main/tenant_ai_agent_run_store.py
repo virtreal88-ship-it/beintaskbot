@@ -263,12 +263,12 @@ def skip_job(job, error_code):
         conn.commit()
 
 
-def knowledge_context(tenant_id, query, *, limit=6, agent_id=None):
+def knowledge_context(tenant_id, query, *, limit=6, agent_id=None, _read_only=False):
     query = str(query or '').strip()[:1000]
     if not query:
         return []
     with _connect() as conn:
-        ensure_schema(conn)
+        if not _read_only:ensure_schema(conn)
         with conn.cursor() as cur:
             from tenant_knowledge_search import tsquery, patterns
             semantic_query=tsquery(query)

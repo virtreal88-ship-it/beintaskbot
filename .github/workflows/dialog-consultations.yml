@@ -27,9 +27,16 @@ on:
       - 'beintaskbot-main/tenant_dialog_greeting.py'
       - 'beintaskbot-main/tests/test_dialog_greeting.py'
       - 'beintaskbot-main/tenant_operator_copilot.py'
+      - 'beintaskbot-main/tenant_saved_only_copilot.py'
+      - 'beintaskbot-main/docs/tenant-saved-only-copilot.js'
+      - 'beintaskbot-main/tests/test_saved_only_copilot*'
       - 'beintaskbot-main/tests/test_manual_knowledge_persistence_postgres.py'
       - 'beintaskbot-main/tests/test_manual_knowledge_scope_browser.cjs'
       - 'beintaskbot-main/docs/tenant-ai-agents.js'
+      - 'beintaskbot-main/tenant_operator_api.py'
+      - 'beintaskbot-main/tenant_ai_state_api.py'
+      - 'beintaskbot-main/tenant_manual_ai_run_diagnostics.py'
+      - 'beintaskbot-main/tests/test_manual_ai_run_diagnostics.py'
       - 'beintaskbot-main/tenant_dialog_evidence.py'
       - 'beintaskbot-main/tenant_episode_media.py'
       - 'beintaskbot-main/tenant_media_evidence.py'
@@ -42,6 +49,8 @@ on:
       - 'beintaskbot-main/docs/tenant-chat-attachments.js'
       - 'beintaskbot-main/tests/test_lazy_audio_state_browser.cjs'
       - 'beintaskbot-main/tests/test_voice_card_mobile_browser.cjs'
+      - 'beintaskbot-main/tests/test_list_toolbar_mobile_browser.cjs'
+      - 'beintaskbot-main/tests/test_message_attachment_menu_browser.cjs'
       - 'beintaskbot-main/tests/test_audio_reload_intent_browser.cjs'
       - 'beintaskbot-main/tests/test_helper_request_identity_browser.cjs'
       - 'beintaskbot-main/tests/test_verified_dialog_phone.py'
@@ -83,6 +92,8 @@ on:
       - 'beintaskbot-main/tests/test_helper_type_full_app_browser.cjs'
       - 'beintaskbot-main/tests/test_helper_modal_mobile_browser.cjs'
       - 'beintaskbot-main/tests/test_assigned_operator_copilot.py'
+      - 'beintaskbot-main/tests/test_required_episode_audio.py'
+      - 'beintaskbot-main/tests/test_required_episode_photos.py'
       - 'beintaskbot-main/tests/test_operator_audio_transcripts.py'
       - 'beintaskbot-main/tests/test_operator_audio_transcript_browser.cjs'
       - 'beintaskbot-main/tests/test_dynamic_audio_menu_browser.cjs'
@@ -162,6 +173,11 @@ jobs:
             tests/test_dialog_photo_receipts_postgres.py \
             tests/test_connect_group_history.py::test_group_context_retains_safe_staff_and_ai_provenance \
             tests/test_assigned_operator_copilot.py \
+            tests/test_required_episode_audio.py \
+            tests/test_required_episode_photos.py \
+            tests/test_manual_ai_run_diagnostics.py \
+            tests/test_saved_only_copilot.py \
+            tests/test_saved_only_copilot_postgres.py \
             tests/test_assigned_agent_prompt_parity.py \
             tests/test_dialog_greeting.py \
             tests/test_operator_audio_transcripts.py \
@@ -190,6 +206,7 @@ jobs:
           node tests/test_tenant_notification_badge_browser.cjs
           node tests/test_dialog_photo_status_ui.cjs
           node tests/test_tenant_operator_copilot_ui.cjs
+          PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_saved_only_copilot_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_helper_request_identity_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_manual_knowledge_scope_browser.cjs
           node tests/test_tenant_operator_mobile_ui.cjs
@@ -203,3 +220,5 @@ jobs:
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_audio_reload_intent_browser.cjs
           node tests/test_tenant_chat_attachments_ui.cjs
           node tests/test_voice_card_mobile_browser.cjs
+          node tests/test_list_toolbar_mobile_browser.cjs
+          node tests/test_message_attachment_menu_browser.cjs

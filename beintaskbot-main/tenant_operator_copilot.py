@@ -49,7 +49,88 @@ from tenant_dialog_evidence import GROUNDING_RULE, provenance, speaker
 INSTRUCTIONS += GROUNDING_RULE
 
 
-def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message_chars=1200):
+def _required_media(rows,kinds):
+    from tenant_episode_media import episode
+    return [row for row in episode(rows,latest_request=True)
+            if str(row.get('message_type') or '').lower() in kinds]
+
+
+def _visual_components(row):
+    receipt=row.get('_episode_receipt') or {}
+    values=[]
+    if receipt.get('observation'):values.append(receipt['observation'])
+    observations=receipt.get('observations') or []
+    if not isinstance(observations,list):return []
+    for item in observations:
+        if not isinstance(item,dict) or not isinstance(item.get('text'),str) or not item['text'].strip():return []
+        values.append(item['text'])
+    return values if all(isinstance(value,str) and value.strip() for value in values) else []
+
+
+def _evidence_ready(row):
+    receipt=row.get('_episode_receipt') or {}
+    if receipt.get('status')!='processed':return False
+    if str(row.get('message_type') or '').lower()=='image':
+        return bool(_visual_components(row)) and (receipt.get('coverage') or {}).get('complete') is not False
+    return bool(str(receipt.get('transcript') or '').strip())
+
+
+def _component_spans(row,appendix):
+    receipt=row.get('_episode_receipt') or {}
+    if str(row.get('message_type') or '').lower() in {'image','document'}:
+        components=_visual_components(row);spans=[];cursor=0
+        markers=list(re.finditer(r'(?:^|\n)\[Untrusted (?:visual observation|saved visual observation(?: frame [^\]\n]{1,80})?|saved document text); not a confirmed solution\] ',appendix))
+        for component in components:
+            marker=next((match for match in markers if match.start()>=cursor and appendix.startswith(component,match.end())),None)
+            if marker is None:return []
+            spans.append((marker.end(),marker.end()+len(component)));cursor=spans[-1][1]
+        return spans
+    speech=str(receipt.get('transcript') or '')
+    footer='\n[Attachment status: '+str(receipt.get('status'))+'; '+str(receipt.get('code'))+'. Never infer unread contents.]'
+    component=appendix[:-len(footer)] if appendix.endswith(footer) else appendix
+    return [(len(component)-len(speech),len(component))] if speech and component.endswith(speech) else []
+
+
+def _required_audio(rows):
+    return _required_media(rows,{'audio','voice','voice_message','ptt'})
+
+
+def _episode_evidence_error(command,row,agent_context,*,context_limit=False):
+    receipt=row.get('_episode_receipt') or {}
+    image=str(row.get('message_type') or '').lower()=='image'
+    stage='context_preparation' if context_limit else receipt.get('failure_stage')
+    if stage not in {'source_validation','media_download','media_validation','audio_transcription','visual_analysis','context_preparation'}:stage='unknown'
+    code=('image_context_incomplete' if image else 'audio_context_incomplete') if context_limit else receipt.get('code')
+    from tenant_media_admission import REASONS, explanation
+    if code not in set(REASONS) | {'media_unavailable','source_fetch_unavailable','source_check_failed','source_rate_limited',
+        'source_access_denied','source_changed','media_processing_failed','media_result_unknown',
+        'asr_authorization_required','legacy_voice_version_unverified','pre_dispatch_retryable',
+        'media_size_limit','asr_model_unavailable','transcript_truncated','audio_context_incomplete','image_context_incomplete','visual_budget','vision_not_approved','external_media_permission_required','model_has_no_vision'}:code='image_evidence_incomplete' if image else 'audio_evidence_incomplete'
+    from tenant_episode_media import reference
+    from tenant_media_evidence import source_hash
+    ref=reference(row,command['channel_id'],command['lead_id'])
+    command['_media_failure']={'source_id':ref['external_id'],'source_hash':source_hash(ref),
+        'kind':ref['media_kind'],'status':'context_limit' if context_limit else str(receipt.get('status') or 'unavailable'),
+        'code':code,'failure_stage':stage}
+    language=str(agent_context.get('language') or 'auto')
+    if context_limit:
+        message={'az':'Cari seriyanın səs yazıları AI kontekstinə tam sığmır. Cavab yaradılmadı; saxlanmış transkripsiyalar qorunur.',
+            'en':'The current voice-message series does not fit completely in the AI context. No reply was created; saved transcripts are retained.'}.get(language,
+            'Голосовые текущей серии не помещаются целиком в контекст AI. Ответ не создан; сохранённые расшифровки не потеряны.')
+    else:
+        message={'az':'Cari seriyanın bütün səs mesajları oxunmayıb. AI cavabı yaradılmadı.',
+            'en':'Not all voice messages in the current series were read. No AI reply was created.'}.get(language,
+            'Не все голосовые текущей серии прочитаны. AI-ответ не создан.')
+    if image:
+        message=({'az':'Cari fotoların təhlili AI kontekstinə tam sığmır. Cavab yaradılmadı; saxlanmış nəticələr qorunur.','en':'Current photo observations do not fit completely in the AI context. No reply was created; saved results are retained.'}.get(language,'Анализ текущих фото не помещается целиком в контекст AI. Ответ не создан; сохранённые результаты не потеряны.') if context_limit else {'az':'Cari seriyanın bütün fotoları təhlil edilməyib. AI cavabı yaradılmadı.','en':'Not all photos in the current series were analyzed. No AI reply was created.'}.get(language,'Не все фото текущей серии проанализированы. AI-ответ не создан.'))
+    reason=explanation(code,language)
+    status=receipt.get('admission_status') if code in REASONS else 409
+    error=TenantLinearError(message+(' '+reason if reason else '')+' ['+stage+': '+code+']',status if status in {403,409,429} else 409)
+    error.keep_request=True
+    return error
+
+
+def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message_chars=1200, audio_coverage=None):
     """Keep the newest chronological evidence under a bounded prompt budget."""
     selected = []
     used = 0
@@ -65,18 +146,25 @@ def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message
         role = speaker(row)
         body = str(row.get('_copilot_context_body', row.get('body') or '') or '')[:max_message_chars]
         kind = str(row.get('message_type') or 'text')
+        spans=[]
+        complete=False
         if kind not in {'', 'text'}:
             notice = str(row.get('_copilot_media_notice') or f'[Attachment type: {kind}; not analyzed by Copilot]')
             appendix = str(row.get('_copilot_attachment_text') or '')
             if appendix:
                 prefix = body[:400]
                 room = max(0, max_message_chars - len(prefix) - len(notice) - 2)
+                spans=[(len(prefix)+len(notice)+2+start,len(prefix)+len(notice)+2+end)
+                       for start,end in _component_spans(row,appendix)]
                 body = prefix + '\n' + notice + '\n' + appendix[:room]
+                complete=bool(spans) and all(end<=len(body) for start,end in spans)
             else:
                 body = body[:max(0, max_message_chars - len(notice) - 1)] + ' ' + notice
         receipt_context=str(row.get('media_evidence_context') or '')[:max_message_chars]
         if receipt_context:
             body=(body+'\n'+receipt_context)[:max_message_chars]
+        body=body[:max_message_chars]
+        complete=complete and all(end<=len(body) for start,end in spans)
         room = max_chars - used
         if room <= 0:
             break
@@ -85,7 +173,9 @@ def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message
             # request commonly appears, while signaling that it was shortened.
             prefix = '[Earlier part omitted] '
             tail_length = max(0, room - len(prefix))
+            complete=complete and all(start>=len(body)-tail_length for start,end in spans)
             body = prefix[:room] + (body[-tail_length:] if tail_length else '')
+        if audio_coverage is not None and id(row) in audio_coverage:audio_coverage[id(row)]=complete
         selected.append({'_order':next(i for i,item in enumerate(rows) if item is row),'speaker': role, 'text': body,
                          'at': str(row.get('happened_at') or ''),
                          'source_id': str(row.get('external_id') or ''),
@@ -286,13 +376,144 @@ def _clean(data):
             'include_media': include_media}
 
 
-def _hash(command):
+def _hash(command, *, media_selection_version='current-episode-v5-complete-audio-photos'):
     value = {key: val for key, val in command.items() if key != 'request_id'}
-    if command.get('mode')=='reply':value['media_selection_version']='latest-customer-request-v3-audio-evidence'
+    if command.get('mode')=='reply':value['media_selection_version']=('latest-customer-request-v3-audio-evidence' if command.get('_consultation_evidence') else media_selection_version)
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+def _read_history(cur,tenant,actor,command,consultation_evidence=None,original_rows=None):
+    thread_key=(tenant,actor,command['channel_id'],command['conversation_id'])
+    cur.execute('''SELECT external_id,direction,body,message_type,COALESCE(happened_at,created_at) AS happened_at,channel,raw,
+                          raw->'voice_transcription' AS voice_transcription
+          FROM saas_crm_messages m
+      WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
+      ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 20''',
+      (tenant, command['lead_id'], 'connect:' + command['channel_id']))
+    rows = list(reversed(cur.fetchall()))
+    from tenant_episode_media import extend_episode
+    rows=original_rows if consultation_evidence is not None else extend_episode(cur,tenant,[command['lead_id']],command['channel_id'],rows,20,latest_request=command['mode']=='reply')
+    if not rows:
+        raise TenantLinearError('В диалоге пока нет сообщений.', 409)
+    if consultation_evidence is None:command['_latest_source_id']=str(rows[-1].get('external_id') or '')
+    from tenant_media_evidence import annotate_rows
+    annotate_rows(cur, tenant, rows)
+    cur.execute('SELECT turns FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE', thread_key)
+    turns_row = cur.fetchone() or {}
+    turns = turns_row.get('turns') if isinstance(turns_row.get('turns'), list) else []
+    turns = turns[-10:] if consultation_evidence is None else []
+    # A private thread from an older assignment must never become the
+    # new agent's memory. Old rows lack a binding and are excluded.
+    turns = [turn for turn in turns if isinstance(turn, dict)
+             and turn.get('agent_binding') == command['_agent_binding']]
+    return rows,turns
+
+
+def _draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence=None,*,saved_only=False):
+    from tenant_episode_media import ManualExecution
+    execution=ManualExecution(tenant,actor,command,config,connection['updated_at'],secret['api_key'],model,
+                              agent_context.get('language') or 'auto',rows)
+    try:
+        if saved_only:
+            from tenant_saved_only_copilot import prepare_saved
+            media=prepare_saved(execution,rows)
+        else:media = _prepare_copilot_media(tenant, actor, command, rows, model,
+                                       include_media=True,execution=execution) if command['mode'] == 'reply' else {
+            'images': [], 'voice_transcriptions': set(), 'documents': set(), 'skipped': []}
+        command['_source_versions']=getattr(execution,'source_refs',[])
+        if any(row.get('_episode_receipt') for row in rows):execution.check_sources()
+        from tenant_ai_agent_run_store import knowledge_context
+        latest_row=next((row for row in reversed(rows) if row.get('_manual_request_source')),None)
+        if latest_row is None:
+            latest_row=next((row for row in reversed(rows) if row.get('direction')=='incoming'
+                and (row.get('raw') if isinstance(row.get('raw'),dict) else {}).get('verified_employee_id') is None
+                and (row.get('raw') if isinstance(row.get('raw'),dict) else {}).get('ai_authored') is not True),{})
+        required_audio=_required_audio(rows) if command['mode']=='reply' and consultation_evidence is None else []
+        required_images=_required_media(rows,{'image'}) if command['mode']=='reply' and consultation_evidence is None else []
+        required_media=required_audio+required_images+(_required_media(rows,{'document'}) if saved_only else [])
+        for required in required_media:
+            receipt=required.get('_episode_receipt') or {}
+            if not (_visual_components(required) if saved_only and str(required.get('message_type')).lower()=='document' else _evidence_ready(required)):
+                raise _episode_evidence_error(command,required,agent_context)
+        if latest_row in required_audio:
+            receipt=latest_row['_episode_receipt']
+            latest_customer=str(receipt['transcript'])
+        else:
+            latest_customer=str(latest_row.get('_copilot_attachment_text') or latest_row.get('_copilot_context_body',latest_row.get('body') or '') or '')
+        knowledge=knowledge_context(tenant,latest_customer+'\n'+command['prompt']+'\n'+str((consultation_evidence or {}).get('body') or '')[:2000],agent_id=command['_agent_id'],limit=4,**({'_read_only':True} if saved_only else {}))
+        knowledge=[{**item,'content':item['content'][:1200]} for item in knowledge]
+    except Exception as error:
+        if not saved_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
+        if isinstance(error,TenantLinearError):raise
+        raise TenantLinearError('Не удалось подготовить вложения. Повторный анализ автоматически не запущен.',503) from None
+    audio_coverage={id(row):False for row in required_media}
+    bounded_lines = _bounded_conversation(rows,audio_coverage=audio_coverage)
+    incomplete=next((row for row in required_media if not audio_coverage[id(row)]),None)
+    if incomplete is not None:
+        error=_episode_evidence_error(command,incomplete,agent_context,context_limit=True)
+        if not saved_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
+        raise error
+    if saved_only:
+        supplied={line['source_id']:line['text'] for line in bounded_lines}
+        for row in rows:
+            if row.get('_manual_request_source') and str(row.get('message_type') or 'text').lower() in {'','text'}:
+                if supplied.get(str(row.get('external_id') or ''))!=str(row.get('body') or ''):
+                    raise TenantLinearError('The current saved request text does not fit completely in the existing context limit.',409)
+    included_ids = {line['source_id'] for line in bounded_lines if line.get('source_id')}
+    images = [image for image in media['images'] if image['source_id'] in included_ids]
+    image_ids = {image['source_id'] for image in images}
+    document_ids = media['documents'] & included_ids
+    transcript_ids = media['voice_transcriptions'] & included_ids
+    skipped = []
+    for item in media['skipped']:
+        reason = item['reason'] if item['source_id'] in included_ids else 'context_limit'
+        skipped.append({'source_id':item['source_id'],'kind': item['kind'], 'reason': reason})
+    for source_id in (set(image['source_id'] for image in media['images']) - included_ids):
+        skipped.append({'kind': 'image', 'reason': 'context_limit'})
+    for source_id in media['documents'] - included_ids:
+        skipped.append({'kind': 'document', 'reason': 'context_limit'})
+    for source_id in media['voice_transcriptions'] - included_ids:
+        skipped.append({'kind': 'voice', 'reason': 'context_limit'})
+    context_usage = {'messages': len(bounded_lines), 'voice_transcriptions': len(transcript_ids),
+                     'saved_visual_observations':sum(line['saved_visual_evidence'] for line in bounded_lines),
+                     'images': len(image_ids), 'documents': len(document_ids), 'skipped': skipped}
+    if any(row.get('_episode_receipt') for row in rows):
+        context_usage['evidence']=[{'source_id':str(row.get('external_id') or ''),'kind':row.get('message_type'),
+            'status':row['_episode_receipt'].get('status'),'code':row['_episode_receipt'].get('code')}
+            for row in rows if row.get('_episode_receipt')]
+    lines = bounded_lines
+    # The receipt is committed before provider I/O. An uncertain result is
+    # charged once and never retried implicitly.
+    request = command['prompt'] or {'reply':'Prepare a concise reply to the latest unresolved customer question or request, using the entire conversation and prior employee replies. If the customer is still waiting for a status or promised action, acknowledge it and ask to check/follow up; do not close the conversation or claim completion without explicit confirmation.',
+        'solution':'Find a solution for the customer issue. Explain uncertainty and missing facts.',
+        "instruction":"Follow the employee's private instruction about the case and answer the employee, not the customer."}.get(command['mode'], '')
+    # Published knowledge is supplied in extra_context below.
+    turns=[{'role':str(turn.get('role') or '')[:20],'text':str(turn.get('text') or '')[:800], 'agent_binding':turn.get('agent_binding')} for turn in turns[-6:] if isinstance(turn,dict)]
+    extra = {'copilot_action': command['mode'], 'employee_request': request,
+             'untrusted_developer_consultation_evidence':consultation_evidence,
+             'assigned_agent_id': command['_agent_id'],
+             'assigned_agent_style':str(agent_context.get('style') or '')[:1200],
+             'language_preference':str(agent_context.get('language') or 'auto')[:20],
+             'greeting_context':greeting_context(bounded_lines),
+             'verified_knowledge': knowledge, 'prior_internal_copilot_turns': turns,
+             'media_context': {'voice_transcriptions': len(transcript_ids), 'images_supplied': len(image_ids),
+                               'saved_visual_observations':context_usage['saved_visual_observations'],
+                               'document_texts': len(document_ids), 'skipped': skipped},
+             'limits': 'Current-episode attachments are processed under company authorization. Historical attachments are not evidence for the latest unread attachment. Never infer skipped attachment contents. No unconfirmed cause, action, or result.'}
+    prompt = INSTRUCTIONS + assigned_guidance(
+        company=str(agent_context.get('company_instructions') or '')[:20000],
+        agent=str(agent_context.get('instructions') or '')[:20000],
+        style=agent_context.get('style'))
+    return {'execution':execution,'lines':lines,'request':request,'instructions':prompt,'extra_context':extra,
+            'images':images,'context_usage':context_usage,'knowledge':knowledge,'turns':turns}
+
+
 def run(profile, data, *, consultation_reply_id=None):
+    if isinstance(data,dict) and 'saved_only' in data and data['saved_only'] is not True:raise TenantLinearError('Invalid saved-only mode.',400)
+    if isinstance(data,dict) and data.get('saved_only') is True:
+        if consultation_reply_id is not None:raise TenantLinearError('Saved-only mode cannot replace consultation evidence.',409)
+        from tenant_saved_only_copilot import execute
+        return execute(profile,data)
     command = _clean(data)
     with _connect() as conn:
         ensure_schema(conn)
@@ -351,6 +572,14 @@ def run(profile, data, *, consultation_reply_id=None):
             cur.execute('SELECT requested_by,input_hash,status,result,config_version FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid FOR UPDATE', (tenant, command['request_id']))
             existing = cur.fetchone()
             if existing:
+                if (int(existing['requested_by'])==actor and command['mode']=='reply'
+                    and existing['input_hash']!=digest and any(existing['input_hash']==_hash(command,media_selection_version=version)
+                        for version in ('latest-customer-request-v3-audio-evidence','current-episode-v4-complete-audio'))):
+                    pending=existing['status']!='completed'
+                    error=TenantLinearError('Предыдущий запрос не подтверждён; повторный запуск заблокирован.' if pending else
+                        'Правила проверки вложений обновлены. Нажмите «AI ответ» снова для нового проверенного черновика.',409)
+                    error.keep_request=pending
+                    raise error
                 if int(existing['requested_by']) != actor or existing['input_hash'] != digest:
                     raise TenantLinearError('Код запроса уже использован для другой операции.', 409)
                 if existing['status'] == 'completed' and existing.get('result') and str(existing['config_version']) == str(connection['updated_at']):
@@ -389,132 +618,16 @@ def run(profile, data, *, consultation_reply_id=None):
                     raise ValueError()
             except Exception:
                 raise TenantLinearError('Проверьте настройки Chat AI компании.', 503) from None
-            cur.execute('''SELECT external_id,direction,body,message_type,COALESCE(happened_at,created_at) AS happened_at,channel,raw,
-                                  raw->'voice_transcription' AS voice_transcription
-                  FROM saas_crm_messages m
-              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
-              ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 20''',
-              (tenant, command['lead_id'], 'connect:' + command['channel_id']))
-            rows = list(reversed(cur.fetchall()))
-            from tenant_episode_media import extend_episode
-            rows=original_rows if consultation_evidence is not None else extend_episode(cur,tenant,[command['lead_id']],command['channel_id'],rows,20,latest_request=command['mode']=='reply')
-            if not rows:
-                raise TenantLinearError('В диалоге пока нет сообщений.', 409)
-            if consultation_evidence is None:command['_latest_source_id']=str(rows[-1].get('external_id') or '')
-            from tenant_media_evidence import annotate_rows
-            annotate_rows(cur, tenant, rows)
-            cur.execute('SELECT turns FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE', thread_key)
-            turns_row = cur.fetchone() or {}
-            turns = turns_row.get('turns') if isinstance(turns_row.get('turns'), list) else []
-            turns = turns[-10:] if consultation_evidence is None else []
-            # A private thread from an older assignment must never become the
-            # new agent's memory. Old rows lack a binding and are excluded.
-            turns = [turn for turn in turns if isinstance(turn, dict)
-                     and turn.get('agent_binding') == command['_agent_binding']]
+            rows,turns=_read_history(cur,tenant,actor,command,consultation_evidence,original_rows if consultation_evidence is not None else None)
             cur.execute('''INSERT INTO saas_chat_ai_runs(tenant_id,request_id,requested_by,lead_id,input_hash,config_version,status,reserved_calls,provider,channel_id,conversation_id)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,'sending',1,'connect',%s,%s)''',
               (tenant, command['request_id'], actor, command['lead_id'], digest, str(connection['updated_at']), command['channel_id'], command['conversation_id']))
             cur.execute("DELETE FROM saas_operator_copilot_threads WHERE updated_at<now()-interval '60 days' AND tenant_id=%s::uuid", (tenant,))
 
         conn.commit()
-    from tenant_episode_media import ManualExecution
-    execution=ManualExecution(tenant,actor,command,config,connection['updated_at'],secret['api_key'],model,
-                              agent_context.get('language') or 'auto',rows)
-    try:
-        media = _prepare_copilot_media(tenant, actor, command, rows, model,
-                                       include_media=True,execution=execution) if command['mode'] == 'reply' else {
-            'images': [], 'voice_transcriptions': set(), 'documents': set(), 'skipped': []}
-        command['_source_versions']=getattr(execution,'source_refs',[])
-        if any(row.get('_episode_receipt') for row in rows):execution.check_sources()
-        from tenant_ai_agent_run_store import knowledge_context
-        latest_row=next((row for row in reversed(rows) if row.get('_manual_request_source')),None)
-        if latest_row is None:
-            latest_row=next((row for row in reversed(rows) if row.get('direction')=='incoming'
-                and (row.get('raw') if isinstance(row.get('raw'),dict) else {}).get('verified_employee_id') is None
-                and (row.get('raw') if isinstance(row.get('raw'),dict) else {}).get('ai_authored') is not True),{})
-        if command['mode']=='reply' and consultation_evidence is None and str(latest_row.get('message_type') or '').lower() in {'voice','audio'}:
-            receipt=latest_row.get('_episode_receipt') or {}
-            if receipt.get('status')!='processed' or not str(receipt.get('transcript') or '').strip():
-                # Missing latest speech cannot be answered from historical text,
-                # legacy body, a prior assistant answer or unrelated KB matches.
-                stage=receipt.get('failure_stage')
-                if stage not in {'source_validation','media_download','media_validation','audio_transcription'}:stage='unknown'
-                code=receipt.get('code')
-                from tenant_media_admission import REASONS, explanation
-                if code not in set(REASONS) | {'media_unavailable','source_fetch_unavailable','source_check_failed','source_rate_limited',
-                    'source_access_denied','source_changed','media_processing_failed','media_result_unknown',
-                    'asr_authorization_required','legacy_voice_version_unverified','pre_dispatch_retryable',
-                    'media_size_limit','asr_model_unavailable','transcript_truncated'}:code='audio_evidence_incomplete'
-                from tenant_episode_media import reference
-                from tenant_media_evidence import source_hash
-                ref=reference(latest_row,command['channel_id'],command['lead_id'])
-                command['_media_failure']={'source_id':ref['external_id'],'source_hash':source_hash(ref),
-                    'kind':ref['media_kind'],'status':str(receipt.get('status') or 'unavailable'),
-                    'code':code,'failure_stage':stage}
-                language=str(agent_context.get('language') or 'auto')
-                message={'az':'Son səs mesajı oxunmayıb. AI cavabı yaradılmadı; əvvəlki mövzu əvəzində istifadə olunmadı.',
-                    'en':'The latest voice message was not read. No AI reply was created from the earlier topic.'}.get(language,
-                    'Последнее голосовое не прочитано. AI-ответ по старой теме не создан.')
-                reason=explanation(code,language)
-                status=receipt.get('admission_status') if code in REASONS else 409
-                error=TenantLinearError(message+(' '+reason if reason else '')+' ['+stage+': '+code+']',status if status in {403,409,429} else 409)
-                error.keep_request=True
-                raise error
-            latest_customer=str(receipt['transcript'])
-        else:
-            latest_customer=str(latest_row.get('_copilot_attachment_text') or latest_row.get('_copilot_context_body',latest_row.get('body') or '') or '')
-        knowledge=knowledge_context(tenant,latest_customer+'\n'+command['prompt']+'\n'+str((consultation_evidence or {}).get('body') or '')[:2000],agent_id=command['_agent_id'],limit=4)
-        knowledge=[{**item,'content':item['content'][:1200]} for item in knowledge]
-    except Exception as error:
-        _finish(tenant,command,actor,None,turns,command['prompt'],'')
-        if isinstance(error,TenantLinearError):raise
-        raise TenantLinearError('Не удалось подготовить вложения. Повторный анализ автоматически не запущен.',503) from None
-    bounded_lines = _bounded_conversation(rows)
-    included_ids = {line['source_id'] for line in bounded_lines if line.get('source_id')}
-    images = [image for image in media['images'] if image['source_id'] in included_ids]
-    image_ids = {image['source_id'] for image in images}
-    document_ids = media['documents'] & included_ids
-    transcript_ids = media['voice_transcriptions'] & included_ids
-    skipped = []
-    for item in media['skipped']:
-        reason = item['reason'] if item['source_id'] in included_ids else 'context_limit'
-        skipped.append({'source_id':item['source_id'],'kind': item['kind'], 'reason': reason})
-    for source_id in (set(image['source_id'] for image in media['images']) - included_ids):
-        skipped.append({'kind': 'image', 'reason': 'context_limit'})
-    for source_id in media['documents'] - included_ids:
-        skipped.append({'kind': 'document', 'reason': 'context_limit'})
-    for source_id in media['voice_transcriptions'] - included_ids:
-        skipped.append({'kind': 'voice', 'reason': 'context_limit'})
-    context_usage = {'messages': len(bounded_lines), 'voice_transcriptions': len(transcript_ids),
-                     'saved_visual_observations':sum(line['saved_visual_evidence'] for line in bounded_lines),
-                     'images': len(image_ids), 'documents': len(document_ids), 'skipped': skipped}
-    if any(row.get('_episode_receipt') for row in rows):
-        context_usage['evidence']=[{'source_id':str(row.get('external_id') or ''),'kind':row.get('message_type'),
-            'status':row['_episode_receipt'].get('status'),'code':row['_episode_receipt'].get('code')}
-            for row in rows if row.get('_episode_receipt')]
-    lines = bounded_lines
-    # The receipt is committed before provider I/O. An uncertain result is
-    # charged once and never retried implicitly.
-    request = command['prompt'] or {'reply':'Prepare a concise reply to the latest unresolved customer question or request, using the entire conversation and prior employee replies. If the customer is still waiting for a status or promised action, acknowledge it and ask to check/follow up; do not close the conversation or claim completion without explicit confirmation.',
-        'solution':'Find a solution for the customer issue. Explain uncertainty and missing facts.',
-        "instruction":"Follow the employee's private instruction about the case and answer the employee, not the customer."}.get(command['mode'], '')
-    # Published knowledge is supplied in extra_context below.
-    turns=[{'role':str(turn.get('role') or '')[:20],'text':str(turn.get('text') or '')[:800], 'agent_binding':turn.get('agent_binding')} for turn in turns[-6:] if isinstance(turn,dict)]
-    extra = {'copilot_action': command['mode'], 'employee_request': request,
-             'untrusted_developer_consultation_evidence':consultation_evidence,
-             'assigned_agent_id': command['_agent_id'],
-             'assigned_agent_style':str(agent_context.get('style') or '')[:1200],
-             'language_preference':str(agent_context.get('language') or 'auto')[:20],
-             'greeting_context':greeting_context(bounded_lines),
-             'verified_knowledge': knowledge, 'prior_internal_copilot_turns': turns,
-             'media_context': {'voice_transcriptions': len(transcript_ids), 'images_supplied': len(image_ids),
-                               'saved_visual_observations':context_usage['saved_visual_observations'],
-                               'document_texts': len(document_ids), 'skipped': skipped},
-             'limits': 'Current-episode attachments are processed under company authorization. Historical attachments are not evidence for the latest unread attachment. Never infer skipped attachment contents. No unconfirmed cause, action, or result.'}
-    prompt = INSTRUCTIONS + assigned_guidance(
-        company=str(agent_context.get('company_instructions') or '')[:20000],
-        agent=str(agent_context.get('instructions') or '')[:20000],
-        style=agent_context.get('style'))
+    context=_draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence)
+    execution=context['execution'];lines=context['lines'];request=context['request'];prompt=context['instructions']
+    extra=context['extra_context'];images=context['images'];context_usage=context['context_usage'];knowledge=context['knowledge'];turns=context['turns']
     text = None
     try:
         mode = 'reply' if command['mode'] == 'reply' else 'summary'
