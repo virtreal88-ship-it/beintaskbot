@@ -45,7 +45,7 @@ def _assigned_context(cur, tenant, command):
     # Shared direct/group authority lookup also fences assignment revisions.
     from tenant_operator_case_submission import assignment
     selected = assignment(cur, tenant, command['channel_id'], command['conversation_id'])
-    cur.execute('''SELECT a.id AS agent_id,a.version,a.instructions,a.language,a.style,s.company_instructions
+    cur.execute('''SELECT a.id AS agent_id,a.version,a.model,a.instructions,a.language,a.style,s.company_instructions
       FROM saas_ai_agents a LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id
       WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid AND a.archived_at IS NULL FOR SHARE OF a''',
       (tenant, selected['agent_id']))
@@ -59,7 +59,7 @@ def _agent_binding(context):
     # Instructions/company instructions are included so a settings change also
     # invalidates cached results and in-flight responses.
     return hashlib.sha256(json.dumps({k: str(context.get(k) or '') for k in
-        ('agent_id', 'version', 'assignment_revision', 'instructions', 'language', 'style', 'company_instructions')},
+        ('agent_id', 'version', 'assignment_revision', 'model', 'instructions', 'language', 'style', 'company_instructions')},
         sort_keys=True).encode()).hexdigest()
 
 def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message_chars=1200):
@@ -346,10 +346,13 @@ def run(profile, data, *, consultation_reply_id=None):
                 raise TenantLinearError('Сначала включите Chat AI и разрешите обработку данных компании.', 409)
             if config.get('copilot_enabled', True) is not True:
                 raise TenantLinearError('AI Copilot выключен для компании. Включите его в настройках → AI Copilot.', 409)
-            model = str(config.get('copilot_model') or config.get('model') or '').strip()
-            if not _MODEL_ID.fullmatch(model):
-                raise TenantLinearError('В настройках Chat AI указана некорректная модель. Проверьте её перед генерацией.', 409)
             agent_context = _assigned_context(cur, tenant, command)
+            # The assigned agent owns every private text action. Company Chat
+            # AI settings still authorize credentials/consent/quotas and the
+            # specialized media models, but cannot substitute a text model.
+            model = str(agent_context.get('model') or '').strip()
+            if not _MODEL_ID.fullmatch(model):
+                raise TenantLinearError('У назначенного агента не выбрана корректная модель. Проверьте настройки агента.', 409)
             command['_agent_binding'] = _agent_binding(agent_context)
             command['_agent_id'] = str(agent_context['agent_id'])
             digest = _hash(command)

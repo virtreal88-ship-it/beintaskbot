@@ -73,7 +73,7 @@ def test_reply_context_resolves_open_customer_question_instead_of_closing_conver
         'copilot_enabled':True,'copilot_model':'dedicated-copilot-model','daily_limit':100,'copilot_daily_limit':8},'updated_at':'v1'}
     conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
     cur=conn.cursor.return_value.__enter__.return_value
-    cur.fetchone.side_effect=[connection,{'agent_id':'bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb','version':1,'instructions':'Assigned support agent rules'},None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
+    cur.fetchone.side_effect=[connection,{'agent_id':'bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb','version':1,'model':'assigned-model','instructions':'Assigned support agent rules'},None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
     transcript=[
         {'external_id':'m1','direction':'incoming','body':'Sifariş hazır olacaq?','message_type':'text','happened_at':'1'},
         {'external_id':'m2','direction':'outgoing','body':'Yoxlayıb məlumat verəcəyəm.','message_type':'text','happened_at':'2'},
@@ -123,14 +123,14 @@ def test_provider_failures_are_actionable_without_exposing_provider_details():
     assert 'secret token' not in _provider_failure_message(TimeoutError('secret token and prompt'))
 
 
-def test_copilot_uses_its_own_model_and_never_sends_a_message(monkeypatch):
+def test_copilot_uses_assigned_model_and_never_sends_a_message(monkeypatch):
     tenant='aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';actor=22
     connection={'secrets':b'cipher','metadata':{'enabled':True,'consent':True,'model':'agent-chat-model',
         'copilot_enabled':True,'copilot_model':'dedicated-copilot-model','daily_limit':100,'copilot_daily_limit':8},
         'updated_at':'v1'}
     conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
     cur=conn.cursor.return_value.__enter__.return_value
-    cur.fetchone.side_effect=[connection,{'agent_id':'bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb','version':1,'instructions':'Assigned support agent rules'},None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
+    cur.fetchone.side_effect=[connection,{'agent_id':'bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb','version':1,'model':'assigned-model','instructions':'Assigned support agent rules'},None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
     cur.fetchall.side_effect=[[
         {'external_id':'m1','direction':'incoming','body':'Salam','message_type':'text','happened_at':'now'}
     ],[]]
@@ -144,7 +144,7 @@ def test_copilot_uses_its_own_model_and_never_sends_a_message(monkeypatch):
     generate=Mock(return_value=('Salam, kömək edək.',{'total_tokens':12}));monkeypatch.setattr(copilot,'generate',generate)
     result=copilot.run({'tenant_id':tenant,'telegram_id':actor},request())
     assert result['text']=='Salam, kömək edək.'
-    assert generate.call_args.args[1]=='dedicated-copilot-model'
+    assert generate.call_args.args[1]=='assigned-model'
     assert generate.call_args.kwargs['extra_context']['assigned_agent_instructions']=='Assigned support agent rules'
     assert generate.call_args.kwargs['extra_context']['assigned_agent_id']=='bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb'
     from tenant_ai_agent_run_store import knowledge_context
@@ -161,7 +161,7 @@ def test_provider_failure_logs_only_allowlisted_metadata(monkeypatch):
         'copilot_enabled':True,'copilot_model':'gpt-4o-mini','daily_limit':100,'copilot_daily_limit':8},'updated_at':'v1'}
     conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
     cur=conn.cursor.return_value.__enter__.return_value
-    cur.fetchone.side_effect=[connection,{'agent_id':'bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb','version':1,'instructions':'Assigned support agent rules'},None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
+    cur.fetchone.side_effect=[connection,{'agent_id':'bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb','version':1,'model':'assigned-model','instructions':'Assigned support agent rules'},None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
     cur.fetchall.side_effect=[[{'external_id':'m1','direction':'incoming','body':'private customer text','message_type':'text','happened_at':'now'}],[]]
     monkeypatch.setattr(copilot,'_connect',lambda:conn);monkeypatch.setattr(copilot,'ensure_schema',Mock())
     monkeypatch.setattr(copilot,'access',Mock(return_value=(tenant,actor,SimpleNamespace(can_use_chat_ai=lambda:True))))
@@ -172,7 +172,7 @@ def test_provider_failure_logs_only_allowlisted_metadata(monkeypatch):
     warning=Mock();monkeypatch.setattr(copilot._LOGGER,'warning',warning)
     with pytest.raises(TenantLinearError):copilot.run({'tenant_id':tenant,'telegram_id':actor},request())
     rendered=' '.join(str(part) for part in warning.call_args.args)
-    assert 'model_access' in rendered and '404' in rendered and 'gpt-4o-mini' in rendered and 'responses' in rendered
+    assert 'model_access' in rendered and '404' in rendered and 'assigned-model' in rendered and 'responses' in rendered
     assert 'private customer text' not in rendered and 'private-secret' not in rendered and tenant not in rendered
 
 
@@ -270,7 +270,7 @@ def test_reply_does_not_reanalyse_historical_voice_photo_after_employee_reply(mo
         'copilot_model':'vision-model','daily_limit':100,'copilot_daily_limit':8},'updated_at':'v1'}
     conn=MagicMock();conn.__enter__.return_value=conn;conn.__exit__.return_value=False
     cur=conn.cursor.return_value.__enter__.return_value
-    cur.fetchone.side_effect=[connection,{'agent_id':'bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb','version':1,'instructions':'Assigned support agent rules'},None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
+    cur.fetchone.side_effect=[connection,{'agent_id':'bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb','version':1,'model':'vision-model','instructions':'Assigned support agent rules'},None,{'used':0},{'used':0},{'used':0},{'turns':[]},{}]
     transcript=[
         {'external_id':'voice-1','direction':'incoming','body':'Printer label does not print; error appears.',
          'message_type':'voice','raw':{'voice_transcription':{'status':'completed'}},'happened_at':'1'},
