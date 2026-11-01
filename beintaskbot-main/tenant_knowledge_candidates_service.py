@@ -445,6 +445,18 @@ def finish(profile,item,values,usage,error,attempted,proposal=None,accounting_us
                 source_valid=True
             except TenantLinearError:
                 values=None;status='failed';error='access_or_source_changed'
+            try:
+                from tenant_dialog_ai_context import resolve as dialog_context, binding as dialog_binding
+                current=dialog_context(cur,tenant,row['route'])
+                if str(current['agent_id'])!=str(item['agent_id']) or row['route'].get('dialog_ai_binding')!=dialog_binding(current):
+                    raise TenantLinearError('Назначение или настройки агента изменились.',409)
+            except TenantLinearError:
+                # Hide stale agent reasoning, but retain source-valid generic
+                # media artifacts and known usage. Never release an unknown
+                # provider outcome merely because the assignment changed.
+                values=None
+                if status!='unknown':status='failed'
+                error='agent_assignment_changed'
             # Persist aggregate tokens for the established daily/token guards,
             # but keep the text-only usage argument for monetary settlement.
             recorded_usage=accounting_usage if isinstance(accounting_usage,dict) else usage

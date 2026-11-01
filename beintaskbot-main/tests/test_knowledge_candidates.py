@@ -1655,3 +1655,16 @@ def test_dialog_extraction_loses_assignment_after_admission_before_provider(read
     assert response['request']['status']=='failed' and response['candidates']==[]
     generation.assert_not_called()
     assert db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n']>0
+
+
+def test_changed_agent_after_generation_hides_case_but_keeps_known_usage(ready):
+    db,generation,data=ready
+    def changed(*args,**kwargs):
+        db.execute('UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid',(A,));db.commit()
+        return json.dumps({'cards':[model_card()]}),{'input_tokens':40,'output_tokens':20,'total_tokens':60}
+    generation.side_effect=changed
+    result=service.analyze(PROFILE,data)
+    generation.assert_called_once()
+    assert result['candidates']==[] and result['request']['status']=='failed'
+    assert db.execute('SELECT total_tokens FROM saas_ai_agent_token_usage WHERE tenant_id=%s::uuid',(A,))[0]['total_tokens']==60
+    assert db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n']>0
