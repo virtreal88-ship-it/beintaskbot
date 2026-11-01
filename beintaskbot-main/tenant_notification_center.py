@@ -36,11 +36,14 @@ def _parameter_bytes(column):
     whole notification read, and double encoding never matches a different JID.
     The SQL column expression is fixed by this module, never supplied by users.
     """
-    return """(SELECT string_agg(CASE WHEN part[1] ~ '^%[0-9A-Fa-f]{2}$'
+    # Literal percent signs in parametrized SQL are parsed by psycopg before
+    # PostgreSQL sees the regex. Construct them in SQL to keep both drivers
+    # on the same exact URL-decoding predicate.
+    return """(SELECT string_agg(CASE WHEN part[1] ~ ('^' || chr(37) || '[0-9A-Fa-f]{2}$')
       THEN lower(substring(part[1] from 2))
       ELSE encode(convert_to(replace(part[1],'+',' '),'UTF8'),'hex') END,
       '' ORDER BY part_order)
-      FROM regexp_matches(""" + column + """, '(%[0-9A-Fa-f]{2}|.)', 'g')
+      FROM regexp_matches(""" + column + """, '(' || chr(37) || '[0-9A-Fa-f]{2}|.)', 'g')
         WITH ORDINALITY AS query_parts(part,part_order))"""
 
 
