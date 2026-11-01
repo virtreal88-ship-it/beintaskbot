@@ -153,6 +153,9 @@ def handler(member_from_request, request_provider, logger):
             await asyncio.to_thread(_check_case_attachment,session,item,request.query)
             key = _media_key(session, item, lead, message)
             result = _cache_get(key)
+            if result is None and request.query.get('cache_only') == '1':
+                # A preview probe never joins a provider flight or starts a download.
+                return web.Response(status=204, headers=headers)
             if result is None:
                 task = MEDIA_INFLIGHT.get(key)
                 if task is None:

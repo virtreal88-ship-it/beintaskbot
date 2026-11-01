@@ -41,6 +41,10 @@ on:
       - 'beintaskbot-main/tests/test_voice_card_mobile_browser.cjs'
       - 'beintaskbot-main/tests/test_list_toolbar_mobile_browser.cjs'
       - 'beintaskbot-main/tests/test_message_attachment_menu_browser.cjs'
+      - 'beintaskbot-main/tests/test_photo_preview_browser.cjs'
+      - 'beintaskbot-main/tests/test_photo_thumbnail_projection.py'
+      - 'beintaskbot-main/tenant_chat_attachment_api.py'
+      - 'beintaskbot-main/tests/test_tenant_chat_attachments.py'
       - 'beintaskbot-main/tests/test_audio_reload_intent_browser.cjs'
       - 'beintaskbot-main/tests/test_helper_request_identity_browser.cjs'
       - 'beintaskbot-main/tests/test_verified_dialog_phone.py'
@@ -131,6 +135,8 @@ jobs:
         run: |
           PYTHONPATH=.:tests python -m pytest -q -rs \
             tests/test_dialog_consultations.py \
+            tests/test_tenant_chat_attachments.py \
+            tests/test_photo_thumbnail_projection.py \
             tests/test_support_case_materials.py \
             tests/test_case_consultations_unified.py \
             tests/test_tenant_notification_center.py \
@@ -202,3 +208,4 @@ jobs:
           node tests/test_voice_card_mobile_browser.cjs
           node tests/test_list_toolbar_mobile_browser.cjs
           node tests/test_message_attachment_menu_browser.cjs
+          node tests/test_photo_preview_browser.cjs
