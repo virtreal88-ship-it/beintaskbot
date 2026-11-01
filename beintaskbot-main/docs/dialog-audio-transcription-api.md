@@ -6,9 +6,14 @@ agent/configuration changes, automatic retry or comparison experiment access.
 
 ## Identity
 
-The UI sends the selected DTO's `external_id` as `message_id` (`connect:<uuid>`),
-not its database `id`. The server resolves the actual lead and assigned agent.
-Source fields: `channel_id`, `conversation_id`, `message_id`.
+The UI sends the CURRENT viewed `channel_id`/`conversation_id`, selected DTO
+`id` as `message_row_id`, and selected DTO `external_id` as `message_id`
+(`connect:<uuid>`). All four identity fields are required. Server proves this
+exact row belongs to the authorized view/history, then derives its physical
+source route; duplicated external IDs across channels cannot choose another file.
+Direct history uses existing audited equivalence members; group history uses
+exact group route membership. No client source lead/URL is authority. The assigned
+agent always belongs to the current viewed dialogue, never an old source chat.
 
 GET uses `X-Tenant-Id` and `X-User-Id`. POST includes `expected_tenant_id` and
 `expected_user_id`, JSON content type and the existing same-origin requirement.
@@ -16,7 +21,7 @@ No client model, media URL, prompt, language, agent ID or permission flag is acc
 
 ## GET preview/status
 
-Query: the three source fields. Optional opaque `history_before` requests an older page; default history page
+Query: the four identity fields above. Optional opaque `history_before` requests an older page; default history page
 limit 20. The returned `history_next_cursor` binds actor/route and the stable
 (created_at, attempt_id) ordering, including tied generation 0 imports. GET creates no attempt, chat run, paid
 reservation or preview row, and does not download media or call a provider.
@@ -29,6 +34,7 @@ Response wrapper: `{ "success": true, "result": { ... } }`.
     "channel_id": "<uuid>",
     "conversation_id": "<selected-route>",
     "message_id": "connect:<uuid>",
+    "message_row_id": "<selected-DTO-id>",
     "source_version": "<opaque-current-source-hash>"
   },
   "state": "ready",
@@ -76,6 +82,7 @@ replacement HTML fragment; UI patches only this selected message.
   "channel_id": "<uuid>",
   "conversation_id": "<selected-route>",
   "message_id": "connect:<uuid>",
+  "message_row_id": "<selected-DTO-id>",
   "source_version": "<GET value>",
   "action": "transcribe",
   "cost_token": "<GET value>",
@@ -109,7 +116,7 @@ Errors use `{ "success": false, "error": "<safe explanation>", "code": "<stable-
 
 ## Durable schema and coordination
 
-Two small tables: source heads keyed by `(tenant_id, channel_id, external_id)`
+Two small tables: source heads keyed by `(tenant_id, message_row_id)`
 with generation/current-success/active-attempt pointers; immutable attempt/history
 rows keyed by attempt UUID, source/version, generation, origin, actor,
 idempotency/input/token hashes, frozen agent/config/ASR binding, state,
@@ -141,13 +148,14 @@ Proposed SQL shape (identifiers/constraint details may be tightened in review):
 
 ```sql
 saas_dialog_audio_sources (
-  tenant_id uuid, channel_id uuid, external_id text,
+  tenant_id uuid, message_row_id uuid, channel_id uuid, external_id text,
   generation bigint not null default 0,
   active_attempt_id uuid, current_success_id uuid,
-  primary key (tenant_id,channel_id,external_id)
+  primary key (tenant_id,message_row_id)
 )
 saas_dialog_audio_attempts (
-  tenant_id uuid, id uuid, channel_id uuid, external_id text,
+  tenant_id uuid, id uuid, message_row_id uuid, channel_id uuid, external_id text,
+  view_channel_id uuid, view_conversation_id text,
   source_version text, generation bigint, origin text,
   actor_id bigint, idempotency_key uuid, input_hash text, cost_token_hash text,
   agent_id uuid, agent_binding text, config_version text,
@@ -160,7 +168,7 @@ saas_dialog_audio_attempts (
 )
 ```
 
-Manual rows have source-unique positive generations and tenant-unique request
+Manual rows have physical-row-unique positive generations and tenant-unique request
 UUIDs; imported previous-success rows have generation 0 and deterministic
 source/version/content-bound IDs, so repeated imports cannot duplicate history.
 No imported row consumes a paid/daily slot. Scope is the authorized selected
