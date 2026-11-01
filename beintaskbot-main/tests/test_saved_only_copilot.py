@@ -246,3 +246,46 @@ def test_one_case_uuid_never_changes_with_owner_route_config_or_model(saved):
 def test_quote_never_uses_project_default_or_premium_tier(tier):
     wire=provider.request_payload('gpt-4.1','reply',[],'',max_output_tokens=900,service_tier=tier)
     with pytest.raises(TenantLinearError):gate.quote_payload(wire)
+
+
+def test_registered_router_reaches_readonly_saved_preflight_and_preserves_normal_post(saved,monkeypatch):
+    import asyncio
+    import logging
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient,TestServer
+    import tenant_web_routes as routes
+    import tenant_operator_api as api
+    db,data,http,forbidden=saved
+    sql=[];query=db.query
+    def recorded(statement,params=()):sql.append(statement);return query(statement,params)
+    monkeypatch.setattr(db,'query',recorded)
+    ordinary=Mock(return_value={'text':'Existing ordinary draft'})
+    monkeypatch.setattr(api,'run_copilot',ordinary)
+    async def scenario():
+        context=routes.TenantWebContext(member=lambda _:PROFILE,origin='https://crm.test',logger=logging.getLogger(__name__),crm_request=Mock(),wait_slot=Mock(),bot=lambda:None)
+        app=web.Application();routes.register_feature_routes(app,context)
+        path='/api/platform/ai/dialogs/copilot'
+        params={**data,'saved_only':'1','expected_tenant_id':A,'expected_user_id':'11'}
+        async with TestClient(TestServer(app)) as client:
+            response=await client.get(path,params={key:str(value) for key,value in params.items()})
+            assert response.status==200,await response.text()
+            body=await response.json()
+            assert body['success'] is True and body['result']['state']=='ready'
+            assert not any(statement.lstrip().upper().startswith(('CREATE ','ALTER ','INSERT ','UPDATE ','DELETE ')) for statement in sql)
+            http.assert_not_called();forbidden.assert_not_called();ordinary.assert_not_called()
+            response=await client.get(path)
+            assert response.status==405
+            response=await client.get(path,params={**{key:str(value) for key,value in params.items()},'expected_user_id':'22'})
+            assert response.status==409
+            http.assert_not_called();forbidden.assert_not_called()
+            response=await client.post(path,json={'expected_tenant_id':A,'expected_user_id':11},headers={'Origin':'https://crm.test'})
+            assert response.status==200
+            ordinary.assert_called_once()
+            monkeypatch.setattr(api,'run_copilot',copilot.run)
+            execute=Mock(return_value={'state':'completed','text':'Synthetic gated result'})
+            monkeypatch.setattr(gate,'execute',execute)
+            response=await client.post(path,json={**data,'expected_tenant_id':A,'expected_user_id':11},headers={'Origin':'https://crm.test'})
+            assert response.status==200 and (await response.json())['result']['state']=='completed'
+            execute.assert_called_once()
+            http.assert_not_called();forbidden.assert_not_called()
+    asyncio.run(scenario())
