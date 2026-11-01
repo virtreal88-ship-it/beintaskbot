@@ -385,37 +385,81 @@ def _before_dispatch(execution,attempt):
         conn.commit()
 
 
-def _finish(profile,auth,attempt,*,text='',usage=None,error=None):
-    from tenant_ai_spend_budget import settle_media
-    published=False
+def _publish_known(profile,auth,attempt,*,accounting_pending=False):
+    """Publication is separate from saving the known provider outcome."""
     with _connect() as conn:
         with conn.cursor() as cur:
-            if error is None:
-                try:
-                    now=_authority(cur,profile,{k:_scope(auth)[k] for k in SOURCE},require_ai=True)
-                    published=(_scope(now)==_scope(auth))
-                except TenantLinearError:
-                    published=False
+            try:
+                now=_authority(cur,profile,{k:_scope(auth)[k] for k in SOURCE},require_ai=True)
+                current=(_scope(now)==_scope(auth))
+            except TenantLinearError:
+                current=False
+            for alias in _aliases(auth):store.lock_source(cur,auth['tenant'],alias['channel_id'],alias['external_id'])
+            cur.execute('''SELECT generation FROM saas_dialog_audio_sources
+              WHERE tenant_id=%s::uuid AND message_row_id=%s::uuid FOR UPDATE''',
+              (auth['tenant'],str(auth['row']['id'])))
+            head=cur.fetchone()
+            current=current and bool(head and int(head['generation'])==int(attempt['generation']))
+            code=('accounting_settlement_pending' if accounting_pending else '') if current else 'context_changed'
+            cur.execute('''UPDATE saas_dialog_audio_attempts SET published=%s,code=%s
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='completed' AND published=FALSE
+                AND code='publication_check_pending' RETURNING id''',
+              (current,code,auth['tenant'],str(attempt['id'])))
+            if cur.fetchone() and current:
+                cur.execute('''UPDATE saas_dialog_audio_sources SET current_success_id=%s::uuid
+                  WHERE tenant_id=%s::uuid AND message_row_id=%s::uuid AND generation=%s''',
+                  (str(attempt['id']),auth['tenant'],str(auth['row']['id']),int(attempt['generation'])))
+        conn.commit()
+
+
+def _finish(profile,auth,attempt,*,text='',usage=None,error=None,provider_failure=True):
+    from tenant_ai_spend_budget import settle_media
+    from tenant_chat_ai_provider import safe_failure_code
+    # Commit valid redacted output BEFORE any publication/financial recheck.
+    # A later database/context failure must never erase a known ASR response.
+    with _connect() as conn:
+        with conn.cursor() as cur:
             for alias in _aliases(auth):store.lock_source(cur,auth['tenant'],alias['channel_id'],alias['external_id'])
             cur.execute('SELECT state FROM saas_dialog_audio_attempts WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(auth['tenant'],str(attempt['id'])))
             row=cur.fetchone()
             if not row or row['state'] not in {'reserved','sending'}:return
             sent=row['state']=='sending'
             state='completed' if error is None and sent else 'unknown' if sent else 'failed_safe'
-            published=published and state=='completed'
-            code='' if state=='completed' and published else 'context_changed' if state=='completed' else 'provider_outcome_unknown' if sent else 'pre_dispatch_stopped'
-            cur.execute('''UPDATE saas_dialog_audio_attempts SET state=%s,code=%s,transcript=%s,usage=%s::jsonb,published=%s,completed_at=now()
+            code='publication_check_pending' if state=='completed' else (safe_failure_code(error) if provider_failure else 'dispatch_blocked') if sent else 'pre_dispatch_stopped'
+            cur.execute('''UPDATE saas_dialog_audio_attempts SET state=%s,code=%s,transcript=%s,usage=%s::jsonb,published=FALSE,completed_at=now()
               WHERE tenant_id=%s::uuid AND id=%s::uuid AND state=%s RETURNING id''',
-              (state,code,text if state=='completed' else '',_json(usage or {}),published,auth['tenant'],str(attempt['id']),row['state']))
+              (state,code,text if state=='completed' else '',_json(usage or {}),auth['tenant'],str(attempt['id']),row['state']))
             if not cur.fetchone():return
-            cur.execute('''UPDATE saas_dialog_audio_sources SET active_attempt_id=%s::uuid,
-              current_success_id=CASE WHEN %s THEN %s::uuid ELSE current_success_id END
+            cur.execute('''UPDATE saas_dialog_audio_sources SET active_attempt_id=%s::uuid
               WHERE tenant_id=%s::uuid AND message_row_id=%s::uuid''',
-              (str(attempt['id']) if state=='unknown' else None,published,str(attempt['id']),auth['tenant'],str(auth['row']['id'])))
+              (str(attempt['id']) if state=='unknown' else None,auth['tenant'],str(auth['row']['id'])))
             cur.execute('''UPDATE saas_chat_ai_runs SET status=%s,result=%s::jsonb WHERE tenant_id=%s::uuid AND request_id=%s::uuid''',
               ('completed' if state=='completed' else 'unknown' if state=='unknown' else 'skipped',_json({'audio_attempt_id':str(attempt['id']),'state':state}),auth['tenant'],str(attempt['id'])))
         conn.commit()
-    settle_media(auth['tenant'],attempt['call_key'],operation='asr',attempted_units=int(sent),reserved_units=1,unknown=state=='unknown')
+    if state!='completed':
+        settle_media(auth['tenant'],attempt['call_key'],operation='asr',attempted_units=int(sent),reserved_units=1,unknown=state=='unknown')
+        return
+    accounting_pending=False
+    try:
+        settle_media(auth['tenant'],attempt['call_key'],operation='asr',attempted_units=1,reserved_units=1)
+    except Exception:
+        # The existing reserve stays held; this is not a provider failure.
+        accounting_pending=True
+    try:
+        _publish_known(profile,auth,attempt,accounting_pending=accounting_pending)
+    except Exception:
+        # Best-effort safe reason only. The completed transcript is already
+        # durable even if the database is unavailable for this annotation.
+        try:
+            with _connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute('''UPDATE saas_dialog_audio_attempts SET code='publication_check_unavailable'
+                      WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='completed'
+                        AND published=FALSE AND code='publication_check_pending'
+              ''',(auth['tenant'],str(attempt['id'])))
+                conn.commit()
+        except Exception:
+            pass
 
 
 def execute(profile,data):
@@ -444,6 +488,7 @@ def execute(profile,data):
     auth,attempt,dispatch=_admit(profile,data,media,original_hash)
     if dispatch:
         execution=AudioExecution(profile,auth,request_id)
+        dispatch_ready=False
         try:
             with _connect() as conn:
                 with conn.cursor() as cur:
@@ -451,15 +496,20 @@ def execute(profile,data):
                     secret=json.loads(_fernet().decrypt(bytes(cur.fetchone()['secrets'])))
                     if secret.get('tenant_id')!=auth['tenant'] or secret.get('provider')!='chat_ai' or not secret.get('api_key'):raise ValueError('key unavailable')
             from tenant_chat_ai_provider import transcribe
-            callback=lambda:_before_dispatch(execution,attempt)
+            def callback():
+                nonlocal dispatch_ready
+                _before_dispatch(execution,attempt)
+                dispatch_ready=True
             if auth.get('scoped'):
                 text,usage=transcribe(secret['api_key'],auth['model'],*media,with_usage=True,bounded_asr=True,asr_tenant=auth['tenant'],before_dispatch=callback)
             else:
                 execution.check();callback()
                 text,usage=transcribe(secret['api_key'],auth['model'],*media,with_usage=True)
-            _finish(profile,auth,attempt,text=_redact(text),usage=usage)
         except Exception as error:
-            _finish(profile,auth,attempt,error=error)
+            _finish(profile,auth,attempt,error=error,provider_failure=dispatch_ready)
+        else:
+            # Persistence/redaction errors are not evidence of provider failure.
+            _finish(profile,auth,attempt,text=_redact(text),usage=usage)
     with _connect() as conn:
         with conn.cursor() as cur:
             current=_authority(cur,profile,clean)
