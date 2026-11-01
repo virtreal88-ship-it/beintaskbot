@@ -36,7 +36,7 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
  assert.equal(d.querySelector('#operatorRows').scrollTop,28,'rerender preserves list position');
  assert.equal(d.querySelector('#operatorRows [role=option]').getAttribute('aria-selected'),'true');
  d.querySelector('#operatorCopilotToggle').click();
- assert.equal(d.querySelector('#operatorCopilot').hidden,false,'Copilot opens alongside the chat without replacing the list');
+ assert.equal(d.querySelector('#operatorCopilotToggle').disabled,true,'AI stays disabled until an agent is assigned');
  assert.equal(calls.filter(call=>call.path.endsWith('/copilot')).length,0,'opening Copilot does not launch an AI call');
  d.querySelector('[data-operator-back]').click();
  assert.equal(d.querySelector('#operatorWorkspace').dataset.selected,'false','mobile back returns to the list');
@@ -64,6 +64,8 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
   assert.match(editForm.querySelector('[role=status]').textContent,/network failed/);
   editForm.dispatchEvent(new w.Event('submit',{cancelable:true}));await settle();
  const posts=calls.filter(c=>c.path.endsWith('/agent-assignment')&&c.method==='POST');
+ d.querySelector('#operatorCopilotToggle').click();
+ assert.equal(d.querySelector('#operatorCopilot').hidden,false,'Copilot opens after assignment');
  assert.equal(posts.length,2);assert.equal(posts[0].body.request_id,posts[1].body.request_id);
  assert.equal(posts[0].body.expected_tenant_id,A);assert.equal(posts[0].body.expected_user_id,11);
  assert.equal(posts[0].body.channel_id,CA);assert.equal(posts[0].body.conversation_id,'same-client');assert.equal(posts[0].body.expected_revision,7);

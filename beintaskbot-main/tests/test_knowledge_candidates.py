@@ -1668,3 +1668,28 @@ def test_changed_agent_after_generation_hides_case_but_keeps_known_usage(ready):
     assert result['candidates']==[] and result['request']['status']=='failed'
     assert db.execute('SELECT total_tokens FROM saas_ai_agent_token_usage WHERE tenant_id=%s::uuid',(A,))[0]['total_tokens']==60
     assert db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n']>0
+
+
+def test_training_unknown_provider_then_unassignment_keeps_monetary_and_token_holds(ready,monkeypatch):
+    import tenant_operator_case_submission as submission
+    import tenant_ai_spend_budget as budget
+    db,generation,data=ready
+    monkeypatch.setattr(submission,'_connect',lambda:db)
+    monkeypatch.setattr(budget,'_connect',lambda:db)
+    monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD',json.dumps({A:1000000}))
+    monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'test-model':{'input':1000000,'output':1000000}}))
+    preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'client'})
+    def uncertain(*args,**kwargs):
+        db.execute('UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid',(A,));db.commit()
+        raise RuntimeError('synthetic uncertain provider outcome')
+    generation.side_effect=uncertain
+    result=submission.submit(PROFILE,{'channel_id':CA,'conversation_id':'client',
+        'message_ids':[r['id'] for r in preview['messages']],
+        **{k:preview['agent'][k] for k in ('agent_id','agent_version','assignment_revision')}})
+    request=result['request']['id']
+    assert result['request']['status']=='unknown' and result['candidates']==[]
+    rows=db.execute('SELECT state,actual_microusd,reserved_microusd FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid',(A,))
+    assert len(rows)==1 and rows[0]['state']=='unknown' and rows[0]['actual_microusd'] is None and rows[0]['reserved_microusd']>0
+    tokens=db.execute('SELECT reserved_tokens FROM saas_ai_agent_token_usage WHERE tenant_id=%s::uuid AND run_id=%s::uuid',(A,request))[0]
+    assert tokens['reserved_tokens']>=policy.MAX_TOKENS
+    generation.assert_called_once()

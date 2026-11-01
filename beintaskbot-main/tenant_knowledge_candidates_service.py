@@ -429,9 +429,6 @@ def finish(profile,item,values,usage,error,attempted,proposal=None,accounting_us
             try:
                 if item.get('media_results'): row={**row,'media_results':item['media_results']}
                 evidence=store.evidence(cur,profile,row)
-                if item.get('training'):
-                    from tenant_operator_case_submission import assignment
-                    assignment(cur,tenant,row['route']['channel_id'],row['route']['conversation_id'],item['training'])
                 cur.execute('SELECT emergency_stop,enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid',(tenant,))
                 settings=cur.fetchone()
                 if item.get('review'):
@@ -444,8 +441,13 @@ def finish(profile,item,values,usage,error,attempted,proposal=None,accounting_us
                 if cur.fetchone()['expired']: raise TenantLinearError('timeout',409)
                 source_valid=True
             except TenantLinearError:
-                values=None;status='failed';error='access_or_source_changed'
+                values=None
+                if status!='unknown':status='failed'
+                error='access_or_source_changed'
             try:
+                if item.get('training'):
+                    from tenant_operator_case_submission import assignment
+                    assignment(cur,tenant,row['route']['channel_id'],row['route']['conversation_id'],item['training'])
                 from tenant_dialog_ai_context import resolve as dialog_context, binding as dialog_binding
                 current=dialog_context(cur,tenant,row['route'])
                 if str(current['agent_id'])!=str(item['agent_id']) or row['route'].get('dialog_ai_binding')!=dialog_binding(current):

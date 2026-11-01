@@ -20,9 +20,9 @@ async def test_initial_consultation_runs_through_worker_and_requires_delivery_re
 
     source = {'external_id': 'source-1', 'direction': 'incoming', 'body': 'Alış 1 qutu 50 AZN, ekranda 49,9992 göstərilir.',
         'message_type': 'text', 'happened_at': '2026-10-31T04:43:44+00:00', 'media_url': '', 'has_attachment': False}
-    config = {'scopes': ['channel-1'], 'schedule': {}, 'chat_model': 'test-model', 'agent_model': '',
+    config = {'scopes': ['channel-1'], 'schedule': {}, 'chat_model': 'test-model', 'agent_model': 'test-model',
         'response_policy': {}}
-    reservation = {'run_id': 'run-1', 'mode': 'automatic', 'auto_send_enabled': True,
+    reservation = {'model':'test-model','run_id': 'run-1', 'mode': 'automatic', 'auto_send_enabled': True,
         'conversation_revision': 3, 'response_policy': config['response_policy'],
         'agent_language': 'az', 'agent_style': '', 'api_key': 'fixture', 'company_instructions': '',
         'agent_instructions': '', 'scope_instructions': ''}
@@ -37,8 +37,10 @@ async def test_initial_consultation_runs_through_worker_and_requires_delivery_re
     monkeypatch.setattr(connect, 'scope_matches', lambda scopes, channel: channel in scopes)
     monkeypatch.setattr(connect, 'group_context', lambda *_: [source])
     monkeypatch.setattr(connect, 'finish_sent_after_reply_handoff', lambda *_: None)
-    monkeypatch.setattr(run_store, 'load_agent_config', lambda *_a, **_k: (config, None))
+    monkeypatch.setattr(run_store, 'load_agent_config', lambda *_a, **_k: ((config, None) if _k.get('with_block_reason') else config))
     monkeypatch.setattr(worker, 'reserve_run', lambda *_a, **_k: reservation)
+    from tenant_episode_media import AutoExecution
+    monkeypatch.setattr(AutoExecution, 'check_sources', lambda *_: None)
     monkeypatch.setattr(worker, 'enabled_triggers', lambda *_: [])
     monkeypatch.setattr(worker, 'matching_triggers', lambda *_a, **_k: [])
     monkeypatch.setattr(worker, 'handoff_reason', lambda *_: '')
@@ -101,9 +103,9 @@ def _install_initial_worker_fakes(monkeypatch, *, generated, send_result='sent-1
         'body':'The app still shows an unexpected value.','message_type':'text',
         'happened_at':'2026-10-31T04:43:44+00:00','media_url':'','has_attachment':False}
     rows = history_rows or [source]
-    config = {'scopes':['channel-1'],'schedule':{},'chat_model':'test-model','agent_model':'',
+    config = {'scopes':['channel-1'],'schedule':{},'chat_model':'test-model','agent_model':'test-model',
         'response_policy':{}}
-    reservation = {'run_id':'run-1','mode':'automatic','auto_send_enabled':True,
+    reservation = {'model':'test-model','run_id':'run-1','mode':'automatic','auto_send_enabled':True,
         'conversation_revision':3,'response_policy':{},'agent_language':'en','agent_style':'',
         'api_key':'fixture','company_instructions':'','agent_instructions':'','scope_instructions':''}
     sends=[]
@@ -125,8 +127,10 @@ def _install_initial_worker_fakes(monkeypatch, *, generated, send_result='sent-1
     monkeypatch.setattr(connect,'history',lambda *_:rows)
     monkeypatch.setattr(connect,'scope_matches',lambda scopes,channel:channel in scopes)
     monkeypatch.setattr(connect,'group_context',lambda *_: [source])
-    monkeypatch.setattr(run_store,'load_agent_config',lambda *_a,**_k:(config,None))
+    monkeypatch.setattr(run_store,'load_agent_config',lambda *_a,**_k:((config,None) if _k.get('with_block_reason') else config))
     monkeypatch.setattr(worker,'reserve_run',lambda *_a,**_k:reservation)
+    from tenant_episode_media import AutoExecution
+    monkeypatch.setattr(AutoExecution,'check_sources',lambda *_:None)
     monkeypatch.setattr(worker,'enabled_triggers',lambda *_:[])
     monkeypatch.setattr(worker,'matching_triggers',lambda *_a,**_k:[])
     monkeypatch.setattr(worker,'handoff_reason',lambda *_:'')
