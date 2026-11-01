@@ -309,3 +309,17 @@ def test_changed_run_state_cannot_publish_unpersisted_provider_text_or_redispatc
     assert hold['state']=='unknown'
     with pytest.raises(TenantLinearError):gate.execute(PROFILE,payload)
     http.assert_called_once();forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize('raw_usage',[None,{}, {'output_tokens':2}, {'input_tokens':True,'output_tokens':2,'total_tokens':3}, {'input_tokens':-1,'output_tokens':2,'total_tokens':1}, {'input_tokens':10,'output_tokens':2,'total_tokens':11}, {'input_tokens':'10','output_tokens':2,'total_tokens':12}])
+def test_invalid_provider_usage_preserves_known_text_and_full_unknown_hold(saved,raw_usage):
+    db,data,http,forbidden=saved
+    raw=http.return_value.json();raw['usage']=raw_usage;http.return_value.json=lambda:raw
+    preview=gate.preflight(PROFILE,data)
+    payload={**data,'request_id':preview['request_id'],'cost_token':preview['cost_token']}
+    result=gate.execute(PROFILE,payload)
+    assert result['text']=='Synthetic saved draft.' and result['usage'] is None
+    hold=db.execute('SELECT state,reserved_microusd FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key=%s',(A,'saved-only:'+preview['request_id']))[0]
+    assert hold['state']=='unknown' and hold['reserved_microusd']==preview['reserve_microusd']
+    assert gate.execute(PROFILE,payload)==result
+    http.assert_called_once();forbidden.assert_not_called()

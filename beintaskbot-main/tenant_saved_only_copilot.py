@@ -233,7 +233,7 @@ def execute(profile,data):
     try:
         from tenant_chat_ai_provider import generate
         context=state['context']
-        text,usage=generate(state['key'],state['model'],'reply',context['lines'],context['request'],instructions=context['instructions'],extra_context=context['extra_context'],images=None,with_usage=True,max_output_tokens=OUTPUT,before_dispatch=guard,service_tier='default')
+        text,usage=generate(state['key'],state['model'],'reply',context['lines'],context['request'],instructions=context['instructions'],extra_context=context['extra_context'],images=None,with_usage=True,max_output_tokens=OUTPUT,before_dispatch=guard,service_tier='default',strict_usage=True)
         if not isinstance(text,str) or not text.strip():raise ValueError('Invalid provider result')
         result={'text':text,'mode':'reply','usage':usage,'saved_only':True,'source_versions':command['_source_versions'],
                 'context_usage':context['context_usage'],'audit':state['audit'],'reserve_microusd':state['reserve'],'request_id':stable}

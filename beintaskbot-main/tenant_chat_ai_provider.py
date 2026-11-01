@@ -124,7 +124,7 @@ def request_payload(model, mode, lines, draft, *, instructions=None, extra_conte
     return wire
 
 
-def generate(key, model, mode, lines, draft, *, instructions=None, extra_context=None, images=None, with_usage=False, max_output_tokens=1800, request_timeout=60, before_dispatch=None, service_tier=None):
+def generate(key, model, mode, lines, draft, *, instructions=None, extra_context=None, images=None, with_usage=False, max_output_tokens=1800, request_timeout=60, before_dispatch=None, service_tier=None, strict_usage=False):
     """Generate one draft for both the Chat AI and the existing AI Agents.
 
     Agents add tenant-scoped instructions, knowledge context and verified image
@@ -148,6 +148,10 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
     if not with_usage:
         return result
     usage = payload.get('usage') if isinstance(payload.get('usage'), dict) else {}
+    if strict_usage:
+        counts=[usage.get(name) for name in ('input_tokens','output_tokens','total_tokens')]
+        if any(type(value) is not int or value<0 for value in counts) or counts[2]!=counts[0]+counts[1]:
+            return result, None
     # Responses uses input_tokens/output_tokens today.  Keep the normalised
     # shape here so workers do not depend on browser data or provider bodies.
     try:
