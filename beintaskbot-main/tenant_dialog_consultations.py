@@ -166,11 +166,46 @@ def preview(profile,data):
         schema(conn)
         with conn.cursor() as cur:
             tenant,_,_,source=_scope(cur,profile,data['channel_id'],data['conversation_id'],manual=True)
-            cur.execute('''SELECT id::text,body,message_type,direction,COALESCE(happened_at,created_at) AS happened_at
+            cur.execute('''SELECT id::text,body,message_type,direction,author_name,raw,COALESCE(happened_at,created_at) AS happened_at
               FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
               ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 80''',
               (tenant,source['lead_id'],'connect:'+data['channel_id']))
-            return {'messages':[{**dict(r),'happened_at':str(r['happened_at'])} for r in reversed(cur.fetchall())]}
+            conversation_kind=str(source.get('conversation_kind') or ('group' if str(source.get('conversation_id','')).endswith('@g.us') else 'contact'))
+            customer_name=source.get('manual_display_name') or source.get('contact_name') or source.get('display_name') or source.get('customer_name') or ''
+            customer_name=_human_preview_name(customer_name,source.get('conversation_id'))
+            phone=_preview_phone(source.get('phone'))
+            if not phone and conversation_kind=='contact':
+                conversation=str(source.get('conversation_id') or '')
+                suffix=next((suffix for suffix in ('@s.whatsapp.net','@c.us') if conversation.endswith(suffix)),'')
+                if suffix:phone=_preview_phone(conversation[:-len(suffix)])
+            messages=[]
+            for row in reversed(cur.fetchall()):
+                value=dict(row);author=value.get('author_name') or '';raw=value.get('raw') or {}
+                if not author and isinstance(raw,dict):
+                    author=next((raw.get(k) for k in ('participantName','senderName','pushName')
+                                 if _human_preview_name(raw.get(k),source.get('conversation_id'))),'')
+                value.update(happened_at=str(value['happened_at']),conversation_kind=conversation_kind,
+                  customer_name=customer_name,customer_phone=phone,
+                  author_name=_human_preview_name(author,source.get('conversation_id')))
+                value.pop('raw',None)
+                messages.append(value)
+            return {'messages':messages}
+
+
+def _human_preview_name(value,conversation=''):
+    if not isinstance(value,str):return ''
+    name=' '.join(value.split()).strip()
+    if (not name or name==conversation or '@' in name or any(ord(c)<32 for c in name)
+            or len(name)>120 or name.casefold() in {'customer','client','contact','unknown'}
+            or re.fullmatch(r'[+\d\W]+',name)):
+        return ''
+    return name
+
+
+def _preview_phone(value):
+    if not isinstance(value,str):return ''
+    phone=' '.join(value.split()).strip()
+    return phone[:28] if re.fullmatch(r'\+?[0-9][0-9 ()-]{4,25}',phone) else ''
 
 
 def prepare(profile,data,origin):
@@ -365,6 +400,11 @@ def inbox(profile,channel='',conversation=''):
         schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy=access(cur,profile,'dialogs')
+            # This is the account notification ledger, distinct from unread
+            # customer-message/dialog counters used by the inbox list.
+            cur.execute('''SELECT count(*) AS unread FROM saas_tenant_notifications
+              WHERE tenant_id=%s::uuid AND telegram_id=%s AND read_at IS NULL''',(tenant,actor))
+            notification_unread_count=int((cur.fetchone() or {}).get('unread') or 0)
             cur.execute('''SELECT r.*,c.channel_id::text AS source_channel,c.conversation_id AS source_conversation,
               rd.read_at FROM saas_dialog_consultation_replies r JOIN saas_internal_consultations c
               ON c.tenant_id=r.tenant_id AND c.id=r.consultation_id LEFT JOIN saas_dialog_consultation_reads rd
@@ -401,7 +441,7 @@ def inbox(profile,channel='',conversation=''):
                 except TenantLinearError:recipient='Recipient unavailable'
                 consultations.append({**{k:str(v) if hasattr(v,'isoformat') else v for k,v in dict(row).items()},'recipient':recipient,
                     'can_dispatch':row['state']=='ready' and row['created_by']==actor})
-            return {'replies':result,'consultations':consultations,'unhandled':sum(r['handled_at'] is None for r in result),'unread':sum(r['read_at'] is None for r in result)}
+            return {'replies':result,'consultations':consultations,'unhandled':sum(r['handled_at'] is None for r in result),'unread':sum(r['read_at'] is None for r in result),'notification_unread_count':notification_unread_count}
 
 
 def action(profile,reply_id,data):
@@ -417,6 +457,9 @@ def action(profile,reply_id,data):
             if data['action']=='read':
                 cur.execute('INSERT INTO saas_dialog_consultation_reads(tenant_id,reply_id,actor_id) VALUES(%s::uuid,%s::uuid,%s) ON CONFLICT DO NOTHING',(tenant,reply_id,actor))
                 cur.execute("UPDATE saas_tenant_notifications SET read_at=COALESCE(read_at,now()) WHERE tenant_id=%s::uuid AND telegram_id=%s AND event_key=%s",(tenant,actor,'dialog_consultation:'+reply_id))
+                cur.execute('''SELECT count(*) AS unread FROM saas_tenant_notifications
+                  WHERE tenant_id=%s::uuid AND telegram_id=%s AND read_at IS NULL''',(tenant,actor))
+                notification_unread_count=int((cur.fetchone() or {}).get('unread') or 0)
             elif data['action']=='link_customer_reply':
                 selected=identifier(data['customer_message_id'])
                 candidates=_customer_replies(cur,tenant,reply_id)
@@ -429,7 +472,9 @@ def action(profile,reply_id,data):
             else:
                 cur.execute('UPDATE saas_dialog_consultation_replies SET handled_at=now(),handled_by=%s WHERE tenant_id=%s::uuid AND id=%s::uuid AND handled_at IS NULL',(actor,tenant,reply_id))
         conn.commit()
-    return {'action':data['action']}
+    result={'action':data['action']}
+    if data['action']=='read':result['notification_unread_count']=notification_unread_count
+    return result
 
 
 def revoke(profile,key):

@@ -101,16 +101,36 @@ def test_delayed_quote_reply_private_inbox_unread_unhandled_next_shift(ready):
     assert items['replies'][0]['author']=='Developer'
     assert 'consultation_reply_id='+ident in items['replies'][0]['url']
     assert items['replies'][0]['happened_at'].startswith('2026-10-01')
-    flow.action(PROFILE,ident,{'action':'read'})
+    db.execute("INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body) VALUES(%s::uuid,%s::uuid,11,%s,'Reply','body')",
+        (uuid.uuid4(),A,'dialog_consultation:'+ident))
+    db.execute("INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body) VALUES(%s::uuid,%s::uuid,11,'task:still-unread','Task','body')",(uuid.uuid4(),A));db.commit()
+    read_result=flow.action(PROFILE,ident,{'action':'read'})
+    assert read_result=={'action':'read','notification_unread_count':1}
     assert flow.inbox(PROFILE)['unread']==0 and flow.inbox(PROFILE)['unhandled']==1
+    assert flow.inbox(PROFILE)['notification_unread_count']==1
     employee={'tenant_id':A,'telegram_id':33}
     assert flow.inbox(employee)['unread']==1 and flow.inbox(employee)['unhandled']==1
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body) VALUES(%s::uuid,%s::uuid,41,'unrelated','outgoing',%s,'Thanks')",(uuid.uuid4(),A,'connect:'+CA));db.commit()
     assert flow.inbox(employee)['unhandled']==1
     flow.action(employee,ident,{'action':'handled'})
     assert flow.inbox(PROFILE)['unhandled']==0
-    assert db.execute("SELECT count(*) AS n FROM saas_tenant_notifications WHERE event_key LIKE 'dialog_consultation:%%'")[0]['n']==1
+    assert db.execute("SELECT count(*) AS n FROM saas_tenant_notifications WHERE event_key LIKE 'dialog_consultation:%%'")[0]['n']==2
     assert sender.call_count==1
+
+
+def test_bell_count_reads_only_current_members_notification_ledger(ready):
+    db,_,_=ready
+    db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions) VALUES(%s::uuid,11,'operator','Other tenant employee','[\"dialogs\"]'::jsonb)",(B,))
+    db.execute("INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body) VALUES(%s::uuid,%s::uuid,11,'task:test','Task','body')",(uuid.uuid4(),A))
+    db.execute("INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body) VALUES(%s::uuid,%s::uuid,11,'consult:test','Consult','body')",(uuid.uuid4(),A))
+    db.execute("INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body,read_at) VALUES(%s::uuid,%s::uuid,11,'read:test','Read','body',now())",(uuid.uuid4(),A))
+    db.execute("INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body) VALUES(%s::uuid,%s::uuid,33,'other-user','Other','body')",(uuid.uuid4(),A))
+    db.execute("INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body) VALUES(%s::uuid,%s::uuid,11,'other-tenant','Other','body')",(uuid.uuid4(),B));db.commit()
+    assert flow.inbox(PROFILE)['notification_unread_count']==2
+    assert flow.inbox({'tenant_id':A,'telegram_id':33})['notification_unread_count']==1
+    assert flow.inbox({'tenant_id':B,'telegram_id':11})['notification_unread_count']==1
+    db.execute("UPDATE saas_tenant_notifications SET read_at=now() WHERE tenant_id=%s::uuid AND telegram_id=11 AND event_key='task:test'",(A,));db.commit()
+    assert flow.inbox(PROFILE)['notification_unread_count']==1
 
 
 def test_marker_conflicting_quote_and_injection_do_not_dispatch(ready):
