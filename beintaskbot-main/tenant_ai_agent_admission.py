@@ -96,6 +96,7 @@ def allowed_job(job):
         return connect_allowed(job)
     if provider != 'kommo':
         return False
+    from tenant_ai_dialog_scope import job_scope
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -112,7 +113,7 @@ def allowed_job(job):
                     AND cs.conversation_id=%s AND cs.channel_id=%s
                     AND cs.agent_id=a.id) ''',
               (str(job.get('agent_id') or ''), str(job.get('tenant_id') or ''),
-               str(job.get('conversation_id') or ''),str(job.get('channel_id') or '')))
+               str(job.get('conversation_id') or ''),job_scope(job)))
             ok = bool(cur.fetchone())
         conn.commit()
     return ok

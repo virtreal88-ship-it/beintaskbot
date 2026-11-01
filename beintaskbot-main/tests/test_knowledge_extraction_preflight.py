@@ -25,6 +25,8 @@ def _cfg():
 
 
 def _source(database, *, tenant=A, channel=CA, lead=41):
+    # Positive fixtures select the same concrete model that _pricing admits.
+    database.execute("UPDATE saas_ai_agents SET model='fixture-model' WHERE tenant_id=%s::uuid AND id=%s::uuid AND model=''",(tenant,AGENT))
     message=str(uuid.uuid4())
     database.execute("""INSERT INTO saas_crm_messages
       (tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,raw)

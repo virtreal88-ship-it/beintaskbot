@@ -35,3 +35,18 @@ def require_assignment(cur, tenant, channel, conversation, expected_agent=None):
     if expected_agent and current['agent_id'] != str(expected_agent):
         raise TenantLinearError('Назначение агента изменилось. Обновите диалог.', 409)
     return current
+
+
+def assert_reservation_current(job, reservation):
+    """Revalidate the frozen agent snapshot without changing source semantics.
+
+    Historical CASE followups may deliberately use an older source fragment;
+    they still cannot generate with an outdated assigned model/instruction set.
+    """
+    from tenant_ai_agent_run_store import load_agent_config
+    current = load_agent_config(job)
+    if not current or str(current.get('agent_model') or '') != str(reservation.get('model') or ''):
+        raise TenantLinearError('Назначенная модель агента изменилась.',409)
+    if reservation.get('agent_version') is not None and str(current.get('agent_version')) != str(reservation['agent_version']):
+        raise TenantLinearError('Настройки назначенного агента изменились.',409)
+    return current

@@ -31,6 +31,8 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
     db.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'historical')",(A,oldchannel))
     for channel,lead in ((CA,309),(oldchannel,308)):
         db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name) VALUES(%s::uuid,%s::uuid,%s,%s,'group')",(A,channel,group,lead))
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}]),A,AGENT))
+    db.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,state,assignments) VALUES(%s::uuid,%s,'paused',%s::jsonb)",(A,group,json.dumps([{'agent_id':AGENT,'channel_id':CA}])))
     raw={'conversationId':group,'mediaId':'stable','fileLength':12}
     db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type,body,raw)
       VALUES(%s::uuid,%s::uuid,308,%s,%s,'incoming','image','',%s::jsonb)""",(message,A,external,'connect:'+oldchannel,json.dumps(raw)))

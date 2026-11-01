@@ -516,8 +516,8 @@ def test_actual_browser_ui_real_http_services_isolated_db(ready,monkeypatch):
               <details id="operatorMoreActions"><summary>⋯</summary><div id="operatorMenuExtra"></div></details>
               <aside id="operatorCopilot"></aside><script>
               window.tenantI18n={language:'ru'};window.tenantOperator={member:MEMBER,hasRight:()=>true,
-              currentDialog:{provider:'connect',channel_id:'CHANNEL',conversation_id:'client',customer_name:'Customer'}};
-              </script><script src="/ui.js"></script>'''.replace('MEMBER',json.dumps(PROFILE)).replace('CHANNEL',CA))
+              currentDialog:{provider:'connect',agent_id:'AGENTID',channel_id:'CHANNEL',conversation_id:'client',customer_name:'Customer'}};
+              </script><script src="/ui.js"></script>'''.replace('MEMBER',json.dumps(PROFILE)).replace('CHANNEL',CA).replace('AGENTID',AGENT))
         async def js(_):return web.Response(content_type='application/javascript',text=Path('docs/tenant-dialog-consultations.js').read_text())
         async def stats(_):
             return web.json_response({'created':db.execute('SELECT count(*) AS n FROM saas_internal_consultations')[0]['n'],

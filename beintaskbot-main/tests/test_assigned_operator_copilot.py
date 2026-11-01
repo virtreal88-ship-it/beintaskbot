@@ -518,3 +518,17 @@ def test_no_assignment_cannot_clear_saved_private_agent_history(ready):
     with pytest.raises(TenantLinearError):copilot.run(PROFILE,{**data,'mode':'clear'})
     generated.assert_not_called()
     assert db.execute('SELECT count(*) AS n FROM saas_operator_copilot_threads')[0]['n']==1
+
+
+def test_kommo_assignment_uses_normalized_scope_not_transport_origin(ready,monkeypatch):
+    import tenant_ai_agent_admission as admission
+    db,other,generated,data=ready
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain) VALUES(%s::uuid,'kommo','connected','synthetic.kommo.com')",(A,))
+    db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,agent_id,state) VALUES(%s::uuid,'kommo','','kommo-chat',%s::uuid,'active')",(A,AGENT));db.commit()
+    monkeypatch.setattr(admission,'_connect',lambda:db)
+    monkeypatch.setattr('tenant_ai_agent_runtime_flags.enabled',lambda _:True)
+    job={'tenant_id':A,'agent_id':AGENT,'provider':'kommo','channel_id':'whatsapp','conversation_id':'kommo-chat'}
+    assert admission.allowed_job(job)
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid AND provider='kommo'",(A,));db.commit()
+    assert not admission.allowed_job(job)
+    generated.assert_not_called()
