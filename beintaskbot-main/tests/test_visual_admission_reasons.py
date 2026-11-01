@@ -11,6 +11,8 @@ from test_episode_media import sandbox,actual_authority,row
  ('ai_spend_budget_exhausted',429,'budget'),
  ('Company daily limit exhausted.',429,'calls'),
  ('Private assignment detail',409,'authority'),
+ ('Private source detail',403,'authority'),
+ ('Private unrecognized setting',409,'budget'),
 ])
 def test_visual_pre_dispatch_reason_is_preserved(sandbox,monkeypatch,reason,status,step):
     rows=[row('image')];auth=actual_authority('manual',rows)
@@ -33,7 +35,7 @@ def test_visual_pre_dispatch_reason_is_preserved(sandbox,monkeypatch,reason,stat
     receipt=rows[0]['_episode_receipt']
     assert receipt['failure_stage']=='visual_analysis'
     expected={'ai_spend_media_price_unknown':'ai_spend_vision_price_unknown','ai_spend_budget_exhausted':'ai_spend_budget_exhausted','calls':'ai_call_limit_exhausted','authority':'media_authority_changed'}
-    assert receipt['code']==expected.get(reason,expected.get(step))
+    assert receipt['code']==('vision_source_access_denied' if status==403 else expected.get(reason,expected.get(step,'vision_admission_failed')))
     assert receipt['admission_status']==status
     assert not getattr(auth,'media_attempts',0)
     assert not sandbox[0] and not sandbox[1]
@@ -62,3 +64,19 @@ def test_visual_provider_safe_category_is_preserved(sandbox,monkeypatch,failure)
     runtime.prepare(actual_authority('manual',again),again)
     generate.assert_called_once()
     assert again[0]['_episode_receipt']['status']=='unknown'
+
+
+@pytest.mark.parametrize('kind,provider_name',[('voice','transcribe'),('image','generate')])
+def test_existing_safe_provider_code_is_preserved(sandbox,monkeypatch,kind,provider_name):
+    import tenant_chat_ai_provider as provider
+    rows=[row(kind)];auth=actual_authority('manual',rows)
+    auth.dispatch=runtime.Execution.dispatch.__get__(auth);auth.admit_call=Mock()
+    conn=MagicMock();conn.__enter__.return_value=conn
+    monkeypatch.setattr(runtime,'_connect',lambda:conn)
+    for name in ('ensure_schema','reserve_media','settle_media'):monkeypatch.setattr('tenant_ai_spend_budget.'+name,Mock())
+    if kind=='voice':core.download_media.return_value=(b'synthetic','audio/ogg')
+    error=ValueError('Private diagnostic');error.media_failure_code='dispatch_blocked'
+    getattr(provider,provider_name).side_effect=error
+    runtime.prepare(auth,rows)
+    assert rows[0]['_episode_receipt']['failure_code']=='dispatch_blocked'
+    assert rows[0]['_episode_receipt']['status']=='unknown'

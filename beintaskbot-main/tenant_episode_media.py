@@ -309,9 +309,10 @@ class Execution:
             return result
         except Exception as error:
             error.media_outcome_unknown=attempted
-            if attempted:
-                from tenant_chat_ai_provider import safe_failure_code
-                error.media_failure_code=safe_failure_code(error)
+            if attempted and operation=='vision_low':
+                from tenant_chat_ai_provider import safe_failure_code,is_safe_failure_code
+                if not is_safe_failure_code(getattr(error,'media_failure_code',None)):
+                    error.media_failure_code=safe_failure_code(error)
             settle_media(self.tenant,call_key,operation=operation,attempted_units=int(attempted),reserved_units=1,unknown=attempted)
             raise
 
