@@ -1,0 +1,24 @@
+const assert=require('node:assert/strict'),fs=require('node:fs');
+const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+const read=p=>fs.readFileSync(p,'utf8'),settle=async()=>{for(let i=0;i<30;i++)await new Promise(r=>setImmediate(r));};
+(async()=>{
+ const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?view=dialogs&site_lang=en',runScripts:'outside-only'}),w=dom.window,d=w.document;
+ const route={provider:'connect',channel_id:'channel',conversation_id:'customer',lead_id:41,customer_name:'Customer',display_state:'manual',can_send:true,available_actions:[],agent_id:'agent'};
+ w.tenantProfileSnapshot={member:{tenant_id:'tenant',telegram_id:11,role:'owner',active:true},capabilities:{modules:{dialogs:true}}};
+ let revision=1,state='not_requested',version='a'.repeat(64);const calls=[];
+ const photo=()=>({id:'photo',external_id:'connect:photo',source:'connect',source_channel_id:'channel',direction:'incoming',message_type:'image',body:'Product caption',media_version:version,analysis_state:state});
+ w.fetch=async(url,options={})=>{calls.push([url,options.method||'GET']);let result={};
+  if(url.includes('/dialogs/history'))result={dialog:route,messages:[photo(),{id:'text-'+revision,external_id:'text-'+revision,message_type:'text',direction:'incoming',body:'Followup'}]};
+  else if(url.includes('/dialogs?'))result={dialogs:[{...route,last_message_id:'text-'+revision,last_message_at:String(revision),last_message_text:'Followup '+revision}],channels:[],agents:[]};
+  return {ok:true,json:async()=>({success:true,result})};};
+ w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await settle();await w.tenantOperator.openDialog(route);await settle();
+ const label=()=>d.querySelector('[data-message-id="photo"] .operator-media-analysis').textContent;
+ assert.match(label(),/not been requested/);const preview=d.querySelector('[data-message-id="photo"] .operator-media-card');
+ state='visual_completed';revision++;await w.tenantOperator.refresh();await settle();
+ assert.equal(label(),'Attachment analysis saved');assert.equal(d.querySelector('[data-message-id="photo"] .operator-media-card'),preview);
+ state='visual_partial';revision++;await w.tenantOperator.refresh();await settle();assert.equal(label(),'Partial attachment analysis saved');
+ state='visual_completed';version='b'.repeat(64);revision++;await w.tenantOperator.refresh();await settle();assert.match(label(),/not been requested/,'replacement evidence cannot certify old preview');
+ await w.tenantOperator.openDialog(route);await settle();assert.equal(label(),'Attachment analysis saved','fresh history uses the replacement receipt');
+ assert.equal(calls.filter(([url,method])=>method==='POST'&&!url.includes('/dialogs/read')).length,0);
+ dom.window.close();console.log('PASS saved visual status refresh/reload/version fencing, no provider requests');
+})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -1029,6 +1029,9 @@ async def process_connect_one(job, logger):
         prompt = INSTRUCTIONS + assigned_guidance(company=reservation.get('company_instructions'),
             agent=reservation.get('agent_instructions'),scope=reservation.get('scope_instructions'),
             style=reservation.get('agent_style'))
+        if not pilot_case_turn:
+            from tenant_dialog_evidence import GROUNDING_RULE
+            prompt += GROUNDING_RULE
         if pilot_initial_turn:
             from tenant_ai_pilot_initial import instructions as initial_triage_instructions
             prompt += '\n\n' + initial_triage_instructions()

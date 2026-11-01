@@ -214,3 +214,17 @@ def test_anchor_scoped_group_history_and_foreign_fallback(history_db):
     fallback=dialogs.history(PROFILE,'connect',1001,CA,G,anchor=str(alien))
     assert fallback['anchor_message_id'] is None
     assert len(fallback['messages'])==50 and str(alien) not in {m['id'] for m in fallback['messages']}
+
+
+def test_group_context_retains_safe_staff_and_ai_provenance(history_db,monkeypatch):
+    from tenant_episode_media import context_lines
+    d=history_db;monkeypatch.setattr(connect,'_connect',lambda:d)
+    add(d,1,CA,body='Staff hypothesis',raw_patch={'verified_employee_id':11})
+    add(d,2,CA,body='Earlier AI hypothesis',raw_patch={'ai_authored':True})
+    add(d,3,CA,body='Customer followup')
+    own=connect.history(A,1001,CA)
+    ctx=connect.group_context({'tenant_id':A,'channel_id':CA,'conversation_id':G,'lead_id':1001},own,'2026-10-19T00:00:00Z')
+    assert all('raw' not in item for item in ctx)
+    lines,_=context_lines(ctx,own)
+    assert [line['speaker'] for line in lines]==['EMPLOYEE','ASSISTANT','CLIENT']
+    assert [line['provenance']['statement_origin'] for line in lines]==['employee_statement_unverified','prior_ai_statement_unverified','customer_statement']

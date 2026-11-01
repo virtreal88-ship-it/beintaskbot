@@ -27,6 +27,11 @@ on:
       - 'beintaskbot-main/tenant_dialog_greeting.py'
       - 'beintaskbot-main/tests/test_dialog_greeting.py'
       - 'beintaskbot-main/tenant_operator_copilot.py'
+      - 'beintaskbot-main/tenant_dialog_evidence.py'
+      - 'beintaskbot-main/tenant_episode_media.py'
+      - 'beintaskbot-main/tenant_media_evidence.py'
+      - 'beintaskbot-main/tests/test_dialog_media_grounding.py'
+      - 'beintaskbot-main/tests/test_dialog_photo*'
       - 'beintaskbot-main/tenant_operator_dialogs.py'
       - 'beintaskbot-main/docs/tenant-chat-attachments.js'
       - 'beintaskbot-main/tests/test_lazy_audio_state_browser.cjs'
@@ -143,6 +148,10 @@ jobs:
             tests/test_dialog_developer_marker.py \
             tests/test_dialog_consultations_api.py \
             tests/test_dialog_consultations_postgres.py \
+            tests/test_dialog_media_grounding.py \
+            tests/test_dialog_photo_receipts.py \
+            tests/test_dialog_photo_receipts_postgres.py \
+            tests/test_connect_group_history.py::test_group_context_retains_safe_staff_and_ai_provenance \
             tests/test_assigned_operator_copilot.py \
             tests/test_assigned_agent_prompt_parity.py \
             tests/test_dialog_greeting.py \
@@ -170,6 +179,7 @@ jobs:
           node tests/test_tenant_support_inbox_ui.cjs
           node tests/test_tenant_push_dialog_route_ui.cjs
           node tests/test_tenant_notification_badge_browser.cjs
+          node tests/test_dialog_photo_status_ui.cjs
           node tests/test_tenant_operator_copilot_ui.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_helper_request_identity_browser.cjs
           node tests/test_tenant_operator_mobile_ui.cjs

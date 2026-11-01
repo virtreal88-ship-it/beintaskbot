@@ -45,6 +45,8 @@ from tenant_dialog_ai_context import resolve as _assigned_context, binding as _a
 from tenant_assigned_agent_prompt import assigned_guidance
 from tenant_dialog_greeting import GREETING_RULE, greeting_context
 INSTRUCTIONS += GREETING_RULE
+from tenant_dialog_evidence import GROUNDING_RULE, provenance, speaker
+INSTRUCTIONS += GROUNDING_RULE
 
 
 def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message_chars=1200):
@@ -60,10 +62,7 @@ def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message
     candidates=[row for row in rows if id(row) in chosen]
     priority=list(reversed([r for r in candidates if r.get('_manual_request_source')]))+list(reversed([r for r in candidates if not r.get('_manual_request_source')]))
     for row in priority:
-        role = 'CLIENT' if row.get('direction') == 'incoming' else 'EMPLOYEE'
-        raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}
-        if str(row.get('channel') or '').startswith('connect:') and raw.get('verified_employee_id') is not None:
-            role = 'EMPLOYEE'
+        role = speaker(row)
         body = str(row.get('_copilot_context_body', row.get('body') or '') or '')[:max_message_chars]
         kind = str(row.get('message_type') or 'text')
         if kind not in {'', 'text'}:
@@ -90,6 +89,13 @@ def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message
         selected.append({'_order':next(i for i,item in enumerate(rows) if item is row),'speaker': role, 'text': body,
                          'at': str(row.get('happened_at') or ''),
                          'source_id': str(row.get('external_id') or ''),
+                         'provenance':provenance(row),
+                         'saved_visual_evidence':kind=='image' and bool(
+                             (row.get('media_evidence') or {}).get('has_visual_result') or
+                             (row.get('_episode_receipt') or {}).get('observations') or
+                             (row.get('_episode_receipt') or {}).get('observation')) and bool(
+                             (row.get('_copilot_attachment_text') or row.get('media_evidence_context') or '')[:80]) and
+                             str(row.get('_copilot_attachment_text') or row.get('media_evidence_context') or '')[:80] in body,
                          'media_kind':kind,'evidence_scope':'current_episode' if row.get('_episode_receipt') else 'historical'})
         used += len(body)
     selected.sort(key=lambda item:item['_order'])
@@ -480,6 +486,7 @@ def run(profile, data, *, consultation_reply_id=None):
     for source_id in media['voice_transcriptions'] - included_ids:
         skipped.append({'kind': 'voice', 'reason': 'context_limit'})
     context_usage = {'messages': len(bounded_lines), 'voice_transcriptions': len(transcript_ids),
+                     'saved_visual_observations':sum(line['saved_visual_evidence'] for line in bounded_lines),
                      'images': len(image_ids), 'documents': len(document_ids), 'skipped': skipped}
     if any(row.get('_episode_receipt') for row in rows):
         context_usage['evidence']=[{'source_id':str(row.get('external_id') or ''),'kind':row.get('message_type'),
@@ -501,6 +508,7 @@ def run(profile, data, *, consultation_reply_id=None):
              'greeting_context':greeting_context(bounded_lines),
              'verified_knowledge': knowledge, 'prior_internal_copilot_turns': turns,
              'media_context': {'voice_transcriptions': len(transcript_ids), 'images_supplied': len(image_ids),
+                               'saved_visual_observations':context_usage['saved_visual_observations'],
                                'document_texts': len(document_ids), 'skipped': skipped},
              'limits': 'Current-episode attachments are processed under company authorization. Historical attachments are not evidence for the latest unread attachment. Never infer skipped attachment contents. No unconfirmed cause, action, or result.'}
     prompt = INSTRUCTIONS + assigned_guidance(
