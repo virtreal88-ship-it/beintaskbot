@@ -392,7 +392,7 @@ def test_latest_unread_audio_never_generates_old_topic_or_queries_stale_body(rea
     generated.assert_not_called()
 
 
-def test_newer_text_question_is_not_blocked_by_an_older_failed_voice(ready,monkeypatch):
+def test_newer_text_question_does_not_hide_failed_voice_in_same_episode(ready,monkeypatch):
     db,other,generated,data=ready
     monkeypatch.setattr('tenant_episode_media._connect',lambda:db)
     for index,(kind,body) in enumerate([('audio','OLD_VOICE_TOPIC'),('text','CURRENT_TEXT_QUESTION')],1):
@@ -410,11 +410,8 @@ def test_newer_text_question_is_not_blocked_by_an_older_failed_voice(ready,monke
         return {'images':[],'voice_transcriptions':set(),'documents':set(),'skipped':[]}
     monkeypatch.setattr(copilot,'_prepare_copilot_media',prepared)
     knowledge=Mock(return_value=[]);monkeypatch.setattr('tenant_ai_agent_run_store.knowledge_context',knowledge)
-    result=copilot.run(PROFILE,data)
-    generated.assert_called_once()
-    assert result['text'] and 'CURRENT_TEXT_QUESTION' in knowledge.call_args.args[1]
-    assert 'OLD_VOICE_TOPIC' not in knowledge.call_args.args[1]
-    assert 'OLD_VOICE_TOPIC' not in str(generated.call_args.args[3])
+    with pytest.raises(TenantLinearError):copilot.run(PROFILE,data)
+    generated.assert_not_called();knowledge.assert_not_called()
     assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
 
 @pytest.mark.parametrize('mode',['reply','chat','instruction','solution'])

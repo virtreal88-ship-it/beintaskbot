@@ -80,6 +80,7 @@ on:
       - 'beintaskbot-main/tests/test_helper_type_full_app_browser.cjs'
       - 'beintaskbot-main/tests/test_helper_modal_mobile_browser.cjs'
       - 'beintaskbot-main/tests/test_assigned_operator_copilot.py'
+      - 'beintaskbot-main/tests/test_required_episode_audio.py'
       - 'beintaskbot-main/tests/test_operator_audio_transcripts.py'
       - 'beintaskbot-main/tests/test_operator_audio_transcript_browser.cjs'
       - 'beintaskbot-main/tests/test_dynamic_audio_menu_browser.cjs'
@@ -157,6 +158,7 @@ jobs:
             tests/test_dialog_photo_receipts_postgres.py \
             tests/test_connect_group_history.py::test_group_context_retains_safe_staff_and_ai_provenance \
             tests/test_assigned_operator_copilot.py \
+            tests/test_required_episode_audio.py \
             tests/test_assigned_agent_prompt_parity.py \
             tests/test_dialog_greeting.py \
             tests/test_operator_audio_transcripts.py \
