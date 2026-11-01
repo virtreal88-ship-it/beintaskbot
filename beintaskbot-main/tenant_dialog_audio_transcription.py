@@ -259,14 +259,17 @@ class AudioExecution(ManualExecution):
     def load(self,profile,lead,external):
         self.check()
         from tenant_chat_attachment_store import load
-        item=load(self.profile,self.auth['source_lead'],self.auth['row']['external_id'],channel_id=self.auth['source_channel'],conversation_id=self.auth['source_conversation'])
+        item=load(self.profile,self.auth['source_lead'],self.auth['row']['external_id'],channel_id=self.auth['source_channel'],conversation_id=self.auth['source_conversation'],_audio_aliases=True)
         if str(item['row']['id'])!=str(self.auth['row']['id']):raise AudioError('source_changed','Обновите выбранное аудио.')
         return item
 
 
 def _download(execution):
     from tenant_connect_media import download_media
-    return asyncio.run(download_media(execution.load({},execution.auth['source_lead'],execution.auth['row']['external_id']),max_bytes=10*1024*1024))
+    item=execution.load({},execution.auth['source_lead'],execution.auth['row']['external_id'])
+    if item['row']['message_type'] in {'voice_message','ptt'}:
+        item={**item,'row':{**item['row'],'message_type':'audio'}}
+    return asyncio.run(download_media(item,max_bytes=10*1024*1024))
 
 
 def _fingerprints(cur,auth,media):

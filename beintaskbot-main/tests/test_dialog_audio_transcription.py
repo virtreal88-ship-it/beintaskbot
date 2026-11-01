@@ -13,6 +13,8 @@ import tenant_dialog_audio_store as store
 import tenant_ai_spend_budget as budget
 import tenant_ai_asr_model as asr
 
+REAL_DOWNLOAD=flow._download
+
 
 def wav():
     out=io.BytesIO()
@@ -308,3 +310,23 @@ def test_paid_success_for_changed_source_is_history_only_never_reapplied(ready):
     assert not first['latest_success'] and not first['message'].get('audio_transcript')
     assert first['history'][0]['text']=='old source paid speech'
     assert db.execute('SELECT state,actual_microusd FROM saas_ai_spend_reservations')==[{'state':'settled','actual_microusd':30000}]
+
+
+@pytest.mark.parametrize('kind',['voice_message','ptt'])
+def test_alias_protected_loader_and_transient_download_keep_exact_source(ready,monkeypatch,kind):
+    import tenant_chat_attachment_store as attachments
+    import tenant_connect_transport as transport
+    import tenant_connect_media as media
+    db,data,provider,download,sent=ready
+    db.execute('UPDATE saas_crm_messages SET message_type=%s WHERE id=%s::uuid',(kind,data['message_row_id']));db.commit()
+    monkeypatch.setattr(attachments,'_connect',lambda:db)
+    monkeypatch.setattr(transport,'connect_route',lambda *a,**kw:{'channel_id':CA,'conversation_id':'client','api_key':'synthetic'})
+    with pytest.raises(Exception):attachments.load(PROFILE,41,data['message_id'],channel_id=CA,conversation_id='client')
+    async def checked(item,**kw):
+        assert str(item['row']['id'])==data['message_row_id'] and item['row']['message_type']=='audio'
+        assert kw['max_bytes']==10*1024*1024
+        return wav(),'audio/wav'
+    monkeypatch.setattr(media,'download_media',checked);monkeypatch.setattr(flow,'_download',REAL_DOWNLOAD)
+    result=flow.execute(PROFILE,command(data,flow.preview(PROFILE,data)))
+    assert result['requested_attempt']['state']=='completed' and len(sent)==1
+    assert db.execute('SELECT message_type FROM saas_crm_messages WHERE id=%s::uuid',(data['message_row_id'],))[0]['message_type']==kind
