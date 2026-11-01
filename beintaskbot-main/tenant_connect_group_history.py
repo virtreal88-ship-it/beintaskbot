@@ -2,13 +2,14 @@
 from tenant_ai_group_coordination import group_jid
 
 
-def page(cur, tenant, conversation, *, before=None, limit=51, through=None, channel_ids=None):
+def page(cur, tenant, conversation, *, before=None, limit=51, through=None, channel_ids=None, selected_row_id=None):
     if not group_jid(conversation):
         return []
     # Only signed, route-consistent provider IDs AND exact participant identities
     # prove a duplicate. Event-scoped provider alias pairs may equate LID/phone JID.
     # Conflicting or missing alias evidence never joins different identities.
     # Prefer an outbound representative to preserve company authorship/media route.
+    selected_clause=('event_identity=(SELECT event_identity FROM scoped WHERE id=%s::uuid) AND ' if selected_row_id else '')
     cur.execute('''WITH base AS (
       SELECT m.*,c.connect_channel_id::text AS source_channel_id,c.lead_id AS source_lead_id,
         ch.name AS source_channel_name,c.conversation_id,
@@ -50,11 +51,11 @@ def page(cur, tenant, conversation, *, before=None, limit=51, through=None, chan
             ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS sources
       FROM scoped
     ), canonical AS (SELECT * FROM ranked WHERE copy_rank=1)
-    SELECT * FROM canonical WHERE (%s::uuid IS NULL OR (sort_at,id)<(
+    SELECT * FROM canonical WHERE '''+selected_clause+'''(%s::uuid IS NULL OR (sort_at,id)<(
       SELECT x.sort_at,x.id FROM canonical x JOIN scoped anchor ON anchor.event_identity=x.event_identity
       WHERE anchor.id=%s::uuid))
     ORDER BY sort_at DESC,id DESC LIMIT %s''',
-    (tenant,conversation,channel_ids,channel_ids,through,through,before,before,min(max(int(limit),1),81)))
+    (tenant,conversation,channel_ids,channel_ids,through,through,*((selected_row_id,) if selected_row_id else ()),before,before,min(max(int(limit),1),81)))
     fields={'id','external_id','direction','channel','author_name','body','message_type','media_url',
             'happened_at','created_at','raw','source_channel_id','source_channel_name','source_lead_id','sources'}
     return [{key:value for key,value in dict(row).items() if key in fields} for row in cur.fetchall()]
