@@ -5,6 +5,10 @@ on:
       - '.github/workflows/dialog-consultations.yml'
       - 'beintaskbot-main/tenant_dialog_consultations*.py'
       - 'beintaskbot-main/tenant_operator_copilot.py'
+      - 'beintaskbot-main/tenant_owner_asr_comparison*.py'
+      - 'beintaskbot-main/tenant_ai_spend_budget.py'
+      - 'beintaskbot-main/docs/tenant-owner-asr-comparison.js'
+      - 'beintaskbot-main/tests/test_owner_asr_comparison*'
       - 'beintaskbot-main/tenant_assigned_agent_prompt.py'
       - 'beintaskbot-main/tenant_ai_agent_worker.py'
       - 'beintaskbot-main/tests/test_assigned_agent_prompt_parity.py'
@@ -59,6 +63,8 @@ jobs:
           node-version: '20'
       - name: Install isolated test dependencies
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
           python -m pip install -r requirements.txt pytest
           npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0 playwright@1.62.1
           node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
@@ -66,6 +72,9 @@ jobs:
         run: |
           PYTHONPATH=.:tests python -m pytest -q -rs \
             tests/test_dialog_consultations.py \
+            tests/test_owner_asr_comparison.py \
+            tests/test_owner_asr_comparison_api.py \
+            tests/test_owner_asr_comparison_postgres.py \
             tests/test_dialog_developer_marker.py \
             tests/test_dialog_consultations_api.py \
             tests/test_dialog_consultations_postgres.py \
@@ -79,6 +88,7 @@ jobs:
             tests/test_group_consultation_receipt.py \
             tests/test_tenant_web_routes.py \
             tests/test_tenant_job_runner.py
+          node tests/test_owner_asr_comparison_browser.cjs
           node tests/test_helper_type_full_app_browser.cjs
           node tests/test_dialog_developer_browser.cjs
           node tests/test_dialog_consultations_ui.cjs
