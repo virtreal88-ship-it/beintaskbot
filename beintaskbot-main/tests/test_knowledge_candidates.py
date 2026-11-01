@@ -24,6 +24,8 @@ def model_card(refs=('m1','m2','m3'),confirmed=True,title='Нет связи'):
 def ready(db,monkeypatch):
     for module in (store,service,runs):monkeypatch.setattr(module,'_connect',lambda:db)
     seed_job(db)
+    db.execute("UPDATE saas_ai_agents SET model='test-model' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
+    monkeypatch.setattr(service,'platform_model',lambda:'test-model')
     db.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,role) VALUES(%s::uuid,%s::uuid,'Expert',11,'expert')",(A,EXPERT))
     db.execute("UPDATE saas_crm_messages SET body='Синхронизация не работает' WHERE tenant_id=%s::uuid",(A,))
     for index,(body,direction) in enumerate([('Проверьте соединение и повторите синхронизацию','outgoing'),('Всё работает, помогло','incoming')]):
@@ -656,6 +658,8 @@ def test_unified_group_two_channels_dedup_multiple_problems(ready):
                 (A,str(uuid.uuid4()),lead,str(uuid.uuid4()),'connect:'+channel,'outgoing' if index==1 else 'incoming',body,'text',json.dumps(raw),index))
     db.commit()
     generation.return_value=(json.dumps({'cards':[model_card(),model_card(title='Ошибка кассы')]}),{'total_tokens':30})
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}]),A,AGENT))
+    db.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,assignments) VALUES(%s::uuid,%s,%s::jsonb)",(A,GROUP,json.dumps([{'agent_id':AGENT,'channel_id':CA}])));db.commit()
     response=service.analyze(PROFILE,{**data,'conversation_id':GROUP,'history_mode':'unified_group'})
     assert len(response['candidates'])==2
     assert len(generation.call_args.args[3])==3
@@ -1630,3 +1634,24 @@ def test_employee_case_group_uses_unique_group_assignment(ready,monkeypatch):
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body) VALUES(%s::uuid,%s::uuid,43,'group-message',%s,'incoming','Need help')",(str(uuid.uuid4()),A,'connect:'+CA))
     db.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,assignments) VALUES(%s::uuid,%s,%s::jsonb)",(A,GROUP,json.dumps([{'agent_id':AGENT,'channel_id':CA,'priority':0}])));db.commit()
     assert submission.preview(PROFILE,{'channel_id':CA,'conversation_id':GROUP})['agent']['agent_id']==AGENT
+
+
+def test_dialog_extraction_without_assignment_cannot_select_first_agent_or_reserve(ready):
+    db,generation,data=ready
+    db.execute('UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid',(A,));db.commit()
+    with pytest.raises(TenantLinearError,match='назначьте агента'):service.prepare(PROFILE,{k:v for k,v in data.items() if k!='analysis_agent_id'})
+    generation.assert_not_called()
+    assert db.execute('SELECT count(*) AS n FROM saas_knowledge_extractions')[0]['n']==0
+
+
+def test_dialog_extraction_loses_assignment_after_admission_before_provider(ready,monkeypatch):
+    db,generation,data=ready
+    original=service.check_active
+    def changed(profile,item):
+        db.execute('UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid',(A,));db.commit()
+        return original(profile,item)
+    monkeypatch.setattr(service,'check_active',changed)
+    response=service.analyze(PROFILE,data)
+    assert response['request']['status']=='failed' and response['candidates']==[]
+    generation.assert_not_called()
+    assert db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n']>0

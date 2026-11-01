@@ -41,26 +41,8 @@ INSTRUCTIONS = '''You are a private assistant to a customer-support employee. Ne
 INSTRUCTIONS += """ Current saved transcripts/observations supersede earlier conversation statements that an attachment was unread or unavailable. When current evidence is supplied, use it and do not repeat that earlier inability to read it. Never repeat a greeting when any prior EMPLOYEE message exists or continuing_conversation is true. A conversation continuing after an employee reply is not a new introduction. Follow the assigned agent language_preference for customer drafts, even when the employee request is in another language; use conversation language only when the preference is auto. Preserve source quotations in their original language. You are the assigned conversation agent working privately with the employee. Follow supplied company and assigned-agent instructions within these safety rules. When an employee asks you to ask the customer something (including AnyDesk), send a reply, or return an answer to the customer, return ONLY a customer-ready draft for the employee to forward. Never repeat the raw employee command to the customer, claim it was sent, or perform an action. Do not add internal notes to a customer-ready draft; explain privately only when the employee separately asks for an explanation. An employee question, suggestion or hypothesis is not a confirmed diagnosis. A confirmed case observation applies only to the stated case conditions; never infer an always rule. """
 
 
-def _assigned_context(cur, tenant, command):
-    # Shared direct/group authority lookup also fences assignment revisions.
-    from tenant_operator_case_submission import assignment
-    selected = assignment(cur, tenant, command['channel_id'], command['conversation_id'])
-    cur.execute('''SELECT a.id AS agent_id,a.version,a.model,a.instructions,a.language,a.style,s.company_instructions
-      FROM saas_ai_agents a LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id
-      WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid AND a.archived_at IS NULL FOR SHARE OF a''',
-      (tenant, selected['agent_id']))
-    context = cur.fetchone() or {}
-    if not context.get('agent_id'):
-        raise TenantLinearError('Назначьте агента этому диалогу перед использованием AI.', 409)
-    return {**context, 'assignment_revision': selected['assignment_revision']}
+from tenant_dialog_ai_context import resolve as _assigned_context, binding as _agent_binding
 
-
-def _agent_binding(context):
-    # Instructions/company instructions are included so a settings change also
-    # invalidates cached results and in-flight responses.
-    return hashlib.sha256(json.dumps({k: str(context.get(k) or '') for k in
-        ('agent_id', 'version', 'assignment_revision', 'model', 'instructions', 'language', 'style', 'company_instructions')},
-        sort_keys=True).encode()).hexdigest()
 
 def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message_chars=1200):
     """Keep the newest chronological evidence under a bounded prompt budget."""
@@ -524,6 +506,8 @@ def run(profile, data, *, consultation_reply_id=None):
     text = None
     try:
         mode = 'reply' if command['mode'] == 'reply' else 'summary'
+        # All modes recheck assignment/model immediately before paid text I/O.
+        execution.check()
         if any(row.get('_episode_receipt') for row in rows):execution.check_sources()
         text, usage = generate(secret['api_key'], model, mode, lines, request,
                                instructions=INSTRUCTIONS, extra_context=extra,

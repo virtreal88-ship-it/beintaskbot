@@ -149,7 +149,12 @@ def active(job, reservation):
     """Recheck lease and takeover revision at each expensive voice boundary."""
     from tenant_ai_agent_admission import allowed_job
     from tenant_ai_agent_run_store import load_agent_config
-    if not allowed_job(job) or not load_agent_config(job):
+    if not allowed_job(job):
+        return False
+    config=load_agent_config(job)
+    if not config or str(config.get('agent_model') or '')!=str(reservation.get('model') or ''):
+        return False
+    if reservation.get('agent_version') is not None and str(config.get('agent_version'))!=str(reservation['agent_version']):
         return False
     with _connect() as conn:
         with conn.cursor() as cur:

@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from tenant_linear_policy import TenantLinearError, identifier
 
 
-def configuration(data):
+def configuration(data, *, models_required=True):
     result = {}
     video_enabled = data.get('video_enabled', False)
     if type(video_enabled) is not bool:
@@ -31,7 +31,10 @@ def configuration(data):
     if result['enabled'] and not result['consent']:
         raise TenantLinearError('OpenAI-yə məlumat göndərilməsinə icazə verin.')
     for field in ('model', 'transcription_model'):
-        value = data.get(field)
+        value = data.get(field, '')
+        if value == '' and not models_required:
+            result[field] = value
+            continue
         if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', value):
             raise TenantLinearError('Modelin adını yazın.')
         result[field] = value
@@ -46,7 +49,7 @@ def configuration(data):
         raise TenantLinearError('AI Copilot ayarı düzgün deyil.')
     result['copilot_enabled'] = copilot_enabled
     copilot_model = data.get('copilot_model', result['model'])
-    if not isinstance(copilot_model, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', copilot_model):
+    if not isinstance(copilot_model, str) or (not (copilot_model == '' and not models_required) and not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', copilot_model)):
         raise TenantLinearError('AI Copilot modelinin adını yazın.')
     result['copilot_model'] = copilot_model
     copilot_limit = data.get('copilot_daily_limit', 50)

@@ -106,8 +106,13 @@ def allowed_job(job):
               JOIN saas_ai_agents a ON a.tenant_id=s.tenant_id AND a.id=%s::uuid
                 AND a.enabled=TRUE AND a.role='primary'
               WHERE s.tenant_id=%s::uuid AND s.enabled=TRUE AND s.emergency_stop=FALSE
-                AND t.status='active' AND i.account_domain<>'' ''',
-              (str(job.get('agent_id') or ''), str(job.get('tenant_id') or '')))
+                AND t.status='active' AND i.account_domain<>''
+                AND EXISTS(SELECT 1 FROM saas_ai_conversation_state cs
+                  WHERE cs.tenant_id=s.tenant_id AND cs.provider='kommo'
+                    AND cs.conversation_id=%s AND cs.channel_id=%s
+                    AND cs.agent_id=a.id) ''',
+              (str(job.get('agent_id') or ''), str(job.get('tenant_id') or ''),
+               str(job.get('conversation_id') or ''),str(job.get('channel_id') or '')))
             ok = bool(cur.fetchone())
         conn.commit()
     return ok

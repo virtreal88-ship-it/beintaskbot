@@ -271,3 +271,34 @@ class Service(unittest.IsolatedAsyncioTestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class AssignedAgentCompanyAccessSettingsTests(unittest.TestCase):
+    def test_access_only_save_preserves_all_model_and_video_state(self):
+        legacy={**CONFIG,'copilot_model':'copilot-only','photo_model':'gpt-4.1',
+            'video_model':'gpt-4o-mini','video_enabled':True,'models':['text-model']}
+        previous={**CONNECTION,'metadata':legacy}
+        connect=MagicMock();cur=connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cur.fetchone.side_effect=[previous,previous]
+        service=loaders.load('tenant_chat_ai_settings',{'_connect':connect,'_fernet':lambda:Mock(),
+            'authorize':Mock(return_value=(TENANT,20)),'ensure_schema':Mock()},
+            {'tenant_platform','tenant_news_ai_settings','tenant_chat_ai_schema'})
+        service.save.__globals__['authorize']=Mock(return_value=(TENANT,20))
+        fields=('model','transcription_model','copilot_model','photo_model','video_model','video_enabled')
+        data={k:v for k,v in CONFIG.items() if k not in fields}
+        service.save(SESSION,{**data,'preserve_models':True,'api_key':'','expected_updated_at':'version-1'})
+        saved=json.loads(cur.execute.call_args.args[1][2])
+        for field in (*fields,'models'):self.assertEqual(saved[field],legacy[field])
+        self.assertEqual(cur.execute.call_args.args[1][1],previous['secrets'])
+
+    def test_access_only_save_cannot_smuggle_a_model_change(self):
+        import tenant_chat_ai_settings as service
+        with self.assertRaises(TenantLinearError):
+            service.save(SESSION,{**CONFIG,'preserve_models':True})
+
+    def test_new_access_settings_do_not_choose_an_arbitrary_text_or_asr_model(self):
+        fields=('model','transcription_model','copilot_model','photo_model','video_model','video_enabled')
+        data={k:v for k,v in CONFIG.items() if k not in fields}
+        result=configuration(data,models_required=False)
+        self.assertEqual(result['model'],'');self.assertEqual(result['transcription_model'],'')
+        self.assertEqual(result['copilot_model'],'')

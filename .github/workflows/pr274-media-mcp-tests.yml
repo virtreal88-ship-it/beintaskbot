@@ -72,6 +72,7 @@ jobs:
           tests/test_connect_images.py
           tests/test_connect_videos.py
           tests/test_episode_media.py
+          tests/test_dialog_ai_context.py
           tests/test_episode_media_pglite.py
           tests/test_integrated_connect_release.py::test_real_sql_text_voice_text_and_central_key
           tests/test_integrated_connect_release.py::test_resume_only_new_messages_and_replayed_webhook

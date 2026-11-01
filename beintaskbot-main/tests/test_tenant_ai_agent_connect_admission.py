@@ -41,6 +41,8 @@ class Cursor:
             return None
         if 'saas_connect_conversations route' in sql:
             return {'connected': True}
+        if 'FROM saas_ai_conversation_state cs' in sql:
+            return {'agent_id':'00000000-0000-0000-0000-000000000003','revision':1,'version':1,'name':'Assigned'}
         if 'to_regclass' in sql:
             return {'present': None}
         return None

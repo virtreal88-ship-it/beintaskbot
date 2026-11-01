@@ -21,6 +21,7 @@ def ready(db,monkeypatch):
     from tenant_chat_send_schema import ensure_schema as send_schema
     send_schema(db);db.commit()
     monkeypatch.setattr(copilot,'_connect',lambda:db)
+    monkeypatch.setattr('tenant_episode_media._connect',lambda:db)
     monkeypatch.setattr(copilot,'_fernet',lambda:SimpleNamespace(decrypt=lambda _:json.dumps({'tenant_id':A,'provider':'chat_ai','api_key':'synthetic-test-key'}).encode()))
     generated = Mock(return_value=('Müştəri üçün hazır cavab.',{'total_tokens':10}))
     monkeypatch.setattr(copilot,'generate',generated)
@@ -474,3 +475,36 @@ def test_assigned_text_model_preserves_specialized_asr_and_photo_selection(ready
     assert voice.transcription_model({'config':execution.config,'credential_source':execution.credential_source})=='whisper-1'
     assert execution.item({'media_kind':'image'},{})['route']['campaign_photo_model']=='gpt-4.1'
     assert generated.call_args.args[1]=='agent-model'
+
+
+def test_queued_connect_work_requires_current_assignment_without_disabling_assignment_discovery(ready,monkeypatch):
+    import tenant_ai_agent_connect as connect
+    db,other,generated,data=ready
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected')",(A,))
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE,operating_mode='active' WHERE tenant_id=%s::uuid",(A,));db.commit()
+    monkeypatch.setattr(connect,'runtime_flag',lambda _:True)
+    monkeypatch.setattr('tenant_connect_identity.conflicted',lambda *a:False)
+    job={**data,'tenant_id':A,'agent_id':AGENT}
+    assert connect.allowed(job,connection=db)
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid",(A,));db.commit()
+    assert not connect.allowed(job,connection=db)
+    # Route admission for the separate assignment business process remains usable.
+    assert connect.allowed(job,connection=db,require_assignment=False)
+    assert db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n']>0
+    generated.assert_not_called()
+
+
+@pytest.mark.parametrize('mode',['reply','chat','instruction','solution'])
+def test_unassignment_before_private_provider_call_prevents_dispatch(ready,monkeypatch,mode):
+    import tenant_episode_media as media
+    db,other,generated,data=ready
+    data.update(mode=mode,prompt='Explain' if mode!='reply' else '')
+    original=media.ManualExecution.check
+    def lose_assignment(self):
+        db.execute('UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid',(A,));db.commit()
+        return original(self)
+    monkeypatch.setattr(media.ManualExecution,'check',lose_assignment)
+    with pytest.raises(TenantLinearError):copilot.run(PROFILE,data)
+    generated.assert_not_called()
+    assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
+    assert db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n']>0
