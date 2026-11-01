@@ -26,6 +26,15 @@ def create_schema(conn):
           reason TEXT NOT NULL DEFAULT 'group_assignment_required',assignments JSONB NOT NULL DEFAULT '[]',
           assigned_to BIGINT,updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),resumed_at TIMESTAMPTZ,
           PRIMARY KEY(tenant_id,provider,group_jid))''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_group_channel_legacy_permits(
+          tenant_id UUID NOT NULL,provider TEXT NOT NULL DEFAULT 'connect' CHECK(provider='connect'),
+          group_jid TEXT NOT NULL,channel_id UUID NOT NULL,agent_id UUID NOT NULL,
+          legacy_revision BIGINT NOT NULL,preview_hash TEXT NOT NULL,
+          granted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),actor BIGINT NOT NULL,
+          PRIMARY KEY(tenant_id,provider,group_jid,channel_id),
+          FOREIGN KEY(tenant_id,provider,group_jid)
+            REFERENCES saas_ai_group_coordination(tenant_id,provider,group_jid) ON DELETE CASCADE,
+          FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id))''')
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_group_events(
           tenant_id UUID NOT NULL,provider TEXT NOT NULL DEFAULT 'connect',group_jid TEXT NOT NULL,event_key TEXT NOT NULL,
           channel_id TEXT NOT NULL,revision BIGINT NOT NULL,claimed BOOLEAN NOT NULL DEFAULT FALSE,created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
@@ -41,6 +50,11 @@ def create_schema(conn):
           verified_by BIGINT NOT NULL,verified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY(tenant_id,channel_id,jid),
           FOREIGN KEY(tenant_id,member_id) REFERENCES saas_tenant_members(tenant_id,telegram_id))''')
+        # A group permit is deliberately narrower than the ordinary channel-local
+        # continuation permit: it is valid only while this exact group binding
+        # (channel + primary agent) remains configured.
+        from tenant_ai_legacy_permit import group_function
+        group_function(cur)
 
 
 def lock_group(cur, tenant, conversation):
@@ -52,6 +66,133 @@ def lock_group(cur, tenant, conversation):
 def read(cur, tenant, conversation):
     cur.execute("SELECT * FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND provider='connect' AND group_jid=%s", (tenant, conversation))
     return dict(cur.fetchone() or {})
+
+
+def _legacy_resolution_snapshot(cur, tenant, actor, conversation, channel, lead, agent_id):
+    import hashlib
+    from tenant_ai_agent_connect import scope_matches
+
+    cur.execute('''SELECT s.channel_id,s.state,s.reason,s.revision,s.agent_id,s.agent_assignment_id
+      FROM saas_ai_conversation_state s WHERE s.tenant_id=%s::uuid AND s.provider='connect'
+        AND s.conversation_id=%s ORDER BY s.channel_id''', (tenant, conversation))
+    states = [dict(row) for row in cur.fetchall()]
+    legacy = next((row for row in states if row.get('channel_id') == ''), None)
+    cur.execute('''SELECT c.connect_channel_id::text AS channel_id,c.lead_id,c.conversation_kind,ch.name,ch.active,
+        count(m.id)::integer AS message_count,
+        count(m.id) FILTER (WHERE m.direction='incoming')::integer AS incoming_count,
+        count(m.id) FILTER (WHERE m.direction='outgoing')::integer AS outgoing_count
+      FROM saas_connect_conversations c JOIN saas_connect_channels ch
+        ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id
+      LEFT JOIN saas_crm_messages m ON m.tenant_id=c.tenant_id AND m.kommo_lead_id=c.lead_id
+        AND m.channel='connect:'||c.connect_channel_id::text
+      WHERE c.tenant_id=%s::uuid AND c.conversation_id=%s
+      GROUP BY c.connect_channel_id,c.lead_id,c.conversation_kind,ch.name,ch.active ORDER BY c.connect_channel_id''',
+      (tenant, conversation))
+    routes = [dict(row) for row in cur.fetchall()]
+    cur.execute('''SELECT state,count(*)::integer AS count FROM saas_ai_agent_jobs
+      WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s
+      GROUP BY state ORDER BY state''', (tenant, conversation))
+    jobs = [dict(row) for row in cur.fetchall()]
+    cur.execute('''SELECT d.state,count(*)::integer AS count FROM saas_ai_agent_drafts d
+      JOIN saas_tenant_webhook_events e ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
+      WHERE d.tenant_id=%s::uuid AND e.provider='connect' AND d.chat_id=%s
+      GROUP BY d.state ORDER BY d.state''', (tenant, conversation))
+    drafts = [dict(row) for row in cur.fetchall()]
+    cur.execute('''SELECT count(*)::integer AS count FROM saas_ai_agent_runs r
+      JOIN saas_tenant_webhook_events e ON e.tenant_id=r.tenant_id AND e.fingerprint=r.event_fingerprint
+      WHERE r.tenant_id=%s::uuid AND e.provider='connect' AND e.payload->>'conversation_id'=%s
+        AND (r.state IN ('generating','unknown') OR r.result->>'send_state' IN ('reserved','unknown'))''',
+      (tenant, conversation))
+    runs = int((cur.fetchone() or {}).get('count') or 0)
+    cur.execute('''SELECT count(*)::integer AS count FROM saas_connect_dialog_links
+      WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND source_id=%s AND active''',
+      (tenant, channel, conversation))
+    active_links = int((cur.fetchone() or {}).get('count') or 0)
+    cur.execute('''SELECT id,name,role,enabled,mode,version,scopes FROM saas_ai_agents
+      WHERE tenant_id=%s::uuid AND id=%s::uuid''', (tenant, agent_id))
+    agent = dict(cur.fetchone() or {})
+    group_state = read(cur, tenant, conversation)
+    selected_route = next((row for row in routes
+      if str(row['channel_id']) == channel and int(row['lead_id']) == lead), None)
+    scope_ok = bool(agent and agent.get('enabled') is True and agent.get('role') == 'primary'
+      and scope_matches(agent.get('scopes'), channel, is_group=True))
+    outstanding_jobs = sum(int(row['count']) for row in jobs
+      if row['state'] in {'queued','processing','drafted','unknown'})
+    outstanding_drafts = sum(int(row['count']) for row in drafts
+      if row['state'] in {'pending','sending','unknown'})
+    reason = ('active_source_link' if active_links else
+      'no_legacy_state' if not legacy else
+      'selected_route_changed' if not selected_route else
+      'selected_route_changed' if selected_route.get('conversation_kind') != 'group' else
+      'selected_channel_inactive' if selected_route.get('active') is not True else
+      'selected_route_has_channel_state' if any(row.get('channel_id') == channel for row in states) else
+      'group_not_paused_or_already_assigned' if group_state.get('state') == 'active' else
+      'outstanding_work' if outstanding_jobs or outstanding_drafts or runs else
+      'agent_not_group_scoped' if not scope_ok else '')
+    evidence = {
+      'legacy_state': {'revision': int(legacy['revision']), 'state': legacy['state'],
+        'agent_id': str(legacy.get('agent_id') or '')} if legacy else None,
+      'routes': routes, 'states': states, 'jobs': jobs, 'drafts': drafts,
+      'runs': runs, 'selected_channel_active_links': active_links,
+      'group_revision': int(group_state.get('revision') or 0),
+      'group_state': group_state.get('state', 'paused'),
+      'group_assignments': group_state.get('assignments') or [],
+      'agent': {key: agent.get(key) for key in ('id','role','enabled','version','scopes')} if agent else None,
+      'selection': {'tenant_id': str(tenant), 'actor': int(actor), 'conversation_id': conversation,
+        'channel_id': channel,
+        'lead_id': lead, 'agent_id': agent_id},
+    }
+    token = hashlib.sha256(json.dumps(evidence, default=str, sort_keys=True).encode()).hexdigest()
+    return {'reason': reason, 'token': token, 'legacy': legacy, 'routes': routes,
+      'group_state': group_state, 'agent': agent, 'evidence': evidence,
+      'active_links': active_links, 'jobs': jobs, 'drafts': drafts, 'runs': runs}
+
+
+def legacy_resolution_preview(profile, data):
+    """Read-only owner preview for one exact group/channel/agent selection."""
+    from tenant_ai_agents_schema import ensure_schema
+    from tenant_ai_dialog_scope import channel_scope
+    from tenant_operator_access import assert_route
+    from tenant_operator_legacy import admin
+
+    conversation = group_jid(data.get('conversation_id'))
+    if not conversation:
+        raise TenantLinearError('Укажите проверенный групповой диалог.', 400)
+    channel = channel_scope('connect', data.get('channel_id'))
+    try:
+        lead = int(data.get('lead_id'))
+        agent_id = str(uuid.UUID(str(data.get('agent_id'))))
+    except (ValueError, TypeError, AttributeError):
+        raise TenantLinearError('Выберите точный канал и основного агента.', 400) from None
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant, actor, policy = admin(cur, profile)
+            route = assert_route(cur, tenant, policy, 'connect', conversation, channel, lead)
+            if route.get('conversation_kind') != 'group':
+                raise TenantLinearError('Выбранный диалог не подтверждён как группа.', 409)
+            snap = _legacy_resolution_snapshot(cur, tenant, actor, conversation, channel, lead, agent_id)
+            return {'allowed': not snap['reason'], 'reason': snap['reason'],
+              'requires_resolution': bool(snap['legacy'] or snap['active_links']),
+              'expected_token': snap['token'],
+              'expected_revision': int(snap['group_state'].get('revision') or 0),
+              'legacy_revision': int(snap['legacy']['revision']) if snap['legacy'] else None,
+              'agent_version': int(snap['agent']['version']) if snap['agent'] else None,
+              'channel_id': channel, 'lead_id': lead, 'agent_id': agent_id,
+              'channels': [{'channel_id': str(row['channel_id']), 'lead_id': int(row['lead_id']),
+                'name': str(row.get('name') or ''), 'active': row.get('active') is True,
+                'message_count': int(row.get('message_count') or 0),
+                'incoming_count': int(row.get('incoming_count') or 0),
+                'outgoing_count': int(row.get('outgoing_count') or 0)} for row in snap['routes']],
+              'evidence': {'route_count': len(snap['routes']),
+                'message_count': sum(int(row.get('message_count') or 0) for row in snap['routes']),
+                'job_counts': snap['jobs'], 'draft_counts': snap['drafts'],
+                'unknown_run_count': snap['runs'], 'active_source_links': snap['active_links'],
+                'legacy_state': snap['legacy']['state'] if snap['legacy'] else None,
+                'group_state': snap['group_state'].get('state', 'paused')},
+              'current_assignments':[{'agent_id':str(row.get('agent_id') or ''),
+                'channel_id':str(row.get('channel_id') or '')}
+                for row in (snap['group_state'].get('assignments') or [])]}
 
 
 def choose(assignments, agents, *, now=None):
@@ -75,8 +216,12 @@ def authority(cur, tenant, channel, conversation, agent_id=None, expected_revisi
         return None
     if expected_revision is not None and int(state['revision']) != int(expected_revision):
         return None
-    cur.execute("SELECT 1 FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s AND channel_id=''", (tenant, conversation))
-    if cur.fetchone():
+    cur.execute("""SELECT ai_legacy_blocked(%s::uuid,%s,%s,NULL) AS legacy_blocked,
+      EXISTS(SELECT 1 FROM saas_connect_dialog_links WHERE tenant_id=%s::uuid
+        AND channel_id=%s::uuid AND source_id=%s AND active) AS active_link""",
+      (tenant,channel,conversation,tenant,channel,conversation))
+    quarantine=cur.fetchone() or {}
+    if quarantine.get('legacy_blocked') or quarantine.get('active_link'):
         return None
     cur.execute('SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid', (tenant,))
     winner = choose(state['assignments'], {str(a['id']): dict(a) for a in cur.fetchall()})
@@ -208,6 +353,7 @@ def configure(profile, data):
     from tenant_linear_policy import identifier
     conversation = group_jid(data.get('conversation_id'))
     slots = data.get('assignments')
+    resolution = data.get('legacy_resolution')
     if not conversation or not isinstance(slots, list) or len(slots) > 1:
         raise TenantLinearError('Укажите проверенную группу и не более одного основного агента.', 400)
     if type(data.get('expected_revision')) is not int or data['expected_revision']<0:
@@ -219,9 +365,99 @@ def configure(profile, data):
         normalized.append({'agent_id':identifier(slot.get('agent_id')), 'channel_id':channel_scope('connect',slot.get('channel_id')), 'priority':0})
     with _connect() as conn:
         ensure_schema(conn)
+        if resolution is not None:
+            # Schema setup is complete; start a bounded serializable transaction
+            # for the owner-confirmed resolution snapshot/write.
+            conn.commit()
+            with conn.cursor() as cur:
+                cur.execute('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE')
+                cur.execute("SET LOCAL lock_timeout = '1500ms'")
+                cur.execute("SET LOCAL statement_timeout = '5000ms'")
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
             lock_group(cur, tenant, conversation)
+            if resolution is not None:
+                from tenant_operator_legacy import admin
+                from tenant_ai_dialog_scope import lock_dialog
+                # Group resolution is an owner/admin-only, explicit operation.
+                admin(cur, profile)
+                if not isinstance(resolution, dict) or resolution.get('confirmed') is not True:
+                    raise TenantLinearError('Подтвердите проверенный канал и назначение группы.', 409)
+                if len(normalized) != 1:
+                    raise TenantLinearError('Для разрешения выберите одного агента и один канал.', 409)
+                selected = normalized[0]
+                if (str(resolution.get('channel_id') or '') != selected['channel_id']
+                        or str(resolution.get('agent_id') or '') != selected['agent_id']):
+                    raise TenantLinearError('Подтверждение должно совпадать с выбранными каналом и агентом.', 409)
+                if (set(resolution)-{'confirmed','expected_token','agent_version','channel_id','lead_id','agent_id'}
+                        or not isinstance(resolution.get('expected_token'), str)
+                        or not re.fullmatch(r'[0-9a-f]{64}',resolution['expected_token'])):
+                    raise TenantLinearError('Сначала проверьте текущую привязку группы.', 409)
+                if type(resolution.get('agent_version')) is not int or resolution.get('agent_version') < 1:
+                    raise TenantLinearError('Обновите проверку агента.', 409)
+                if type(resolution.get('lead_id')) is not int or resolution['lead_id'] < 1:
+                    raise TenantLinearError('Обновите точный маршрут группы.', 409)
+                lock_dialog(cur, tenant, 'connect', selected['channel_id'], conversation)
+                cur.execute('''LOCK TABLE saas_connect_conversations,saas_crm_messages,
+                  saas_ai_agent_jobs,saas_ai_agent_drafts,saas_ai_agent_runs,
+                  saas_tenant_webhook_events,saas_connect_dialog_links,saas_ai_agents
+                  IN SHARE MODE NOWAIT''')
+                cur.execute('''INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,revision)
+                  VALUES(%s::uuid,%s,0) ON CONFLICT DO NOTHING''', (tenant, conversation))
+                # Revalidate the exact owner preview under the group/channel locks.
+                cur.execute('''SELECT c.lead_id,c.conversation_kind,ch.active FROM saas_connect_conversations c
+                  JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id
+                    AND ch.connect_channel_id=c.connect_channel_id
+                  WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s
+                  FOR SHARE OF c,ch''',
+                  (tenant, selected['channel_id'], conversation))
+                route = dict(cur.fetchone() or {})
+                if not route or int(route.get('lead_id') or 0) != int(resolution.get('lead_id') or 0):
+                    raise TenantLinearError('Маршрут группы изменился. Проверьте его ещё раз.', 409)
+                if route.get('conversation_kind') != 'group':
+                    raise TenantLinearError('Выбранный маршрут больше не подтверждён как группа.', 409)
+                if route.get('active') is not True:
+                    raise TenantLinearError('Выбранный канал сейчас неактивен.', 409)
+                snapshot = _legacy_resolution_snapshot(cur, tenant, actor, conversation,
+                    selected['channel_id'], int(route['lead_id']), selected['agent_id'])
+                if (snapshot['reason'] or snapshot['token'] != resolution['expected_token']
+                        or int(snapshot['group_state'].get('revision') or 0) != int(data['expected_revision'])
+                        or int(snapshot['agent'].get('version') or 0) != resolution['agent_version']):
+                    raise TenantLinearError('Данные изменились или требуют отдельной проверки. Обновите предварительный просмотр.', 409)
+                cur.execute('SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',
+                  (tenant, selected['agent_id']))
+                verified_agent = cur.fetchone()
+                if not verified_agent or verified_agent.get('enabled') is not True or verified_agent.get('role') != 'primary' or not scope_matches(verified_agent.get('scopes'), selected['channel_id'], is_group=True):
+                    raise TenantLinearError('У выбранного агента нет разрешённой области для этой группы и канала.', 409)
+                # Keep the unbound historical row untouched. The group-specific
+                # permit only makes the exact selected group/channel binding
+                # admissible; all other channel routes remain quarantined.
+                cur.execute('''UPDATE saas_ai_group_coordination SET assignments=%s::jsonb,
+                    state=CASE WHEN state='human' THEN 'human' ELSE 'paused' END,
+                    reason=CASE WHEN state='human' THEN reason ELSE 'legacy_group_resolved_paused' END,
+                    revision=revision+1,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND provider='connect' AND group_jid=%s
+                    AND revision=%s AND state IN ('paused','human') RETURNING revision,state''',
+                  (_json(normalized), tenant, conversation, int(data['expected_revision'])) )
+                saved = dict(cur.fetchone() or {})
+                if not saved:
+                    raise TenantLinearError('Состояние группы изменилось. Обновите предварительный просмотр.', 409)
+                cur.execute('''INSERT INTO saas_ai_group_channel_legacy_permits
+                  (tenant_id,provider,group_jid,channel_id,agent_id,legacy_revision,preview_hash,actor)
+                  VALUES(%s::uuid,'connect',%s,%s::uuid,%s::uuid,%s,%s,%s)
+                  ON CONFLICT(tenant_id,provider,group_jid,channel_id) DO UPDATE SET
+                    agent_id=EXCLUDED.agent_id,legacy_revision=EXCLUDED.legacy_revision,
+                    preview_hash=EXCLUDED.preview_hash,granted_at=clock_timestamp(),actor=EXCLUDED.actor''',
+                  (tenant, conversation, selected['channel_id'], selected['agent_id'],
+                   int(snapshot['legacy']['revision']), snapshot['token'], actor))
+                _audit(cur,tenant,actor,'ai_group_legacy_channel_resolved','conversation',conversation,
+                  {'channel_id':selected['channel_id'],'agent_id':selected['agent_id'],
+                   'legacy_revision':int(snapshot['legacy']['revision']),
+                   'preview_hash':snapshot['token'],'previous_assignments':snapshot['group_state'].get('assignments') or [],
+                   'paused_or_human_preserved':True,'history_merged':False})
+                conn.commit()
+                return {'revision':int(saved['revision']),'state':saved['state'],
+                  'legacy_resolved':True,'resume_required':True,'automatic_replies_enabled':False}
             existing = read(cur, tenant, conversation)
             if int(data.get('expected_revision', -1)) != int(existing.get('revision', 0)):
                 raise TenantLinearError('Состояние группы изменилось. Обновите окно.', 409)

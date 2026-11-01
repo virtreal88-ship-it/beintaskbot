@@ -110,6 +110,122 @@ def test_tenant_and_legacy_quarantine(group):
     group['db'].execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,state) VALUES(%s::uuid,'connect','',%s,'human')",(A,G));group['db'].commit()
     with pytest.raises(TenantLinearError):groups.configure(PROFILE,config())
 
+
+def _legacy_group_fixture(group):
+    d=group['db']
+    d.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,agent_id,state,reason,revision) VALUES(%s::uuid,'connect','',%s,%s::uuid,'human','legacy_handoff',9)",(A,G,AGENT))
+    d.commit()
+    return {'provider':'connect','channel_id':CA,'conversation_id':G,'lead_id':1001,'agent_id':AGENT}
+
+
+def test_owner_group_legacy_preview_confirms_exact_channel_and_stays_paused(group):
+    d=group['db'];selection=_legacy_group_fixture(group)
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert preview['allowed'] and preview['requires_resolution']
+    assert [(row['channel_id'],row['lead_id'],row['message_count']) for row in preview['channels']]==[(CA,1001,0),(CB,1002,0)]
+    assert 'text' not in str(preview).lower()
+    before=d.execute("SELECT channel_id,conversation_id,agent_id,state,reason,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND conversation_id=%s ORDER BY channel_id",(A,G));d.commit()
+    result=groups.configure(PROFILE,{'conversation_id':G,'expected_revision':preview['expected_revision'],
+      'assignments':[{'agent_id':AGENT,'channel_id':CA}],
+      'legacy_resolution':{'confirmed':True,'expected_token':preview['expected_token'],
+        'agent_version':preview['agent_version'],'channel_id':CA,'lead_id':1001,'agent_id':AGENT}})
+    assert result=={'revision':1,'state':'paused','legacy_resolved':True,'resume_required':True,'automatic_replies_enabled':False}
+    after=d.execute("SELECT channel_id,conversation_id,agent_id,state,reason,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND conversation_id=%s ORDER BY channel_id",(A,G));d.commit()
+    assert after==before,'the original state/history stays in its unbound row; no channel history was moved'
+    assert d.execute('SELECT channel_id::text AS channel_id,agent_id::text AS agent_id,legacy_revision FROM saas_ai_group_channel_legacy_permits WHERE tenant_id=%s::uuid AND group_jid=%s',(A,G))==[{'channel_id':CA,'agent_id':AGENT,'legacy_revision':9}]
+    assert not d.execute('SELECT ai_legacy_blocked(%s::uuid,%s,%s,NULL) AS blocked',(A,CA,G))[0]['blocked']
+    assert d.execute('SELECT ai_legacy_blocked(%s::uuid,%s,%s,NULL) AS blocked',(A,CB,G))[0]['blocked']
+    with d.cursor() as cur:
+        assert groups.authority(cur,A,CA,G) is None,'assignment never resumes the group'
+        assert groups.admit(cur,A,CA,G,'LEGACY_EVENT') is None
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_group_preview_token_is_bound_to_the_exact_group_id(group):
+    d=group['db'];selection=_legacy_group_fixture(group);other='120363431037910652@g.us'
+    d.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,conversation_kind,lead_id) VALUES(%s::uuid,%s::uuid,%s,'group',1004),(%s::uuid,%s::uuid,%s,'group',1005)",(A,CA,other,A,CB,other))
+    d.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,agent_id,state,reason,revision) VALUES(%s::uuid,'connect','',%s,%s::uuid,'human','legacy_handoff',9)",(A,other,AGENT));d.commit()
+    second=groups.legacy_resolution_preview(PROFILE,{**selection,'conversation_id':other,'lead_id':1004})
+    first=groups.legacy_resolution_preview(PROFILE,selection)
+    assert first['allowed'] and second['allowed'] and first['expected_token']!=second['expected_token']
+
+
+def test_group_legacy_preview_blocks_links_and_stale_or_wrong_scope(group):
+    d=group['db'];selection=_legacy_group_fixture(group)
+    # An active source link is never covered by the group-specific permit.
+    d.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,conversation_kind,lead_id) VALUES(%s::uuid,%s::uuid,'120363431037910652@g.us','group',1003)",(A,CA))
+    d.execute("INSERT INTO saas_connect_dialog_links(tenant_id,channel_id,source_id,canonical_id,source_lead,canonical_lead,pair_id,snapshot) VALUES(%s::uuid,%s::uuid,%s,%s,1001,1003,'pair','{}'::jsonb)",(A,CA,G,'120363431037910652@g.us'));d.commit()
+    linked=groups.legacy_resolution_preview(PROFILE,selection)
+    assert not linked['allowed'] and linked['reason']=='active_source_link'
+    assert linked['evidence']['active_source_links']==1
+    assert not d.execute('SELECT 1 FROM saas_ai_group_channel_legacy_permits WHERE tenant_id=%s::uuid',(A,));d.commit()
+    d.execute("UPDATE saas_connect_dialog_links SET active=FALSE WHERE tenant_id=%s::uuid AND pair_id='pair'",(A,));d.commit()
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    with pytest.raises(TenantLinearError):groups.legacy_resolution_preview({'tenant_id':B,'telegram_id':22},selection)
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,{'conversation_id':G,'expected_revision':preview['expected_revision'],
+      'assignments':[{'agent_id':AGENT,'channel_id':CB}],
+      'legacy_resolution':{'confirmed':True,'expected_token':preview['expected_token'],'agent_version':preview['agent_version'],
+        'channel_id':CA,'lead_id':1001,'agent_id':AGENT}})
+    d.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,revision,state) VALUES(%s::uuid,%s,%s,'paused') ON CONFLICT(tenant_id,provider,group_jid) DO UPDATE SET revision=saas_ai_group_coordination.revision+1",(A,G,preview['expected_revision']+1));d.commit()
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,{'conversation_id':G,'expected_revision':preview['expected_revision'],
+      'assignments':[{'agent_id':AGENT,'channel_id':CA}],
+      'legacy_resolution':{'confirmed':True,'expected_token':preview['expected_token'],'agent_version':preview['agent_version'],
+        'channel_id':CA,'lead_id':1001,'agent_id':AGENT}})
+    assert not d.execute('SELECT 1 FROM saas_ai_group_channel_legacy_permits WHERE tenant_id=%s::uuid',(A,));d.commit()
+    group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_group_legacy_preview_blocks_unknown_work_and_does_not_change_agent_scope(group):
+    d=group['db'];selection=_legacy_group_fixture(group)
+    d.execute("UPDATE saas_ai_agent_jobs SET conversation_id=%s,state='unknown' WHERE tenant_id=%s::uuid AND provider='connect'",(G,A));d.commit()
+    pending=groups.legacy_resolution_preview(PROFILE,selection)
+    assert not pending['allowed'] and pending['reason']=='outstanding_work'
+    assert pending['evidence']['job_counts']
+    assert not d.execute('SELECT 1 FROM saas_ai_group_channel_legacy_permits WHERE tenant_id=%s::uuid',(A,));d.commit()
+    d.execute("UPDATE saas_ai_agent_jobs SET conversation_id='client',state='skipped' WHERE tenant_id=%s::uuid AND provider='connect'",(A,))
+    d.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':False}]),A,AGENT));d.commit()
+    blocked=groups.legacy_resolution_preview(PROFILE,selection)
+    assert not blocked['allowed'] and blocked['reason']=='agent_not_group_scoped'
+    assert d.execute("SELECT scopes FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]['scopes']==[{'provider':'connect','channel_id':CA,'allow_group_messages':False}]
+    assert not d.execute('SELECT 1 FROM saas_ai_group_channel_legacy_permits WHERE tenant_id=%s::uuid',(A,));d.commit()
+    group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_group_legacy_confirmation_rechecks_route_kind(group):
+    d=group['db'];selection=_legacy_group_fixture(group);preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert preview['allowed']
+    d.execute("UPDATE saas_connect_conversations SET conversation_kind='direct' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s",(A,CA,G));d.commit()
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,{'conversation_id':G,'expected_revision':preview['expected_revision'],
+      'assignments':[{'agent_id':AGENT,'channel_id':CA}],
+      'legacy_resolution':{'confirmed':True,'expected_token':preview['expected_token'],'agent_version':preview['agent_version'],
+        'channel_id':CA,'lead_id':1001,'agent_id':AGENT}})
+    assert not d.execute('SELECT 1 FROM saas_ai_group_channel_legacy_permits WHERE tenant_id=%s::uuid',(A,));d.commit()
+    group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_group_legacy_resolution_replaces_paused_stale_channel_binding_only(group):
+    d=group['db'];selection=_legacy_group_fixture(group)
+    old=[{'agent_id':AGENT2,'channel_id':CB,'priority':0}]
+    d.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,revision,state,assignments,reason) VALUES(%s::uuid,%s,4,'paused',%s::jsonb,'legacy_binding')",(A,G,json.dumps(old)))
+    d.execute("UPDATE saas_connect_channels SET active=FALSE WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid",(A,CB));d.commit()
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert preview['allowed'] and preview['expected_revision']==4
+    assert preview['current_assignments']==[{'agent_id':AGENT2,'channel_id':CB}]
+    before=d.execute("SELECT channel_id,conversation_id,agent_id,state,reason,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND conversation_id=%s ORDER BY channel_id",(A,G));d.commit()
+    result=groups.configure(PROFILE,{'conversation_id':G,'expected_revision':4,
+      'assignments':[{'agent_id':AGENT,'channel_id':CA}],
+      'legacy_resolution':{'confirmed':True,'expected_token':preview['expected_token'],
+        'agent_version':preview['agent_version'],'channel_id':CA,'lead_id':1001,'agent_id':AGENT}})
+    assert result['state']=='paused' and result['automatic_replies_enabled'] is False
+    assert groups.read(d.cursor(),A,G)['assignments']==[{'agent_id':AGENT,'channel_id':CA,'priority':0}]
+    after=d.execute("SELECT channel_id,conversation_id,agent_id,state,reason,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND conversation_id=%s ORDER BY channel_id",(A,G));d.commit()
+    assert after==before
+    audit=d.execute("SELECT payload FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='ai_group_legacy_channel_resolved' ORDER BY created_at DESC LIMIT 1",(A,))[0]['payload'];d.commit()
+    assert audit['previous_assignments']==old and audit['history_merged'] is False
+    with d.cursor() as cur:
+        assert groups.authority(cur,A,CA,G) is None
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
 def test_stale_config_and_old_jobs(group):
     groups.configure(PROFILE,config())
     with pytest.raises(TenantLinearError):groups.configure(PROFILE,config())
