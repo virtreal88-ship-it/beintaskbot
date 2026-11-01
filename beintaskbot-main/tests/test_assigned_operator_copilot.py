@@ -508,3 +508,13 @@ def test_unassignment_before_private_provider_call_prevents_dispatch(ready,monke
     generated.assert_not_called()
     assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
     assert db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n']>0
+
+
+def test_no_assignment_cannot_clear_saved_private_agent_history(ready):
+    db,other,generated,data=ready
+    copilot.ensure_schema(db)
+    db.execute("INSERT INTO saas_operator_copilot_threads(tenant_id,requested_by,channel_id,conversation_id,turns) VALUES(%s::uuid,11,%s,'client','[{\"text\":\"saved private history\"}]'::jsonb)",(A,CA))
+    db.execute('UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid',(A,));db.commit()
+    with pytest.raises(TenantLinearError):copilot.run(PROFILE,{**data,'mode':'clear'})
+    generated.assert_not_called()
+    assert db.execute('SELECT count(*) AS n FROM saas_operator_copilot_threads')[0]['n']==1

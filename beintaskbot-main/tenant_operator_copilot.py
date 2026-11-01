@@ -312,6 +312,7 @@ def run(profile, data, *, consultation_reply_id=None):
                 command['_consultation_evidence']=consultation_evidence
             thread_key = (tenant, actor, command['channel_id'], command['conversation_id'])
             if command['mode'] == 'clear':
+                _assigned_context(cur,tenant,command)
                 cur.execute('DELETE FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s', thread_key)
                 conn.commit()
                 return {'cleared': True, 'text': ''}
