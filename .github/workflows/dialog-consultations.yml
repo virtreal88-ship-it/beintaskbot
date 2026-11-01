@@ -88,6 +88,7 @@ jobs:
             tests/test_group_consultation_receipt.py \
             tests/test_tenant_web_routes.py \
             tests/test_tenant_job_runner.py
+          node tests/test_owner_asr_comparison_browser.cjs
           node tests/test_helper_type_full_app_browser.cjs
           node tests/test_dialog_developer_browser.cjs
           node tests/test_dialog_consultations_ui.cjs
