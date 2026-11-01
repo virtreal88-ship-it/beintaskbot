@@ -216,6 +216,9 @@ def _claim(job, reservation, source, model):
                   AND metadata->>'owner_retry_component'='asr' AND metadata->'owner_retry_source'->>'channel_id'=%s
                   AND metadata->'owner_retry_source'->>'external_id'=%s LIMIT 1""",(job['tenant_id'],str(job['channel_id']),external))
                 if cur.fetchone():raise VoiceError('voice_already_claimed')
+            from tenant_dialog_audio_store import blocked
+            if blocked(cur,job['tenant_id'],channel=job['channel_id'],external=external):
+                raise VoiceError('voice_already_claimed')
             cur.execute("""INSERT INTO saas_connect_voice_receipts
               (tenant_id,channel_id,external_id,run_id,model,state)
               SELECT tenant_id,%s::uuid,external_id,%s::uuid,%s,'processing'

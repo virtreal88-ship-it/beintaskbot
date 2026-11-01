@@ -22,6 +22,7 @@ from tenant_chat_attachment_api import handler as chat_attachment_handler
 from tenant_chat_review_api import handler as chat_review_handler
 from tenant_diagnostics_api import handler as diagnostics_handler
 from tenant_owner_asr_comparison_api import handler as owner_asr_comparison_handler
+from tenant_dialog_audio_transcription_api import handler as dialog_audio_transcription_handler
 from tenant_deal_completion_api import handler as deal_completion_handler
 from tenant_deal_completion_provider import provider as deal_provider
 from tenant_ai_agents_api import handler as ai_agents_handler
@@ -129,6 +130,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/history', operator_handler(member, origin, logger, 'history'), ('GET',)),
         ('dialogs/read', operator_handler(member, origin, logger, 'dialogs_read'), ('POST',)),
         ('dialogs/read-all', operator_handler(member, origin, logger, 'dialogs_read_all'), ('POST',)),
+        ('dialogs/audio-transcription', dialog_audio_transcription_handler(member, origin, logger), ('GET', 'POST')),
         ('dialogs/asr-comparison', owner_asr_comparison_handler(member, origin, logger), ('GET', 'POST')),
         ('dialogs/copilot', operator_handler(member, origin, logger, 'copilot'), ('POST',)),
         ('dialogs/display-name', operator_handler(member, origin, logger, 'display_name'), ('POST',)),

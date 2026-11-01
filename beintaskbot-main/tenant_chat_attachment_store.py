@@ -6,7 +6,7 @@ from tenant_ai_agent_access import tenant_status_allows_management
 from tenant_linear_policy import TenantLinearError
 
 
-def load(session: dict, lead_id: object, message_id: object, *, channel_id=None, conversation_id=None) -> dict:
+def load(session: dict, lead_id: object, message_id: object, *, channel_id=None, conversation_id=None, _audio_aliases=False) -> dict:
     tenant = str(uuid.UUID(str(session['tenant_id'])))
     actor, lead = int(session['telegram_id']), int(str(lead_id))
     if not 0 < lead < 2**63 or not isinstance(message_id, str) or not 0 < len(message_id) <= 500:

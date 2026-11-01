@@ -290,6 +290,16 @@ def transcribe_once(profile,item,model,media,invoke,check_before_ai=None,*,retur
             checked,_,_=store.authorize(cur,profile)
             if checked!=tenant:raise TenantLinearError('Нет доступа.',403)
             schema(cur)
+            from tenant_dialog_audio_store import lock_bytes,blocked
+            upload_hash=hashlib.sha256(media[0]).hexdigest()
+            lock_bytes(cur,tenant,upload_hash)
+            refs=item.get('refs') if isinstance(item.get('refs'),list) else []
+            ref=refs[0] if len(refs)==1 else {}
+            try:channel=str(uuid.UUID(str(ref.get('channel_id'))))
+            except (ValueError,TypeError):channel=None
+            external=ref.get('external_id') if channel else None
+            if blocked(cur,tenant,channel=channel,external=external,hashes=[upload_hash]):
+                raise TenantLinearError('Selected audio has a pending or unknown explicit transcription.',409)
             if (item.get('route') or {}).get('owner_retry_unknown') is True:
                 prior=_batch_retry_base_state(cur,tenant,base_fingerprint)
                 if prior and prior['state']=='completed':
