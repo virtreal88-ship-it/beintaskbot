@@ -4,6 +4,12 @@ from pathlib import Path
 from aiohttp import web
 
 ASSETS = (
+    ('/app/manifest.webmanifest', 'tenant-app.webmanifest', 'no-cache, no-store, must-revalidate, max-age=0'),
+    ('/app/pwa-sw.js', 'tenant-app-pwa-sw.js', 'no-cache, no-store, must-revalidate, max-age=0'),
+    ('/app/pwa-icon-192.png', 'icon-192.png', 'public, max-age=86400'),
+    ('/app/pwa-icon-512.png', 'icon-512.png', 'public, max-age=86400'),
+    ('/app/apple-touch-icon.png', 'apple-touch-icon.png', 'public, max-age=86400'),
+    ('/assets/tenant-pwa.js', 'tenant-pwa.js', 'no-store'),
     ('/app/instructions', 'tenant-instructions.html', 'no-store'),
     ('/app/ai-instructor', 'tenant-ai-instructor.html', 'no-store'),
     ('/assets/tenant-ai-instructor.js', 'tenant-ai-instructor.js', 'no-store'),
@@ -80,11 +86,11 @@ ASSETS = (
 )
 
 
-def asset_handler(path: Path, cache: str | None, *, worker: bool = False) -> Callable[[web.Request], Awaitable[web.FileResponse]]:
+def asset_handler(path: Path, cache: str | None, *, worker_scope: str | None = None) -> Callable[[web.Request], Awaitable[web.FileResponse]]:
     async def handle(_request: web.Request) -> web.FileResponse:
         headers = {} if cache is None else {'Cache-Control': cache}
-        if worker:
-            headers['Service-Worker-Allowed'] = '/app/'
+        if worker_scope:
+            headers['Service-Worker-Allowed'] = worker_scope
         return web.FileResponse(path, headers=headers)
     return handle
 
@@ -92,4 +98,5 @@ def asset_handler(path: Path, cache: str | None, *, worker: bool = False) -> Cal
 def register_assets(app: web.Application) -> None:
     directory = Path(__file__).resolve().parent / 'docs'
     for url, filename, cache in ASSETS:
-        app.router.add_get(url, asset_handler(directory / filename, cache, worker=url == '/app/push-sw.js'))
+        worker_scope = '/app' if url == '/app/pwa-sw.js' else '/app/' if url == '/app/push-sw.js' else None
+        app.router.add_get(url, asset_handler(directory / filename, cache, worker_scope=worker_scope))

@@ -18820,6 +18820,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_get("/invite", auth_api["onboarding_page"])
     app_web.router.add_get("/invite/{token}", auth_api["onboarding_page"])
     app_web.router.add_get("/app", auth_api["app_page"])
+    app_web.router.add_get("/app/", auth_api["app_page"])
     app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/{filename:manifest\\.json|sw\\.js|icon-192\\.png|icon-512\\.png|apple-touch-icon\\.png|alarm\\.wav}", serve_web_asset)
     app_web.router.add_get("/deal.html", serve_deal_page)

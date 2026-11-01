@@ -143,5 +143,6 @@ jobs:
           node tests/test_case_media_admission_ui.cjs
           node tests/test_tenant_chat_ai_model_picker_ui.cjs
           node tests/test_photo_settings_ui.cjs
+          PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_tenant_app_pwa_browser.cjs
           SUPPORT_CASES_PLAYWRIGHT=../.support-test-deps/node_modules/playwright node tests/test_tenant_knowledge_candidates_media_review_browser.cjs
           node tests/case-deeplink-smoke.cjs

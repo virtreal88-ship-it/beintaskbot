@@ -7,7 +7,7 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME && k !== MEDIA_CACHE_NAME).map(k => caches.delete(k))))
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME && k !== MEDIA_CACHE_NAME && !k.startsWith('beintaskbot-app-pwa-')).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
