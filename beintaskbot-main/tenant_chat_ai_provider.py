@@ -149,9 +149,20 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
 
 
 def transcribe(key, model, content, extension, content_type, *, with_usage=False, request_timeout=90,
-               response_format='json', with_diagnostics=False):
+               response_format='json', with_diagnostics=False, bounded_asr=False, asr_tenant=None,
+               before_dispatch=None):
     if response_format not in {'json', 'verbose_json'}:
         raise ValueError('Unsupported transcription response format')
+    if bounded_asr:
+        from tenant_ai_asr_model import STRONG_MODEL, scoped_strong_quote
+        if model != STRONG_MODEL or response_format != 'json' or with_diagnostics or not callable(before_dispatch):
+            raise ValueError('Unsupported bounded transcription options')
+        scoped_strong_quote(asr_tenant)
+        from tenant_connect_voice import validate_audio
+        content, extension, content_type = validate_audio(
+            content, extension, content_type, prove_upload_duration=True)
+        scoped_strong_quote(asr_tenant)
+        before_dispatch()
     response = requests.post('https://api.openai.com/v1/audio/transcriptions',
         headers={'Authorization': 'Bearer ' + key}, data={'model': model, 'response_format': response_format},
         files={'file': ('recording.' + extension, content, content_type)}, timeout=(5, min(90,max(1,request_timeout))), allow_redirects=False)
@@ -198,6 +209,21 @@ def transcribe(key, model, content, extension, content_type, *, with_usage=False
     except (TypeError, ValueError):
         incoming = outgoing = total = 0
     usage = {'input_tokens': incoming, 'output_tokens': outgoing, 'total_tokens': total}
+    if bounded_asr:
+        import math
+        import re
+        raw_usage = payload.get('usage') if isinstance(payload.get('usage'), dict) else {}
+        try:
+            seconds = float(raw_usage.get('seconds'))
+            if math.isfinite(seconds) and 0 <= seconds <= 300:
+                usage['seconds'] = seconds
+        except (TypeError, ValueError):
+            pass
+        detected = payload.get('languages')
+        if isinstance(detected, list):
+            usage['detected_languages'] = [entry['code'] for entry in detected
+                if isinstance(entry, dict) and isinstance(entry.get('code'), str)
+                and re.fullmatch(r'[a-z]{2}', entry['code'])][:20]
     if with_diagnostics:
         return result.strip(), usage, diagnostics
     return result.strip(), usage

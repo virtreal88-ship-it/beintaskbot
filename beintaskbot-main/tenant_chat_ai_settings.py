@@ -55,6 +55,11 @@ def public(row, tenant_id=None):
         for model in VIDEO_MODELS} if tenant_id else {})
     from tenant_ai_asr_model import MODELS as ASR_MODELS, tariff_status as asr_tariff_status
     result['asr_model_tariffs'] = {model: asr_tariff_status(model) for model in ASR_MODELS}
+    from tenant_ai_asr_model import shared_asr_tenant, shared_audio_model
+    if shared_asr_tenant(tenant_id):
+        result['effective_shared_dialog_audio_model'] = shared_audio_model(
+            result['transcription_model'], tenant=tenant_id, credential_source='company',
+            context='manual_helper') if result['audio_enabled'] is True else result['transcription_model']
     return result
 
 

@@ -54,3 +54,66 @@ def tariff_status(model):
     except TenantLinearError as error:
         return {'model': model, 'operation': 'asr', 'ready': False,
                 'reason_code': str(error)}
+
+
+# Internal standalone-dialog rollout; unrelated to any experiment authorization.
+# Tenant identifiers and production message/reference text are not published.
+SHARED_ASR_TENANT_DIGEST = '18bf0f79cb1e3b250dba8c4fd881b5ddc43e79be87cabab9ef217d0bf44f5f9d'
+STRONG_MODEL = 'gpt-transcribe'
+SHARED_ASR_CONTEXTS = {'manual_helper', 'connect_auto'}
+
+
+def shared_asr_tenant(tenant):
+    import hashlib
+    import uuid
+    try:
+        canonical = str(uuid.UUID(str(tenant)))
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return hashlib.sha256(('shared-dialog-asr-rollout:v1:' + canonical).encode()).hexdigest() == SHARED_ASR_TENANT_DIGEST
+
+
+def scoped_strong_quote(tenant):
+    """Private exact-3c quote; public model registry/admission stays unchanged."""
+    import json
+    import os
+    if not shared_asr_tenant(tenant):
+        raise TenantLinearError('shared_asr_scope_unavailable', 409)
+    # Never turn a previously blocked/repriced Whisper operation into a new call.
+    old = quote('whisper-1')
+    if old['reserve_microusd'] != 30_000:
+        raise TenantLinearError('shared_asr_existing_tariff_changed', 409)
+    try:
+        registry = json.loads(os.environ.get('AI_MEDIA_OPERATION_PRICES_MICROUSD') or '{}')
+        if not isinstance(registry, dict):
+            raise ValueError()
+        entry = registry.get(STRONG_MODEL, {})
+        if not isinstance(entry, dict):
+            raise ValueError()
+        amount = entry.get('asr', 30_000)
+        if (isinstance(amount, bool) or not isinstance(amount, (int, str))
+                or (isinstance(amount, str) and not amount.isdecimal()) or int(amount) != 30_000):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise TenantLinearError('shared_asr_tariff_unavailable', 409) from None
+    # https://developers.openai.com/api/docs/models/gpt-transcribe
+    # $0.0045/minute * enforced maximum300s =22500microUSD; fixed quote stays3c.
+    return {'model': STRONG_MODEL, 'operation': 'asr', 'reserve_microusd': 30_000,
+            'minimum_microusd': 22_500, 'max_duration_seconds': AUDIO_MAX_SECONDS}
+
+
+def shared_audio_model(configured, *, tenant, credential_source, context):
+    """Opt in only the authorized company/shared standalone-audio execution."""
+    value = str(configured or '').strip()
+    if (credential_source != 'company' or context not in SHARED_ASR_CONTEXTS
+            or value != 'whisper-1' or not shared_asr_tenant(tenant)):
+        return value
+    try:
+        scoped_strong_quote(tenant)
+    except TenantLinearError:
+        return value
+    return STRONG_MODEL
+
+
+def shared_request_policy():
+    return {'model': STRONG_MODEL, 'response_format': 'json', 'language_policy': 'auto'}

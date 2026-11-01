@@ -6,6 +6,8 @@ reissued after a crash/timeout: an uncertain paid request must not run twice.
 """
 from tenant_ai_testing_budget import TOKEN_USAGE_SQL
 import io
+import json
+import math
 from tenant_linear_policy import TenantLinearError
 import os
 import subprocess
@@ -105,7 +107,7 @@ def download_audio(job, message_id):
             connection.close()
 
 
-def validate_audio(content, extension, mime, *, max_seconds=MAX_SECONDS):
+def validate_audio(content, extension, mime, *, max_seconds=MAX_SECONDS, prove_upload_duration=False):
     """Decode locally to measure real duration, rejecting corruption/playlists.
 
     OpenAI accepts OGG/Opus directly. Only raw AAC is converted to WAV.
@@ -119,6 +121,32 @@ def validate_audio(content, extension, mime, *, max_seconds=MAX_SECONDS):
         with tempfile.TemporaryDirectory(prefix='connect-voice-') as directory:
             path = Path(directory) / ('audio.' + extension)
             path.write_bytes(content)
+            if prove_upload_duration:
+                probe = subprocess.run([
+                    'ffprobe', '-v', 'error', '-protocol_whitelist', 'file,pipe',
+                    '-format_whitelist', 'ogg,mp3,wav,mov,matroska,webm,flac,aac',
+                    '-show_entries', 'stream=codec_type,duration:format=duration',
+                    '-of', 'json', str(path)], capture_output=True, timeout=20, check=False)
+                try:
+                    info = json.loads(probe.stdout)
+                    streams = info['streams']
+                    duration = float(info['format']['duration'])
+                    if (probe.returncode or len(streams) != 1
+                            or streams[0].get('codec_type') != 'audio'
+                            or not math.isfinite(duration) or duration <= 0):
+                        raise ValueError()
+                    stream_duration = streams[0].get('duration')
+                    if stream_duration is not None:
+                        measured = float(stream_duration)
+                        if not math.isfinite(measured) or measured <= 0:
+                            raise ValueError()
+                        duration = max(duration, measured)
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    # N/A duration or ambiguous streams cannot establish the
+                    # duration-billed upload bound. No provider request follows.
+                    raise VoiceError('voice_upload_duration_unproven') from None
+                if duration > min(MAX_SECONDS, max_seconds):
+                    raise VoiceError('voice_duration_limit')
             decoded = subprocess.run([
                 'ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-xerror',
                 '-protocol_whitelist', 'file,pipe',
