@@ -80,6 +80,7 @@ on:
       - 'beintaskbot-main/tests/test_tenant_notification_badge_browser.cjs'
       - 'beintaskbot-main/tests/test_dialog_developer*'
       - 'beintaskbot-main/tests/test_helper_type_full_app_browser.cjs'
+      - 'beintaskbot-main/tests/test_dialog_avatar_card_browser.cjs'
       - 'beintaskbot-main/tests/test_helper_modal_mobile_browser.cjs'
       - 'beintaskbot-main/tests/test_assigned_operator_copilot.py'
       - 'beintaskbot-main/tests/test_required_episode_audio.py'
@@ -174,6 +175,7 @@ jobs:
             tests/test_tenant_job_runner.py
           node tests/test_owner_asr_comparison_browser.cjs
           node tests/test_helper_type_full_app_browser.cjs
+          node tests/test_dialog_avatar_card_browser.cjs
           node tests/test_helper_modal_mobile_browser.cjs
           node tests/test_dialog_developer_browser.cjs
           node tests/test_dialog_consultations_ui.cjs
