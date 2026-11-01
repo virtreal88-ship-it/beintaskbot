@@ -405,6 +405,13 @@ def test_history_pagination_stays_with_exact_channel(db):
     for i in range(110):
         db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,happened_at) VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming',%s,'2026-10-16 00:00:00Z')",(str(uuid.uuid4()),A,'message'+str(i),'connect:'+CA,str(i)))
     db.commit();first=manual();ticket=first['ticket']['id']
+    assert first['scope']['message_count']==50
+    assert first['scope']['initial_limit']==50 and first['scope']['has_earlier_source']
+    # Old full-history cases retain their exact-channel pagination; creating a
+    # new case now pins the explicitly disclosed bounded snapshot above.
+    db.execute("UPDATE saas_support_tickets SET history_scope='legacy' WHERE id=%s::uuid",(ticket,))
+    db.execute('DELETE FROM saas_support_ticket_messages WHERE ticket_id=%s::uuid',(ticket,));db.commit()
+    first=store.detail(PROFILE,ticket)
     ids=[];page=first
     while True:
         ids.extend(m['id'] for m in page['messages'])
@@ -416,6 +423,8 @@ def test_history_pagination_stays_with_exact_channel(db):
 def config_company(db,limit=50):
     from cryptography.fernet import Fernet
     cipher=Fernet(Fernet.generate_key())
+    seed_job(db)
+    db.execute("UPDATE saas_ai_agents SET model='test-model',language='az' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
     secret=cipher.encrypt(json.dumps({'tenant_id':A,'provider':'chat_ai','api_key':'test-key'}).encode())
     db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets,metadata) VALUES(%s::uuid,'chat_ai','connected',%s,%s::jsonb)",(A,secret,json.dumps({'enabled':True,'consent':True,'model':'test-model','daily_limit':limit})))
     db.commit()
@@ -430,7 +439,7 @@ def test_ai_summary_fields_and_shared_budget_receipt(db):
     assert result['ticket']['summary_state']=='completed'
     for key,value in output.items():assert result['ticket'][key]==value
     assert provider.call_args.args[2]=='summary'
-    assert db.execute('SELECT reserved_calls,status FROM saas_chat_ai_runs')[0]=={'reserved_calls':1,'status':'completed'}
+    assert db.execute('SELECT reserved_calls,state FROM saas_ai_agent_runs')[0]=={'reserved_calls':1,'state':'completed'}
     db.commit()
 
 
@@ -449,8 +458,8 @@ def test_russian_support_history_produces_azerbaijani_ticket_fields_without_tran
 
     for key,value in output.items():
         assert result['ticket'][key]==value
-    # Prompting is fixed to Azerbaijani even when the evidence is Russian.
-    assert 'Azərbaycan dilində' in provider.call_args.kwargs['instructions']
+    # The assigned agent chooses Azerbaijani while quotations stay original.
+    assert provider.call_args.kwargs['extra_context']['assigned_agent_language']=='az'
     assert any('Не работает интернет после перезагрузки модема' in line['text'] for line in provider.call_args.args[3])
     # Persisted correspondence remains in the language actually sent by the customer.
     assert any(message['body']=='Не работает интернет после перезагрузки модема' for message in result['messages'])
@@ -464,7 +473,7 @@ def test_ai_failure_keeps_ticket_and_consumes_reservation(db):
         result=manual()
     assert result['ticket']['summary_state']=='unavailable'
     assert result['ticket']['description']=='Internet is down'
-    assert db.execute('SELECT reserved_calls,status FROM saas_chat_ai_runs')[0]=={'reserved_calls':1,'status':'unknown'}
+    assert db.execute('SELECT reserved_calls,state FROM saas_ai_agent_runs')[0]=={'reserved_calls':1,'state':'unknown'}
     db.commit()
 
 
@@ -479,6 +488,7 @@ def test_daily_budget_exhaustion_never_calls_provider(db):
 
 def test_platform_summary_uses_existing_agent_run_and_token_accounting(db):
     seed_job(db)
+    db.execute("UPDATE saas_ai_agents SET model='platform-test-model' WHERE tenant_id=%s::uuid",(A,));db.commit()
     output={k:'Test' for k in ('description','summary','suggestions','next_steps')}
     with patch.object(summary,'choose_api_credential',return_value=('platform-test-key','platform')),patch.object(summary,'platform_model_allowed',return_value=True),patch.object(summary,'generate',return_value=(json.dumps(output),{'input_tokens':10,'output_tokens':5,'total_tokens':15})):
         result=manual()
@@ -564,6 +574,7 @@ def test_ai_does_not_overwrite_employee_edits(db):
 
 def test_summary_platform_cap_never_calls_provider(db):
     seed_job(db)
+    db.execute("UPDATE saas_ai_agents SET model='platform-test-model' WHERE tenant_id=%s::uuid",(A,));db.commit()
     with patch.object(store,'summarize_created'):ticket=manual()['ticket']['id']
     run=str(uuid.uuid4())
     db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state) VALUES(%s::uuid,%s::uuid,%s::uuid,'evt',1,'test','completed')",(A,run,AGENT))

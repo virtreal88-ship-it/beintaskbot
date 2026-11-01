@@ -49,7 +49,7 @@ def route(cur, tenant, channel, conversation, lead_id=None):
     return dict(value)
 
 
-def create_in_transaction(cur, tenant, channel, conversation, reason, event_key, *, actor=None, description='', source='ai_handoff', lead_id=None):
+def create_in_transaction(cur, tenant, channel, conversation, reason, event_key, *, actor=None, description='', source='ai_handoff', lead_id=None, message_ids=None, bounded_episode=False):
     """Caller initializes schema first; ticket and handoff commit together. No provider calls."""
     tenant = identifier(tenant)
     cur.execute('SELECT status FROM saas_tenants WHERE id=%s::uuid FOR SHARE', (tenant,))
@@ -78,16 +78,39 @@ def create_in_transaction(cur, tenant, channel, conversation, reason, event_key,
         latest = cur.fetchone() or {}
         description = str(latest.get('body') or '')[:240]
     ticket_id = str(uuid.uuid4())
-    cur.execute('''INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,reason,description,status,created_by)
-      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s)
+    scope_kind = 'selected' if bounded_episode or message_ids is not None else 'snapshot'
+    cur.execute('''INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source,reason,description,status,created_by,history_scope)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s)
       ON CONFLICT(tenant_id,channel_id,conversation_id)
       WHERE status<>'resolved' AND completion_outcome<>'test_stopped' DO UPDATE
         SET source=CASE WHEN EXCLUDED.source='ai_handoff' THEN 'ai_handoff' ELSE saas_support_tickets.source END,
         reason=CASE WHEN EXCLUDED.source='ai_handoff' THEN EXCLUDED.reason ELSE saas_support_tickets.reason END,
         status=CASE WHEN EXCLUDED.source='ai_handoff' AND saas_support_tickets.status='new' THEN 'waiting' ELSE saas_support_tickets.status END
       RETURNING id''', (tenant,ticket_id,channel,conversation,source,str(reason or 'Требуется помощь сотрудника')[:1000],
-        str(description or reason or 'Требуется помощь сотрудника')[:1000], 'waiting' if source=='ai_handoff' else 'new',actor))
+        str(description or reason or 'Требуется помощь сотрудника')[:1000], 'waiting' if source=='ai_handoff' else 'new',actor,scope_kind))
     result_id = str(cur.fetchone()['id'])
+    if result_id == ticket_id and not bounded_episode:
+        from tenant_support_case_context import SNAPSHOT_LIMIT, _selection
+        if message_ids is None:
+            # Pin a bounded local snapshot once. Later attachment/share actions
+            # cannot narrow it, and future unrelated incidents do not leak in.
+            cur.execute('''SELECT id FROM saas_crm_messages
+              WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
+                AND direction IN ('incoming','outgoing')
+              ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT %s''',
+              (tenant, selected['lead_id'], 'connect:' + channel, SNAPSHOT_LIMIT))
+            snapshot_ids = [str(row['id']) for row in cur.fetchall()]
+        else:
+            selection_scope = {'tenant_id': tenant, 'lead_id': int(selected['lead_id']),
+                               'channel_id': channel, 'kind': 'conversation'}
+            snapshot_ids = [row['id'] for row in _selection(cur, selection_scope, message_ids, 80)]
+        if snapshot_ids:
+            cur.execute('''INSERT INTO saas_support_ticket_messages(tenant_id,ticket_id,message_id,event_key)
+              SELECT %s::uuid,%s::uuid,m.id,%s FROM saas_crm_messages m
+              WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s
+                AND m.id=ANY(%s::uuid[]) ON CONFLICT DO NOTHING''',
+              (tenant, ticket_id, 'case-snapshot:' + event_key, tenant, selected['lead_id'],
+               'connect:' + channel, snapshot_ids))
     cur.execute('''INSERT INTO saas_support_events(tenant_id,event_key,ticket_id) VALUES(%s::uuid,%s,%s::uuid)
       ON CONFLICT(tenant_id,event_key) DO NOTHING''', (tenant,event_key,result_id))
     return {'id': result_id, 'created': result_id == ticket_id}
@@ -173,12 +196,12 @@ def handoff_ticket(cur, job, reason):
             if ((source.get('media_evidence') or {}).get('has_audio_result')
                 and (source.get('media_evidence') or {}).get('status') in {'processed','partial'}):
                 description=str(source.get('media_evidence_context') or '')[:1000]
-    receipt=create_in_transaction(cur, str(job['tenant_id']), job['channel_id'],
-        job.get('conversation_id') or job.get('chat_id'), reason,
-        'handoff:' + str(job['event_fingerprint']),description=description)
     ids=job.get('case_message_ids') if isinstance(job.get('case_message_ids'),(list,tuple)) else []
     source_id=str(job.get('source_message_id') or '')
     if source_id and source_id not in ids:ids=[*ids,source_id]
+    receipt=create_in_transaction(cur, str(job['tenant_id']), job['channel_id'],
+        job.get('conversation_id') or job.get('chat_id'), reason,
+        'handoff:' + str(job['event_fingerprint']),description=description,bounded_episode=bool(ids))
     if receipt.get('id') and ids:
         record_case_message_membership(cur,str(job['tenant_id']),receipt['id'],job['channel_id'],
           job.get('conversation_id') or job.get('chat_id'),ids,'handoff:'+str(job['event_fingerprint']))
@@ -268,34 +291,40 @@ def detail(profile, ticket_id, before=None, message_id=None):
             ticket = cur.fetchone()
             if not ticket:
                 raise TenantLinearError('Обращение не найдено.', 404)
-            # CASEs with explicit membership render only their selected/linked
-            # dialogue; legacy tickets keep their existing scoped transcript.
-            cur.execute('SELECT EXISTS(SELECT 1 FROM saas_support_ticket_messages WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid) AS has_membership',(tenant,ticket_id))
-            has_membership=bool((cur.fetchone() or {}).get('has_membership'))
-            args = [tenant,ticket_id] if has_membership else [tenant,ticket['lead_id'],'connect:'+str(ticket['channel_id'])]
-            clause = ''
-            if before:
-                before_id = identifier(before)
-                clause = (''' AND (COALESCE(m.happened_at,m.created_at),m.id)<(SELECT COALESCE(happened_at,created_at),id
-                  FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid)''' if has_membership else ''' AND (COALESCE(happened_at,created_at),id)<(SELECT COALESCE(happened_at,created_at),id
-                  FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid)''')
-                args += [tenant,ticket['lead_id'],'connect:'+str(ticket['channel_id']),before_id]
-            if has_membership:
-                cur.execute('''SELECT m.id,m.external_id,m.direction,m.body,m.message_type,m.happened_at,m.created_at
-                  FROM saas_support_ticket_messages cm JOIN saas_crm_messages m ON m.id=cm.message_id
-                  WHERE cm.tenant_id=%s::uuid AND cm.ticket_id=%s::uuid''' + clause + '''
-                  ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 51''',tuple(args))
-            else:
-                cur.execute('''SELECT id,external_id,direction,body,message_type,happened_at,created_at FROM saas_crm_messages
-                  WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s''' + clause + '''
-                  ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 51''', tuple(args))
-            rows = cur.fetchall()
+            from tenant_support_case_context import load_scope, messages, metadata
+            material_scope = load_scope(cur, tenant, ticket_id)
+            scope_metadata = metadata(cur, material_scope)
+            rows = list(reversed(messages(cur, material_scope, limit=51, before=before)))
+            # Keep internal raw/URLs out of the case browser projection.
+            fields = ('id','external_id','direction','author_name','body','message_type','happened_at','created_at')
+            rows = [{key: row.get(key) for key in fields} for row in rows]
+            try:
+                from tenant_dialog_ai_context import resolve, binding
+                from tenant_support_case_context import fingerprint
+                current = resolve(cur, tenant, {'channel_id': str(ticket['channel_id']), 'conversation_id': ticket['conversation_id']})
+                ticket['agent_id'] = str(current['agent_id'])
+                cur.execute('SELECT name,enabled FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid', (tenant, current['agent_id']))
+                agent = cur.fetchone() or {}
+                ticket['agent_name'] = agent.get('name') or ''
+                ticket['agent_enabled'] = bool(agent.get('enabled'))
+                ticket['summary_available'] = bool(agent.get('enabled') and ticket.get('company_enabled')
+                                                   and not ticket.get('company_emergency_stop'))
+                ticket['summary_current'] = bool(ticket.get('summary_agent_binding')) and (
+                    ticket.get('summary_agent_binding') == binding(current)
+                    and ticket.get('summary_scope_hash') == fingerprint(cur, material_scope))
+            except TenantLinearError:
+                ticket['agent_id'] = None
+                ticket['agent_name'] = ''
+                ticket['summary_available'] = False
+                ticket['summary_current'] = False
             cur.execute('''SELECT m.id,m.external_id,m.direction,m.message_type,m.happened_at,m.created_at
               FROM saas_support_ticket_messages cm JOIN saas_crm_messages m
                 ON m.tenant_id=cm.tenant_id AND m.id=cm.message_id
               WHERE cm.tenant_id=%s::uuid AND cm.ticket_id=%s::uuid
+                AND m.kommo_lead_id=%s AND m.channel=%s
                 AND m.message_type IN ('image','audio','voice','video','document')
-              ORDER BY cm.created_at DESC,m.id DESC LIMIT 30''',(tenant,ticket_id))
+              ORDER BY cm.created_at DESC,m.id DESC LIMIT 30''',
+              (tenant,ticket_id,ticket['lead_id'],'connect:'+str(ticket['channel_id'])))
             attached_media=[public(row) for row in cur.fetchall()]
             focus_message = None
             if message_id:
@@ -307,7 +336,7 @@ def detail(profile, ticket_id, before=None, message_id=None):
                     AND message_type IN ('image','audio','voice','video','document')''',
                   (tenant,ticket['lead_id'],'connect:'+str(ticket['channel_id']),identifier(message_id)))
                 focus_message=cur.fetchone()
-                if focus_message and has_membership:
+                if focus_message and material_scope['kind'] != 'conversation':
                     cur.execute('SELECT 1 FROM saas_support_ticket_messages WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND message_id=%s::uuid',(tenant,ticket_id,identifier(message_id)))
                     if not cur.fetchone():focus_message=None
                 if not focus_message:raise TenantLinearError('Вложение недоступно в этом обращении.',404)
@@ -324,7 +353,7 @@ def detail(profile, ticket_id, before=None, message_id=None):
               ORDER BY e.created_at DESC LIMIT 10''',(tenant,str(ticket['channel_id']),ticket['conversation_id']))
             expert_results=[public(row) for row in cur.fetchall()]
     return {'expert_results':expert_results,'ticket':public(ticket), 'messages':[public(row) for row in reversed(rows[:50])],
-            'attached_media':attached_media,
+            'attached_media':attached_media,'scope':scope_metadata,
             'focus_message':public(focus_message) if focus_message else None,
             'next_before':str(rows[49]['id']) if len(rows)>50 else None}
 
@@ -405,6 +434,10 @@ def attach_case_media(profile,ticket_id,message_ids):
 
 
 def create(profile, data):
+    if not isinstance(data, dict) or set(data) - {'request_id','lead_id','channel_id','conversation_id','reason','description','message_ids'}:
+        raise TenantLinearError('Некорректные поля обращения.')
+    if 'message_ids' in data and (not isinstance(data['message_ids'], list) or not 1 <= len(data['message_ids']) <= 80):
+        raise TenantLinearError('Выберите от 1 до 80 сообщений обращения.')
     request_id = identifier(data.get('request_id'))
     with _connect() as conn:
         ensure_schema(conn)
@@ -412,7 +445,7 @@ def create(profile, data):
             tenant, actor = _authorize(cur, profile)
             receipt = create_in_transaction(cur,tenant,data.get('channel_id'),data.get('conversation_id'),
                 data.get('reason') or 'Создано сотрудником','manual:'+request_id,actor=actor,
-                description=data.get('description',''),source='manual',lead_id=data.get('lead_id'))
+                description=data.get('description',''),source='manual',lead_id=data.get('lead_id'),message_ids=data.get('message_ids'))
             _audit(cur,tenant,actor,'support_create','support_ticket',receipt['id'])
         conn.commit()
     summarize_created(tenant,receipt)

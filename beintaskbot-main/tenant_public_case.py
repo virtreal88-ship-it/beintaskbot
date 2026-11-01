@@ -287,8 +287,9 @@ def create(profile,ticket_id,payload,origin):
               WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid FOR SHARE OF t,c''',(tenant,ticket_id))
             route=cur.fetchone()
             if not route:raise TenantLinearError('Обращение недоступно.',404)
-            from tenant_support_inbox_store import record_case_selected_message_ids
-            record_case_selected_message_ids(cur,tenant,ticket_id,message_ids,'public-case-selection:'+share_id)
+            # This is an explicit public snapshot, not a case-boundary edit.
+            # Selected IDs below are revalidated against the exact source route;
+            # creating a link must never hide other internal case materials.
             cur.execute('''SELECT 1 FROM saas_connect_conversations c JOIN saas_connect_channels ch
               ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id
               WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s AND ch.active=TRUE''',
@@ -407,9 +408,11 @@ def media(token,message_id,client=''):
               JOIN saas_connect_conversations c ON c.tenant_id=t.tenant_id AND c.connect_channel_id=t.channel_id AND c.conversation_id=t.conversation_id
               JOIN saas_crm_messages m ON m.tenant_id=s.tenant_id AND m.kommo_lead_id=c.lead_id
                 AND m.channel='connect:'||s.channel_id::text AND m.id=%s::uuid
-              JOIN saas_support_ticket_messages cm ON cm.tenant_id=s.tenant_id AND cm.ticket_id=s.ticket_id AND cm.message_id=m.id
               WHERE s.token_hash=%s AND s.revoked_at IS NULL AND s.expires_at>now()
                 AND s.selected_message_ids ? %s AND s.selected_media_ids ? %s
+                AND (s.created_by IS NOT NULL OR EXISTS(
+                  SELECT 1 FROM saas_support_ticket_messages cm WHERE cm.tenant_id=s.tenant_id
+                    AND cm.ticket_id=s.ticket_id AND cm.message_id=m.id))
                 AND m.message_type IN ('image','audio','voice','video','document')''',
                 (message_id,digest,message_id,message_id))
             row=cur.fetchone()
