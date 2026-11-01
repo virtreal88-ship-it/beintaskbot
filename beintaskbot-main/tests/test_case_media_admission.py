@@ -338,7 +338,7 @@ def test_all_cases_grant_requires_exact_owner_acceptance_then_stops_cleanly(read
     monkeypatch.setenv('AI_AGENTS_PLATFORM_MODELS','["test-model"]')
     monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'test-model':{'input':10,'output':10},'gpt-4.1':{'input':2000000,'output':8000000}}))
     monkeypatch.setenv('AI_AGENTS_TRANSCRIPTION_MODEL','whisper-1')
-    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'gpt-4.1':{'vision_low':8896},'whisper-1':{'asr':12_000}}))
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'gpt-4.1':{'vision_low':8896},'whisper-1':{'asr':30_000}}))
     import tenant_ai_agent_key_policy as key_policy
     monkeypatch.setattr(key_policy,'platform_model',lambda:'test-model')
     monkeypatch.setattr(key_policy,'choose_api_credential',lambda *args:('synthetic-key','platform'))
@@ -880,7 +880,7 @@ def test_fixed_grant_over_cap_blocks_before_any_provider_call(ready,monkeypatch)
     monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'test-model':{'input':10,'output':10},'gpt-4.1':{'input':2000000,'output':8000000}}))
     monkeypatch.setenv('AI_AGENTS_TRANSCRIPTION_MODEL','whisper-1')
     monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({
-      'gpt-4.1':{'vision_low':6_000_000},'whisper-1':{'asr':12_000}}))
+      'gpt-4.1':{'vision_low':6_000_000},'whisper-1':{'asr':30_000}}))
     import tenant_ai_agent_key_policy as key_policy
     import tenant_knowledge_campaign_worker as campaign_worker
     import tenant_knowledge_candidates_service as service

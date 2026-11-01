@@ -41,15 +41,27 @@ def media_price(model, operation):
     """Return an allowlisted, fixed worst-case price for one media call.
 
     Media APIs do not consistently return token usage.  They therefore cannot
-    share the text-token tariff.  Operations are admitted only when Railway
-    has an explicit non-secret tariff for the exact configured model and
-    operation (``asr`` or ``vision_low``); no code default can spend money.
+    share the text-token tariff.  Operations require an explicit tariff for the exact model/operation,
+    except the published, duration-bounded Whisper ASR tariff below. Other
+    unknown models/operations remain closed.
     """
     if operation not in {'asr', 'vision_low'}:
         return None
-    raw = _json_env('AI_MEDIA_OPERATION_PRICES_MICROUSD').get(str(model))
+    # A known, published duration tariff may supply a conservative default;
+    # explicit values (including an intentional invalid/disabled entry) win.
+    # Do not silently repair malformed financial configuration.
+    try:
+        registry = json.loads(str(os.environ.get('AI_MEDIA_OPERATION_PRICES_MICROUSD') or '{}'))
+    except ValueError:
+        return None
+    if not isinstance(registry, dict):
+        return None
+    raw = registry.get(str(model), {})
     if not isinstance(raw, dict):
         return None
+    if str(model) == 'whisper-1' and operation == 'asr' and operation not in raw:
+        from tenant_ai_asr_model import minimum_reserve_microusd
+        return minimum_reserve_microusd('whisper-1')
     try:
         value = int(raw.get(operation))
         return value if value > 0 else None

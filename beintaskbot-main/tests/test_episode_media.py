@@ -424,6 +424,7 @@ def test_audio_admission_reason_without_provider_or_receipt(sandbox,monkeypatch,
     import tenant_ai_spend_budget as budget
     rows=[row('voice')];auth=actual_authority('manual',rows)
     auth.dispatch=runtime.Execution.dispatch.__get__(auth);auth.admit_call=Mock()
+    if reason=='ai_spend_media_price_unknown':auth.config={**auth.config,'transcription_model':'unpriced-asr'}
     conn=MagicMock();conn.__enter__.return_value=conn
     conn.cursor.return_value.__enter__.return_value.fetchone.side_effect=[None,{'used':1000}]
     monkeypatch.setattr(runtime,'_connect',lambda:conn)
@@ -463,3 +464,34 @@ def test_attempted_provider_cannot_be_safe_admission_failure(sandbox,monkeypatch
     assert (receipt['code'],receipt['status'])==('media_result_unknown','unknown')
     assert receipt.get('admission_status') is None
     assert auth.media_attempts==1 and sandbox[1]
+
+
+@pytest.mark.parametrize('cap,processed',[(29999,False),(30000,True)])
+def test_missing_whisper_tariff_keeps_budget_guard_and_reuses_success(sandbox,monkeypatch,cap,processed):
+    import tenant_ai_spend_budget as budget
+    from tenant_chat_ai_provider import transcribe
+    rows=[row('voice')];auth=actual_authority('manual',rows)
+    auth.dispatch=runtime.Execution.dispatch.__get__(auth);auth.admit_call=Mock()
+    conn=MagicMock();conn.__enter__.return_value=conn
+    cur=conn.cursor.return_value.__enter__.return_value
+    cur.fetchone.side_effect=[None,{'used':0}]
+    monkeypatch.setattr(runtime,'_connect',lambda:conn)
+    monkeypatch.setattr(budget,'ensure_schema',Mock())
+    monkeypatch.setattr(budget,'limit_microusd',lambda _:cap)
+    settled=Mock();monkeypatch.setattr(budget,'settle_media',settled)
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD','{"gpt-4o-mini-transcribe":{"asr":30000}}')
+    monkeypatch.setattr(core,'download_media',AsyncMock(return_value=(b'synthetic','audio/ogg')))
+    runtime.prepare(auth,rows)
+    if not processed:
+        assert rows[0]['_episode_receipt']['code']=='ai_spend_budget_exhausted'
+        transcribe.assert_not_called();settled.assert_not_called()
+        assert not sandbox[0] and not sandbox[1]
+    else:
+        assert rows[0]['_episode_receipt']['status']=='processed'
+        transcribe.assert_called_once()
+        inserted=[c.args[1] for c in cur.execute.call_args_list if 'INSERT INTO saas_ai_spend_reservations' in c.args[0]]
+        assert len(inserted)==1 and inserted[0][5]==30000
+        settled.assert_called_once()
+        again=[row('voice')];runtime.prepare(actual_authority('manual',again),again)
+        assert again[0]['_episode_receipt']['transcript']==rows[0]['_episode_receipt']['transcript']
+        transcribe.assert_called_once()
