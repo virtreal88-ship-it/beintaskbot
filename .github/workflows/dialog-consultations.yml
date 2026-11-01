@@ -13,6 +13,8 @@ on:
       - 'beintaskbot-main/tests/test_case_consultations_unified.py'
       - 'beintaskbot-main/tenant_notification_center*.py'
       - 'beintaskbot-main/tests/test_tenant_notification_center*'
+      - 'beintaskbot-main/tests/test_tenant_notification_bell_ux_browser.cjs'
+      - 'beintaskbot-main/tests/test_support_notification_bridge_ui.cjs'
       - 'beintaskbot-main/tests/test_case_consultation_media_replies.py'
       - 'beintaskbot-main/tests/test_developer_media_reply_ui.cjs'
       - 'beintaskbot-main/tests/test_support_consultation_flow_ui.cjs'
@@ -139,6 +141,8 @@ jobs:
           node tests/test_dialog_developer_browser.cjs
           node tests/test_dialog_consultations_ui.cjs
           node tests/test_tenant_notification_center_ui.cjs
+          node tests/test_tenant_notification_bell_ux_browser.cjs
+          node tests/test_support_notification_bridge_ui.cjs
           node tests/test_support_case_materials_ui.cjs
           node tests/test_support_consultation_flow_ui.cjs
           node tests/test_developer_media_reply_ui.cjs
