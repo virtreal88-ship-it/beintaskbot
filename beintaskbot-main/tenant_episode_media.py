@@ -256,18 +256,30 @@ class Execution:
             with conn.cursor() as cur:revalidate_sources(cur,self.tenant,getattr(self,'source_refs',[]))
 
     def dispatch(self,model,operation,invoke):
-        self.validate(self.current_ref)
+        from tenant_media_admission import mark
+        step='authority'
         call_key='episode:'+str(uuid.uuid4())
         from tenant_ai_spend_budget import ensure_schema, reserve_media, settle_media
-        with _connect() as conn:
-            ensure_schema(conn)
-            with conn.cursor() as cur:
-                self.admit_call(cur)
-                reserve_media(cur,self.tenant,call_key,'episode_media',model,operation,1)
-            conn.commit()
-        attempted=False
         try:
             self.validate(self.current_ref)
+            with _connect() as conn:
+                ensure_schema(conn)
+                with conn.cursor() as cur:
+                    step='calls'
+                    self.admit_call(cur)
+                    step='budget'
+                    reserve_media(cur,self.tenant,call_key,'episode_media',model,operation,1)
+                conn.commit()
+        except TenantLinearError as error:
+            if operation=='asr':mark(error,step)
+            raise
+        attempted=False
+        try:
+            try:
+                self.validate(self.current_ref)
+            except TenantLinearError as error:
+                if operation=='asr':mark(error,'authority')
+                raise
             attempted=True
             self.media_attempts=getattr(self,'media_attempts',0)+1
             result=invoke()

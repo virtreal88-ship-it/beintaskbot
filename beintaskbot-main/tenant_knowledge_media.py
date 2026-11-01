@@ -299,6 +299,12 @@ def collect(profile,item,check_before_ai=None,*,execution=None):
             _failure_detail(receipt,error)
             if getattr(error,'media_outcome_unknown',False):
                 receipt.update(status='unknown',code='media_result_unknown',failure_stage=stage);continue
+            from tenant_media_admission import REASONS
+            admission=getattr(error,'media_admission_code',None)
+            if admission in REASONS:
+                receipt.update(status='error',code=admission,failure_stage=stage,
+                               admission_status=error.status if error.status in {403,409,429} else 409)
+                continue
             code=('unsupported_document_feature' if kind=='document' and error.status==415 else
                 'video_size_limit' if kind=='video' and error.status==413 else
                 'media_size_limit' if error.status==413 else 'media_unavailable')

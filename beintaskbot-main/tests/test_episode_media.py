@@ -415,3 +415,51 @@ def test_knowledge_query_cannot_use_legacy_voice_body_when_current_audio_unread(
         _copilot_attachment_text='Actual newest speech')
     query=runtime.evidence_query(rows,'1')
     assert 'Actual newest speech' in query and 'OLD_TOPIC' not in query
+
+@pytest.mark.parametrize('reason,http_status',[
+    ('ai_spend_media_price_unknown',409),('ai_spend_budget_exhausted',429),
+    ('ai_call_limit_exhausted',429),('media_authority_changed',409),('source_access_denied',403),
+])
+def test_audio_admission_reason_without_provider_or_receipt(sandbox,monkeypatch,reason,http_status):
+    import tenant_ai_spend_budget as budget
+    rows=[row('voice')];auth=actual_authority('manual',rows)
+    auth.dispatch=runtime.Execution.dispatch.__get__(auth);auth.admit_call=Mock()
+    conn=MagicMock();conn.__enter__.return_value=conn
+    conn.cursor.return_value.__enter__.return_value.fetchone.side_effect=[None,{'used':1000}]
+    monkeypatch.setattr(runtime,'_connect',lambda:conn)
+    monkeypatch.setattr(budget,'ensure_schema',Mock())
+    monkeypatch.setattr(budget,'limit_microusd',lambda _:1000)
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD','{}' if reason=='ai_spend_media_price_unknown' else '{"whisper-1":{"asr":600}}')
+    monkeypatch.setattr(core,'download_media',AsyncMock(return_value=(b'synthetic','audio/ogg')))
+    if reason=='ai_call_limit_exhausted':auth.admit_call.side_effect=TenantLinearError('Company Copilot daily limit exhausted.',429)
+    if reason in {'media_authority_changed','source_access_denied'}:
+        original=auth.validate;calls=[]
+        def validate(ref):
+            calls.append(ref)
+            if len(calls)>1:raise TenantLinearError('private source/tenant details',http_status)
+            return original(ref)
+        auth.validate=validate
+    runtime.prepare(auth,rows)
+    receipt=rows[0]['_episode_receipt']
+    assert (receipt['status'],receipt['code'],receipt['failure_stage'],receipt['admission_status'])==('error',reason,'audio_transcription',http_status)
+    assert getattr(auth,'media_attempts',0)==0
+    assert not sandbox[0] and not sandbox[1]
+    assert 'private' not in str(receipt)
+    from tenant_chat_ai_provider import transcribe
+    transcribe.assert_not_called()
+
+
+def test_attempted_provider_cannot_be_safe_admission_failure(sandbox,monkeypatch):
+    from tenant_chat_ai_provider import transcribe
+    rows=[row('voice')];auth=actual_authority('manual',rows)
+    auth.dispatch=runtime.Execution.dispatch.__get__(auth);auth.admit_call=Mock()
+    conn=MagicMock();conn.__enter__.return_value=conn
+    monkeypatch.setattr(runtime,'_connect',lambda:conn)
+    for name in ('ensure_schema','reserve_media','settle_media'):monkeypatch.setattr('tenant_ai_spend_budget.'+name,Mock())
+    monkeypatch.setattr(core,'download_media',AsyncMock(return_value=(b'synthetic','audio/ogg')))
+    transcribe.side_effect=TenantLinearError('ai_spend_media_price_unknown',409)
+    runtime.prepare(auth,rows)
+    receipt=rows[0]['_episode_receipt']
+    assert (receipt['code'],receipt['status'])==('media_result_unknown','unknown')
+    assert receipt.get('admission_status') is None
+    assert auth.media_attempts==1 and sandbox[1]
