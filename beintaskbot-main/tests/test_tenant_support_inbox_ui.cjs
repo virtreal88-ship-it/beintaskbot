@@ -11,7 +11,7 @@ const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmedia
 function setup(fetch,url='https://crm.test/app',rights=true){
  const dom=new JSDOM('<section id="view-support"><div id="operatorSupport"></div></section><div id="modalContent"></div>',{url,runScripts:'outside-only'});
  dom.window.HTMLElement.prototype.scrollIntoView=function(){};
- dom.window.fetch=fetch;dom.window.tenantOperator={hasRight:typeof rights==='function'?rights:()=>rights};dom.window.eval(fs.readFileSync(path.join(__dirname,'../docs/tenant-operator-i18n.js'),'utf8'));dom.window.eval(source);return dom;
+ dom.window.fetch=fetch;dom.window.tenantOperator={hasRight:typeof rights==='function'?rights:()=>rights};dom.window.eval(fs.readFileSync(path.join(__dirname,'../docs/tenant-operator-i18n.js'),'utf8'));dom.window.eval(fs.readFileSync(path.join(__dirname,'../docs/tenant-support-consultations.js'),'utf8'));dom.window.eval(source);return dom;
 }
 (async()=>{
  const calls=[];
@@ -32,12 +32,13 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  assert.match(doc.querySelector('[data-expert-diagnostics]').textContent,/Требуется проверка линии/);
  assert.equal(doc.querySelector('[data-expert-diagnostics] img'),null);
  assert.equal(calls.filter(x=>x.init.method&&x.init.method!=='GET').length,0,'viewing must be read-only');
+ assert.equal(doc.querySelectorAll('#consultCreate').length,1,'one developer request entry point');
+ assert.equal(doc.querySelector('#consultRecipient'),null,'recipient selection opens only when requested');
+ assert.equal(doc.querySelector('#publicCaseShare'),null,'no duplicate primary public-link form');
+ assert.equal(doc.querySelector('[data-consult-answer]'),null,'manual developer answer is not an unexplained initial field');
  let opened=null;doc.addEventListener('tenant-support-open',e=>opened=e.detail.lead_id);
  doc.querySelector('#supportOpenChat').click();assert.equal(opened,41);
- assert.ok(doc.querySelector('#consultCreate'),'ticket detail has the internal developer consultation action');
- doc.querySelector('#consultReason').value='Проверить логи';doc.querySelector('#consultCreate').click();await settle();
- const consultation=calls.find(x=>x.url==='/api/platform/ai/internal-consultations'&&x.init.method==='POST');
- assert.equal(JSON.parse(consultation.init.body).case_id,'ticket-1');assert.equal(JSON.parse(consultation.init.body).expected_tenant_id,'company-a');
+ doc.querySelector('[data-support-id]').click();await settle();
  doc.querySelector('#supportTake').click();await settle();
  const take=calls.find(x=>x.init.method==='PATCH');const data=JSON.parse(take.init.body);
  assert.equal(data.assigned_to,11);assert.equal(data.status,'in_progress');assert.equal(data.expected_tenant_id,'company-a');
@@ -100,58 +101,38 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  const deniedCalls=[];
  const denied=setup(async(url)=>{deniedCalls.push(url);return {ok:true,json:async()=>({member:profile})};},'https://crm.test/app?view=support&support_ticket_id='+id,false);
  await settle();assert.ok(!deniedCalls.some(url=>url.includes('/support-tickets')));denied.window.close();
+ // The main card delegates one bounded request to the unified controller.
  const cid='4bfc7540-38e8-4e14-a571-057817c6ca6b',gid='120363411822115409@g.us',synthetic=[];let delivery=null;
+ const base='/api/platform/ai/dialog-consultations';
+ const caseMessages=[{id:'safe-text-id',message_type:'text',direction:'incoming',body:'Issue persists'},{id:messageId,message_type:'image',direction:'incoming',body:'Attachment',happened_at:'2026-10-16T00:00:00Z'}];
  const cycle=setup(async(url,init={})=>{
    const body=init.body?JSON.parse(init.body):{};synthetic.push({url,method:init.method||'GET',body});
    if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
-   if(url==='/api/platform/ai/internal-consultations?case_id=ticket-1')return response({consultations:[{id:cid,reason:'50 → 49,9992',created_at:'2026-10-16T00:00:00Z',status:'waiting_specialist',recipient_name:'Developer'}]});
-   if(url==='/api/platform/ai/internal-consultations/groups')return response({groups:[{channel_id:'channel-a',conversation_id:gid,contact_name:'Test group'}]});
-   if(url==='/api/platform/ai/internal-consultations/'+cid+'/group'){
-     if(init.method==='POST'&&body.action==='prepare'){delivery={state:'ready',request_id:body.request_id,destination:'Test group',prepared_text:body.summary,replies:[],customer_draft:'',draft_revision:0};return response({state:'ready'});}
-     if(init.method==='POST'&&body.action==='send'){delivery.state='sent';delivery.replies=[{message_id:'reply-1',body:'We are investigating'}];return response({state:'sent'});}
-     if(init.method==='POST'&&body.action==='draft'){delivery.draft_reply_id=body.message_id;delivery.customer_draft=body.draft;return response({customer_message_sent:false});}
-     if(delivery)return response(delivery);
-     return {ok:false,status:404,json:async()=>({success:false,error:'Not prepared'})};
-   }
-   if(url==='/api/platform/ai/support-tickets/ticket-1')return response({ticket,messages:[{id:messageId,message_type:'image',direction:'incoming',happened_at:'2026-10-16T00:00:00Z'}],expert_results:[],next_before:null});
+   if(url.startsWith(base+'/replies?'))return response({consultations:delivery?[delivery]:[],replies:[]});
+   if(url===base+'/destinations')return response({destinations:[{channel_id:'developer-channel',conversation_id:gid,customer_name:'Developer group'}]});
+   if(url===base+'/preview')return response({messages:caseMessages,has_earlier:false});
+   if(url===base&&init.method==='POST'){delivery={id:cid,case_id:ticket.id,request_id:body.request_id,state:'ready',destination_channel:body.destination_channel_id,destination_conversation:body.destination_conversation_id,recipient:'Developer group',reason:body.summary,can_dispatch:true,can_manual_reply:true};return response({id:cid,state:'ready'});}
+   if(url===base+'/'+cid+'/dispatch'){delivery.state='pending';delivery.can_dispatch=false;return response({state:'pending'});}
+   if(url==='/api/platform/ai/support-tickets/ticket-1')return response({ticket:{...ticket,channel_id:'channel-a'},messages:caseMessages,expert_results:[],next_before:null});
    return response({tickets:[ticket],members,next_offset:null});
  });
- await settle();cycle.window.document.querySelector('[data-support-id]').click();await settle();
- const panel=cycle.window.document.querySelector('[data-consult-id] details');panel.open=true;panel.dispatchEvent(new cycle.window.Event('toggle'));await settle();
- panel.querySelector('select').value='0';panel.querySelector('textarea').value='50 → 49,9992';panel.querySelector('input[type=checkbox]').checked=true;panel.querySelector('button').click();await settle();
- assert.equal(synthetic.filter(x=>x.body.action==='prepare').length,1);assert.equal(synthetic.filter(x=>x.body.action==='send').length,0);
- assert.deepEqual(synthetic.find(x=>x.body.action==='prepare').body.attachment_ids,[messageId]);
- assert.match(panel.textContent,/Test group/);panel.querySelector('button').click();await settle();
- assert.equal(synthetic.filter(x=>x.body.action==='send').length,1);assert.match(panel.textContent,/We are investigating/);
- panel.querySelector('textarea').value='We are checking.';panel.querySelector('[data-group-draft]').click();await settle();
- assert.equal(delivery.customer_draft,'We are checking.',JSON.stringify(synthetic));assert.ok(!synthetic.some(x=>/\/dialogs\/send/.test(x.url)));cycle.window.close();
- const shareCalls=[],shareUrl='/api/platform/support-cases/ticket-1/public-share';
- let copiedPublicUrl='';const publicUi=setup(async(url,init={})=>{const body=init.body?JSON.parse(init.body):{};shareCalls.push({url,init,body});
-   if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
-   if(url==='/api/platform/ai/internal-consultations/groups')return response({groups:[{channel_id:'channel-a',conversation_id:gid,contact_name:'Developer group'}]});
-   if(url==='/api/platform/ai/internal-consultations?case_id=ticket-1')return response({consultations:[]});
-   if(url==='/api/platform/ai/support-tickets/ticket-1')return response({ticket,messages:[{id:'safe-text-id',direction:'incoming',body:'Issue persists',message_type:'text'},{id:messageId,direction:'incoming',body:'Attachment',message_type:'image'}],expert_results:[],next_before:null});
-   if(url==='/api/platform/support-cases/ticket-1/public-shares')return response([]);
-   if(url===shareUrl&&init.method==='POST')return response({id:'share-a',url:'https://crm.test/public/case/synthetic-token',expires_in_hours:24});
-   return response({tickets:[ticket],members,next_offset:null});
- });
- Object.defineProperty(publicUi.window.navigator,'clipboard',{value:{writeText:async value=>{copiedPublicUrl=value;}},configurable:true});
- await settle();const shareDoc=publicUi.window.document;shareDoc.querySelector('[data-support-id]').click();await settle();const sharePanel=shareDoc.querySelector('#publicCaseShare');assert.ok(sharePanel);
- const shareChecks=[...sharePanel.querySelectorAll('[data-share-message]')];shareChecks[0].checked=true;shareChecks[1].checked=true;
- sharePanel.querySelector('#publicCaseGroup').value='0';sharePanel.querySelector('button').click();await settle();
- const shareRequest=shareCalls.find(x=>x.url===shareUrl&&x.init.method==='POST');assert.deepEqual(shareRequest.body.message_ids,['safe-text-id',messageId]);
- assert.deepEqual(shareRequest.body.media_message_ids,[messageId]);assert.ok(!('confirm_media_review' in shareRequest.body));
- assert.match(sharePanel.textContent,/Linki əldə edən hər kəs 24 saat/);assert.equal(sharePanel.querySelector('#publicCaseMediaReviewed'),null);
- assert.equal(shareRequest.body.group_conversation_id,gid);assert.match(shareDoc.querySelector('#publicCaseShare').textContent,/WhatsApp-a yalnız istədiyiniz halda özünüz göndərin/);
- assert.equal(shareCalls.filter(x=>x.init.method==='POST').length,1,'creating a page does not send a WhatsApp message');const copyButton=shareDoc.querySelector('[data-share-copy]');assert.ok(copyButton);copyButton.click();await settle();assert.equal(copiedPublicUrl,'https://crm.test/public/case/synthetic-token');assert.match(shareDoc.querySelector('#publicCaseShare').textContent,/əvvəlki linklər aktiv qalır/);publicUi.window.close();
+ await settle();const cycleDoc=cycle.window.document;cycleDoc.querySelector('[data-support-id]').click();await settle();
+ assert.equal(synthetic.some(call=>call.method==='POST'),false,'opening case is read-only');cycleDoc.querySelector('#consultCreate').click();await settle();
+ const form=cycleDoc.querySelector('#caseDeveloperForm');assert.ok(form);assert.equal(form.querySelectorAll('#consultRecipient').length,1);assert.equal(form.querySelector('[data-consultation-confirm]'),null);
+ form.querySelector('#consultReason').value='50 → 49,9992';form.querySelector('#caseConsultFirst').value='safe-text-id';form.querySelector('#caseConsultLast').value=messageId;form.querySelector('input[type=checkbox]').checked=true;form.dispatchEvent(new cycle.window.Event('input',{bubbles:true}));
+ form.dispatchEvent(new cycle.window.Event('submit',{cancelable:true}));await settle();
+ const prepared=synthetic.filter(call=>call.url===base&&call.method==='POST'),dispatched=synthetic.filter(call=>call.url.endsWith('/dispatch'));
+ assert.equal(prepared.length,1);assert.equal(dispatched.length,1);assert.deepEqual(prepared[0].body.message_ids,['safe-text-id',messageId]);assert.deepEqual(prepared[0].body.media_ids,[messageId]);assert.equal(prepared[0].body.expected_tenant_id,'company-a');assert.equal(dispatched[0].body.request_id,prepared[0].body.request_id);
+ assert.match(cycleDoc.querySelector('#consultRows').textContent,/принял запрос в очередь/);assert.equal(cycleDoc.querySelector('#publicCaseShare'),null);assert.equal(cycleDoc.querySelector('[data-consult-answer]'),null);
+ assert.ok(!synthetic.some(call=>call.method==='POST'&&/internal-consultations|public-share|messages\/send|dialogs\/send/.test(call.url)),'one request creates its public snapshot through the unified service and never sends to the customer');cycle.window.close();
  const oldMediaId='afdf2239-babc-44cc-a703-3d1df394e099',historyCalls=[],attachCalls=[];
  const picker=setup(async(url,init={})=>{
    const body=init.body?JSON.parse(init.body):{};historyCalls.push({url,init,body});
    if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
    if(url.startsWith('/api/platform/ai/internal-consultations'))return response({consultations:[]});
    if(url==='/api/platform/ai/support-tickets/ticket-1')return response({ticket:{...ticket,channel_id:'channel-a'},messages:[{id:'case-text',direction:'incoming',body:'Ticket message',message_type:'text'}],attached_media:[],expert_results:[],next_before:null});
-   if(url.startsWith('/api/platform/ai/support-tickets/ticket-1/attachments')&&init.method!=='POST')return response(url.includes('before=')?{messages:[{id:oldMediaId,external_id:'connect:old-photo',message_type:'image',direction:'incoming',created_at:'2026-09-01T00:00:00Z'}],next_before:null}:{messages:Array.from({length:50},(_,i)=>({id:`00000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`,message_type:'image',direction:'incoming'})),next_before:'history-49'});
-   if(url==='/api/platform/ai/support-tickets/ticket-1/attachments'&&init.method==='POST'){attachCalls.push({url,init,body});return response({ticket_id:'ticket-1',attached_message_ids:[oldMediaId],attached_count:1});}
+   if(url.startsWith('/api/platform/ai/support-tickets/ticket-1/messages')&&init.method!=='POST')return response(url.includes('before=')?{messages:[{id:oldMediaId,external_id:'connect:old-photo',message_type:'image',direction:'incoming',created_at:'2026-09-01T00:00:00Z'}],next_before:null}:{messages:Array.from({length:50},(_,i)=>({id:`00000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`,message_type:'image',direction:'incoming'})),next_before:'history-49'});
+   if(url==='/api/platform/ai/support-tickets/ticket-1/messages'&&init.method==='POST'){attachCalls.push({url,init,body});return response({ticket_id:'ticket-1',attached_message_ids:[oldMediaId],attached_count:1});}
    if(url==='/api/platform/support-cases/ticket-1/public-shares')return response([]);
    return response({tickets:[ticket],members,next_offset:null});
  },'https://crm.test/app?view=support&support_ticket_id=ticket-1');
@@ -164,7 +145,7 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  oldCheck.checked=true;oldCheck.dispatchEvent(new picker.window.Event('change'));
  const attachButton=pickerDoc.querySelector('#supportExistingMedia [data-case-media-attach]');
  assert.ok(attachButton);const beforeAttach=historyCalls.length;attachButton.click();await settle();
- assert.equal(attachCalls.length,1);assert.deepEqual(attachCalls[0].body.message_ids,[oldMediaId]);assert.deepEqual(historyCalls.filter(call=>call.init.method==='POST').map(call=>call.url),['/api/platform/ai/support-tickets/ticket-1/attachments'],'attach makes no consultation, share, model or delivery call');
+ assert.equal(attachCalls.length,1);assert.deepEqual(attachCalls[0].body.message_ids,[oldMediaId]);assert.deepEqual(historyCalls.filter(call=>call.init.method==='POST').map(call=>call.url),['/api/platform/ai/support-tickets/ticket-1/messages'],'attach makes no consultation, share, model or delivery call');
  assert.ok(!historyCalls.some(call=>/\/dialogs\/send|group$|public-share/.test(call.url)&&call.init.method==='POST'));
  const openButton=pickerDoc.querySelector('#supportExistingMedia [data-case-media-open]');
  assert.ok(openButton);openButton.click();assert.match(downloaded,/conversation_id=client/);assert.equal(attachCalls.length,1);picker.window.close();
@@ -177,14 +158,14 @@ function setup(fetch,url='https://crm.test/app',rights=true){
    if(url==='/api/platform/ai/support-tickets?status=unresolved&assignee=&search=&channel_id=&offset=0')return response({tickets:[{...ticket,id:ticketA,contact_name:'Case A'},{...ticket,id:ticketB,contact_name:'Case B'}],members,next_offset:null});
    if(url==='/api/platform/ai/support-tickets/'+ticketA)return response({ticket:{...ticket,id:ticketA,contact_name:'Case A',channel_id:'channel-a'},messages:[],attached_media:[],expert_results:[],next_before:null});
    if(url==='/api/platform/ai/support-tickets/'+ticketB)return response({ticket:{...ticket,id:ticketB,contact_name:'Case B',channel_id:'channel-a'},messages:[],attached_media:[],expert_results:[],next_before:null});
-   if(url==='/api/platform/ai/support-tickets/'+ticketA+'/attachments'&&init.method==='POST')return new Promise(resolve=>{finishAttach=()=>resolve(response({ticket_id:ticketA,attached_message_ids:[oldMediaId],attached_count:1}));});
-   if(url==='/api/platform/ai/support-tickets/'+ticketA+'/attachments')return response({messages:[{id:oldMediaId,external_id:'connect:old-photo',message_type:'image',direction:'incoming'}],next_before:null});
+   if(url==='/api/platform/ai/support-tickets/'+ticketA+'/messages'&&init.method==='POST')return new Promise(resolve=>{finishAttach=()=>resolve(response({ticket_id:ticketA,attached_message_ids:[oldMediaId],attached_count:1}));});
+   if(url==='/api/platform/ai/support-tickets/'+ticketA+'/messages')return response({messages:[{id:oldMediaId,external_id:'connect:old-photo',message_type:'image',direction:'incoming'}],next_before:null});
    return response({tickets:[],members,next_offset:null});
  });
  await settle();const raceDoc=raced.window.document;raceDoc.querySelector(`[data-support-id="${ticketA}"]`).click();await settle();raceDoc.querySelector('#caseMediaLoad').click();await settle();
  const raceCheck=raceDoc.querySelector('#supportExistingMedia input');assert.ok(raceCheck);raceCheck.checked=true;raceCheck.dispatchEvent(new raced.window.Event('change'));raceDoc.querySelector('[data-case-media-attach]').click();await settle();assert.equal(typeof finishAttach,'function');
  raceDoc.querySelector(`[data-support-id="${ticketB}"]`).click();await settle();assert.equal(raceDoc.querySelector('#supportTicketTitle').textContent,'Case B');finishAttach();await settle();
- assert.equal(raceDoc.querySelector('#supportTicketTitle').textContent,'Case B');assert.equal(pendingCalls.filter(x=>x.url==='/api/platform/ai/internal-consultations?case_id='+ticketA).length,1,'late attach completion must not redraw A consultation into B');raced.window.close();
+ assert.equal(raceDoc.querySelector('#supportTicketTitle').textContent,'Case B');assert.equal(pendingCalls.filter(x=>x.url==='/api/platform/ai/dialog-consultations/replies?case_id='+ticketA).length,1,'late attach completion must not redraw A consultation into B');raced.window.close();
 
- console.log('PASS: inbox renders safely; public shares scope explicitly selected CASE messages/media, disclose link access, and do not send WhatsApp.');
+ console.log('PASS: queue, identity, deep links, unified bounded developer request, media picker and late attachment isolation.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

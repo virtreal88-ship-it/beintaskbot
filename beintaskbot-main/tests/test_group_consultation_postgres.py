@@ -24,6 +24,7 @@ def child(dsn,kind,consult,data,barrier,results):
         time.sleep(.15)
         return {'message_id':'synthetic','external_message_id':'PROVIDER_123'}
     transport.send_group_with_receipt=send
+    transport.send_consultation_with_receipt=send
     try:
         barrier.wait(20)
         if kind=='prepare':value=local.prepare(PROFILE,consult,data)

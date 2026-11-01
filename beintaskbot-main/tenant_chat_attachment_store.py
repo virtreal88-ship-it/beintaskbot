@@ -42,13 +42,17 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
                 # Read a retained attachment from an inactive channel. Sending,
                 # Copilot and AI media execution still require an active route.
                 route = connect_route(cur, tenant, lead, historical_read=True)
+                kind=str(row.get('message_type') or '').lower()
+                kind={'ptt':'audio','voice_message':'audio','photo':'image','file':'document'}.get(kind,kind)
                 if (not route or not route.get('api_key') or bool(channel_id) != bool(conversation_id)
                         or (channel_id and str(channel_id) != str(route['channel_id']))
                         or (conversation_id and str(conversation_id) != str(route['conversation_id']))
                         or row.get('channel') != 'connect:' + route['channel_id']
-                        or row.get('message_type') not in {'image', 'audio', 'voice', 'video', 'document'}
+                        or kind not in {'image', 'audio', 'voice', 'video', 'document'}
                         or row.get('direction') not in {'incoming', 'outgoing'}):
                     raise TenantLinearError('Fayl bu dialoqda və kanalda mövcud deyil.', 404)
+                row=dict(row)
+                row['message_type']=kind
                 raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}
                 if raw.get('conversationId') and raw['conversationId'] != route['conversation_id']:
                     raise TenantLinearError('Fayl bu dialoqda mövcud deyil.', 404)

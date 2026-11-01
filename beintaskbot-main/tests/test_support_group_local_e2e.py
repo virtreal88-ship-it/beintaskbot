@@ -38,6 +38,7 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db,monkeypatc
         sends.append((route['conversation_id'],body))
         return {'message_id':'synthetic-'+str(len(sends)),'external_message_id':'PROVIDER_'+str(len(sends))}
     monkeypatch.setattr(transport,'send_group_with_receipt',send)
+    monkeypatch.setattr(transport,'send_consultation_with_receipt',send)
     sock=socket.socket();sock.bind(('127.0.0.1',0));sock.listen(16);port=sock.getsockname()[1];origin='http://127.0.0.1:'+str(port)
     loop=asyncio.new_event_loop();ready=threading.Event();state={}
     async def start():

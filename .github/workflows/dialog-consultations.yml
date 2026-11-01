@@ -9,6 +9,12 @@ on:
       - 'beintaskbot-main/docs/tenant-support-inbox.js'
       - 'beintaskbot-main/docs/tenant-operator-i18n.js'
       - 'beintaskbot-main/tests/test_support_case_materials*'
+      - 'beintaskbot-main/docs/tenant-support-consultations.js'
+      - 'beintaskbot-main/tests/test_case_consultations_unified.py'
+      - 'beintaskbot-main/tests/test_case_consultation_media_replies.py'
+      - 'beintaskbot-main/tests/test_developer_media_reply_ui.cjs'
+      - 'beintaskbot-main/tests/test_support_consultation_flow_ui.cjs'
+      - 'beintaskbot-main/tests/test_support_ticket_modal_browser.cjs'
       - 'beintaskbot-main/tests/test_tenant_support_inbox*'
       - 'beintaskbot-main/tenant_operator_copilot.py'
       - 'beintaskbot-main/tenant_owner_asr_comparison*.py'
@@ -94,6 +100,8 @@ jobs:
           PYTHONPATH=.:tests python -m pytest -q -rs \
             tests/test_dialog_consultations.py \
             tests/test_support_case_materials.py \
+            tests/test_case_consultations_unified.py \
+            tests/test_case_consultation_media_replies.py \
             tests/test_tenant_support_inbox.py \
             tests/test_tenant_push_provider.py \
             tests/test_tenant_crm_notice.py \
@@ -120,6 +128,9 @@ jobs:
           node tests/test_dialog_developer_browser.cjs
           node tests/test_dialog_consultations_ui.cjs
           node tests/test_support_case_materials_ui.cjs
+          node tests/test_support_consultation_flow_ui.cjs
+          node tests/test_developer_media_reply_ui.cjs
+          node tests/test_support_ticket_modal_browser.cjs
           node tests/test_tenant_support_inbox_ui.cjs
           node tests/test_tenant_push_dialog_route_ui.cjs
           node tests/test_tenant_notification_badge_browser.cjs
