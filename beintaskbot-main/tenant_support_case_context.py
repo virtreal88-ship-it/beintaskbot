@@ -10,7 +10,7 @@ from tenant_linear_policy import TenantLinearError, identifier
 MEDIA_TYPES = ('image', 'video', 'audio', 'voice', 'document')
 SNAPSHOT_LIMIT = 50
 _NON_BOUNDARY_EVENTS = ('support-media-picker:%', 'public-case-selection:%',
-                        'consultation-attachment-selection:%')
+                        'consultation-attachment-selection:%', 'support-material-picker:%')
 
 
 def load_scope(cur, tenant, ticket_id, channel_id=None, conversation_id=None):
@@ -32,7 +32,7 @@ def load_scope(cur, tenant, ticket_id, channel_id=None, conversation_id=None):
         cur.execute('''SELECT EXISTS(SELECT 1 FROM saas_support_ticket_messages
           WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid
             AND event_key NOT LIKE %s AND event_key NOT LIKE %s
-            AND event_key NOT LIKE %s) AS bounded''',
+            AND event_key NOT LIKE %s AND event_key NOT LIKE %s) AS bounded''',
             (tenant, ticket_id, *_NON_BOUNDARY_EVENTS))
         kind = 'selected' if (cur.fetchone() or {}).get('bounded') else 'conversation'
     return {'tenant_id': str(tenant), 'ticket_id': ticket_id,
@@ -49,6 +49,21 @@ def predicate(scope):
           WHERE cm.tenant_id=m.tenant_id AND cm.ticket_id=%s::uuid AND cm.message_id=m.id)'''
         args.append(scope['ticket_id'])
     return sql, args
+
+
+def freeze_scope(cur, tenant, ticket_id):
+    """Pin legacy interpretation before an authorized material addition.
+
+    Readers never backfill. Mutating callers serialize on the ticket so a new
+    handoff/followup row cannot redefine an existing full transcript as selected.
+    """
+    cur.execute('SELECT history_scope FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',
+                (tenant, ticket_id))
+    row = cur.fetchone()
+    if row and row['history_scope'] == 'legacy':
+        scope = load_scope(cur, tenant, ticket_id)
+        cur.execute("UPDATE saas_support_tickets SET history_scope=%s WHERE tenant_id=%s::uuid AND id=%s::uuid AND history_scope='legacy'",
+                    (scope['kind'], tenant, ticket_id))
 
 
 def messages(cur, scope, limit=80, before=None):
@@ -96,12 +111,32 @@ def metadata(cur, scope):
             'has_earlier_source': earlier}
 
 
+def summary_messages(cur, scope):
+    """Keep the original problem and recent evidence within 80 source rows."""
+    recent = messages(cur, scope, limit=60)
+    where, args = predicate(scope)
+    cur.execute('''SELECT m.id::text AS id,m.external_id,m.direction,m.author_name,m.body,m.message_type,
+        COALESCE(m.happened_at,m.created_at) AS happened_at,m.created_at,m.channel,m.raw,m.media_url
+      FROM saas_crm_messages m WHERE ''' + where + '''
+      ORDER BY COALESCE(m.happened_at,m.created_at),m.id LIMIT 20''', tuple(args))
+    oldest = cur.fetchall()
+    by_id = {row['id']: row for row in oldest + recent}
+    return sorted(by_id.values(), key=lambda row: (str(row['happened_at']), str(row['id'])))
+
+
 def fingerprint(cur, scope, rows=None):
     """Bind a generated summary to exact consumed rows and case boundaries."""
-    rows = messages(cur, scope, limit=80) if rows is None else rows
-    value = {'scope': metadata(cur, scope), 'rows': [
-        {key: row.get(key) for key in ('id','external_id','direction','body','message_type','happened_at','raw')}
-        for row in rows]}
+    from tenant_media_evidence import publication_fingerprint
+    rows = summary_messages(cur, scope) if rows is None else rows
+    sources = []
+    for row in rows:
+        source = {key: row.get(key) for key in ('id','external_id','direction','body','message_type','happened_at','raw')}
+        # A transcript/visual receipt can arrive without changing CRM body/raw.
+        # Bind its exact source/version and saved result in this transaction;
+        # this helper never opens media or asks a provider to analyze it.
+        source['media_evidence'] = publication_fingerprint(cur, scope['tenant_id'], row)
+        sources.append(source)
+    value = {'scope': metadata(cur, scope), 'rows': sources}
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
 
 

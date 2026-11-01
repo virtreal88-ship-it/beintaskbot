@@ -133,6 +133,8 @@ def record_case_message_membership(cur, tenant, ticket_id, channel_id, conversat
       (tenant,ticket_id,channel_id,conversation_id))
     route=cur.fetchone()
     if not route:return 0
+    from tenant_support_case_context import freeze_scope
+    freeze_scope(cur, tenant, ticket_id)
     cur.execute('''INSERT INTO saas_support_ticket_messages(tenant_id,ticket_id,message_id,event_key)
       SELECT %s::uuid,%s::uuid,m.id,%s FROM saas_crm_messages m
       WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s
@@ -144,9 +146,9 @@ def record_case_message_membership(cur, tenant, ticket_id, channel_id, conversat
     return len(cur.fetchall())
 
 
-def record_case_selected_message_ids(cur,tenant,ticket_id,message_ids,event_key):
+def record_case_selected_message_ids(cur,tenant,ticket_id,message_ids,event_key,maximum=30):
     """Record the owner's explicit, bounded transcript selection for this CASE."""
-    if not isinstance(message_ids,(list,tuple)) or not 1<=len(message_ids)<=30:return 0
+    if not isinstance(message_ids,(list,tuple)) or not 1<=len(message_ids)<=min(80,maximum):return 0
     keys=[]
     for value in message_ids:
         try:key=str(uuid.UUID(str(value)))
@@ -159,6 +161,8 @@ def record_case_selected_message_ids(cur,tenant,ticket_id,message_ids,event_key)
       WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid''',(tenant,ticket_id))
     route=cur.fetchone()
     if not route:return 0
+    from tenant_support_case_context import freeze_scope
+    freeze_scope(cur, tenant, ticket_id)
     cur.execute('''INSERT INTO saas_support_ticket_messages(tenant_id,ticket_id,message_id,event_key)
       SELECT %s::uuid,%s::uuid,m.id,%s FROM saas_crm_messages m
       WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s AND m.id=ANY(%s::uuid[])
@@ -360,13 +364,22 @@ def detail(profile, ticket_id, before=None, message_id=None):
 
 def available_case_media(profile,ticket_id,before=None):
     """List media metadata from exactly one ticket source route, newest first."""
+    return _available_case_materials(profile,ticket_id,before,media_only=True)
+
+
+def available_case_messages(profile,ticket_id,before=None):
+    """List bounded text previews and media metadata for explicit case additions."""
+    return _available_case_materials(profile,ticket_id,before,media_only=False)
+
+
+def _available_case_materials(profile,ticket_id,before,*,media_only):
     from tenant_operator_access import access,assert_route
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,_,policy=access(cur,profile,'support')
             if policy.profile.get('role')!='owner' or not policy.allows('dialogs'):
-                raise TenantLinearError('Только владелец с доступом к диалогам может просматривать медиа.',403)
+                raise TenantLinearError('Только владелец с доступом к диалогам может просматривать материалы.',403)
             ticket_id=identifier(ticket_id)
             cur.execute('''SELECT t.id,t.channel_id::text AS channel_id,t.conversation_id,c.lead_id
               FROM saas_support_tickets t JOIN saas_connect_conversations c
@@ -382,9 +395,11 @@ def available_case_media(profile,ticket_id,before=None):
                   SELECT COALESCE(happened_at,created_at),id FROM saas_crm_messages
                   WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND id=%s::uuid)'''
                 args.extend([tenant,int(route['lead_id']),'connect:'+str(route['connect_channel_id']),identifier(before)])
-            cur.execute('''SELECT m.id,m.external_id,m.direction,m.message_type,m.happened_at,m.created_at
+            preview = '' if media_only else ',left(m.body,1000) AS body,m.author_name'
+            types = "('image','audio','voice','video','document')" if media_only else "('text','image','audio','voice','video','document')"
+            cur.execute('''SELECT m.id,m.external_id,m.direction,m.message_type,m.happened_at,m.created_at'''+preview+'''
               FROM saas_crm_messages m WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s
-                AND m.direction IN ('incoming','outgoing') AND m.message_type IN ('image','audio','voice','video','document')'''+cursor_clause+'''
+                AND m.direction IN ('incoming','outgoing') AND m.message_type IN '''+types+cursor_clause+'''
               ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 51''',tuple(args))
             rows=cur.fetchall()
     return {'messages':[public(row) for row in rows[:50]],'next_before':str(rows[49]['id']) if len(rows)>50 else None}
@@ -392,8 +407,18 @@ def available_case_media(profile,ticket_id,before=None):
 
 def attach_case_media(profile,ticket_id,message_ids):
     """Attach explicitly selected media from the ticket's exact Connect route; no delivery or analysis."""
-    if not isinstance(message_ids,list) or not 1<=len(message_ids)<=10:
-        raise TenantLinearError('Выберите от 1 до 10 вложений.')
+    return _attach_case_materials(profile,ticket_id,message_ids,media_only=True)
+
+
+def attach_case_messages(profile,ticket_id,message_ids):
+    """Explicitly union selected source text/media into a case, without external actions."""
+    return _attach_case_materials(profile,ticket_id,message_ids,media_only=False)
+
+
+def _attach_case_materials(profile,ticket_id,message_ids,*,media_only):
+    maximum = 10 if media_only else 80
+    if not isinstance(message_ids,list) or not 1<=len(message_ids)<=maximum:
+        raise TenantLinearError('Выберите от 1 до '+str(maximum)+' материалов.')
     try:keys=[str(uuid.UUID(str(value))) for value in message_ids]
     except (ValueError,TypeError,AttributeError):raise TenantLinearError('Некорректный идентификатор вложения.') from None
     if len(set(keys))!=len(keys):raise TenantLinearError('Повторяющиеся вложения.')
@@ -408,15 +433,16 @@ def attach_case_media(profile,ticket_id,message_ids):
             cur.execute('''SELECT t.id,t.status,t.channel_id::text AS channel_id,t.conversation_id,c.lead_id
               FROM saas_support_tickets t JOIN saas_connect_conversations c
                 ON c.tenant_id=t.tenant_id AND c.connect_channel_id=t.channel_id AND c.conversation_id=t.conversation_id
-              WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid FOR SHARE OF t,c''',(tenant,ticket_id))
+              WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid FOR UPDATE OF t FOR SHARE OF c''',(tenant,ticket_id))
             ticket=cur.fetchone()
             if not ticket:raise TenantLinearError('Обращение не найдено.',404)
             if ticket['status']=='resolved':raise TenantLinearError('Обращение уже закрыто.',409)
             route=assert_route(cur,tenant,policy,'connect',ticket['conversation_id'],ticket['channel_id'],ticket['lead_id'])
+            types = "('image','audio','voice','video','document')" if media_only else "('text','image','audio','voice','video','document')"
             cur.execute('''SELECT m.id FROM saas_crm_messages m
               WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id=%s AND m.channel=%s AND m.id=ANY(%s::uuid[])
                 AND m.direction IN ('incoming','outgoing')
-                AND m.message_type IN ('image','audio','voice','video','document')
+                AND m.message_type IN '''+types+'''
                 AND EXISTS (SELECT 1 FROM saas_connect_conversations c
                   WHERE c.tenant_id=m.tenant_id AND c.connect_channel_id=%s::uuid
                     AND c.conversation_id=%s AND c.lead_id=m.kommo_lead_id)''',
@@ -424,10 +450,10 @@ def attach_case_media(profile,ticket_id,message_ids):
                str(route['connect_channel_id']),route['conversation_id']))
             eligible={str(row['id']) for row in cur.fetchall()}
             if eligible!=set(keys):raise TenantLinearError('Вложение недоступно в исходном диалоге этого обращения.',404)
-            event_key='support-media-picker:'+str(uuid.uuid4())
-            if record_case_selected_message_ids(cur,tenant,ticket_id,keys,event_key)!=len(keys):
+            event_key=('support-media-picker:' if media_only else 'support-material-picker:')+str(uuid.uuid4())
+            if record_case_selected_message_ids(cur,tenant,ticket_id,keys,event_key,maximum=maximum)!=len(keys):
                 raise TenantLinearError('Не удалось привязать выбранные вложения.',409)
-            _audit(cur,tenant,actor,'support_ticket_media_attached','support_ticket',ticket_id,
+            _audit(cur,tenant,actor,'support_ticket_media_attached' if media_only else 'support_ticket_messages_attached','support_ticket',ticket_id,
                    {'message_ids':keys,'source':'scoped_dialog_picker'})
         conn.commit()
     return {'ticket_id':ticket_id,'attached_message_ids':keys,'attached_count':len(keys)}
