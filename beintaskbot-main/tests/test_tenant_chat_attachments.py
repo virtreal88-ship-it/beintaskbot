@@ -160,6 +160,27 @@ class Api(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.download.call_count,1)
         self.assertEqual(self.load.call_count,4)
 
+    async def test_cache_only_miss_never_starts_or_joins_provider_work(self):
+        self.query['cache_only']='1'
+        result=await self.handle(SimpleNamespace(query=self.query))
+        self.assertEqual(result['status'],204)
+        self.download.assert_not_called();self.provider.assert_not_called()
+        self.assertFalse(self.module.MEDIA_INFLIGHT)
+        self.assertEqual(self.load.call_count,1)
+
+    async def test_cache_only_hit_still_rechecks_authority(self):
+        await self.handle(SimpleNamespace(query=self.query))
+        self.query['cache_only']='1'
+        self.load.reset_mock()
+        result=await self.handle(SimpleNamespace(query=self.query))
+        self.assertEqual(result['body'],b'picture')
+        self.assertEqual(self.load.call_count,2)
+        self.download.assert_called_once()
+        self.load.side_effect=TenantLinearError('Revoked',403)
+        denied=await self.handle(SimpleNamespace(query=self.query))
+        self.assertEqual(denied['status'],403)
+        self.assertNotIn('body',denied)
+
     async def test_audio_range_is_served_from_authorized_attachment(self):
         request=SimpleNamespace(query=self.query,headers={'Range':'bytes=1-3'})
         result=await self.handle(request)
