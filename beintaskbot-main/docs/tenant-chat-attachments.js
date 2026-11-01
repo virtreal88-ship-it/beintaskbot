@@ -49,7 +49,7 @@
     const audio=host.querySelector('.operator-native-audio'),busy=primary?.getAttribute('aria-busy')==='true';
     const loaded=!!audio?.getAttribute('src')&&audio?.dataset.mediaPreview==='audio';
     const blocked=['unavailable','forbidden','too_large','invalid','terminal'].includes(host.dataset.mediaPreviewState);
-    if(audio)audio.hidden=!loaded;
+    if(audio){audio.hidden=false;audio.tabIndex=loaded?0:-1;const controls=audio.closest('.operator-audio-controls');if(controls){controls.inert=!loaded;controls.setAttribute('aria-disabled',String(!loaded));}}
     if(primary){primary.hidden=loaded;primary.disabled=busy||blocked;primary.textContent=busy?text('loading','Loading…'):['retryable','rate_limited'].includes(host.dataset.mediaPreviewState)?text('retryAttachment','Retry loading'):text('loadAttachment','Load file');}
     if(menuLoad)menuLoad.disabled=busy||blocked;
     const status=host.querySelector('[data-media-load-status]'),language=window.tenantI18n?.language||'en';
@@ -205,7 +205,7 @@
           // Keep at most three decoded previews in this tab, not the whole history.
           if(previews.size>=3){const [oldUrl,old]=previews.entries().next().value;stop(old.media);if(old.node.classList?.contains('operator-native-audio')){old.node.removeAttribute('src');old.node.load?.();delete old.node.dataset.mediaPreview;old.button.hidden=true;delete old.host.dataset.mediaPreviewState;updateMediaMenu(old.host);}else{old.node.remove();old.button.hidden=false;delete old.host.dataset.mediaPreviewState;updateMediaMenu(old.host);}URL.revokeObjectURL(oldUrl);urls.delete(oldUrl);previews.delete(oldUrl);loadedKeys.delete(old.cacheKey);}
           previews.set(blobUrl,{node,button,media,host,cacheKey});if(mediaCache.has(cacheKey)){loadedKeys.delete(cacheKey);loadedKeys.add(cacheKey);while(loadedKeys.size>3)loadedKeys.delete(loadedKeys.values().next().value);}
-          if(host.insertBefore)host.insertBefore(node,button);else host.append(node);button.hidden=true;status.textContent='';
+          if(!node.closest?.('.operator-audio-controls')){if(host.insertBefore)host.insertBefore(node,button);else host.append(node);}button.hidden=true;status.textContent='';
           delete host.dataset.mediaRetryAt;retryUntil.delete(retryKey(host,host.dataset.chatAttachment||''));host.dataset.mediaPreviewState='loaded';updateMediaMenu(host);if(!cachedOnly&&!automatic)void rememberAudio(host);
         }catch(error){if(blobUrl){URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);}if(valid()){if(automatic)blockAudioIntent(intentBinding,0);if(!host.dataset.mediaPreviewState||host.dataset.mediaPreviewState==='loaded')host.dataset.mediaPreviewState='retryable';status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;updateMediaMenu(host);}}
         finally{clearTimeout(timer);active.delete(controller);if(pendingKeys.get(requestKey)===controller)pendingKeys.delete(requestKey);button.setAttribute('aria-busy','false');if(menuLoad)menuLoad.disabled=false;updateMediaMenu(host);if(restoreRetained)bind();}
