@@ -25,6 +25,52 @@ def schema(cur):
       $$''')
 
 
+def group_function(cur):
+    """Extend legacy quarantine only for a confirmed exact group binding.
+
+    The permit does not resolve ordinary/direct routes and never overrides an
+    active saas_connect_dialog_links row (that remains a separate hard gate).
+    Fingerprinted work additionally needs a new inbound message after both the
+    permit and an explicit group Resume.
+    """
+    cur.execute('''CREATE OR REPLACE FUNCTION ai_legacy_blocked(t UUID,ch TEXT,c TEXT,fp TEXT DEFAULT NULL)
+      RETURNS BOOLEAN LANGUAGE SQL STABLE AS $$
+      SELECT EXISTS(SELECT 1 FROM saas_ai_conversation_state old
+        WHERE old.tenant_id=t AND old.provider='connect' AND old.channel_id='' AND old.conversation_id=c
+        AND NOT EXISTS(SELECT 1 FROM saas_ai_legacy_permits p
+          JOIN saas_ai_conversation_state s ON s.tenant_id=p.tenant_id AND s.provider='connect'
+            AND s.channel_id=p.channel_id AND s.conversation_id=p.conversation_id
+          WHERE p.tenant_id=t AND p.channel_id=ch AND p.conversation_id=c
+            AND p.legacy_revision=old.revision AND p.channel_revision=s.revision AND p.agent_id=s.agent_id
+            AND (fp IS NULL OR EXISTS(SELECT 1 FROM saas_tenant_webhook_events e
+              JOIN saas_connect_conversations route ON route.tenant_id=t AND route.connect_channel_id::text=ch AND route.conversation_id=c
+              JOIN saas_crm_messages m ON m.tenant_id=t AND m.channel='connect:'||ch
+                AND m.kommo_lead_id=route.lead_id AND m.external_id='connect:'||(e.payload->>'message_id')
+              WHERE e.tenant_id=t AND e.fingerprint=fp AND e.provider='connect'
+                AND e.payload->>'channel_id'=ch AND e.payload->>'conversation_id'=c
+                AND e.received_at>p.granted_at AND e.received_at>s.resumed_at
+                AND m.created_at>p.granted_at AND m.happened_at>s.resumed_at AND m.direction='incoming')))
+          AND NOT EXISTS(SELECT 1 FROM saas_ai_group_channel_legacy_permits p
+            JOIN saas_ai_group_coordination g ON g.tenant_id=p.tenant_id
+              AND g.provider=p.provider AND g.group_jid=p.group_jid
+            JOIN LATERAL jsonb_array_elements(g.assignments) AS assignment(value) ON TRUE
+              AND assignment.value->>'channel_id'=p.channel_id::text
+              AND assignment.value->>'agent_id'=p.agent_id::text
+          WHERE p.tenant_id=t AND p.provider='connect' AND p.channel_id::text=ch
+            AND p.group_jid=c AND old.conversation_id=p.group_jid
+            AND p.legacy_revision=old.revision AND p.preview_hash<>''
+            AND (fp IS NULL OR EXISTS(SELECT 1 FROM saas_tenant_webhook_events e
+              JOIN saas_connect_conversations route ON route.tenant_id=t AND route.connect_channel_id::text=ch AND route.conversation_id=c
+              JOIN saas_crm_messages m ON m.tenant_id=t AND m.channel='connect:'||ch
+                AND m.kommo_lead_id=route.lead_id AND m.external_id='connect:'||(e.payload->>'message_id')
+              WHERE e.tenant_id=t AND e.fingerprint=fp AND e.provider='connect'
+                AND e.payload->>'channel_id'=ch AND e.payload->>'conversation_id'=c
+                AND g.state='active' AND g.resumed_at IS NOT NULL
+                AND e.received_at>p.granted_at AND e.received_at>g.resumed_at
+                AND m.created_at>p.granted_at AND m.happened_at>g.resumed_at AND m.direction='incoming'))))
+      $$''')
+
+
 def renew(cur, tenant, channel, conversation):
     """Only called after a validated Resume/new inbound/successful send under the dialogue lock.
     All other revision changes revoke the exception, including takeover/Pause.

@@ -5,7 +5,7 @@ from aiohttp import web
 from tenant_ai_agents_api import _expected, _origin
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_dialogs import listing,history,save_display_name,mark_read,mark_all_read
-from tenant_ai_group_coordination import configure as configure_group, register_employee
+from tenant_ai_group_coordination import configure as configure_group, register_employee, legacy_resolution_preview
 from tenant_operator_assignment import options as assignment_options, assign as assign_agent, bulk_preview as assignment_bulk_preview, bulk_apply as assignment_bulk_apply
 from tenant_operator_continuation import options as continuation_options, grant as grant_continuation
 from tenant_operator_legacy import options as legacy_options, recover as recover_legacy
@@ -41,6 +41,9 @@ def handler(member_from_request,origin,logger,resource):
                     result=await asyncio.to_thread(assignment_options,profile,dict(query))
                 elif resource=='agent_assignment_bulk':
                     result=await asyncio.to_thread(assignment_bulk_preview,profile,query.get('channel_id'),query.get('agent_id'))
+                elif resource=='group_legacy_resolution':
+                    _expected(query,profile)
+                    result=await asyncio.to_thread(legacy_resolution_preview,profile,dict(query))
                 elif resource in {'legacy_recovery','legacy_continuation'}:
                     _expected(query,profile)
                     result=await asyncio.to_thread(continuation_options if resource=='legacy_continuation' else legacy_options,profile,dict(query))

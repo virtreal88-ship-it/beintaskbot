@@ -141,6 +141,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/agent-assignment-bulk', operator_handler(member, origin, logger, 'agent_assignment_bulk'), ('GET', 'POST')),
         ('dialogs/legacy-continuation', operator_handler(member, origin, logger, 'legacy_continuation'), ('GET', 'POST')),
         ('dialogs/legacy-recovery', operator_handler(member, origin, logger, 'legacy_recovery'), ('GET', 'POST')),
+        ('dialogs/group-legacy-resolution', operator_handler(member, origin, logger, 'group_legacy_resolution'), ('GET',)),
         ('dialogs/group-coordination', operator_handler(member, origin, logger, 'group_coordination'), ('POST',)),
         ('dialogs/group-staff', operator_handler(member, origin, logger, 'group_staff'), ('POST',)),
         ('night-report', night_report_handler(member, logger), ('GET',)),
