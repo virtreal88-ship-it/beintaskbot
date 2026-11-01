@@ -118,16 +118,18 @@ async function bootstrapTests(){
  console.log('PASS bootstrap: superseded startup waits for fresh authorization; independent CRM reads start in parallel');
 }
 async function defaultSupportLandingTests(){
- const boot=async(url='/app',savedView='')=>{
+ const boot=async(url='/app',savedView='',modules={support:true,tasks:true,dialogs:true,ai_agents:true})=>{
   const b=browser('support'),{w,requests}=b;w.history.replaceState({},'',url);if(savedView)w.sessionStorage.setItem('tenant.app.view',savedView);else w.sessionStorage.removeItem('tenant.app.view');
   const main=[...w.document.scripts].find(script=>script.textContent.includes('const savedView=sessionStorage')).textContent;w.eval(main);assert.equal(requests.length,1);
-  const full={...profile,capabilities:{modules:{support:true,tasks:true,dialogs:true,ai_agents:true}}};requests[0].resolve(response(full));await settle();return b;
+  const full={...profile,capabilities:{modules}};requests[0].resolve(response(full));await settle();return b;
  };
  const bare=await boot('/app?return_to=%2Fapp%2Fsupport%2Fcase%2F7');
  try{assert.ok(bare.w.document.getElementById('view-support').classList.contains('active'),'bare app opens user-facing tickets/support, not native tasks');assert.equal(new URL(bare.w.location.href).searchParams.get('view'),'support');assert.equal(new URL(bare.w.location.href).searchParams.get('return_to'),'/app/support/case/7','return-to query survives default normalization');assert.ok(bare.w.document.querySelector('#view-support #operatorSupport'),'default target is the support-ticket inbox');assert.equal(bare.w.document.getElementById('supportCases')?.closest('.view')?.id,'view-support_cases','learning cases stay in their own route');
   bare.w.document.querySelector('.nav [data-view="tasks"]').click();assert.ok(bare.w.document.getElementById('view-tasks').classList.contains('active'));bare.w.history.back();await new Promise(resolve=>setTimeout(resolve,100));assert.ok(bare.w.document.getElementById('view-support').classList.contains('active'),'Back restores the previous view');bare.w.history.forward();await new Promise(resolve=>setTimeout(resolve,100));assert.ok(bare.w.document.getElementById('view-tasks').classList.contains('active'),'Forward restores the chosen tasks view');
  }finally{bare.dom.window.close();}
  for(const [url,saved,expected] of [['/app?view=tasks','support','tasks'],['/app','dialogs','dialogs'],['/app?view=support','tasks','support']]){const b=await boot(url,saved);try{assert.ok(b.w.document.getElementById('view-'+expected).classList.contains('active'),`${url} with saved=${saved} preserves explicit or remembered route ${expected}`);}finally{b.dom.window.close();}}
+ const restricted=await boot('/app?view=tasks','',{tasks:true,dialogs:false,support:false,ai_agents:false});
+ try{assert.ok(restricted.w.document.getElementById('view-tasks').classList.contains('active'));restricted.w.history.pushState({},'','/app');restricted.w.dispatchEvent(new restricted.w.PopStateEvent('popstate'));assert.ok(restricted.w.document.getElementById('view-tasks').classList.contains('active'),'a history URL without a view falls back to an available pane when support is unavailable');assert.equal(new URL(restricted.w.location.href).searchParams.get('view'),'tasks');}finally{restricted.dom.window.close();}
  console.log('PASS default landing: bare app defaults to support tickets; explicit/deep-link and remembered views plus back/forward are preserved');
 }
 async function focusTests(){
