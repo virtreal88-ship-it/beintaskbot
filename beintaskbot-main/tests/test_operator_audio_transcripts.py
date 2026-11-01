@@ -78,7 +78,10 @@ def test_saved_failure_projection_is_exact_version_and_contains_no_private_paylo
     assert '_saved_audio_receipt_diagnostic' not in foreign
 
 
-def test_prior_manual_reply_exposes_only_matching_metadata_not_private_text(db):
+import pytest
+
+@pytest.mark.parametrize('code',['media_unavailable','ai_spend_media_price_unknown','ai_spend_budget_exhausted','ai_call_limit_exhausted','media_authority_changed','source_access_denied'])
+def test_prior_manual_reply_exposes_only_matching_metadata_not_private_text(db,code):
     from tenant_chat_ai_schema import ensure_schema
     ensure_schema(db);create_schema(db)
     row={'id':str(uuid.uuid4()),'external_id':'connect:manual-attempt','channel':'connect:'+CA,
@@ -87,13 +90,14 @@ def test_prior_manual_reply_exposes_only_matching_metadata_not_private_text(db):
         'media_kind':'audio','media_version':media_version(row['raw'])}
     result={'text':'PRIVATE_COPILOT_RESPONSE','source_versions':[ref],
         'context_usage':{'evidence':[{'source_id':row['external_id'],'kind':'audio','status':'unsupported','code':'media_unavailable'}]}}
+    if code!='media_unavailable':result={'media_failure':{'source_id':row['external_id'],'source_hash':source_hash(ref),'kind':'audio','status':'error','code':code,'failure_stage':'audio_transcription'},'text':'PRIVATE_COPILOT_RESPONSE'}
     db.execute('''INSERT INTO saas_chat_ai_runs(tenant_id,request_id,requested_by,lead_id,input_hash,config_version,status,reserved_calls,result,provider,channel_id,conversation_id)
       VALUES(%s::uuid,%s::uuid,11,41,'synthetic-hash','1','completed',1,%s::jsonb,'connect',%s,'client')''',
       (A,str(uuid.uuid4()),json.dumps(result),CA));db.commit()
     with db.cursor() as cur:_attach_saved_audio_transcripts(cur,A,[row],conversation_id='client')
     public=_message(row)
-    assert public['analysis_diagnostic']['code']=='media_unavailable'
-    assert public['analysis_diagnostic']['stage']=='unknown'
+    assert public['analysis_diagnostic']['code']==code
+    assert public['analysis_diagnostic']['stage']==('unknown' if code=='media_unavailable' else 'audio_transcription')
     assert 'PRIVATE' not in json.dumps(public)
     for tenant,channel,conversation,raw in [(B,CA,'client',row['raw']),(A,CB,'client',row['raw']),
             (A,CA,'other',row['raw']),(A,CA,'client',{'mediaId':'changed'})]:

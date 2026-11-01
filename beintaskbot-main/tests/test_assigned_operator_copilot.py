@@ -343,6 +343,11 @@ def test_async_consultation_uses_current_assigned_agent_and_long_original_eviden
 
 
 @pytest.mark.parametrize('status,code,stage',[
+    ('error','ai_spend_media_price_unknown','audio_transcription'),
+    ('error','ai_spend_budget_exhausted','audio_transcription'),
+    ('error','ai_call_limit_exhausted','audio_transcription'),
+    ('error','media_authority_changed','audio_transcription'),
+    ('error','source_access_denied','audio_transcription'),
     ('unsupported','media_unavailable','media_download'),
     ('error','media_processing_failed','media_validation'),
     ('unknown','media_result_unknown','audio_transcription'),
@@ -362,6 +367,8 @@ def test_latest_unread_audio_never_generates_old_topic_or_queries_stale_body(rea
     def failed_media(_tenant,_actor,_command,rows,_model,**kw):
         latest=rows[-1];latest['_manual_request_source']=True;latest['_copilot_context_body']=''
         latest['_episode_receipt']={'status':status,'code':code,**({'failure_stage':stage} if stage else {})}
+        from tenant_media_admission import REASONS
+        if code in REASONS:latest['_episode_receipt']['admission_status']=429 if code in {'ai_spend_budget_exhausted','ai_call_limit_exhausted'} else 403 if code=='source_access_denied' else 409
         from tenant_episode_media import reference
         kw['execution'].source_refs=[reference(latest,CA,41)]
         # A processed receipt without actual speech is not sufficient evidence.
@@ -370,7 +377,9 @@ def test_latest_unread_audio_never_generates_old_topic_or_queries_stale_body(rea
     monkeypatch.setattr(copilot,'_prepare_copilot_media',failed_media)
     knowledge=Mock(return_value=[]);monkeypatch.setattr('tenant_ai_agent_run_store.knowledge_context',knowledge)
     with pytest.raises(TenantLinearError) as caught:copilot.run(PROFILE,data)
-    assert caught.value.status==409
+    assert caught.value.status==(429 if code in {'ai_spend_budget_exhausted','ai_call_limit_exhausted'} else 403 if code=='source_access_denied' else 409)
+    from tenant_media_admission import explanation
+    if explanation(code,'ru'):assert explanation(code,'ru') in str(caught.value)
     assert 'OLD_TOPIC' not in str(caught.value)
     assert (stage or 'unknown') in str(caught.value)
     generated.assert_not_called();knowledge.assert_not_called()

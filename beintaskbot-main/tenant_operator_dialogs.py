@@ -104,7 +104,8 @@ def _media_filename(raw):
 def _audio_diagnostic(status, code, result, at):
     """Product diagnostics: fixed enums only, never raw errors, text or URLs."""
     if status not in {'processed','partial','unavailable','unsupported','error','unknown'}:return None
-    codes={'transcribed','transcript_truncated','existing_transcript','media_unavailable',
+    from tenant_media_admission import REASONS
+    codes=set(REASONS) | {'transcribed','transcript_truncated','existing_transcript','media_unavailable',
         'source_fetch_unavailable','source_check_failed','source_rate_limited','source_access_denied',
         'source_changed','media_processing_failed','media_result_unknown','asr_authorization_required',
         'legacy_voice_version_unverified','pre_dispatch_retryable','media_size_limit',

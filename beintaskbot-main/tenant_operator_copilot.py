@@ -447,7 +447,8 @@ def run(profile, data, *, consultation_reply_id=None):
                 stage=receipt.get('failure_stage')
                 if stage not in {'source_validation','media_download','media_validation','audio_transcription'}:stage='unknown'
                 code=receipt.get('code')
-                if code not in {'media_unavailable','source_fetch_unavailable','source_check_failed','source_rate_limited',
+                from tenant_media_admission import REASONS, explanation
+                if code not in set(REASONS) | {'media_unavailable','source_fetch_unavailable','source_check_failed','source_rate_limited',
                     'source_access_denied','source_changed','media_processing_failed','media_result_unknown',
                     'asr_authorization_required','legacy_voice_version_unverified','pre_dispatch_retryable',
                     'media_size_limit','asr_model_unavailable','transcript_truncated'}:code='audio_evidence_incomplete'
@@ -461,7 +462,9 @@ def run(profile, data, *, consultation_reply_id=None):
                 message={'az':'Son səs mesajı oxunmayıb. AI cavabı yaradılmadı; əvvəlki mövzu əvəzində istifadə olunmadı.',
                     'en':'The latest voice message was not read. No AI reply was created from the earlier topic.'}.get(language,
                     'Последнее голосовое не прочитано. AI-ответ по старой теме не создан.')
-                error=TenantLinearError(message+' ['+stage+': '+code+']',409)
+                reason=explanation(code,language)
+                status=receipt.get('admission_status') if code in REASONS else 409
+                error=TenantLinearError(message+(' '+reason if reason else '')+' ['+stage+': '+code+']',status if status in {403,409,429} else 409)
                 error.keep_request=True
                 raise error
             latest_customer=str(receipt['transcript'])
