@@ -31,7 +31,9 @@ handlers issued two POSTs for rapid activation, and successful POST followed by 
 failed GET erased the input and overwrote the refresh failure with a success notice.
 The shared in-flight guard prevents duplicate clicks. A browser-wide Web Lock
 also serializes tabs. Before any POST, a tenant/actor-scoped localStorage registry
-records a random UUID, audience, payload fingerprint and recoverable text draft.
+records only a random UUID, payload fingerprint, status, timestamp and exact
+tenant/actor/agent/editor scope. No title, content, filename, file bytes or raw
+server-error text is written to localStorage.
 An existing fingerprint always performs GET by that exact UUID, never another POST.
 404, malformed responses, timeout, changed identity or unavailable readback cannot
 unlock a resend. Edited content is a new operation; another primary editor/channel
@@ -53,8 +55,8 @@ request ID, tenant, author and audience. Only then are still-unchanged submitted
 fields cleared; later edits and other editors remain intact. A known successful
 POST with failed detail/list readback reports saved-but-unreadable and keeps its
 operation locked. Lost or malformed POST responses report unconfirmed and retain
-input. Repeated clicks only reconcile with GET. Records confirmed via readback keep
-only identity/fingerprint metadata, removing stored draft text and title.
+input in its scoped in-memory editor. Repeated clicks only reconcile with GET.
+All durable records, including unconfirmed/rejected ones, contain metadata only.
 
 Native PostgreSQL/psycopg tests read committed sources through fresh connections,
 including chunks/audience metadata, concurrent identity races and foreign-tenant
@@ -64,22 +66,33 @@ separate from mocked UI tests.
 
 ## Durability and limits
 
-Text drafts and uncertain locks survive full UI reload/browser restart while that
-origin's localStorage is retained. Web Locks and persistent storage are required;
-unavailable/corrupt storage fails closed before dispatch. Different browsers or
-cleared site storage cannot recover the old client-generated identity automatically;
-no cross-device content-based deduplication is claimed. The server still deduplicates
-the same UUID while its source/receipt exists. Normal archival keeps that receipt;
-physical deletion is not a durable separate request ledger. There is no expiry or
-unsafe manual unlock for uncertain operations.
+Uncertain metadata locks survive UI reload/browser restart while that origin's
+localStorage remains. Unsaved text and selected File objects live only in the
+page's memory, keyed by tenant, actor and editor. Switching editor, tenant, actor
+or logging out clears visible fields before the new scope is rendered. Returning
+to the same authorized scope in that page restores its own in-memory draft and
+File objects; a different scope never receives them. Logout does not delete durable
+uncertainty identities. Memory disappears when the page is destroyed.
 
-For files, binary input cannot be restored to a browser file picker after restart.
-The registry retains name/title and fingerprint; reselecting the same bytes/name
-reconciles the same operation without upload. A request that never reached the
-server remains locked if reads find nothing; an operator must establish its outcome
-rather than blindly retry. Persisted draft data is scoped to tenant/actor within the
-same browser origin and is removed on confirmed readback; it is not encrypted browser
-storage. No paid model call or production write is used to test this behavior.
+After restart, the current editor's most recent unresolved operation is checked by
+its exact receipt-mode GET. Only a matching authorized server text source may refill
+an empty text form; existing in-memory or newer input is never overwritten. If the
+source is absent/unavailable, UI explicitly says the unsaved draft cannot be recovered
+after reload and leaves the operation locked. A saved file's original bytes cannot be
+reconstructed; its source is available in the normal server knowledge list. Reselecting
+the same file/title recomputes its fingerprint and performs only reconciliation.
+
+Web Locks and persistent metadata storage are required. Storage failures fail closed
+before POST. No raw title/content/filename/file bytes or server-error text is persisted,
+including rejection paths. Same-tab validation reasons remain in memory only.
+Metadata receipts have no expiry or unsafe manual unlock. Clearing site storage or
+using another browser loses automatic recovery of the old client-generated identity;
+no cross-device content deduplication is claimed. Server deduplication of the same
+UUID lasts while its source/receipt exists; ordinary archive retains it, physical
+source deletion is not a separate durable request ledger. A request that never
+reached the server remains locked until its outcome can be established.
+
+No paid model call or production write is used to test this behavior.
 
 ## Validation
 
@@ -95,6 +108,9 @@ storage. No paid model call or production write is used to test this behavior.
 - UI fixture covers commit + lost response, malformed 200, known success + failed
   readback, same-operation repeat, edited new operation, full JS restart, file
   re-selection, tenant/actor/audience boundaries, concurrent tabs and storage denial.
+- Native Chromium scope fixture passes real FileList/DataTransfer restoration,
+  expert A/B, separate tenant and actor changes, in-flight completion, return to A,
+  logout and metadata-only storage.
 - Existing Knowledge Center and case-loading UI suites pass.
 - `test_tenant_operator_workspace_ui.cjs` fails at workspace bootstrap/navigation
   unchanged on base 89583dd; it does not reach the modified save handlers.
