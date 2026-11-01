@@ -22,7 +22,7 @@ const settle=async()=>{for(let i=0;i<15;i++)await new Promise(resolve=>setImmedi
  inboxFail=true;d.querySelector('#dialogConsultationBell').click();await settle();d.dispatchEvent(new w.CustomEvent('tenant-chat-attachments-ready'));await settle();
  assert.match(d.querySelector('#dialogConsultationBell').textContent,/!/);assert.match(d.querySelector('#dialogConsultationMenu [role=alert]').textContent,/Synthetic failure/);
  inboxFail=false;[...d.querySelectorAll('#dialogConsultationMenu button')].find(b=>b.textContent==='Повторить').click();await settle();assert.doesNotMatch(d.querySelector('#dialogConsultationBell').textContent,/!/);
- assert.ok(d.querySelector('#dialogConsultationMobileBell'));d.querySelector('#dialogConsultationMobileBell').click();assert.equal(d.querySelector('#dialogConsultationMenu').hidden,false);
+ assert.equal(d.querySelector('#dialogConsultationMobileBell'),null);d.querySelector('#notificationClose').click();d.querySelector('#dialogConsultationBell').click();assert.equal(d.querySelector('#dialogConsultationMenu').hidden,false);
  previewFail=true;d.querySelector('#dialogConsultationStart').click();await settle();assert.match(d.querySelector('.dialog-consultation-overlay [role=alert]').textContent,/Synthetic failure/);
  assert.equal(calls.filter(c=>c.path.endsWith('/dialog-consultations')&&c.body).length,0);
  previewFail=false;[...d.querySelectorAll('.dialog-consultation-overlay button')].find(b=>b.textContent==='Повторить').click();await settle();
