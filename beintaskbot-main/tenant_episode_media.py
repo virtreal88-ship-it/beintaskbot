@@ -185,6 +185,13 @@ def prepare(authority, rows):
             # it must not be confused with analysis of a new attachment.
             if historical_context:
                 row['_copilot_attachment_text']=historical_context
+                if (str(row.get('message_type') or '').lower()=='image'
+                        and str(row.get('channel') or '').removeprefix('connect:')==authority.channel):
+                    # Read only the exact historical receipt; never enter a
+                    # flight or re-analyse an old, already redacted image.
+                    from tenant_product_identifiers import context as product_context
+                    historical_ref=reference(row,authority.channel,authority.lead)
+                    row['_copilot_attachment_text']=product_context(authority.tenant,historical_ref,reusable(profile,historical_ref))+'\n'+historical_context
                 row['_historical_media_status']=(row.get('media_evidence') or {}).get('status')
                 partial=row['_historical_media_status']=='partial'
                 row['_copilot_media_notice']=('[Historical attachment; saved partial evidence; incomplete, do not infer omitted contents; not the latest attachment]'
@@ -225,6 +232,10 @@ def prepare(authority, rows):
         status=receipt.get('status','unknown');code=receipt.get('code','media_result_unknown')
         row['_copilot_media_notice']='[Attachment '+status+': '+code+'; never infer unread contents]'
         row['_copilot_attachment_text']=message['text']
+        if ref['media_kind']=='image':
+            from tenant_product_identifiers import context as product_context
+            row['_copilot_attachment_text']=product_context(authority.tenant,ref,prior or {
+                'status':receipt.get('status'),'coverage':receipt.get('coverage',{}),'result':receipt})+'\n'+message['text']
         row['_episode_receipt']=receipt
     return rows
 

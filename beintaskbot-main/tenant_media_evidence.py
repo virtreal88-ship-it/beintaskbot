@@ -161,6 +161,12 @@ def persist(cur, tenant, refs, receipts, *, skip_unverified_source_ids=(), proce
             result['failure_code']=receipt['failure_code']
         if isinstance(receipt.get('observations'), list):
             result['observations'] = [x for x in receipt['observations'] if isinstance(x,dict)][:MAX_OBSERVATIONS]
+        # Private typed evidence is source-bound and never added to generic
+        # observation text or the public apply_reusable/coverage projections.
+        from tenant_product_identifiers import candidate
+        typed = candidate(tenant, ref, {'status':status, 'coverage':coverage, 'result':receipt})
+        if typed:
+            result['product_barcode_candidate'] = typed
         # An empty terminal result is not reusable evidence.  In particular,
         # a visual budget/consent stop or a model-supplied image must not
         # permanently prevent a later separately-authorized analysis.

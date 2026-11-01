@@ -1,4 +1,47 @@
-# Typed product-barcode evidence: separate plan, not a released fix
+# Typed product-barcode evidence: implementation and acceptance boundary
+
+## Implemented after plan approval
+
+`tenant_product_identifiers.py` accepts one complete image observation containing
+one explicit, bounded field such as `Printed EAN-13 barcode on the bottle label:
+4006381333931`. Packaging mentioned elsewhere is insufficient. Supported English
+field grammar, ASCII EAN-8/EAN-13/UPC-A length and check digit, no competing barcode
+field, no ambiguous/negative/remote/application/other-object context, and separate
+complete contact fields are required. A phone heading above a barcode field rejects
+the whole candidate. Unknown grammar/language remains unknown. This intentionally
+under-accepts observations; it does not prove vision accuracy or product ownership.
+
+The original observation and all existing generic redactors are unchanged. Future
+cache processing retains only the typed candidate, observation hash and actual
+image-byte hash in existing JSON metadata before redaction. Cache reuse validates
+those hashes and never changes its cache key, starts an extra call, or retries an
+unknown hold. Receipt persistence binds the field to the exact tenant, channel,
+external ID, source hash and media version. Original receipts without an image-byte
+hash retain `null` for that hash; their literal must still independently classify.
+No byte hash or masked value is reconstructed.
+
+Only private episode context receives the candidate, ahead of the bounded visual
+description, with an explicit unconfirmed/same-product qualification. Historical
+manual and automatic channel projections are normalized only within the existing
+channel fence; a separate exact saved-receipt lookup cannot initiate processing.
+Historical context keeps its original source and requirement for a supported
+customer follow-up. No intent heuristic turns an unrelated old product into the
+current question. Public receipt, learning-MCP and case projections retain their
+redaction/content whitelists and omit the private typed field. No schema or DDL
+change, agent prompt edit, permission change, or live knowledge write is included.
+
+The old Fəxri source has **not** been restored or classified. Available authorized
+connectors do not expose an exact-receipt server-side classifier; the case-source
+inspector requires a separately identified case/campaign and exposes safe status,
+not this original receipt field. No raw read/export, credential extraction, alternate
+runtime access or re-analysis was used. It remains unknown whether the original
+literal survives and satisfies the stricter field attribution.
+
+Local acceptance covers pure hostile fixtures, current/historical dialog context,
+bare/prefixed channel IDs, provider-call spies, actual collector propagation,
+unchanged public/MCP redaction, and full-schema native PostgreSQL receipt/cache
+commit and reuse. These establish code/data behavior, not a post-release model
+quality pass. Parent coordinates the separate review, CI and release slot.
 
 ## Established source behavior
 
