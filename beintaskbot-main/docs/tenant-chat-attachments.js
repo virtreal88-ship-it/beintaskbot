@@ -21,7 +21,7 @@
   }
   async function rememberAudio(host){if(!['audio','voice','voice_message','ptt'].includes(host.dataset.mediaKind))return;const sequence=++rememberSequence;try{await profileFetch;const binding=await audioBinding(host);if(sequence===rememberSequence&&binding&&host.dataset.mediaPreviewState==='loaded'&&host.querySelector('audio')?.getAttribute('src')&&!host.querySelector('audio')?.error)writeAudioIntent({v:1,...binding,expires_at:Date.now()+AUDIO_INTENT_TTL,blocked:false,retry_until:0});}catch{}}
   function blockAudioIntent(binding,status,retry=0){const value=audioIntent();if(!value||!binding||!['owner','scope','source','version'].every(key=>value[key]===binding[key]))return;if([403,404,410].includes(status)){forgetAudioIntent();return;}writeAudioIntent({...value,blocked:true,retry_until:Math.max(value.retry_until,retry)});}
-  async function failAudio(host,binding,status,retry=0){try{blockAudioIntent(binding||await audioBinding(host),status,retry);}catch{}}
+  async function failAudio(host,binding,status,retry=0){if(!['audio','voice','voice_message','ptt'].includes(host.dataset.mediaKind))return;try{if(!binding)await profileFetch;blockAudioIntent(binding||await audioBinding(host),status,retry);}catch{}}
   async function restoreAudio(host,load){
     if(restorePending.has(host)||autoRestoreAttempted||!freshProfile||!audioIntent())return;
     restorePending.add(host);
