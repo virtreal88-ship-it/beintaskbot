@@ -330,3 +330,13 @@ def test_alias_protected_loader_and_transient_download_keep_exact_source(ready,m
     result=flow.execute(PROFILE,command(data,flow.preview(PROFILE,data)))
     assert result['requested_attempt']['state']=='completed' and len(sent)==1
     assert db.execute('SELECT message_type FROM saas_crm_messages WHERE id=%s::uuid',(data['message_row_id'],))[0]['message_type']==kind
+
+
+def test_unverified_old_text_cannot_turn_retranscribe_token_into_paid_transcribe(ready):
+    db,data,provider,download,sent=ready
+    db.execute("UPDATE saas_crm_messages SET body='old unverified transcript',raw=raw||'{\"voice_transcription\":{\"status\":\"completed\",\"model\":\"whisper-1\"}}'::jsonb WHERE id=%s::uuid",(data['message_row_id'],));db.commit()
+    preview=flow.preview(PROFILE,data)
+    assert preview['allowed_actions']==['retranscribe'] and not preview['latest_success']['source_current']
+    with pytest.raises(flow.AudioError) as caught:flow.execute(PROFILE,command(data,preview,action='transcribe'))
+    assert caught.value.code=='preview_changed' and not sent
+    assert db.execute('SELECT count(*) AS n FROM saas_chat_ai_runs')[0]['n']==0

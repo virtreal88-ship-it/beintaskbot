@@ -331,7 +331,7 @@ def _admit(profile,data,media,original_hash):
             if state:raise AudioError('provider_outcome_unknown' if state=='unknown' else 'source_pending','Предыдущая обработка ещё не завершена; новый ASR-вызов не разрешён.')
             old=legacy(cur,auth);saved=store.known_success(cur,auth['tenant'],str(auth['row']['id']),auth['source_version'],auth['selection_version'])
             if data['action']=='retranscribe' and not (saved or old):raise AudioError('no_previous_result','Сначала расшифруйте выбранное аудио.')
-            if data['action'] not in cost.get('actions',[]) and not (data['action']=='transcribe' and (saved or old)):
+            if data['action'] not in cost.get('actions',[]) and not (data['action']=='transcribe' and (saved or any(r['source_current'] for r in old))):
                 raise AudioError('preview_changed','Обновите подтверждение действия.')
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('tenant-chat-ai:'+auth['tenant'],))
             cur.execute('SELECT 1 FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid FOR UPDATE',(auth['tenant'],request_id))
