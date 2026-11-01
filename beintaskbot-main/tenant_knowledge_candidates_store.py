@@ -94,7 +94,7 @@ def author_role(row):
     return {'incoming':'customer','outgoing':'operator'}.get(row.get('direction'),'system')
 
 
-def _preview_sender_names(cur, tenant, binding, chosen, rows):
+def _preview_sender_names(cur, tenant, policy, binding, chosen, rows):
     """Resolve human-readable message authors for the bounded training preview.
 
     Keep this projection tenant/route-local.  In particular, direct customer
@@ -106,8 +106,22 @@ def _preview_sender_names(cur, tenant, binding, chosen, rows):
     is_group=bool(group_jid(binding['conversation_id']))
     direct_contact=''
     if not is_group:
+        # Match the same tenant/route-local contact projection used by the
+        # ordinary dialogue history. It also resolves an approved direct-chat
+        # merge's source contact name, which is not stored on the canonical row.
+        from tenant_operator_dialogs import projection
+        from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+        sql,scopes=projection(policy)
+        cur.execute(sql+'''SELECT customer_name FROM visible WHERE provider='connect' AND lead_id=%s
+          AND channel_id=%s AND conversation_id=%s''',
+          (tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'),int(chosen['lead_id']),
+           binding['channel_id'],binding['conversation_id']))
+        projected=(cur.fetchone() or {}).get('customer_name')
+        projected=str(projected or '').strip()
+        if projected and '@' not in projected and projected!=str(binding['conversation_id']) and projected.casefold() not in {'customer','client','operator','whatsapp operator','employee'}:
+            direct_contact=projected[:180]
         generic_names={'customer','client','operator','whatsapp operator','employee'}
-        for candidate in (chosen.get('manual_display_name'),chosen.get('contact_name'),chosen.get('display_name')):
+        for candidate in (() if direct_contact else (chosen.get('manual_display_name'),chosen.get('contact_name'),chosen.get('display_name'))):
             value=str(candidate or '').strip()
             if (value and value.casefold() not in generic_names and '@' not in value
                 and value!=str(binding['conversation_id']) and not re.fullmatch(r'[+\d\s().-]+',value)):
@@ -206,7 +220,7 @@ def snapshot(cur,profile,data):
             if channel not in route_cache: route_cache[channel]=assert_route(cur,tenant,policy,'connect',binding['conversation_id'],channel)
             source=route_cache[channel]
             names.extend([source.get('contact_name'),source.get('phone')]);channels.add(channel)
-    preview_sender_names=_preview_sender_names(cur,tenant,binding,chosen,rows)
+    preview_sender_names=_preview_sender_names(cur,tenant,policy,binding,chosen,rows)
     refs=[];messages=[];preview_metadata=[];remaining=MAX_CONTEXT
     for row in rows:
         body=redact(row.get('body'),names)[:min(1500,remaining)]

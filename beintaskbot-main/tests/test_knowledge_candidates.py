@@ -1566,6 +1566,22 @@ def test_employee_case_submission_uses_assigned_agent_and_is_idempotent(ready,mo
         submission.submit(PROFILE,data)
 
 
+def test_employee_case_preview_uses_same_projected_contact_name_as_dialog_history(ready,monkeypatch):
+    import tenant_operator_case_submission as submission
+    from tenant_connect_dialog_equivalence import schema as ensure_dialog_links
+    db,_,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
+    with db.cursor() as cur: ensure_dialog_links(cur)
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,display_name) VALUES(%s::uuid,%s::uuid,'canonical',44,'','')",(A,CA))
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,display_name) VALUES(%s::uuid,%s::uuid,'source',45,'Aysel Məmmədova','')",(A,CA))
+    db.execute("INSERT INTO saas_connect_dialog_links(tenant_id,channel_id,source_id,canonical_id,source_lead,canonical_lead,pair_id,snapshot) VALUES(%s::uuid,%s::uuid,'source','canonical',45,44,'test-pair','{}'::jsonb)",(A,CA))
+    db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,channel_id,agent_id,state) VALUES(%s::uuid,'connect','canonical',%s,%s::uuid,'active')",(A,CA,AGENT))
+    message_id=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,author_name) VALUES(%s::uuid,%s::uuid,44,'canonical-incoming',%s,'incoming','Hello','customer')",(message_id,A,'connect:'+CA));db.commit()
+    preview=submission.preview(PROFILE,{'channel_id':CA,'conversation_id':'canonical'})
+    assert preview['messages'][0]['id']==message_id
+    assert preview['messages'][0]['sender_name']=='Aysel Məmmədova','training preview uses the same merged-route contact name shown in dialogue history'
+
+
 def test_employee_case_fences_changed_assignment_before_saving(ready,monkeypatch):
     import tenant_operator_case_submission as submission
     db,generation,_=ready;monkeypatch.setattr(submission,'_connect',lambda:db)
