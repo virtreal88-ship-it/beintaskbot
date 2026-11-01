@@ -250,6 +250,8 @@ def _message(item, *, group=False, participant_names=None, employee_participants
         # No provider URL or raw webhook payload crosses the browser boundary.
         value['media_url'] = ''
         if value.get('message_type') in {'image','audio','voice','voice_message','ptt','video','document'}:
+            from tenant_media_evidence import media_version
+            value['media_version']=media_version(raw)
             filename=_media_filename(raw)
             if filename:value['media_filename']=filename
             size=_media_size(raw)
@@ -394,6 +396,17 @@ def _agent_scope_available(item):
 
 
 _HANDOFF_REASONS={'human_handoff','operator_handoff','trigger_reply_sent_then_handoff','customer_requested_manager','connect_human_takeover','verified_employee_reply'}
+
+
+def _attach_verified_phone(cur,tenant,dialog):
+    """Read a single channel-scoped verified phone alias; never infer LID digits."""
+    if dialog.get('phone') or dialog.get('customer_kind')=='group' or dialog.get('conversation_kind')=='group':return
+    cur.execute("SELECT to_regclass('public.saas_connect_direct_identities') AS relation")
+    if not (cur.fetchone() or {}).get('relation'):return
+    from tenant_connect_direct_identity import verified_phone_jid
+    jid=verified_phone_jid(cur,tenant,dialog['channel_id'],dialog['conversation_id'])
+    match=re.fullmatch(r'([1-9][0-9]{6,14})@s\.whatsapp\.net',jid)
+    if match:dialog['phone']='+'+match[1]
 
 
 def decorate(row):
@@ -748,6 +761,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             row=cur.fetchone()
             if not row:raise TenantLinearError('Диалог не найден.',404)
             dialog=decorate(row)
+            if provider=='connect':_attach_verified_phone(cur,tenant,dialog)
             from tenant_ai_group_coordination import group_jid, view as group_view
             if provider=='connect' and group_jid(conversation):
                 apply_group_view(cur,tenant,dialog)

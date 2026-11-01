@@ -42,7 +42,7 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
   f=fixture();f.setResponse(async()=>({ok:false,status:503,headers:{get:()=>null},json:async()=>({error:'Fayl yüklənmədi.'})}));
   await f.button.onclick();assert.ok(f.status.textContent.includes('Fayl yüklənmədi'));assert.equal(f.button.disabled,false);
   f=fixture();let resolve;f.setResponse(()=>new Promise(r=>resolve=r));
-  const pending=f.button.onclick();await flush();await f.button.onclick();assert.equal(f.calls.length,1);
+  const pending=f.button.onclick();await flush();f.events['tenant-chat-loaded']({detail:{}});await f.button.onclick();assert.equal(f.calls.length,1,'rebinding an in-flight card must preserve singleflight');
   f.events['tenant-chat-open']({detail:{lead_id:8}});resolve(f.good());await pending;
   assert.equal(f.host.children.length,0);assert.equal(f.calls[0].options.signal.aborted,true);
   f=fixture();f.setResponse(()=>new Promise(r=>resolve=r));const switched=f.button.onclick();await flush();
