@@ -135,7 +135,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/read-all', operator_handler(member, origin, logger, 'dialogs_read_all'), ('POST',)),
         ('dialogs/audio-transcription', dialog_audio_transcription_handler(member, origin, logger), ('GET', 'POST')),
         ('dialogs/asr-comparison', owner_asr_comparison_handler(member, origin, logger), ('GET', 'POST')),
-        ('dialogs/copilot', operator_handler(member, origin, logger, 'copilot'), ('POST',)),
+        ('dialogs/copilot', operator_handler(member, origin, logger, 'copilot'), ('GET', 'POST')),
         ('dialogs/display-name', operator_handler(member, origin, logger, 'display_name'), ('POST',)),
         ('dialogs/agent-assignment', operator_handler(member, origin, logger, 'agent_assignment'), ('GET', 'POST')),
         ('dialogs/agent-assignment-bulk', operator_handler(member, origin, logger, 'agent_assignment_bulk'), ('GET', 'POST')),

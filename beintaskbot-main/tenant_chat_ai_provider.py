@@ -103,13 +103,7 @@ def probe_model(key, model):
     return True
 
 
-def generate(key, model, mode, lines, draft, *, instructions=None, extra_context=None, images=None, with_usage=False, max_output_tokens=1800, request_timeout=60):
-    """Generate one draft for both the Chat AI and the existing AI Agents.
-
-    Agents add tenant-scoped instructions, knowledge context and verified image
-    bytes.  Keeping that optional input here prevents the Connect worker from
-    falling back to a second model client with different safety behavior.
-    """
+def request_payload(model, mode, lines, draft, *, instructions=None, extra_context=None, images=None, max_output_tokens=1800, service_tier=None):
     prompt = INSTRUCTIONS if instructions is None else str(instructions)
     input_data = {'mode': mode, 'conversation': lines, 'manager_draft': draft}
     if extra_context is not None:
@@ -124,9 +118,23 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
         data_url = 'data:' + content_type + ';base64,' + base64.b64encode(raw).decode('ascii')
         content.append({'type': 'input_image', 'image_url': data_url, 'detail': image.get('detail','auto') if image.get('detail','auto') in {'low','high','auto'} else 'low'})
     request_input = text_input if not images else [{'role': 'user', 'content': content}]
+    wire={'model':model,'store':False,'max_output_tokens':max(16,min(1800,int(max_output_tokens))),
+          'instructions':prompt,'input':request_input}
+    if service_tier is not None:wire['service_tier']=str(service_tier)
+    return wire
+
+
+def generate(key, model, mode, lines, draft, *, instructions=None, extra_context=None, images=None, with_usage=False, max_output_tokens=1800, request_timeout=60, before_dispatch=None, service_tier=None, strict_usage=False):
+    """Generate one draft for both the Chat AI and the existing AI Agents.
+
+    Agents add tenant-scoped instructions, knowledge context and verified image
+    bytes.  Keeping that optional input here prevents the Connect worker from
+    falling back to a second model client with different safety behavior.
+    """
+    wire=request_payload(model,mode,lines,draft,instructions=instructions,extra_context=extra_context,images=images,max_output_tokens=max_output_tokens,service_tier=service_tier)
+    if before_dispatch is not None:before_dispatch(wire)
     response = requests.post('https://api.openai.com/v1/responses', headers={'Authorization': 'Bearer ' + key},
-        json={'model': model, 'store': False, 'max_output_tokens': max(16,min(1800,int(max_output_tokens))), 'instructions': prompt,
-              'input': request_input},
+        json=wire,
         timeout=(min(5,request_timeout), request_timeout), allow_redirects=False)
     if response.status_code != 200:
         raise ChatAIProviderError(response.status_code, _provider_error_category(response))
@@ -140,6 +148,10 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
     if not with_usage:
         return result
     usage = payload.get('usage') if isinstance(payload.get('usage'), dict) else {}
+    if strict_usage:
+        counts=[usage.get(name) for name in ('input_tokens','output_tokens','total_tokens')]
+        if any(type(value) is not int or value<0 for value in counts) or counts[2]!=counts[0]+counts[1]:
+            return result, None
     # Responses uses input_tokens/output_tokens today.  Keep the normalised
     # shape here so workers do not depend on browser data or provider bodies.
     try:

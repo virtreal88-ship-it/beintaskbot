@@ -28,7 +28,11 @@ def handler(member_from_request,origin,logger,resource):
                 if 'X-Tenant-Id' in request.headers or 'X-User-Id' in request.headers:
                     _expected({'expected_tenant_id':request.headers.get('X-Tenant-Id'),'expected_user_id':request.headers.get('X-User-Id')},profile)
                     scope_verified=True
-                if resource=='avatar':
+                if resource=='copilot' and query.get('saved_only')=='1':
+                    _expected(query,profile)
+                    from tenant_saved_only_copilot import preflight
+                    result=await asyncio.to_thread(preflight,profile,dict(query))
+                elif resource=='avatar':
                     content,mime=await get_avatar(profile,dict(query))
                     return web.Response(body=content,content_type=mime,headers={
                         'Cache-Control':'private, max-age=3600',
