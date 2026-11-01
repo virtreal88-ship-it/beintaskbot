@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import multiprocessing
+import time
 import uuid
 import psycopg
 from psycopg.rows import dict_row
@@ -137,3 +138,55 @@ def test_api_and_artifact_claim_share_actual_upload_byte_guard(database,monkeypa
     values=run(database,key,[(DATA,request),(DATA,{})],kinds=['api','cache'])
     assert sum(v.get('ok',False) for v in values)==1,values
     assert database.execute('SELECT count(*) AS n FROM test_audio_calls')[0]['n']==1
+
+
+def admission_with_actual_agent_share(dsn,key,request,entered,shared,results):
+    import tenant_operator_case_submission as cases
+    from tenant_dialog_ai_context import resolve
+    factory=lambda:psycopg.connect(dsn,row_factory=dict_row,application_name='dialog-audio-admission-lock-race')
+    flow._connect=factory;flow._fernet=lambda:Fernet(key)
+    cases.assignment=lambda *args:{'agent_id':AGENT,'assignment_revision':0}
+    def actual_share(cur,profile,source,**kw):
+        resolve(cur,A,{'channel_id':CA,'conversation_id':'synthetic-chat'})
+        shared.set()
+        return authority(source)
+    flow._authority=actual_share
+    entered.set()
+    try:
+        auth,attempt,dispatch=flow._admit(PROFILE,request,(wav(),'wav','audio/wav'),hashlib.sha256(wav()).hexdigest())
+        if dispatch:
+            with factory() as conn:conn.execute("INSERT INTO test_audio_calls VALUES('admitted-once')")
+        results.put({'ok':True,'dispatch':dispatch})
+    except BaseException as error:results.put({'error':type(error).__name__,'detail':str(error)[:100]})
+
+
+def test_admission_tenant_lock_precedes_actual_assigned_agent_share(database,monkeypatch):
+    key=setup(database,monkeypatch)
+    database.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,model,created_by) VALUES(%s::uuid,%s::uuid,'Synthetic assigned','gpt-4.1',11)",(A,AGENT));database.commit()
+    request=request_for(key,DATA)
+    context=multiprocessing.get_context('fork');entered=context.Event();shared=context.Event();results=context.Queue()
+    worker=context.Process(target=admission_with_actual_agent_share,args=(database.dsn,key,request,entered,shared,results))
+    with psycopg.connect(database.dsn,row_factory=dict_row) as automatic:
+        automatic.execute('SET LOCAL lock_timeout=\'3s\'')
+        automatic.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('tenant-chat-ai:'+A,))
+        worker.start()
+        try:
+            assert entered.wait(10)
+            # Wait for actual lock contention, not a scheduler-dependent delay.
+            deadline=time.monotonic()+10
+            while time.monotonic()<deadline:
+                database.execute('SELECT pg_stat_clear_snapshot()')
+                waiting=database.execute("SELECT 1 FROM pg_stat_activity WHERE application_name='dialog-audio-admission-lock-race' AND wait_event_type='Lock'")
+                if waiting:break
+                time.sleep(.01)
+            assert waiting and not shared.is_set(), 'Agent share must not precede the tenant lock'
+            automatic.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(A,AGENT))
+            automatic.commit()
+            value=results.get(timeout=15)
+            assert value=={'ok':True,'dispatch':True},value
+            worker.join(5);assert worker.exitcode==0
+        finally:
+            automatic.rollback()
+            if worker.is_alive():worker.terminate();worker.join(5)
+    assert database.execute('SELECT count(*) AS n FROM test_audio_calls')[0]['n']==1
+    assert database.execute("SELECT count(*) AS n FROM saas_dialog_audio_attempts WHERE origin='manual'")[0]['n']==1

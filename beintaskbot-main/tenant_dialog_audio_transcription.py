@@ -313,6 +313,8 @@ def _admit(profile,data,media,original_hash):
     with _connect() as conn:
         store.schema(conn)
         with conn.cursor() as cur:
+            # Match ordinary admission: tenant budget lock precedes agent/config row locks.
+            cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('tenant-chat-ai:'+identifier(profile['tenant_id']),))
             auth=_authority(cur,profile,clean)
             store.lock_bytes(cur,auth['tenant'],upload_hash)
             for alias in _aliases(auth):store.lock_source(cur,auth['tenant'],alias['channel_id'],alias['external_id'])
