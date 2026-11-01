@@ -1,4 +1,6 @@
-"""Neutral external push content. No company, person or task data."""
+"""External push payloads; Connect message details are included only for an
+already-authorized incoming-message delivery to an opted-in device.
+"""
 import re
 from urllib.parse import parse_qs, urlsplit
 
@@ -59,10 +61,59 @@ def _safe_dialog_target(value: object) -> str:
     return target
 
 
-def payload_for(event: str | None, target_url: str = '') -> dict[str, str]:
+def _notification_text(value: object, limit: int, *, display_label: bool = False) -> str:
+    """Bound user-visible text and remove control/route-like identifiers."""
+    if not isinstance(value, str):
+        return ''
+    value = re.sub(r'[\x00-\x1f\x7f]+', ' ', value)
+    value = re.sub(r'\s+', ' ', value).strip()
+    # WhatsApp/Connect addressing identifiers are never human display labels.
+    if display_label and ('@' in value or value.casefold() in {'customer','client','contact','unknown'}):
+        return ''
+    if not display_label:
+        value = re.sub(r'(?i)\S+@(?:g\.us|s\.whatsapp\.net|c\.us|lid)\b', '', value)
+        value = re.sub(r'(?i)(?:^|\s)\[CRM:[^\]]*\]', ' ', value)
+        value = re.sub(r'(?i)\[Attachment pending_processing: contents not read\]', ' ', value)
+        value = re.sub(r'\s+', ' ', value).strip()
+    return value[:limit]
+
+
+def _incoming_copy(context: object) -> tuple[str, str]:
+    if not isinstance(context, dict):
+        return 'CRM Smart Assistant', 'Yeni mesaj var. Kabinetdə yoxlayın.'
+    group = context.get('conversation_kind') == 'group'
+    name = _notification_text(context.get('display_name'), 80, display_label=True)
+    if group:
+        author = _notification_text(context.get('author'), 50, display_label=True) or 'İştirakçı'
+        title = f'{name or "Qrup"} · {author}'
+    else:
+        phone = _notification_text(context.get('phone'), 28, display_label=True)
+        if phone and not re.fullmatch(r'\+?[0-9][0-9 ()-]{4,25}', phone):
+            phone = ''
+        title = name or phone or 'Yeni mesaj'
+        if name and phone:
+            title += ' · ' + phone
+    body = _notification_text(context.get('text'), 180)
+    if not body:
+        kind = str(context.get('message_type') or '').casefold()
+        if kind in {'audio', 'voice', 'ptt', 'voicenote', 'audio_message'}:
+            body = 'Səsli mesaj'
+        elif kind in {'image', 'photo', 'image_message', 'sticker'}:
+            body = 'Foto'
+        elif kind in {'video', 'video_message'}:
+            body = 'Video'
+        elif kind in {'document', 'file', 'document_message'}:
+            body = 'Sənəd'
+        else:
+            body = 'Yeni mesaj var. Kabinetdə yoxlayın.'
+    return title[:120], body
+
+
+def payload_for(event: str | None, target_url: str = '', notification_context: object = None) -> dict[str, str]:
     """Return an independent copy; unknown events retain the old default."""
     payload=dict(_PAYLOADS.get(event, _DEFAULT))
     if event=='incoming_message':
         safe_target=_safe_dialog_target(target_url)
         if safe_target:payload['url']=safe_target
+        payload['title'],payload['body']=_incoming_copy(notification_context)
     return payload

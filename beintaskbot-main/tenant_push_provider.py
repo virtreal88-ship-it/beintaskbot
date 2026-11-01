@@ -23,7 +23,7 @@ def send(item: dict, private_key: str, claims: dict, *,
     digest = hashlib.sha256(subscription['endpoint'].encode()).hexdigest()
     if digest != item['endpoint_hash']:
         raise ValueError('Push device identity mismatch')
-    payload = payload_for(item.get('event'),item.get('target_url') or '')
+    payload = payload_for(item.get('event'),item.get('target_url') or '',item.get('notification_context'))
     with session_factory() as session:
         result = webpush(subscription_info=subscription, data=json.dumps(payload),
                          vapid_private_key=private_key, vapid_claims=dict(claims),
