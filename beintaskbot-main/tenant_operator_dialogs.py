@@ -101,6 +101,49 @@ def _media_filename(raw):
     return ''
 
 
+def _media_thumbnail(raw):
+    """Only a small real image thumbnail; never a URL, quote or guessed image."""
+    if not isinstance(raw, dict):
+        return ''
+    candidates = [raw]
+    if isinstance(raw.get('imageMessage'), dict):
+        candidates.append(raw['imageMessage'])
+    message = raw.get('message')
+    if isinstance(message, dict) and isinstance(message.get('imageMessage'), dict):
+        candidates.append(message['imageMessage'])
+    import base64
+    import io
+    import warnings
+    for item in candidates:
+        value = item.get('jpegThumbnail') or item.get('thumbnail_base64') or item.get('thumbnailBase64')
+        if not isinstance(value, str) or not 1 <= len(value) <= 44000:
+            continue
+        try:
+            if value.startswith('data:image/'):
+                prefix, value = value.split(',', 1)
+                if prefix not in {'data:image/jpeg;base64','data:image/png;base64','data:image/webp;base64'}:
+                    continue
+            data = base64.b64decode(value, validate=True)
+            if not 0 < len(data) <= 32768:
+                continue
+            from PIL import Image
+            with warnings.catch_warnings():
+                warnings.simplefilter('error', Image.DecompressionBombWarning)
+                with Image.open(io.BytesIO(data)) as image:
+                    if image.format not in {'JPEG','PNG','WEBP'} or min(image.size) < 1 or max(image.size) > 1024:
+                        continue
+                    image.load()
+                    image.thumbnail((192, 192))
+                    clean = io.BytesIO()
+                    image.convert('RGB').save(clean, format='JPEG', quality=65)
+            encoded = base64.b64encode(clean.getvalue()).decode('ascii')
+            if len(encoded) <= 24000:
+                return 'data:image/jpeg;base64,' + encoded
+        except Exception:
+            continue
+    return ''
+
+
 def _audio_diagnostic(status, code, result, at):
     """Product diagnostics: fixed enums only, never raw errors, text or URLs."""
     if status not in {'processed','partial','unavailable','unsupported','error','unknown'}:return None
@@ -282,6 +325,9 @@ def _message(item, *, group=False, participant_names=None, employee_participants
             if filename:value['media_filename']=filename
             size=_media_size(raw)
             if size is not None:value['media_size_bytes']=size
+            if value.get('message_type') == 'image':
+                thumbnail = _media_thumbnail(raw)
+                if thumbnail:value['media_thumbnail']=thumbnail
         transcript = raw.get('voice_transcription', {}) if isinstance(raw, dict) else {}
         if value.get('message_type') in {'image','audio','voice','voice_message','ptt','video','document'}:
             state=transcript.get('status') if isinstance(transcript,dict) else None
