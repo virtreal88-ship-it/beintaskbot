@@ -61,6 +61,10 @@ const server = http.createServer((req, res) => {
     const pushBefore=await pushSetupPage.evaluate(()=>({permission:Notification.permission,hasPermissionApi:typeof Notification.requestPermission==='function'}));
     await pushSetupPage.close();
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      const key = 'tenant-app-pwa-page-load-count';
+      sessionStorage.setItem(key, String(Number(sessionStorage.getItem(key) || '0') + 1));
+    });
     if(process.env.DEBUG_PWA){page.on('console',message=>console.log('browser console:',message.type(),message.text()));page.on('pageerror',error=>console.log('browser error:',error.message));page.on('requestfailed',request=>console.log('request failed:',request.url(),request.failure()?.errorText));}
     await page.goto(origin+'/app?view=dialogs',{waitUntil:'domcontentloaded'});
     if(process.env.DEBUG_PWA)console.log('app pwa state:',await page.evaluate(()=>({ready:typeof window.tenantAppPwaReady,script:document.querySelector('script[src="/assets/tenant-pwa.js"]')?.outerHTML,head:document.querySelector('link[rel="manifest"]')?.href})));
@@ -129,6 +133,7 @@ const server = http.createServer((req, res) => {
     assert.ok(cachesBefore.includes('beintaskbot-webapp-v-test'));
     assert.ok(cachesBefore.includes('beintaskbot-media-v1'));
 
+    await page.evaluate(() => { window.__unsentWorkFixture = 'unsent draft stays in the page'; });
     workerVersion = 2;
     await page.evaluate(async()=>{const registration=await navigator.serviceWorker.getRegistration('/app');await registration.update();});
     await page.waitForFunction(async()=>{
@@ -139,6 +144,12 @@ const server = http.createServer((req, res) => {
     const cachesAfter = await page.evaluate(()=>caches.keys());
     assert.ok(cachesAfter.includes('beintaskbot-webapp-v-test'),'app activation preserves the legacy webapp cache');
     assert.ok(cachesAfter.includes('beintaskbot-media-v1'),'app activation preserves legacy media cache');
+    const pageStateAfterUpdate = await page.evaluate(() => ({
+      loadCount: Number(sessionStorage.getItem('tenant-app-pwa-page-load-count') || '0'),
+      unsentWork: window.__unsentWorkFixture
+    }));
+    assert.equal(pageStateAfterUpdate.loadCount, 1, 'service worker activation does not automatically reload the app page');
+    assert.equal(pageStateAfterUpdate.unsentWork, 'unsent draft stays in the page', 'worker updates preserve in-memory work');
 
     await page.evaluate(async()=>{
       await caches.open('beintaskbot-app-pwa-v2');
