@@ -127,6 +127,7 @@ def test_no_assigned_agent_blocks_company_summary_without_spend_or_fallback(db):
         page=manual()
     provider.assert_not_called()
     assert not page['ticket']['agent_id'] and not page['ticket']['summary_available']
+    assert tickets.listing(PROFILE)['tickets'][0]['agent_id'] is None
     assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_runs')[0]['n']==0
 
 

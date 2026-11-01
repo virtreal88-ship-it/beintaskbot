@@ -220,7 +220,7 @@ def summarize_created(tenant, receipt):
 
 
 _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_message_at,c.last_message_at) AS last_message_at,ch.name AS channel_name,m.display_name AS assignee_name,
- cs.state AS ai_state,cs.reason AS ai_reason,a.name AS agent_name,COALESCE(cs.agent_id,j.agent_id) AS agent_id,
+ cs.state AS ai_state,cs.reason AS ai_reason,a.name AS agent_name,cs.agent_id AS agent_id,
  a.enabled AS agent_enabled,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,
  company.status AS tenant_status,j.state AS latest_job_state,j.error_code AS latest_job_error,
  ch.active AS channel_active,cs.updated_at AS ai_updated_at,
@@ -234,7 +234,7 @@ _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_messag
    AND j0.provider='connect' AND j0.channel_id=t.channel_id::text AND j0.conversation_id=t.conversation_id
    ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
  LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect' AND cs.conversation_id=t.conversation_id AND cs.channel_id=t.channel_id::text
- LEFT JOIN saas_ai_agents a ON a.tenant_id=t.tenant_id AND a.id=COALESCE(cs.agent_id,j.agent_id)
+ LEFT JOIN saas_ai_agents a ON a.tenant_id=t.tenant_id AND a.id=cs.agent_id
  LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.assigned_to
  LEFT JOIN LATERAL (SELECT COALESCE(happened_at,created_at) AS last_message_at FROM saas_crm_messages
    WHERE tenant_id=t.tenant_id AND kommo_lead_id=c.lead_id AND channel='connect:'||t.channel_id::text
