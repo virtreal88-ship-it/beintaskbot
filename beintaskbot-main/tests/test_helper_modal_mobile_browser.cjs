@@ -74,7 +74,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     await page.evaluate(()=>window.tenantAppNavigate('dialogs',true));await page.locator('#operatorCopilotToggle').click();assert.equal(await prompt.inputValue(),'Private question for this conversation');
     if(width<=900){
       // A smaller visual viewport models the space left by the on-screen keyboard.
-      await page.setViewportSize({width,height:500});await prompt.focus();
+      await page.setViewportSize({width,height:500});await prompt.focus();await page.waitForFunction(()=>Math.abs(document.getElementById('operatorCopilot').getBoundingClientRect().height-(visualViewport.height-16))<=1);
       await page.evaluate(()=>{document.getElementById('dialogHelperContent').scrollTop=0;});
       const geometry=await page.evaluate(()=>{const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};return {panel:rect('operatorCopilot'),close:rect('operatorCopilotClose'),prompt:rect('operatorCopilotPrompt'),ask:rect('operatorCopilotAsk'),vw:innerWidth,vh:visualViewport.height};});
       assert.ok(geometry.panel.top>=0&&geometry.panel.bottom<=geometry.vh+1,JSON.stringify(geometry));
