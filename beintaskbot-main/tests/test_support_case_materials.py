@@ -137,7 +137,7 @@ def test_explicit_manual_selection_rejects_gaps_and_wrong_route(db):
 
 
 def test_no_assigned_agent_blocks_company_summary_without_spend_or_fallback(db):
-    cipher=config_company(db)
+    cipher=config_company(db,assign_agent=True)
     db.execute('UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid',(A,));db.commit()
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate') as provider:
         page=manual()
@@ -148,7 +148,7 @@ def test_no_assigned_agent_blocks_company_summary_without_spend_or_fallback(db):
 
 
 def test_blank_assigned_model_never_uses_platform_default_or_reserves_ai(db,monkeypatch):
-    cipher=config_company(db)
+    cipher=config_company(db,assign_agent=True)
     db.execute("UPDATE saas_ai_agents SET model='' WHERE tenant_id=%s::uuid",(A,));db.commit()
     monkeypatch.setenv('OPENAI_HISTORY_REPLY_MODEL','unrelated-platform-default')
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate') as provider,patch.object(summary,'choose_api_credential') as credential:
@@ -159,7 +159,7 @@ def test_blank_assigned_model_never_uses_platform_default_or_reserves_ai(db,monk
 
 
 def test_summary_uses_current_assignment_instructions_language_and_exact_case(db):
-    cipher=config_company(db)
+    cipher=config_company(db,assign_agent=True)
     first,last=add(db,body='Only current problem'),add(db,body='Current supporting fact')
     second=str(uuid.uuid4())
     db.execute('''INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled,model,instructions,language,style)
@@ -182,7 +182,7 @@ def test_summary_uses_current_assignment_instructions_language_and_exact_case(db
 
 @pytest.mark.parametrize('change',['assignment','materials','disabled'])
 def test_inflight_summary_does_not_apply_after_context_change(db,change):
-    cipher=config_company(db)
+    cipher=config_company(db,assign_agent=True)
     with patch.object(tickets,'summarize_created'):ticket=manual()['ticket']['id']
     def provider(*_args,**_kwargs):
         if change=='assignment':db.execute('UPDATE saas_ai_conversation_state SET revision=revision+1 WHERE tenant_id=%s::uuid',(A,))
@@ -201,7 +201,7 @@ def test_inflight_summary_does_not_apply_after_context_change(db,change):
 
 
 def test_saved_summary_is_historical_and_explicitly_regenerates_after_agent_edit(db):
-    cipher=config_company(db)
+    cipher=config_company(db,assign_agent=True)
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate',return_value=(json.dumps(OUTPUT),{})) as provider:
         ticket=manual()['ticket']['id']
         assert tickets.detail(PROFILE,ticket)['ticket']['summary_current']
@@ -225,7 +225,7 @@ def save_audio_receipt(db,mid,transcript):
 
 
 def test_new_exact_media_receipt_invalidates_summary_without_changing_crm_source(db):
-    cipher=config_company(db);audio=add(db,'audio')
+    cipher=config_company(db,assign_agent=True);audio=add(db,'audio')
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate',return_value=(json.dumps(OUTPUT),{})) as provider:
         ticket=manual()['ticket']['id']
         assert tickets.detail(PROFILE,ticket)['ticket']['summary_current']
@@ -243,7 +243,7 @@ def test_new_exact_media_receipt_invalidates_summary_without_changing_crm_source
 
 
 def test_receipt_arriving_during_generation_withholds_stale_summary(db):
-    cipher=config_company(db);audio=add(db,'audio')
+    cipher=config_company(db,assign_agent=True);audio=add(db,'audio')
     with patch.object(tickets,'summarize_created'):ticket=manual()['ticket']['id']
     def provider(*_args,**_kwargs):
         save_audio_receipt(db,audio,'Speech became available during the request')
@@ -256,7 +256,7 @@ def test_receipt_arriving_during_generation_withholds_stale_summary(db):
 
 
 def test_summary_keeps_initial_case_problem_before_more_than_thirty_followups(db):
-    cipher=config_company(db)
+    cipher=config_company(db,assign_agent=True)
     first=add(db,body='The initial and only problem is duplicate receipt printing')
     ids=[first]+[add(db,body='Followup acknowledgement '+str(i)) for i in range(44)]
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate',return_value=(json.dumps(OUTPUT),{})) as provider:
@@ -268,7 +268,7 @@ def test_summary_keeps_initial_case_problem_before_more_than_thirty_followups(db
 
 
 def test_long_case_summary_preserves_problem_and_recent_evidence_with_fixed_budget(db):
-    cipher=config_company(db)
+    cipher=config_company(db,assign_agent=True)
     first=add(db,body='Original problem: duplicate printing. '+('a'*2400))
     with patch.object(tickets,'summarize_created'):ticket=manual()['ticket']['id']
     newer=[add(db,body='Recent evidence '+str(i)+' '+('b'*2400)) for i in range(90)]

@@ -420,11 +420,12 @@ def test_history_pagination_stays_with_exact_channel(db):
     assert len(ids)==111 and len(set(ids))==111
 
 
-def config_company(db,limit=50):
+def config_company(db,limit=50,*,assign_agent=False):
     from cryptography.fernet import Fernet
     cipher=Fernet(Fernet.generate_key())
-    seed_job(db)
-    db.execute("UPDATE saas_ai_agents SET model='test-model',language='az' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
+    if assign_agent:
+        seed_job(db)
+        db.execute("UPDATE saas_ai_agents SET model='test-model',language='az' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
     secret=cipher.encrypt(json.dumps({'tenant_id':A,'provider':'chat_ai','api_key':'test-key'}).encode())
     db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets,metadata) VALUES(%s::uuid,'chat_ai','connected',%s,%s::jsonb)",(A,secret,json.dumps({'enabled':True,'consent':True,'model':'test-model','daily_limit':limit})))
     db.commit()
@@ -432,7 +433,7 @@ def config_company(db,limit=50):
 
 
 def test_ai_summary_fields_and_shared_budget_receipt(db):
-    cipher=config_company(db)
+    cipher=config_company(db,assign_agent=True)
     output={'description':'Нет интернета','summary':'Клиент без связи','suggestions':'Перезагрузка','next_steps':'Проверить линию'}
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate',return_value=(json.dumps(output),{'total_tokens':12})) as provider:
         result=manual()
@@ -444,7 +445,7 @@ def test_ai_summary_fields_and_shared_budget_receipt(db):
 
 
 def test_russian_support_history_produces_azerbaijani_ticket_fields_without_translating_evidence(db):
-    cipher=config_company(db)
+    cipher=config_company(db,assign_agent=True)
     db.execute("UPDATE saas_crm_messages SET body='Не работает интернет после перезагрузки модема' WHERE external_id='m1'")
     db.commit()
     output={
@@ -468,7 +469,7 @@ def test_russian_support_history_produces_azerbaijani_ticket_fields_without_tran
 
 
 def test_ai_failure_keeps_ticket_and_consumes_reservation(db):
-    cipher=config_company(db)
+    cipher=config_company(db,assign_agent=True)
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate',side_effect=RuntimeError('unavailable')):
         result=manual()
     assert result['ticket']['summary_state']=='unavailable'
@@ -478,7 +479,7 @@ def test_ai_failure_keeps_ticket_and_consumes_reservation(db):
 
 
 def test_daily_budget_exhaustion_never_calls_provider(db):
-    cipher=config_company(db,1)
+    cipher=config_company(db,1,assign_agent=True)
     db.execute("INSERT INTO saas_chat_ai_runs(tenant_id,request_id,requested_by,lead_id,input_hash,config_version,status,reserved_calls) VALUES(%s::uuid,%s::uuid,11,41,'x','v','unknown',1)",(A,str(uuid.uuid4())));db.commit()
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate') as provider:
         result=manual()
@@ -559,7 +560,7 @@ def test_complete_ticket_rejects_cross_tenant_and_idempotency_reuse(db):
 
 
 def test_ai_does_not_overwrite_employee_edits(db):
-    cipher=config_company(db)
+    cipher=config_company(db,assign_agent=True)
     output={k:'AI' for k in ('description','summary','suggestions','next_steps')}
     with patch.object(store,'summarize_created'):ticket=manual()['ticket']['id']
     def provider(*args,**kwargs):
