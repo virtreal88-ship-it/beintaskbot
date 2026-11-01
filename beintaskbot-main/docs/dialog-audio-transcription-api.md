@@ -22,7 +22,8 @@ No client model, media URL, prompt, language, agent ID or permission flag is acc
 ## GET preview/status
 
 Query: the four identity fields above. Optional opaque `history_before` requests an older page; default history page
-limit 20. The returned `history_next_cursor` binds actor/route and the stable
+limit 20. Optional `idempotency_key` polls the same actor/source operation
+without dispatch. The returned `history_next_cursor` binds actor/route and the stable
 (created_at, attempt_id) ordering, including tied generation 0 imports. GET creates no attempt, chat run, paid
 reservation or preview row, and does not download media or call a provider.
 
@@ -51,6 +52,7 @@ Response wrapper: `{ "success": true, "result": { ... } }`.
   "cost_token": "<opaque-server-token>",
   "cost_token_expires_at": "<UTC>",
   "current_attempt": null,
+  "requested_attempt": null,
   "latest_success": null,
   "history": [],
   "history_next_cursor": null,
@@ -103,6 +105,16 @@ action eligibility and prior head generation. Changing a UUID alone cannot repea
 a token after an admitted attempt, even if it already completed. The same
 idempotency key and same input return the same durable attempt without dispatch;
 key reuse for another input/actor is409.
+
+POST returns the same result shape as GET, with `requested_attempt` identifying
+the exact stable operation for this idempotency key. `current_attempt` is the
+global source head and may already be newer. A duplicate must return its original
+requested attempt even after a later generation completed; UI patches the card
+from `message`/`latest_success`, not from an older requested attempt. GET with
+`idempotency_key` returns that same requested operation for its actor/source.
+A transcribe click reusing completed text records a durable zero-dispatch reuse
+operation (no ASR/chat slot/monetary reservation) so its identity/text remain
+stable when a later retranscription succeeds.
 
 POST returns the same result shape as GET. An attempt is `reserved`, `sending`,
 `completed`, `failed_safe`, or `unknown`; public state combines reserved/sending
