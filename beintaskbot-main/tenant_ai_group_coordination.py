@@ -68,6 +68,135 @@ def read(cur, tenant, conversation):
     return dict(cur.fetchone() or {})
 
 
+def _legacy_work_items(cur, tenant, conversation, selected_channel):
+    """Return bounded work metadata and cancelability evidence, never content."""
+    cur.execute('''SELECT 'job'::text AS item_type,j.event_fingerprint AS job_id,j.agent_id::text AS agent_id,
+        j.channel_id,j.lead_id,j.state AS job_state,e.received_at AS created_at,j.updated_at,j.due_at,
+        j.attempts,j.error_code,j.lease_until,j.lease_token IS NOT NULL AS has_lease,
+        e.state AS event_state,e.event_type,e.received_at,e.attempts AS event_attempts,
+        e.lease_until AS event_lease_until,e.lease_token IS NOT NULL AS event_has_lease,
+        CASE WHEN e.payload->>'message_type' IN ('text','image','audio','video','document')
+          THEN e.payload->>'message_type' ELSE 'other' END AS message_type,
+        e.error_code AS event_error_code,
+        r.id::text AS run_id,r.state AS run_state,r.model,r.created_at AS run_created_at,
+        d.id::text AS draft_id,d.state AS draft_state,d.created_at AS draft_created_at,
+        (j.channel_id=%s OR e.payload->>'channel_id'=%s
+          OR coalesce(e.payload->>'channel_id','')='') AS relevant_to_selection,
+        (j.state='queued' AND j.attempts=0 AND j.lease_token IS NULL AND j.lease_until IS NULL
+          AND e.state='queued' AND e.attempts=0 AND e.lease_token IS NULL AND e.lease_until IS NULL
+          AND r.id IS NULL AND d.id IS NULL
+          AND e.event_type='incoming_message'
+          AND e.payload->>'conversation_id'=%s
+          AND e.payload->>'channel_id'=%s
+          AND NOT EXISTS(SELECT 1 FROM saas_ai_agent_jobs other
+            WHERE other.tenant_id=j.tenant_id AND other.provider='connect'
+              AND other.event_fingerprint=j.event_fingerprint
+              AND other.state IN ('queued','processing','drafted','unknown')
+              AND (other.agent_id<>j.agent_id OR other.conversation_id<>j.conversation_id
+                OR other.scope_channel_id<>j.scope_channel_id))
+          AND NOT EXISTS(SELECT 1 FROM saas_ai_agent_runs active_run
+            WHERE active_run.tenant_id=j.tenant_id AND active_run.event_fingerprint=j.event_fingerprint
+              AND (active_run.state IN ('generating','unknown')
+                OR active_run.result->>'send_state' IN ('reserved','unknown')))
+          AND NOT EXISTS(SELECT 1 FROM saas_ai_agent_drafts active_draft
+            WHERE active_draft.tenant_id=j.tenant_id AND active_draft.source_fingerprint=j.event_fingerprint
+              AND active_draft.state IN ('pending','sending','unknown'))
+          AND (j.channel_id=e.payload->>'channel_id' OR j.channel_id='')) AS safely_stoppable
+      FROM saas_ai_agent_jobs j
+      JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
+        AND e.provider='connect'
+      LEFT JOIN LATERAL (SELECT r0.id,r0.state,r0.model,r0.result,r0.created_at FROM saas_ai_agent_runs r0
+        WHERE r0.tenant_id=j.tenant_id AND r0.agent_id=j.agent_id AND r0.event_fingerprint=j.event_fingerprint
+        ORDER BY r0.created_at DESC,r0.id DESC LIMIT 1) r ON TRUE
+      LEFT JOIN LATERAL (SELECT d0.id,d0.state,d0.created_at FROM saas_ai_agent_drafts d0
+        WHERE d0.tenant_id=j.tenant_id AND d0.agent_id=j.agent_id AND d0.source_fingerprint=j.event_fingerprint
+        ORDER BY d0.created_at DESC,d0.id DESC LIMIT 1) d ON TRUE
+      WHERE j.tenant_id=%s::uuid AND j.provider='connect' AND j.conversation_id=%s
+        AND (j.state IN ('queued','processing','drafted','unknown') OR r.state IN ('generating','unknown')
+          OR r.result->>'send_state' IN ('reserved','unknown') OR d.state IN ('pending','sending','unknown'))
+      ORDER BY j.updated_at DESC,j.event_fingerprint LIMIT 100''',
+      (selected_channel,selected_channel,conversation,selected_channel,tenant,conversation))
+    items = [dict(row) for row in cur.fetchall()]
+    cur.execute('''SELECT 'run'::text AS item_type,r.id::text AS item_id,r.event_fingerprint AS job_id,r.agent_id::text AS agent_id,
+        e.payload->>'channel_id' AS channel_id,e.event_type,
+        CASE WHEN e.payload->>'message_type' IN ('text','image','audio','video','document')
+          THEN e.payload->>'message_type' ELSE 'other' END AS message_type,
+        e.error_code AS event_error_code,e.attempts AS event_attempts,
+        e.lease_until AS event_lease_until,e.lease_token IS NOT NULL AS event_has_lease,
+        (e.payload->>'channel_id'=%s OR coalesce(e.payload->>'channel_id','')='') AS relevant_to_selection,
+        r.state AS run_state,r.model,r.created_at,e.state AS event_state,
+        NULL::text AS job_state,NULL::integer AS attempts,NULL::timestamptz AS due_at,
+        NULL::timestamptz AS lease_until,NULL::text AS draft_state,
+        FALSE AS safely_stoppable
+      FROM saas_ai_agent_runs r JOIN saas_tenant_webhook_events e
+        ON e.tenant_id=r.tenant_id AND e.fingerprint=r.event_fingerprint AND e.provider='connect'
+      WHERE r.tenant_id=%s::uuid AND e.payload->>'conversation_id'=%s
+        AND (r.state IN ('generating','unknown') OR r.result->>'send_state' IN ('reserved','unknown'))
+        AND NOT EXISTS(SELECT 1 FROM saas_ai_agent_jobs j WHERE j.tenant_id=r.tenant_id
+          AND j.agent_id=r.agent_id AND j.event_fingerprint=r.event_fingerprint AND j.conversation_id=%s)
+      ORDER BY r.created_at DESC,r.id DESC LIMIT 100''', (selected_channel,tenant,conversation,conversation))
+    items.extend(dict(row) for row in cur.fetchall())
+    cur.execute('''SELECT 'draft'::text AS item_type,d.id::text AS item_id,d.source_fingerprint AS job_id,d.agent_id::text AS agent_id,
+        e.payload->>'channel_id' AS channel_id,e.event_type,
+        CASE WHEN e.payload->>'message_type' IN ('text','image','audio','video','document')
+          THEN e.payload->>'message_type' ELSE 'other' END AS message_type,
+        e.error_code AS event_error_code,e.attempts AS event_attempts,
+        e.lease_until AS event_lease_until,e.lease_token IS NOT NULL AS event_has_lease,
+        (e.payload->>'channel_id'=%s OR coalesce(e.payload->>'channel_id','')='') AS relevant_to_selection,
+        r.state AS run_state,r.model,d.created_at,e.state AS event_state,
+        NULL::text AS job_state,NULL::integer AS attempts,NULL::timestamptz AS due_at,
+        NULL::timestamptz AS lease_until,d.state AS draft_state,
+        FALSE AS safely_stoppable
+      FROM saas_ai_agent_drafts d JOIN saas_tenant_webhook_events e
+        ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint AND e.provider='connect'
+      LEFT JOIN LATERAL (SELECT r0.state,r0.model FROM saas_ai_agent_runs r0
+        WHERE r0.tenant_id=d.tenant_id AND r0.id=d.run_id LIMIT 1) r ON TRUE
+      WHERE d.tenant_id=%s::uuid AND e.payload->>'conversation_id'=%s
+        AND d.state IN ('pending','sending','unknown')
+        AND NOT EXISTS(SELECT 1 FROM saas_ai_agent_jobs j WHERE j.tenant_id=d.tenant_id
+          AND j.agent_id=d.agent_id AND j.event_fingerprint=d.source_fingerprint AND j.conversation_id=%s)
+      ORDER BY d.created_at DESC,d.id DESC LIMIT 100''', (selected_channel,tenant,conversation,conversation))
+    items.extend(dict(row) for row in cur.fetchall())
+    cur.execute('''SELECT 'event'::text AS item_type,e.fingerprint AS item_id,e.fingerprint AS job_id,
+        e.payload->>'channel_id' AS channel_id,e.event_type,e.state AS event_state,
+        e.error_code AS event_error_code,e.attempts AS event_attempts,
+        e.lease_until AS event_lease_until,e.lease_token IS NOT NULL AS event_has_lease,
+        e.received_at AS created_at,
+        CASE WHEN e.payload->>'message_type' IN ('text','image','audio','video','document')
+          THEN e.payload->>'message_type' ELSE 'other' END AS message_type,
+        (e.payload->>'channel_id'=%s OR coalesce(e.payload->>'channel_id','')='') AS relevant_to_selection,
+        (e.state='queued' AND e.attempts=0 AND e.lease_token IS NULL AND e.lease_until IS NULL
+          AND e.event_type='incoming_message'
+          AND e.payload->>'channel_id'=%s) AS safely_stoppable
+      FROM saas_tenant_webhook_events e
+      WHERE e.tenant_id=%s::uuid AND e.provider='connect'
+        AND e.payload->>'conversation_id'=%s AND e.state IN ('queued','processing')
+        AND NOT EXISTS(SELECT 1 FROM saas_ai_agent_jobs j WHERE j.tenant_id=e.tenant_id
+          AND j.event_fingerprint=e.fingerprint AND j.provider='connect')
+        AND NOT EXISTS(SELECT 1 FROM saas_ai_agent_runs r WHERE r.tenant_id=e.tenant_id
+          AND r.event_fingerprint=e.fingerprint)
+        AND NOT EXISTS(SELECT 1 FROM saas_ai_agent_drafts d WHERE d.tenant_id=e.tenant_id
+          AND d.source_fingerprint=e.fingerprint)
+      ORDER BY e.received_at DESC,e.fingerprint LIMIT 100''',
+      (selected_channel,selected_channel,tenant,conversation))
+    items.extend(dict(row) for row in cur.fetchall())
+    # A capped inventory must fail closed; never assume omitted rows are safe.
+    truncated = len(items) >= 100
+    if truncated:
+        items = items[:100]
+    # Serialize datetimes before exposing a preview through JSON.
+    for row in items:
+        for key, value in list(row.items()):
+            if isinstance(value, datetime):
+                row[key] = value.isoformat()
+    safely_stoppable = [row for row in items if row.get('safely_stoppable') is True]
+    blocked = [row for row in items if row.get('relevant_to_selection') is True
+               and row.get('safely_stoppable') is not True]
+    if truncated:
+        blocked.append({'item_id':'inventory_truncated','job_state':'unknown','safely_stoppable':False})
+    return items, safely_stoppable, blocked, truncated
+
+
 def _legacy_resolution_snapshot(cur, tenant, actor, conversation, channel, lead, agent_id):
     import hashlib
     from tenant_ai_agent_connect import scope_matches
@@ -108,6 +237,8 @@ def _legacy_resolution_snapshot(cur, tenant, actor, conversation, channel, lead,
       WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND source_id=%s AND active''',
       (tenant, channel, conversation))
     active_links = int((cur.fetchone() or {}).get('count') or 0)
+    work_items, safely_stoppable, blocked_work, inventory_truncated = _legacy_work_items(
+      cur,tenant,conversation,channel)
     cur.execute('''SELECT id,name,role,enabled,mode,version,scopes FROM saas_ai_agents
       WHERE tenant_id=%s::uuid AND id=%s::uuid''', (tenant, agent_id))
     agent = dict(cur.fetchone() or {})
@@ -116,10 +247,6 @@ def _legacy_resolution_snapshot(cur, tenant, actor, conversation, channel, lead,
       if str(row['channel_id']) == channel and int(row['lead_id']) == lead), None)
     scope_ok = bool(agent and agent.get('enabled') is True and agent.get('role') == 'primary'
       and scope_matches(agent.get('scopes'), channel, is_group=True))
-    outstanding_jobs = sum(int(row['count']) for row in jobs
-      if row['state'] in {'queued','processing','drafted','unknown'})
-    outstanding_drafts = sum(int(row['count']) for row in drafts
-      if row['state'] in {'pending','sending','unknown'})
     reason = ('active_source_link' if active_links else
       'no_legacy_state' if not legacy else
       'selected_route_changed' if not selected_route else
@@ -127,7 +254,7 @@ def _legacy_resolution_snapshot(cur, tenant, actor, conversation, channel, lead,
       'selected_channel_inactive' if selected_route.get('active') is not True else
       'selected_route_has_channel_state' if any(row.get('channel_id') == channel for row in states) else
       'group_not_paused_or_already_assigned' if group_state.get('state') == 'active' else
-      'outstanding_work' if outstanding_jobs or outstanding_drafts or runs else
+      'outstanding_work' if blocked_work else
       'agent_not_group_scoped' if not scope_ok else '')
     evidence = {
       'legacy_state': {'revision': int(legacy['revision']), 'state': legacy['state'],
@@ -137,6 +264,8 @@ def _legacy_resolution_snapshot(cur, tenant, actor, conversation, channel, lead,
       'group_revision': int(group_state.get('revision') or 0),
       'group_state': group_state.get('state', 'paused'),
       'group_assignments': group_state.get('assignments') or [],
+      'work_items': work_items,
+      'safely_stoppable_job_ids': sorted({str(row['job_id']) for row in safely_stoppable if row.get('job_id')}),
       'agent': {key: agent.get(key) for key in ('id','role','enabled','version','scopes')} if agent else None,
       'selection': {'tenant_id': str(tenant), 'actor': int(actor), 'conversation_id': conversation,
         'channel_id': channel,
@@ -145,7 +274,9 @@ def _legacy_resolution_snapshot(cur, tenant, actor, conversation, channel, lead,
     token = hashlib.sha256(json.dumps(evidence, default=str, sort_keys=True).encode()).hexdigest()
     return {'reason': reason, 'token': token, 'legacy': legacy, 'routes': routes,
       'group_state': group_state, 'agent': agent, 'evidence': evidence,
-      'active_links': active_links, 'jobs': jobs, 'drafts': drafts, 'runs': runs}
+      'active_links': active_links, 'jobs': jobs, 'drafts': drafts, 'runs': runs,
+      'work_items':work_items,'safely_stoppable':safely_stoppable,'blocked_work':blocked_work,
+      'inventory_truncated':inventory_truncated}
 
 
 def legacy_resolution_preview(profile, data):
@@ -179,6 +310,11 @@ def legacy_resolution_preview(profile, data):
               'legacy_revision': int(snap['legacy']['revision']) if snap['legacy'] else None,
               'agent_version': int(snap['agent']['version']) if snap['agent'] else None,
               'channel_id': channel, 'lead_id': lead, 'agent_id': agent_id,
+              'work_items':snap['work_items'],
+              'safely_stoppable_queued_count':len(snap['safely_stoppable']),
+              'blocked_work_count':len(snap['blocked_work']),
+              'work_record_count':len(snap['work_items']),
+              'work_inventory_truncated':snap['inventory_truncated'],
               'channels': [{'channel_id': str(row['channel_id']), 'lead_id': int(row['lead_id']),
                 'name': str(row.get('name') or ''), 'active': row.get('active') is True,
                 'message_count': int(row.get('message_count') or 0),
@@ -389,19 +525,17 @@ def configure(profile, data):
                 if (str(resolution.get('channel_id') or '') != selected['channel_id']
                         or str(resolution.get('agent_id') or '') != selected['agent_id']):
                     raise TenantLinearError('Подтверждение должно совпадать с выбранными каналом и агентом.', 409)
-                if (set(resolution)-{'confirmed','expected_token','agent_version','channel_id','lead_id','agent_id'}
+                if (set(resolution)-{'confirmed','expected_token','agent_version','channel_id','lead_id','agent_id','cancel_queued_work'}
                         or not isinstance(resolution.get('expected_token'), str)
                         or not re.fullmatch(r'[0-9a-f]{64}',resolution['expected_token'])):
                     raise TenantLinearError('Сначала проверьте текущую привязку группы.', 409)
+                if 'cancel_queued_work' in resolution and type(resolution['cancel_queued_work']) is not bool:
+                    raise TenantLinearError('Подтверждение остановки ожидающих задач некорректно.',409)
                 if type(resolution.get('agent_version')) is not int or resolution.get('agent_version') < 1:
                     raise TenantLinearError('Обновите проверку агента.', 409)
                 if type(resolution.get('lead_id')) is not int or resolution['lead_id'] < 1:
                     raise TenantLinearError('Обновите точный маршрут группы.', 409)
                 lock_dialog(cur, tenant, 'connect', selected['channel_id'], conversation)
-                cur.execute('''LOCK TABLE saas_connect_conversations,saas_crm_messages,
-                  saas_ai_agent_jobs,saas_ai_agent_drafts,saas_ai_agent_runs,
-                  saas_tenant_webhook_events,saas_connect_dialog_links,saas_ai_agents
-                  IN SHARE MODE NOWAIT''')
                 cur.execute('''INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,revision)
                   VALUES(%s::uuid,%s,0) ON CONFLICT DO NOTHING''', (tenant, conversation))
                 # Revalidate the exact owner preview under the group/channel locks.
@@ -418,17 +552,91 @@ def configure(profile, data):
                     raise TenantLinearError('Выбранный маршрут больше не подтверждён как группа.', 409)
                 if route.get('active') is not True:
                     raise TenantLinearError('Выбранный канал сейчас неактивен.', 409)
+                # Lock only this exact group/channel's pending work. A worker
+                # claiming one of these jobs must wait; unrelated tenant queues
+                # and other channel routes remain available.
+                cur.execute('''SELECT event_fingerprint FROM saas_ai_agent_jobs
+                  WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id=%s
+                    AND channel_id IN (%s,'') AND state IN ('queued','processing','drafted','unknown')
+                  FOR UPDATE''',(tenant,conversation,selected['channel_id']))
+                cur.fetchall()
+                cur.execute('''SELECT fingerprint FROM saas_tenant_webhook_events
+                  WHERE tenant_id=%s::uuid AND provider='connect'
+                    AND payload->>'conversation_id'=%s
+                    AND (payload->>'channel_id'=%s OR coalesce(payload->>'channel_id','')='')
+                    AND state IN ('queued','processing')
+                  FOR UPDATE''',(tenant,conversation,selected['channel_id']))
+                cur.fetchall()
+                cur.execute('''SELECT r.id FROM saas_ai_agent_runs r JOIN saas_tenant_webhook_events e
+                  ON e.tenant_id=r.tenant_id AND e.fingerprint=r.event_fingerprint
+                  WHERE r.tenant_id=%s::uuid AND e.provider='connect'
+                    AND e.payload->>'conversation_id'=%s
+                    AND (e.payload->>'channel_id'=%s OR coalesce(e.payload->>'channel_id','')='')
+                    AND (r.state IN ('generating','unknown') OR r.result->>'send_state' IN ('reserved','unknown'))
+                  FOR UPDATE OF r''',(tenant,conversation,selected['channel_id']))
+                cur.fetchall()
+                cur.execute('''SELECT d.id FROM saas_ai_agent_drafts d JOIN saas_tenant_webhook_events e
+                  ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
+                  WHERE d.tenant_id=%s::uuid AND e.provider='connect'
+                    AND e.payload->>'conversation_id'=%s
+                    AND (e.payload->>'channel_id'=%s OR coalesce(e.payload->>'channel_id','')='')
+                    AND d.state IN ('pending','sending','unknown')
+                  FOR UPDATE OF d''',(tenant,conversation,selected['channel_id']))
+                cur.fetchall()
+                cur.execute('''SELECT source_id FROM saas_connect_dialog_links WHERE tenant_id=%s::uuid
+                  AND channel_id=%s::uuid AND source_id=%s AND active FOR UPDATE''',
+                  (tenant,selected['channel_id'],conversation))
+                cur.fetchall()
                 snapshot = _legacy_resolution_snapshot(cur, tenant, actor, conversation,
                     selected['channel_id'], int(route['lead_id']), selected['agent_id'])
                 if (snapshot['reason'] or snapshot['token'] != resolution['expected_token']
                         or int(snapshot['group_state'].get('revision') or 0) != int(data['expected_revision'])
                         or int(snapshot['agent'].get('version') or 0) != resolution['agent_version']):
                     raise TenantLinearError('Данные изменились или требуют отдельной проверки. Обновите предварительный просмотр.', 409)
+                cancel_queued = snapshot['safely_stoppable']
+                if cancel_queued and resolution.get('cancel_queued_work') is not True:
+                    raise TenantLinearError('Подтвердите остановку только тех задач, которые ещё не запускались.',409)
+                if not cancel_queued and resolution.get('cancel_queued_work') is True:
+                    raise TenantLinearError('Очередь изменилась. Обновите предварительный просмотр.',409)
                 cur.execute('SELECT * FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',
                   (tenant, selected['agent_id']))
                 verified_agent = cur.fetchone()
                 if not verified_agent or verified_agent.get('enabled') is not True or verified_agent.get('role') != 'primary' or not scope_matches(verified_agent.get('scopes'), selected['channel_id'], is_group=True):
                     raise TenantLinearError('У выбранного агента нет разрешённой области для этой группы и канала.', 409)
+                stopped_ids=[]
+                stopped_job_count=0
+                stopped_event_only_count=0
+                for item in cancel_queued:
+                    if item.get('item_type') == 'job':
+                        cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,
+                            lease_token=NULL,lease_until=NULL,error_code='owner_group_resolution_cancelled',updated_at=now()
+                          WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider='connect'
+                            AND conversation_id=%s AND channel_id=%s AND scope_channel_id=%s AND event_fingerprint=%s
+                            AND state='queued' AND attempts=0 AND lease_token IS NULL AND lease_until IS NULL
+                          RETURNING event_fingerprint''',
+                          (tenant,item['agent_id'],conversation,item.get('channel_id') or '',item.get('channel_id') or '',item['job_id']))
+                        changed=cur.fetchone()
+                        if not changed:
+                            raise TenantLinearError('Очередь изменилась. Обновите предварительный просмотр.',409)
+                        stopped_ids.append(str(changed['event_fingerprint']))
+                        stopped_job_count+=1
+                    elif item.get('item_type') == 'event':
+                        stopped_ids.append(str(item['job_id']))
+                        stopped_event_only_count+=1
+                    else:
+                        raise TenantLinearError('Очередь изменилась. Обновите предварительный просмотр.',409)
+                stopped_ids=sorted(set(stopped_ids))
+                if stopped_ids:
+                    cur.execute('''UPDATE saas_tenant_webhook_events SET state='skipped',
+                        error_code='owner_group_resolution_cancelled',completed_at=now()
+                      WHERE tenant_id=%s::uuid AND fingerprint=ANY(%s::text[]) AND state='queued'
+                        AND attempts=0 AND lease_token IS NULL AND lease_until IS NULL
+                        AND provider='connect' AND payload->>'conversation_id'=%s
+                        AND payload->>'channel_id'=%s
+                      RETURNING fingerprint''',(tenant,stopped_ids,conversation,selected['channel_id']))
+                    stopped_events={str(row['fingerprint']) for row in cur.fetchall()}
+                    if stopped_events!=set(stopped_ids):
+                        raise TenantLinearError('Очередь события изменилась. Обновите предварительный просмотр.',409)
                 # Keep the unbound historical row untouched. The group-specific
                 # permit only makes the exact selected group/channel binding
                 # admissible; all other channel routes remain quarantined.
@@ -454,10 +662,15 @@ def configure(profile, data):
                   {'channel_id':selected['channel_id'],'agent_id':selected['agent_id'],
                    'legacy_revision':int(snapshot['legacy']['revision']),
                    'preview_hash':snapshot['token'],'previous_assignments':snapshot['group_state'].get('assignments') or [],
-                   'paused_or_human_preserved':True,'history_merged':False})
+                   'paused_or_human_preserved':True,'history_merged':False,
+                   'stopped_queued_job_count':stopped_job_count,
+                   'stopped_queued_event_only_count':stopped_event_only_count,
+                   'stopped_queued_event_ids':stopped_ids})
                 conn.commit()
                 return {'revision':int(saved['revision']),'state':saved['state'],
-                  'legacy_resolved':True,'resume_required':True,'automatic_replies_enabled':False}
+                  'legacy_resolved':True,'resume_required':True,'automatic_replies_enabled':False,
+                  'stopped_queued_count':stopped_job_count+stopped_event_only_count,
+                  'stopped_queued_event_ids':stopped_ids}
             existing = read(cur, tenant, conversation)
             if int(data.get('expected_revision', -1)) != int(existing.get('revision', 0)):
                 raise TenantLinearError('Состояние группы изменилось. Обновите окно.', 409)

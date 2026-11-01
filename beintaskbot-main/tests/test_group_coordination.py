@@ -118,6 +118,190 @@ def _legacy_group_fixture(group):
     return {'provider':'connect','channel_id':CA,'conversation_id':G,'lead_id':1001,'agent_id':AGENT}
 
 
+def _queued_group_work(db, *, channel=CA, job_channel=None, suffix='queued', attempts=0, state='queued'):
+    fingerprint='fingerprint-'+suffix
+    payload={'channel_id':channel,'conversation_id':G,'message_type':'text'}
+    db.execute('''INSERT INTO saas_tenant_webhook_events
+      (tenant_id,fingerprint,provider,external_id,event_type,payload,state,attempts)
+      VALUES(%s::uuid,%s,'connect',%s,'incoming_message',%s::jsonb,%s,%s)''',
+      (A,fingerprint,'external-'+suffix,json.dumps(payload),'queued',attempts))
+    db.execute('''INSERT INTO saas_ai_agent_jobs
+      (tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,channel_id,event_fingerprint,due_at,state,attempts)
+      VALUES(%s::uuid,%s::uuid,'connect',%s,%s,'',%s,%s,%s,now(),%s,%s)''',
+      (A,AGENT,G,1001 if channel==CA else 1002,G,channel if job_channel is None else job_channel,fingerprint,state,attempts))
+    db.commit()
+    return fingerprint
+
+
+def _queued_group_event_only(db, *, channel=CA, suffix='event-only', event_type='incoming_message'):
+    fingerprint='fingerprint-'+suffix
+    payload={'channel_id':channel,'conversation_id':G,'message_type':'image'}
+    db.execute('''INSERT INTO saas_tenant_webhook_events
+      (tenant_id,fingerprint,provider,external_id,event_type,payload,state)
+      VALUES(%s::uuid,%s,'connect',%s,%s,%s::jsonb,'queued')''',
+      (A,fingerprint,'external-'+suffix,event_type,json.dumps(payload)))
+    db.commit()
+    return fingerprint
+
+
+def _legacy_resolution_payload(preview, *, cancel=False):
+    return {'conversation_id':G,'expected_revision':preview['expected_revision'],
+      'assignments':[{'agent_id':AGENT,'channel_id':CA}],
+      'legacy_resolution':{'confirmed':True,'expected_token':preview['expected_token'],
+        'agent_version':preview['agent_version'],'channel_id':CA,'lead_id':1001,'agent_id':AGENT,
+        **({'cancel_queued_work':True} if cancel else {})}}
+
+
+def test_owner_confirmation_stops_only_proven_queued_selected_channel_work(group):
+    d=group['db'];selection=_legacy_group_fixture(group)
+    selected_fp=_queued_group_work(d,suffix='selected')
+    other_fp=_queued_group_work(d,channel=CB,suffix='other')
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert preview['allowed'] and preview['safely_stoppable_queued_count']==1
+    assert preview['blocked_work_count']==0
+    assert any(row['job_id']==selected_fp and row['safely_stoppable'] for row in preview['work_items'])
+    assert any(row['job_id']==other_fp and not row['relevant_to_selection'] for row in preview['work_items'])
+    assert 'Question' not in str(preview) and 'secret message body' not in str(preview)
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,_legacy_resolution_payload(preview))
+    assert d.execute('SELECT state FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s',(A,selected_fp))[0]['state']=='queued';d.commit()
+    result=groups.configure(PROFILE,_legacy_resolution_payload(preview,cancel=True))
+    assert result['stopped_queued_count']==1 and result['state']=='paused'
+    assert d.execute('SELECT state,error_code FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s',(A,selected_fp))==[{'state':'skipped','error_code':'owner_group_resolution_cancelled'}]
+    assert d.execute('SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',(A,selected_fp))==[{'state':'skipped','error_code':'owner_group_resolution_cancelled'}]
+    assert d.execute('SELECT state,error_code FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s',(A,other_fp))==[{'state':'queued','error_code':''}]
+    assert d.execute('SELECT state FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',(A,other_fp))==[{'state':'queued'}]
+    assert d.execute('SELECT count(*)::int AS count FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s',(A,selected_fp))[0]['count']==1
+    audit=d.execute("SELECT payload FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='ai_group_legacy_channel_resolved' ORDER BY created_at DESC LIMIT 1",(A,))[0]['payload'];d.commit()
+    assert audit['stopped_queued_job_count']==1 and audit['stopped_queued_event_ids']==[selected_fp]
+    group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_owner_confirmation_stops_unstarted_event_without_job_row(group):
+    d=group['db'];selection=_legacy_group_fixture(group);fingerprint=_queued_group_event_only(d)
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert preview['allowed'] and preview['safely_stoppable_queued_count']==1
+    item=next(row for row in preview['work_items'] if row['job_id']==fingerprint)
+    assert item['item_type']=='event' and item['safely_stoppable'] is True
+    result=groups.configure(PROFILE,_legacy_resolution_payload(preview,cancel=True))
+    assert result['stopped_queued_count']==1 and result['stopped_queued_event_ids']==[fingerprint]
+    assert d.execute('SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',(A,fingerprint))==[{'state':'skipped','error_code':'owner_group_resolution_cancelled'}]
+    assert d.execute('SELECT count(*)::int AS count FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s',(A,fingerprint))[0]['count']==0
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_owner_resolution_ignores_completed_webhook_history(group):
+    d=group['db'];selection=_legacy_group_fixture(group);fingerprint='fingerprint-completed-history'
+    d.execute('''INSERT INTO saas_tenant_webhook_events
+      (tenant_id,fingerprint,provider,external_id,event_type,payload,state,error_code,completed_at)
+      VALUES(%s::uuid,%s,'connect','external-completed-history','incoming_message',%s::jsonb,'completed','sent',now())''',
+      (A,fingerprint,json.dumps({'channel_id':CA,'conversation_id':G,'message_type':'text'})));d.commit()
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert preview['allowed'] and preview['work_items']==[]
+    groups.configure(PROFILE,_legacy_resolution_payload(preview))
+    assert d.execute('SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',(A,fingerprint))==[{'state':'completed','error_code':'sent'}]
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_owner_resolution_never_cancels_non_message_event(group):
+    d=group['db'];selection=_legacy_group_fixture(group);fingerprint=_queued_group_event_only(d,suffix='control-event',event_type='legacy_control')
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    item=next(row for row in preview['work_items'] if row['job_id']==fingerprint)
+    assert not preview['allowed'] and preview['reason']=='outstanding_work'
+    assert item['safely_stoppable'] is False
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,_legacy_resolution_payload(preview,cancel=True))
+    assert d.execute('SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',(A,fingerprint))==[{'state':'queued','error_code':''}]
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_owner_resolution_never_cancels_unknown_provider_run(group):
+    import uuid
+    d=group['db'];selection=_legacy_group_fixture(group);fingerprint='fingerprint-unknown-run'
+    d.execute('''INSERT INTO saas_tenant_webhook_events
+      (tenant_id,fingerprint,provider,external_id,event_type,payload,state)
+      VALUES(%s::uuid,%s,'connect','external-unknown-run','incoming_message',%s::jsonb,'processing')''',
+      (A,fingerprint,json.dumps({'channel_id':CA,'conversation_id':G,'message_type':'audio'})))
+    run_id=str(uuid.uuid4())
+    d.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state,result) VALUES(%s::uuid,%s::uuid,%s::uuid,%s,1,'mock','unknown','{}'::jsonb)",(A,run_id,AGENT,fingerprint));d.commit()
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert not preview['allowed'] and preview['reason']=='outstanding_work'
+    item=next(row for row in preview['work_items'] if row.get('item_id')==run_id)
+    assert item['item_type']=='run' and item['run_state']=='unknown' and item['safely_stoppable'] is False
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,_legacy_resolution_payload(preview,cancel=True))
+    assert d.execute('SELECT state FROM saas_ai_agent_runs WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,run_id))==[{'state':'unknown'}]
+    assert d.execute('SELECT state FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',(A,fingerprint))==[{'state':'processing'}]
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_owner_confirmation_stops_legacy_unbound_job_only_when_event_route_is_exact(group):
+    d=group['db'];selection=_legacy_group_fixture(group);fingerprint=_queued_group_work(d,job_channel='',suffix='unbound')
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    item=next(row for row in preview['work_items'] if row['job_id']==fingerprint)
+    assert preview['allowed'] and item['safely_stoppable'] is True and item['channel_id']==''
+    result=groups.configure(PROFILE,_legacy_resolution_payload(preview,cancel=True))
+    assert result['stopped_queued_count']==1
+    assert d.execute('SELECT state,error_code FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s',(A,fingerprint))==[{'state':'skipped','error_code':'owner_group_resolution_cancelled'}]
+    assert d.execute('SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',(A,fingerprint))==[{'state':'skipped','error_code':'owner_group_resolution_cancelled'}]
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_owner_resolution_does_not_stop_attempted_or_stale_preview_work(group):
+    d=group['db'];selection=_legacy_group_fixture(group);fingerprint=_queued_group_work(d,suffix='attempted',attempts=1)
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert not preview['allowed'] and preview['reason']=='outstanding_work'
+    assert preview['safely_stoppable_queued_count']==0 and preview['blocked_work_count']==1
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,_legacy_resolution_payload(preview,cancel=True))
+    assert d.execute('SELECT state,attempts FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s',(A,fingerprint))==[{'state':'queued','attempts':1}]
+    assert d.execute('SELECT state,attempts FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',(A,fingerprint))==[{'state':'queued','attempts':1}]
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_owner_resolution_never_cancels_unknown_or_running_work(group):
+    d=group['db'];selection=_legacy_group_fixture(group);fingerprint=_queued_group_work(d,suffix='unknown',state='unknown',attempts=1)
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert not preview['allowed'] and preview['blocked_work_count']==1
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,_legacy_resolution_payload(preview,cancel=True))
+    assert d.execute('SELECT state FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s',(A,fingerprint))==[{'state':'unknown'}]
+    assert d.execute('SELECT state FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',(A,fingerprint))==[{'state':'queued'}]
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_owner_resolution_never_relabels_processing_or_leased_work_as_stopped(group):
+    d=group['db'];selection=_legacy_group_fixture(group);fingerprint=_queued_group_work(d,suffix='running')
+    lease='00000000-0000-0000-0000-000000000777'
+    d.execute("UPDATE saas_ai_agent_jobs SET state='processing',attempts=1,lease_token=%s::uuid,lease_until=now()+interval '1 minute' WHERE tenant_id=%s::uuid AND event_fingerprint=%s",(lease,A,fingerprint))
+    d.execute("UPDATE saas_tenant_webhook_events SET state='processing',attempts=1,lease_token=%s::uuid,lease_until=now()+interval '1 minute' WHERE tenant_id=%s::uuid AND fingerprint=%s",(lease,A,fingerprint));d.commit()
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert not preview['allowed'] and preview['blocked_work_count']==1
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,_legacy_resolution_payload(preview,cancel=True))
+    assert d.execute('SELECT state,attempts,lease_token::text AS lease_token FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s',(A,fingerprint))==[{'state':'processing','attempts':1,'lease_token':lease}]
+    assert d.execute('SELECT state,attempts,lease_token::text AS lease_token FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',(A,fingerprint))==[{'state':'processing','attempts':1,'lease_token':lease}]
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_owner_confirmation_rejects_stale_safe_queue_preview(group):
+    d=group['db'];selection=_legacy_group_fixture(group);fingerprint=_queued_group_work(d,suffix='stale')
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert preview['allowed'] and preview['safely_stoppable_queued_count']==1
+    d.execute("UPDATE saas_ai_agent_jobs SET attempts=1 WHERE tenant_id=%s::uuid AND event_fingerprint=%s",(A,fingerprint));d.commit()
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,_legacy_resolution_payload(preview,cancel=True))
+    assert d.execute('SELECT state,attempts FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s',(A,fingerprint))==[{'state':'queued','attempts':1}]
+    assert d.execute('SELECT state FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',(A,fingerprint))==[{'state':'queued'}]
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_worker_claim_after_preview_aborts_resolution_without_partial_changes(group):
+    d=group['db'];selection=_legacy_group_fixture(group);fingerprint=_queued_group_work(d,suffix='worker-claim')
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    lease='00000000-0000-0000-0000-000000000778'
+    d.execute("UPDATE saas_ai_agent_jobs SET state='processing',attempts=1,lease_token=%s::uuid,lease_until=now()+interval '1 minute' WHERE tenant_id=%s::uuid AND event_fingerprint=%s",(lease,A,fingerprint))
+    d.execute("UPDATE saas_tenant_webhook_events SET state='processing',attempts=1,lease_token=%s::uuid,lease_until=now()+interval '1 minute' WHERE tenant_id=%s::uuid AND fingerprint=%s",(lease,A,fingerprint));d.commit()
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,_legacy_resolution_payload(preview,cancel=True))
+    assert d.execute('SELECT state,attempts FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint=%s',(A,fingerprint))==[{'state':'processing','attempts':1}]
+    assert d.execute('SELECT state,attempts FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',(A,fingerprint))==[{'state':'processing','attempts':1}]
+    assert not d.execute('SELECT 1 FROM saas_ai_group_channel_legacy_permits WHERE tenant_id=%s::uuid AND group_jid=%s',(A,G))
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
 def test_owner_group_legacy_preview_confirms_exact_channel_and_stays_paused(group):
     d=group['db'];selection=_legacy_group_fixture(group)
     preview=groups.legacy_resolution_preview(PROFILE,selection)
@@ -129,7 +313,8 @@ def test_owner_group_legacy_preview_confirms_exact_channel_and_stays_paused(grou
       'assignments':[{'agent_id':AGENT,'channel_id':CA}],
       'legacy_resolution':{'confirmed':True,'expected_token':preview['expected_token'],
         'agent_version':preview['agent_version'],'channel_id':CA,'lead_id':1001,'agent_id':AGENT}})
-    assert result=={'revision':1,'state':'paused','legacy_resolved':True,'resume_required':True,'automatic_replies_enabled':False}
+    assert result=={'revision':1,'state':'paused','legacy_resolved':True,'resume_required':True,'automatic_replies_enabled':False,
+      'stopped_queued_count':0,'stopped_queued_event_ids':[]}
     after=d.execute("SELECT channel_id,conversation_id,agent_id,state,reason,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND conversation_id=%s ORDER BY channel_id",(A,G));d.commit()
     assert after==before,'the original state/history stays in its unbound row; no channel history was moved'
     assert d.execute('SELECT channel_id::text AS channel_id,agent_id::text AS agent_id,legacy_revision FROM saas_ai_group_channel_legacy_permits WHERE tenant_id=%s::uuid AND group_jid=%s',(A,G))==[{'channel_id':CA,'agent_id':AGENT,'legacy_revision':9}]
