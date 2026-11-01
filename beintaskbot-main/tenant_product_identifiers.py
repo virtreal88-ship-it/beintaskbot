@@ -5,10 +5,19 @@ The caller must already be authorized to read the exact receipt. Cached artifact
 are server-produced metadata, never accepted from a client or model JSON object.
 """
 import hashlib
+import json
 import re
 import uuid
 
 VERSION = 'product-label-v1'
+PRODUCER_RULE = (' For a single product image only, when exactly one printed packaging barcode and every digit '
+    'are clearly visible, return ONLY this optional block: first line "Product packaging observed."; '
+    'optional lines Product name: "<visible name>" and Product size: "<visible size>" using JSON-quoted '
+    'strings in their original script; last line "Barcode on product packaging: <literal digits>." '
+    'Use these exact English field names and no other prose with this block. Copy digits without '
+    'repair, inference or checksum completion. Omit the block for ambiguity, unreadable codes, multiple '
+    'products, screenshots, phone/contact numbers or remote IDs; otherwise use ordinary observations. '
+    'The block is an unconfirmed visual candidate, never a diagnosis.')
 _FORMATS = {8: 'EAN-8', 12: 'UPC-A', 13: 'EAN-13'}
 _LABEL = re.compile(r'\b(?:(?P<label>EAN(?:[- ]?(?:8|13))?|UPC(?:[- ]?A)?)\s*(?:barcode)?|barcode)\s+on\s+(?:the\s+)?(?:product packaging(?: label)?|(?:bottle|carton|packet|package|can|jar) label)\s*[:=#-]\s*(?P<value>[0-9][0-9 -]{6,24}[0-9])\b', re.I)
 _UNSAFE = re.compile(r'\b(?:anydesk|teamviewer|remote|desktop|screenshot|screen|window|your address|address|session|credential|password|secret|token|api.key|customer text|chat|message says|quoted|unreadable|illegible|blurred|blurry|obscured|partial|guess|possibly|maybe|uncertain|ambiguous|not visible|no product|no packaging|not product|not packaging|not on|cannot read|can.t read)\b', re.I)
@@ -31,27 +40,50 @@ def _valid(value):
 def extract(text, *, kind='image', origin=None):
     """One literal on one product image, not checksum-only OCR classification.
 
-    Deliberately English-only: unfamiliar or ambiguous observations stay unknown.
+    Fixed field grammar only; quoted product names may retain their original script.
     A separately labelled contact line is allowed, but never its number.
     """
     if kind != 'image' or origin or not isinstance(text, str) or len(text) >= 2400:
         return None
     if _UNSAFE.search(text) or _OTHER_OR_NEGATED.search(text):
         return None
-    matches = list(_LABEL.finditer(text))
-    if len(matches) != 1:
+    lines=[line.strip() for line in text.splitlines() if line.strip()]
+    if lines.count('Product packaging observed.') != 1:
         return None
-    match = matches[0]
-    # Accept a bounded, affirmative printed-label field, not a number quoted
-    # somewhere in prose about a different object. Unsupported prose remains
-    # unknown; adding more languages/grammars needs its own fixtures.
-    start=max(text.rfind(mark,0,match.start()) for mark in ('\n','.',';'))+1
-    ends=[pos for mark in ('\n','.',';') if (pos:=text.find(mark,match.end()))>=0]
-    end=min(ends) if ends else len(text)
-    if not _FIELD_PREFIX.fullmatch(text[start:match.start()].strip()) or text[match.end():end].strip():
+    fields=set();matches=[];contacts=[]
+    for line in lines:
+        if line=='Product packaging observed.':
+            continue
+        detail=re.fullmatch(r'Product (name|size): (.+)',line)
+        if detail:
+            if detail[1] in fields:
+                return None
+            fields.add(detail[1])
+            try:
+                label=json.loads(detail[2])
+            except (TypeError,ValueError):
+                return None
+            if not isinstance(label,str) or not 1<=len(label)<=160 or any(ord(c)<32 for c in label):
+                return None
+            # JSON escapes cannot hide a contradictory/sensitive label or a
+            # second numeric identifier from the same exclusion policy.
+            if (_UNSAFE.search(label) or _OTHER_OR_NEGATED.search(label) or _CONTACT.search(label)
+                    or len(re.sub(r'[^0-9]','',label))>=8):
+                return None
+            continue
+        match=_LABEL.search(line)
+        if match and _FIELD_PREFIX.fullmatch(line[:match.start()].strip()) and line[match.end():].strip() in {'','.'}:
+            matches.append(match)
+            continue
+        # A separately labelled contact value is not promoted. Headings,
+        # free prose (in ANY language) and other objects fail closed.
+        if re.fullmatch(r'(?:contact\s+)?(?:phone|telephone|mobile|tel|fax|whatsapp)\s*:\s*\+?[0-9][0-9 ()-]{6,20}[0-9]\.?',line,re.I):
+            contacts.append(line)
+            continue
         return None
-    if re.search(r'\b(?:barcode|EAN|UPC)\b',text[:start]+text[end:],re.I):
+    if len(matches)!=1:
         return None
+    match=matches[0]
     value = re.sub(r'[ -]', '', match['value'])
     if not _valid(value):
         return None
@@ -60,17 +92,8 @@ def extract(text, *, kind='image', origin=None):
         return None
     if declared == 'EAN' and len(value) not in {8, 13} or declared == 'UPC' and len(value) != 12:
         return None
-    # A barcode/phone label collision or repeated digits under another label is
-    # ambiguous even when its check digit happens to be valid.
-    clauses = re.split(r'[\n.;]', text)
-    for clause in clauses:
-        if not _CONTACT.search(clause):
-            continue
-        # Only a separate complete contact field is harmless. A heading such
-        # as 'Telephone:\nBarcode ...' has ambiguous ownership and rejects.
-        if (not re.fullmatch(r'\s*(?:contact\s+)?(?:phone|telephone|mobile|tel|fax|whatsapp)\s*:\s*\+?[0-9][0-9 ()-]{6,20}[0-9]\s*', clause, re.I)
-                or value in re.sub(r'[^0-9]', '', clause)):
-            return None
+    if any(value in re.sub(r'[^0-9]','',line) for line in contacts):
+        return None
     if len(re.findall(re.escape(value), re.sub(r'[ -]', '', text))) != 1:
         return None
     return {'version': VERSION, 'format': _FORMATS[len(value)], 'value': value,

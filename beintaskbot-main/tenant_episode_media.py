@@ -234,8 +234,9 @@ def prepare(authority, rows):
         row['_copilot_attachment_text']=message['text']
         if ref['media_kind']=='image':
             from tenant_product_identifiers import context as product_context
+            from tenant_media_evidence import _safe_text
             row['_copilot_attachment_text']=product_context(authority.tenant,ref,prior or {
-                'status':receipt.get('status'),'coverage':receipt.get('coverage',{}),'result':receipt})+'\n'+message['text']
+                'status':receipt.get('status'),'coverage':receipt.get('coverage',{}),'result':receipt})+'\n'+_safe_text(message['text'])
         row['_episode_receipt']=receipt
     return rows
 

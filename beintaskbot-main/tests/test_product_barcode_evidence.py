@@ -21,7 +21,7 @@ RAW={'mediaId':'fixture-image'}
 REF={'id':'connect:fixture','external_id':'connect:fixture','channel_id':CHANNEL,
      'media_kind':'image','body_hash':evidence._body_hash(''), 'media_version':evidence.media_version(RAW)}
 EAN='4006381333931'
-OBS='Product packaging: a sunflower oil bottle. Printed EAN-13 barcode on the bottle label: '+EAN+'.'
+OBS='Product packaging observed.\nProduct name: "KIRLANGIÇ sunflower oil"\nProduct size: "1L"\nPrinted EAN-13 barcode on the bottle label: '+EAN+'.'
 CONTENT=b'local fixture only'
 HASH=hashlib.sha256(CONTENT).hexdigest()
 
@@ -36,7 +36,7 @@ def receipt(text=OBS, **changes):
     ('EAN-13 barcode',EAN,'EAN-13'),('barcode','4006 3813 3393 1','EAN-13'),
     ('EAN-8','96385074','EAN-8'),('UPC-A','036000291452','UPC-A')])
 def test_explicit_packaging_label_is_an_unconfirmed_candidate(label,value,format):
-    text='Product packaging: bottle label. '+label+' on the bottle label: '+value+'.'
+    text='Product packaging observed.\n'+label+' on the bottle label: '+value+'.'
     found=identifiers.candidate(TENANT,REF,receipt(text))
     assert found['artifact']['format']==format
     assert found['artifact']['value']==value.replace(' ','')
@@ -218,3 +218,34 @@ def test_collector_transfers_only_single_image_artifact(monkeypatch):
     assert results[0]['_product_barcode_candidate']['artifact']['value']==EAN
     assert EAN not in item['messages'][0]['text']
     assert EAN not in json.dumps(project(item['refs'],results,'completed',include_content=True))
+
+
+@pytest.mark.parametrize('field,label',[('name',r'"\u0041nyDesk"'),('size',r'"\u0075nreadable"'),
+    ('name',r'"\u0034\u0030\u0030\u0036\u0033\u0038\u0031\u0033\u0033\u0033\u0039\u0033\u0031"')])
+def test_decoded_json_fields_cannot_hide_conflicts_or_identifiers(field,label):
+    text='Product packaging observed.\nProduct '+field+': '+label+'\nBarcode on product packaging: '+EAN+'.'
+    assert identifiers.extract(text) is None
+
+
+@pytest.mark.parametrize('eligible',[True,False])
+def test_fresh_prepare_only_exposes_typed_candidate_not_generic_digits(monkeypatch,eligible):
+    import tenant_knowledge_media as media
+    import tenant_chat_ai_provider as provider
+    from test_connect_images import PNG
+    from unittest.mock import AsyncMock
+    photo=row('image',channel='connect:'+CHANNEL,external_id=REF['external_id'],raw=RAW)
+    auth=Authority([photo]);auth.tenant=TENANT;auth.channel=CHANNEL;auth.model='gpt-4.1'
+    text=(OBS if eligible else 'The bottle barcode is '+EAN+'.')+'\nContact phone: +994501234567.'
+    http=Mock(return_value=Mock(status_code=200,json=Mock(return_value={'status':'completed',
+        'output':[{'type':'message','content':[{'type':'output_text','text':text}]}],'usage':{}})))
+    monkeypatch.setattr(provider.requests,'post',http)
+    monkeypatch.setattr(media,'download_media',AsyncMock(return_value=(PNG,'image/png')))
+    monkeypatch.setattr(episode,'reusable',Mock(return_value=None))
+    monkeypatch.setattr(evidence,'reusable',Mock(return_value=None))
+    monkeypatch.setattr(episode,'_flight',Mock(return_value=('local-key','local-token',None)))
+    monkeypatch.setattr(episode,'_finish',Mock())
+    episode.prepare(auth,[photo])
+    line=_bounded_conversation([photo])[0]
+    assert (EAN in line['text'])==eligible
+    assert '994501234567' not in line['text']
+    http.assert_called_once()

@@ -32,6 +32,7 @@ on:
       - 'beintaskbot-main/tenant_media_evidence.py'
       - 'beintaskbot-main/tenant_product_identifiers.py'
       - 'beintaskbot-main/tests/test_product_barcode*.py'
+      - 'beintaskbot-main/tests/fixtures/product_barcode_observation_responses.json'
       - 'beintaskbot-main/tests/test_dialog_media_grounding.py'
       - 'beintaskbot-main/tests/test_dialog_photo*'
       - 'beintaskbot-main/tenant_operator_dialogs.py'
