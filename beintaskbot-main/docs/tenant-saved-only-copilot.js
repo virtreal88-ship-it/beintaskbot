@@ -1,6 +1,6 @@
 /* One approved owner action. No automatic dispatch, media load, or customer send. */
 (()=>{
-  const APPROVED_SCOPE_DIGEST=null; // Must match the server's reviewed target digest.
+  const APPROVED_SCOPE_DIGEST='23ecbd195403ebb1098b1d3e66542cca3892bad8ff95a7a327d5d63f7f1df37a'; // Must match the server's reviewed target digest.
   const CASE='owner-saved-draft-v1';
   const permissionSnapshot=data=>JSON.stringify([data?.role_permissions,data?.capabilities?.modules,data?.capabilities?.chat_ai]);
   let generation=0,mountedKey='',mountedBox=null,profilePolicy=permissionSnapshot(window.tenantProfileSnapshot);
@@ -12,7 +12,7 @@
     const revision=++generation,member=operator()?.member,route=operator()?.currentDialog;
     existing?.remove();mountedBox?.remove();mountedBox=null;mountedKey='';
     if(!APPROVED_SCOPE_DIGEST||member?.role!=='owner'||member.active===false||!route)return;
-    const scope=JSON.stringify([CASE,String(member.tenant_id),String(member.telegram_id),String(route.channel_id),String(route.conversation_id),Number(route.lead_id)]);
+    const scope=JSON.stringify([CASE,String(member.tenant_id),String(route.channel_id),String(route.conversation_id),Number(route.lead_id)]);
     const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(scope)))].map(n=>n.toString(16).padStart(2,'0')).join('');
     const panel=document.getElementById('operatorCopilot');if(digest!==APPROVED_SCOPE_DIGEST||revision!==generation||!panel)return;
     const captured=key(),box=document.createElement('section'),button=document.createElement('button'),status=document.createElement('p'),output=document.createElement('pre'),details=document.createElement('details'),summary=document.createElement('summary'),audit=document.createElement('pre');

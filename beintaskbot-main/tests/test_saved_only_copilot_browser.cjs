@@ -16,8 +16,10 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  else if(url.includes('/dialogs?'))result={dialogs:[],channels:[],agents:[]};return {ok:true,status:200,json:async()=>({success:true,result})};};
  });
  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-operator-dialogs.js'])await page.addScriptTag({path:path.join(root,file)});await page.evaluate(()=>window.tenantOperator.openDialog(window.testRoute));
- const target=crypto.createHash('sha256').update(JSON.stringify(['owner-saved-draft-v1','tenant-ui','11','channel-ui','client-ui',41])).digest('hex');
- await page.addScriptTag({content:fs.readFileSync(path.join(root,'docs/tenant-saved-only-copilot.js'),'utf8').replace('const APPROVED_SCOPE_DIGEST=null','const APPROVED_SCOPE_DIGEST='+JSON.stringify(target))});
+ const target=crypto.createHash('sha256').update(JSON.stringify(['owner-saved-draft-v1','tenant-ui','channel-ui','client-ui',41])).digest('hex');
+ const asset=fs.readFileSync(path.join(root,'docs/tenant-saved-only-copilot.js'),'utf8'),scopePattern=/const\s+APPROVED_SCOPE_DIGEST\s*=\s*(?:null|"[a-f0-9]{64}"|'[a-f0-9]{64}')/g;
+ assert.equal([...asset.matchAll(scopePattern)].length,1,'Expected exactly one disabled or pinned scope digest in the owner asset');
+ await page.addScriptTag({content:asset.replace(scopePattern,'const APPROVED_SCOPE_DIGEST='+JSON.stringify(target))});
  await page.waitForSelector('#ownerSavedOnlyCopilot',{state:'attached'});await page.locator('#operatorCopilotToggle').click();await page.locator('#chatText').fill('Ordinary unsent draft');
  const card=page.locator('#ownerSavedOnlyCopilot'),button=card.locator('>button');assert.equal(await page.evaluate(()=>window.posts.length),0);await button.click();await page.waitForFunction(()=>document.querySelector('#ownerSavedOnlyCopilot>button')?.textContent==='Создать один черновик');
  await card.locator('details summary').click();assert.match(await card.locator('details pre').innerText(),/gpt-4.1|snapshot-hash/);assert.match(await card.locator('details pre').innerText(),/source-version-hash/);assert.match(await card.locator('details pre').innerText(),/kb-version-hash/);

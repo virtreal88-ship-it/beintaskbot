@@ -154,7 +154,7 @@ def test_exact_context_parity_with_normal_saved_reuse_including_captions_history
     http.assert_not_called()
 
 
-@pytest.mark.parametrize('mutation',['source','agent','kb_version'])
+@pytest.mark.parametrize('mutation',['source','agent','kb_version','owner'])
 def test_final_dispatch_guard_stops_context_races_without_http_or_new_uuid(saved,monkeypatch,mutation):
     import uuid
     from test_tenant_support_inbox import AGENT
@@ -167,6 +167,7 @@ def test_final_dispatch_guard_stops_context_races_without_http_or_new_uuid(saved
     def mutate_then_generate(*args,**kwargs):
         if mutation=='source':db.execute("UPDATE saas_crm_messages SET body='Changed source' WHERE tenant_id=%s::uuid",(A,))
         elif mutation=='agent':db.execute("UPDATE saas_ai_agents SET instructions='Changed instructions',version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
+        elif mutation=='owner':db.execute('UPDATE saas_tenants SET owner_telegram_id=22 WHERE id=%s::uuid',(A,))
         else:db.execute("UPDATE saas_ai_knowledge_sources SET content_hash='new-version',provenance='{\"revision\":2}'::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,source))
         db.commit();changed.append(True);return actual(*args,**kwargs)
     monkeypatch.setattr(provider,'generate',mutate_then_generate)
@@ -236,7 +237,7 @@ def test_one_case_uuid_never_changes_with_owner_route_config_or_model(saved):
     db,data,http,forbidden=saved
     original=gate.request_id(A,data)
     assert gate.request_id(A,{**data,'conversation_id':'different-route','lead_id':999,'model':'different'})==original
-    assert gate.scope_digest(A,data,11)!=gate.scope_digest(A,data,22)
+    assert gate.scope_digest(A,data,11)==gate.scope_digest(A,data,22)  # Route pin; DB canonical ownership is authoritative.
     db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name) VALUES(%s::uuid,22,'owner','Synthetic second owner')",(A,));db.commit()
     with pytest.raises(TenantLinearError):gate.preflight({'tenant_id':A,'telegram_id':22},data)
     http.assert_not_called()
@@ -322,4 +323,26 @@ def test_invalid_provider_usage_preserves_known_text_and_full_unknown_hold(saved
     hold=db.execute('SELECT state,reserved_microusd FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key=%s',(A,'saved-only:'+preview['request_id']))[0]
     assert hold['state']=='unknown' and hold['reserved_microusd']==preview['reserve_microusd']
     assert gate.execute(PROFILE,payload)==result
+    http.assert_called_once();forbidden.assert_not_called()
+
+
+def test_owner_transfer_invalidates_quote_and_denies_old_owner(saved):
+    db,data,http,forbidden=saved
+    preview=gate.preflight(PROFILE,data)
+    db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name) VALUES(%s::uuid,22,'owner','Synthetic successor')",(A,))
+    db.execute('UPDATE saas_tenants SET owner_telegram_id=22 WHERE id=%s::uuid',(A,));db.commit()
+    with pytest.raises(TenantLinearError):gate.preflight(PROFILE,data)
+    with pytest.raises(TenantLinearError):gate.execute(PROFILE,{**data,'cost_token':preview['cost_token']})
+    with pytest.raises(TenantLinearError):gate.execute({'tenant_id':A,'telegram_id':22},{**data,'cost_token':preview['cost_token']})
+    http.assert_not_called();forbidden.assert_not_called()
+
+
+def test_owner_transfer_denies_completed_result_reuse(saved):
+    db,data,http,forbidden=saved
+    preview=gate.preflight(PROFILE,data)
+    payload={**data,'cost_token':preview['cost_token']}
+    gate.execute(PROFILE,payload)
+    db.execute('UPDATE saas_tenants SET owner_telegram_id=22 WHERE id=%s::uuid',(A,));db.commit()
+    with pytest.raises(TenantLinearError):gate.preflight(PROFILE,data)
+    with pytest.raises(TenantLinearError):gate.execute(PROFILE,payload)
     http.assert_called_once();forbidden.assert_not_called()

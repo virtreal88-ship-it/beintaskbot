@@ -7,7 +7,7 @@ import uuid
 from tenant_linear_policy import TenantLinearError
 from tenant_platform import _connect,_fernet
 
-APPROVED_SCOPE_DIGEST=None  # Set only after the parent verifies the authorized target.
+APPROVED_SCOPE_DIGEST='23ecbd195403ebb1098b1d3e66542cca3892bad8ff95a7a327d5d63f7f1df37a'  # Owner-approved Fəxri route; canonical owner is checked in the DB.
 CASE='owner-saved-draft-v1'
 CAP=940000
 OUTPUT=900
@@ -21,8 +21,8 @@ def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False,default=str,separators=(',',':')).encode()).hexdigest()
 
 
-def scope_digest(tenant,command,actor):
-    return digest([CASE,str(uuid.UUID(str(tenant))),str(actor),str(command['channel_id']),str(command['conversation_id']),int(command['lead_id'])])
+def scope_digest(tenant,command,actor=None):
+    return digest([CASE,str(uuid.UUID(str(tenant))),str(command['channel_id']),str(command['conversation_id']),int(command['lead_id'])])
 
 
 def request_id(tenant,command):
@@ -110,9 +110,9 @@ def _read(profile,data):
     with _connect() as conn:
         with conn.cursor() as cur:
             tenant,actor,policy=access(cur,profile,'dialogs')
-            cur.execute('SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s',(tenant,actor))
+            cur.execute('''SELECT m.role,m.active,t.owner_telegram_id FROM saas_tenant_members m JOIN saas_tenants t ON t.id=m.tenant_id WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''',(tenant,actor))
             member=cur.fetchone() or {}
-            if member.get('role')!='owner' or member.get('active') is not True or not policy.can_use_chat_ai():raise TenantLinearError('Active owner access is required.',403)
+            if member.get('role')!='owner' or member.get('active') is not True or str(member.get('owner_telegram_id'))!=str(actor) or not policy.can_use_chat_ai():raise TenantLinearError('Active owner access is required.',403)
             route=assert_route(cur,tenant,policy,'connect',command['conversation_id'],command['channel_id'],command['lead_id'])
             if int(route.get('lead_id') or 0)!=command['lead_id']:raise TenantLinearError('The selected dialog changed.',409)
             if not APPROVED_SCOPE_DIGEST or scope_digest(tenant,command,actor)!=APPROVED_SCOPE_DIGEST:raise TenantLinearError('No approved saved-only target is configured.',403)
