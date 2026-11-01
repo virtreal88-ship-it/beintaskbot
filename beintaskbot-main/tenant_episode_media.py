@@ -225,6 +225,15 @@ class Execution:
     def item(self,ref,message):
         self.current_ref=ref
         config=self.config
+        scoped_asr = False
+        if ref['media_kind'] in {'audio', 'voice'} and config.get('audio_enabled') is True:
+            from tenant_ai_asr_model import shared_audio_model, STRONG_MODEL
+            selected = shared_audio_model(config.get('transcription_model'), tenant=self.tenant,
+                credential_source=self.credential_source, context=getattr(self, 'shared_asr_context', ''))
+            if selected == STRONG_MODEL and config.get('transcription_model') == 'whisper-1':
+                config = {**config, 'transcription_model': selected}
+                scoped_asr = True
+        self.scoped_dialog_asr = scoped_asr
         route={'channel_id':self.channel,'conversation_id':self.conversation,
                'allow_external_media':config.get('consent') is True or self.credential_source=='platform',
                'allow_paid_asr':config.get('audio_enabled') is True or self.credential_source=='platform',
@@ -240,6 +249,7 @@ class Execution:
             if limit_microusd(self.tenant)<=0:route['allow_external_media']=False
         return {'tenant':self.tenant,'agent_id':getattr(self,'agent_id',''),'key':getattr(self,'video_key',self.key) if ref['media_kind']=='video' else self.key,'model':model,'config':config,
                 'credential_source':self.credential_source,'route':route,
+                **({'_shared_dialog_asr': True} if scoped_asr else {}),
                 'refs':[ref],'messages':[message]}
 
     def validate(self,ref):
@@ -268,7 +278,9 @@ class Execution:
                     step='calls'
                     self.admit_call(cur)
                     step='budget'
-                    reserve_media(cur,self.tenant,call_key,'episode_media',model,operation,1)
+                    scoped = ({'_shared_dialog_asr': True} if
+                        getattr(self, 'scoped_dialog_asr', False) and operation=='asr' else {})
+                    reserve_media(cur,self.tenant,call_key,'episode_media',model,operation,1,**scoped)
                 conn.commit()
         except TenantLinearError as error:
             if operation=='asr':mark(error,step)
@@ -333,6 +345,7 @@ class Execution:
 
 
 class ManualExecution(Execution):
+    shared_asr_context = 'manual_helper'
     latest_request=True
     def __init__(self,tenant,actor,command,config,version,key,model,language,rows):
         self.tenant,self.actor,self.command=tenant,actor,command
@@ -389,8 +402,12 @@ class ManualExecution(Execution):
 
 
 class AutoExecution(Execution):
+    shared_asr_context = 'connect_auto'
     def __init__(self,job,reservation):
         self.job,self.reservation=job,reservation
+        payload = job.get('payload') if isinstance(job.get('payload'), dict) else {}
+        if job.get('provider') != 'connect' or payload.get('pilot_developer_followup') or payload.get('pilot_customer_case_reply'):
+            self.shared_asr_context = ''
         self.tenant,self.channel,self.conversation,self.lead=str(job['tenant_id']),str(job['channel_id']),str(job['conversation_id']),int(job['lead_id'])
         self.prepaid_calls=max(0,int(reservation.get('reserved_calls') or 1)-1)
         from tenant_dialog_media_adapters import configuration

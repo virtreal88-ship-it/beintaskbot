@@ -265,13 +265,11 @@ def _finish(job, reservation, source, *, text='', code=''):
 
 def transcription_model(reservation):
     if reservation.get('credential_source') == 'platform':
-        from tenant_ai_asr_model import effective_model
-        return effective_model(os.environ.get('AI_AGENTS_TRANSCRIPTION_MODEL', 'gpt-4o-mini-transcribe'), platform=True)
+        return os.environ.get('AI_AGENTS_TRANSCRIPTION_MODEL', 'gpt-4o-mini-transcribe').strip()
     config = reservation.get('config') or {}
     if config.get('audio_enabled') is not True:
         raise VoiceError('voice_disabled')
-    from tenant_ai_asr_model import effective_model
-    return effective_model(config.get('transcription_model'))
+    return str(config.get('transcription_model') or '').strip()
 
 
 def transcribe_message(job, reservation, source):
@@ -284,8 +282,7 @@ def transcribe_message(job, reservation, source):
     try:
         if not active(job, reservation):
             raise VoiceError('voice_conversation_changed')
-        media = validate_audio(*download_audio(job, source['external_id']),
-                               prove_upload_duration=(model == 'gpt-transcribe'))
+        media = validate_audio(*download_audio(job, source['external_id']))
         if not active(job, reservation):
             raise VoiceError('voice_conversation_changed')
         text, usage = transcribe(reservation['api_key'], model, *media, with_usage=True)

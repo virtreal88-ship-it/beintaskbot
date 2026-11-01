@@ -124,7 +124,15 @@ def collect(profile,item,check_before_ai=None,*,execution=None):
                     receipt.update(status='unavailable',code='asr_authorization_required');continue
                 from tenant_connect_voice import validate_audio,transcription_model,FORMATS
                 from tenant_chat_ai_provider import transcribe
-                stage='audio_transcription'
+                from tenant_episode_media import ManualExecution, AutoExecution
+                scoped_asr = (isinstance(execution, (ManualExecution, AutoExecution))
+                    and getattr(execution, 'scoped_dialog_asr', False) is True
+                    and getattr(execution, 'shared_asr_context', '') in {'manual_helper', 'connect_auto'}
+                    and str(getattr(execution, 'tenant', '')) == str(item['tenant'])
+                    and item.get('_shared_dialog_asr') is True)
+                if scoped_asr:
+                    from functools import partial
+                    transcribe = partial(transcribe, bounded_asr=True, asr_tenant=item['tenant'])
                 model=transcription_model(item)
                 if not model: raise LookupError('asr_model_unavailable')
                 stage='media_download'
@@ -135,8 +143,8 @@ def collect(profile,item,check_before_ai=None,*,execution=None):
                 validate_media_size(kind,len(data))
                 if size>MAX_BYTES: receipt.update(status='unavailable',code='byte_budget');continue
                 stage='media_validation'
-                media=validate_audio(data,FORMATS[mime],mime,max_seconds=300 if execution else 60,
-                    prove_upload_duration=(model == 'gpt-transcribe'))
+                proof = {'prove_upload_duration': True} if scoped_asr else {}
+                media=validate_audio(data,FORMATS[mime],mime,max_seconds=300 if execution else 60,**proof)
                 # Extraction is already durably reserved and is never replayed automatically.
                 if loader(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
                 check_active(profile,item)
@@ -151,8 +159,10 @@ def collect(profile,item,check_before_ai=None,*,execution=None):
                 truncated=len(safe_text)>4000
                 text=safe_text[:4000]
                 receipt.update(status='partial' if truncated else 'processed',
-                    code='transcript_truncated' if truncated else 'transcribed',transcript=text,
-                    model=item.get('asr_artifact_model') or model)
+                    code='transcript_truncated' if truncated else 'transcribed',transcript=text,model=model)
+                if scoped_asr:
+                    from tenant_ai_asr_model import shared_request_policy
+                    receipt['asr_request_policy'] = shared_request_policy()
                 message['text']+='\n[Transcript] '+text
                 continue
             if kind=='video' and video_used:

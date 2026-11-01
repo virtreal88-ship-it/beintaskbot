@@ -149,29 +149,19 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
 
 
 def transcribe(key, model, content, extension, content_type, *, with_usage=False, request_timeout=90,
-               response_format='json', with_diagnostics=False, speech_languages=None):
+               response_format='json', with_diagnostics=False, bounded_asr=False, asr_tenant=None):
     if response_format not in {'json', 'verbose_json'}:
         raise ValueError('Unsupported transcription response format')
-    data = {'model': model, 'response_format': response_format}
-    if model == 'gpt-transcribe':
-        if response_format != 'json' or with_diagnostics:
-            raise ValueError('Unsupported transcription response options')
-        from tenant_ai_asr_model import quote
-        quote(model)  # Explicit disabled/malformed/over-budget tariffs stay closed.
+    if bounded_asr:
+        from tenant_ai_asr_model import STRONG_MODEL, scoped_strong_quote
+        if model != STRONG_MODEL or response_format != 'json' or with_diagnostics:
+            raise ValueError('Unsupported bounded transcription options')
+        scoped_strong_quote(asr_tenant)
         from tenant_connect_voice import validate_audio
         content, extension, content_type = validate_audio(
             content, extension, content_type, prove_upload_duration=True)
-        if speech_languages is not None:
-            import re
-            if (not isinstance(speech_languages, (tuple, list)) or not speech_languages
-                    or any(not isinstance(code, str) or not re.fullmatch(r'[a-z]{2}', code)
-                           for code in speech_languages)):
-                raise ValueError('Invalid explicit speech language policy')
-            data['languages[]'] = list(dict.fromkeys(speech_languages))
-    elif speech_languages is not None:
-        raise ValueError('Unsupported speech language policy')
     response = requests.post('https://api.openai.com/v1/audio/transcriptions',
-        headers={'Authorization': 'Bearer ' + key}, data=data,
+        headers={'Authorization': 'Bearer ' + key}, data={'model': model, 'response_format': response_format},
         files={'file': ('recording.' + extension, content, content_type)}, timeout=(5, min(90,max(1,request_timeout))), allow_redirects=False)
     if response.status_code != 200:
         raise ChatAIProviderError(response.status_code, _provider_error_category(response))
@@ -216,17 +206,18 @@ def transcribe(key, model, content, extension, content_type, *, with_usage=False
     except (TypeError, ValueError):
         incoming = outgoing = total = 0
     usage = {'input_tokens': incoming, 'output_tokens': outgoing, 'total_tokens': total}
-    if model == 'gpt-transcribe':
+    if bounded_asr:
         import math
+        import re
+        raw_usage = payload.get('usage') if isinstance(payload.get('usage'), dict) else {}
         try:
-            seconds = float(payload.get('usage', {}).get('seconds'))
+            seconds = float(raw_usage.get('seconds'))
             if math.isfinite(seconds) and 0 <= seconds <= 300:
                 usage['seconds'] = seconds
-        except (TypeError, ValueError, AttributeError):
+        except (TypeError, ValueError):
             pass
         detected = payload.get('languages')
         if isinstance(detected, list):
-            import re
             usage['detected_languages'] = [entry['code'] for entry in detected
                 if isinstance(entry, dict) and isinstance(entry.get('code'), str)
                 and re.fullmatch(r'[a-z]{2}', entry['code'])][:20]
@@ -239,20 +230,19 @@ def transcribe_video(key, model, content, extension, content_type, *, expected_l
                      request_timeout=45, with_usage=True):
     """Video-only ASR path: withhold text unless Whisper reports confident speech.
 
-    Other supported ASR APIs return uncertain evidence because their detected
-    languages and nonempty text do not establish word or no-speech confidence.
+    Other ASR APIs do not expose compatible no-speech confidence, so they are
+    left uncalled instead of treating an unverifiable nonempty string as speech.
     A language mismatch downgrades to uncertain; it never discards the visual
     analysis or is interpreted as proof that the customer did not speak.
     """
-    if model in {'gpt-4o-mini-transcribe', 'gpt-transcribe'}:
+    if model == 'gpt-4o-mini-transcribe':
         # Use the same bounded transcription adapter as standalone audio. This
         # model does not expose Whisper's no-speech confidence, so its result
         # stays uncertain and transcribe_once withholds it from case facts.
         text, usage = transcribe(key, model, content, extension, content_type,
             with_usage=True, request_timeout=request_timeout, response_format='json')
         return text, usage, {'speech_state': 'uncertain',
-            'reason': 'speech_confidence_unavailable', 'language': '',
-            **({'detected_languages': usage.get('detected_languages', [])} if model == 'gpt-transcribe' else {})}
+            'reason': 'speech_confidence_unavailable', 'language': ''}
     if model != 'whisper-1':
         return '', {}, {'speech_state': 'uncertain', 'reason': 'unsupported_video_asr_model', 'language': ''}
     text, usage, diagnostics = transcribe(

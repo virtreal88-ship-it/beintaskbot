@@ -59,18 +59,11 @@ def media_price(model, operation):
     raw = registry.get(str(model), {})
     if not isinstance(raw, dict):
         return None
-    if str(model) in {'whisper-1', 'gpt-transcribe'} and operation == 'asr' and operation not in raw:
+    if str(model) == 'whisper-1' and operation == 'asr' and operation not in raw:
         from tenant_ai_asr_model import minimum_reserve_microusd
-        return 30_000 if str(model) == 'gpt-transcribe' else minimum_reserve_microusd('whisper-1')
+        return minimum_reserve_microusd('whisper-1')
     try:
-        candidate = raw.get(operation)
-        if str(model) == 'gpt-transcribe' and (isinstance(candidate, bool) or
-                not isinstance(candidate, (int, str)) or
-                (isinstance(candidate, str) and not candidate.isdecimal())):
-            return None
-        value = int(candidate)
-        if str(model) == 'gpt-transcribe' and not 22_500 <= value <= 30_000:
-            return None
+        value = int(raw.get(operation))
         return value if value > 0 else None
     except (TypeError, ValueError):
         return None
@@ -173,7 +166,7 @@ def reserve(cur, tenant_id, call_key, kind, model, input_upper=0, output_upper=0
     return reservation_id
 
 
-def reserve_media(cur, tenant_id, call_key, kind, model, operation, units, *, campaign_id=None, track_uncapped=False):
+def reserve_media(cur, tenant_id, call_key, kind, model, operation, units, *, campaign_id=None, track_uncapped=False, _shared_dialog_asr=False):
     """Reserve a fixed, configured upper bound before a media provider call.
 
     An internally bounded owner workflow may track its explicit grant even
@@ -184,7 +177,13 @@ def reserve_media(cur, tenant_id, call_key, kind, model, operation, units, *, ca
         return None
     if type(units) is not int or units < 1:
         raise TenantLinearError('ai_spend_media_units_invalid', 409)
-    unit = media_price(model, operation)
+    if _shared_dialog_asr:
+        from tenant_ai_asr_model import STRONG_MODEL, scoped_strong_quote
+        if model != STRONG_MODEL or operation != 'asr':
+            raise TenantLinearError('shared_asr_scope_unavailable', 409)
+        unit = scoped_strong_quote(tenant_id)['reserve_microusd']
+    else:
+        unit = media_price(model, operation)
     if unit is None:
         raise TenantLinearError('ai_spend_media_price_unknown', 409)
     amount = unit * units

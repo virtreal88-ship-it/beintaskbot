@@ -282,7 +282,6 @@ def observe_once(profile,item,ref,content,mime,origin,invoke,check_before_ai=Non
 
 
 def transcribe_once(profile,item,model,media,invoke,check_before_ai=None,*,return_diagnostics=False):
-    item.pop('asr_artifact_model', None)
     base_fingerprint=transcription_fingerprint(item,model,media,return_diagnostics=return_diagnostics)
     fingerprint=base_fingerprint
     token=str(uuid.uuid4());tenant=item['tenant'];cache_fingerprints=[base_fingerprint]
@@ -291,30 +290,6 @@ def transcribe_once(profile,item,model,media,invoke,check_before_ai=None,*,retur
             checked,_,_=store.authorize(cur,profile)
             if checked!=tenant:raise TenantLinearError('Нет доступа.',403)
             schema(cur)
-            if model == 'gpt-transcribe':
-                source_guard = store.digest({'asr_source_sha256': hashlib.sha256(media[0]).hexdigest(),
-                                             'format': media[2]})
-                cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
-                            ('asr-source:' + str(tenant) + ':' + source_guard,))
-                prior_keys = {source_guard: model, base_fingerprint: model}
-                prior_keys.update({transcription_fingerprint(item, old, media, return_diagnostics=diagnostics): old
-                    for old in ('whisper-1', 'gpt-4o-mini-transcribe')
-                    for diagnostics in (False, True)})
-                for prior_key, prior_model in prior_keys.items():
-                    cur.execute('SELECT state,transcript,metadata FROM saas_knowledge_media_cache WHERE tenant_id=%s::uuid AND fingerprint=%s',
-                                (tenant, prior_key))
-                    prior = cur.fetchone()
-                    if prior:
-                        if prior['state'] != 'completed':
-                            _raise_unknown_cache(prior, 'asr')
-                        metadata = prior.get('metadata') if isinstance(prior.get('metadata'), dict) else {}
-                        details = {key:metadata[key] for key in ('speech_state','speech_language','speech_reason') if key in metadata}
-                        item['asr_artifact_model'] = metadata.get('model') or prior_model
-                        result = (redact(prior['transcript'], item.get('redaction_names', [])), {}, False)
-                        return (*result, details) if return_diagnostics else result
-                cur.execute("INSERT INTO saas_knowledge_media_cache(tenant_id,fingerprint,state,token,metadata) VALUES(%s::uuid,%s,'running',%s::uuid,%s::jsonb)",
-                            (tenant, source_guard, token, _json({'model':model, 'kind':'asr'})))
-                cache_fingerprints.append(source_guard)
             if (item.get('route') or {}).get('owner_retry_unknown') is True:
                 prior=_batch_retry_base_state(cur,tenant,base_fingerprint)
                 if prior and prior['state']=='completed':
@@ -354,8 +329,7 @@ def transcribe_once(profile,item,model,media,invoke,check_before_ai=None,*,retur
                     return (*result,details) if return_diagnostics else result
                 cache_fingerprints=[fingerprint,artifact_retry_key]
             else:
-                from tenant_ai_asr_model import request_policy
-                retry_meta={'model':model, 'request_policy':request_policy(model)}
+                retry_meta={}
                 shared_retry=_completed_batch_retry(cur,tenant,base_fingerprint,'asr')
                 if shared_retry:
                     metadata=shared_retry.get('metadata') if isinstance(shared_retry.get('metadata'),dict) else {}
@@ -375,8 +349,6 @@ def transcribe_once(profile,item,model,media,invoke,check_before_ai=None,*,retur
                         result=(redact(receipt['transcript'],item.get('redaction_names',[])),{},False)
                         return (*result,details) if return_diagnostics else result
                     _raise_unknown_cache(receipt,'asr')
-            if model == 'gpt-transcribe' and source_guard not in cache_fingerprints:
-                cache_fingerprints.append(source_guard)
         conn.commit()
     # Mark attempted before crossing the external boundary, even if it throws.
     dispatched=False
@@ -418,9 +390,6 @@ def transcribe_once(profile,item,model,media,invoke,check_before_ai=None,*,retur
 
 def transcription_fingerprint(item,model,media,*,return_diagnostics=False):
     fingerprint_data={'sha256':hashlib.sha256(media[0]).hexdigest(),'model':model,'format':media[2]}
-    if model == 'gpt-transcribe':
-        from tenant_ai_asr_model import request_policy
-        fingerprint_data['request_policy'] = request_policy(model)
     if return_diagnostics:
         route=item.get('route') if isinstance(item.get('route'),dict) else {}
         # Speech confidence and language mismatch are evaluated against the

@@ -379,7 +379,7 @@ def test_protected_alias_download_real_decode_reaches_mock_asr(monkeypatch,tmp_p
     ref={'id':'ref','external_id':'connect:'+MID,'channel_id':CA,'lead_id':41,'media_kind':kind}
     message={'ref':'ref','text':''}
     request={'tenant':'unit','model':'mock-model','key':'mock-key',
-        'config':{'audio_enabled':True,'transcription_model':'gpt-transcribe'},
+        'config':{'audio_enabled':True,'transcription_model':'mock-asr'},
         'route':{'channel_id':CA,'conversation_id':'g@g.us','allow_external_media':True,'allow_paid_asr':True},
         'refs':[ref],'messages':[message]}
     asr=Mock(return_value=('Synthetic tone transcript',{'total_tokens':2}))

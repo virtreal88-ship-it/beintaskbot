@@ -40,9 +40,9 @@ def _pricing(monkeypatch):
     monkeypatch.setenv('AI_AGENTS_PLATFORM_DEFAULT_MODEL','fixture-model')
     monkeypatch.setenv('AI_AGENTS_PLATFORM_ENABLED','true')
     monkeypatch.setenv('OPENAI_API_KEY','test-only-not-a-real-key')
-    monkeypatch.setenv('AI_AGENTS_TRANSCRIPTION_MODEL','gpt-transcribe')
+    monkeypatch.setenv('AI_AGENTS_TRANSCRIPTION_MODEL','fixture-asr')
     monkeypatch.setenv('AI_MODEL_PRICES_MICROUSD_PER_MILLION',json.dumps({'fixture-model':{'input':1,'output':1}}))
-    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'fixture-model':{'vision_low':10},'gpt-transcribe':{'asr':30000}}))
+    monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps({'fixture-model':{'vision_low':10},'fixture-asr':{'asr':10}}))
     monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD',json.dumps({A:5_000_000}))
 
 

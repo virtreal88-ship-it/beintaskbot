@@ -419,10 +419,9 @@ def test_all_cases_grant_requires_exact_owner_acceptance_then_stops_cleanly(read
     reservations=observed['reservations_before_media']
     assert {(r['kind'],r['model'],str(r['grant_id']),r['state']) for r in reservations}=={
       ('live_case_extraction','test-model',key,'reserved'),
-      ('knowledge_asr','gpt-transcribe',key,'reserved'),
+      ('knowledge_asr','whisper-1',key,'reserved'),
       ('knowledge_vision','gpt-4.1',key,'reserved')}
     assert all(r['reserved_microusd']>0 for r in reservations)
-    assert next(r['reserved_microusd'] for r in reservations if r['kind']=='knowledge_asr')==30000
     assert {(r['kind'],r['state'],str(r['grant_id'])) for r in db.execute(
       'SELECT kind,state,grant_id FROM saas_ai_spend_reservations WHERE campaign_id=%s::uuid',(key,))}=={
       ('live_case_extraction','settled',key),('knowledge_asr','settled',key),('knowledge_vision','settled',key)}
