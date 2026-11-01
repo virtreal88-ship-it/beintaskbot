@@ -45,7 +45,7 @@ def preview(profile,data):
         with conn.cursor() as cur:
             item=store.snapshot(cur,profile,{'channel_id':channel,'conversation_id':conversation})
             agent=assignment(cur,item['tenant'],channel,conversation)
-            return {'agent':agent,'messages':[{'id':ref['id'],'role':ref['role'],'text':msg['text'],
+            return {'agent':agent,'messages':[{'id':ref['id'],'role':ref['role'],'sender_name':meta.get('sender_name') or '', 'text':msg['text'],
                        'media_kind':ref.get('media_kind'),'message_type':meta['message_type'],
                        'happened_at':meta['happened_at']}
                     for ref,msg,meta in zip(item['refs'],item['messages'],item['preview_metadata'])],
