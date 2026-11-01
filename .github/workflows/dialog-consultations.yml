@@ -75,6 +75,7 @@ on:
       - 'beintaskbot-main/tests/test_assigned_operator_copilot.py'
       - 'beintaskbot-main/tests/test_operator_audio_transcripts.py'
       - 'beintaskbot-main/tests/test_operator_audio_transcript_browser.cjs'
+      - 'beintaskbot-main/tests/test_dynamic_audio_menu_browser.cjs'
       - 'beintaskbot-main/tests/test_native_reply_layout_browser.cjs'
       - 'beintaskbot-main/tests/test_native_reply_longpress_browser.cjs'
   workflow_dispatch:
@@ -178,6 +179,7 @@ jobs:
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_helper_request_identity_browser.cjs
           node tests/test_tenant_operator_mobile_ui.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_operator_audio_transcript_browser.cjs
+          PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_dynamic_audio_menu_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_native_reply_layout_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_native_reply_longpress_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_dialog_ai_assignment_browser.cjs
