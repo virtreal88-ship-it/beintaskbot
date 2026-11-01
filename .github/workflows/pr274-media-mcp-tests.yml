@@ -63,6 +63,7 @@ jobs:
         run: >-
           python -m pytest -q -rs
           tests/test_ai_administrator_read.py
+          tests/test_audio_attempts_diagnostic.py
           tests/test_company_model_listing.py
           tests/test_tenant_chat_ai_api.py
           tests/test_media_evidence.py

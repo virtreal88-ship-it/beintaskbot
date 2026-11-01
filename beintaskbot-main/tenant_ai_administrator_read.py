@@ -42,6 +42,7 @@ SPECS = {
     # This intentionally exposes admission facts only. It neither claims an
     # item nor reads the customer message that caused it to be queued.
     'simulation_queue_diagnostic_read': (None, '', '', ''),
+    'audio_attempts_diagnostic_read': (None, '', '', ''),
     'spend_read': ('saas_ai_spend_reservations', 'id', 'id model kind reserved_microusd actual_microusd state created_at completed_at', ''),
     'audit_read': ('saas_tenant_audit_events', 'id', 'id action entity_type entity_id created_at', ''),
     'administrator_observations_read': ('saas_ai_administrator_observations', 'id', 'id source state attempts checkpoint created_at updated_at', 'payload'),
@@ -74,6 +75,10 @@ def definitions():
              'securitySchemes': [{'type': 'oauth2', 'scopes': ['ai_learning.read']}]}
             for name in SPECS]
     for tool in tools:
+        if tool['name']=='audio_attempts_diagnostic_read':
+            from tenant_ai_audio_attempts_diagnostic import schema as audio_schema
+            tool['inputSchema']=audio_schema()
+            tool['description']='Read at most 20 exact-channel/lead audio source and attempt metadata records. No customer text, JID, media, provider calls or attempt mutations. Requires channel_id and lead_id.'
         if tool['name']=='company_ai_settings_read':
             tool['description']+=' Set list_provider_models=true for a free model-ID listing using only the saved company key. Listing does not verify generation access.'
     tools.append({'name':'administrator_testing_compare','description':'Compare two isolated AI Testing sessions for the same company agent. Returns aggregate lifecycle and token metrics only; it never reads test text, runs a model, or changes a session.',
@@ -263,6 +268,8 @@ def read(cur,cfg,name,args):
         if (not isinstance(args,dict) or set(args)-{'case_id','message_id','expected_version'} or not isinstance(args.get('case_id'),str)
             or ('expected_version' in args and (type(args['expected_version']) is not int or args['expected_version']<1 or not args.get('message_id')))):
             raise TenantLinearError('Invalid case conversation link request.',400)
+    elif name=='audio_attempts_diagnostic_read':
+        if not isinstance(args,dict):raise TenantLinearError('Invalid diagnostic arguments.',400)
     else:
         validate(args,name)
     scopes=set(cfg.get('granted_scopes',[]))
@@ -342,6 +349,9 @@ def read(cur,cfg,name,args):
             cases._bounded_media_link(cur,tenant,candidate,saved,chosen,cases.identifier(requested),args['expected_version'])
         return {'read_only':True,'case_id':str(key),'route':{'provider':'connect','channel_id':channel,'lead_id':chosen['lead_id']},
                 'anchor_message_id':requested or None,'open_with':'existing_dialog_route_resolver','context':{'kind':'support_case','redacted':True}}
+    if name == 'audio_attempts_diagnostic_read':
+        from tenant_ai_audio_attempts_diagnostic import read as audio_read
+        return audio_read(cur,cfg,args)
     if name == 'simulation_queue_diagnostic_read':
         return _simulation_queue_diagnostic(cur, cfg, args)
     table,key,fields,content=SPECS[name]

@@ -74,7 +74,7 @@ def test_all_read_projections_are_valid_bounded_and_tenant_scoped(db,monkeypatch
             if name=='administrator_case_conversation_link_read':
                 with pytest.raises(Exception): admin.read(cur,cfg,name,{'case_id':str(uuid.uuid4())})
                 continue
-            if name=='simulation_queue_diagnostic_read':
+            if name in {'simulation_queue_diagnostic_read','audio_attempts_diagnostic_read'}:
                 continue
             result=admin.read(cur,cfg,name,{'limit':1,'include_content':True})
             assert len(result['items'])<=1
