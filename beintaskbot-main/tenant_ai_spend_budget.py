@@ -69,8 +69,25 @@ def media_price(model, operation):
         return None
 
 
+# Keep this preflight aligned with the additive DDL below (including nested schemas).
+_SCHEMA_COLUMNS = {
+    'saas_ai_spend_reservations': (
+        'actual_microusd call_key campaign_id completed_at created_at grant_id id kind '
+        'media_operation media_unit_microusd media_units model reserved_microusd state '
+        'tenant_id '
+    ).split(),
+}
+_SCHEMA_INDEXES = ['saas_ai_spend_reservations_grant_idx', 'saas_ai_spend_reservations_tenant_idx']
+
+
 def ensure_schema(conn):
     with conn.cursor() as cur:
+        from tenant_schema_preflight import ready, lock_schema
+        if ready(cur, _SCHEMA_COLUMNS, _SCHEMA_INDEXES):
+            return
+        lock_schema(cur)
+        if ready(cur, _SCHEMA_COLUMNS, _SCHEMA_INDEXES):
+            return
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_spend_reservations(
           tenant_id UUID NOT NULL, id UUID NOT NULL, call_key TEXT NOT NULL, model TEXT NOT NULL,
           kind TEXT NOT NULL, reserved_microusd BIGINT NOT NULL CHECK(reserved_microusd >= 0),
