@@ -266,7 +266,9 @@ def test_ticket_shows_effective_ai_state_without_changing_it(operator_db):
     operator_db.commit()
     operator_db.execute("DELETE FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid",(A,))
     operator_db.execute("UPDATE saas_ai_agent_settings SET emergency_stop=FALSE WHERE tenant_id=%s::uuid",(A,));operator_db.commit()
-    assert tickets.detail(PROFILE,ticket)['ticket']['ai_state']=='active'
+    # A historical job is not a current assignment after the state row was removed.
+    current=tickets.detail(PROFILE,ticket)['ticket']
+    assert current['ai_state']=='unmanaged' and current['agent_id'] is None
     assert operator_db.execute('SELECT count(*) AS n FROM saas_ai_conversation_state')[0]['n']==0
     operator_db.commit()
 
