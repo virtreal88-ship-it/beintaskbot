@@ -63,6 +63,8 @@ jobs:
           node-version: '20'
       - name: Install isolated test dependencies
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
           python -m pip install -r requirements.txt pytest
           npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0 playwright@1.62.1
           node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
