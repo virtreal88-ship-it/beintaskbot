@@ -35,6 +35,7 @@ jobs:
           node tests/test_case_processing_races_ui.cjs
           node tests/test_campaign_restore_ui.cjs
           node tests/test_campaign_start_diagnostics_ui.cjs
+          node tests/test_manual_knowledge_save_ui.cjs
           node tests/test_case_knowledge_loading.cjs
           node tests/test_knowledge_center_ui.cjs
           node tests/knowledge-center-delete-profile-ui.cjs

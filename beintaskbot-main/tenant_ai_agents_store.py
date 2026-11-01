@@ -884,11 +884,14 @@ def permanently_delete_agent(profile, agent_id, *, expected_version, confirm_age
     return {'deleted':True,'agent_id':str(target),'paused_dialogs':len(dialogs),'replayed':False}
 
 
-def list_knowledge(profile, source_id=None):
+def list_knowledge(profile, source_id=None, *, create_request_id=None):
+    request_identity = identifier(create_request_id) if create_request_id is not None else None
+    if request_identity and (not source_id or identifier(source_id)!=request_identity):
+        raise TenantLinearError('Knowledge create receipt not found.',404)
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            tenant, _ = _authorize(cur, profile)
+            tenant, actor = _authorize(cur, profile)
             if source_id:
                 source = identifier(source_id)
                 cur.execute('''SELECT s.id,s.tenant_id,s.agent_id,COALESCE(a.name,hi.display_name) AS agent_name,s.title,s.kind,s.content,s.active,s.content_hash,s.created_by,s.provenance,
@@ -902,6 +905,12 @@ def list_knowledge(profile, source_id=None):
                 row = _row(cur.fetchone())
                 if not row:
                     raise TenantLinearError('Bilik mənbəyi tapılmadı.', 404)
+                if request_identity:
+                    provenance=row.get('provenance') or {}
+                    if isinstance(provenance,str):provenance=json.loads(provenance)
+                    receipt=provenance.get('manual_create_request') if isinstance(provenance,dict) else None
+                    if not isinstance(receipt,dict) or receipt.get('id')!=request_identity or receipt.get('actor')!=str(actor) or str(row.get('created_by'))!=str(actor):
+                        raise TenantLinearError('Knowledge create receipt not found.',404)
                 return _enrich_knowledge_rows(cur,[row],tenant)[0]
             cur.execute('''SELECT s.id,s.tenant_id,s.agent_id,COALESCE(a.name,hi.display_name) AS agent_name,s.title,s.kind,s.active,s.content_hash,s.created_by,s.provenance,
               CASE WHEN s.provenance ? 'instruction_id' THEN 'instruction'
@@ -960,6 +969,9 @@ def _enrich_knowledge_rows(cur,rows,tenant):
         # expose the full provenance payload, which can contain workflow
         # implementation details.
         clean={key:provenance[key] for key in ('review_status','approved_by','instruction_id','candidate_id','archive') if key in provenance}
+        manual_request=provenance.get('manual_create_request')
+        if isinstance(manual_request,dict) and manual_request.get('id')==str(row['id']):
+            row['create_request_id']=manual_request['id']
         row['provenance']=clean;row['review_status']=review;row['approved_by']=approved_by
         row['material_status']='revoked' if row.get('active') is not True else ('published' if published else review)
         row['ai_available']=bool(ai_available);row['access_scope']='agent' if row.get('agent_id') else 'company'
@@ -975,8 +987,11 @@ def save_knowledge(profile, data, *, source_id=None, connection=None):
         raise TenantLinearError('Bilik mənbəyinin agenti dəyişdirilə bilməz.')
     if not creating and 'setup_key' in data:
         raise TenantLinearError('Yenidən cəhd açarı dəyişdirilə bilməz.')
+    if 'create_request_id' in data and (not creating or data.get('setup_key') is not None):
+        raise TenantLinearError('Knowledge create request cannot be changed or combined with setup_key.', 400)
+    create_request = identifier(data['create_request_id']) if 'create_request_id' in data else None
     retry_key = validate_setup_key(data['setup_key']) if data.get('setup_key') is not None else None
-    patch = validate_knowledge({k:v for k,v in data.items() if k not in {'agent_id','setup_key'}}, creating=creating)
+    patch = validate_knowledge({k:v for k,v in data.items() if k not in {'agent_id','setup_key','create_request_id'}}, creating=creating)
     if not patch:
         raise TenantLinearError('Dəyişdiriləcək bilik ayarı yoxdur.')
     from contextlib import nullcontext
@@ -992,6 +1007,26 @@ def save_knowledge(profile, data, *, source_id=None, connection=None):
                     cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE', (tenant,bound_agent))
                     if not cur.fetchone(): raise TenantLinearError('Agent tapılmadı.',404)
                 digest = hashlib.sha256(patch['content'].encode('utf-8')).hexdigest()
+                request_receipt = None
+                if create_request:
+                    # Existing source PK is the atomic request identity; no request-path DDL.
+                    request_hash = hashlib.sha256(json.dumps({'tenant':str(tenant),'actor':str(actor),
+                        'agent':str(bound_agent or ''),**patch},sort_keys=True,ensure_ascii=False).encode('utf-8')).hexdigest()
+                    request_receipt = {'id':str(create_request),'hash':request_hash,'actor':str(actor)}
+                    def replay_request():
+                        cur.execute('''SELECT id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at,provenance
+                          FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid''',(tenant,create_request))
+                        old = _row(cur.fetchone())
+                        if not old:
+                            return None
+                        provenance = old.pop('provenance',{}) or {}
+                        if isinstance(provenance,str): provenance=json.loads(provenance)
+                        if not isinstance(provenance,dict) or provenance.get('manual_create_request') != request_receipt:
+                            raise TenantLinearError('Knowledge create request conflicts with an existing operation.',409)
+                        return {**old,'create_request_id':str(create_request)}
+                    replay = replay_request()
+                    if replay:
+                        return replay
                 if retry_key:
                     cur.execute('''SELECT id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at
                       FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND setup_key=%s FOR SHARE''',
@@ -1024,11 +1059,18 @@ def save_knowledge(profile, data, *, source_id=None, connection=None):
                 cur.execute('SELECT count(*) AS total FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid', (tenant,))
                 if int((cur.fetchone() or {}).get('total') or 0) >= MAX_SOURCES:
                     raise TenantLinearError('Bilik mənbələrinin sayı həddə çatıb.')
-                source = uuid.uuid4()
-                cur.execute('''INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,active,content_hash,created_by,agent_id,setup_key)
-                  VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s) RETURNING id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at''',
-                  (source, tenant, patch['title'], patch['kind'], patch['content'], patch['active'], digest, actor, bound_agent, retry_key))
+                source = create_request or uuid.uuid4()
+                cur.execute('''INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,active,content_hash,created_by,agent_id,setup_key,provenance)
+                  VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s,%s::jsonb)
+                  ON CONFLICT (id) DO NOTHING RETURNING id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at''',
+                  (source, tenant, patch['title'], patch['kind'], patch['content'], patch['active'], digest, actor, bound_agent, retry_key,
+                   _json({'manual_create_request':request_receipt} if request_receipt else {})))
                 result = _row(cur.fetchone())
+                if not result:
+                    replay = replay_request() if create_request else None
+                    if replay: return replay
+                    raise TenantLinearError('Knowledge create request conflicts with an existing operation.',409)
+                if create_request: result['create_request_id']=str(create_request)
             else:
                 source = identifier(source_id)
                 cur.execute('''SELECT * FROM saas_ai_knowledge_sources WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE''', (tenant, source))
