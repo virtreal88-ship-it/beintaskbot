@@ -47,6 +47,23 @@ class PayloadTests(unittest.TestCase):
         first['title'] = 'PRIVATE'
         self.assertEqual(payload_for(None)['title'], 'CRM Smart Assistant')
 
+    def test_incoming_context_direct_group_missing_identity_and_media(self):
+        direct=payload_for('incoming_message','',{'conversation_kind':'contact','display_name':'Aylin','phone':'+994 50 123 4567','text':'  Salam\n  printer işləmir  '})
+        self.assertEqual(direct['title'],'Aylin · +994 50 123 4567')
+        self.assertEqual(direct['body'],'Salam printer işləmir')
+        group=payload_for('incoming_message','',{'conversation_kind':'group','display_name':'Support Team','author':'Rauf','phone':'994501234567','text':'Need help'})
+        self.assertEqual(group['title'],'Support Team · Rauf')
+        missing=payload_for('incoming_message','',{'conversation_kind':'contact','display_name':'123@s.whatsapp.net','phone':'','author':'994@g.us','text':'Hi'})
+        self.assertEqual(missing['title'],'Yeni mesaj');self.assertNotIn('@',str(missing))
+        number=payload_for('incoming_message','',{'conversation_kind':'contact','display_name':'customer','phone':'+994 50 555 1212','text':'Hello'})
+        self.assertEqual(number['title'],'+994 50 555 1212')
+        self.assertEqual(payload_for('incoming_message','',{'message_type':'voice','text':'[Attachment pending_processing: contents not read]'})['body'],'Səsli mesaj')
+        self.assertEqual(payload_for('incoming_message','',{'message_type':'image'})['body'],'Foto')
+        self.assertEqual(payload_for('incoming_message','',{'message_type':'video'})['body'],'Video')
+        self.assertEqual(payload_for('incoming_message','',{'message_type':'document'})['body'],'Sənəd')
+        self.assertEqual(payload_for('incoming_message','',{'text':'x'*500})['body'],'x'*180)
+        self.assertNotIn('private',str(payload_for('task_assigned','',{'text':'private'})))
+
     def test_modules_have_no_db_queue_or_platform_dependencies(self):
         root = Path(__file__).resolve().parents[1]
         for name in ['tenant_push_payload', 'tenant_push_provider']:
@@ -94,6 +111,15 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(json.loads(args['data']), payload_for('linear_done'))
         self.assertNotIn('PRIVATE', args['data'])
         self.session.__exit__.assert_called_once()
+
+    def test_opted_in_incoming_delivery_sends_sanitized_message_context(self):
+        self.item.update(event='incoming_message',target_url='/app?view=dialogs&open_dialog=1&provider=connect&lead_id=41&channel_id=00000000-0000-0000-0000-000000000201&conversation_id=client%40s.whatsapp.net',
+          notification_context={'conversation_kind':'contact','display_name':'Aylin','phone':'+994 50 123 4567','text':'Salam\n printer issue','message_type':'text'})
+        self.send()
+        payload=json.loads(self.webpush.call_args.kwargs['data'])
+        self.assertEqual(payload['title'],'Aylin · +994 50 123 4567')
+        self.assertEqual(payload['body'],'Salam printer issue')
+        self.assertNotIn('PRIVATE',self.webpush.call_args.kwargs['data'])
 
     def test_identity_mismatch_never_opens_session_or_calls_provider(self):
         self.item['endpoint_hash'] = 'foreign'

@@ -45,20 +45,39 @@ def claim(channel: str) -> dict | None:
             target_url=''
             connect_route=None
             connect_route_ok=True
+            push_context=None
             if item['event']=='incoming_message' and item['kind']=='message' and str((row or {}).get('channel') or '').startswith('connect:'):
                 connect_route=connect_dialog_route(row or {})
                 stored_route=(item.get('payload') or {}).get('connect_dialog')
                 connect_route_ok=bool(connect_route and (not stored_route or stored_route==connect_route))
                 if connect_route_ok:
-                    cur.execute('''SELECT 1 FROM saas_connect_conversations c
+                    cur.execute('''SELECT c.conversation_kind,c.display_name,c.manual_display_name,c.contact_name,c.phone FROM saas_connect_conversations c
                       JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
                       JOIN saas_tenant_integrations i ON i.tenant_id=c.tenant_id AND i.provider='connect' AND i.status='connected'
                       WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid
                         AND c.conversation_id=%s AND c.lead_id=%s''',
                       (tenant,connect_route['channel_id'],connect_route['conversation_id'],connect_route['lead_id']))
-                    connect_route_ok=bool(cur.fetchone())
+                    conversation=cur.fetchone()
+                    connect_route_ok=bool(conversation)
                 if connect_route_ok:
                     target_url='/app?'+urlencode({'view':'dialogs','open_dialog':'1',**connect_route})
+                    # Select only the latest persisted *incoming* message from this exact
+                    # tenant/channel/conversation. Outgoing echoes, internal notes and
+                    # Copilot drafts never become notification content.
+                    cur.execute('''SELECT author_name,body,message_type FROM saas_crm_messages
+                      WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s
+                        AND direction='incoming' AND raw->>'conversationId'=%s
+                      ORDER BY happened_at DESC NULLS LAST,created_at DESC,id DESC LIMIT 1''',
+                      (tenant,connect_route['lead_id'],'connect:'+connect_route['channel_id'],connect_route['conversation_id']))
+                    latest=cur.fetchone()
+                    if not latest and (row or {}).get('direction')=='incoming':
+                        latest=row
+                    if latest and latest.get('direction','incoming')=='incoming':
+                        display_name=(conversation or {}).get('manual_display_name') or (conversation or {}).get('contact_name') or (conversation or {}).get('display_name') or ''
+                        push_context={'conversation_kind':(conversation or {}).get('conversation_kind') or '',
+                          'display_name':display_name,'phone':(conversation or {}).get('phone') or '',
+                          'author':latest.get('author_name') or '',
+                          'text':latest.get('body') or '', 'message_type':latest.get('message_type') or ''}
             allowed = bool(member and item['payload'].get('connection') == connection_id(cur, tenant)
                            and fresh(item['event'], row, item['payload']) and connect_route_ok
                            and eligible(member, item['event'], row, channel))
@@ -70,6 +89,8 @@ def claim(channel: str) -> dict | None:
             if row and member and item['event'].startswith('task_') and not TenantPolicy(member).can_access_deal(row.get('deal')):
                 row = {**row, 'deal': None}  # Task-only users do not gain client contact access.
             item.update(send=allowed, resource=row, tenant_name=(member or {}).get('tenant_name', ''),target_url=target_url)
+            if allowed and channel=='push' and push_context:
+                item['notification_context']=push_context
         conn.commit()
     return item
 

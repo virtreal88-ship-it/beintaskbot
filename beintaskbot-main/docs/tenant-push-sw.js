@@ -20,13 +20,17 @@ function dialogNoticeTag(target){
     return 'crm-dialog-'+(hash>>>0).toString(16);
   }catch{return 'crm-notice';}
 }
+function safeMessageText(value,limit){
+  if(typeof value!=='string')return '';
+  return value.replace(/[\u0000-\u001f\u007f]+/g,' ').replace(/\S+@(?:g\.us|s\.whatsapp\.net|c\.us|lid)\b/ig,'').replace(/\s+/g,' ').trim().slice(0,limit);
+}
 self.addEventListener('push',event=>{
   let kind='';try{kind=event.data?.json()?.kind || '';}catch{}
   if(kind==='crm_notice'){
-    let eventKey='',target='/app';try{const payload=event.data.json();eventKey=payload.event||'';target=allowedTarget(payload.url);}catch{}
+    let eventKey='',target='/app',title='CRM Smart Assistant',body='';try{const payload=event.data.json();eventKey=payload.event||'';target=allowedTarget(payload.url);if(eventKey==='incoming_message'){title=safeMessageText(payload.title,120)||title;body=safeMessageText(payload.body,180);}}catch{}
     const task=['task_assigned','task_overdue'].includes(eventKey);
-    event.waitUntil(self.registration.showNotification('CRM Smart Assistant',{
-      body:task?'Tapşırıq üzrə yenilik var. Kabinetdə yoxlayın.':eventKey==='incoming_message'?'Yeni mesaj var. Kabinetdə yoxlayın.':'Yeni mesaj və ya sövdələşmə var. Kabinetdə yoxlayın.',
+    event.waitUntil(self.registration.showNotification(title,{
+      body:task?'Tapşırıq üzrə yenilik var. Kabinetdə yoxlayın.':eventKey==='incoming_message'?(body||'Yeni mesaj var. Kabinetdə yoxlayın.'):'Yeni mesaj və ya sövdələşmə var. Kabinetdə yoxlayın.',
       tag:task?'crm-task-notice':eventKey==='incoming_message'?dialogNoticeTag(target):'crm-notice',data:{url:task?'/app?view=tasks':target}
     }));return;
   }

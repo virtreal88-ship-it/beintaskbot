@@ -1,0 +1,20 @@
+const {chromium}=require('../.support-test-deps/node_modules/playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+(async()=>{
+ const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+ try{
+  const page=await browser.newPage({viewport:{width:390,height:844}});let count=150,read=false,holdRefresh=false,releaseRefresh;
+  await page.route('https://crm.test/**',route=>route.fulfill({status:200,contentType:'text/html',body:'<header id=\"top\" style=\"display:flex;align-items:center;gap:8px\"><span>CRM</span><select data-app-language aria-label=\"Language\"><option>AZ</option></select></header><details id=\"operatorMoreActions\"><summary>More</summary><div id=\"operatorMenuExtra\"></div></details><aside id=\"operatorCopilot\" hidden></aside><button id=\"operatorCopilotToggle\"></button><textarea id=\"chatText\"></textarea>'}));await page.goto('https://crm.test/app');
+  await page.evaluate(()=>{window.tenantI18n={language:'az'};const member={tenant_id:'tenant-a',telegram_id:11};window.tenantOperator={member,currentDialog:null,hasRight:()=>true,openDialog:async()=>{}};window.tenantProfileSnapshot={member};});
+  await page.route('**/api/platform/ai/dialog-consultations/replies',async route=>{if(read&&holdRefresh){await page.evaluate(()=>window.testRefreshBlocked=true);await new Promise(resolve=>releaseRefresh=resolve);}return route.fulfill({json:{success:true,result:{replies:[{id:'reply-1',consultation_id:'c1',source_channel:'chan',source_conversation:'conv',customer:'Customer',author:'Developer',happened_at:'2026-10-31T12:00:00Z',body:'Reply',read_at:read?'now':null,handled_at:null,url:'/app?view=dialogs&open_dialog=1&provider=connect&lead_id=41&channel_id=00000000-0000-0000-0000-000000000201&conversation_id=conv'}],consultations:[],notification_unread_count:count}}});});
+  await page.route('**/api/platform/ai/dialog-consultations/replies/reply-1/action',async route=>{read=true;count=0;await route.fulfill({json:{success:true,result:{action:'read',notification_unread_count:0}}});});
+  await page.addScriptTag({content:fs.readFileSync('docs/tenant-dialog-consultations.js','utf8')});
+  const bell=page.locator('#dialogConsultationBell'),badge=bell.locator('.notification-unread-badge');await badge.waitFor();assert.equal(await badge.textContent(),'99+');assert.match(await bell.getAttribute('aria-label'),/Oxunmamış bildirişlər 150/);
+  const rects=await page.evaluate(()=>{const a=document.querySelector('.notification-unread-badge').getBoundingClientRect(),b=document.querySelector('[data-app-language]').getBoundingClientRect();return{badge:{left:a.left,right:a.right,top:a.top,bottom:a.bottom},language:{left:b.left,right:b.right,top:b.top,bottom:b.bottom}}});
+  assert.ok(rects.badge.right<=rects.language.left,'mobile unread badge must not overlap the language selector: '+JSON.stringify(rects));
+  await page.evaluate(()=>window.testRefreshBlocked=false);holdRefresh=true;await bell.click();await page.getByRole('button',{name:'Dialoqu aç'}).click();await page.waitForFunction(()=>!document.querySelector('#dialogConsultationBell .notification-unread-badge'));await page.waitForFunction(()=>window.testRefreshBlocked===true);assert.ok(holdRefresh,'follow-up inbox refresh is deliberately pending');releaseRefresh();holdRefresh=false;
+  count=0;await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready')));await page.waitForTimeout(30);assert.equal(await page.locator('#dialogConsultationBell .notification-unread-badge').count(),0);
+  await page.setViewportSize({width:1440,height:900});count=12;await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready')));await page.waitForFunction(()=>document.querySelector('#dialogConsultationBell .notification-unread-badge')?.textContent==='12');
+ }finally{await browser.close();}
+})().catch(error=>{console.error(error);process.exitCode=1;});

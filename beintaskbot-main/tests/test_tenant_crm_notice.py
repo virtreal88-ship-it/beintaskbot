@@ -199,13 +199,16 @@ class OutboxTests(unittest.TestCase):
              'raw':{'channelId':route['channel_id'],'conversationId':route['conversation_id']}}
         self.box.profiles.return_value=[member('worker')];self.box.resource.return_value=row
         self.box.connection_id.return_value='';self.box.eligible.return_value=True
-        self.cur.fetchone.side_effect=[copy.deepcopy(item),{'present':1}]
+        self.cur.fetchone.side_effect=[copy.deepcopy(item),{'conversation_kind':'group','display_name':'Support','manual_display_name':'','contact_name':'','phone':''},{'author_name':'Leyla','body':'Latest inbound','message_type':'text'}]
         result=self.box.claim('push')
         self.assertTrue(result['send'])
         self.assertEqual(result['target_url'],'/app?view=dialogs&open_dialog=1&provider=connect&lead_id=41&channel_id=00000000-0000-0000-0000-000000000201&conversation_id=client%40g.us')
+        self.assertEqual(result['notification_context'],{'conversation_kind':'group','display_name':'Support','phone':'','author':'Leyla','text':'Latest inbound','message_type':'text'})
         route_sql=next(call for call in self.cur.execute.call_args_list if 'JOIN saas_connect_channels' in call.args[0])
         self.assertIn('c.tenant_id=%s::uuid',route_sql.args[0])
         self.assertEqual(route_sql.args[1],('company-a',route['channel_id'],route['conversation_id'],41))
+        latest_sql=next(call for call in self.cur.execute.call_args_list if 'ORDER BY happened_at DESC NULLS LAST' in call.args[0])
+        self.assertIn("direction='incoming'",latest_sql.args[0]);self.assertIn("raw->>'conversationId'=%s",latest_sql.args[0])
 
     def test_connect_push_is_skipped_when_stored_route_or_channel_is_ambiguous(self):
         route={'provider':'connect','lead_id':41,'channel_id':'00000000-0000-0000-0000-000000000201','conversation_id':'client@g.us'}
