@@ -164,9 +164,55 @@ def _outbound_is_ai(data: dict, existing: dict | None = None) -> bool:
     return (data.get('ai_authored') is True or _is_ai_message(existing))
 
 
+# Keep this preflight aligned with the additive DDL below (including nested schemas).
+_SCHEMA_COLUMNS = {
+    'saas_connect_channels': (
+        'active connect_channel_id created_at name status tenant_id updated_at '
+    ).split(),
+    'saas_connect_conversations': (
+        'ai_enabled avatar_checked_at avatar_status connect_channel_id contact_name '
+        'conversation_id conversation_kind created_at display_name last_message_at lead_id '
+        'manual_display_name manual_hold phone tenant_id updated_at '
+    ).split(),
+    'saas_connect_dialog_links': (
+        'active canonical_id canonical_lead channel_id created_at pair_id snapshot source_id '
+        'source_lead tenant_id updated_at '
+    ).split(),
+    'saas_connect_direct_identities': (
+        'canonical_conversation_id connect_channel_id identity_key tenant_id verified_at '
+    ).split(),
+    'saas_connect_identity_conflict_events': (
+        'connect_channel_id conversation_id created_at event_id evidence tenant_id '
+    ).split(),
+    'saas_connect_identity_conflicts': (
+        'connect_channel_id conversation_id created_at event_id evidence tenant_id '
+    ).split(),
+    'saas_connect_owner_identity_assertions': (
+        'canonical_id canonical_lead channel_id created_at evidence_ref id merge_snapshot '
+        'owner_id pair_id phone revoked_at revoked_by source source_id source_lead tenant_id '
+    ).split(),
+    'saas_connect_participant_display_names': (
+        'connect_channel_id conversation_id display_name participant_jid tenant_id updated_at '
+        'updated_by '
+    ).split(),
+    'saas_connect_webhook_events': (
+        'event_id received_at tenant_id '
+    ).split(),
+}
+_SCHEMA_INDEXES = ['saas_connect_dialog_links_canonical',
+ 'saas_connect_direct_canonical_idx',
+ 'saas_connect_owner_identity_active']
+
+
 def _schema(conn) -> None:
     _ensure_schema(conn)
     with conn.cursor() as cur:
+        from tenant_schema_preflight import ready, lock_schema
+        if ready(cur, _SCHEMA_COLUMNS, _SCHEMA_INDEXES):
+            return
+        lock_schema(cur)
+        if ready(cur, _SCHEMA_COLUMNS, _SCHEMA_INDEXES):
+            return
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_channels (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
           connect_channel_id UUID NOT NULL, name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '',
@@ -729,6 +775,11 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
         from tenant_knowledge_live_queue import create_schema as create_live_queue_schema
         create_live_queue_schema(conn)
         _schema(conn)
+        from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+        simulation_prepared=runtime_flag('AI_SIMULATION_ENABLED')
+        if simulation_prepared:
+            from tenant_ai_simulation_schema import ensure_schema as ensure_simulation_schema
+            ensure_simulation_schema(conn)
         # Usually installed by tenant_ai_agent_startup.prepare_database. The
         # HTTP listener starts before the background worker's startup task, so
         # close that first-request race as well. This is additive/idempotent;
@@ -1104,11 +1155,8 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             # Simulation admits only the first durable inbound delivery.
             # Webhook retries may repair the Active queue above but must
             # never backfill Simulation or replay a paid virtual run.
-            from tenant_ai_agent_runtime_flags import enabled as runtime_flag
-            if inserted_event and not ai_admission_failed and runtime_flag('AI_SIMULATION_ENABLED'):
-                from tenant_ai_simulation_schema import ensure_schema as ensure_simulation_schema
+            if inserted_event and not ai_admission_failed and simulation_prepared and runtime_flag('AI_SIMULATION_ENABLED'):
                 from tenant_ai_simulation_engine import enqueue_inbound
-                ensure_simulation_schema(conn)
                 enqueue_inbound(cur,tenant_id=tenant,channel_id=channel_id,
                     conversation_id=conversation,lead_id=queued_payload[3],
                     source_message_id=str(source_message['id']),
