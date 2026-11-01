@@ -15,6 +15,7 @@ from tenant_ai_agent_run_store import (claim_next, defer_job,
     reserve_run, retry_or_fail, skip_job)
 from tenant_ai_agent_send import send_agent
 from tenant_chat_ai_policy import history
+from tenant_dialog_greeting import greeting_context
 from tenant_chat_ai_provider import ChatAIProviderError, INSTRUCTIONS, generate, transcribe
 from tenant_chat_ai_policy import audio as is_audio
 from tenant_chat_media import AUDIO_TYPES, IMAGE_TYPES, download
@@ -597,8 +598,7 @@ async def process_one(job, kommo_request, wait_slot, logger):
         prompt += ('\nAnswer the latest client message. Messages marked current belong to the active session; '
             'messages marked earlier are older background and may be about a different topic. '
             'Use earlier messages only when they are relevant to the new request. Do not repeat questions already answered '
-            'in the active session. For this agent, greet only if this is the first manager reply in the active session, '
-            'regardless of older sessions.')
+            'in the active session. Apply the greeting policy to the supplied chronological conversation.')
         needs_task = (reservation['mode']=='automatic' and reservation['crm_actions_enabled'] is True
             and runtime_flag('AI_AGENTS_CRM_ENABLED') and any(item.get('dynamic_task_text') is True
             for item in action_preview.get('actions',[])))
@@ -618,7 +618,7 @@ async def process_one(job, kommo_request, wait_slot, logger):
             prompt += ('\nReturn only a JSON object with exactly two string fields: reply and task_text. '
                 'reply is the client-facing draft. task_text is a short, specific internal task for the responsible manager '
                 'based on the latest request and established facts in the conversation. Do not invent prices or customer details.')
-        extra_context = {'language':reservation['agent_language'],'style':reservation['agent_style'],
+        extra_context = {'greeting_context':greeting_context(lines), 'language':reservation['agent_language'],'style':reservation['agent_style'],
                          'knowledge':knowledge,'unprocessed_media_count':missing,
                          'latest_client_message_id':source_id,
                          'latest_client_message':str(source.get('body') or '')[:2000],
@@ -1029,7 +1029,6 @@ async def process_connect_one(job, logger):
         prompt = INSTRUCTIONS + assigned_guidance(company=reservation.get('company_instructions'),
             agent=reservation.get('agent_instructions'),scope=reservation.get('scope_instructions'),
             style=reservation.get('agent_style'))
-        if any(row.get('has_prior_employee') for row in rows):prompt+='\nThis is a continuing conversation with prior employee replies. Do not greet or introduce yourself again.'
         if pilot_initial_turn:
             from tenant_ai_pilot_initial import instructions as initial_triage_instructions
             prompt += '\n\n' + initial_triage_instructions()
@@ -1100,7 +1099,7 @@ async def process_connect_one(job, logger):
         assert_reservation_current(job,reservation)
         draft, usage = await asyncio.to_thread(generate, reservation['api_key'], model, 'reply', lines, '',
                                         instructions=prompt,
-                                        extra_context={'language':reservation['agent_language'], 'style':reservation['agent_style'],
+                                        extra_context={'greeting_context':greeting_context(lines), 'language':reservation['agent_language'], 'style':reservation['agent_style'],
                                                        'knowledge':knowledge, 'latest_client_message_id':source_id,
                                                        'latest_client_message':query, 'unprocessed_media_count':missing,
                                                        'image_message_ids_for_analysis':[image['message_id'] for image in images],
@@ -1243,7 +1242,7 @@ async def process_connect_one(job, logger):
                 assert_reservation_current(job,reservation)
                 draft,usage=await asyncio.to_thread(generate,reservation['api_key'],model,'reply',lines,'',
                     instructions=prompt+'\n\n'+prompt_instructions(),
-                    extra_context={'language':reservation['agent_language'],'style':reservation['agent_style'],
+                    extra_context={'greeting_context':greeting_context(lines), 'language':reservation['agent_language'],'style':reservation['agent_style'],
                     'knowledge':verified_knowledge,'latest_client_message_id':source_id,'latest_client_message':query,
                       'unprocessed_media_count':missing,'image_message_ids_for_analysis':[image['message_id'] for image in images],
                       **({'pilot_developer_context':pilot_developer_context} if pilot_developer_context else {}),
