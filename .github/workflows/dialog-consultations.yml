@@ -27,6 +27,9 @@ on:
       - 'beintaskbot-main/tenant_dialog_greeting.py'
       - 'beintaskbot-main/tests/test_dialog_greeting.py'
       - 'beintaskbot-main/tenant_operator_copilot.py'
+      - 'beintaskbot-main/tenant_saved_only_copilot.py'
+      - 'beintaskbot-main/docs/tenant-saved-only-copilot.js'
+      - 'beintaskbot-main/tests/test_saved_only_copilot*'
       - 'beintaskbot-main/tests/test_manual_knowledge_persistence_postgres.py'
       - 'beintaskbot-main/tests/test_manual_knowledge_scope_browser.cjs'
       - 'beintaskbot-main/docs/tenant-ai-agents.js'
@@ -164,6 +167,8 @@ jobs:
             tests/test_assigned_operator_copilot.py \
             tests/test_required_episode_audio.py \
             tests/test_required_episode_photos.py \
+            tests/test_saved_only_copilot.py \
+            tests/test_saved_only_copilot_postgres.py \
             tests/test_assigned_agent_prompt_parity.py \
             tests/test_dialog_greeting.py \
             tests/test_operator_audio_transcripts.py \
@@ -192,6 +197,7 @@ jobs:
           node tests/test_tenant_notification_badge_browser.cjs
           node tests/test_dialog_photo_status_ui.cjs
           node tests/test_tenant_operator_copilot_ui.cjs
+          PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_saved_only_copilot_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_helper_request_identity_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_manual_knowledge_scope_browser.cjs
           node tests/test_tenant_operator_mobile_ui.cjs
