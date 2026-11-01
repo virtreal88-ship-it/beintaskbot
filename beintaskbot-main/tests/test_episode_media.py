@@ -199,7 +199,9 @@ def test_authority_loss_prevents_even_cached_evidence(sandbox):
 
 def test_manual_prompt_preserves_sources_language_and_continuation_rule():
     from tenant_operator_copilot import INSTRUCTIONS,_bounded_conversation
-    assert 'Never repeat a greeting when any prior EMPLOYEE message exists' in INSTRUCTIONS
+    from tenant_dialog_greeting import GREETING_RULE
+    assert GREETING_RULE in INSTRUCTIONS
+    assert 'Never repeat a greeting when any prior EMPLOYEE message exists' not in INSTRUCTIONS
     assert 'even when the employee request is in another language' in INSTRUCTIONS
     assert 'Preserve source quotations in their original language' in INSTRUCTIONS
     rows=[row('voice',_copilot_media_notice='[processed]',_copilot_attachment_text='AZ source')]

@@ -24,11 +24,14 @@ on:
       - 'beintaskbot-main/tests/test_dialog_audio_transcription*'
       - 'beintaskbot-main/tests/test_dialog_audio_result_durability.py'
       - 'beintaskbot-main/docs/dialog-audio-transcription-api.md'
+      - 'beintaskbot-main/tenant_dialog_greeting.py'
+      - 'beintaskbot-main/tests/test_dialog_greeting.py'
       - 'beintaskbot-main/tenant_operator_copilot.py'
       - 'beintaskbot-main/tenant_operator_dialogs.py'
       - 'beintaskbot-main/docs/tenant-chat-attachments.js'
       - 'beintaskbot-main/tests/test_lazy_audio_state_browser.cjs'
       - 'beintaskbot-main/tests/test_voice_card_mobile_browser.cjs'
+      - 'beintaskbot-main/tests/test_helper_request_identity_browser.cjs'
       - 'beintaskbot-main/tests/test_verified_dialog_phone.py'
       - 'beintaskbot-main/tenant_owner_asr_comparison*.py'
       - 'beintaskbot-main/tenant_ai_spend_budget.py'
@@ -64,6 +67,7 @@ on:
       - 'beintaskbot-main/tests/test_tenant_notification_badge_browser.cjs'
       - 'beintaskbot-main/tests/test_dialog_developer*'
       - 'beintaskbot-main/tests/test_helper_type_full_app_browser.cjs'
+      - 'beintaskbot-main/tests/test_helper_modal_mobile_browser.cjs'
       - 'beintaskbot-main/tests/test_assigned_operator_copilot.py'
       - 'beintaskbot-main/tests/test_operator_audio_transcripts.py'
       - 'beintaskbot-main/tests/test_operator_audio_transcript_browser.cjs'
@@ -136,6 +140,7 @@ jobs:
             tests/test_dialog_consultations_postgres.py \
             tests/test_assigned_operator_copilot.py \
             tests/test_assigned_agent_prompt_parity.py \
+            tests/test_dialog_greeting.py \
             tests/test_operator_audio_transcripts.py \
             tests/test_verified_dialog_phone.py \
             tests/test_tenant_operator_copilot.py \
@@ -147,6 +152,7 @@ jobs:
             tests/test_tenant_job_runner.py
           node tests/test_owner_asr_comparison_browser.cjs
           node tests/test_helper_type_full_app_browser.cjs
+          node tests/test_helper_modal_mobile_browser.cjs
           node tests/test_dialog_developer_browser.cjs
           node tests/test_dialog_consultations_ui.cjs
           node tests/test_tenant_notification_center_ui.cjs
@@ -160,6 +166,7 @@ jobs:
           node tests/test_tenant_push_dialog_route_ui.cjs
           node tests/test_tenant_notification_badge_browser.cjs
           node tests/test_tenant_operator_copilot_ui.cjs
+          PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_helper_request_identity_browser.cjs
           node tests/test_tenant_operator_mobile_ui.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_operator_audio_transcript_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_native_reply_layout_browser.cjs

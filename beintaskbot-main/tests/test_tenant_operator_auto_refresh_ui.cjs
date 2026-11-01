@@ -18,7 +18,7 @@ let readThrough=new Map(),unreadValue=1,soundCalls=0;const latest=()=>({success:
  const firstTimer=[...timers.entries()].find(([,timer])=>timer.delay===30000);timers.delete(firstTimer[0]);await firstTimer[1].fn();await settle();assert.ok([...timers.values()].some(timer=>timer.delay===30000),'subsequent refresh remains at 30 seconds');
  await w.tenantOperator.openDialog(route);await settle();w.dispatchEvent(new w.Event('pointerdown'));await settle();
  const chat=w.document.getElementById('chatRows'),composer=w.document.getElementById('chatText'),copilot=w.document.getElementById('operatorCopilot');
- Object.defineProperty(chat,'scrollHeight',{configurable:true,get:()=>chat.querySelectorAll('.operator-message').length*100});Object.defineProperty(chat,'clientHeight',{configurable:true,value:100});chat.scrollTop=0;
+ Object.defineProperty(chat,'scrollHeight',{configurable:true,get:()=>chat.querySelectorAll('.operator-message').length*100});Object.defineProperty(chat,'clientHeight',{configurable:true,value:100});chat.scrollTop=45;
  composer.value='Draft stays';copilot.hidden=false;w.document.getElementById('operatorCopilotPrompt').value='Internal copilot prompt';
  messages.push({id:'duplicate-delivery',external_id:'external-3',direction:'incoming',message_type:'text',body:'Message 3 duplicate webhook',author_type:'customer',author_name:'Customer',happened_at:'2026-10-21T10:03:00Z'});
  messages.push({id:'message-4',external_id:'external-4',direction:'incoming',message_type:'text',body:'New customer question',author_type:'customer',author_name:'Customer',happened_at:'2026-10-21T10:04:00Z'});
@@ -27,7 +27,7 @@ let readThrough=new Map(),unreadValue=1,soundCalls=0;const latest=()=>({success:
  assert.equal(calls.filter(url=>url.includes('/dialogs/history')).length,beforeHistory+1,'a changed latest message fetches the existing history API');
  assert.equal(chat.querySelectorAll('.operator-message').length,4,'new history is appended once and duplicate external deliveries are ignored');
  assert.equal(composer.value,'Draft stays');assert.equal(w.document.getElementById('operatorCopilot'),copilot);assert.equal(copilot.hidden,false);assert.equal(w.document.getElementById('operatorCopilotPrompt').value,'Internal copilot prompt');
- assert.equal(chat.scrollTop,100,'reading position is kept when the operator is not at the bottom');assert.equal(w.document.getElementById('operatorNewMessages').hidden,false);
+ assert.equal(chat.scrollTop,45,'appending below the reader preserves the same viewport offset');assert.equal(w.document.getElementById('operatorNewMessages').hidden,false);
  await w.tenantOperator.refresh();await settle();assert.equal(calls.filter(url=>url.includes('/dialogs/history')).length,beforeHistory+1,'unchanged latest message does not refetch chat history');
  w.document.getElementById('operatorNewMessages').click();await settle();assert.equal(readThrough.get(route.conversation_id),'message-4','jump to newest marks the displayed snapshot read');
  chat.scrollTop=0;messages.push({id:'message-5',external_id:'external-5',direction:'incoming',message_type:'text',body:'Later question',author_type:'customer',happened_at:'2026-10-21T10:05:00Z'});await w.tenantOperator.refresh();await settle();assert.equal(readThrough.get(route.conversation_id),'message-4','new messages arriving while scrolled away remain unread');

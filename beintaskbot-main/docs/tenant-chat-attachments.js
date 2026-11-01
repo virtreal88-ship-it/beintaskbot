@@ -95,6 +95,9 @@
     });
   }
   function bind(){
+    // Same-dialog renders retain stable media hosts. Retire only removed assets.
+    for(const [url,preview] of previews){if(!preview.host.isConnected){stop(preview.media);URL.revokeObjectURL(url);urls.delete(url);previews.delete(url);}}
+
     document.querySelectorAll('[data-media-download]').forEach(button=>{button.onclick=()=>downloadAttachment(button,button.dataset.mediaDownload,button.closest('.operator-media-card')?.querySelector('[data-media-load-status]')||button.closest('.operator-media-card')?.querySelector('[role="status"]'));});
     document.querySelectorAll('#chatRows [data-chat-attachment], [data-learning-chat] [data-chat-attachment]').forEach(host=>{
       const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button'),status=host.querySelector('[data-media-load-status]')||host.querySelector('[role="status"]');
@@ -186,7 +189,7 @@
   document.addEventListener('tenant-chat-history-added',bind);
   document.getElementById('closeModal')?.addEventListener('click',clear);
   document.getElementById('dealModal')?.addEventListener('click',event=>{if(event.target.id==='dealModal')clear();});
-  document.addEventListener('visibilitychange',()=>{if(document.hidden)clear();else bind();});
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)bind();});
   const initialProfile=profileRevision;
   fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(response=>response.ok?response.json():null).then(data=>{
     if(initialProfile===profileRevision&&data?.member){member=data.member;bind();}

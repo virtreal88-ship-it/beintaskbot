@@ -764,8 +764,6 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
             history_leads=lead_members(cur,tenant,channel_id,lead_id)
             cur.execute('''SELECT * FROM (
               SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,m.created_at,m.id,m.channel,m.raw,
-                EXISTS(SELECT 1 FROM saas_crm_messages h WHERE h.tenant_id=m.tenant_id AND h.channel=m.channel
-                  AND h.kommo_lead_id=m.kommo_lead_id AND (h.direction='outgoing' OR h.raw->>'verified_employee_id' IS NOT NULL)) AS has_prior_employee,
                 COALESCE(v.state,'') AS voice_state,
                 NOT EXISTS (SELECT 1 FROM saas_connect_conversations c
                   JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id
@@ -788,7 +786,7 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
              'message_type': str(row.get('message_type') or 'text'), 'media_url': str(row.get('media_url') or ''),
              'has_attachment': bool(row.get('media_url')) or str(row.get('message_type') or 'text') != 'text',
              'happened_at': (row.get('happened_at') or row.get('created_at')).isoformat() if row.get('happened_at') or row.get('created_at') else '',
-             'raw': row.get('raw') or {},'has_prior_employee':row.get('has_prior_employee') is True,
+             'raw': row.get('raw') or {},
              'transcript': str(row.get('transcript') or ''), 'voice_state': str(row.get('voice_state') or ''),
              'media_evidence': row.get('media_evidence') if isinstance(row.get('media_evidence'),dict) else None,
              'media_evidence_context': str(row.get('media_evidence_context') or '')[:4000],
