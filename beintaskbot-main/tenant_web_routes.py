@@ -38,6 +38,7 @@ from tenant_night_report_api import handler as night_report_handler
 from tenant_ai_instructor_api import handler as ai_instructor_handler
 from tenant_ai_administrator_api import handler as administrator_handler
 from tenant_ai_learning_mcp import routes as learning_mcp_routes
+from tenant_notification_center_api import handler as notification_center_handler
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 MemberReader = Callable[[web.Request], dict | None]
@@ -64,6 +65,8 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
         ('/api/instructions/shared/{token}', instruction_handler(member,origin,logger,'public'), ('GET',)),
         ('/api/instructions/shared/{token}/assets/{asset_id}', instruction_handler(member,origin,logger,'public'), ('GET',)),
 
+        ('/api/platform/notifications', notification_center_handler(member, origin, logger), ('GET',)),
+        ('/api/platform/notifications/{notification_id}/read', notification_center_handler(member, origin, logger, 'read'), ('POST',)),
         ('/api/platform/finance', finance_handler(member, origin, logger), ('GET', 'POST')),
         ('/api/platform/linear/settings', linear_handler(member, origin, logger), ('GET', 'POST')),
         ('/api/platform/linear/tasks', tasks_handler(member, origin, logger), ('GET', 'POST')),
