@@ -28,6 +28,7 @@ on:
       - 'beintaskbot-main/tenant_operator_dialogs.py'
       - 'beintaskbot-main/docs/tenant-chat-attachments.js'
       - 'beintaskbot-main/tests/test_lazy_audio_state_browser.cjs'
+      - 'beintaskbot-main/tests/test_helper_request_identity_browser.cjs'
       - 'beintaskbot-main/tests/test_verified_dialog_phone.py'
       - 'beintaskbot-main/tenant_owner_asr_comparison*.py'
       - 'beintaskbot-main/tenant_ai_spend_budget.py'
@@ -159,6 +160,7 @@ jobs:
           node tests/test_tenant_push_dialog_route_ui.cjs
           node tests/test_tenant_notification_badge_browser.cjs
           node tests/test_tenant_operator_copilot_ui.cjs
+          PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_helper_request_identity_browser.cjs
           node tests/test_tenant_operator_mobile_ui.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_operator_audio_transcript_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_native_reply_layout_browser.cjs
