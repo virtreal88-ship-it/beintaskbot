@@ -78,7 +78,7 @@ def prepare_saved(authority,rows):
         if kind not in KINDS:continue
         historical=normalize_media_row(row,authority.channel)
         if str(row.get('external_id')) not in selected_ids:
-            apply_historical_context(row,historical)
+            apply_historical_context(row,historical,authority=authority)
             continue
         authority.check()
         if kind=='video':raise TenantLinearError('Full video coverage is unavailable. No paid analysis or draft was started.',409)
@@ -92,7 +92,7 @@ def prepare_saved(authority,rows):
         message={'text':'','ref':ref['id']};receipt={'id':ref['id'],'kind':ref['media_kind'],**apply_reusable(message,saved)}
         if kind in {'audio','voice'} and not str(receipt.get('transcript') or '').strip():raise TenantLinearError('Saved speech is incomplete.',409)
         if kind in {'image','document'} and not (receipt.get('observation') or receipt.get('observations')):raise TenantLinearError('Saved visual/document evidence is incomplete.',409)
-        apply_episode_receipt(row,message,receipt)
+        apply_episode_receipt(row,message,receipt,authority=authority,ref=ref,saved=saved)
         if kind in {'audio','voice'}:media['voice_transcriptions'].add(ref['external_id'])
         if kind=='document':
             text=str(receipt.get('observation') or '')

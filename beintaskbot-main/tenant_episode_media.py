@@ -174,20 +174,32 @@ def normalize_media_row(row,channel):
     return historical_context
 
 
-def apply_historical_context(row,context):
+def apply_historical_context(row,context,*,authority=None):
     if context:
         row['_copilot_attachment_text']=context
         row['_historical_media_status']=(row.get('media_evidence') or {}).get('status')
         partial=row['_historical_media_status']=='partial'
         row['_copilot_media_notice']=('[Historical attachment; saved partial evidence; incomplete, do not infer omitted contents; not the latest attachment]'
             if partial else '[Historical attachment; saved evidence from an earlier turn, not the latest attachment]')
+        if (authority is not None and str(row.get('message_type') or '').lower()=='image'
+                and str(row.get('channel') or '').removeprefix('connect:')==authority.channel):
+            # Only an exact saved receipt may add a private typed candidate.
+            # This read never enters a flight or re-analyzes historical media.
+            from tenant_product_identifiers import context as product_context
+            ref=reference(row,authority.channel,authority.lead)
+            row['_copilot_attachment_text']=product_context(authority.tenant,ref,reusable({'tenant_id':authority.tenant},ref))+'\n'+context
 
 
-def apply_episode_receipt(row,message,receipt):
+def apply_episode_receipt(row,message,receipt,*,authority=None,ref=None,saved=None):
     status=receipt.get('status','unknown');code=receipt.get('code','media_result_unknown')
     row['_copilot_media_notice']='[Attachment '+status+': '+code+'; never infer unread contents]'
     row['_copilot_attachment_text']=message['text']
     row['_episode_receipt']=receipt
+    if authority is not None and ref is not None and ref['media_kind']=='image':
+        from tenant_product_identifiers import context as product_context
+        from tenant_media_evidence import _safe_text
+        row['_copilot_attachment_text']=product_context(authority.tenant,ref,saved or {
+            'status':receipt.get('status'),'coverage':receipt.get('coverage',{}),'result':receipt})+'\n'+_safe_text(message['text'])
 
 
 def prepare(authority, rows):
@@ -204,7 +216,7 @@ def prepare(authority, rows):
         if str(row.get('message_type') or '').lower() not in KINDS:continue
         historical_context=normalize_media_row(row,authority.channel)
         if str(row.get('external_id')) not in selected_ids:
-            apply_historical_context(row,historical_context)
+            apply_historical_context(row,historical_context,authority=authority)
             continue
         authority.check()
         ref=reference(row,authority.channel,authority.lead)
@@ -238,7 +250,7 @@ def prepare(authority, rows):
                 saved={'status':receipt.get('status'),'code':receipt.get('code'),
                        'coverage':receipt.get('coverage',{}),'result':receipt}
                 apply_reusable(message,saved)
-        apply_episode_receipt(row,message,receipt)
+        apply_episode_receipt(row,message,receipt,authority=authority,ref=ref,saved=prior)
     return rows
 
 
