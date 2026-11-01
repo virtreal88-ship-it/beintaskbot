@@ -91,13 +91,13 @@ def test_opted_provider_preserves_original_language_contract_and_bytes(monkeypat
     response=Mock(status_code=200);response.json.return_value={'text':'Synthetic speech','languages':[{'code':'ru'},{'code':'az'}],'usage':{'seconds':0.1}}
     post=Mock(return_value=response);monkeypatch.setattr(provider.requests,'post',post)
     audio=wav()
-    text,usage=provider.transcribe('synthetic','gpt-transcribe',audio,'wav','audio/wav',with_usage=True,bounded_asr=True,asr_tenant=A)
+    text,usage=provider.transcribe('synthetic','gpt-transcribe',audio,'wav','audio/wav',with_usage=True,bounded_asr=True,before_dispatch=lambda:None,asr_tenant=A)
     assert text=='Synthetic speech' and usage['detected_languages']==['ru','az']
     assert post.call_args.args[0]=='https://api.openai.com/v1/audio/transcriptions'
     assert post.call_args.kwargs['data']=={'model':'gpt-transcribe','response_format':'json'}
     assert post.call_args.kwargs['files']['file'][1]==audio
     post.reset_mock()
-    with pytest.raises(TenantLinearError):provider.transcribe('synthetic','gpt-transcribe',audio,'wav','audio/wav',bounded_asr=True,asr_tenant=B)
+    with pytest.raises(TenantLinearError):provider.transcribe('synthetic','gpt-transcribe',audio,'wav','audio/wav',bounded_asr=True,before_dispatch=lambda:None,asr_tenant=B)
     post.assert_not_called()
 
 
@@ -115,7 +115,7 @@ def test_preexisting_custom_gpt_provider_behavior_is_unchanged_without_optin(mon
 def test_opted_ambiguous_or_overlong_upload_never_dispatched(monkeypatch,streams,duration):
     monkeypatch.setattr(voice.subprocess,'run',Mock(return_value=Mock(returncode=0,stdout=json.dumps({'streams':streams,'format':{'duration':duration}}).encode())))
     post=Mock();monkeypatch.setattr(provider.requests,'post',post)
-    with pytest.raises(voice.VoiceError):provider.transcribe('synthetic','gpt-transcribe',b'x','ogg','audio/ogg',bounded_asr=True,asr_tenant=A)
+    with pytest.raises(voice.VoiceError):provider.transcribe('synthetic','gpt-transcribe',b'x','ogg','audio/ogg',bounded_asr=True,before_dispatch=lambda:None,asr_tenant=A)
     post.assert_not_called()
 
 
@@ -164,4 +164,44 @@ def test_collect_requires_real_shared_execution_not_a_forged_item_flag(monkeypat
     assert results[0]['status']=='processed'
     assert call.call_args.args[1]==('gpt-transcribe' if trusted else 'whisper-1')
     assert call.call_args.kwargs.get('bounded_asr',False) is trusted
+    assert callable(call.call_args.kwargs.get('before_dispatch')) is trusted
     assert ('asr_request_policy' in results[0]) is trusted
+
+
+def test_bounded_adapter_requires_a_final_authority_callback(monkeypatch):
+    post=Mock();monkeypatch.setattr(provider.requests,'post',post)
+    with pytest.raises(ValueError):
+        provider.transcribe('synthetic','gpt-transcribe',wav(),'wav','audio/wav',bounded_asr=True,asr_tenant=A)
+    post.assert_not_called()
+
+@pytest.mark.parametrize('change',['assignment_removed_or_reassigned','source_version_changed'])
+def test_real_collect_late_decode_change_is_fenced_before_http(monkeypatch,change):
+    from unittest.mock import AsyncMock
+    import tenant_knowledge_media as media
+    import tenant_media_evidence as evidence
+    ref={'id':'synthetic','channel_id':B,'lead_id':41,'external_id':'connect:synthetic','media_kind':'audio'}
+    current={'provider':'connect','route':{'channel_id':B,'conversation_id':'synthetic'},'row':{'message_type':'audio'}}
+    executor=authority();executor.check=Mock();executor.load=Mock(return_value=current)
+    state={'current':True,'decodes':0}
+    def validate(exact_ref):
+        assert exact_ref is ref
+        if not state['current']:raise TenantLinearError(change,409)
+    executor.validate=Mock(side_effect=validate)
+    def dispatch(model,operation,invoke):
+        executor.validate(ref)  # The existing pre-provider Execution guard.
+        return invoke()
+    executor.dispatch=Mock(side_effect=dispatch)
+    item=executor.item(ref,{'text':'','ref':'synthetic'})
+    audio=wav()
+    def decode(*args,**kwargs):
+        state['decodes']+=1
+        if state['decodes']==2:state['current']=False  # Provider's independent proof finishes after the change.
+        return audio,'wav','audio/wav'
+    monkeypatch.setattr(voice,'validate_audio',decode)
+    monkeypatch.setattr(media,'download_media',AsyncMock(return_value=(audio,'audio/wav')))
+    monkeypatch.setattr(evidence,'reusable',lambda *_:None)
+    post=Mock();monkeypatch.setattr(provider.requests,'post',post)
+    _,results=media.collect({},item,execution=executor)
+    assert state['decodes']==2 and executor.validate.call_count==2
+    assert results[0]['status']=='error'
+    post.assert_not_called()

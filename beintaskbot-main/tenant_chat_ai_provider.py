@@ -149,17 +149,20 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
 
 
 def transcribe(key, model, content, extension, content_type, *, with_usage=False, request_timeout=90,
-               response_format='json', with_diagnostics=False, bounded_asr=False, asr_tenant=None):
+               response_format='json', with_diagnostics=False, bounded_asr=False, asr_tenant=None,
+               before_dispatch=None):
     if response_format not in {'json', 'verbose_json'}:
         raise ValueError('Unsupported transcription response format')
     if bounded_asr:
         from tenant_ai_asr_model import STRONG_MODEL, scoped_strong_quote
-        if model != STRONG_MODEL or response_format != 'json' or with_diagnostics:
+        if model != STRONG_MODEL or response_format != 'json' or with_diagnostics or not callable(before_dispatch):
             raise ValueError('Unsupported bounded transcription options')
         scoped_strong_quote(asr_tenant)
         from tenant_connect_voice import validate_audio
         content, extension, content_type = validate_audio(
             content, extension, content_type, prove_upload_duration=True)
+        scoped_strong_quote(asr_tenant)
+        before_dispatch()
     response = requests.post('https://api.openai.com/v1/audio/transcriptions',
         headers={'Authorization': 'Bearer ' + key}, data={'model': model, 'response_format': response_format},
         files={'file': ('recording.' + extension, content, content_type)}, timeout=(5, min(90,max(1,request_timeout))), allow_redirects=False)

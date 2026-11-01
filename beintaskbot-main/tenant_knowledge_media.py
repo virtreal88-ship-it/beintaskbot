@@ -132,7 +132,8 @@ def collect(profile,item,check_before_ai=None,*,execution=None):
                     and item.get('_shared_dialog_asr') is True)
                 if scoped_asr:
                     from functools import partial
-                    transcribe = partial(transcribe, bounded_asr=True, asr_tenant=item['tenant'])
+                    transcribe = partial(transcribe, bounded_asr=True, asr_tenant=item['tenant'],
+                        before_dispatch=lambda ref=ref: execution.validate(ref))
                 model=transcription_model(item)
                 if not model: raise LookupError('asr_model_unavailable')
                 stage='media_download'
