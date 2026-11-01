@@ -21,6 +21,8 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  assert.match(await page.locator('.operator-client-phone').innerText(),/994500001234/);
  assert.equal(await page.evaluate(()=>window.mediaCount),0,'lazy history never downloads automatically');
  assert.equal(await voice().locator('audio').getAttribute('src'),null);
+ await voice().locator('audio').evaluate(audio=>audio.dispatchEvent(new Event('error')));
+ assert.doesNotMatch(await voice().textContent(),/Audio unavailable|Аудио недоступно|Audio əlçatan deyil/,'unloaded native error cannot claim the file is absent');
  assert.match(await voice().locator('[data-media-load-status]').innerText(),/не загружено|not loaded|yüklənməyib/);
  await voice().locator('[data-media-open]').click();await page.waitForFunction(()=>document.querySelector('audio.operator-native-audio')?.getAttribute('src')?.startsWith('blob:'));
  assert.equal(await page.evaluate(()=>window.mediaCount),1);
