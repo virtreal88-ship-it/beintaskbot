@@ -271,14 +271,14 @@ class Execution:
                     reserve_media(cur,self.tenant,call_key,'episode_media',model,operation,1)
                 conn.commit()
         except TenantLinearError as error:
-            mark(error,step)
+            if operation=='asr':mark(error,step)
             raise
         attempted=False
         try:
             try:
                 self.validate(self.current_ref)
             except TenantLinearError as error:
-                mark(error,'authority')
+                if operation=='asr':mark(error,'authority')
                 raise
             attempted=True
             self.media_attempts=getattr(self,'media_attempts',0)+1
