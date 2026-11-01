@@ -49,22 +49,63 @@ from tenant_dialog_evidence import GROUNDING_RULE, provenance, speaker
 INSTRUCTIONS += GROUNDING_RULE
 
 
-def _required_audio(rows):
+def _required_media(rows,kinds):
     from tenant_episode_media import episode
     return [row for row in episode(rows,latest_request=True)
-            if str(row.get('message_type') or '').lower() in {'audio','voice','voice_message','ptt'}]
+            if str(row.get('message_type') or '').lower() in kinds]
 
 
-def _audio_evidence_error(command,row,agent_context,*,context_limit=False):
+def _visual_components(row):
     receipt=row.get('_episode_receipt') or {}
+    values=[]
+    if receipt.get('observation'):values.append(receipt['observation'])
+    observations=receipt.get('observations') or []
+    if not isinstance(observations,list):return []
+    for item in observations:
+        if not isinstance(item,dict) or not isinstance(item.get('text'),str) or not item['text'].strip():return []
+        values.append(item['text'])
+    return values if all(isinstance(value,str) and value.strip() for value in values) else []
+
+
+def _evidence_ready(row):
+    receipt=row.get('_episode_receipt') or {}
+    if receipt.get('status')!='processed':return False
+    if str(row.get('message_type') or '').lower()=='image':
+        return bool(_visual_components(row)) and (receipt.get('coverage') or {}).get('complete') is not False
+    return bool(str(receipt.get('transcript') or '').strip())
+
+
+def _component_spans(row,appendix):
+    receipt=row.get('_episode_receipt') or {}
+    if str(row.get('message_type') or '').lower()=='image':
+        components=_visual_components(row);spans=[];cursor=0
+        markers=list(re.finditer(r'(?:^|\n)\[Untrusted (?:visual observation|saved visual observation(?: frame [^\]\n]{1,80})?); not a confirmed solution\] ',appendix))
+        for component in components:
+            marker=next((match for match in markers if match.start()>=cursor and appendix.startswith(component,match.end())),None)
+            if marker is None:return []
+            spans.append((marker.end(),marker.end()+len(component)));cursor=spans[-1][1]
+        return spans
+    speech=str(receipt.get('transcript') or '')
+    footer='\n[Attachment status: '+str(receipt.get('status'))+'; '+str(receipt.get('code'))+'. Never infer unread contents.]'
+    component=appendix[:-len(footer)] if appendix.endswith(footer) else appendix
+    return [(len(component)-len(speech),len(component))] if speech and component.endswith(speech) else []
+
+
+def _required_audio(rows):
+    return _required_media(rows,{'audio','voice','voice_message','ptt'})
+
+
+def _episode_evidence_error(command,row,agent_context,*,context_limit=False):
+    receipt=row.get('_episode_receipt') or {}
+    image=str(row.get('message_type') or '').lower()=='image'
     stage='context_preparation' if context_limit else receipt.get('failure_stage')
-    if stage not in {'source_validation','media_download','media_validation','audio_transcription','context_preparation'}:stage='unknown'
-    code='audio_context_incomplete' if context_limit else receipt.get('code')
+    if stage not in {'source_validation','media_download','media_validation','audio_transcription','visual_analysis','context_preparation'}:stage='unknown'
+    code=('image_context_incomplete' if image else 'audio_context_incomplete') if context_limit else receipt.get('code')
     from tenant_media_admission import REASONS, explanation
     if code not in set(REASONS) | {'media_unavailable','source_fetch_unavailable','source_check_failed','source_rate_limited',
         'source_access_denied','source_changed','media_processing_failed','media_result_unknown',
         'asr_authorization_required','legacy_voice_version_unverified','pre_dispatch_retryable',
-        'media_size_limit','asr_model_unavailable','transcript_truncated','audio_context_incomplete'}:code='audio_evidence_incomplete'
+        'media_size_limit','asr_model_unavailable','transcript_truncated','audio_context_incomplete','image_context_incomplete','visual_budget','vision_not_approved','external_media_permission_required','model_has_no_vision'}:code='image_evidence_incomplete' if image else 'audio_evidence_incomplete'
     from tenant_episode_media import reference
     from tenant_media_evidence import source_hash
     ref=reference(row,command['channel_id'],command['lead_id'])
@@ -80,6 +121,8 @@ def _audio_evidence_error(command,row,agent_context,*,context_limit=False):
         message={'az':'Cari seriyanın bütün səs mesajları oxunmayıb. AI cavabı yaradılmadı.',
             'en':'Not all voice messages in the current series were read. No AI reply was created.'}.get(language,
             'Не все голосовые текущей серии прочитаны. AI-ответ не создан.')
+    if image:
+        message=({'az':'Cari fotoların təhlili AI kontekstinə tam sığmır. Cavab yaradılmadı; saxlanmış nəticələr qorunur.','en':'Current photo observations do not fit completely in the AI context. No reply was created; saved results are retained.'}.get(language,'Анализ текущих фото не помещается целиком в контекст AI. Ответ не создан; сохранённые результаты не потеряны.') if context_limit else {'az':'Cari seriyanın bütün fotoları təhlil edilməyib. AI cavabı yaradılmadı.','en':'Not all photos in the current series were analyzed. No AI reply was created.'}.get(language,'Не все фото текущей серии проанализированы. AI-ответ не создан.'))
     reason=explanation(code,language)
     status=receipt.get('admission_status') if code in REASONS else 409
     error=TenantLinearError(message+(' '+reason if reason else '')+' ['+stage+': '+code+']',status if status in {403,409,429} else 409)
@@ -103,8 +146,7 @@ def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message
         role = speaker(row)
         body = str(row.get('_copilot_context_body', row.get('body') or '') or '')[:max_message_chars]
         kind = str(row.get('message_type') or 'text')
-        speech=str((row.get('_episode_receipt') or {}).get('transcript') or '')
-        speech_span=None
+        spans=[]
         complete=False
         if kind not in {'', 'text'}:
             notice = str(row.get('_copilot_media_notice') or f'[Attachment type: {kind}; not analyzed by Copilot]')
@@ -112,24 +154,17 @@ def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message
             if appendix:
                 prefix = body[:400]
                 room = max(0, max_message_chars - len(prefix) - len(notice) - 2)
-                # collect appends its own exact receipt footer after speech;
-                # reuse has no footer. Track the verified component, not a
-                # semantic match against customer prose or the whole wrapper.
-                receipt=row.get('_episode_receipt') or {}
-                footer='\n[Attachment status: '+str(receipt.get('status'))+'; '+str(receipt.get('code'))+'. Never infer unread contents.]'
-                component=appendix[:-len(footer)] if appendix.endswith(footer) else appendix
-                if speech and component.endswith(speech):
-                    start=len(prefix)+len(notice)+2+len(component)-len(speech)
-                    speech_span=(start,start+len(speech))
+                spans=[(len(prefix)+len(notice)+2+start,len(prefix)+len(notice)+2+end)
+                       for start,end in _component_spans(row,appendix)]
                 body = prefix + '\n' + notice + '\n' + appendix[:room]
-                if speech_span:complete=speech_span[1]<=len(body)
+                complete=bool(spans) and all(end<=len(body) for start,end in spans)
             else:
                 body = body[:max(0, max_message_chars - len(notice) - 1)] + ' ' + notice
         receipt_context=str(row.get('media_evidence_context') or '')[:max_message_chars]
         if receipt_context:
             body=(body+'\n'+receipt_context)[:max_message_chars]
         body=body[:max_message_chars]
-        if speech_span:complete=complete and speech_span[1]<=len(body)
+        complete=complete and all(end<=len(body) for start,end in spans)
         room = max_chars - used
         if room <= 0:
             break
@@ -138,7 +173,7 @@ def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message
             # request commonly appears, while signaling that it was shortened.
             prefix = '[Earlier part omitted] '
             tail_length = max(0, room - len(prefix))
-            if speech_span:complete=complete and speech_span[0]>=len(body)-tail_length
+            complete=complete and all(start>=len(body)-tail_length for start,end in spans)
             body = prefix[:room] + (body[-tail_length:] if tail_length else '')
         if audio_coverage is not None and id(row) in audio_coverage:audio_coverage[id(row)]=complete
         selected.append({'_order':next(i for i,item in enumerate(rows) if item is row),'speaker': role, 'text': body,
@@ -341,7 +376,7 @@ def _clean(data):
             'include_media': include_media}
 
 
-def _hash(command, *, media_selection_version='current-episode-v4-complete-audio'):
+def _hash(command, *, media_selection_version='current-episode-v5-complete-audio-photos'):
     value = {key: val for key, val in command.items() if key != 'request_id'}
     if command.get('mode')=='reply':value['media_selection_version']=('latest-customer-request-v3-audio-evidence' if command.get('_consultation_evidence') else media_selection_version)
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -407,11 +442,11 @@ def run(profile, data, *, consultation_reply_id=None):
             existing = cur.fetchone()
             if existing:
                 if (int(existing['requested_by'])==actor and command['mode']=='reply'
-                    and existing['input_hash']!=digest and existing['input_hash']==_hash(command,
-                        media_selection_version='latest-customer-request-v3-audio-evidence')):
+                    and existing['input_hash']!=digest and any(existing['input_hash']==_hash(command,media_selection_version=version)
+                        for version in ('latest-customer-request-v3-audio-evidence','current-episode-v4-complete-audio'))):
                     pending=existing['status']!='completed'
                     error=TenantLinearError('Предыдущий запрос не подтверждён; повторный запуск заблокирован.' if pending else
-                        'Правила проверки голосовых обновлены. Нажмите «AI ответ» снова для нового проверенного черновика.',409)
+                        'Правила проверки вложений обновлены. Нажмите «AI ответ» снова для нового проверенного черновика.',409)
                     error.keep_request=pending
                     raise error
                 if int(existing['requested_by']) != actor or existing['input_hash'] != digest:
@@ -496,10 +531,12 @@ def run(profile, data, *, consultation_reply_id=None):
                 and (row.get('raw') if isinstance(row.get('raw'),dict) else {}).get('verified_employee_id') is None
                 and (row.get('raw') if isinstance(row.get('raw'),dict) else {}).get('ai_authored') is not True),{})
         required_audio=_required_audio(rows) if command['mode']=='reply' and consultation_evidence is None else []
-        for required in required_audio:
+        required_images=_required_media(rows,{'image'}) if command['mode']=='reply' and consultation_evidence is None else []
+        required_media=required_audio+required_images
+        for required in required_media:
             receipt=required.get('_episode_receipt') or {}
-            if receipt.get('status')!='processed' or not str(receipt.get('transcript') or '').strip():
-                raise _audio_evidence_error(command,required,agent_context)
+            if not _evidence_ready(required):
+                raise _episode_evidence_error(command,required,agent_context)
         if latest_row in required_audio:
             receipt=latest_row['_episode_receipt']
             latest_customer=str(receipt['transcript'])
@@ -511,11 +548,11 @@ def run(profile, data, *, consultation_reply_id=None):
         _finish(tenant,command,actor,None,turns,command['prompt'],'')
         if isinstance(error,TenantLinearError):raise
         raise TenantLinearError('Не удалось подготовить вложения. Повторный анализ автоматически не запущен.',503) from None
-    audio_coverage={id(row):False for row in required_audio}
+    audio_coverage={id(row):False for row in required_media}
     bounded_lines = _bounded_conversation(rows,audio_coverage=audio_coverage)
-    incomplete=next((row for row in required_audio if not audio_coverage[id(row)]),None)
+    incomplete=next((row for row in required_media if not audio_coverage[id(row)]),None)
     if incomplete is not None:
-        error=_audio_evidence_error(command,incomplete,agent_context,context_limit=True)
+        error=_episode_evidence_error(command,incomplete,agent_context,context_limit=True)
         _finish(tenant,command,actor,None,turns,command['prompt'],'')
         raise error
     included_ids = {line['source_id'] for line in bounded_lines if line.get('source_id')}
