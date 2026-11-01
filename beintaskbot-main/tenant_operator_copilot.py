@@ -341,9 +341,9 @@ def _clean(data):
             'include_media': include_media}
 
 
-def _hash(command):
+def _hash(command, *, media_selection_version='current-episode-v4-complete-audio'):
     value = {key: val for key, val in command.items() if key != 'request_id'}
-    if command.get('mode')=='reply':value['media_selection_version']='latest-customer-request-v3-audio-evidence'
+    if command.get('mode')=='reply':value['media_selection_version']=('latest-customer-request-v3-audio-evidence' if command.get('_consultation_evidence') else media_selection_version)
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -406,6 +406,14 @@ def run(profile, data, *, consultation_reply_id=None):
             cur.execute('SELECT requested_by,input_hash,status,result,config_version FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid FOR UPDATE', (tenant, command['request_id']))
             existing = cur.fetchone()
             if existing:
+                if (int(existing['requested_by'])==actor and command['mode']=='reply'
+                    and existing['input_hash']!=digest and existing['input_hash']==_hash(command,
+                        media_selection_version='latest-customer-request-v3-audio-evidence')):
+                    pending=existing['status']!='completed'
+                    error=TenantLinearError('Предыдущий запрос не подтверждён; повторный запуск заблокирован.' if pending else
+                        'Правила проверки голосовых обновлены. Нажмите «AI ответ» снова для нового проверенного черновика.',409)
+                    error.keep_request=pending
+                    raise error
                 if int(existing['requested_by']) != actor or existing['input_hash'] != digest:
                     raise TenantLinearError('Код запроса уже использован для другой операции.', 409)
                 if existing['status'] == 'completed' and existing.get('result') and str(existing['config_version']) == str(connection['updated_at']):

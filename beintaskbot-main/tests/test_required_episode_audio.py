@@ -20,6 +20,8 @@ def install(ready,monkeypatch,specs):
     def prepared(_tenant,_actor,_command,rows,_model,**kw):
         from tenant_episode_media import episode
         selected=episode(rows,latest_request=True)
+        from tenant_episode_media import reference
+        kw['execution'].source_refs=[reference(rows[-1],CA,41)]+[reference(row,CA,41) for row in selected if row is not rows[-1]]
         sources=set()
         for row in selected:
             row['_manual_request_source']=True
@@ -50,7 +52,9 @@ def test_three_ready_voices_are_all_supplied_and_no_internal_coverage_is_sent(re
 @pytest.mark.parametrize('tail',[('voice','LAST_SUCCESS','processed'),('text','?','processed')])
 @pytest.mark.parametrize('state',['error','pending','unknown'])
 def test_any_unread_current_voice_blocks_even_when_last_source_succeeds_or_is_text(ready,monkeypatch,tail,state):
-    specs=[('voice','',''+state,'incoming',1),(*tail,'incoming',2)]
+    specs=[('voice','',state,'incoming',1)]
+    if tail[0]=='voice':specs.append(('voice','MIDDLE_SUCCESS','processed','incoming',2))
+    specs.append((*tail,'incoming',3))
     db,generated,data,asr,finish=install(ready,monkeypatch,specs)
     with pytest.raises(TenantLinearError) as caught:copilot.run(PROFILE,data)
     assert 'текущей серии' in str(caught.value) and 'UNVERIFIED_OLD_BODY' not in str(caught.value)
@@ -122,3 +126,31 @@ def test_exact_collect_footer_may_clip_without_losing_any_speech():
     coverage={id(row):False};lines=copilot._bounded_conversation([row],audio_coverage=coverage)
     assert coverage[id(row)] is True and text in lines[0]['text']
     assert len(lines[0]['text'])==1200
+
+
+@pytest.mark.parametrize('state',['completed','unknown','sending'])
+def test_legacy_v3_cached_request_cannot_bypass_policy_or_replay_uncertainty(ready,monkeypatch,state):
+    db,generated,data,asr,finish=install(ready,monkeypatch,[('voice','READY_SPEECH','processed','incoming',1)])
+    current_hash=copilot._hash
+    monkeypatch.setattr(copilot,'_hash',lambda command,**kwargs:current_hash(command,media_selection_version='latest-customer-request-v3-audio-evidence'))
+    copilot.run(PROFILE,data)
+    db.execute("UPDATE saas_chat_ai_runs SET status=%s,result=jsonb_set(result,'{text}','\"UNSAFE_LEGACY_DRAFT\"'::jsonb) WHERE tenant_id=%s::uuid AND request_id=%s::uuid",(state,A,data['request_id']));db.commit()
+    before=db.execute('SELECT status,input_hash,result FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(A,data['request_id']))[0]
+    monkeypatch.setattr(copilot,'_hash',current_hash);generated.reset_mock();finish.reset_mock()
+    with pytest.raises(TenantLinearError) as caught:copilot.run(PROFILE,data)
+    assert caught.value.status==409 and caught.value.keep_request is (state!='completed')
+    assert 'UNSAFE_LEGACY_DRAFT' not in str(caught.value)
+    generated.assert_not_called();asr.assert_not_called();finish.assert_not_called()
+    assert db.execute('SELECT status,input_hash,result FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(A,data['request_id']))[0]==before
+
+
+def test_v4_completed_cache_reuses_good_draft_without_provider_and_other_actor_cannot_read_it(ready,monkeypatch):
+    db,generated,data,asr,finish=install(ready,monkeypatch,[('voice','READY_SPEECH','processed','incoming',1)])
+    first=copilot.run(PROFILE,data)
+    assert copilot.run(PROFILE,data)==first
+    generated.assert_called_once();asr.assert_not_called()
+    db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name) VALUES(%s::uuid,22,'operator','Synthetic other actor')",(A,))
+    db.execute('UPDATE saas_chat_ai_runs SET requested_by=22 WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(A,data['request_id']));db.commit()
+    with pytest.raises(TenantLinearError) as caught:copilot.run(PROFILE,data)
+    assert first['text'] not in str(caught.value)
+    generated.assert_called_once()
