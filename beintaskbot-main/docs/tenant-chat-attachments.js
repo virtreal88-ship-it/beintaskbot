@@ -19,7 +19,7 @@
     if(!freshProfile||proof!==profilePolicy||who!==identity(member)||current!==epoch||!host.isConnected||version!==host.dataset.mediaVersion)return null;
     return {owner,scope,source,version};
   }
-  async function rememberAudio(host){try{await profileFetch;const binding=await audioBinding(host);if(binding)writeAudioIntent({v:1,...binding,expires_at:Date.now()+AUDIO_INTENT_TTL,blocked:false,retry_until:0});}catch{}}
+  async function rememberAudio(host){try{await profileFetch;const binding=await audioBinding(host);if(binding&&host.dataset.mediaPreviewState==='loaded'&&host.querySelector('audio')?.getAttribute('src')&&!host.querySelector('audio')?.error)writeAudioIntent({v:1,...binding,expires_at:Date.now()+AUDIO_INTENT_TTL,blocked:false,retry_until:0});}catch{}}
   function blockAudioIntent(binding,status,retry=0){const value=audioIntent();if(!value||!binding||!['owner','scope','source','version'].every(key=>value[key]===binding[key]))return;if([403,404,410].includes(status)){forgetAudioIntent();return;}writeAudioIntent({...value,blocked:true,retry_until:Math.max(value.retry_until,retry)});}
   async function failAudio(host,binding,status,retry=0){try{blockAudioIntent(binding||await audioBinding(host),status,retry);}catch{}}
   async function restoreAudio(host,load){
@@ -163,7 +163,7 @@
           else{
             const response=await fetch('/api/platform/crm/chat/attachment?'+query,
               {credentials:'same-origin',cache:'no-store',signal:controller.signal});
-            if(!response.ok){const data=await response.json().catch(()=>({}));const key=data.code==='media_duration_limit'?'mediaDuration':({404:'mediaUnavailable',410:'mediaUnavailable',413:'mediaLarge',415:'mediaInvalid',429:'mediaBusy'}[response.status]||'mediaFailed');void failAudio(host,intentBinding,response.status,response.status===429?Date.now()+retryDelay(response)*1000:0);if(response.status===429){const seconds=retryDelay(response),until=Date.now()+seconds*1000;rememberRetry(host,button,until,host.dataset.chatAttachment||'');host.dataset.mediaPreviewState='rate_limited';updateMediaMenu(host);throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds)));}host.dataset.mediaPreviewState=mediaFailureState(response.status);updateMediaMenu(host);throw Error(response.status===403?text('mediaForbidden','You do not have access to this file.'):response.status===404||response.status===410?text(key,'File is unavailable or expired.'):response.status===413?text(key,'File is too large.'):response.status===415?text(key,'File format is not supported.'):data.error||text('mediaFailed','File could not be downloaded.'));}
+            if(!response.ok){const data=await response.json().catch(()=>({}));const key=data.code==='media_duration_limit'?'mediaDuration':({404:'mediaUnavailable',410:'mediaUnavailable',413:'mediaLarge',415:'mediaInvalid',429:'mediaBusy'}[response.status]||'mediaFailed');await failAudio(host,intentBinding,response.status,response.status===429?Date.now()+retryDelay(response)*1000:0);if(response.status===429){const seconds=retryDelay(response),until=Date.now()+seconds*1000;rememberRetry(host,button,until,host.dataset.chatAttachment||'');host.dataset.mediaPreviewState='rate_limited';updateMediaMenu(host);throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds)));}host.dataset.mediaPreviewState=mediaFailureState(response.status);updateMediaMenu(host);throw Error(response.status===403?text('mediaForbidden','You do not have access to this file.'):response.status===404||response.status===410?text(key,'File is unavailable or expired.'):response.status===413?text(key,'File is too large.'):response.status===415?text(key,'File format is not supported.'):data.error||text('mediaFailed','File could not be downloaded.'));}
             servedFilename=dispositionName(response.headers.get('Content-Disposition'))||servedFilename;const declaredSize=Number(response.headers.get('Content-Length'));contentLength=response.headers.get('Content-Length')||'';
             const chunks=[],reader=response.body.getReader(),total=declaredSize;
             let size=0;
@@ -214,7 +214,7 @@
       else void restoreAudio(host,load);
     });
   }
-  document.addEventListener('tenant-profile',event=>{profileRevision++;const nextPolicy=policy(event.detail);if(member&&profilePolicy!==nextPolicy){freshProfile=false;forgetAudioIntent();clear(true);}member=event.detail.member;profilePolicy=nextPolicy;if(!member){freshProfile=false;forgetAudioIntent();}bind();});
+  document.addEventListener('tenant-profile',event=>{const nextPolicy=policy(event.detail),changed=!!profilePolicy&&profilePolicy!==nextPolicy;if(profilePolicy!==nextPolicy)profileRevision++;if(changed){freshProfile=false;forgetAudioIntent();clear(true);}member=event.detail.member;profilePolicy=nextPolicy;if(!member){freshProfile=false;forgetAudioIntent();}else if(changed)refreshAudioProfile();bind();});
   document.addEventListener('tenant-chat-open',event=>{clear();lead=event.detail.lead_id;});
   document.addEventListener('tenant-chat-history-reset',clear);
   document.addEventListener('tenant-chat-close',clear);
@@ -225,8 +225,14 @@
   document.getElementById('closeModal')?.addEventListener('click',clear);
   document.getElementById('dealModal')?.addEventListener('click',event=>{if(event.target.id==='dealModal')clear();});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)bind();});
-  const initialProfile=profileRevision;
-  const profileFetch=fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(response=>response.ok?response.json():null).then(data=>{
-    if(data?.member){const nextPolicy=policy(data);if(initialProfile===profileRevision){member=data.member;profilePolicy=nextPolicy;}if(profilePolicy===nextPolicy&&member?.active!==false){freshProfile=true;bind();}}else forgetAudioIntent();
-  }).catch(()=>{});
+  let profileFetch;
+  function refreshAudioProfile(){
+    const revision=profileRevision,expected=profilePolicy;
+    const flight=fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(response=>response.ok?response.json():null).then(data=>{
+      if(revision!==profileRevision&&expected)return;
+      if(data?.member){const nextPolicy=policy(data);if(!member&&revision===profileRevision){member=data.member;profilePolicy=nextPolicy;}if(profilePolicy===nextPolicy&&member?.active!==false){freshProfile=true;bind();}}else forgetAudioIntent();
+    }).catch(()=>{});
+    profileFetch=flight;return flight;
+  }
+  refreshAudioProfile();
 })();
