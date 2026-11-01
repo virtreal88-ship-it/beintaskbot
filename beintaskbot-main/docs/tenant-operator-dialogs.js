@@ -493,6 +493,15 @@
     };
   }
   function agentModeLabel(route){
+    if(route.group_coordination?.primary_agent_id&&route.group_coordination.state==='human')return t('groupAgentHuman');
+    if(route.group_coordination?.primary_agent_id&&route.group_coordination.state==='paused')return t('groupAgentPaused');
+    if(route.group_coordination?.primary_agent_id&&route.group_coordination.state==='active'){
+      if(route.agent_status==='error')return t('aiStatusError');
+      if(route.agent_status==='automatic')return t('aiModeAutomatic');
+      if(route.agent_status==='attention')return t('aiNeedsAttention');
+      if(route.agent_mode==='manual')return t('groupAgentManual');
+      return t('groupAgentAssigned');
+    }
     if(route.agent_status==='error')return t('aiStatusError');
     if(route.agent_status==='automatic')return t('aiModeAutomatic');
     if(route.agent_status==='manual')return t('aiModeManual');
