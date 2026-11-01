@@ -166,10 +166,14 @@ def reserve(cur, tenant_id, call_key, kind, model, input_upper=0, output_upper=0
     return reservation_id
 
 
-def reserve_media(cur, tenant_id, call_key, kind, model, operation, units, *, campaign_id=None):
-    """Reserve a fixed, configured upper bound before a media provider call."""
+def reserve_media(cur, tenant_id, call_key, kind, model, operation, units, *, campaign_id=None, track_uncapped=False):
+    """Reserve a fixed, configured upper bound before a media provider call.
+
+    An internally bounded owner workflow may track its explicit grant even
+    without a global tenant cap. Ordinary uncapped callers remain unchanged.
+    """
     cap = limit_microusd(tenant_id)
-    if not cap and not campaign_id:
+    if not cap and not campaign_id and not track_uncapped:
         return None
     if type(units) is not int or units < 1:
         raise TenantLinearError('ai_spend_media_units_invalid', 409)
