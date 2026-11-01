@@ -33,7 +33,7 @@ def authority(data,*,aliases=False,reverse=False):
       'source_channel':row['channel'].removeprefix('connect:'),'source_conversation':'synthetic-chat','source_lead':row['kommo_lead_id'],
       'view_channel':data['channel_id'],'view_conversation':data['conversation_id'],'view_lead':row['kommo_lead_id'],
       'config':CONFIG,'config_version':'fixed-v1','context':{'agent_id':AGENT,'model':'gpt-4.1','language':'auto'},'agent_binding':'fixed-binding',
-      'model':'gpt-transcribe','scoped':True,'quote':asr.scoped_strong_quote(A),'ai_error':None,'aliases':copies}
+      'model':'gpt-4o-transcribe','scoped':True,'quote':asr.scoped_strong_quote(A),'ai_error':None,'aliases':copies}
 
 
 def setup(db,monkeypatch):
@@ -122,7 +122,7 @@ def test_parallel_posts_exactly_one_asr_and_one_fixed_reservation(database,monke
     assert database.execute('SELECT count(*) AS n FROM test_audio_calls')[0]['n']==1
     assert database.execute("SELECT count(*) AS n FROM saas_dialog_audio_attempts WHERE origin='manual'")[0]['n']==1
     assert database.execute('SELECT reserved_calls FROM saas_chat_ai_runs')==[{'reserved_calls':1}]
-    assert database.execute('SELECT state,reserved_microusd,actual_microusd FROM saas_ai_spend_reservations')==[{'state':'settled','reserved_microusd':30000,'actual_microusd':30000}]
+    assert database.execute('SELECT state,reserved_microusd,actual_microusd FROM saas_ai_spend_reservations')==[{'state':'settled','reserved_microusd':60000,'actual_microusd':60000}]
 
 
 def test_reversed_alias_contenders_use_one_sorted_lock_order(database,monkeypatch):

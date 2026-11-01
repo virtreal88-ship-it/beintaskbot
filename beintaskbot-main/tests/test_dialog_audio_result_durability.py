@@ -33,7 +33,7 @@ def test_known_success_survives_unexpected_publication_authority_failure(ready,m
     assert not result['latest_success'] and not result['message'].get('audio_transcript')
     assert result['history'][0]['text']=='known validated ASR text'
     assert result['requested_attempt']['code']=='publication_check_unavailable'
-    assert db.execute('SELECT state,actual_microusd FROM saas_ai_spend_reservations')==[{'state':'settled','actual_microusd':30000}]
+    assert db.execute('SELECT state,actual_microusd FROM saas_ai_spend_reservations')==[{'state':'settled','actual_microusd':60000}]
     # A fresh authorized transcribe reuses this exact known result, not paid ASR.
     reused=flow.execute(PROFILE,command(data,flow.preview(PROFILE,data),action='transcribe'))
     assert reused['requested_attempt']['origin']=='reuse' and len(sent)==1
@@ -55,7 +55,7 @@ def test_new_unknown_keeps_safe_failure_reason_and_hold_without_replay(ready,fai
     request=command(data,flow.preview(PROFILE,data));result=flow.execute(PROFILE,request)
     assert result['requested_attempt']['state']=='unknown' and result['requested_attempt']['code']==code
     assert 'never expose' not in str(result)
-    assert db.execute('SELECT state,actual_microusd,reserved_microusd FROM saas_ai_spend_reservations')==[{'state':'unknown','actual_microusd':None,'reserved_microusd':30000}]
+    assert db.execute('SELECT state,actual_microusd,reserved_microusd FROM saas_ai_spend_reservations')==[{'state':'unknown','actual_microusd':None,'reserved_microusd':60000}]
     duplicate=flow.execute(PROFILE,request)
     assert duplicate['requested_attempt']['id']==result['requested_attempt']['id'] and len(sent)==1
 
@@ -69,7 +69,7 @@ def test_settlement_failure_retains_known_text_and_conservative_reserve(ready,mo
     assert result['requested_attempt']['state']=='completed'
     assert result['requested_attempt']['code']=='accounting_settlement_pending'
     assert result['message']['audio_transcript']=='synthetic speech'
-    assert db.execute('SELECT state,actual_microusd,reserved_microusd FROM saas_ai_spend_reservations')==[{'state':'reserved','actual_microusd':None,'reserved_microusd':30000}]
+    assert db.execute('SELECT state,actual_microusd,reserved_microusd FROM saas_ai_spend_reservations')==[{'state':'reserved','actual_microusd':None,'reserved_microusd':60000}]
     duplicate=flow.execute(PROFILE,request)
     assert duplicate['requested_attempt']['id']==result['requested_attempt']['id'] and len(sent)==1
 
@@ -134,7 +134,7 @@ def test_dispatch_fence_failure_is_not_a_provider_failure_or_refund(ready,monkey
     result=flow.execute(PROFILE,command(data,flow.preview(PROFILE,data)))
     assert result['requested_attempt']['state']=='unknown'
     assert result['requested_attempt']['code']=='dispatch_blocked' and not sent
-    assert db.execute('SELECT state,actual_microusd,reserved_microusd FROM saas_ai_spend_reservations')==[{'state':'unknown','actual_microusd':None,'reserved_microusd':30000}]
+    assert db.execute('SELECT state,actual_microusd,reserved_microusd FROM saas_ai_spend_reservations')==[{'state':'unknown','actual_microusd':None,'reserved_microusd':60000}]
 
 
 def test_late_publication_cannot_overwrite_a_newer_zero_dispatch_repair(ready,monkeypatch):
