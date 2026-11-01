@@ -23,6 +23,12 @@ def create_schema(conn):
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS completion_outcome TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS completion_note TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS knowledge_candidate_requested BOOLEAN NOT NULL DEFAULT FALSE")
+        # Existing rows keep their prior intended scope. The reader distinguishes
+        # true episode membership from old attachment/share additions without
+        # rewriting history; new cases choose an explicit scope on creation.
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS history_scope TEXT NOT NULL DEFAULT 'legacy'")
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS summary_agent_binding TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS summary_scope_hash TEXT NOT NULL DEFAULT ''")
         cur.execute('DROP INDEX IF EXISTS saas_support_open_route_idx')
         cur.execute("CREATE UNIQUE INDEX saas_support_open_route_idx ON saas_support_tickets(tenant_id,channel_id,conversation_id) WHERE status<>'resolved' AND completion_outcome<>'test_stopped'")
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_support_completions(
