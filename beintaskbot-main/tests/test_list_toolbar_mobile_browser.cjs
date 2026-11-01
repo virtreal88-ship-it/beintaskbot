@@ -29,6 +29,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
    try{
     await page.goto('https://crm.test/app?view=dialogs');await page.locator('.app-topbar').waitFor();await page.locator('[data-app-language]').selectOption(language);
     const read=()=>page.evaluate(()=>{const r=selector=>{const n=document.querySelector(selector),box=n.getBoundingClientRect();return {x:box.x,y:box.y,w:box.width,h:box.height,position:getComputedStyle(n).position};};return {search:r('#operatorSearch'),trigger:r('#operatorToolsMenu>summary'),details:r('#operatorToolsMenu'),filter:r('#operatorFiltersToggle'),toolbar:r('.operator-filters'),firstAction:r('#operatorSoundToggle')};});
+    await page.evaluate(()=>document.fonts.ready);await page.waitForFunction(()=>document.querySelector('#operatorSearch')?.offsetWidth>0);await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     const before=await read(),trigger=page.locator('#operatorToolsMenu>summary'),popover=page.locator('#operatorToolsPopover');
     assert.equal(await page.locator('#operatorSearch').getAttribute('placeholder'),{ru:'Поиск',az:'Axtarış',en:'Search'}[language]);
     await trigger.click();await popover.waitFor();const after=await read();
