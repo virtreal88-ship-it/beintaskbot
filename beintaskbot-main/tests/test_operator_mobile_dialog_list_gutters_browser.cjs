@@ -133,7 +133,7 @@ const server = http.createServer((req, res) => {
       // explicitly so this assertion tests the standalone CSS branch rather
       // than depending on the runner's installed-app registry.
       const standaloneCdp = await standaloneContext.newCDPSession(page);
-      await standaloneCdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'display-mode', value: 'standalone' }] });
+      await standaloneCdp.send('Emulation.setEmulatedMedia', { media: 'screen', features: [{ name: 'display-mode', value: 'standalone' }] });
       await page.evaluate(({ route, messages, profile }) => {
         document.querySelectorAll('.view').forEach(node => node.classList.toggle('active', node.id === 'view-dialogs'));
         window.alert = () => {};
@@ -152,7 +152,8 @@ const server = http.createServer((req, res) => {
       await page.evaluate(() => window.tenantOperator.refresh());
       await page.locator('.operator-row').waitFor();
       await page.evaluate(() => { const nav = document.querySelector('#nativeCrmNav'); if (nav) nav.open = false; });
-      assert.equal(await page.evaluate(() => matchMedia('(display-mode: standalone)').matches), true, 'the standalone browser surface is exercised');
+      const displayModes = await page.evaluate(() => ({ standalone: matchMedia('(display-mode: standalone)').matches, minimalUi: matchMedia('(display-mode: minimal-ui)').matches }));
+      assert.equal(displayModes.standalone, true, `the standalone browser surface is exercised: ${JSON.stringify(displayModes)}`);
       const standaloneGeometry = await page.evaluate(() => {
         const pane = document.querySelector('.operator-list-pane').getBoundingClientRect();
         const list = document.querySelector('.operator-list-pane');
