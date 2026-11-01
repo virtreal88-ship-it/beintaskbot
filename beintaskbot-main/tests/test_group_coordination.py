@@ -152,6 +152,65 @@ def _legacy_resolution_payload(preview, *, cancel=False):
         **({'cancel_queued_work':True} if cancel else {})}}
 
 
+def _selected_channel_state(db, state='paused', revision=4):
+    db.execute('''INSERT INTO saas_ai_conversation_state
+      (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason,revision)
+      VALUES(%s::uuid,'connect',%s,%s,%s::uuid,%s,'existing_channel_state',%s)''',
+      (A,CA,G,AGENT,state,revision))
+    db.commit()
+
+
+@pytest.mark.parametrize('state',['paused','human'])
+def test_owner_resolution_preserves_existing_stopped_selected_channel_state(group,state):
+    d=group['db'];selection=_legacy_group_fixture(group);_selected_channel_state(d,state=state,revision=12)
+    before=d.execute('''SELECT state,reason,revision,agent_id,agent_assignment_id
+      FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect'
+        AND channel_id=%s AND conversation_id=%s''',(A,CA,G));d.commit()
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert preview['allowed'] and preview['reason']==''
+    assert preview['evidence']['selected_channel_state']=={'state':state,'revision':12,'agent_id':AGENT}
+    result=groups.configure(PROFILE,_legacy_resolution_payload(preview))
+    after=d.execute('''SELECT state,reason,revision,agent_id,agent_assignment_id
+      FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect'
+        AND channel_id=%s AND conversation_id=%s''',(A,CA,G));d.commit()
+    assert after==before
+    assert result['state']=='paused' and result['resume_required'] is True
+    assert result['automatic_replies_enabled'] is False
+    assert groups.read(d.cursor(),A,G)['assignments']==[{'agent_id':AGENT,'channel_id':CA,'priority':0}]
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_owner_resolution_keeps_active_selected_channel_state_blocked(group):
+    d=group['db'];selection=_legacy_group_fixture(group);_selected_channel_state(d,state='active',revision=7)
+    before=d.execute('''SELECT state,reason,revision,agent_id FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s''',(A,CA,G));d.commit()
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert not preview['allowed'] and preview['reason']=='selected_route_channel_state_not_stopped'
+    assert preview['evidence']['selected_channel_state']=={'state':'active','revision':7,'agent_id':AGENT}
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,_legacy_resolution_payload(preview))
+    after=d.execute('''SELECT state,reason,revision,agent_id FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s''',(A,CA,G));d.commit()
+    assert after==before
+    assigned=d.execute("SELECT assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s",(A,G));d.commit()
+    assert not assigned or assigned[0]['assignments']==[]
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_owner_resolution_rejects_selected_channel_state_changed_after_preview(group):
+    d=group['db'];selection=_legacy_group_fixture(group);_selected_channel_state(d,state='paused',revision=8)
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert preview['allowed']
+    d.execute('''UPDATE saas_ai_conversation_state SET revision=revision+1
+      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s''',(A,CA,G));d.commit()
+    with pytest.raises(TenantLinearError):groups.configure(PROFILE,_legacy_resolution_payload(preview))
+    row=d.execute('''SELECT state,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid
+      AND provider='connect' AND channel_id=%s AND conversation_id=%s''',(A,CA,G))[0];d.commit()
+    assert row=={'state':'paused','revision':9}
+    assigned=d.execute("SELECT assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s",(A,G));d.commit()
+    assert not assigned or assigned[0]['assignments']==[]
+    d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
 def test_owner_confirmation_stops_only_proven_queued_selected_channel_work(group):
     d=group['db'];selection=_legacy_group_fixture(group)
     selected_fp=_queued_group_work(d,suffix='selected')

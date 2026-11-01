@@ -641,6 +641,8 @@
           const reasonKey=`groupLegacyReason_${String(result.reason||'unknown')}`;
           legacyNote.textContent=result.allowed?t('groupLegacyReview'):t(reasonKey)===(reasonKey)?t('groupLegacyReason_unknown'):t(reasonKey);
           const evidence=result.evidence||{},items=Array.isArray(result.work_items)?result.work_items:[],stoppable=Number(result.safely_stoppable_queued_count)||0,blocked=Number(result.blocked_work_count)||0,recordCount=Number(result.work_record_count)||items.length;
+          const selectedState=evidence.selected_channel_state;
+          if(result.allowed&&selectedState&&['paused','human'].includes(String(selectedState.state))){const stateKey=`groupLegacyChannelState_${selectedState.state}`,stateLabel=t(stateKey)===(stateKey)?String(selectedState.state):t(stateKey),stateAgent=choices.find(row=>String(row.id)===String(selectedState.agent_id)),agentLabel=stateAgent?.name?` · ${stateAgent.name}`:'';legacyNote.textContent+=' '+t('groupLegacySelectedStatePreserved').replace('{state}',stateLabel).replace('{agent}',agentLabel);}
           legacyEvidence.textContent=t('groupLegacyEvidence').replace('{routes}',String(evidence.route_count||0)).replace('{messages}',String(evidence.message_count||0)).replace('{links}',String(evidence.active_source_links||0)).replace('{work}',String(recordCount)+(result.work_inventory_truncated?'+':''));
           if(stoppable)legacyNote.textContent+=' '+t(blocked?'groupLegacyStopHeld':'groupLegacyStopNotice').replace('{count}',String(stoppable));
           if(blocked)legacyNote.textContent+=' '+t('groupLegacyBlockedWork').replace('{count}',String(blocked));

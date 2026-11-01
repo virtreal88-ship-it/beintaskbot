@@ -245,6 +245,8 @@ def _legacy_resolution_snapshot(cur, tenant, actor, conversation, channel, lead,
     group_state = read(cur, tenant, conversation)
     selected_route = next((row for row in routes
       if str(row['channel_id']) == channel and int(row['lead_id']) == lead), None)
+    selected_channel_state = next((row for row in states
+      if str(row.get('channel_id') or '') == channel), None)
     scope_ok = bool(agent and agent.get('enabled') is True and agent.get('role') == 'primary'
       and scope_matches(agent.get('scopes'), channel, is_group=True))
     reason = ('active_source_link' if active_links else
@@ -252,13 +254,17 @@ def _legacy_resolution_snapshot(cur, tenant, actor, conversation, channel, lead,
       'selected_route_changed' if not selected_route else
       'selected_route_changed' if selected_route.get('conversation_kind') != 'group' else
       'selected_channel_inactive' if selected_route.get('active') is not True else
-      'selected_route_has_channel_state' if any(row.get('channel_id') == channel for row in states) else
+      'selected_route_channel_state_not_stopped' if selected_channel_state and selected_channel_state.get('state') not in {'paused', 'human'} else
       'group_not_paused_or_already_assigned' if group_state.get('state') == 'active' else
       'outstanding_work' if blocked_work else
       'agent_not_group_scoped' if not scope_ok else '')
     evidence = {
       'legacy_state': {'revision': int(legacy['revision']), 'state': legacy['state'],
         'agent_id': str(legacy.get('agent_id') or '')} if legacy else None,
+      'selected_channel_state': ({'state': str(selected_channel_state.get('state') or 'unknown'),
+        'revision': int(selected_channel_state.get('revision') or 0),
+        'agent_id': str(selected_channel_state.get('agent_id') or '')}
+        if selected_channel_state else None),
       'routes': routes, 'states': states, 'jobs': jobs, 'drafts': drafts,
       'runs': runs, 'selected_channel_active_links': active_links,
       'group_revision': int(group_state.get('revision') or 0),
@@ -275,6 +281,7 @@ def _legacy_resolution_snapshot(cur, tenant, actor, conversation, channel, lead,
     return {'reason': reason, 'token': token, 'legacy': legacy, 'routes': routes,
       'group_state': group_state, 'agent': agent, 'evidence': evidence,
       'active_links': active_links, 'jobs': jobs, 'drafts': drafts, 'runs': runs,
+      'selected_channel_state': selected_channel_state,
       'work_items':work_items,'safely_stoppable':safely_stoppable,'blocked_work':blocked_work,
       'inventory_truncated':inventory_truncated}
 
@@ -325,6 +332,10 @@ def legacy_resolution_preview(profile, data):
                 'job_counts': snap['jobs'], 'draft_counts': snap['drafts'],
                 'unknown_run_count': snap['runs'], 'active_source_links': snap['active_links'],
                 'legacy_state': snap['legacy']['state'] if snap['legacy'] else None,
+                'selected_channel_state': ({'state': str(snap['selected_channel_state'].get('state') or 'unknown'),
+                  'revision': int(snap['selected_channel_state'].get('revision') or 0),
+                  'agent_id': str(snap['selected_channel_state'].get('agent_id') or '')}
+                  if snap['selected_channel_state'] else None),
                 'group_state': snap['group_state'].get('state', 'paused')},
               'current_assignments':[{'agent_id':str(row.get('agent_id') or ''),
                 'channel_id':str(row.get('channel_id') or '')}
@@ -552,6 +563,13 @@ def configure(profile, data):
                     raise TenantLinearError('Выбранный маршрут больше не подтверждён как группа.', 409)
                 if route.get('active') is not True:
                     raise TenantLinearError('Выбранный канал сейчас неактивен.', 409)
+                # Preserve an existing selected-channel state, but lock its exact
+                # revision so a concurrent pause/resume cannot race this owner confirmation.
+                cur.execute('''SELECT state,revision FROM saas_ai_conversation_state
+                  WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+                    AND conversation_id=%s FOR UPDATE''',
+                  (tenant, selected['channel_id'], conversation))
+                cur.fetchone()
                 # Lock only this exact group/channel's pending work. A worker
                 # claiming one of these jobs must wait; unrelated tenant queues
                 # and other channel routes remain available.
