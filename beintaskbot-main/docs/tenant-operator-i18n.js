@@ -1,6 +1,7 @@
 /* RU/AZ/EN for the operator and AI settings; honours the existing site language preference. */
 (()=>{
   const copy={
+    searchShort:['Поиск','Axtarış','Search'],
     receivedVia:['Получено','Qəbul edilib','Received'],
     markAllRead:['Отметить все диалоги прочитанными','Bütün dialoqları oxunmuş kimi işarələ','Mark all dialogues as read'],
     markAllReadConfirm:['Отметить прочитанными все непрочитанные диалоги в доступном вам списке? Новые сообщения после снимка операции останутся непрочитанными.','Əlçatan siyahıdakı bütün oxunmamış dialoqlar oxunmuş kimi işarələnsin? Əməliyyatın başlanğıcındakı vəziyyətdən sonra gələn mesajlar oxunmamış qalacaq.','Mark all unread dialogues in your accessible inbox as read? Messages arriving after the operation snapshot will remain unread.'],
