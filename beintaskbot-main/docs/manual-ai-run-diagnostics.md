@@ -1,0 +1,11 @@
+# Exact-dialog manual AI metadata
+
+The existing authenticated GET `/api/platform/ai/state/technical` accepts an exact `channel_id` UUID and positive `lead_id`, plus the usual exact `expected_tenant_id` and `expected_user_id`. Optional `request_id` filters one UUID; `limit` defaults to 10 and accepts only 1–10. Supplying incomplete/invalid exact-dialog parameters fails closed. Ordinary state/technical reads without these parameters retain their behavior.
+
+This mode revalidates active tenant membership, the DB `owner` role **and** `saas_tenants.owner_telegram_id`, existing dialog permissions, route membership and current visible active channel. It does not require AI settings/credentials to be enabled to inspect historical metadata. Admins and additional members labelled owner cannot read this mode.
+
+The result is `{coverage:"manual_runs_metadata_only", available, items, limited, limitations}`. Items contain request UUID, stored status and times, bounded safe source UUID/version hashes, and stored media-failure status/code/stage. `dispatch_proof:null` explicitly means no dispatch proof is present in this projection. No provider attempt, billing event, missing file or original cause is inferred from `unknown` or an absent failure reason.
+
+No transcript, draft, customer content, JID, attachment URL, credentials or raw provider error is returned. The query projects only metadata from existing `saas_chat_ai_runs`; it performs no schema setup, writes, media downloads, provider calls or retries. Existing unknown attempts and financial holds are untouched. At most ten rows and twenty safe source references per row are returned. `limited:true` reports that older rows were omitted; optional request UUID can locate an older known operation without broadening the dialog scope.
+
+A signed-in owner can open the ordinary JSON URL directly in the existing browser tab: `/api/platform/ai/state/technical?channel_id=<channel UUID>&lead_id=<lead>&expected_tenant_id=<current tenant UUID>&expected_user_id=<current Telegram numeric ID>`. The registered route uses the normal browser session cookie; custom headers or arbitrary JavaScript fetch are unnecessary. This URL contains no conversation JID or content. It does not initiate AI work.

@@ -34,6 +34,9 @@ on:
       - 'beintaskbot-main/tests/test_manual_knowledge_scope_browser.cjs'
       - 'beintaskbot-main/docs/tenant-ai-agents.js'
       - 'beintaskbot-main/tenant_operator_api.py'
+      - 'beintaskbot-main/tenant_ai_state_api.py'
+      - 'beintaskbot-main/tenant_manual_ai_run_diagnostics.py'
+      - 'beintaskbot-main/tests/test_manual_ai_run_diagnostics.py'
       - 'beintaskbot-main/tenant_dialog_evidence.py'
       - 'beintaskbot-main/tenant_episode_media.py'
       - 'beintaskbot-main/tenant_media_evidence.py'
@@ -167,6 +170,7 @@ jobs:
             tests/test_assigned_operator_copilot.py \
             tests/test_required_episode_audio.py \
             tests/test_required_episode_photos.py \
+            tests/test_manual_ai_run_diagnostics.py \
             tests/test_saved_only_copilot.py \
             tests/test_saved_only_copilot_postgres.py \
             tests/test_assigned_agent_prompt_parity.py \
