@@ -200,7 +200,7 @@
    updateEditorDirty();
    try{const rows=await loadKnowledge({strict:true});if(!same())return;if(!rows?.some(row=>row.id===saved.id))throw new Error('Saved source missing from readback');notice(knowledgeSaveCopy('saved')+' '+saved.id);}
    catch(error){if(same())notice(knowledgeSaveCopy('refreshFailed')+' '+saved.id);}
-  }catch(error){if(same()){const message=window.aiExpertEditor?.error(error.message)||error.message;notice(postStarted&&(!Number.isInteger(error.status)||error.status>=500)?knowledgeSaveCopy('unconfirmed')+' '+(message===knowledgeSaveCopy('unconfirmed')?'':message):message);}}
+  }catch(error){if(same()){const message=window.aiExpertEditor?.error(error.message)||error.message;notice(postStarted&&(!Number.isInteger(error.status)||(error.status>=200&&error.status<300)||error.status>=500)?knowledgeSaveCopy('unconfirmed')+' '+(message===knowledgeSaveCopy('unconfirmed')?'':message):message);}}
   finally{knowledgeSaveBusy=false;$('aiAddKnowledge').disabled=false;$('aiUploadKnowledge').disabled=false;}
  }
  $('aiAddKnowledge').onclick=()=>submitKnowledge(false);

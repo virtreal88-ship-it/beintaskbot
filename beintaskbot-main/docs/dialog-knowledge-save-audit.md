@@ -33,7 +33,8 @@ The new shared in-flight guard prevents duplicate clicks. Success requires a sou
 ID. Known success clears only submitted values still unchanged; later input and
 other agent/tenant editors are not cleared. Readback checks that exact ID. Failed
 readback reports that the object is saved and the list needs refresh, with its ID.
-Failed POST preserves input. Ambiguous transport/JSON/5xx outcomes warn that save
+Failed POST preserves input. Ambiguous transport/JSON/5xx outcomes (including a
+committed write followed by malformed HTTP 200 JSON) warn that save
 is unconfirmed and the list must be checked before resubmission; no automatic
 retry occurs. Durable retry deduplication across reloads is not added to the
 company-wide endpoint, and a manual resubmission after an unknown outcome remains

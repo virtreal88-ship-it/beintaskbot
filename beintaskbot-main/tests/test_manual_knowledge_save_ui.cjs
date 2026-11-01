@@ -7,7 +7,7 @@ const baseline=process.argv.includes('--baseline');
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?site_lang=ru',runScripts:'outside-only'}),w=dom.window,d=w.document;
  const member={tenant_id:'tenant',telegram_id:11,role:'owner',active:true};
  const agents=[{id:'primary',name:'Primary',role:'primary',model:'test',mode:'manual',version:1,scopes:[],schedule:{}},{id:'expert',name:'Expert',role:'expert',model:'test',mode:'manual',version:1,scopes:[],schedule:{}}];
- const stored=[],calls=[];let failPost=false,failGet=false,failAfterCommit=false,gate=null;
+ const stored=[],calls=[];let failPost=false,failGet=false,failAfterCommit=false,badJsonAfterCommit=false,gate=null;
  d.getElementById('view-ai_agents').classList.add('active');w.tenantProfileSnapshot={member,capabilities:{modules:{ai_agents:true}}};w.confirm=()=>true;w.HTMLElement.prototype.scrollIntoView=function(){};
  w.fetch=async(url,options={})=>{const path=new URL(url,w.location).pathname,method=options.method||'GET';let body=options.body instanceof w.FormData?Object.fromEntries(options.body):options.body?JSON.parse(options.body):{};calls.push({path,method,body});let result={};
   if(path.endsWith('/agents/settings'))result={enabled:true,operating_mode:'manual',company_instructions:''};
@@ -16,7 +16,7 @@ const baseline=process.argv.includes('--baseline');
   else if(path.includes('/knowledge')){
    if(method==='POST'){
     if(failPost)return {ok:false,status:400,json:async()=>({success:false,error:'Validation failed'})};
-    result={id:'source-'+(stored.length+1),title:body.title,content:body.content||'Synthetic file text',agent_id:body.agent_id||null,active:true,ai_available:true,material_status:'available',origin_type:'knowledge',chunks:1};stored.push(result);if(failAfterCommit)throw new Error('Connection lost after commit');if(gate)await gate;
+    result={id:'source-'+(stored.length+1),title:body.title,content:body.content||'Synthetic file text',agent_id:body.agent_id||null,active:true,ai_available:true,material_status:'available',origin_type:'knowledge',chunks:1};stored.push(result);if(failAfterCommit)throw new Error('Connection lost after commit');if(badJsonAfterCommit)return {ok:true,status:200,json:async()=>{throw new SyntaxError('Truncated response');}};if(gate)await gate;
    }else{if(failGet)return {ok:false,status:503,json:async()=>({success:false,error:'Reload failed'})};result=stored.map(x=>({...x}));}
   }else if(path.endsWith('/triggers')||path.endsWith('/drafts'))result=[];
   return {ok:true,status:200,json:async()=>({success:true,result})};};
@@ -46,6 +46,9 @@ const baseline=process.argv.includes('--baseline');
  title.value='Uncertain outcome';content.value='Retain this input';failAfterCommit=true;const beforeUnknown=stored.length;await add.onclick();
  assert.equal(stored.length,beforeUnknown+1);assert.equal(content.value,'Retain this input');assert.match(d.getElementById('aiAgentsNotice').textContent,/не подтверждено/);assert.match(d.getElementById('aiAgentsNotice').textContent,/проверьте список/);
  failAfterCommit=false;d.querySelector('[data-ai-section-nav="knowledge"]').click();await settle();assert.equal(stored.length,beforeUnknown+1,'readback does not retry ambiguous write');
+ title.value='Truncated response';content.value='Keep malformed-response draft';badJsonAfterCommit=true;const beforeBadJson=stored.length;await add.onclick();
+ assert.equal(stored.length,beforeBadJson+1);assert.equal(content.value,'Keep malformed-response draft');assert.match(d.getElementById('aiAgentsNotice').textContent,/не подтверждено/);assert.match(d.getElementById('aiAgentsNotice').textContent,/проверьте список/);
+ badJsonAfterCommit=false;d.querySelector('[data-ai-section-nav="knowledge"]').click();await settle();assert.equal(stored.length,beforeBadJson+1,'malformed 200 readback does not retry write');
  assert.equal(calls.filter(c=>/publish|operator-submit|copilot|send/.test(c.path)).length,0);
  dom.window.close();console.log('PASS manual knowledge persistence/readback/failure/duplicate/stale-target/file/explicit-save semantics');
 })().catch(e=>{console.error(e);process.exitCode=1;});
