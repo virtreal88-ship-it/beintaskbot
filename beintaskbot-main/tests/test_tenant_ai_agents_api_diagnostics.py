@@ -55,7 +55,21 @@ def run_without_event_loop(coroutine):
 
 
 class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
+    def test_manual_create_reconciliation_forwards_explicit_receipt_identity(self):
+        profile={'tenant_id':'tenant','telegram_id':42}
+        request=SimpleNamespace(method='GET',headers={},query={'id':'request-uuid','create_request_id':'request-uuid'})
+        handler,namespace=load_handler()
+        response=run_without_event_loop(handler(Mock(return_value=profile),'https://crm.pro.az',Mock(),'knowledge')(request))
+        self.assertEqual(response.status,200)
+        namespace['list_knowledge'].assert_called_once_with(profile,'request-uuid',create_request_id='request-uuid')
+
     def test_multipart_knowledge_upload_keeps_the_bound_agent_and_retry_key(self):
+        self._multipart_knowledge_upload('setup_key', 'night-wizard-retry-0001-kb-file')
+
+    def test_multipart_knowledge_upload_keeps_the_manual_request_identity(self):
+        self._multipart_knowledge_upload('create_request_id', '00000000-0000-0000-0000-000000000104')
+
+    def _multipart_knowledge_upload(self, retry_field, retry_value):
         profile = {'tenant_id': '00000000-0000-0000-0000-000000000101', 'telegram_id': 42}
         captured = Mock(return_value={'id': 'source-a'})
 
@@ -86,7 +100,7 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
                     Part('file', b'Router instructions', 'BeinSystems.txt'),
                     Part('title', b'BeinSystems'),
                     Part('agent_id', b'00000000-0000-0000-0000-000000000103'),
-                    Part('setup_key', b'night-wizard-retry-0001-kb-file'),
+                    Part(retry_field, retry_value.encode()),
                     Part('expected_tenant_id', profile['tenant_id'].encode()),
                     Part('expected_user_id', str(profile['telegram_id']).encode()),
                 ])
@@ -103,7 +117,7 @@ class TenantAiAgentApiDiagnosticsTests(unittest.TestCase):
         self.assertTrue(payload['success'])
         submitted = captured.call_args.args[1]
         self.assertEqual(submitted['agent_id'], '00000000-0000-0000-0000-000000000103')
-        self.assertEqual(submitted['setup_key'], 'night-wizard-retry-0001-kb-file')
+        self.assertEqual(submitted[retry_field], retry_value)
 
     def test_invalid_wizard_request_returns_a_field_key_instead_of_a_generic_azerbaijani_error(self):
         profile = {'tenant_id': 'tenant-from-verified-session', 'telegram_id': 42}

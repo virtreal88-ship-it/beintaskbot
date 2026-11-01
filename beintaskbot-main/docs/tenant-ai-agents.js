@@ -50,7 +50,7 @@
   function normalizeEditorPane(pane){return ({behavior:'basics',advanced:'scope',stopping:'basics'})[pane]||pane||'basics'}
   function activateEditorSection(pane,title){const editor=$('aiAgentEditor'),section=normalizeEditorPane(pane);editor.dataset.aiActivePane=section;$('aiSaveAgent').hidden=section==='knowledge';editor.querySelectorAll('[data-ai-section-nav]').forEach(button=>{const active=button.dataset.aiSectionNav===section;button.classList.toggle('is-active',active);button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1;});if(title&&$('aiEditorPageTitle'))$('aiEditorPageTitle').textContent=selected?.name||t('newAgent');refreshEditorStatus();return section}
   function openEditorPane(pane,title){const editor=$('aiAgentEditor');activateEditorSection(pane,title);showEditorWorkspace();}
-  function showEditorSection(pane){const section=normalizeEditorPane(pane),keys={basics:'behavior',scope:'scope',schedule:'schedule',stopping:'basics',knowledge:'knowledge',triggers:'triggers'};openEditorPane(section,t(keys[section]||'editAgent')+(selected?' · '+selected.name:''));if(section==='knowledge')loadKnowledge();if(section==='triggers')loadTriggers();}
+  function showEditorSection(pane){const section=normalizeEditorPane(pane),keys={basics:'behavior',scope:'scope',schedule:'schedule',stopping:'basics',knowledge:'knowledge',triggers:'triggers'};openEditorPane(section,t(keys[section]||'editAgent')+(selected?' · '+selected.name:''));if(section==='knowledge'){restoreKnowledgeOperation();loadKnowledge();}if(section==='triggers')loadTriggers();}
 
  function openModalContent(node,title){if(modalNode)closeModal();notice('');const modal=$('aiAgentsModal'),body=document.querySelector('.ai-agents-dialog-body');modalReturnFocus=document.activeElement;modalPlaceholder=document.createComment('ai-modal-origin');node.parentNode.insertBefore(modalPlaceholder,node);modalNode=node;node.hidden=false;body.replaceChildren(node);$('aiAgentsModalTitle').textContent=title;modal.hidden=false;document.body.dataset.aiModalOpen='true';$('aiAgentsModalClose').focus();}
  function closeModal(){aiStatePanel?.destroy();aiStatePanel=null;if(!modalNode)return;const modal=$('aiAgentsModal');modalNode.hidden=true;if(modalNode.id==='aiAgentEditor')delete modalNode.dataset.aiActivePane;if(modalPlaceholder?.parentNode)modalPlaceholder.parentNode.insertBefore(modalNode,modalPlaceholder);modalPlaceholder?.remove();modalPlaceholder=null;modalNode=null;$('aiAgentsModalBody').replaceChildren();modal.hidden=true;delete document.body.dataset.aiModalOpen;modalReturnFocus?.focus?.();modalReturnFocus=null;}
@@ -171,36 +171,80 @@
  document.addEventListener('tenant-language',()=>{translateTriggerUi();renderTriggerTable();});
  function knowledgeSaveCopy(key){const lang=window.tenantI18n?.language||'az';return ({
   saved:{ru:'Источник знаний сохранён.',az:'Bilik mənbəyi saxlanıldı.',en:'Knowledge source saved.'},
-  refreshFailed:{ru:'Источник сохранён, но список не удалось обновить. Обновите список; повторное сохранение не требуется.',az:'Mənbə saxlanıldı, lakin siyahı yenilənmədi. Siyahını yeniləyin; yenidən saxlamaq lazım deyil.',en:'Source saved, but the list could not be refreshed. Refresh the list; do not save it again.'},
-  unconfirmed:{ru:'Сохранение не подтверждено. Текст сохранён в форме; проверьте список перед повторной отправкой.',az:'Saxlanma təsdiqlənmədi. Mətn formadadır; təkrar göndərməzdən əvvəl siyahını yoxlayın.',en:'Save was not confirmed. Input remains in the form; check the list before submitting again.'}
+  refreshFailed:{ru:'Источник сохранён, но чтение не удалось. Повторная отправка заблокирована; следующее нажатие проверит сохранение.',az:'Mənbə saxlanıldı, lakin oxunmadı. Təkrar göndərmə bloklanıb; növbəti klik saxlanmanı yoxlayacaq.',en:'Source saved, but readback failed. Resending is blocked; the next click will check the save.'},
+  unconfirmed:{ru:'Сохранение не подтверждено. Ввод сохранён; повторная отправка заблокирована. Следующее нажатие только проверит результат.',az:'Saxlanma təsdiqlənmədi. Məlumat saxlanılıb; təkrar göndərmə bloklanıb. Növbəti klik yalnız nəticəni yoxlayacaq.',en:'Save is unconfirmed. Input is retained; resending is blocked. The next click only checks the result.'},
+  rejected:{ru:'Сервер отклонил сохранение. Исправьте указанные данные для новой операции; повтор исходной отправки заблокирован.',az:'Server saxlanmanı rədd etdi. Yeni əməliyyat üçün göstərilən məlumatı düzəldin; ilkin göndərmənin təkrarı bloklanıb.',en:'The server rejected the save. Correct the indicated input for a new operation; resending the original is blocked.'},
+  storageFailed:{ru:'Не удалось защитить сохранение от повтора в этом браузере. Отправка не выполнена.',az:'Bu brauzerdə təkrar göndərmədən qoruma mümkün olmadı. Göndərilmədi.',en:'This browser could not protect the save against resending. Nothing was submitted.'}
  }[key]?.[lang]||key);}
+ function knowledgeOperationKey(){return 'tenant.knowledge.create.v1:'+profile.tenant_id+':'+profile.telegram_id;}
+ function knowledgeOperations(key){try{const data=JSON.parse(localStorage.getItem(key)||'{}');if(!data||typeof data!=='object'||Array.isArray(data))throw new Error();return data;}catch(error){throw new Error(knowledgeSaveCopy('storageFailed'));}}
+ function writeKnowledgeOperations(key,data){try{const value=JSON.stringify(data);localStorage.setItem(key,value);if(localStorage.getItem(key)!==value)throw new Error();}catch(error){throw new Error(knowledgeSaveCopy('storageFailed'));}}
+ function restoreKnowledgeOperation(){
+  if(!profile||!selected)return;
+  try{const scope=selected.role==='expert'?selected.id:null,rows=Object.values(knowledgeOperations(knowledgeOperationKey()));
+   const op=rows.reverse().find(row=>row.state!=='confirmed'&&row.agentId===scope&&row.editorId===selected.id);
+   if(!op)return;
+   if(op.fileMode){if(!$('aiKnowledgeFileTitle').value)$('aiKnowledgeFileTitle').value=op.title;}
+   else if(!$('aiKnowledgeTitle').value&&!$('aiKnowledgeContent').value){$('aiKnowledgeTitle').value=op.title;$('aiKnowledgeContent').value=op.content;}
+   notice(knowledgeSaveCopy(op.state==='rejected'?'rejected':op.state==='accepted'?'refreshFailed':'unconfirmed')+' '+(op.errorMessage||'')+' '+op.id+(op.fileName?' · '+op.fileName:''));
+  }catch(error){notice(error.message);}
+ }
+ async function knowledgeFingerprint(value){const bytes=typeof value==='string'?new TextEncoder().encode(value):value;return [...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(b=>b.toString(16).padStart(2,'0')).join('');}
+ async function knowledgeFileBytes(file){if(file.arrayBuffer)return file.arrayBuffer();return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsArrayBuffer(file);});}
  async function submitKnowledge(fileMode=false){
   if(knowledgeSaveBusy)return;
-  const target=selected,epoch=aiEpoch,editorRevision=knowledgeEditorRevision;
-  const same=()=>epoch===aiEpoch&&editorRevision===knowledgeEditorRevision&&selected?.id===target?.id;
+  const target=selected,epoch=aiEpoch,editorRevision=knowledgeEditorRevision,tenant=profile?.tenant_id,actor=String(profile?.telegram_id);
+  const same=()=>epoch===aiEpoch&&editorRevision===knowledgeEditorRevision&&selected?.id===target?.id&&profile?.tenant_id===tenant&&String(profile?.telegram_id)===actor;
   const title=$('aiKnowledgeTitle').value,content=$('aiKnowledgeContent').value,fileTitle=$('aiKnowledgeFileTitle').value,file=$('aiKnowledgeFile').files[0];
-  let postStarted=false;
+  let op=null,key='',records=null,dispatched=false;
   knowledgeSaveBusy=true;$('aiAddKnowledge').disabled=true;$('aiUploadKnowledge').disabled=true;
   try{
    if(!target)throw new Error('Əvvəlcə agenti saxlayın.');
    if(!profile||!aiAllowed)throw new Error(t('noAccess'));if(!aiReady)throw new Error(t('loading'));
-   let saved;
-   if(fileMode){
-    if(!file)throw new Error('Yüklənəcək faylı seçin.');
-    const form=new FormData();form.append('file',file);form.append('title',fileTitle);if(target.role==='expert')form.append('agent_id',target.id);
-    form.append('expected_tenant_id',profile.tenant_id);form.append('expected_user_id',profile.telegram_id);
-    postStarted=true;const response=await fetch(endpoint+'knowledge/upload',{method:'POST',credentials:'same-origin',body:form}),result=await response.json();
-    if(!response.ok||!result.success){const error=new Error(result.error||'Fayl yüklənmədi.');error.status=response.status;throw error;}saved=result.result;
-   }else{postStarted=true;saved=await api('knowledge','POST',{title,kind:'text',content,active:true,...(target.role==='expert'?{agent_id:target.id}:{})});}
-   if(!saved||typeof saved.id!=='string'||!saved.id)throw new Error(knowledgeSaveCopy('unconfirmed'));
+   if(fileMode&&!file)throw new Error('Yüklənəcək faylı seçin.');
+   if(!navigator.locks?.request||!crypto.subtle||!crypto.randomUUID)throw new Error(knowledgeSaveCopy('storageFailed'));
+   key=knowledgeOperationKey();const agentId=target.role==='expert'?target.id:null;
+   const fileHash=fileMode?await knowledgeFingerprint(await knowledgeFileBytes(file)):null;
+   const fingerprint=await knowledgeFingerprint(JSON.stringify({tenant,actor,agentId,fileMode,title:(fileMode?fileTitle:title).trim(),content:fileMode?fileHash:content.trim(),fileName:fileMode?file.name:null}));
    if(!same())return;
-   // A known persisted object clears only the submitted values, never later edits.
-   if(fileMode){if($('aiKnowledgeFile').files[0]===file)$('aiKnowledgeFile').value='';if($('aiKnowledgeFileTitle').value===fileTitle)$('aiKnowledgeFileTitle').value='';}
-   else{if($('aiKnowledgeTitle').value===title)$('aiKnowledgeTitle').value='';if($('aiKnowledgeContent').value===content)$('aiKnowledgeContent').value='';}
-   updateEditorDirty();
-   try{const rows=await loadKnowledge({strict:true});if(!same())return;if(!rows?.some(row=>row.id===saved.id))throw new Error('Saved source missing from readback');notice(knowledgeSaveCopy('saved')+' '+saved.id);}
-   catch(error){if(same())notice(knowledgeSaveCopy('refreshFailed')+' '+saved.id);}
-  }catch(error){if(same()){const message=window.aiExpertEditor?.error(error.message)||error.message;notice(postStarted&&(!Number.isInteger(error.status)||(error.status>=200&&error.status<300)||error.status>=500)?knowledgeSaveCopy('unconfirmed')+' '+(message===knowledgeSaveCopy('unconfirmed')?'':message):message);}}
+   // A browser-wide lock closes the concurrent-tab read/create race. The durable
+   // record is written before POST; an existing operation is always GET-only.
+   await navigator.locks.request(key,async()=>{
+    if(!same())return;
+    records=knowledgeOperations(key);op=records[fingerprint];
+    if(!op){
+     const fresh={id:crypto.randomUUID(),fingerprint,tenant,actor,agentId,editorId:target.id,fileMode,title:fileMode?fileTitle:title,content:fileMode?null:content,fileName:fileMode?file.name:null,state:'uncertain'};
+     records[fingerprint]=fresh;writeKnowledgeOperations(key,records);op=fresh;
+     let saved;
+     if(fileMode){
+      const form=new FormData();form.append('file',file);form.append('title',fileTitle);if(agentId)form.append('agent_id',agentId);
+      form.append('expected_tenant_id',tenant);form.append('expected_user_id',actor);form.append('create_request_id',op.id);
+      dispatched=true;const response=await fetch(endpoint+'knowledge/upload',{method:'POST',credentials:'same-origin',body:form}),result=await response.json();
+      if(!response.ok||!result.success){const error=new Error(result.error||'Fayl yüklənmədi.');error.status=response.status;throw error;}saved=result.result;
+     }else{dispatched=true;saved=await api('knowledge','POST',{title,kind:'text',content,active:true,create_request_id:op.id,...(agentId?{agent_id:agentId}:{})});}
+     if(saved?.id!==op.id||saved?.create_request_id!==op.id)throw new Error(knowledgeSaveCopy('unconfirmed'));
+     op.state='accepted';writeKnowledgeOperations(key,records);
+    }
+    if(!same())return;
+    // 404, unavailable readback, identity mismatch, or an old server without a
+    // receipt never unlock a POST. Only the exact committed receipt proves it.
+    const saved=await api('knowledge?id='+encodeURIComponent(op.id)+'&create_request_id='+encodeURIComponent(op.id));
+    if(!same())return;
+    if(saved?.id!==op.id||saved?.create_request_id!==op.id||saved?.tenant_id!==tenant||String(saved?.created_by)!==actor||(saved?.agent_id||null)!==agentId)throw new Error(knowledgeSaveCopy('unconfirmed'));
+    op.state='confirmed';op.content=null;op.title='';op.fileName=null;writeKnowledgeOperations(key,records);
+    if(fileMode){if($('aiKnowledgeFile').files[0]===file)$('aiKnowledgeFile').value='';if($('aiKnowledgeFileTitle').value===fileTitle)$('aiKnowledgeFileTitle').value='';}
+    else{if($('aiKnowledgeTitle').value===title)$('aiKnowledgeTitle').value='';if($('aiKnowledgeContent').value===content)$('aiKnowledgeContent').value='';}
+    updateEditorDirty();
+    try{const rows=await loadKnowledge({strict:true});if(!same())return;if(!rows?.some(row=>row.id===op.id))throw new Error();notice(knowledgeSaveCopy('saved')+' '+op.id);}
+    catch(error){if(same())notice(knowledgeSaveCopy('refreshFailed')+' '+op.id);}
+   });
+  }catch(error){
+   if(op&&dispatched&&op.state==='uncertain'&&error.status>=400&&error.status<500){
+    try{await navigator.locks.request(key,()=>{const latest=knowledgeOperations(key),current=latest[op.fingerprint];if(current?.id===op.id&&current.state==='uncertain'){current.state='rejected';current.errorMessage=error.message;writeKnowledgeOperations(key,latest);}if(current?.id===op.id)op=current;});}
+    catch(storageError){/* The pre-dispatch uncertain record remains locked. */}
+   }
+   if(same())notice(op?knowledgeSaveCopy(op.state==='rejected'?'rejected':['accepted','confirmed'].includes(op.state)?'refreshFailed':'unconfirmed')+' '+(op.errorMessage||'')+' '+op.id:(window.aiExpertEditor?.error(error.message)||error.message));
+  }
   finally{knowledgeSaveBusy=false;$('aiAddKnowledge').disabled=false;$('aiUploadKnowledge').disabled=false;}
  }
  $('aiAddKnowledge').onclick=()=>submitKnowledge(false);
