@@ -10,6 +10,9 @@ on:
       - 'beintaskbot-main/docs/tenant-operator-i18n.js'
       - 'beintaskbot-main/tests/test_support_case_materials*'
       - 'beintaskbot-main/tests/test_tenant_support_inbox*'
+      - 'beintaskbot-main/tenant_dialog_audio*.py'
+      - 'beintaskbot-main/tests/test_dialog_audio_transcription*'
+      - 'beintaskbot-main/docs/dialog-audio-transcription-api.md'
       - 'beintaskbot-main/tenant_operator_copilot.py'
       - 'beintaskbot-main/tenant_owner_asr_comparison*.py'
       - 'beintaskbot-main/tenant_ai_spend_budget.py'
@@ -95,6 +98,9 @@ jobs:
             tests/test_dialog_consultations.py \
             tests/test_support_case_materials.py \
             tests/test_tenant_support_inbox.py \
+            tests/test_dialog_audio_transcription.py \
+            tests/test_dialog_audio_transcription_api.py \
+            tests/test_dialog_audio_transcription_postgres.py \
             tests/test_tenant_push_provider.py \
             tests/test_tenant_crm_notice.py \
             tests/test_strong_asr_default.py \

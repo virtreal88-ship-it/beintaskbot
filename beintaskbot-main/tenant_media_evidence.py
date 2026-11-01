@@ -99,6 +99,14 @@ def reusable(profile, ref):
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
+                from tenant_dialog_audio_store import current_ref
+                explicit=current_ref(cur,tenant,ref)
+                if explicit:
+                    full=explicit['transcript'];partial=len(full)>4000
+                    return {'status':'partial' if partial else 'processed','code':'transcript_truncated' if partial else 'transcribed',
+                        'coverage':{'kind':ref['media_kind'],'complete':not partial},
+                        'result':{'transcript':full[:4000],'model':explicit['model']},
+                        'provenance':{'processor':'explicit_audio','source_version':source_hash(ref)}}
                 cur.execute("""SELECT status,code,coverage,result,provenance FROM saas_media_evidence_receipts
                   WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND external_id=%s AND source_hash=%s
                     AND media_kind=%s""", (tenant, channel, external, source_hash(ref), str(ref['media_kind'])))

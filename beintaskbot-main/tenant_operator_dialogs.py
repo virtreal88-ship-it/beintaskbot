@@ -117,15 +117,20 @@ def _audio_diagnostic(status, code, result, at):
             'stage':stage,'at':str(at or '')}
 
 
-def _attach_saved_audio_transcripts(cur, tenant, rows, *, conversation_id=None):
+def _attach_saved_audio_transcripts(cur, tenant, rows, *, conversation_id=None,view_channel=None):
     """Read only exact-version ASR evidence for already-authorized message rows."""
     from tenant_media_evidence import media_version, source_hash, _body_hash, retryable_audio_download_failure
     audio=[row for row in rows if str(row.get('message_type') or '').lower() in {'audio','voice','voice_message','ptt'}
            and str(row.get('channel') or '').startswith('connect:') and row.get('external_id')]
     if not audio:return
     for row in audio:
-        for field in ('_saved_audio_transcript','_saved_audio_state','_saved_audio_diagnostic','_saved_audio_receipt_diagnostic'):
+        for field in ('_saved_audio_transcript','_saved_audio_state','_saved_audio_diagnostic','_saved_audio_receipt_diagnostic','_explicit_audio_transcript'):
             row.pop(field,None)
+    from tenant_dialog_audio_store import selected_successes
+    explicit_rows=selected_successes(cur,tenant,audio,view_channel=view_channel,view_conversation=conversation_id)
+    for row in audio:
+        explicit=explicit_rows.get(str(row['id']))
+        if explicit:row['_explicit_audio_transcript']=explicit['transcript']
     cur.execute("SELECT to_regclass('public.saas_media_evidence_receipts') AS relation")
     if not (cur.fetchone() or {}).get('relation'):return
     keys=[]
@@ -189,6 +194,7 @@ def _attach_saved_audio_transcripts(cur, tenant, rows, *, conversation_id=None):
 def _message(item, *, group=False, participant_names=None, employee_participants=None, contact_name=''):
     value = dict(item)
     saved_audio_transcript=value.pop('_saved_audio_transcript',None)
+    explicit_audio_transcript=value.pop('_explicit_audio_transcript',None)
     saved_audio_state=value.pop('_saved_audio_state',None)
     audio_diagnostic=value.pop('_saved_audio_diagnostic',None)
     receipt_diagnostic=value.pop('_saved_audio_receipt_diagnostic',None)
@@ -262,7 +268,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
                 elif code in {'voice_transcription_failed','voice_model_unavailable'}:
                     value['analysis_state']='transcription_unavailable'
         if value.get('message_type') in {'audio','voice','voice_message','ptt'}:
-            text=(str(value.get('body') or '') if isinstance(transcript,dict) and transcript.get('status')=='completed' else '') or saved_audio_transcript
+            text=explicit_audio_transcript or (str(value.get('body') or '') if isinstance(transcript,dict) and transcript.get('status')=='completed' else '') or saved_audio_transcript
             if isinstance(text,str) and text.strip():
                 value['audio_transcript']=text
                 value['has_transcription']=True
@@ -818,7 +824,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     for message in messages:
                         message['source_conversation_id']=by_lead[int(message['source_lead_id'])]
                         message['source_channel_id']=channel
-            if provider=='connect':_attach_saved_audio_transcripts(cur,tenant,messages[:50],conversation_id=conversation)
+            if provider=='connect':_attach_saved_audio_transcripts(cur,tenant,messages[:50],conversation_id=conversation,view_channel=channel)
             captured_group=[]
             if provider=='connect' and group_jid(conversation):
                 # A displayed group event can be represented by another channel's
