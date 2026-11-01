@@ -27,6 +27,7 @@ on:
       - 'beintaskbot-main/tenant_dialog_greeting.py'
       - 'beintaskbot-main/tests/test_dialog_greeting.py'
       - 'beintaskbot-main/tenant_operator_copilot.py'
+      - 'beintaskbot-main/tests/test_manual_knowledge_persistence_postgres.py'
       - 'beintaskbot-main/tenant_operator_dialogs.py'
       - 'beintaskbot-main/docs/tenant-chat-attachments.js'
       - 'beintaskbot-main/tests/test_lazy_audio_state_browser.cjs'
@@ -142,6 +143,7 @@ jobs:
             tests/test_dialog_developer_marker.py \
             tests/test_dialog_consultations_api.py \
             tests/test_dialog_consultations_postgres.py \
+            tests/test_manual_knowledge_persistence_postgres.py \
             tests/test_assigned_operator_copilot.py \
             tests/test_assigned_agent_prompt_parity.py \
             tests/test_dialog_greeting.py \
