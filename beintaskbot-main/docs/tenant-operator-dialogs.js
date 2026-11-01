@@ -211,11 +211,38 @@
     finally{if(version===epoch&&revision===listRevision){listFlight=null;$('operatorRows').setAttribute('aria-busy','false');}}})();
     listFlight={key,promise};return promise;
   }
+  const audioEvidenceFields=['has_transcription','audio_transcript','analysis_state','analysis_diagnostic','analysis_receipt_diagnostic'];
+  function updateAudioEvidence(latest,route,sourceIds=null){
+    const chat=$('chatRows');if(!chat||!currentPage||!sameDialog(route,currentDialog)||!sameDialog(latest.dialog,route))return;
+    const top=chat.scrollTop;
+    for(const fresh of latest.messages||[]){
+      if(fresh.source!=='connect'||!['audio','voice','voice_message','ptt'].includes(String(fresh.message_type||'').toLowerCase())||(sourceIds&&!sourceIds.has(String(fresh.external_id))))continue;
+      const old=(currentPage.messages||[]).find(item=>String(item.id||item.external_id)===String(fresh.id||fresh.external_id)&&String(item.external_id)===String(fresh.external_id)&&String(item.source_channel_id||route.channel_id)===String(fresh.source_channel_id||route.channel_id));
+      if(!old||audioEvidenceFields.every(key=>JSON.stringify(old[key])===JSON.stringify(fresh[key])))continue;
+      const article=[...chat.querySelectorAll('[data-message-id]')].find(node=>node.dataset.messageId===String(old.id||old.external_id));
+      for(const key of audioEvidenceFields){if(Object.prototype.hasOwnProperty.call(fresh,key))old[key]=fresh[key];else delete old[key];}
+      if(!article)continue;
+      const template=document.createElement('template');template.innerHTML=messageMarkup([old],route);
+      const label=article.querySelector('.operator-media-analysis'),nextLabel=template.content.querySelector('.operator-media-analysis');if(label&&nextLabel)label.textContent=nextLabel.textContent;
+      // Keep the native player, quote controls and employee editor in place.
+      for(const selector of ['[data-audio-transcript]','[data-audio-diagnostic]']){
+        const prior=article.querySelector(selector),next=template.content.querySelector(selector),focused=prior?.contains(document.activeElement),opened=prior?.open;
+        if(next){if(opened)next.open=true;if(prior)prior.replaceWith(next);else article.insertBefore(next,article.querySelector('footer'));if(focused)next.querySelector('summary')?.focus({preventScroll:true});}else prior?.remove();
+      }
+    }
+    chat.scrollTop=top;rememberDialogPage(route,currentPage);
+  }
+  async function refreshAudioEvidence(route,sourceIds){
+    const page=currentPage,chat=$('chatRows'),version=epoch;
+    try{const latest=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||page!==currentPage||!chat?.isConnected||!sameDialog(route,currentDialog))return;updateAudioEvidence(latest,route,sourceIds);}
+    catch(error){if(version===epoch&&page===currentPage&&sameDialog(route,currentDialog)){const status=$('operatorChatError');if(status)status.textContent=error.message;}}
+  }
   async function appendNewMessages(route){
     const chat=$('chatRows');if(!chat||!currentPage||!sameDialog(route,currentDialog))return;
     try{
       const latest=await api('dialogs/history?'+historyQuery(route));
       if(!sameDialog(route,currentDialog)||!chat.isConnected)return;
+      updateAudioEvidence(latest,route);
       const messageKeys=m=>[m.id,m.external_id].filter(Boolean).map(String),seen=new Set((currentPage.messages||[]).flatMap(messageKeys));
       const added=(latest.messages||[]).filter(m=>{const keys=messageKeys(m);if(!keys.length||keys.some(key=>seen.has(key)))return false;keys.forEach(key=>seen.add(key));return true;});
       if(!added.length){if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(atBottom(chat))void markDialogReadIfVisible(currentPage);return;}
@@ -295,7 +322,7 @@
   function attachmentUrl(item,route,download=false){const leadId=item.source_lead_id||route?.lead_id;if(!leadId||!item.external_id)return '';const guard=route?.case_attachment;const query=new URLSearchParams({lead_id:String(leadId),message_id:String(item.external_id),channel_id:String(item.source_channel_id||route?.channel_id||''),conversation_id:String(item.source_conversation_id||route?.conversation_id||''),expected_tenant_id:String(member?.tenant_id||''),expected_user_id:String(member?.telegram_id||''),...(download?{download:'1'}:{}),...(download&&guard&&String(item.id)===guard.message_id?{case_id:guard.case_id,case_message_id:guard.message_id,case_version:String(guard.version)}:{})});return '/api/platform/crm/chat/attachment?'+query;}
   function messageMarkup(items,route=currentDialog){return items.map((m,index)=>{
     const media=m.source==='connect'&&m.message_type!=='text'&&m.external_id;
-    const transcript=m.has_transcription&&(m.audio_transcript||m.body)?`<details><summary>${t('showTranscript')}</summary><div data-user-content>${esc(m.audio_transcript||m.body)}</div></details>`:'';
+    const transcript=m.has_transcription&&(m.audio_transcript||m.body)?`<details data-audio-transcript><summary>${t('showTranscript')}</summary><div data-user-content>${esc(m.audio_transcript||m.body)}</div></details>`:'';
     const participantMenu=m.author_type==='participant'&&m.participant_jid;
     const author=participantMenu?`<span class="operator-participant-name" data-participant-menu="${esc(m.id)}" data-participant-jid="${esc(m.participant_jid)}" role="button" tabindex="0" aria-label="${esc(t('editParticipantName'))}" data-user-content>${esc(messageAuthor(m))}</span>`:`<span data-user-content>${esc(messageAuthor(m))}</span>`;
     const directAudio=media&&['audio','voice','voice_message','ptt'].includes(String(m.message_type||'').toLowerCase()),url=directAudio?attachmentUrl(m,route):'';
@@ -545,10 +572,11 @@
       const prompt=$('operatorCopilotPrompt').value.trim();if(['chat','instruction'].includes(mode)&&!prompt){copilotStatus.textContent=copilotText('prompt');$('operatorCopilotPrompt').focus();return;}
       const contextBox=$('operatorAIContextUsage');let hasIncomingMedia=false;if(mode==='reply'){contextBox.hidden=true;contextBox.replaceChildren();hasIncomingMedia=(currentPage?.messages||[]).some(message=>message.direction==='incoming'&&['image','document'].includes(String(message.message_type||'').toLowerCase()));if(hasIncomingMedia&&!window.confirm(copilotText('mediaConsent')))return;}copilotBusy=true;host.querySelector('[data-operator-dialog]')?.setAttribute('data-copilot-busy','true');copilotAsk.disabled=true;$('operatorAIReply').disabled=true;if(mode==='reply'){$('chatText').disabled=true;$('operatorAIReplyStatus').textContent=copilotText('working');}else copilotStatus.textContent=copilotText('working');copilotResult.hidden=true;copilotInsert.hidden=true;
       if(mode==='reply'&&$('chatText').value.trim()&&!window.confirm(t('replaceDraftConfirm'))){copilotBusy=false;host.querySelector('[data-operator-dialog]')?.removeAttribute('data-copilot-busy');copilotAsk.disabled=false;$('operatorAIReply').disabled=false;return;}const requestContextSignature=copilotContextSignature(currentPage?.dialog||currentDialog);copilotRequestId=copilotRequestId||crypto.randomUUID();
+      let audioRefreshSources=null;
       try{const result=await api('dialogs/copilot','POST',{provider:'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id,mode,prompt:mode==='reply'?'':prompt,request_id:copilotRequestId,...(mode==='reply'?{include_media:hasIncomingMedia&&true}:{})});
-        if(!same())return;copilotRequestId='';copilotAnswer=String(result.text||'');if(mode==='reply'){if(copilotAnswer.trim()){$('chatText').value=copilotAnswer;$('chatText').dispatchEvent(new Event('input',{bubbles:true}));$('chatText').focus();$('operatorAIReplyStatus').textContent=t('aiReplyReady');showCopilotContext(result.context_usage||{});}else $('operatorAIReplyStatus').textContent=t('aiReplyError');}else{copilotResult.textContent=copilotAnswer;copilotResult.hidden=false;copilotInsert.dataset.contextSignature=requestContextSignature;copilotInsert.hidden=!copilotAnswer.trim()||!sendAllowed;copilotStatus.textContent=(result.knowledge_sources||[]).map(source=>source.title).filter(Boolean).length?copilotText('knowledge')+': '+result.knowledge_sources.map(source=>source.title).join(', '):'';}
+        if(!same())return;copilotRequestId='';copilotAnswer=String(result.text||'');if(mode==='reply'){if(copilotAnswer.trim()){$('chatText').value=copilotAnswer;$('chatText').dispatchEvent(new Event('input',{bubbles:true}));$('chatText').focus();$('operatorAIReplyStatus').textContent=t('aiReplyReady');showCopilotContext(result.context_usage||{});const sources=new Set((result.context_usage?.evidence||[]).filter(item=>['audio','voice','voice_message','ptt'].includes(String(item.kind||'').toLowerCase())).map(item=>String(item.source_id)));audioRefreshSources=sources;}else $('operatorAIReplyStatus').textContent=t('aiReplyError');}else{copilotResult.textContent=copilotAnswer;copilotResult.hidden=false;copilotInsert.dataset.contextSignature=requestContextSignature;copilotInsert.hidden=!copilotAnswer.trim()||!sendAllowed;copilotStatus.textContent=(result.knowledge_sources||[]).map(source=>source.title).filter(Boolean).length?copilotText('knowledge')+': '+result.knowledge_sources.map(source=>source.title).join(', '):'';}
       }catch(error){if(same()){if(mode==='reply')$('operatorAIReplyStatus').textContent=error.message||t('aiReplyError');else copilotStatus.textContent=error.message||copilotText('failed');if(error.keepRequest===false)copilotRequestId='';$('operatorAIContextUsage')?.replaceChildren();if($('operatorAIContextUsage'))$('operatorAIContextUsage').hidden=true;}}
-      finally{copilotBusy=false;if(same()){host.querySelector('[data-operator-dialog]')?.removeAttribute('data-copilot-busy');if(copilotAsk.isConnected)copilotAsk.disabled=!dialogAiAssigned;if($('operatorAIReply')?.isConnected)$('operatorAIReply').disabled=!dialogAiAssigned;if($('chatText')?.isConnected)$('chatText').disabled=!sendAllowed;const deferred=copilotDeferredPage;copilotDeferredPage=null;if(deferred&&currentPage===deferred&&sameDialog(deferred.dialog,route)){renderDialog(deferred);const markDisplayed=()=>{if(displayedPage===deferred&&currentPage===deferred&&sameDialog(deferred.dialog,currentDialog))void markDialogReadIfVisible(deferred);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markDisplayed);else markDisplayed();}}}
+      finally{copilotBusy=false;if(same()){host.querySelector('[data-operator-dialog]')?.removeAttribute('data-copilot-busy');if(copilotAsk.isConnected)copilotAsk.disabled=!dialogAiAssigned;if($('operatorAIReply')?.isConnected)$('operatorAIReply').disabled=!dialogAiAssigned;if($('chatText')?.isConnected)$('chatText').disabled=!sendAllowed;const deferred=copilotDeferredPage;copilotDeferredPage=null;if(deferred&&currentPage===deferred&&sameDialog(deferred.dialog,route)){renderDialog(deferred);const markDisplayed=()=>{if(displayedPage===deferred&&currentPage===deferred&&sameDialog(deferred.dialog,currentDialog))void markDialogReadIfVisible(deferred);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markDisplayed);else markDisplayed();}if(audioRefreshSources?.size)void refreshAudioEvidence(route,audioRefreshSources);}}
     }
     copilotAsk.onclick=()=>submitCopilot(copilotMode==='instruction'?'instruction':'chat');
     $('operatorAIReply').onclick=()=>{if(copilotBusy)return;submitCopilot('reply');};

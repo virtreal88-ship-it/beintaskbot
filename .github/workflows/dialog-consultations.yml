@@ -8,6 +8,7 @@ on:
       - 'beintaskbot-main/tenant_dialog_ai_context.py'
       - 'beintaskbot-main/tenant_dialog_media_adapters.py'
       - 'beintaskbot-main/tests/test_dialog_ai_assignment_browser.cjs'
+      - 'beintaskbot-main/tests/test_manual_audio_refresh_browser.cjs'
       - 'beintaskbot-main/tenant_connect_transport.py'
       - 'beintaskbot-main/tenant_public_case.py'
       - 'beintaskbot-main/tenant_web_routes.py'
@@ -81,3 +82,4 @@ jobs:
           node tests/test_tenant_operator_mobile_ui.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_operator_audio_transcript_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_dialog_ai_assignment_browser.cjs
+          PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_manual_audio_refresh_browser.cjs
