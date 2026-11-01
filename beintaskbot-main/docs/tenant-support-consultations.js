@@ -22,7 +22,7 @@
     const status=el('p');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
     const formHost=el('div'),thread=el('div');thread.id='consultRows';
     const canDialogs=!!window.tenantOperator?.hasRight('dialogs'),canSend=member.role==='owner'&&canDialogs&&ticket.status!=='resolved';
-    let disposed=false,loading=false,loadRevision=0,formRevision=0,formOpening=false,items=[],replies=[],formState=null;
+    let disposed=false,loading=false,loadRevision=0,formRevision=0,formOpening=false,items=[],replies=[],formState=null,threadLoad=null;
     const current=()=>!disposed&&section.isConnected&&isCurrent();
     const showError=error=>{if(current()){status.textContent=error.message||t('error');status.setAttribute('role','alert');notice?.(error.message||t('error'));}};
     async function api(path='',method='GET',data,legacy=false){
@@ -38,7 +38,8 @@
     }
     function replyCard(reply){
       const article=el('article');article.className='support-message';article.dataset.consultationReply=reply.id;
-      article.append(el('strong',t('answer')),el('small',(reply.author||t('manualAuthor'))+' · '+date(reply.happened_at)),el('p',reply.body));
+      article.append(el('strong',t('answer')),el('small',(reply.author||t('manualAuthor'))+' · '+date(reply.happened_at)),el('p',window.tenantConsultationPresentation?.body?.(reply)??reply.body));
+      const original=window.tenantConsultationPresentation?.original?.(reply);if(original)article.append(original);
       if(reply.source_url){const original=el('a',t('developerSource'));original.href=reply.source_url;article.append(original);}if(reply.attachment_url){const attachment=el('a',t('developerFile'));attachment.href=reply.attachment_url;attachment.target='_blank';attachment.rel='noopener noreferrer';article.append(attachment);}
       if(reply.source_kind==='manual')article.append(el('small',t('manualSource')));
       if(reply.historical_draft)article.append(el('small',t('draftSaved')),el('p',reply.historical_draft));
@@ -64,11 +65,21 @@
         itemReplies.forEach(reply=>article.append(replyCard(reply)));addManual(item,article);thread.append(article);
       }
     }
-    async function loadThread(){
+    function loadThread(){threadLoad=loadThreadData();return threadLoad;}
+    async function loadThreadData(){
       const revision=++loadRevision;loading=true;
-      try{const result=await api((canDialogs?'/replies?':'?')+new URLSearchParams({case_id:ticket.id}),'GET',undefined,!canDialogs);if(!current()||revision!==loadRevision)return;items=(result.consultations||[]).map(item=>canDialogs?item:{...item,legacy:true,state:'internal',can_manual_reply:['owner','admin'].includes(member.role)||String(item.recipient_id)===String(member.telegram_id)});replies=result.replies||[];renderThread();}
-      catch(error){if(current()&&revision===loadRevision)showError(error);}
+      try{const result=await api((canDialogs?'/replies?':'?')+new URLSearchParams({case_id:ticket.id}),'GET',undefined,!canDialogs);if(!current()||revision!==loadRevision)return false;items=(result.consultations||[]).map(item=>canDialogs?item:{...item,legacy:true,state:'internal',can_manual_reply:['owner','admin'].includes(member.role)||String(item.recipient_id)===String(member.telegram_id)});replies=result.replies||[];renderThread();return true;}
+      catch(error){if(current()&&revision===loadRevision)showError(error);return false;}
       finally{if(revision===loadRevision)loading=false;}
+    }
+    async function focusReply(id){
+      if(typeof id!=='string'||!id||id.length>200||!current())return false;
+      let pending=threadLoad;
+      while(pending){const loaded=await pending;if(!current())return false;if(pending===threadLoad){if(!loaded)return false;break;}pending=threadLoad;}
+      const target=[...thread.querySelectorAll('[data-consultation-reply]')].find(node=>node.dataset.consultationReply===id);
+      if(!target||!current()||target.closest('[hidden]'))return false;
+      target.tabIndex=-1;target.focus({preventScroll:true});target.scrollIntoView?.({block:'center'});
+      return current()&&target.isConnected&&document.activeElement===target;
     }
     function rememberForm(){if(formState&&current())drafts.set(draftKey,{...formState.saved,summary:formState.summary?.value||'',first_id:formState.first?.value||'',last_id:formState.last?.value||'',destination:formState.destination?.(),media_ids:formState.fileInputs?.filter(input=>input.checked).map(input=>input.value)||[]});}
     function closeForm(clear=false){rememberForm();if(clear)drafts.delete(draftKey);formHost.replaceChildren();formState=null;start.hidden=!canSend;}
@@ -117,7 +128,7 @@
     }
     host.append(section);void loadThread();
     const timer=setInterval(()=>{if(current()&&!document.hidden&&!loading&&!formState)void loadThread();},60000);
-    return {refreshMaterials(){if(formState?.busy)return;if(formOpening){formRevision++;formOpening=false;void openForm();return;}if(formState){rememberForm();const followup=formState.followup;formState=null;void openForm(followup);}else if(current())void loadThread();},dispose(){rememberForm();disposed=true;formRevision++;clearInterval(timer);section.remove();}};
+    return {focusReply,refreshMaterials(){if(formState?.busy)return;if(formOpening){formRevision++;formOpening=false;void openForm();return;}if(formState){rememberForm();const followup=formState.followup;formState=null;void openForm(followup);}else if(current())void loadThread();},dispose(){rememberForm();disposed=true;formRevision++;clearInterval(timer);section.remove();}};
   }
   const style=el('style');style.textContent='.support-case-consultations{margin-top:24px;padding-top:18px;border-top:1px solid var(--line)}.support-case-consultations .support-edit{min-width:0}.support-case-consultations label{display:grid;gap:6px;min-width:0}.support-case-consultations fieldset{min-width:0;border:1px solid var(--line);border-radius:10px;padding:12px}.support-case-consultations fieldset label{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0}.support-case-consultations input[type=checkbox]{width:auto!important;flex:none}.support-case-consultations form button{justify-self:start}.support-case-consultations [role=alert]{color:var(--app-danger-ink,#b42318)}.support-case-consultations .support-message .support-message{border-inline-start:3px solid var(--brand);margin-inline-start:8px}.support-case-consultations a{display:inline-block;margin:6px 0}.support-case-consultations details{margin:16px 0}';document.head.append(style);
   window.tenantCaseConsultations={mount};

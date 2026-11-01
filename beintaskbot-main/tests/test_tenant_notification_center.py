@@ -11,6 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from test_tenant_support_inbox import database, db, A, B, CA, CB, PROFILE
 from test_dialog_consultations import ready, prepared, reply
+from test_case_consultations_unified import case_ready
 import tenant_dialog_consultations as consultations
 import tenant_notification_center as center
 from tenant_notification_center_api import handler
@@ -206,3 +207,20 @@ def test_http_boundary_binds_identity_and_only_explicit_read_is_a_write(monkeypa
             response = await client.post('/notifications/'+key+'/read', json={'expected_tenant_id': A, 'expected_user_id': 11}, headers={'Origin': 'https://wrong.invalid'})
             assert response.status == 403
     asyncio.run(scenario())
+
+
+def test_case_notification_retains_original_and_exact_context_for_presentation(case_ready, monkeypatch):
+    local, data, _ = case_ready
+    monkeypatch.setattr(center, '_connect', lambda: local)
+    request = consultations.prepare(PROFILE, data, 'https://crm.test')
+    consultations.dispatch(PROFILE, request['id'], data['request_id'])
+    original = 'CASE:' + request['id'] + ' Replace the printer cable.'
+    rid = reply(local, request, text=original)
+    item = center.listing(PROFILE)['notifications'][0]
+    assert item['consultation_id'] == request['id']
+    assert item['case_id'] == data['case_id']
+    assert item['reply_id'] == rid
+    assert item['body'] == original
+    assert 'support_ticket_id=' + data['case_id'] in item['target_url']
+    assert local.execute('SELECT body FROM saas_dialog_consultation_replies WHERE id=%s::uuid', (rid,))[0]['body'] == original
+    assert center.listing(PROFILE)['unread_count'] == 1

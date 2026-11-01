@@ -60,7 +60,7 @@ def _eligible(cur, tenant, actor, policy):
     cur.execute("SELECT to_regclass('saas_dialog_consultation_replies') IS NOT NULL AS replies, to_regclass('saas_support_tickets') IS NOT NULL AS tickets, to_regclass('saas_connect_dialog_links') IS NOT NULL AS links")
     ready = cur.fetchone() or {}
     consult_joins = ''
-    consult_columns = 'NULL::text AS reply_id,NULL::text AS source_channel,NULL::text AS source_conversation,NULL::bigint AS source_lead,NULL::text AS case_id'
+    consult_columns = 'NULL::text AS reply_id,NULL::text AS consultation_id,NULL::text AS source_channel,NULL::text AS source_conversation,NULL::bigint AS source_lead,NULL::text AS case_id'
     consult_guard = 'FALSE'
     if ready.get('replies'):
         consult_joins = '''LEFT JOIN saas_dialog_consultation_replies r ON r.tenant_id=n.tenant_id
@@ -69,7 +69,7 @@ def _eligible(cur, tenant, actor, policy):
           LEFT JOIN saas_connect_conversations v ON v.tenant_id=c.tenant_id
             AND v.connect_channel_id=c.channel_id AND v.conversation_id=c.conversation_id
           LEFT JOIN saas_connect_channels ch ON ch.tenant_id=v.tenant_id AND ch.connect_channel_id=v.connect_channel_id'''
-        consult_columns = 'r.id::text AS reply_id,c.channel_id::text AS source_channel,c.conversation_id AS source_conversation,v.lead_id AS source_lead,c.case_id::text AS case_id'
+        consult_columns = 'r.id::text AS reply_id,c.id::text AS consultation_id,c.channel_id::text AS source_channel,c.conversation_id AS source_conversation,v.lead_id AS source_lead,c.case_id::text AS case_id'
         consult_guard = ('TRUE' if policy.allows('dialogs') else 'FALSE') + ''' AND r.id IS NOT NULL AND v.lead_id IS NOT NULL AND ch.active=TRUE'''
         consult_guard += ' AND (c.case_id IS NULL OR ' + ('TRUE' if policy.allows('support') else 'FALSE') + ')'
         if ready.get('links'):
@@ -150,6 +150,8 @@ def _public(row):
     value.update(title=str(row.get('title') or '')[:200], body=str(row.get('body') or '')[:1000],
                  target_url=str(row.get('target_url') or ''), kind='consultation' if row.get('is_reply') else row.get('module') or 'account')
     if row.get('is_reply'):
+        value['consultation_id'] = str(row['consultation_id'])
+        value['case_id'] = str(row['case_id']) if row.get('case_id') else None
         params = {'view': 'dialogs', 'open_dialog': '1', 'provider': 'connect',
                   'lead_id': row['source_lead'], 'channel_id': row['source_channel'],
                   'conversation_id': row['source_conversation'], 'consultation_reply_id': row['reply_id']}
