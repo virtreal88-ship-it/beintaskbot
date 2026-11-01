@@ -472,7 +472,8 @@ def test_assigned_text_model_preserves_specialized_asr_and_photo_selection(ready
     execution=prepare.call_args.kwargs['execution']
     assert execution.model=='agent-model'
     assert execution.command['_agent_id']==AGENT
-    assert voice.transcription_model({'config':execution.config,'credential_source':execution.credential_source})=='whisper-1'
+    assert execution.config['transcription_model']=='whisper-1'  # Saved settings are preserved.
+    assert voice.transcription_model({'config':execution.config,'credential_source':execution.credential_source})=='gpt-transcribe'
     assert execution.item({'media_kind':'image'},{})['route']['campaign_photo_model']=='gpt-4.1'
     assert generated.call_args.args[1]=='agent-model'
 
