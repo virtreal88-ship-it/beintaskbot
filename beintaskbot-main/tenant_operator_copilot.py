@@ -42,6 +42,7 @@ INSTRUCTIONS += """ Current saved transcripts/observations supersede earlier con
 
 
 from tenant_dialog_ai_context import resolve as _assigned_context, binding as _agent_binding
+from tenant_assigned_agent_prompt import assigned_guidance
 
 
 def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message_chars=1200):
@@ -494,9 +495,7 @@ def run(profile, data, *, consultation_reply_id=None):
     turns=[{'role':str(turn.get('role') or '')[:20],'text':str(turn.get('text') or '')[:800], 'agent_binding':turn.get('agent_binding')} for turn in turns[-6:] if isinstance(turn,dict)]
     extra = {'copilot_action': command['mode'], 'employee_request': request,
              'untrusted_developer_consultation_evidence':consultation_evidence,
-             'company_instructions':str(agent_context.get('company_instructions') or '')[:20000],
              'assigned_agent_id': command['_agent_id'],
-             'assigned_agent_instructions':str(agent_context.get('instructions') or '')[:20000],
              'assigned_agent_style':str(agent_context.get('style') or '')[:1200],
              'language_preference':str(agent_context.get('language') or 'auto')[:20],
              'continuing_conversation':any(row.get('direction')=='outgoing' or row.get('has_prior_employee') for row in rows),
@@ -504,6 +503,10 @@ def run(profile, data, *, consultation_reply_id=None):
              'media_context': {'voice_transcriptions': len(transcript_ids), 'images_supplied': len(image_ids),
                                'document_texts': len(document_ids), 'skipped': skipped},
              'limits': 'Current-episode attachments are processed under company authorization. Historical attachments are not evidence for the latest unread attachment. Never infer skipped attachment contents. No unconfirmed cause, action, or result.'}
+    prompt = INSTRUCTIONS + assigned_guidance(
+        company=str(agent_context.get('company_instructions') or '')[:20000],
+        agent=str(agent_context.get('instructions') or '')[:20000],
+        style=agent_context.get('style'))
     text = None
     try:
         mode = 'reply' if command['mode'] == 'reply' else 'summary'
@@ -511,7 +514,7 @@ def run(profile, data, *, consultation_reply_id=None):
         execution.check()
         if any(row.get('_episode_receipt') for row in rows):execution.check_sources()
         text, usage = generate(secret['api_key'], model, mode, lines, request,
-                               instructions=INSTRUCTIONS, extra_context=extra,
+                               instructions=prompt, extra_context=extra,
                                images=images,
                                with_usage=True, max_output_tokens=900)
         if not text or not text.strip():

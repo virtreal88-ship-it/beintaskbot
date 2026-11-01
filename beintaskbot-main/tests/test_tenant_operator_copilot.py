@@ -147,7 +147,7 @@ def test_copilot_uses_assigned_model_and_never_sends_a_message(monkeypatch):
     result=copilot.run({'tenant_id':tenant,'telegram_id':actor},request())
     assert result['text']=='Salam, kömək edək.'
     assert generate.call_args.args[1]=='assigned-model'
-    assert generate.call_args.kwargs['extra_context']['assigned_agent_instructions']=='Assigned support agent rules'
+    assert 'Assigned support agent rules' in generate.call_args.kwargs['instructions']
     assert generate.call_args.kwargs['extra_context']['assigned_agent_id']=='bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb'
     from tenant_ai_agent_run_store import knowledge_context
     assert knowledge_context.call_args.kwargs['agent_id']=='bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb'
