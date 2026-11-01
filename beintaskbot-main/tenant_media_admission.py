@@ -2,6 +2,9 @@
 from tenant_linear_policy import TenantLinearError
 
 REASONS = {
+    'ai_spend_vision_price_unknown': ('Не настроен тариф анализа изображения для выбранной модели.', 'Seçilmiş model üçün şəkil təhlili tarifi qurulmayıb.', 'The selected model has no configured image-analysis tariff.'),
+    'vision_source_access_denied': ('Нет доступа к источнику изображения.', 'Şəkil mənbəyinə giriş yoxdur.', 'Access to the image source was denied.'),
+    'vision_admission_failed': ('Анализ изображения не допущен. Проверьте настройки AI.', 'Şəkil təhlilinə icazə verilmədi. AI ayarlarını yoxlayın.', 'Image analysis admission failed. Check AI settings.'),
     'ai_spend_media_price_unknown': ('Не настроен тариф ASR для выбранной модели.', 'Seçilmiş model üçün ASR tarifi qurulmayıb.', 'The selected model has no configured ASR tariff.'),
     'ai_spend_budget_exhausted': ('Исчерпан денежный лимит AI.', 'AI pul limiti tükənib.', 'The AI spending limit is exhausted.'),
     'ai_call_limit_exhausted': ('Исчерпан дневной лимит вызовов AI.', 'Gündəlik AI sorğu limiti tükənib.', 'The daily AI call limit is exhausted.'),
@@ -11,7 +14,7 @@ REASONS = {
 }
 
 
-def mark(error, step):
+def mark(error, step, operation='asr'):
     """Only our pre-dispatch boundary may certify admission; never raw text."""
     if not isinstance(error, TenantLinearError):
         return
@@ -25,6 +28,10 @@ def mark(error, step):
         code = 'media_authority_changed'
     elif step == 'calls' and error.status == 429:
         code = 'ai_call_limit_exhausted'
+    if operation=='vision_low':
+        code={'ai_spend_media_price_unknown':'ai_spend_vision_price_unknown',
+              'source_access_denied':'vision_source_access_denied',
+              'media_admission_failed':'vision_admission_failed'}.get(code,code)
     error.media_admission_code = code
 
 
