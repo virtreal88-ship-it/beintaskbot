@@ -170,6 +170,7 @@ def test_inflight_summary_does_not_apply_after_context_change(db,change):
     page=tickets.detail(PROFILE,ticket)
     assert page['ticket']['summary_state']=='unavailable' and page['ticket']['summary']==''
     assert db.execute('SELECT total_tokens FROM saas_ai_agent_token_usage')[0]['total_tokens']==7
+    assert db.execute('SELECT state FROM saas_ai_agent_runs')[0]['state']=='completed'
 
 
 def test_saved_summary_is_historical_and_explicitly_regenerates_after_agent_edit(db):

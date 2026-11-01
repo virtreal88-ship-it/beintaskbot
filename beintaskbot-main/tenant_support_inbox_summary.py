@@ -38,11 +38,15 @@ def reserve(tenant, ticket_id, profile=None, retry=False):
                 if not owner: raise TenantLinearError('Нет ответственного за компанию.',403)
                 profile = {'tenant_id':tenant,'telegram_id':owner['telegram_id']}
             tenant, actor = _authorize(cur,profile)
-            cur.execute('SELECT * FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE', (tenant,ticket_id))
+            cur.execute('SELECT * FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid', (tenant,ticket_id))
             ticket = cur.fetchone()
             if not ticket: raise TenantLinearError('Обращение не найдено.',404)
             selected = route(cur,tenant,ticket['channel_id'],ticket['conversation_id'])
             context = assigned_context(cur, tenant, {'channel_id': str(ticket['channel_id']), 'conversation_id': ticket['conversation_id']})
+            # Handoff/assignment locks the conversation before its case. Keep
+            # that order so summary reservation cannot deadlock with takeover.
+            cur.execute('SELECT * FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE', (tenant,ticket_id))
+            ticket = cur.fetchone()
             binding = agent_binding(context)
             material_scope = load_scope(cur, tenant, ticket_id)
             rows = scoped_messages(cur, material_scope, limit=80)
@@ -130,19 +134,22 @@ def _assert_current(cur, item):
 
 def finish(item, result, usage):
     tenant, ticket_id = item['tenant'], item['ticket_id']
+    provider_completed = result is not None
     with _connect() as conn:
         with conn.cursor() as cur:
-            if item['agent_id']:
-                cur.execute('''INSERT INTO saas_ai_agent_token_usage(tenant_id,id,run_id,agent_id,model,input_tokens,output_tokens,total_tokens)
-                  VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s) ON CONFLICT(tenant_id,run_id) DO NOTHING''',
-                  (tenant,str(uuid.uuid4()),item['run_id'],item['agent_id'],item['model'],usage.get('input_tokens',0),usage.get('output_tokens',0),usage.get('total_tokens',0)))
-                cur.execute('UPDATE saas_ai_agent_runs SET state=%s,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid', ('completed' if result else 'unknown',tenant,item['run_id']))
-            else:
-                cur.execute('UPDATE saas_chat_ai_runs SET status=%s,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid', ('completed' if result else 'unknown',tenant,item['run_id']))
+            # Validate assignment before locking the run: handoff owns the
+            # conversation first, then supersedes its in-flight runs.
             try:
                 _assert_current(cur,item)
             except TenantLinearError:
                 result = None
+            if item['agent_id']:
+                cur.execute('''INSERT INTO saas_ai_agent_token_usage(tenant_id,id,run_id,agent_id,model,input_tokens,output_tokens,total_tokens)
+                  VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s) ON CONFLICT(tenant_id,run_id) DO NOTHING''',
+                  (tenant,str(uuid.uuid4()),item['run_id'],item['agent_id'],item['model'],usage.get('input_tokens',0),usage.get('output_tokens',0),usage.get('total_tokens',0)))
+                cur.execute('UPDATE saas_ai_agent_runs SET state=%s,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid', ('completed' if provider_completed else 'unknown',tenant,item['run_id']))
+            else:
+                cur.execute('UPDATE saas_chat_ai_runs SET status=%s,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid', ('completed' if provider_completed else 'unknown',tenant,item['run_id']))
             if result:
                 cur.execute('''UPDATE saas_support_tickets SET description=CASE WHEN description=%s THEN %s ELSE description END,summary=%s,
                   suggestions=CASE WHEN suggestions=%s THEN %s ELSE suggestions END,
