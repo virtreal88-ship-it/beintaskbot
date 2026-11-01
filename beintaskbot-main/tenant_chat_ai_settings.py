@@ -105,7 +105,11 @@ def test_model(session, model):
 
 
 def save(session, data):
-    config = configuration(data)
+    preserve_models = data.get('preserve_models') is True
+    model_fields = ('model','transcription_model','copilot_model','photo_model','video_model','video_enabled')
+    if preserve_models and any(field in data for field in model_fields):
+        raise TenantLinearError('Модели задаются у агента.',400)
+    config = configuration(data, models_required=not preserve_models)
     key = data.get('api_key', '')
     if not isinstance(key, str) or (key and (not 20 <= len(key) <= 500 or any(c.isspace() for c in key))):
         raise TenantLinearError('API açarı düzgün deyil.')
@@ -121,6 +125,9 @@ def save(session, data):
             # Older settings clients do not submit the Copilot subsection.
             # Preserve its values so legacy Chat AI edits cannot couple models.
             old_metadata = previous.get('metadata') if isinstance(previous.get('metadata'), dict) else {}
+            if preserve_models:
+                for field in model_fields:
+                    config[field] = old_metadata.get(field, False if field=='video_enabled' else '')
             # Photo selection is a separate owner setting, never the text-model
             # allowlist. Old clients preserve it and cannot add model grants.
             if 'photo_model' not in data and 'photo_model' in old_metadata:
@@ -154,7 +161,7 @@ def save(session, data):
                     quote(config['photo_model'])
                     if not previous.get('secrets') or not config['enabled'] or not config['consent']:
                         raise TenantLinearError('photo_model_company_configuration_required', 409)
-            if 'copilot_model' not in data:
+            if 'copilot_model' not in data and not preserve_models:
                 config['copilot_model'] = old_metadata.get('copilot_model') or old_metadata.get('model') or config['model']
             if 'copilot_enabled' not in data:
                 config['copilot_enabled'] = old_metadata.get('copilot_enabled', True)

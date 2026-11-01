@@ -22,6 +22,7 @@ from tenant_chat_reader import read_messages, read_talks
 from tenant_linear_policy import TenantLinearError
 from tenant_ai_agent_admission import assert_job_allowed, assert_live_job_allowed
 from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+from tenant_dialog_ai_context import assert_reservation_current
 from tenant_ai_agent_schedule import next_open as _schedule_next_open
 
 
@@ -153,7 +154,7 @@ def _context_for_source(rows, source_id):
     return context, media
 
 
-async def _prepare_agent_media(job, rows, config, api_key, logger):
+async def _prepare_agent_media(job, rows, config, api_key, logger, reservation=None):
     """Transcribe permitted audio and fetch bounded image inputs for Responses."""
     transcripts, images, analyzed_images = {}, [], set()
     hosts = config.get('media_hosts') if isinstance(config, dict) else []
@@ -170,6 +171,7 @@ async def _prepare_agent_media(job, rows, config, api_key, logger):
                 if media[2] not in AUDIO_TYPES:
                     continue
                 assert_job_allowed(job)
+                assert_reservation_current(job,reservation or {})
                 text = await asyncio.to_thread(transcribe, api_key, config['transcription_model'], *media)
                 if text:
                     transcripts[message_id] = text
@@ -564,11 +566,11 @@ async def process_one(job, kommo_request, wait_slot, logger):
             _ai_diag(logger, job, 'job_handed_off', 'preview_handoff')
             return
         relevant_history, relevant_media = _context_for_source(normalized, source_id)
-        model = str(model_config.get('agent_model') or model_config['chat_model'])
+        model = str(model_config.get('agent_model') or '')
         reservation = await asyncio.to_thread(reserve_run,job,pipeline_id=pipeline_id,stage_id=stage_id,model=model)
         assert_job_allowed(job)
         transcripts, images, analyzed_images = await _prepare_agent_media(
-            job, relevant_media, reservation.get('config') or {}, reservation['api_key'], logger)
+            job, relevant_media, reservation.get('config') or {}, reservation['api_key'], logger, reservation)
         focus_ids = {str(row['external_id']) for row in relevant_media}
         lines,missing = history(relevant_history,transcripts,analyzed_media=analyzed_images,
             focus_media_ids=focus_ids)
@@ -639,6 +641,7 @@ async def process_one(job, kommo_request, wait_slot, logger):
             extra_context['internal_expert_advisory'] = expert_result
             prompt += '\nExpert evidence is advisory and may be incomplete. Verify recommendations, ask for missing information or recommend a human; never claim resolution without confirmation.'
         assert_job_allowed(job)
+        assert_reservation_current(job,reservation)
         call = asyncio.create_task(asyncio.to_thread(generate,reservation['api_key'],model,'reply',lines,'',
             instructions=prompt,extra_context=extra_context,images=images,with_usage=True))
         try:
@@ -665,6 +668,7 @@ async def process_one(job, kommo_request, wait_slot, logger):
                         **({'internal_expert_advisory':expert_result} if expert_result else {})}
                     assert_job_allowed(job)
                     prior_usage=usage if isinstance(usage,dict) else {}
+                    assert_reservation_current(job,reservation)
                     generated,usage=await asyncio.to_thread(generate,reservation['api_key'],model,'reply',lines,'',
                         instructions=prompt+'\n\n'+prompt_instructions(),extra_context=retry_context,images=images,with_usage=True)
                     total_usage={key:int(prior_usage.get(key) or 0)+int((usage or {}).get(key) or 0)
@@ -865,7 +869,7 @@ async def process_connect_one(job, logger):
                          and not row.get('transcript') and not row.get('voice_state')]
         pending_audio = pending_audio[-3:]
         if pending_audio:
-            model = str(config.get('agent_model') or config['chat_model'])
+            model = str(config.get('agent_model') or '')
             phase = 'connect_transcription'
             reservation = await asyncio.to_thread(reserve_run, job, pipeline_id='', stage_id='',
                                                   model=model, reserved_calls=1 + len(pending_audio))
@@ -898,7 +902,7 @@ async def process_connect_one(job, logger):
                 return
         from tenant_episode_media import AutoExecution,prepare as prepare_episode,episode
         if not pilot_media_turn and any(is_audio(row) for row in episode(rows)):
-            model=str(config.get('agent_model') or config['chat_model'])
+            model=str(config.get('agent_model') or '')
             reservation=await asyncio.to_thread(reserve_run,job,pipeline_id='',stage_id='',model=model,
                 video_requested=any(row.get('message_type')=='video' for row in episode(rows)))
             episode_execution=AutoExecution(job,reservation)
@@ -924,7 +928,7 @@ async def process_connect_one(job, logger):
                 await asyncio.to_thread(finish_superseded,job,reservation,
                     reason if current_handoff else 'connect_handoff_turn_stale')
             return
-        model = str(config.get('agent_model') or config['chat_model'])
+        model = str(config.get('agent_model') or '')
         phase = 'connect_reserve'
         if reservation is None:
             reservation = await asyncio.to_thread(reserve_run, job, pipeline_id='', stage_id='', model=model,
@@ -1096,6 +1100,7 @@ async def process_connect_one(job, logger):
         if images and not await asyncio.to_thread(image_live,job,reservation):
             await asyncio.to_thread(finish_superseded,job,reservation,'image_parent_inactive');return
         if not pilot_case_turn:await asyncio.to_thread(episode_execution.check_sources)
+        assert_reservation_current(job,reservation)
         draft, usage = await asyncio.to_thread(generate, reservation['api_key'], model, 'reply', lines, '',
                                         instructions=prompt,
                                         extra_context={'language':reservation['agent_language'], 'style':reservation['agent_style'],
@@ -1238,6 +1243,7 @@ async def process_connect_one(job, logger):
                 verified_knowledge=no_answer.get('knowledge') or knowledge
                 advisory=no_answer.get('expert_result')
                 assert_job_allowed(job)
+                assert_reservation_current(job,reservation)
                 draft,usage=await asyncio.to_thread(generate,reservation['api_key'],model,'reply',lines,'',
                     instructions=prompt+'\n\n'+prompt_instructions(),
                     extra_context={'language':reservation['agent_language'],'style':reservation['agent_style'],

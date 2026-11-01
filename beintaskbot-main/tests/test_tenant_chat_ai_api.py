@@ -26,9 +26,10 @@ class Api(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.request({'expected_user_id':21}))['status'],409)
         self.run.assert_not_awaited()
 
-    async def test_success_is_draft_only_no_store_header(self):
-        result=await self.request();self.assertEqual(result['body']['text'],'draft')
-        self.assertEqual(result['headers']['Cache-Control'],'no-store');self.run.assert_awaited_once()
+    async def test_legacy_unbound_endpoint_cannot_bypass_assigned_agent_runtime(self):
+        result=await self.request();self.assertEqual(result['status'],409)
+        self.assertIn('назначенного агента',result['body']['error'])
+        self.assertEqual(result['headers']['Cache-Control'],'no-store');self.run.assert_not_awaited()
 
     async def test_model_discovery_and_probe_require_current_company_identity(self):
         handle=self.service.model_management_handler(lambda request:SESSION,'https://crm.pro.az',self.logger)
@@ -52,11 +53,11 @@ class Api(unittest.IsolatedAsyncioTestCase):
 
     async def test_error_does_not_expose_provider_or_credentials(self):
         self.run.side_effect=RuntimeError('sk-SECRET https://private-media')
-        result=await self.request();self.assertEqual(result['status'],503);self.assertNotIn('SECRET',str(result))
+        result=await self.request();self.assertEqual(result['status'],409);self.assertNotIn('SECRET',str(result));self.run.assert_not_awaited()
 
     async def test_inflight_receipt_preserves_browser_request(self):
         error=TenantLinearError('Pending',409);error.keep_request=True;self.run.side_effect=error
-        self.assertTrue((await self.request())['body']['keep_request'])
+        self.assertFalse((await self.request())['body']['keep_request']);self.run.assert_not_awaited()
 
 
 class Settings(unittest.TestCase):

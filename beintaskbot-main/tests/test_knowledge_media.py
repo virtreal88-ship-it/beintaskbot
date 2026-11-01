@@ -601,6 +601,7 @@ def _priced_campaign_env(monkeypatch,database):
     }))
     monkeypatch.setattr(budget,'_connect',lambda:database)
     monkeypatch.setattr(service,'platform_model',lambda:'fixture')
+    database.execute("UPDATE saas_ai_agents SET model='fixture' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));database.commit()
 
 
 def test_campaign_inline_visual_success_keeps_unknown_visual_reserve_and_aggregates_tokens(ready,monkeypatch):

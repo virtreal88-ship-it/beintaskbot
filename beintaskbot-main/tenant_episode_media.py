@@ -238,7 +238,7 @@ class Execution:
             route['video_model']=self.video_model
             from tenant_ai_spend_budget import limit_microusd
             if limit_microusd(self.tenant)<=0:route['allow_external_media']=False
-        return {'tenant':self.tenant,'key':getattr(self,'video_key',self.key) if ref['media_kind']=='video' else self.key,'model':model,'config':config,
+        return {'tenant':self.tenant,'agent_id':getattr(self,'agent_id',''),'key':getattr(self,'video_key',self.key) if ref['media_kind']=='video' else self.key,'model':model,'config':config,
                 'credential_source':self.credential_source,'route':route,
                 'refs':[ref],'messages':[message]}
 
@@ -296,6 +296,8 @@ class Execution:
         text,usage=self.dispatch(item['model'],'vision_low',lambda:invoke(
             item['key'],item['model'],'media_observation',[],'',instructions=OBSERVATION_PROMPT,
             images=[{'content':content,'content_type':mime,'detail':'low'}],
+            extra_context={'assigned_agent_id':getattr(self,'agent_id',''),'primary_model':self.model,
+                           'processing_role':'untrusted_attachment_observation'},
             with_usage=True,max_output_tokens=600,request_timeout=25))
         if not isinstance(text,str) or not text.strip():raise ValueError('empty_observation')
         return text[:2400],usage,True
@@ -335,7 +337,9 @@ class ManualExecution(Execution):
     def __init__(self,tenant,actor,command,config,version,key,model,language,rows):
         self.tenant,self.actor,self.command=tenant,actor,command
         self.channel,self.conversation,self.lead=command['channel_id'],command['conversation_id'],command['lead_id']
-        self.config,self.version,self.key,self.model=config,str(version),key,model
+        from tenant_dialog_media_adapters import configuration
+        self.config,self.version,self.key,self.model=configuration(model,config),str(version),key,model
+        self.agent_id=str(command.get('_agent_id') or '')
         self.video_model=str(config.get('video_model') or '')
         self.language=language;self.credential_source='company'
         self.latest=str(rows[-1].get('external_id') or '') if rows else ''
@@ -354,11 +358,18 @@ class ManualExecution(Execution):
                 if (str(current.get('updated_at'))!=self.version or metadata.get('enabled') is not True
                     or metadata.get('consent') is not True or metadata.get('copilot_enabled',True) is not True):
                     raise TenantLinearError('AI settings changed.',409)
-                cur.execute('''SELECT external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid
-                  AND kommo_lead_id=%s AND channel=%s ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 1''',
-                  (self.tenant,self.lead,'connect:'+self.channel))
-                if str((cur.fetchone() or {}).get('external_id') or '')!=self.latest:
-                    raise TenantLinearError('Conversation changed. Request a fresh draft.',409)
+                if self.command.get('_consultation_evidence'):
+                    # An explicit consultation reviews its original frozen
+                    # fragment, not an unrelated newer customer incident.
+                    from tenant_dialog_consultations import original_evidence
+                    original_evidence(cur,self.tenant,self.command['_consultation_evidence']['id'],
+                                      self.channel,self.conversation,self.lead)
+                else:
+                    cur.execute('''SELECT external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid
+                      AND kommo_lead_id=%s AND channel=%s ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 1''',
+                      (self.tenant,self.lead,'connect:'+self.channel))
+                    if str((cur.fetchone() or {}).get('external_id') or '')!=self.latest:
+                        raise TenantLinearError('Conversation changed. Request a fresh draft.',409)
 
     def load(self,profile,lead,external):
         from tenant_chat_attachment_store import load
@@ -382,7 +393,9 @@ class AutoExecution(Execution):
         self.job,self.reservation=job,reservation
         self.tenant,self.channel,self.conversation,self.lead=str(job['tenant_id']),str(job['channel_id']),str(job['conversation_id']),int(job['lead_id'])
         self.prepaid_calls=max(0,int(reservation.get('reserved_calls') or 1)-1)
-        self.config=reservation.get('config') or {};self.model=reservation['model']
+        from tenant_dialog_media_adapters import configuration
+        self.model=reservation['model'];self.config=configuration(self.model,reservation.get('config') or {})
+        self.agent_id=str(job.get('agent_id') or '')
         self.key=reservation['api_key'];self.video_model=reservation.get('video_model') or ''
         self.video_key=reservation.get('video_api_key') or ''
         self.language=reservation.get('agent_language') or 'auto'

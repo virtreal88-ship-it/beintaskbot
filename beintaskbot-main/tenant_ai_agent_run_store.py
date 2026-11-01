@@ -145,7 +145,7 @@ def load_agent_config(job, *, with_block_reason=False):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT a.role,a.enabled AS agent_enabled,a.scopes,a.model AS agent_model,a.safety,a.response_policy,a.schedule,a.mode,
+            cur.execute('''SELECT a.role,a.version AS agent_version,a.enabled AS agent_enabled,a.scopes,a.model AS agent_model,a.safety,a.response_policy,a.schedule,a.mode,
               s.enabled AS settings_enabled,s.operating_mode,s.auto_send_enabled,s.emergency_stop,s.crm_actions_enabled,s.native_crm_actions_enabled,i.metadata,i.secrets,t.status AS tenant_status,cs.state AS conversation_state
               FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
               JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id
@@ -179,10 +179,8 @@ def load_agent_config(job, *, with_block_reason=False):
         return (None, reason) if with_block_reason else None
     selected_model = str(row['agent_model'] or '')
     config = row['metadata'] if isinstance(row['metadata'],dict) else {}
-    if not selected_model and platform_service_ready():
-        selected_model = platform_model()
     if not selected_model:
-        selected_model = str(config.get('model') or '')
+        return (None, 'agent_model_required') if with_block_reason else None
     use_platform = platform_key_ready(job['tenant_id'], job['agent_id'], job.get('provider')) and (
         not row.get('secrets') or platform_model_allowed(selected_model))
     if not use_platform:
@@ -194,7 +192,7 @@ def load_agent_config(job, *, with_block_reason=False):
             reason = 'chat_ai_key_missing'
     if reason:
         return (None, reason) if with_block_reason else None
-    result = {'scopes':row['scopes'],'agent_model':selected_model,'safety':row.get('safety') or {},
+    result = {'agent_version':row.get('agent_version'),'scopes':row['scopes'],'agent_model':selected_model,'safety':row.get('safety') or {},
       'response_policy':row.get('response_policy') or {},
       'chat_model':str(config.get('model') or ''),'schedule':row['schedule'],'mode':row['mode'],
       'crm_actions_enabled':row['crm_actions_enabled'] is True,
@@ -352,11 +350,9 @@ def reserve_run(job, *, pipeline_id, stage_id, model, reserved_calls=1, video_re
             from tenant_ai_pilot import manual_live_job
             pilot_live=manual_live_job(job)
             configured_model = str(row.get('configured_model') or '')
-            selected_model = str(model or configured_model or '')
-            if not selected_model and platform_service_ready():
-                selected_model = platform_model()
-            if not selected_model:
-                selected_model = str(config.get('model') or '')
+            selected_model = str(configured_model or '')
+            if not selected_model or (model and str(model) != selected_model):
+                raise TenantLinearError('Выберите модель назначенного агента.',409)
             company_key = ''
             if row.get('secrets'):
                 try:

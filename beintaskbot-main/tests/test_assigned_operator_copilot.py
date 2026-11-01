@@ -14,13 +14,14 @@ from test_tenant_support_inbox import database, db, A, B, CA, AGENT, PROFILE, se
 def ready(db,monkeypatch):
     seed_job(db)
     other = str(uuid.uuid4())
-    db.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,instructions) VALUES(%s::uuid,%s::uuid,'Other support',11,'OTHER_AGENT_RULES')",(A,other))
+    db.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,instructions,model) VALUES(%s::uuid,%s::uuid,'Other support',11,'OTHER_AGENT_RULES','other-agent-model')",(A,other))
     db.execute("UPDATE saas_ai_agents SET instructions='ASSIGNED_AGENT_RULES',model='agent-model' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
     db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,secrets,metadata) VALUES(%s::uuid,'chat_ai',%s,%s::jsonb)",
         (A,b'synthetic-cipher',json.dumps({'enabled':True,'consent':True,'copilot_enabled':True,'copilot_model':'configured-copilot-model','daily_limit':100})))
     from tenant_chat_send_schema import ensure_schema as send_schema
     send_schema(db);db.commit()
     monkeypatch.setattr(copilot,'_connect',lambda:db)
+    monkeypatch.setattr('tenant_episode_media._connect',lambda:db)
     monkeypatch.setattr(copilot,'_fernet',lambda:SimpleNamespace(decrypt=lambda _:json.dumps({'tenant_id':A,'provider':'chat_ai','api_key':'synthetic-test-key'}).encode()))
     generated = Mock(return_value=('Müştəri üçün hazır cavab.',{'total_tokens':10}))
     monkeypatch.setattr(copilot,'generate',generated)
@@ -43,7 +44,7 @@ def test_reply_uses_assigned_instructions_scoped_knowledge_latest_context_and_ca
     assert copilot.run(PROFILE,data) == result
     generated.assert_called_once()
     args,kwargs = generated.call_args
-    assert args[1] == 'configured-copilot-model'
+    assert args[1] == 'agent-model'
     assert args[3][-1]['text'] == 'Internet is still down?'
     context = kwargs['extra_context']
     assert context['assigned_agent_id'] == AGENT
@@ -131,6 +132,7 @@ def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receip
             'daily_limit':100,'audio_enabled':True,'transcription_model':'whisper-1',
             'video_enabled':True,'video_model':'gpt-4o-mini'}
     db.execute("UPDATE saas_tenant_integrations SET metadata=%s::jsonb WHERE tenant_id=%s::uuid AND provider='chat_ai'",(json.dumps(config),A))
+    db.execute("UPDATE saas_ai_agents SET model='gpt-4o-mini' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
     source='connect:'+str(uuid.uuid4())
     db.execute('''INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,raw,happened_at)
       VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','',%s,'{"mediaId":"version1"}',now()+interval '2 seconds')''',
@@ -414,3 +416,119 @@ def test_newer_text_question_is_not_blocked_by_an_older_failed_voice(ready,monke
     assert 'OLD_VOICE_TOPIC' not in knowledge.call_args.args[1]
     assert 'OLD_VOICE_TOPIC' not in str(generated.call_args.args[3])
     assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
+
+@pytest.mark.parametrize('mode',['reply','chat','instruction','solution'])
+def test_every_private_dialog_action_uses_assigned_model_not_company_copilot(ready,mode):
+    db,other,generated,data=ready
+    # A stale/empty company model must not replace the agent's configured one.
+    db.execute("UPDATE saas_tenant_integrations SET metadata=jsonb_set(metadata,'{copilot_model}','\"\"'::jsonb) WHERE tenant_id=%s::uuid AND provider='chat_ai'",(A,));db.commit()
+    data.update(mode=mode,prompt='Explain the current request' if mode!='reply' else '')
+    copilot.run(PROFILE,data)
+    assert generated.call_args.args[1]=='agent-model'
+    assert generated.call_args.kwargs['extra_context']['assigned_agent_id']==AGENT
+
+
+@pytest.mark.parametrize('model',['','bad model with spaces'])
+def test_missing_or_invalid_assigned_model_blocks_without_fallback_or_reservation(ready,model):
+    db,other,generated,data=ready
+    db.execute('UPDATE saas_ai_agents SET model=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(model,A,AGENT));db.commit()
+    with pytest.raises(TenantLinearError) as caught:copilot.run(PROFILE,data)
+    assert caught.value.status==409
+    generated.assert_not_called()
+    assert db.execute('SELECT count(*) AS n FROM saas_chat_ai_runs')[0]['n']==0
+
+
+def test_model_change_without_version_bump_invalidates_cache_and_private_memory(ready):
+    db,other,generated,data=ready
+    data.update(mode='chat',prompt='Old model private memory')
+    copilot.run(PROFILE,data)
+    db.execute("UPDATE saas_ai_agents SET model='new-agent-model' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));db.commit()
+    with pytest.raises(TenantLinearError):copilot.run(PROFILE,data)
+    assert generated.call_count==1
+    copilot.run(PROFILE,{**data,'request_id':str(uuid.uuid4()),'prompt':'New model request'})
+    assert generated.call_args.args[1]=='new-agent-model'
+    assert generated.call_args.kwargs['extra_context']['prior_internal_copilot_turns']==[]
+
+
+def test_model_change_during_generation_hides_stale_result(ready):
+    db,other,generated,data=ready
+    def respond(*args,**kwargs):
+        db.execute("UPDATE saas_ai_agents SET model='new-agent-model' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));db.commit()
+        return 'stale result',{}
+    generated.side_effect=respond
+    with pytest.raises(TenantLinearError) as caught:copilot.run(PROFILE,data)
+    assert caught.value.status==409
+    assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
+
+
+def test_assigned_text_model_preserves_specialized_asr_and_photo_selection(ready,monkeypatch):
+    import tenant_connect_voice as voice
+    db,other,generated,data=ready
+    db.execute("UPDATE saas_tenant_integrations SET metadata=metadata||%s::jsonb WHERE tenant_id=%s::uuid AND provider='chat_ai'",
+        (json.dumps({'audio_enabled':True,'transcription_model':'whisper-1','photo_model':'gpt-4.1'}),A));db.commit()
+    prepare=Mock(wraps=copilot._prepare_copilot_media)
+    monkeypatch.setattr(copilot,'_prepare_copilot_media',prepare)
+    copilot.run(PROFILE,data)
+    execution=prepare.call_args.kwargs['execution']
+    assert execution.model=='agent-model'
+    assert execution.command['_agent_id']==AGENT
+    assert voice.transcription_model({'config':execution.config,'credential_source':execution.credential_source})=='whisper-1'
+    assert execution.item({'media_kind':'image'},{})['route']['campaign_photo_model']=='gpt-4.1'
+    assert generated.call_args.args[1]=='agent-model'
+
+
+def test_queued_connect_work_requires_current_assignment_without_disabling_assignment_discovery(ready,monkeypatch):
+    import tenant_ai_agent_connect as connect
+    db,other,generated,data=ready
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected')",(A,))
+    db.execute("UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE,operating_mode='active' WHERE tenant_id=%s::uuid",(A,));db.commit()
+    monkeypatch.setattr(connect,'runtime_flag',lambda _:True)
+    monkeypatch.setattr('tenant_connect_identity.conflicted',lambda *a:False)
+    job={**data,'tenant_id':A,'agent_id':AGENT}
+    assert connect.allowed(job,connection=db)
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid",(A,));db.commit()
+    assert not connect.allowed(job,connection=db)
+    # Route admission for the separate assignment business process remains usable.
+    assert connect.allowed(job,connection=db,require_assignment=False)
+    assert db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n']>0
+    generated.assert_not_called()
+
+
+@pytest.mark.parametrize('mode',['reply','chat','instruction','solution'])
+def test_unassignment_before_private_provider_call_prevents_dispatch(ready,monkeypatch,mode):
+    import tenant_episode_media as media
+    db,other,generated,data=ready
+    data.update(mode=mode,prompt='Explain' if mode!='reply' else '')
+    original=media.ManualExecution.check
+    def lose_assignment(self):
+        db.execute('UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid',(A,));db.commit()
+        return original(self)
+    monkeypatch.setattr(media.ManualExecution,'check',lose_assignment)
+    with pytest.raises(TenantLinearError):copilot.run(PROFILE,data)
+    generated.assert_not_called()
+    assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
+    assert db.execute('SELECT count(*) AS n FROM saas_crm_messages')[0]['n']>0
+
+
+def test_no_assignment_cannot_clear_saved_private_agent_history(ready):
+    db,other,generated,data=ready
+    copilot.ensure_schema(db)
+    db.execute("INSERT INTO saas_operator_copilot_threads(tenant_id,requested_by,channel_id,conversation_id,turns) VALUES(%s::uuid,11,%s,'client','[{\"text\":\"saved private history\"}]'::jsonb)",(A,CA))
+    db.execute('UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid',(A,));db.commit()
+    with pytest.raises(TenantLinearError):copilot.run(PROFILE,{**data,'mode':'clear'})
+    generated.assert_not_called()
+    assert db.execute('SELECT count(*) AS n FROM saas_operator_copilot_threads')[0]['n']==1
+
+
+def test_kommo_assignment_uses_normalized_scope_not_transport_origin(ready,monkeypatch):
+    import tenant_ai_agent_admission as admission
+    db,other,generated,data=ready
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain) VALUES(%s::uuid,'kommo','connected','synthetic.kommo.com')",(A,))
+    db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,agent_id,state) VALUES(%s::uuid,'kommo','','kommo-chat',%s::uuid,'active')",(A,AGENT));db.commit()
+    monkeypatch.setattr(admission,'_connect',lambda:db)
+    monkeypatch.setattr('tenant_ai_agent_runtime_flags.enabled',lambda _:True)
+    job={'tenant_id':A,'agent_id':AGENT,'provider':'kommo','channel_id':'whatsapp','conversation_id':'kommo-chat'}
+    assert admission.allowed_job(job)
+    db.execute("UPDATE saas_ai_conversation_state SET agent_id=NULL WHERE tenant_id=%s::uuid AND provider='kommo'",(A,));db.commit()
+    assert not admission.allowed_job(job)
+    generated.assert_not_called()

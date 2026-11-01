@@ -298,7 +298,7 @@ def test_actual_worker_creates_case_snapshot_then_sends_same_revision_link_once(
       (str(uuid.uuid4()),A,'connect:'+source_id,'connect:'+CA,source_text));db.commit()
     source={'external_id':source_id,'direction':'incoming','body':source_text,'message_type':'text',
       'happened_at':'2026-10-31T04:43:44+00:00','media_url':'','has_attachment':False}
-    config={'scopes':[CA],'schedule':{},'chat_model':'test-model','agent_model':'','response_policy':{}}
+    config={'scopes':[CA],'schedule':{},'chat_model':'test-model','agent_model':'test-model','response_policy':{}}
     reservation={'model':'test-model','run_id':'run-1','mode':'automatic','auto_send_enabled':True,'conversation_revision':3,
       'response_policy':{},'agent_language':'az','agent_style':'','api_key':'synthetic',
       'company_instructions':'','agent_instructions':'','scope_instructions':''}
@@ -309,7 +309,7 @@ def test_actual_worker_creates_case_snapshot_then_sends_same_revision_link_once(
     monkeypatch.setattr(connect,'scope_matches',lambda scopes,channel:channel in scopes)
     monkeypatch.setattr(connect,'group_context',lambda *_:[source])
     monkeypatch.setattr(connect,'finish_sent_after_reply_handoff',lambda *_:None)
-    monkeypatch.setattr(run_store,'load_agent_config',lambda *_a,**_k:(config,None))
+    monkeypatch.setattr(run_store,'load_agent_config',lambda *_a,**_k:((config,None) if _k.get('with_block_reason') else config))
     monkeypatch.setattr(worker,'reserve_run',lambda *_a,**_k:reservation)
     # This fixture tests consultation publication with an admitted text turn;
     # real media/lease/version admission is covered by the SQL integration flow.
@@ -1064,7 +1064,7 @@ def test_full_agent_worker_answers_developer_in_group_from_case_fact(db,monkeypa
     monkeypatch.setattr(worker,'handoff_reason',lambda *_args:None)
     monkeypatch.setattr(worker,'reserve_run',lambda *_args,**_kwargs:dict(reservation))
     import tenant_ai_agent_run_store as run_store
-    monkeypatch.setattr(run_store,'load_agent_config',lambda *_args,**_kwargs:(config,None))
+    monkeypatch.setattr(run_store,'load_agent_config',lambda *_args,**_kwargs:((config,None) if _kwargs.get('with_block_reason') else config))
     monkeypatch.setattr(worker,'knowledge_context',lambda *_args,**_kwargs:[])
     monkeypatch.setattr(worker,'request_expert',AsyncMock(return_value=None))
     monkeypatch.setattr(worker,'history',lambda *_args,**_kwargs:([{'speaker':'CLIENT','text':source['body']}],0))

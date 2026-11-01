@@ -294,7 +294,7 @@ def projection(policy):
           OR c.avatar_checked_at<now()-interval '7 days'
           OR (c.avatar_status='loading' AND c.avatar_checked_at<now()-interval '3 minutes') THEN '' ELSE c.avatar_status END AS avatar_status,
         ch.name AS channel_name,ch.active AS channel_active,'connect:'||c.connect_channel_id::text AS history_channel,
-        CASE WHEN cs.agent_assignment_id IS NOT NULL THEN cs.agent_id ELSE COALESCE(cs.agent_id,j.agent_id) END AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,a.mode AS agent_mode,a.scopes AS agent_scopes,a.schedule AS agent_schedule,
+        cs.agent_id AS agent_id,a.name AS agent_name,a.enabled AS agent_enabled,a.mode AS agent_mode,a.scopes AS agent_scopes,a.schedule AS agent_schedule,
         COALESCE(gc.state,cs.state,'active') AS state,COALESCE(gc.reason,cs.reason,'') AS reason,COALESCE(gc.updated_at,cs.updated_at) AS updated_at,
         cs.tenant_id IS NOT NULL AS tracked,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,s.auto_send_enabled AS company_auto_send_enabled,
         t.status AS tenant_status,j.state AS latest_job_state,COALESCE(j.error_code,'') AS latest_job_error,
@@ -312,7 +312,7 @@ def projection(policy):
       LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id AND cs.channel_id=c.connect_channel_id::text
       LEFT JOIN LATERAL(SELECT j0.* FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=c.tenant_id AND j0.provider='connect'
         AND j0.channel_id=c.connect_channel_id::text AND j0.conversation_id=c.conversation_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
-      LEFT JOIN saas_ai_agents a ON a.tenant_id=c.tenant_id AND a.id=CASE WHEN cs.agent_assignment_id IS NOT NULL THEN cs.agent_id ELSE COALESCE(cs.agent_id,j.agent_id) END
+      LEFT JOIN saas_ai_agents a ON a.tenant_id=c.tenant_id AND a.id=cs.agent_id
       LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=c.tenant_id
       LEFT JOIN LATERAL(SELECT COALESCE(m.happened_at,m.created_at) AS last_message_at,m.id::text AS last_message_id,
           m.direction AS last_message_direction,m.message_type AS last_message_type,left(COALESCE(m.body,''),240) AS last_message_text

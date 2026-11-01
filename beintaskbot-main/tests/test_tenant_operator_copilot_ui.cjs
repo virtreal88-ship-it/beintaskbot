@@ -6,7 +6,7 @@ const settle=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmedi
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?site_lang=ru',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[],confirmations=[];
  const member={tenant_id:'tenant-a',telegram_id:11,role:'owner',permissions:['dialogs'],active:true};
  w.tenantProfileSnapshot={member,capabilities:{modules:{dialogs:true},chat_ai:true}};
- const route={provider:'connect',channel_id:'channel-a',conversation_id:'conversation-a',lead_id:41,customer_name:'Customer',channel_name:'Support',state:'active',display_state:'manual',controls_allowed:true,can_send:true,available_actions:[]};
+ const route={provider:'connect',agent_id:'assigned-agent',channel_id:'channel-a',conversation_id:'conversation-a',lead_id:41,customer_name:'Customer',channel_name:'Support',state:'active',display_state:'manual',controls_allowed:true,can_send:true,available_actions:[]};
  const messages=[{external_id:'photo-1',direction:'incoming',message_type:'image',body:'Error light is blinking',happened_at:'1'},
   {external_id:'voice-1',direction:'incoming',message_type:'voice',body:'Printer is ready?',has_transcription:true,happened_at:'2'},
   {external_id:'question-1',direction:'incoming',message_type:'text',body:'Hazırdı?',happened_at:'3'}];

@@ -2,7 +2,6 @@
 import asyncio
 from aiohttp import web
 from tenant_chat_ai_settings import read, save, available_models, test_model
-from tenant_chat_ai_service import run
 from tenant_linear_policy import TenantLinearError
 from tenant_request_origin import require_json_post
 from tenant_chat_ai_provider import ChatAIProviderError
@@ -24,7 +23,11 @@ def handler(member_from_request, canonical_origin, logger, *, settings=False):
                     raise TenantLinearError('Sorğu düzgün deyil.')
                 if str(data.get('expected_tenant_id') or '') != str(profile['tenant_id']) or str(data.get('expected_user_id') or '') != str(profile['telegram_id']):
                     raise TenantLinearError('Kabinet dəyişib. Yeniləyin.', 409)
-                result = await asyncio.to_thread(save, profile, data) if settings else await run(profile, data, logger)
+                if not settings:
+                    # The old company-model endpoint has no conversation/agent
+                    # binding. It must not bypass assigned-agent admission.
+                    raise TenantLinearError('Откройте диалог и используйте AI назначенного агента. Если агент не назначен, сначала назначьте его.',409)
+                result = await asyncio.to_thread(save, profile, data)
             return web.json_response({'success': True, **result}, headers=headers)
         except TenantLinearError as error:
             return web.json_response({'success': False, 'error': str(error), 'keep_request': getattr(error, 'keep_request', False)}, status=error.status, headers=headers)

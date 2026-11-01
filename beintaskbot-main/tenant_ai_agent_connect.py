@@ -15,6 +15,7 @@ from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agent_runtime_flags import enabled as runtime_flag
 from tenant_ai_agent_access import tenant_status_allows_ai
 from tenant_platform import _connect, _json
+from tenant_linear_policy import TenantLinearError
 
 
 def _whatsapp_phone(conversation_id: str) -> str:
@@ -341,7 +342,7 @@ def scope_matches(scopes, channel_id: str, *, is_group=False) -> bool:
     return False
 
 
-def allowed(job: dict, connection=None) -> bool:
+def allowed(job: dict, connection=None, *, require_assignment=True) -> bool:
     if str(job.get('provider') or '') != 'connect':
         return False
     if not runtime_flag('AI_AGENTS_ENABLED'):
@@ -394,6 +395,12 @@ def allowed(job: dict, connection=None) -> bool:
                 result = result and bool(authority(cur, tenant, channel, conversation, job.get('agent_id')))
                 if job.get('agent_id'):
                     result = result and job_allowed(cur, job)
+            if result and require_assignment:
+                from tenant_dialog_ai_context import require_assignment as current_assignment
+                try:
+                    current_assignment(cur,tenant,channel,conversation,job.get('agent_id'))
+                except TenantLinearError:
+                    result=False
         if connection is None:
             conn.commit()
     return result
@@ -527,7 +534,7 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 if connection is None:
                     conn.commit()
                 return 0
-            if not allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel_id,'conversation_id':conversation_id,'lead_id':lead_id,'event_fingerprint':fingerprint}, connection=conn):
+            if not allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel_id,'conversation_id':conversation_id,'lead_id':lead_id,'event_fingerprint':fingerprint}, connection=conn, require_assignment=False):
                 if not group_fence:
                     # Persist ownership even when runtime/send gates are off.
                     # The reconciler stores a paused binding and never queues,

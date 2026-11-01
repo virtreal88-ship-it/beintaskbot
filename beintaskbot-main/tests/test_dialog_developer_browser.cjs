@@ -17,7 +17,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
    await route.fulfill({json:{success:true,result}});
   });
   await page.goto('https://crm.test/');
-  await page.evaluate(()=>{window.tenantI18n={language:'ru'};window.tenantOperator={member:{tenant_id:'a',telegram_id:33},hasRight:()=>true,currentDialog:{provider:'connect',channel_id:'channel',conversation_id:'source'}};});
+  await page.evaluate(()=>{window.tenantI18n={language:'ru'};window.tenantOperator={member:{tenant_id:'a',telegram_id:33},hasRight:()=>true,currentDialog:{provider:'connect',agent_id:'assigned-agent',channel_id:'channel',conversation_id:'source'}};});
   await page.addScriptTag({path:'docs/tenant-dialog-consultations.js'});
   assert.equal(await page.locator('#dialogHelperType').inputValue(),'Helper');assert.equal(await page.locator('#privatePrompt').isVisible(),true);
   await page.locator('#dialogHelperType').selectOption('Developer');await page.locator('#dialogHelperType').dispatchEvent('change');

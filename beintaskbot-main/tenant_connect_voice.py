@@ -6,6 +6,7 @@ reissued after a crash/timeout: an uncertain paid request must not run twice.
 """
 from tenant_ai_testing_budget import TOKEN_USAGE_SQL
 import io
+from tenant_linear_policy import TenantLinearError
 import os
 import subprocess
 import tempfile
@@ -149,7 +150,12 @@ def active(job, reservation):
     """Recheck lease and takeover revision at each expensive voice boundary."""
     from tenant_ai_agent_admission import allowed_job
     from tenant_ai_agent_run_store import load_agent_config
-    if not allowed_job(job) or not load_agent_config(job):
+    if not allowed_job(job):
+        return False
+    from tenant_dialog_ai_context import assert_reservation_current
+    try:
+        assert_reservation_current(job,reservation)
+    except TenantLinearError:
         return False
     with _connect() as conn:
         with conn.cursor() as cur:

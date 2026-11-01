@@ -8,7 +8,7 @@ import unittest
 import wave
 from contextlib import ExitStack
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, AsyncMock, patch
 
 try:
     import psycopg
@@ -186,6 +186,24 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
     async def test_outgoing_audio_cannot_start_media(self):
         self.rows[0]['direction']='outgoing';await self.process()
         self.prepare_media.assert_not_called();self.generate.assert_not_called()
+
+
+    async def test_text_only_case_followup_rechecks_model_after_expert_context(self):
+        for flag in ('pilot_developer_followup','pilot_customer_case_reply'):
+            with self.subTest(flag=flag):
+                mid='case-'+flag
+                self.rows=[row(mid=mid,kind='text',text='Need help with the original case')]
+                current={'model':'model'}
+                def configured(*args,**kwargs):return {**CONFIG,'agent_model':current['model']}
+                async def changed(*args,**kwargs):current['model']='changed-after-reservation';return None
+                expert=AsyncMock(side_effect=changed)
+                with patch.object(runs,'load_agent_config',side_effect=configured), \
+                     patch.object(worker,'request_expert',expert), \
+                     patch('tenant_connect_documents.prepare',new=AsyncMock(return_value={})), \
+                     patch('tenant_connect_videos.prepare',new=AsyncMock(return_value=({},{},{}))):
+                    await self.process({**JOB,'payload':{'message_id':mid,flag:True}})
+                expert.assert_awaited_once()
+                self.generate.assert_not_called();self.send.assert_not_called()
 
 
 class VoiceBoundaries(unittest.TestCase):
