@@ -1,24 +1,34 @@
 /* Explicit bounded downloads. No remote URLs or credentials are put in the DOM. */
 (() => {
   let member, lead, epoch=0;
-  const active=new Set(), urls=new Set(), previews=new Map(), mediaCache=new Map();
+  const active=new Set(), urls=new Set(), previews=new Map(), mediaCache=new Map(), retryUntil=new Map();
   let cacheBytes=0;
   const MAX_PREVIEW_BYTES=100*1024*1024,MAX_CACHE_BYTES=32*1024*1024;
   const text=(key,fallback)=>globalThis.window?.tenantI18n?.t(key)||fallback;
+  const retryDelay=response=>Math.max(1,Math.min(3600,parseInt(response.headers.get('Retry-After')||'60',10)||60));
+  const mediaFailureState=status=>status===429?'rate_limited':status===404||status===410?'unavailable':status===403?'forbidden':status===413?'too_large':status===415?'invalid':status===502||status===503?'retryable':'terminal';
+  const retryKey=(host,fallback='')=>[identity(member),host?.dataset.channelId||'',host?.dataset.conversationId||'',host?.dataset.chatAttachment||fallback].join(':');
+  const retryAt=(host,button,fallback='')=>Math.max(Number(host?.dataset.mediaRetryAt||0),Number(button?.dataset.retryAt||0),Number(retryUntil.get(retryKey(host,fallback))||0));
+  const rememberRetry=(host,button,until,fallback='')=>{retryUntil.set(retryKey(host,fallback),until);if(host)host.dataset.mediaRetryAt=String(until);if(button)button.dataset.retryAt=String(until);};
+  const canStartMedia=host=>active.size<3&&(!(host?.dataset.connectMedia==='true')||[...active].filter(controller=>controller.connectMedia).length<2);
+  const busyText=()=>text('mediaBusy','Other attachments are loading. Try again when they finish.');
+  function updateMediaMenu(host){const load=host?.querySelector('[data-media-menu-load]'),primary=host?.querySelector('[data-media-open]'),download=host?.querySelector('[data-media-download]');if(load){const loaded=!!host.querySelector('[data-media-preview]'),state=host.dataset.mediaPreviewState,blocked=['unavailable','forbidden','too_large','invalid','terminal'].includes(state);load.hidden=loaded;load.disabled=blocked;load.textContent=['retryable','rate_limited'].includes(state)?text('retryAttachment','Retry loading'):text('loadAttachment','Load file');if(primary)primary.disabled=blocked;if(download)download.disabled=blocked;}}
   const identity=m=>m?.tenant_id+':'+m?.telegram_id;
   const formatSize=value=>{const bytes=Number(value);if(!Number.isFinite(bytes)||bytes<0)return '';if(bytes<1024)return `${bytes} B`;if(bytes<1024*1024)return `${Math.round(bytes/1024)} KB`;return `${(bytes/(1024*1024)).toFixed(1)} MB`;};
   const duration=value=>{const seconds=Number(value);if(!Number.isFinite(seconds)||seconds<0)return '';const whole=Math.round(seconds);return `${Math.floor(whole/60)}:${String(whole%60).padStart(2,'0')}`;};
   const dispositionName=header=>{const encoded=String(header||'').match(/filename\*=UTF-8''([^;]+)/i);if(encoded){try{return decodeURIComponent(encoded[1].trim().replace(/^"|"$/g,''));}catch(_error){}}return String(header||'').match(/filename="?([^";]+)"?/i)?.[1]?.trim()||'';};
   async function downloadAttachment(button,url,status){
     if(button.disabled||!member||!url)return;
-    const retry=Number(button.dataset.retryAt||0);if(retry>Date.now()){status.textContent=text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(Math.ceil((retry-Date.now())/1000)));return;}
-    const current=epoch,who=identity(member);button.disabled=true;status.textContent=text('loading','Yüklənir…');
-    try{const response=await fetch(url,{credentials:'same-origin',cache:'no-store'});
-      if(!response.ok){const data=await response.json().catch(()=>({}));if(response.status===429){const seconds=Math.max(1,Math.min(3600,parseInt(response.headers.get('Retry-After')||'60',10)||60));button.dataset.retryAt=String(Date.now()+seconds*1000);throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds)));}throw Error(response.status===404||response.status===410?text('mediaUnavailable','File is unavailable or expired.'):data.error||text('mediaFailed','File could not be downloaded.'));}
+    const host=button.closest('[data-chat-attachment]'),statusNode=status||host?.querySelector('[role="status"]'),key=button.dataset.mediaDownload||url,attachmentKey=host?.dataset.chatAttachment||key;
+    const retry=retryAt(host,button,attachmentKey);if(retry>Date.now()){if(statusNode)statusNode.textContent=text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(Math.ceil((retry-Date.now())/1000)));return;}
+    if(!canStartMedia(host)){if(statusNode)statusNode.textContent=busyText();return;}
+    const current=epoch,who=identity(member),controller=new AbortController();controller.connectMedia=host?.dataset.connectMedia==='true';active.add(controller);button.disabled=true;button.setAttribute('aria-busy','true');if(statusNode)statusNode.textContent=text('loading','Yüklənir…');
+    try{const response=await fetch(url,{credentials:'same-origin',cache:'no-store',signal:controller.signal});
+      if(!response.ok){const data=await response.json().catch(()=>({}));if(response.status===429){const seconds=retryDelay(response),until=Date.now()+seconds*1000;rememberRetry(host,button,until,attachmentKey);if(host){host.dataset.mediaPreviewState='rate_limited';updateMediaMenu(host);}throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds)));}if(host){host.dataset.mediaPreviewState=mediaFailureState(response.status);updateMediaMenu(host);}throw Error(response.status===403?text('mediaForbidden','You do not have access to this file.'):response.status===404||response.status===410?text('mediaUnavailable','File is unavailable or expired.'):response.status===413?text('mediaLarge','File is too large.'):response.status===415?text('mediaInvalid','File format is not supported.'):data.error||text('mediaFailed','File could not be downloaded.'));}
       const blob=await response.blob();if(current!==epoch||who!==identity(member)||!button.isConnected)return;if(!blob.size||blob.size>MAX_PREVIEW_BYTES)throw Error(text('mediaLarge','File is too large.'));
-      const objectUrl=URL.createObjectURL(blob),link=document.createElement('a');link.href=objectUrl;link.download=dispositionName(response.headers.get('Content-Disposition'))||'attachment';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);status.textContent='';delete button.dataset.retryAt;
-    }catch(error){if(current===epoch&&who===identity(member)&&button.isConnected)status.textContent=error.message||text('mediaFailed','File could not be downloaded.');}
-    finally{button.disabled=false;}
+      const objectUrl=URL.createObjectURL(blob),link=document.createElement('a');link.href=objectUrl;link.download=dispositionName(response.headers.get('Content-Disposition'))||'attachment';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);if(statusNode)statusNode.textContent='';retryUntil.delete(retryKey(host,attachmentKey));delete button.dataset.retryAt;if(host){delete host.dataset.mediaRetryAt;delete host.dataset.mediaPreviewState;updateMediaMenu(host);}
+    }catch(error){if(current===epoch&&who===identity(member)&&button.isConnected){if(host&&!['rate_limited','unavailable','forbidden','too_large','invalid','terminal'].includes(host.dataset.mediaPreviewState)){host.dataset.mediaPreviewState='retryable';updateMediaMenu(host);}if(statusNode)statusNode.textContent=error.message||text('mediaFailed','File could not be downloaded.');}}
+    finally{active.delete(controller);if(button.isConnected){button.setAttribute('aria-busy','false');if(host)updateMediaMenu(host);else button.disabled=false;}}
   }
   if(globalThis.window)window.tenantDownloadAttachment=downloadAttachment;
   function audioPlayer(url,seconds){
@@ -63,11 +73,11 @@
     epoch++;
     active.forEach(controller=>controller.abort());active.clear();
     urls.forEach(url=>URL.revokeObjectURL(url));urls.clear();previews.forEach(preview=>stop(preview.media));previews.clear();
-    document.querySelectorAll('[data-native-audio] audio').forEach(audio=>{audio.pause?.();audio.removeAttribute?.('src');audio.load?.();});
-    if(dropCache){mediaCache.clear();cacheBytes=0;}
+    document.querySelectorAll('[data-native-audio] audio').forEach(audio=>{audio.pause?.();audio.removeAttribute?.('src');audio.load?.();delete audio.dataset.mediaPreview;});
+    if(dropCache){mediaCache.clear();cacheBytes=0;retryUntil.clear();}
     document.querySelectorAll('[data-chat-attachment]').forEach(host=>{
-      host.querySelectorAll('[data-media-preview],img,audio,video,a').forEach(node=>node.remove());
-      const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button');if(button){button.hidden=false;button.disabled=false;}delete host.dataset.mediaPreviewState;
+      host.querySelectorAll('[data-media-preview]:not(.operator-native-audio),img,audio:not(.operator-native-audio),video,a').forEach(node=>node.remove());
+      const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button');if(button){button.hidden=!!host.querySelector('.operator-native-audio');button.disabled=false;}delete host.dataset.mediaPreviewState;updateMediaMenu(host);
     });
   }
   function bind(){
@@ -75,17 +85,19 @@
     document.querySelectorAll('#chatRows [data-chat-attachment], [data-learning-chat] [data-chat-attachment]').forEach(host=>{
       const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button'),status=host.querySelector('[role="status"]');
       if(!button)return;
-      const load=async(auto=false)=>{
+      const menuLoad=host.querySelector('[data-media-menu-load]');if(menuLoad&&!menuLoad.dataset.bound){menuLoad.dataset.bound='true';menuLoad.onclick=()=>{menuLoad.closest('details')?.removeAttribute('open');button.click();};}
+      updateMediaMenu(host);
+      const load=async()=>{
         if(button.disabled||!member||!(lead||host.dataset.attachmentLeadId))return;
-        const retryAt=Number(host.dataset.mediaRetryAt||0);
-        if(retryAt>Date.now()){
-          const seconds=Math.ceil((retryAt-Date.now())/1000);
+        const retry=retryAt(host,button,host.dataset.chatAttachment||'');
+        if(retry>Date.now()){
+          const seconds=Math.ceil((retry-Date.now())/1000);
           status.textContent=' '+text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds));
           return;
         }
-        if(active.size>=3){status.textContent=text('mediaBusy','Bir az sonra yoxlayın.');if(auto)button.hidden=false;return;}
+        if(!canStartMedia(host)){status.textContent=busyText();return;}
         const current=epoch,who=identity(member),selected=lead||host.dataset.attachmentLeadId,controller=new AbortController();
-        active.add(controller);button.disabled=true;button.setAttribute('aria-busy','true');status.textContent=' '+text('loading','Yüklənir…');
+        controller.connectMedia=host.dataset.connectMedia==='true';active.add(controller);button.disabled=true;button.setAttribute('aria-busy','true');if(menuLoad)menuLoad.disabled=true;status.textContent=' '+text('loading','Yüklənir…');
         const valid=()=>current===epoch&&who===identity(member)&&selected===(lead||host.dataset.attachmentLeadId)&&host.isConnected;
         const timer=setTimeout(()=>controller.abort(),70000);
         let blobUrl;
@@ -97,14 +109,14 @@
           else{
             const response=await fetch('/api/platform/crm/chat/attachment?'+query,
               {credentials:'same-origin',cache:'no-store',signal:controller.signal});
-            if(!response.ok){const data=await response.json().catch(()=>({}));const key=data.code==='media_duration_limit'?'mediaDuration':({404:'mediaUnavailable',410:'mediaUnavailable',413:'mediaLarge',415:'mediaInvalid',429:'mediaBusy'}[response.status]||'mediaFailed');if(response.status===429){const retry=Math.max(1,Math.min(3600,parseInt(response.headers.get('Retry-After')||'60',10)||60));host.dataset.mediaRetryAt=String(Date.now()+retry*1000);throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(retry)));}throw Error(host.dataset.connectMedia?text(key,data.error||'Fayl yüklənmədi.'):data.error||'Fayl yüklənmədi.');}
-            servedFilename=dispositionName(response.headers.get('Content-Disposition'))||servedFilename;const declaredSize=Number(response.headers.get('Content-Length'));contentLength=response.headers.get('Content-Length')||'';if(auto&&declaredSize>5*1024*1024)throw Error(text('mediaLarge','Fayl çox böyükdür.'));
+            if(!response.ok){const data=await response.json().catch(()=>({}));const key=data.code==='media_duration_limit'?'mediaDuration':({404:'mediaUnavailable',410:'mediaUnavailable',413:'mediaLarge',415:'mediaInvalid',429:'mediaBusy'}[response.status]||'mediaFailed');if(response.status===429){const seconds=retryDelay(response),until=Date.now()+seconds*1000;rememberRetry(host,button,until,host.dataset.chatAttachment||'');host.dataset.mediaPreviewState='rate_limited';updateMediaMenu(host);throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds)));}host.dataset.mediaPreviewState=mediaFailureState(response.status);updateMediaMenu(host);throw Error(response.status===403?text('mediaForbidden','You do not have access to this file.'):response.status===404||response.status===410?text(key,'File is unavailable or expired.'):response.status===413?text(key,'File is too large.'):response.status===415?text(key,'File format is not supported.'):data.error||text('mediaFailed','File could not be downloaded.'));}
+            servedFilename=dispositionName(response.headers.get('Content-Disposition'))||servedFilename;const declaredSize=Number(response.headers.get('Content-Length'));contentLength=response.headers.get('Content-Length')||'';
             const chunks=[],reader=response.body.getReader(),total=declaredSize;
             let size=0;
             while(true){
               const {done,value}=await reader.read();if(done)break;
               if(!valid()){await reader.cancel();return;}
-              size+=value.length;if(auto&&size>5*1024*1024){await reader.cancel();throw Error(text('mediaLarge','Fayl çox böyükdür.'));}
+              size+=value.length;
               if(size>MAX_PREVIEW_BYTES){await reader.cancel();throw Error('Fayl çox böyükdür.');}
               chunks.push(value);status.textContent=total>0?' Yüklənir: '+Math.min(100,Math.round(size/total*100))+'%':' Yüklənir…';
             }
@@ -114,14 +126,15 @@
             // in the 32 MiB in-tab cache after playback or preview is closed.
             if(blob.size<=MAX_CACHE_BYTES){while(cacheBytes+blob.size>MAX_CACHE_BYTES&&mediaCache.size){const [oldKey,oldBlob]=mediaCache.entries().next().value;mediaCache.delete(oldKey);cacheBytes-=oldBlob.size;}if(cacheBytes+blob.size<=MAX_CACHE_BYTES){mediaCache.set(cacheKey,blob);cacheBytes+=blob.size;}}
           }
-          if(auto&&blob.size>5*1024*1024)throw Error(text('mediaLarge','Fayl çox böyükdür.'));
-          if(!blob.size||blob.size>MAX_PREVIEW_BYTES)throw Error('Fayl ölçüsü düzgün deyil.');
+          if(!blob.size||blob.size>MAX_PREVIEW_BYTES){host.dataset.mediaPreviewState='too_large';updateMediaMenu(host);throw Error('Fayl ölçüsü düzgün deyil.');}
           blobUrl=URL.createObjectURL(blob);urls.add(blobUrl);
-          const type=blob.type.split(';')[0],expected=host.dataset.mediaKind;if(expected==='image'&&!type.startsWith('image/'))throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));if(expected==='audio'&&!type.startsWith('audio/')&&type!=='application/ogg')throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));if(expected==='video'&&!type.startsWith('video/'))throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));let node,media;
+          const type=blob.type.split(';')[0],expected=String(host.dataset.mediaKind||'').toLowerCase();if(expected==='image'&&!type.startsWith('image/')){host.dataset.mediaPreviewState='invalid';updateMediaMenu(host);throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));}if(['audio','voice','voice_message','ptt'].includes(expected)&&!type.startsWith('audio/')&&type!=='application/ogg'){host.dataset.mediaPreviewState='invalid';updateMediaMenu(host);throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));}if(expected==='video'&&!type.startsWith('video/')){host.dataset.mediaPreviewState='invalid';updateMediaMenu(host);throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));}let node,media;
           if(['image/jpeg','image/png','image/webp','image/gif'].includes(type)){
             node=document.createElement('img');if(node.dataset)node.dataset.mediaPreview='image';node.className='operator-media-preview';node.alt=text('photo','Chat photo');node.title=text('openOriginal','Open original');node.tabIndex=0;node.setAttribute?.('role','button');node.onclick=()=>openPhotoViewer(node);node.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();openPhotoViewer(node);}};media=node;
           }else if(type.startsWith('audio/')||type==='application/ogg'){
-            ({node,media}=audioPlayer(blobUrl,host.dataset.mediaDuration));
+            const nativeAudio=host.querySelector('.operator-native-audio');
+            if(nativeAudio){node=media=nativeAudio;node.dataset.mediaPreview='audio';node.src=blobUrl;node.load?.();}
+            else ({node,media}=audioPlayer(blobUrl,host.dataset.mediaDuration));
           }else if(['video/mp4','video/webm'].includes(type)){
             node=document.createElement('video');if(node.dataset)node.dataset.mediaPreview='video';node.className='operator-media-video';node.controls=true;node.preload='metadata';media=node;
           }else{
@@ -129,21 +142,18 @@
             const meta=host.querySelector('[data-media-meta]');if(meta?.dataset)meta.textContent=[servedFilename,type==='application/pdf'?'PDF':type,formatSize(contentLength||blob.size)].filter(Boolean).join(' · ');
           }
           if(node.tagName!=='A'){
-            media.onerror=()=>{stop(media);previews.delete(blobUrl);if(valid()){node.remove();button.hidden=false;status.textContent=' '+text('mediaInvalid','Fayl açıla bilmədi. Yenidən yoxlayın.');}URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);};
+            media.onerror=()=>{stop(media);previews.delete(blobUrl);if(valid()){if(node.classList?.contains('operator-native-audio')){node.removeAttribute('src');node.load?.();delete node.dataset.mediaPreview;}else node.remove();host.dataset.mediaPreviewState='invalid';button.hidden=!!host.querySelector('.operator-native-audio');status.textContent=' '+text('mediaInvalid','Fayl açıla bilmədi. Yenidən yoxlayın.');updateMediaMenu(host);}URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);};
             if(media.tagName!=='AUDIO')media.src=blobUrl;
           }
           // Keep at most three decoded previews in this tab, not the whole history.
-          if(previews.size>=3){const [oldUrl,old]=previews.entries().next().value;stop(old.media);old.node.remove();old.button.hidden=false;URL.revokeObjectURL(oldUrl);urls.delete(oldUrl);previews.delete(oldUrl);}
-          previews.set(blobUrl,{node,button,media});
+          if(previews.size>=3){const [oldUrl,old]=previews.entries().next().value;stop(old.media);if(old.node.classList?.contains('operator-native-audio')){old.node.removeAttribute('src');old.node.load?.();delete old.node.dataset.mediaPreview;old.button.hidden=true;delete old.host.dataset.mediaPreviewState;updateMediaMenu(old.host);}else{old.node.remove();old.button.hidden=false;delete old.host.dataset.mediaPreviewState;updateMediaMenu(old.host);}URL.revokeObjectURL(oldUrl);urls.delete(oldUrl);previews.delete(oldUrl);}
+          previews.set(blobUrl,{node,button,media,host});
           if(host.insertBefore)host.insertBefore(node,button);else host.append(node);button.hidden=true;status.textContent='';
-          delete host.dataset.mediaRetryAt;
-          if(media?.tagName==='AUDIO'&&!auto&&typeof media.play==='function'){
-            try{await media.play();}catch(_error){status.textContent=' '+text('mediaInvalid','Audio is ready. Press Play to listen.');}
-          }
-        }catch(error){if(blobUrl){URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);}if(valid()){host.dataset.mediaPreviewState='unavailable';status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;}}
-        finally{clearTimeout(timer);active.delete(controller);button.disabled=false;button.setAttribute('aria-busy','false');}
+          delete host.dataset.mediaRetryAt;retryUntil.delete(retryKey(host,host.dataset.chatAttachment||''));host.dataset.mediaPreviewState='loaded';updateMediaMenu(host);
+        }catch(error){if(blobUrl){URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);}if(valid()){if(!host.dataset.mediaPreviewState||host.dataset.mediaPreviewState==='loaded')host.dataset.mediaPreviewState='retryable';status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;updateMediaMenu(host);}}
+        finally{clearTimeout(timer);active.delete(controller);button.setAttribute('aria-busy','false');if(menuLoad)menuLoad.disabled=false;updateMediaMenu(host);}
       };
-      button.onclick=()=>load(false);const knownImage=host.dataset.mediaKind==='image';if(knownImage&&!host.dataset.mediaPreviewState){host.dataset.mediaPreviewState='loading';button.hidden=true;load(true).then(()=>{if(!host.isConnected)return;if(!host.querySelector('[data-media-preview="image"]'))button.hidden=false;});}
+      button.onclick=()=>load();
     });
   }
   document.addEventListener('tenant-profile',event=>{if(identity(member)!==identity(event.detail.member)||JSON.stringify(member?.permissions)!==JSON.stringify(event.detail.member?.permissions)||member?.role!==event.detail.member?.role||member?.active!==event.detail.member?.active)clear(true);member=event.detail.member;});
