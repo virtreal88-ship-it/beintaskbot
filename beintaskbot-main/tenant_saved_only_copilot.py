@@ -241,12 +241,14 @@ def execute(profile,data):
         # mutates message bodies, media receipts or the ordinary private thread.
         with _connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("UPDATE saas_chat_ai_runs SET status='completed',result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending'",(json.dumps(result,ensure_ascii=False),state['tenant'],stable))
+                cur.execute("UPDATE saas_chat_ai_runs SET status='completed',result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending' RETURNING request_id",(json.dumps(result,ensure_ascii=False),state['tenant'],stable))
+                if not cur.fetchone():raise TenantLinearError('The known result could not be durably recorded.',409)
             conn.commit()
         try:settle(state['tenant'],call_key,usage,unknown=not (isinstance(usage,dict) and isinstance(usage.get('total_tokens'),int) and usage['total_tokens']>0),reserved_prices=PRICES,track_uncapped=True)
         except Exception:pass  # Keep the financial hold; never discard known text.
         current=_read(profile,data)
-        if current['fingerprint']!=state['fingerprint']:raise TenantLinearError('The saved result belongs to the earlier context and is withheld.',409)
+        old=current['existing']
+        if current['fingerprint']!=state['fingerprint'] or not old or old['status']!='completed' or old['input_hash']!=state['fingerprint'] or old['result']!=result:raise TenantLinearError('The saved result is not durably available in the current context.',409)
         return result
     except Exception:
         with _connect() as conn:

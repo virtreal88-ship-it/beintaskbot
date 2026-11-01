@@ -289,3 +289,23 @@ def test_registered_router_reaches_readonly_saved_preflight_and_preserves_normal
             execute.assert_called_once()
             http.assert_not_called();forbidden.assert_not_called()
     asyncio.run(scenario())
+
+
+def test_changed_run_state_cannot_publish_unpersisted_provider_text_or_redispatch(saved):
+    db,data,http,forbidden=saved
+    preview=gate.preflight(PROFILE,data)
+    payload={**data,'request_id':preview['request_id'],'cost_token':preview['cost_token']}
+    response=http.return_value
+    def changed(*args,**kwargs):
+        db.execute("UPDATE saas_chat_ai_runs SET status='unknown' WHERE tenant_id=%s::uuid AND request_id=%s::uuid",(A,preview['request_id']));db.commit()
+        return response
+    http.side_effect=changed
+    with pytest.raises(TenantLinearError) as caught:gate.execute(PROFILE,payload)
+    assert caught.value.keep_request is True
+    assert 'Synthetic saved draft' not in str(caught.value)
+    row=db.execute('SELECT status,result FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(A,preview['request_id']))[0]
+    assert row['status']=='unknown' and not row['result']
+    hold=db.execute('SELECT state FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid AND call_key=%s',(A,'saved-only:'+preview['request_id']))[0]
+    assert hold['state']=='unknown'
+    with pytest.raises(TenantLinearError):gate.execute(PROFILE,payload)
+    http.assert_called_once();forbidden.assert_not_called()
