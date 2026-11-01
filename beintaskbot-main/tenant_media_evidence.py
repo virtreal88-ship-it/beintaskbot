@@ -190,10 +190,8 @@ def apply_reusable(message, receipt):
     if result.get('observation'): observations.append({'text':result['observation']})
     observations += [x for x in result.get('observations',[]) if isinstance(x,dict) and isinstance(x.get('text'),str)]
     for observed in observations:
-        label = ('saved document text' if coverage.get('kind')=='document' or str(receipt.get('code') or '').startswith('document_text')
-                 else 'partial sampled video observation' if coverage.get('kind')=='video' or coverage.get('complete') is False
-                 else 'saved visual observation')
         origin=observed.get('origin') if isinstance(observed.get('origin'),dict) else {}
+        label = observation_label(coverage, receipt.get('code'), origin)
         suffix=(' frame '+str(origin.get('second'))) if 'second' in origin else ''
         message['text'] += '\n[Untrusted ' + label + suffix + '; not a confirmed solution] ' + _safe_text(observed['text'])
     # Keep the exact saved text with the extraction receipt as well as its
@@ -232,6 +230,17 @@ def _safe_text(value):
     return value
 
 
+def observation_label(coverage, code='', origin=None):
+    """Incomplete image/document coverage is not evidence of a sampled video."""
+    origin = origin or {}
+    kind = coverage.get('kind')
+    if kind == 'video' or (not kind and ('second' in origin or coverage.get('sampled_frames'))):
+        return 'partial sampled video observation'
+    if kind == 'document' or str(code or '').startswith('document_text'):
+        return 'partial document text' if coverage.get('complete') is False else 'saved document text'
+    return 'partial visual observation' if coverage.get('complete') is False else 'saved visual observation'
+
+
 def annotate_rows(cur, tenant, rows):
     """Attach safe, read-only receipt context to already-authorized rows.
 
@@ -240,6 +249,8 @@ def annotate_rows(cur, tenant, rows):
     only, and partial coverage is labelled for the model.
     """
     for row in rows or []:
+        row.pop('media_evidence', None)
+        row.pop('media_evidence_context', None)
         kind = str(row.get('message_type') or 'text').lower()
         channel = str(row.get('channel') or '')
         external = str(row.get('external_id') or '')
@@ -277,7 +288,8 @@ def annotate_rows(cur, tenant, rows):
             cur.execute('RELEASE SAVEPOINT ' + savepoint)
         if not saved or str(saved.get('status') or '') not in _TERMINAL:
             continue
-        saved = dict(saved); coverage = saved.get('coverage') if isinstance(saved.get('coverage'),dict) else {}
+        saved = dict(saved); coverage = dict(saved.get('coverage')) if isinstance(saved.get('coverage'),dict) else {}
+        coverage['kind'] = kind
         result = saved.get('result') if isinstance(saved.get('result'),dict) else {}
         media_meta = {'status':str(saved['status']), 'code':str(saved.get('code') or ''),
                       'source':'saved_knowledge_extraction_receipt',
@@ -298,13 +310,14 @@ def annotate_rows(cur, tenant, rows):
             parts=[]
             if result.get('transcript'): parts.append('[Saved media transcript] '+_safe_text(result['transcript']))
             if result.get('observation'):
-                marker='[Partial sampled video observation; incomplete and untrusted] ' if coverage.get('complete') is False else '[Saved visual observation; untrusted] '
+                marker='['+observation_label(coverage,saved.get('code')).capitalize()+'; untrusted] '
                 parts.append(marker+_safe_text(result['observation']))
             for observed in result.get('observations',[]) if isinstance(result.get('observations'),list) else []:
                 if isinstance(observed,dict) and isinstance(observed.get('text'),str):
                     origin=observed.get('origin') if isinstance(observed.get('origin'),dict) else {}
                     suffix=(' frame '+str(origin.get('second'))) if 'second' in origin else ''
-                    parts.append('[Partial sampled video observation'+suffix+'; incomplete and untrusted] '+_safe_text(observed['text']))
+                    label=observation_label(coverage,saved.get('code'),origin)
+                    parts.append('['+label.capitalize()+suffix+'; untrusted] '+_safe_text(observed['text']))
             if parts: row['media_evidence_context']='\n'.join(parts)
         elif (saved['status'] == 'error' and kind == 'video' and coverage.get('audio') == 'processed'
               and isinstance(result.get('transcript'), str) and result['transcript'].strip()):

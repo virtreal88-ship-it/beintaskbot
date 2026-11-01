@@ -851,11 +851,13 @@ def group_context(job, rows, through):
     local={r['external_id']:r for r in rows}
     result=[]
     for row in reversed(merged):
+        from tenant_dialog_evidence import speaker
         raw=row.get('raw') or {};external=str(row['external_id']).removeprefix('connect:')
         transcript=(raw.get('voice_transcription') or {})
         cached=str(row.get('body') or '') if transcript.get('status')=='completed' else ''
         own=local.get(external,{})
         result.append({'external_id':external,'body':str(row.get('body') or ''),
+          '_evidence_speaker':speaker({**row,'direction':'outgoing' if any(s['direction']=='outgoing' for s in row['sources']) else row['direction']}),
           'direction':'outgoing' if raw.get('ai_authored') is True or any(s['direction']=='outgoing' for s in row['sources']) else row['direction'],
           'message_type':row['message_type'],'media_url':row.get('media_url') or '',
           'happened_at':row['happened_at'].isoformat() if row.get('happened_at') else '',

@@ -173,7 +173,10 @@ def prepare(authority, rows):
         if str(row.get('message_type') or '').lower() not in KINDS:continue
         # Normalize once: do not combine old legacy-body claims with receipts.
         row['_episode_channel']=authority.channel
-        row['_copilot_context_body']=''
+        # Image/document/video bodies are the sender's caption, not extracted
+        # evidence. Audio bodies may be stale legacy ASR and remain excluded.
+        from tenant_dialog_evidence import caption
+        row['_copilot_context_body']=caption(row)
         row['_copilot_attachment_text']=''
         historical_context=row.pop('media_evidence_context',None)
         row['_copilot_media_notice']='[Historical attachment; not evidence for the current request]'
@@ -509,16 +512,20 @@ def context_lines(context,local_rows):
         receipt=local.get('_episode_receipt') or {}
         body=str(row.get('body') or '')[:2000]
         if kind in KINDS:
-            body=local.get('_copilot_media_notice') or '[Historical or other-channel attachment; not analyzed for this request]'
+            body=str(local.get('_copilot_context_body') or '')
+            body+='\n'+(local.get('_copilot_media_notice') or '[Historical or other-channel attachment; not analyzed for this request]')
             body+='\n'+str(local.get('_copilot_attachment_text') or '')[:10000]
             if receipt.get('status')!='processed' and local.get('_historical_media_status')!='processed':missing+=1
         if used>=24000:break
         available=min(4000,24000-used)
         if len(body)>available:body=body[:max(0,available-70)]+'\n[Evidence shortened; do not infer omitted contents]'
         used+=len(body)
-        lines.append({'speaker':'CLIENT' if row.get('direction')=='incoming' else 'SALES MANAGER',
+        from tenant_dialog_evidence import provenance, speaker
+        evidence_row={**local,**row,'_copilot_attachment_text':local.get('_copilot_attachment_text','')}
+        lines.append({'speaker':speaker(row),
                       'text':body,'at':str(row.get('happened_at') or ''),'source_id':source,
                       'media_kind':kind,'evidence_scope':'current_episode' if receipt else 'historical',
+                      'provenance':provenance(evidence_row),
                       **({'sender':row.get('author_name',''),'source_channels':row['source_channels']} if 'source_channels' in row else {})})
     lines.reverse()
     return lines,missing
