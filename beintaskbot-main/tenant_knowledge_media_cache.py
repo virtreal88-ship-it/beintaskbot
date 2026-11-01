@@ -282,6 +282,7 @@ def observe_once(profile,item,ref,content,mime,origin,invoke,check_before_ai=Non
 
 
 def transcribe_once(profile,item,model,media,invoke,check_before_ai=None,*,return_diagnostics=False):
+    item.pop('asr_artifact_model', None)
     base_fingerprint=transcription_fingerprint(item,model,media,return_diagnostics=return_diagnostics)
     fingerprint=base_fingerprint
     token=str(uuid.uuid4());tenant=item['tenant'];cache_fingerprints=[base_fingerprint]

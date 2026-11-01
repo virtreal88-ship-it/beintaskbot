@@ -43,8 +43,10 @@ def test_new_unknown_source_fence_blocks_changed_options(cached,monkeypatch):
 
 def test_new_completed_receipt_reused_under_changed_policy_fingerprint(cached,monkeypatch):
     conn,item,media=cached
+    item['asr_artifact_model']='stale-other-artifact'
     invoke=Mock(return_value=('Stored synthetic transcript',{'total_tokens':1}))
     assert cache.transcribe_once(PROFILE,item,'gpt-transcribe',media,invoke)[2]
+    assert 'asr_artifact_model' not in item
     original=cache.transcription_fingerprint
     monkeypatch.setattr(cache,'transcription_fingerprint',lambda *a,**k: original(*a,**k)+'changed-options')
     assert cache.transcribe_once(PROFILE,item,'gpt-transcribe',media,invoke)==('Stored synthetic transcript',{},False)
