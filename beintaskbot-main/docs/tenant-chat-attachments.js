@@ -4,7 +4,7 @@
   const active=new Set(), urls=new Set(), previews=new Map(), mediaCache=new Map(), retryUntil=new Map(), loadedKeys=new Set(), pendingKeys=new Map();
   let cacheBytes=0;
   const AUDIO_INTENT_KEY='tenant.audio-reload-intent.v1',AUDIO_INTENT_TTL=3600000;
-  let profilePolicy='',freshProfile=false,autoRestoreAttempted=false;
+  let profilePolicy='',freshProfile=false,autoRestoreAttempted=false,rememberSequence=0;
   const restorePending=new WeakSet();
   const hash=async value=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))].map(byte=>byte.toString(16).padStart(2,'0')).join('');
   const forgetAudioIntent=()=>{try{sessionStorage.removeItem(AUDIO_INTENT_KEY);}catch{}};
@@ -19,7 +19,7 @@
     if(!freshProfile||proof!==profilePolicy||who!==identity(member)||current!==epoch||!host.isConnected||version!==host.dataset.mediaVersion)return null;
     return {owner,scope,source,version};
   }
-  async function rememberAudio(host){try{await profileFetch;const binding=await audioBinding(host);if(binding&&host.dataset.mediaPreviewState==='loaded'&&host.querySelector('audio')?.getAttribute('src')&&!host.querySelector('audio')?.error)writeAudioIntent({v:1,...binding,expires_at:Date.now()+AUDIO_INTENT_TTL,blocked:false,retry_until:0});}catch{}}
+  async function rememberAudio(host){if(!['audio','voice','voice_message','ptt'].includes(host.dataset.mediaKind))return;const sequence=++rememberSequence;try{await profileFetch;const binding=await audioBinding(host);if(sequence===rememberSequence&&binding&&host.dataset.mediaPreviewState==='loaded'&&host.querySelector('audio')?.getAttribute('src')&&!host.querySelector('audio')?.error)writeAudioIntent({v:1,...binding,expires_at:Date.now()+AUDIO_INTENT_TTL,blocked:false,retry_until:0});}catch{}}
   function blockAudioIntent(binding,status,retry=0){const value=audioIntent();if(!value||!binding||!['owner','scope','source','version'].every(key=>value[key]===binding[key]))return;if([403,404,410].includes(status)){forgetAudioIntent();return;}writeAudioIntent({...value,blocked:true,retry_until:Math.max(value.retry_until,retry)});}
   async function failAudio(host,binding,status,retry=0){try{blockAudioIntent(binding||await audioBinding(host),status,retry);}catch{}}
   async function restoreAudio(host,load){
@@ -125,6 +125,7 @@
       const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button');if(button){button.hidden=false;button.disabled=false;}delete host.dataset.mediaPreviewState;updateMediaMenu(host);
     });
   }
+  const viewLead=host=>{if(lead)return lead;const route=window.tenantOperator?.currentDialog,shell=host.closest?.('#chatRows')?.closest('[data-dialog-key]');return route&&shell?.dataset.dialogKey===[route.provider||'connect',route.channel_id||'',route.conversation_id||'',route.lead_id||''].join(':')?route.lead_id:undefined;};
   function bind(){
     // Same-dialog renders retain stable media hosts. Retire only removed assets.
     for(const [url,preview] of previews){if(!preview.host.isConnected){stop(preview.media);URL.revokeObjectURL(url);urls.delete(url);previews.delete(url);}}
@@ -137,10 +138,10 @@
       updateMediaMenu(host);
       if(host.querySelector('[data-media-preview]'))return;
       if(host.querySelector('.operator-native-audio')&&!status.textContent)status.textContent=({ru:'Аудио не загружено',az:'Səs yüklənməyib',en:'Audio not loaded'}[window.tenantI18n?.language]||'Audio is not loaded in this tab');
-      const mediaQuery=()=>new URLSearchParams({lead_id:host.dataset.attachmentLeadId||lead,message_id:host.dataset.chatAttachment,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id,...(host.dataset.channelId&&host.dataset.conversationId?{channel_id:host.dataset.channelId,conversation_id:host.dataset.conversationId}:{})});
+      const mediaQuery=()=>new URLSearchParams({lead_id:host.dataset.attachmentLeadId||viewLead(host),message_id:host.dataset.chatAttachment,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id,...(host.dataset.channelId&&host.dataset.conversationId?{channel_id:host.dataset.channelId,conversation_id:host.dataset.conversationId}:{})});
       const previewKey=()=>mediaQuery().toString()+'|'+String(host.dataset.mediaVersion||'');
       const load=async(cachedOnly=false,automatic=false,intentBinding=null)=>{
-        if(button.disabled||!member||!(lead||host.dataset.attachmentLeadId))return;
+        if(button.disabled||!member||!(viewLead(host)||host.dataset.attachmentLeadId))return;
         const requestKey=previewKey();if(pendingKeys.has(requestKey)){status.textContent=busyText();return;}
         const retry=retryAt(host,button,host.dataset.chatAttachment||'');
         if(retry>Date.now()){
@@ -149,11 +150,11 @@
           return;
         }
         if(!cachedOnly&&!canStartMedia(host)){status.textContent=busyText();return;}
-        const current=epoch,who=identity(member),selected=lead||host.dataset.attachmentLeadId,controller=new AbortController();
+        const current=epoch,who=identity(member),selected=viewLead(host)||host.dataset.attachmentLeadId,controller=new AbortController();
         controller.audioReload=automatic;controller.connectMedia=host.dataset.connectMedia==='true';if(!cachedOnly){active.add(controller);pendingKeys.set(requestKey,controller);}button.disabled=true;button.setAttribute('aria-busy','true');if(menuLoad)menuLoad.disabled=true;status.textContent=' '+text('loading','Yüklənir…');updateMediaMenu(host);
-        const valid=()=>current===epoch&&who===identity(member)&&selected===(lead||host.dataset.attachmentLeadId)&&host.isConnected;
+        const valid=()=>current===epoch&&who===identity(member)&&selected===(viewLead(host)||host.dataset.attachmentLeadId)&&host.isConnected;
         const proof=profilePolicy,sourceVersion=host.dataset.mediaVersion,sourceDialog=host.closest?.('[data-dialog-key]')?.dataset.dialogKey;
-        const canRetain=()=>automatic&&freshProfile&&proof===profilePolicy&&who===identity(member)&&selected===(lead||host.dataset.attachmentLeadId)&&[...document.querySelectorAll('#chatRows [data-chat-attachment]')].some(next=>next.dataset.chatAttachment===host.dataset.chatAttachment&&next.dataset.mediaVersion===sourceVersion&&next.dataset.channelId===host.dataset.channelId&&next.dataset.conversationId===host.dataset.conversationId&&next.closest('[data-dialog-key]')?.dataset.dialogKey===sourceDialog);
+        const canRetain=()=>automatic&&freshProfile&&proof===profilePolicy&&who===identity(member)&&selected===(viewLead(host)||host.dataset.attachmentLeadId)&&[...document.querySelectorAll('#chatRows [data-chat-attachment]')].some(next=>next.dataset.chatAttachment===host.dataset.chatAttachment&&next.dataset.mediaVersion===sourceVersion&&next.dataset.channelId===host.dataset.channelId&&next.dataset.conversationId===host.dataset.conversationId&&next.closest('[data-dialog-key]')?.dataset.dialogKey===sourceDialog);
         const timer=setTimeout(()=>controller.abort(),70000);
         let blobUrl,restoreRetained=false;
         try{
