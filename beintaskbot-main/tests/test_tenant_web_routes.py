@@ -42,6 +42,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialog-consultations/replies/{id}/action', ('POST',)),
     ('dialog-consultations/replies/{id}/draft', ('POST',)),
     ('dialogs/asr-comparison', ('GET', 'POST')),
+    ('dialogs/audio-transcription', ('GET', 'POST')),
     ('dialogs/read', ('POST',)),
     ('dialogs/read-all', ('POST',)),
     ('testing/sessions', ('GET','POST')),
@@ -115,7 +116,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
 FACTORIES = ('instruction_handler', 'finance_handler', 'linear_handler', 'tasks_handler', 'news_handler',
     'news_telegram_handler', 'chat_ai_handler', 'chat_ai_model_handler', 'chat_send_handler', 'chat_receipt_handler', 'chat_upload_handler',
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler', 'historical_replay_handler',
-    'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'administrator_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'dialog_consultations_handler', 'owner_asr_comparison_handler', 'night_report_handler', 'testing_handler', 'simulation_handler', 'ai_state_handler', 'ai_instructor_handler')
+    'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'administrator_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'dialog_consultations_handler', 'owner_asr_comparison_handler', 'dialog_audio_transcription_handler', 'night_report_handler', 'testing_handler', 'simulation_handler', 'ai_state_handler', 'ai_instructor_handler')
 
 
 class Routes(unittest.IsolatedAsyncioTestCase):

@@ -236,3 +236,75 @@ def test_group_representative_requires_current_capture_and_uses_view_agent(ready
         assert result['requested_attempt']['state']=='completed' and result['message']['id']==selection
         assert result['source']['message_row_id']==selection and result['source']['message_id']==external
         assert result['message']['audio_transcript']=='synthetic speech' and len(sent)==1
+
+
+def test_foreign_chat_uuid_and_orphan_unknown_reservation_never_dispatch(ready):
+    db,data,provider,download,sent=ready
+    request=command(data,flow.preview(PROFILE,data))
+    db.execute("INSERT INTO saas_chat_ai_runs(tenant_id,request_id,requested_by,lead_id,input_hash,config_version,status,reserved_calls,provider,channel_id,conversation_id) VALUES(%s::uuid,%s::uuid,11,41,'other','other','completed',1,'connect',%s,'client')",(A,request['idempotency_key'],CA));db.commit()
+    with pytest.raises(flow.AudioError) as caught:flow.execute(PROFILE,request)
+    assert caught.value.code=='idempotency_conflict' and not sent
+    other=command(data,flow.preview(PROFILE,data));key='dialog-audio:'+other['idempotency_key']
+    with db.cursor() as cur:budget.reserve_media(cur,A,key,'dialog_audio_asr','whisper-1','asr',1)
+    db.commit();budget.settle_media(A,key,operation='asr',attempted_units=1,unknown=True)
+    with pytest.raises(flow.AudioError) as caught:flow.execute(PROFILE,other)
+    assert caught.value.code=='attempt_state_unavailable' and not sent
+    assert db.execute('SELECT state FROM saas_ai_spend_reservations WHERE call_key=%s',(key,))==[{'state':'unknown'}]
+
+
+def test_unmatched_unknown_hold_still_exhausts_existing_budget(ready,monkeypatch):
+    db,data,provider,download,sent=ready
+    monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD',json.dumps({A:30000}))
+    with db.cursor() as cur:budget.reserve_media(cur,A,'unattributed-old','knowledge_asr','whisper-1','asr',1)
+    db.commit();budget.settle_media(A,'unattributed-old',operation='asr',attempted_units=1,unknown=True)
+    with pytest.raises(Exception):flow.execute(PROFILE,command(data,flow.preview(PROFILE,data)))
+    assert not sent and db.execute('SELECT count(*) AS n FROM saas_dialog_audio_attempts')[0]['n']==0
+    assert db.execute("SELECT state,reserved_microusd FROM saas_ai_spend_reservations WHERE call_key='unattributed-old'")==[{'state':'unknown','reserved_microusd':30000}]
+
+
+@pytest.mark.parametrize('kind',['voice_message','ptt'])
+def test_native_audio_alias_claims_take_source_lock_and_respect_pending(ready,monkeypatch,kind):
+    import tenant_episode_media as episode
+    from types import SimpleNamespace
+    db,data,provider,download,sent=ready
+    original=provider.side_effect
+    def pending(*args,**kw):
+        # The explicit claim is durably pending before provider dispatch.
+        ref={**flow.reference(db.execute('SELECT * FROM saas_crm_messages WHERE id=%s::uuid',(data['message_row_id'],))[0],CA,41),'media_kind':kind}
+        # Use the real SQL claim path, not a synthetic source-guard stub.
+        monkeypatch.setattr(episode,'_connect',lambda:db)
+        key,token,result=episode._flight(SimpleNamespace(tenant=A,check=lambda:None),ref)
+        assert token is None and result['code']=='audio_transcription_pending'
+        return original(*args,**kw)
+    provider.side_effect=pending
+    result=flow.execute(PROFILE,command(data,flow.preview(PROFILE,data)))
+    assert result['requested_attempt']['state']=='completed' and len(sent)==1
+
+
+def test_opaque_history_cursor_preserves_tied_imports_and_source_scope(ready):
+    db,data,provider,download,sent=ready
+    with db.cursor() as cur:
+        auth=flow._authority(cur,PROFILE,data)
+        for i in range(23):store.import_success(cur,auth,{'origin':'legacy_body','source_version':auth['source_version'],'source_current':True,'model':'whisper-1','text':'previous '+str(i)})
+    db.commit()
+    first=flow.preview(PROFILE,data)
+    assert len(first['history'])==20 and first['history_next_cursor']
+    second=flow.preview(PROFILE,{**data,'history_before':first['history_next_cursor']})
+    assert len(second['history'])==3 and not second['history_next_cursor']
+    ids=[item['id'] for page in (first,second) for item in page['history']]
+    assert len(set(ids))==23 and {item['generation'] for item in first['history']}=={0}
+    provider.assert_not_called();download.assert_not_called()
+
+
+def test_paid_success_for_changed_source_is_history_only_never_reapplied(ready):
+    db,data,provider,download,sent=ready
+    def changed(*args,**kw):
+        kw['before_dispatch']();sent.append(args[1])
+        db.execute("UPDATE saas_crm_messages SET raw=raw||'{\"mediaId\":\"new-file\"}'::jsonb WHERE id=%s::uuid",(data['message_row_id'],));db.commit()
+        return 'old source paid speech',{'seconds':.1}
+    provider.side_effect=changed
+    first=flow.execute(PROFILE,command(data,flow.preview(PROFILE,data)))
+    assert first['requested_attempt']['state']=='completed' and not first['requested_attempt']['source_current']
+    assert not first['latest_success'] and not first['message'].get('audio_transcript')
+    assert first['history'][0]['text']=='old source paid speech'
+    assert db.execute('SELECT state,actual_microusd FROM saas_ai_spend_reservations')==[{'state':'settled','actual_microusd':30000}]
