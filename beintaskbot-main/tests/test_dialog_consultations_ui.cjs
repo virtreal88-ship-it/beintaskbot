@@ -3,7 +3,7 @@ const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const settle=async()=>{for(let i=0;i<15;i++)await new Promise(resolve=>setImmediate(resolve));};
 (async()=>{
  const dom=new JSDOM('<html><head></head><body><div><select data-app-language></select></div><details id="operatorMoreActions"><summary>More</summary><div id="operatorMenuExtra"></div></details><aside id="operatorCopilot" hidden></aside><button id="operatorCopilotToggle"></button><textarea id="chatText"></textarea></body></html>',{url:'https://crm.test/app',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
- const member={tenant_id:'tenant',telegram_id:33},route={provider:'connect',channel_id:'channel',conversation_id:'source',lead_id:41,customer_name:'Customer'};
+ const member={tenant_id:'tenant',telegram_id:33},route={provider:'connect',agent_id:'assigned-agent',channel_id:'channel',conversation_id:'source',lead_id:41,customer_name:'Customer'};
  let previewFail=false,inboxFail=false;w.alert=()=>assert.fail('No native error dialogs');
  let allowed=true,read=false,handled=false,draft='';w.tenantI18n={language:'ru'};w.tenantOperator={member,currentDialog:route,hasRight:()=>allowed,openDialog:async()=>{}};w.tenantProfileSnapshot={member};
  d.querySelector('#operatorCopilotToggle').onclick=()=>{d.querySelector('#operatorCopilot').hidden=false;};
@@ -40,4 +40,4 @@ const settle=async()=>{for(let i=0;i<15;i++)await new Promise(resolve=>setImmedi
  const handledButton=[...d.querySelectorAll('#dialogConsultationReplies button')].find(b=>b.textContent==='Обработано');handledButton.click();await settle();assert.equal(handled,true);assert.match(d.querySelector('#dialogConsultationBell').getAttribute('aria-label'),/Не обработано 0/);
  allowed=false;d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{member}}));await settle();assert.equal(d.querySelector('#dialogConsultationBell').hidden,true);assert.equal(d.querySelector('form'),null);
  dom.window.close();console.log('Consultation UI: explicit recipient/snapshot send, unknown quarantine, private drafts, global bell and unread vs handled passed');
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error=>{console.error(error);process.exit(1);});
