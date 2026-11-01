@@ -35,10 +35,10 @@ def authority(kind='manual',tenant=A,source='company',raw='whisper-1',payload=No
 def test_only_shared_target_company_audio_maps_transiently(kind):
     execution=authority(kind)
     item=execution.item({'media_kind':'audio'},{})
-    assert item['config']['transcription_model']=='gpt-transcribe' and item['_shared_dialog_asr']
+    assert item['config']['transcription_model']=='gpt-4o-transcribe' and item['_shared_dialog_asr']
     assert execution.config['transcription_model']=='whisper-1'
     assert execution.model=='gpt-4.1' and execution.agent_id==B
-    assert voice.transcription_model(item)=='gpt-transcribe'
+    assert voice.transcription_model(item)=='gpt-4o-transcribe'
 
 @pytest.mark.parametrize('change', ['other_tenant','platform','mini','custom','empty','video','pilot_case','pilot_followup'])
 def test_other_paths_do_not_opt_in(change):
@@ -54,19 +54,20 @@ def test_other_paths_do_not_opt_in(change):
 def test_legacy_resolver_and_public_registry_exactly_unchanged(monkeypatch):
     from tenant_ai_spend_budget import media_price
     assert asr.MODELS==('gpt-4o-mini-transcribe','whisper-1')
+    assert media_price('gpt-4o-transcribe','asr') is None
     assert media_price('gpt-transcribe','asr') is None
-    with pytest.raises(TenantLinearError):asr.quote('gpt-transcribe')
+    with pytest.raises(TenantLinearError):asr.quote('gpt-4o-transcribe')
     monkeypatch.delenv('AI_AGENTS_TRANSCRIPTION_MODEL',raising=False)
     assert voice.transcription_model({'credential_source':'platform'})=='gpt-4o-mini-transcribe'
-    for raw in ['whisper-1','gpt-4o-mini-transcribe','custom-asr','gpt-transcribe','']:
+    for raw in ['whisper-1','gpt-4o-mini-transcribe','custom-asr','gpt-transcribe','gpt-4o-transcribe','']:
         assert voice.transcription_model({'config':{'audio_enabled':True,'transcription_model':raw}})==raw
-    assert asr.scoped_strong_quote(A)=={'model':'gpt-transcribe','operation':'asr','reserve_microusd':30000,'minimum_microusd':22500,'max_duration_seconds':300}
+    assert asr.scoped_strong_quote(A)=={'model':'gpt-4o-transcribe','operation':'asr','reserve_microusd':60000,'minimum_microusd':60000,'max_input_tokens':16000,'max_output_tokens':2000,'max_duration_seconds':300}
     with pytest.raises(TenantLinearError):asr.scoped_strong_quote(B)
 
 @pytest.mark.parametrize('prices',[
     {'whisper-1':{'asr':0}}, {'whisper-1':{'asr':12000}}, {'whisper-1':{'asr':40000}},
-    {'gpt-transcribe':{'asr':0}}, {'gpt-transcribe':{'asr':22500}}, {'gpt-transcribe':{'asr':30001}},
-    {'gpt-transcribe':None},{'gpt-transcribe':{'asr':True}}, {'gpt-transcribe':{'asr':30000.5}},
+    {'gpt-4o-transcribe':{'asr':0}}, {'gpt-4o-transcribe':{'asr':30000}}, {'gpt-4o-transcribe':{'asr':22500}}, {'gpt-4o-transcribe':{'asr':60001}},
+    {'gpt-4o-transcribe':None},{'gpt-4o-transcribe':{'asr':True}}, {'gpt-4o-transcribe':{'asr':60000.5}},
 ])
 def test_changed_disabled_or_underbound_tariff_retains_original_path(monkeypatch,prices):
     monkeypatch.setenv('AI_MEDIA_OPERATION_PRICES_MICROUSD',json.dumps(prices))
@@ -91,13 +92,13 @@ def test_opted_provider_preserves_original_language_contract_and_bytes(monkeypat
     response=Mock(status_code=200);response.json.return_value={'text':'Synthetic speech','languages':[{'code':'ru'},{'code':'az'}],'usage':{'seconds':0.1}}
     post=Mock(return_value=response);monkeypatch.setattr(provider.requests,'post',post)
     audio=wav()
-    text,usage=provider.transcribe('synthetic','gpt-transcribe',audio,'wav','audio/wav',with_usage=True,bounded_asr=True,before_dispatch=lambda:None,asr_tenant=A)
+    text,usage=provider.transcribe('synthetic','gpt-4o-transcribe',audio,'wav','audio/wav',with_usage=True,bounded_asr=True,before_dispatch=lambda:None,asr_tenant=A)
     assert text=='Synthetic speech' and usage['detected_languages']==['ru','az']
     assert post.call_args.args[0]=='https://api.openai.com/v1/audio/transcriptions'
-    assert post.call_args.kwargs['data']=={'model':'gpt-transcribe','response_format':'json'}
+    assert post.call_args.kwargs['data']=={'model':'gpt-4o-transcribe','response_format':'json'}
     assert post.call_args.kwargs['files']['file'][1]==audio
     post.reset_mock()
-    with pytest.raises(TenantLinearError):provider.transcribe('synthetic','gpt-transcribe',audio,'wav','audio/wav',bounded_asr=True,before_dispatch=lambda:None,asr_tenant=B)
+    with pytest.raises(TenantLinearError):provider.transcribe('synthetic','gpt-4o-transcribe',audio,'wav','audio/wav',bounded_asr=True,before_dispatch=lambda:None,asr_tenant=B)
     post.assert_not_called()
 
 
@@ -115,7 +116,7 @@ def test_preexisting_custom_gpt_provider_behavior_is_unchanged_without_optin(mon
 def test_opted_ambiguous_or_overlong_upload_never_dispatched(monkeypatch,streams,duration):
     monkeypatch.setattr(voice.subprocess,'run',Mock(return_value=Mock(returncode=0,stdout=json.dumps({'streams':streams,'format':{'duration':duration}}).encode())))
     post=Mock();monkeypatch.setattr(provider.requests,'post',post)
-    with pytest.raises(voice.VoiceError):provider.transcribe('synthetic','gpt-transcribe',b'x','ogg','audio/ogg',bounded_asr=True,before_dispatch=lambda:None,asr_tenant=A)
+    with pytest.raises(voice.VoiceError):provider.transcribe('synthetic','gpt-4o-transcribe',b'x','ogg','audio/ogg',bounded_asr=True,before_dispatch=lambda:None,asr_tenant=A)
     post.assert_not_called()
 
 
@@ -133,7 +134,7 @@ def test_readonly_diagnostic_is_precisely_scoped():
     from tenant_chat_ai_settings import public
     row={'metadata':{'audio_enabled':True,'transcription_model':'whisper-1','model':'gpt-4.1'}}
     result=public(row,A)
-    assert result['transcription_model']=='whisper-1' and result['effective_shared_dialog_audio_model']=='gpt-transcribe'
+    assert result['transcription_model']=='whisper-1' and result['effective_shared_dialog_audio_model']=='gpt-4o-transcribe'
     assert 'effective_shared_dialog_audio_model' not in public(row,B)
     assert row['metadata']['model']=='gpt-4.1' and row['metadata']['transcription_model']=='whisper-1'
 
@@ -162,7 +163,7 @@ def test_collect_requires_real_shared_execution_not_a_forged_item_flag(monkeypat
     monkeypatch.setattr(provider,'transcribe',call)
     _,results=media.collect({},item,execution=executor)
     assert results[0]['status']=='processed'
-    assert call.call_args.args[1]==('gpt-transcribe' if trusted else 'whisper-1')
+    assert call.call_args.args[1]==('gpt-4o-transcribe' if trusted else 'whisper-1')
     assert call.call_args.kwargs.get('bounded_asr',False) is trusted
     assert callable(call.call_args.kwargs.get('before_dispatch')) is trusted
     assert ('asr_request_policy' in results[0]) is trusted
@@ -171,7 +172,7 @@ def test_collect_requires_real_shared_execution_not_a_forged_item_flag(monkeypat
 def test_bounded_adapter_requires_a_final_authority_callback(monkeypatch):
     post=Mock();monkeypatch.setattr(provider.requests,'post',post)
     with pytest.raises(ValueError):
-        provider.transcribe('synthetic','gpt-transcribe',wav(),'wav','audio/wav',bounded_asr=True,asr_tenant=A)
+        provider.transcribe('synthetic','gpt-4o-transcribe',wav(),'wav','audio/wav',bounded_asr=True,asr_tenant=A)
     post.assert_not_called()
 
 @pytest.mark.parametrize('change',['assignment_removed_or_reassigned','source_version_changed'])

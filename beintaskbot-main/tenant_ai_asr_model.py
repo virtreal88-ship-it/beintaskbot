@@ -59,7 +59,7 @@ def tariff_status(model):
 # Internal standalone-dialog rollout; unrelated to any experiment authorization.
 # Tenant identifiers and production message/reference text are not published.
 SHARED_ASR_TENANT_DIGEST = '18bf0f79cb1e3b250dba8c4fd881b5ddc43e79be87cabab9ef217d0bf44f5f9d'
-STRONG_MODEL = 'gpt-transcribe'
+STRONG_MODEL = 'gpt-4o-transcribe'
 SHARED_ASR_CONTEXTS = {'manual_helper', 'connect_auto'}
 
 
@@ -74,7 +74,7 @@ def shared_asr_tenant(tenant):
 
 
 def scoped_strong_quote(tenant):
-    """Private exact-3c quote; public model registry/admission stays unchanged."""
+    """Private exact-6c quote; public model registry/admission stays unchanged."""
     import json
     import os
     if not shared_asr_tenant(tenant):
@@ -90,16 +90,17 @@ def scoped_strong_quote(tenant):
         entry = registry.get(STRONG_MODEL, {})
         if not isinstance(entry, dict):
             raise ValueError()
-        amount = entry.get('asr', 30_000)
+        amount = entry.get('asr', 60_000)
         if (isinstance(amount, bool) or not isinstance(amount, (int, str))
-                or (isinstance(amount, str) and not amount.isdecimal()) or int(amount) != 30_000):
+                or (isinstance(amount, str) and not amount.isdecimal()) or int(amount) != 60_000):
             raise ValueError()
     except (ValueError, TypeError):
         raise TenantLinearError('shared_asr_tariff_unavailable', 409) from None
-    # https://developers.openai.com/api/docs/models/gpt-transcribe
-    # $0.0045/minute * enforced maximum300s =22500microUSD; fixed quote stays3c.
-    return {'model': STRONG_MODEL, 'operation': 'asr', 'reserve_microusd': 30_000,
-            'minimum_microusd': 22_500, 'max_duration_seconds': AUDIO_MAX_SECONDS}
+    # https://developers.openai.com/api/docs/models/gpt-4o-transcribe
+    # 16k input at $2.5/M + 2k output at $10/M = 60000 microUSD.
+    # Owner-approved fixed reserve/settlement; legacy public tariffs stay unchanged.
+    return {'model': STRONG_MODEL, 'operation': 'asr', 'reserve_microusd': 60_000,
+            'minimum_microusd': 60_000, 'max_input_tokens': 16_000, 'max_output_tokens': 2_000, 'max_duration_seconds': AUDIO_MAX_SECONDS}
 
 
 def shared_audio_model(configured, *, tenant, credential_source, context):
