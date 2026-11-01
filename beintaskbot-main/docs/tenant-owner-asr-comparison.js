@@ -18,7 +18,7 @@
   try{
    const owner=identity(),key=routeKey(route);let source;
    for(const audio of document.querySelectorAll('#chatRows audio.operator-native-audio')){
-    const url=new URL(audio.src,location.origin),message=url.searchParams.get('message_id');
+    const host=audio.closest('[data-chat-attachment]'),message=host?.dataset.chatAttachment||audio.dataset.messageId||new URL(audio.src,location.origin).searchParams.get('message_id');
     if(message&&await hash([String(m.tenant_id),String(route.channel_id),String(route.conversation_id),message])===approved){source={channel_id:route.channel_id,conversation_id:route.conversation_id,message_id:message};break;}
    }
    if(!source||owner!==identity()||key!==routeKey(window.tenantOperator?.currentDialog)||!body.isConnected||modal.hidden||$('ownerASRComparison'))return;
