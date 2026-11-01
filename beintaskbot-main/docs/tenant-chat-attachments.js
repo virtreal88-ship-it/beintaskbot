@@ -1,7 +1,7 @@
 /* Explicit bounded downloads. No remote URLs or credentials are put in the DOM. */
 (() => {
-  let member, lead, epoch=0;
-  const active=new Set(), urls=new Set(), previews=new Map(), mediaCache=new Map(), retryUntil=new Map();
+  let member, lead, epoch=0, profileRevision=0;
+  const active=new Set(), urls=new Set(), previews=new Map(), mediaCache=new Map(), retryUntil=new Map(), loadedKeys=new Set(), pendingKeys=new Map();
   let cacheBytes=0;
   const MAX_PREVIEW_BYTES=100*1024*1024,MAX_CACHE_BYTES=32*1024*1024;
   const text=(key,fallback)=>globalThis.window?.tenantI18n?.t(key)||fallback;
@@ -71,40 +71,44 @@
   function clear(dropCache=false){
     if(photoViewer){if(history.state?.operatorPhotoViewer===photoViewer.token){const state={...history.state};delete state.operatorPhotoViewer;history.replaceState(state,'',location.href);}closePhotoViewer(true);}
     epoch++;
-    active.forEach(controller=>controller.abort());active.clear();
+    active.forEach(controller=>controller.abort());active.clear();pendingKeys.clear();
     urls.forEach(url=>URL.revokeObjectURL(url));urls.clear();previews.forEach(preview=>stop(preview.media));previews.clear();
     document.querySelectorAll('[data-native-audio] audio').forEach(audio=>{audio.pause?.();audio.removeAttribute?.('src');audio.load?.();delete audio.dataset.mediaPreview;});
-    if(dropCache){mediaCache.clear();cacheBytes=0;retryUntil.clear();}
+    if(dropCache===true){mediaCache.clear();cacheBytes=0;retryUntil.clear();loadedKeys.clear();}
     document.querySelectorAll('[data-chat-attachment]').forEach(host=>{
       host.querySelectorAll('[data-media-preview]:not(.operator-native-audio),img,audio:not(.operator-native-audio),video,a').forEach(node=>node.remove());
-      const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button');if(button){button.hidden=!!host.querySelector('.operator-native-audio');button.disabled=false;}delete host.dataset.mediaPreviewState;updateMediaMenu(host);
+      const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button');if(button){button.hidden=false;button.disabled=false;}delete host.dataset.mediaPreviewState;updateMediaMenu(host);
     });
   }
   function bind(){
-    document.querySelectorAll('[data-media-download]').forEach(button=>{button.onclick=()=>downloadAttachment(button,button.dataset.mediaDownload,button.closest('.operator-media-card')?.querySelector('[role="status"]'));});
+    document.querySelectorAll('[data-media-download]').forEach(button=>{button.onclick=()=>downloadAttachment(button,button.dataset.mediaDownload,button.closest('.operator-media-card')?.querySelector('[data-media-load-status]')||button.closest('.operator-media-card')?.querySelector('[role="status"]'));});
     document.querySelectorAll('#chatRows [data-chat-attachment], [data-learning-chat] [data-chat-attachment]').forEach(host=>{
-      const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button'),status=host.querySelector('[role="status"]');
+      const button=host.querySelectorAll('button[data-media-open]')[0]||host.querySelector('button'),status=host.querySelector('[data-media-load-status]')||host.querySelector('[role="status"]');
       if(!button)return;
       const menuLoad=host.querySelector('[data-media-menu-load]');if(menuLoad&&!menuLoad.dataset.bound){menuLoad.dataset.bound='true';menuLoad.onclick=()=>{menuLoad.closest('details')?.removeAttribute('open');button.click();};}
       updateMediaMenu(host);
-      const load=async()=>{
+      if(host.querySelector('[data-media-preview]'))return;
+      if(host.querySelector('.operator-native-audio')&&!status.textContent)status.textContent=({ru:'Аудио не загружено в этой вкладке',az:'Səs bu vərəqdə yüklənməyib',en:'Audio is not loaded in this tab'}[window.tenantI18n?.language]||'Audio is not loaded in this tab');
+      const mediaQuery=()=>new URLSearchParams({lead_id:host.dataset.attachmentLeadId||lead,message_id:host.dataset.chatAttachment,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id,...(host.dataset.channelId&&host.dataset.conversationId?{channel_id:host.dataset.channelId,conversation_id:host.dataset.conversationId}:{})});
+      const previewKey=()=>mediaQuery().toString()+'|'+String(host.dataset.mediaVersion||'');
+      const load=async(cachedOnly=false)=>{
         if(button.disabled||!member||!(lead||host.dataset.attachmentLeadId))return;
+        const requestKey=previewKey();if(pendingKeys.has(requestKey)){status.textContent=busyText();return;}
         const retry=retryAt(host,button,host.dataset.chatAttachment||'');
         if(retry>Date.now()){
           const seconds=Math.ceil((retry-Date.now())/1000);
           status.textContent=' '+text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds));
           return;
         }
-        if(!canStartMedia(host)){status.textContent=busyText();return;}
+        if(!cachedOnly&&!canStartMedia(host)){status.textContent=busyText();return;}
         const current=epoch,who=identity(member),selected=lead||host.dataset.attachmentLeadId,controller=new AbortController();
-        controller.connectMedia=host.dataset.connectMedia==='true';active.add(controller);button.disabled=true;button.setAttribute('aria-busy','true');if(menuLoad)menuLoad.disabled=true;status.textContent=' '+text('loading','Yüklənir…');
+        controller.connectMedia=host.dataset.connectMedia==='true';if(!cachedOnly){active.add(controller);pendingKeys.set(requestKey,controller);}button.disabled=true;button.setAttribute('aria-busy','true');if(menuLoad)menuLoad.disabled=true;status.textContent=' '+text('loading','Yüklənir…');
         const valid=()=>current===epoch&&who===identity(member)&&selected===(lead||host.dataset.attachmentLeadId)&&host.isConnected;
         const timer=setTimeout(()=>controller.abort(),70000);
         let blobUrl;
         try{
-          const query=new URLSearchParams({lead_id:host.dataset.attachmentLeadId||selected,message_id:host.dataset.chatAttachment,
-            expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id,...(host.dataset.channelId&&host.dataset.conversationId?{channel_id:host.dataset.channelId,conversation_id:host.dataset.conversationId}:{})});
-          const cacheKey=query.toString();let blob=mediaCache.get(cacheKey),contentLength='',servedFilename=host.querySelector('[data-media-meta]')?.textContent||'';
+          const query=mediaQuery(),cacheKey=previewKey();let blob=mediaCache.get(cacheKey),contentLength='',servedFilename=host.dataset.mediaFilename||'';
+          if(cachedOnly&&!blob)return;
           if(blob){mediaCache.delete(cacheKey);mediaCache.set(cacheKey,blob);}
           else{
             const response=await fetch('/api/platform/crm/chat/attachment?'+query,
@@ -141,22 +145,24 @@
             node=document.createElement('a');if(node.dataset)node.dataset.mediaPreview='file';node.href=blobUrl;node.target='_blank';node.rel='noopener';node.download=servedFilename||'attachment';node.textContent=servedFilename||text('downloadAttachment','Download attachment');
             const meta=host.querySelector('[data-media-meta]');if(meta?.dataset)meta.textContent=[servedFilename,type==='application/pdf'?'PDF':type,formatSize(contentLength||blob.size)].filter(Boolean).join(' · ');
           }
+          const loadedMeta=host.querySelector('[data-media-meta]');if(loadedMeta)loadedMeta.textContent=[servedFilename,type==='application/pdf'?'PDF':'',formatSize(blob.size)].filter(Boolean).join(' · ');
           if(node.tagName!=='A'){
-            media.onerror=()=>{stop(media);previews.delete(blobUrl);if(valid()){if(node.classList?.contains('operator-native-audio')){node.removeAttribute('src');node.load?.();delete node.dataset.mediaPreview;}else node.remove();host.dataset.mediaPreviewState='invalid';button.hidden=!!host.querySelector('.operator-native-audio');status.textContent=' '+text('mediaInvalid','Fayl açıla bilmədi. Yenidən yoxlayın.');updateMediaMenu(host);}URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);};
+            media.onerror=()=>{previews.delete(blobUrl);if(valid()){stop(media);loadedKeys.delete(cacheKey);const invalidBlob=mediaCache.get(cacheKey);if(invalidBlob===blob){cacheBytes-=invalidBlob.size;mediaCache.delete(cacheKey);}if(node.classList?.contains('operator-native-audio')){node.removeAttribute('src');node.load?.();delete node.dataset.mediaPreview;}else node.remove();host.dataset.mediaPreviewState='invalid';button.hidden=!!host.querySelector('.operator-native-audio');status.textContent=' '+text('mediaInvalid','Fayl açıla bilmədi. Yenidən yoxlayın.');updateMediaMenu(host);}URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);};
             if(media.tagName!=='AUDIO')media.src=blobUrl;
           }
           // Keep at most three decoded previews in this tab, not the whole history.
-          if(previews.size>=3){const [oldUrl,old]=previews.entries().next().value;stop(old.media);if(old.node.classList?.contains('operator-native-audio')){old.node.removeAttribute('src');old.node.load?.();delete old.node.dataset.mediaPreview;old.button.hidden=true;delete old.host.dataset.mediaPreviewState;updateMediaMenu(old.host);}else{old.node.remove();old.button.hidden=false;delete old.host.dataset.mediaPreviewState;updateMediaMenu(old.host);}URL.revokeObjectURL(oldUrl);urls.delete(oldUrl);previews.delete(oldUrl);}
-          previews.set(blobUrl,{node,button,media,host});
+          if(previews.size>=3){const [oldUrl,old]=previews.entries().next().value;stop(old.media);if(old.node.classList?.contains('operator-native-audio')){old.node.removeAttribute('src');old.node.load?.();delete old.node.dataset.mediaPreview;old.button.hidden=true;delete old.host.dataset.mediaPreviewState;updateMediaMenu(old.host);}else{old.node.remove();old.button.hidden=false;delete old.host.dataset.mediaPreviewState;updateMediaMenu(old.host);}URL.revokeObjectURL(oldUrl);urls.delete(oldUrl);previews.delete(oldUrl);loadedKeys.delete(old.cacheKey);}
+          previews.set(blobUrl,{node,button,media,host,cacheKey});if(mediaCache.has(cacheKey)){loadedKeys.delete(cacheKey);loadedKeys.add(cacheKey);while(loadedKeys.size>3)loadedKeys.delete(loadedKeys.values().next().value);}
           if(host.insertBefore)host.insertBefore(node,button);else host.append(node);button.hidden=true;status.textContent='';
           delete host.dataset.mediaRetryAt;retryUntil.delete(retryKey(host,host.dataset.chatAttachment||''));host.dataset.mediaPreviewState='loaded';updateMediaMenu(host);
         }catch(error){if(blobUrl){URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);}if(valid()){if(!host.dataset.mediaPreviewState||host.dataset.mediaPreviewState==='loaded')host.dataset.mediaPreviewState='retryable';status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;updateMediaMenu(host);}}
-        finally{clearTimeout(timer);active.delete(controller);button.setAttribute('aria-busy','false');if(menuLoad)menuLoad.disabled=false;updateMediaMenu(host);}
+        finally{clearTimeout(timer);active.delete(controller);if(pendingKeys.get(requestKey)===controller)pendingKeys.delete(requestKey);button.setAttribute('aria-busy','false');if(menuLoad)menuLoad.disabled=false;updateMediaMenu(host);}
       };
       button.onclick=()=>load();
+      if(member&&/^[a-f0-9]{64}$/.test(host.dataset.mediaVersion||'')&&loadedKeys.has(previewKey())&&mediaCache.has(previewKey()))void load(true);
     });
   }
-  document.addEventListener('tenant-profile',event=>{if(identity(member)!==identity(event.detail.member)||JSON.stringify(member?.permissions)!==JSON.stringify(event.detail.member?.permissions)||member?.role!==event.detail.member?.role||member?.active!==event.detail.member?.active)clear(true);member=event.detail.member;});
+  document.addEventListener('tenant-profile',event=>{profileRevision++;if(identity(member)!==identity(event.detail.member)||JSON.stringify(member?.permissions)!==JSON.stringify(event.detail.member?.permissions)||member?.role!==event.detail.member?.role||member?.active!==event.detail.member?.active)clear(true);member=event.detail.member;});
   document.addEventListener('tenant-chat-open',event=>{clear();lead=event.detail.lead_id;});
   document.addEventListener('tenant-chat-history-reset',clear);
   document.addEventListener('tenant-chat-close',clear);
@@ -166,9 +172,9 @@
   document.addEventListener('tenant-chat-history-added',bind);
   document.getElementById('closeModal')?.addEventListener('click',clear);
   document.getElementById('dealModal')?.addEventListener('click',event=>{if(event.target.id==='dealModal')clear();});
-  document.addEventListener('visibilitychange',()=>{if(document.hidden)clear();});
-  const initial=epoch;
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)clear();else bind();});
+  const initialProfile=profileRevision;
   fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(response=>response.ok?response.json():null).then(data=>{
-    if(initial===epoch&&data?.member){member=data.member;bind();}
+    if(initialProfile===profileRevision&&data?.member){member=data.member;bind();}
   }).catch(()=>{});
 })();

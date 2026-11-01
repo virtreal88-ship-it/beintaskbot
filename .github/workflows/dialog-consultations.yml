@@ -25,6 +25,10 @@ on:
       - 'beintaskbot-main/tests/test_dialog_audio_result_durability.py'
       - 'beintaskbot-main/docs/dialog-audio-transcription-api.md'
       - 'beintaskbot-main/tenant_operator_copilot.py'
+      - 'beintaskbot-main/tenant_operator_dialogs.py'
+      - 'beintaskbot-main/docs/tenant-chat-attachments.js'
+      - 'beintaskbot-main/tests/test_lazy_audio_state_browser.cjs'
+      - 'beintaskbot-main/tests/test_verified_dialog_phone.py'
       - 'beintaskbot-main/tenant_owner_asr_comparison*.py'
       - 'beintaskbot-main/tenant_ai_spend_budget.py'
       - 'beintaskbot-main/tenant_ai_asr_model.py'
@@ -129,6 +133,7 @@ jobs:
             tests/test_assigned_operator_copilot.py \
             tests/test_assigned_agent_prompt_parity.py \
             tests/test_operator_audio_transcripts.py \
+            tests/test_verified_dialog_phone.py \
             tests/test_tenant_operator_copilot.py \
             tests/test_tenant_public_case.py \
             tests/test_tenant_consultation_group.py \
@@ -157,3 +162,5 @@ jobs:
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_native_reply_longpress_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_dialog_ai_assignment_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_manual_audio_refresh_browser.cjs
+          PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_lazy_audio_state_browser.cjs
+          node tests/test_tenant_chat_attachments_ui.cjs
