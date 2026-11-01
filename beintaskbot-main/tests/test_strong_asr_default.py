@@ -83,22 +83,21 @@ def test_effective_readonly_settings_preserve_saved_values(monkeypatch):
     assert result['transcription_model']=='whisper-1' and result['effective_transcription_model']=='gpt-transcribe'
     assert row=={'metadata':{'transcription_model':'whisper-1','model':'gpt-4.1'}}
 
-@pytest.mark.asyncio
-async def test_ordinary_auto_resolves_legacy_default_after_assignment_guard(monkeypatch):
+def test_ordinary_auto_resolves_legacy_default_after_assignment_guard(monkeypatch):
+    import asyncio
     import tenant_ai_agent_worker as worker
-    from unittest.mock import AsyncMock
     monkeypatch.setattr(worker,'download',Mock(return_value=(b'synthetic','ogg','audio/ogg')))
     gate=Mock();monkeypatch.setattr(worker,'assert_job_allowed',gate)
     current=Mock();monkeypatch.setattr(worker,'assert_reservation_current',current)
     transcribe=Mock(return_value='Synthetic speech');monkeypatch.setattr(worker,'transcribe',transcribe)
     config={'audio_enabled':True,'transcription_model':'whisper-1'}
     row={'direction':'incoming','external_id':'synthetic','media_url':'https://synthetic.invalid/a','message_type':'audio'}
-    result=await worker._prepare_agent_media({},[row],config,'synthetic',Mock(),reservation={'credential_source':'company'})
+    result=asyncio.run(worker._prepare_agent_media({},[row],config,'synthetic',Mock(),reservation={'credential_source':'company'}))
     assert result[0]=={'synthetic':'Synthetic speech'}
     assert transcribe.call_args.args[1]=='gpt-transcribe'
     current.side_effect=TenantLinearError('assignment removed',409)
     transcribe.reset_mock()
-    await worker._prepare_agent_media({},[row],config,'synthetic',Mock(),reservation={'credential_source':'company'})
+    asyncio.run(worker._prepare_agent_media({},[row],config,'synthetic',Mock(),reservation={'credential_source':'company'}))
     transcribe.assert_not_called()
 
 
