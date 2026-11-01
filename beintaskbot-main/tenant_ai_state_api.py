@@ -18,7 +18,10 @@ def handler(member_from_request, logger, resource='state'):
             if not str(raw_limit).isascii() or not str(raw_limit).isdigit() or len(str(raw_limit)) > 3:
                 return web.json_response({'success': False, 'error_code': 'invalid_limit'}, status=400, headers=headers)
             limit = max(1, min(int(raw_limit), 100))
-            if resource == 'channels':
+            if resource=='technical' and any(key in request.query for key in ('channel_id','lead_id','request_id')):
+                from tenant_manual_ai_run_diagnostics import read
+                result=await asyncio.to_thread(read,profile,dict(request.query))
+            elif resource == 'channels':
                 result = await asyncio.to_thread(catalog, profile)
             else:
                 result = await asyncio.to_thread(snapshot, profile, limit, technical=resource == 'technical')
