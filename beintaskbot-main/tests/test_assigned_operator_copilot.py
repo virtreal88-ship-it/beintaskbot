@@ -48,7 +48,7 @@ def test_reply_uses_assigned_instructions_scoped_knowledge_latest_context_and_ca
     assert args[3][-1]['text'] == 'Internet is still down?'
     context = kwargs['extra_context']
     assert context['assigned_agent_id'] == AGENT
-    assert context['assigned_agent_instructions'] == 'ASSIGNED_AGENT_RULES'
+    assert 'ASSIGNED_AGENT_RULES' in kwargs['instructions']
     knowledge = json.dumps(context['verified_knowledge'])
     assert 'ASSIGNED_KNOWLEDGE' in knowledge and 'SHARED_COMPANY_KNOWLEDGE' in knowledge
     assert 'FOREIGN_AGENT_KNOWLEDGE' not in knowledge
@@ -63,7 +63,7 @@ def test_private_employee_command_returns_text_without_sending_or_learning(ready
     generated.return_value = ('Zəhmət olmasa AnyDesk kodunu göndərin.',{'total_tokens':10})
     result = copilot.run(PROFILE,data)
     assert result['text'] == 'Zəhmət olmasa AnyDesk kodunu göndərin.'
-    assert generated.call_args.kwargs['extra_context']['assigned_agent_instructions'] == 'ASSIGNED_AGENT_RULES'
+    assert 'ASSIGNED_AGENT_RULES' in generated.call_args.kwargs['instructions']
     assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n'] == 0
     assert db.execute('SELECT count(*) AS n FROM saas_ai_knowledge_sources')[0]['n'] == 0
     assert db.execute('SELECT count(*) AS n FROM saas_knowledge_candidates')[0]['n'] == 0
@@ -108,7 +108,7 @@ def test_reassignment_excludes_old_agent_private_turns_and_cached_result(ready):
     copilot.run(PROFILE,data)
     context = generated.call_args.kwargs['extra_context']
     assert context['assigned_agent_id'] == other
-    assert context['assigned_agent_instructions'] == 'OTHER_AGENT_RULES'
+    assert 'OTHER_AGENT_RULES' in generated.call_args.kwargs['instructions']
     assert context['prior_internal_copilot_turns'] == []
 
 
@@ -337,7 +337,7 @@ def test_async_consultation_uses_current_assigned_agent_and_long_original_eviden
     assert context['prior_internal_copilot_turns']==[]
     assert context['language_preference']=='az'
     assert context['assigned_agent_id']==AGENT
-    assert context['assigned_agent_instructions']=='ASSIGNED_AGENT_RULES'
+    assert 'ASSIGNED_AGENT_RULES' in generated.call_args.kwargs['instructions']
     assert len(context['untrusted_developer_consultation_evidence']['body'])>5000
     assert db.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
     assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0

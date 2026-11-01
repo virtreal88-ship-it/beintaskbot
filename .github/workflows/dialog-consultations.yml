@@ -5,6 +5,9 @@ on:
       - '.github/workflows/dialog-consultations.yml'
       - 'beintaskbot-main/tenant_dialog_consultations*.py'
       - 'beintaskbot-main/tenant_operator_copilot.py'
+      - 'beintaskbot-main/tenant_assigned_agent_prompt.py'
+      - 'beintaskbot-main/tenant_ai_agent_worker.py'
+      - 'beintaskbot-main/tests/test_assigned_agent_prompt_parity.py'
       - 'beintaskbot-main/tenant_dialog_ai_context.py'
       - 'beintaskbot-main/tenant_dialog_media_adapters.py'
       - 'beintaskbot-main/tests/test_dialog_ai_assignment_browser.cjs'
@@ -67,6 +70,7 @@ jobs:
             tests/test_dialog_consultations_api.py \
             tests/test_dialog_consultations_postgres.py \
             tests/test_assigned_operator_copilot.py \
+            tests/test_assigned_agent_prompt_parity.py \
             tests/test_operator_audio_transcripts.py \
             tests/test_tenant_operator_copilot.py \
             tests/test_tenant_public_case.py \
