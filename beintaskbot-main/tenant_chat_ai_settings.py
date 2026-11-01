@@ -54,6 +54,12 @@ def public(row, tenant_id=None):
     result['video_model_tariffs'] = ({model: video_tariff_status(model, str(tenant_id))
         for model in VIDEO_MODELS} if tenant_id else {})
     from tenant_ai_asr_model import MODELS as ASR_MODELS, tariff_status as asr_tariff_status
+    from tenant_ai_asr_model import effective_model
+    try:
+        result['effective_transcription_model'] = effective_model(result['transcription_model'])
+    except TenantLinearError:
+        result['effective_transcription_model'] = ''
+        result['transcription_model_blocked_reason'] = 'asr_model_unavailable'
     result['asr_model_tariffs'] = {model: asr_tariff_status(model) for model in ASR_MODELS}
     return result
 

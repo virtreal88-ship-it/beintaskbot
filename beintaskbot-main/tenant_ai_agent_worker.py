@@ -173,7 +173,9 @@ async def _prepare_agent_media(job, rows, config, api_key, logger, reservation=N
                     continue
                 assert_job_allowed(job)
                 assert_reservation_current(job,reservation or {})
-                text = await asyncio.to_thread(transcribe, api_key, config['transcription_model'], *media)
+                from tenant_connect_voice import transcription_model
+                asr_model = transcription_model({**(reservation or {}), 'config': config})
+                text = await asyncio.to_thread(transcribe, api_key, asr_model, *media)
                 if text:
                     transcripts[message_id] = text
             except Exception:

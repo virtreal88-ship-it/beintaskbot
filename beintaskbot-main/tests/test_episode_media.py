@@ -129,7 +129,7 @@ def test_old_image_new_voice_is_not_answered_from_image(sandbox):
           row('text',2,direction='outgoing',body='Yoxlayıram'),row('voice',3)]
     auth=Authority(rows);core.download_media.return_value=(b'audio','audio/wav')
     runtime.prepare(auth,rows)
-    assert auth.calls==[('whisper-1','asr')]
+    assert auth.calls==[('gpt-transcribe','asr')]
     lines,missing=runtime.context_lines(rows,rows)
     assert lines[0]['evidence_scope']=='historical'
     assert 'Visible error' not in str(lines)
@@ -153,7 +153,7 @@ def test_legacy_unversioned_transcript_is_not_exact_version_receipt(sandbox):
     rows=[row('voice',body='old legacy transcript',raw={'mediaId':'changed','voice_transcription':{'status':'completed'}})]
     core.download_media.return_value=(b'audio','audio/wav')
     auth=Authority(rows);runtime.prepare(auth,rows)
-    assert auth.calls==[('whisper-1','asr')]
+    assert auth.calls==[('gpt-transcribe','asr')]
     assert 'old legacy' not in rows[0]['_copilot_attachment_text']
 
 

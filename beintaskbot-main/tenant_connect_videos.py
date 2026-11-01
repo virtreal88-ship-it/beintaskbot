@@ -55,6 +55,20 @@ def _schema(cur):
     cur.execute("ALTER TABLE saas_ai_connect_video_observations ADD COLUMN IF NOT EXISTS speech_state TEXT NOT NULL DEFAULT ''")
 
 
+
+def _retained_asr(item, video_hash, audio_hash, component):
+    """Read old exact-byte outcomes without creating a new paid claim."""
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT state,observation AS text,speech_state
+              FROM saas_ai_connect_video_observations
+              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND message_id=%s
+                AND video_sha256=%s AND frame_sha256=%s AND frame_second=-1
+                AND component=%s AND state IN ('completed','running','unknown')
+              ORDER BY CASE WHEN state='completed' THEN 0 ELSE 1 END LIMIT 1""",
+              (item['tenant_id'],item['channel_id'],item['message_id'],video_hash,audio_hash,component))
+            return cur.fetchone()
+
 def _active(job, reservation):
     from tenant_connect_images import live as parent_live
     if not parent_live(job, reservation):
@@ -273,19 +287,30 @@ async def prepare(job, reservation, rows, logger):
                     (entry['state'] for entry in frame_results), 'unknown')
 
             audio_status = ('not_enabled' if metadata.get('audio_enabled') is not True else 'unavailable')
-            asr_model = str(metadata.get('transcription_model') or '').strip()
+            asr_model = ''
+            if metadata.get('audio_enabled') is True:
+                from tenant_ai_asr_model import effective_model
+                try:
+                    asr_model = effective_model(metadata.get('transcription_model'))
+                except TenantLinearError:
+                    audio_status = 'unavailable'
             asr_component = _asr_component(reservation.get('agent_language'))
             policy=reservation.get('response_policy') if isinstance(reservation.get('response_policy'),dict) else {}
             if metadata.get('audio_enabled') is True and asr_model and policy.get('enabled') is not True:
                 try:
                     from tenant_video_frames import extract_audio
                     track = await asyncio.to_thread(extract_audio, data, mime)
+                    audio_hash = hashlib.sha256(track[0]).hexdigest()
                     if asr_model != 'whisper-1':
                         # Other supported transcribers do not expose compatible
                         # no-speech confidence; don't surface their raw guesses.
+                        retained = _retained_asr(item, video_hash, audio_hash, asr_component)
                         audio_status = 'uncertain'
+                        if retained:
+                            audio_status = (retained.get('speech_state') or 'uncertain') if retained['state']=='completed' else retained['state']
+                            if retained['state']=='completed' and audio_status=='confident' and retained.get('text'):
+                                transcripts[message_id] = redact_observation(retained['text'])
                     else:
-                        audio_hash = hashlib.sha256(track[0]).hexdigest()
                         claim = _claim(item, video_hash, audio_hash, -1.0, asr_model, asr_component)
                         if claim['state'] == 'completed':
                             audio_status = claim.get('speech_state') or 'uncertain'

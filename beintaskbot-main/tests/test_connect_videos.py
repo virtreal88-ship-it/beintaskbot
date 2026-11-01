@@ -23,6 +23,7 @@ def _setup(monkeypatch, *, audio=False):
     video_row=row(kind='video');video_row['media_url']='https://media.example.invalid/video.mp4'
     item={'tenant_id':JOB['tenant_id'],'channel_id':JOB['channel_id'],'message_id':video_row['external_id']}
     monkeypatch.setattr(videos,'_active',lambda *_:True)
+    monkeypatch.setattr(videos,'_retained_asr',lambda *_:None)
     monkeypatch.setattr(videos,'_resolve',lambda *_:item)
     monkeypatch.setattr(videos,'download_media',AsyncMock(return_value=(b'synthetic-video','video/mp4')))
     monkeypatch.setattr(videos,'sample_frames',lambda *_a,**_k:[(PNG,'image/jpeg',{'second':0.0}),(PNG,'image/jpeg',{'second':1.0})])
@@ -95,6 +96,8 @@ def test_replayed_completed_frame_cache_does_not_call_provider(monkeypatch):
 
 
 def test_audio_can_succeed_when_visual_sampling_fails_and_transcript_is_unverified(monkeypatch):
+    # Exercise the retained legacy confidence adapter independently of default migration.
+    monkeypatch.setattr("tenant_ai_asr_model.effective_model",lambda _:"whisper-1")
     reservation,row,_item=_setup(monkeypatch,audio=True)
     monkeypatch.setattr(videos,'sample_frames',Mock(side_effect=ValueError('bad frame')))
     monkeypatch.setattr('tenant_video_frames.extract_audio',lambda *_:(b'RIFFsynthetic','wav','audio/wav'))
@@ -115,6 +118,7 @@ def test_audio_can_succeed_when_visual_sampling_fails_and_transcript_is_unverifi
 
 
 def test_suspect_video_asr_is_not_presented_as_speech(monkeypatch):
+    monkeypatch.setattr("tenant_ai_asr_model.effective_model",lambda _:"whisper-1")
     reservation,row,_item=_setup(monkeypatch,audio=True)
     monkeypatch.setattr(videos,'_claim',Mock(return_value={'state':'running','token':'token','call_key':'call'}))
     finish=Mock();monkeypatch.setattr(videos,'_finish',finish)
@@ -250,6 +254,7 @@ def test_video_resolution_is_tenant_channel_lead_and_message_scoped(monkeypatch)
     cur.fetchone.side_effect=[{'ok':1}]
     route={'channel_id':JOB['channel_id'],'conversation_id':JOB['conversation_id'],'api_key':'synthetic'}
     monkeypatch.setattr(videos,'_active',lambda *_:True)
+    monkeypatch.setattr(videos,'_retained_asr',lambda *_:None)
     monkeypatch.setattr(videos,'_connect',lambda:conn)
     monkeypatch.setattr(videos,'connect_route',lambda *_:route)
     item=videos._resolve(JOB,RESERVATION,MESSAGE)
@@ -281,6 +286,8 @@ def test_video_cache_identity_pins_tenant_source_bytes_model_component_and_times
 
 
 def test_synthetic_silent_printer_video_keeps_visual_fact_and_withholds_asr_guess(tmp_path,monkeypatch):
+    # Exercise the retained legacy confidence adapter independently of default migration.
+    monkeypatch.setattr("tenant_ai_asr_model.effective_model",lambda _:"whisper-1")
     if not shutil.which('ffmpeg'):
         pytest.skip('ffmpeg is not installed')
     from PIL import Image,ImageDraw

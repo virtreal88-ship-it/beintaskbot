@@ -324,7 +324,7 @@ def test_missing_asr_explicit_paid_call_uses_existing_provider(context,monkeypat
     calls=[]
     monkeypatch.setattr(provider,'transcribe',lambda *a,**kw:(calls.append(a) or (text,{'total_tokens':20})))
     images,results=media.collect({},item)
-    assert len(calls)==1 and calls[0][1]=='gpt-4o-mini-transcribe'
+    assert len(calls)==1 and calls[0][1]=='gpt-transcribe'
     assert results[0]['transcript']==text and results[0]['status']=='processed'
     assert results[1]['status']=='unavailable' and item['asr_usage']['total_tokens']==20
 

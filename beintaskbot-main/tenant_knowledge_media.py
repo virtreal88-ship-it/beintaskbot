@@ -124,6 +124,7 @@ def collect(profile,item,check_before_ai=None,*,execution=None):
                     receipt.update(status='unavailable',code='asr_authorization_required');continue
                 from tenant_connect_voice import validate_audio,transcription_model,FORMATS
                 from tenant_chat_ai_provider import transcribe
+                stage='audio_transcription'
                 model=transcription_model(item)
                 if not model: raise LookupError('asr_model_unavailable')
                 stage='media_download'
@@ -134,7 +135,8 @@ def collect(profile,item,check_before_ai=None,*,execution=None):
                 validate_media_size(kind,len(data))
                 if size>MAX_BYTES: receipt.update(status='unavailable',code='byte_budget');continue
                 stage='media_validation'
-                media=validate_audio(data,FORMATS[mime],mime,max_seconds=300 if execution else 60)
+                media=validate_audio(data,FORMATS[mime],mime,max_seconds=300 if execution else 60,
+                    prove_upload_duration=(model == 'gpt-transcribe'))
                 # Extraction is already durably reserved and is never replayed automatically.
                 if loader(profile,ref['lead_id'],ref['external_id'])!=current: raise TenantLinearError('source_changed',409)
                 check_active(profile,item)
@@ -149,7 +151,8 @@ def collect(profile,item,check_before_ai=None,*,execution=None):
                 truncated=len(safe_text)>4000
                 text=safe_text[:4000]
                 receipt.update(status='partial' if truncated else 'processed',
-                    code='transcript_truncated' if truncated else 'transcribed',transcript=text,model=model)
+                    code='transcript_truncated' if truncated else 'transcribed',transcript=text,
+                    model=item.get('asr_artifact_model') or model)
                 message['text']+='\n[Transcript] '+text
                 continue
             if kind=='video' and video_used:

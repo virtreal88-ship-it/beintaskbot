@@ -59,11 +59,18 @@ def media_price(model, operation):
     raw = registry.get(str(model), {})
     if not isinstance(raw, dict):
         return None
-    if str(model) == 'whisper-1' and operation == 'asr' and operation not in raw:
+    if str(model) in {'whisper-1', 'gpt-transcribe'} and operation == 'asr' and operation not in raw:
         from tenant_ai_asr_model import minimum_reserve_microusd
-        return minimum_reserve_microusd('whisper-1')
+        return 30_000 if str(model) == 'gpt-transcribe' else minimum_reserve_microusd('whisper-1')
     try:
-        value = int(raw.get(operation))
+        candidate = raw.get(operation)
+        if str(model) == 'gpt-transcribe' and (isinstance(candidate, bool) or
+                not isinstance(candidate, (int, str)) or
+                (isinstance(candidate, str) and not candidate.isdecimal())):
+            return None
+        value = int(candidate)
+        if str(model) == 'gpt-transcribe' and not 22_500 <= value <= 30_000:
+            return None
         return value if value > 0 else None
     except (TypeError, ValueError):
         return None

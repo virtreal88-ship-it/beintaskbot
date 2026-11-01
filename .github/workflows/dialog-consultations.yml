@@ -7,6 +7,11 @@ on:
       - 'beintaskbot-main/tenant_operator_copilot.py'
       - 'beintaskbot-main/tenant_owner_asr_comparison*.py'
       - 'beintaskbot-main/tenant_ai_spend_budget.py'
+      - 'beintaskbot-main/tenant_ai_asr_model.py'
+      - 'beintaskbot-main/tenant_connect_voice.py'
+      - 'beintaskbot-main/tenant_chat_ai_provider.py'
+      - 'beintaskbot-main/tenant_knowledge_media_cache.py'
+      - 'beintaskbot-main/tests/test_strong_asr*'
       - 'beintaskbot-main/docs/tenant-owner-asr-comparison.js'
       - 'beintaskbot-main/tests/test_owner_asr_comparison*'
       - 'beintaskbot-main/tenant_assigned_agent_prompt.py'
@@ -84,6 +89,8 @@ jobs:
             tests/test_dialog_consultations.py \
             tests/test_tenant_push_provider.py \
             tests/test_tenant_crm_notice.py \
+            tests/test_strong_asr_default.py \
+            tests/test_strong_asr_cache.py \
             tests/test_owner_asr_comparison.py \
             tests/test_owner_asr_comparison_api.py \
             tests/test_owner_asr_comparison_postgres.py \
