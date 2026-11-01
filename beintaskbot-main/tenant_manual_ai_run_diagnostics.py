@@ -17,10 +17,66 @@ def _hash(value):
     return value if isinstance(value,str) and re.fullmatch(r'[0-9a-f]{64}',value) else None
 
 
+
+def _source_receipts(cur,tenant,channel,lead,row):
+    result={'status':'unknown','reason':'source_unverified','flight_table_available':None,'receipt_table_available':None,
+      'flight':None,'receipt':None,'limitations':['source_records_not_request_linked','absence_not_dispatch_proof']}
+    source=_source(row.get('failure_source_id'));version=_hash(row.get('failure_source_hash'))
+    kind=row.get('failure_kind')
+    if not source or not version or kind not in {'voice','audio','image','video','document'}:return result
+    cur.execute('''SELECT 1 AS visible FROM saas_crm_messages WHERE tenant_id=%s::uuid
+      AND channel=%s AND kommo_lead_id=%s AND external_id=%s AND message_type=%s LIMIT 1''',
+      (tenant,'connect:'+channel,lead,source,kind))
+    if not cur.fetchone():return result
+    cur.execute("SELECT to_regclass('public.saas_episode_media_flights') AS flight, to_regclass('public.saas_media_evidence_receipts') AS receipt")
+    tables=cur.fetchone() or {}
+    result.update(reason='records_absent' if tables.get('flight') and tables.get('receipt') else 'records_unavailable',
+      flight_table_available=bool(tables.get('flight')),receipt_table_available=bool(tables.get('receipt')))
+    key=(tenant,channel,source,version)
+    if tables.get('flight'):
+        cur.execute('''SELECT state,created_at,result->>'status' AS result_status,result->>'code' AS code,
+          result->>'failure_stage' AS failure_stage,result->>'failure_code' AS failure_code
+          FROM saas_episode_media_flights WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
+            AND external_id=%s AND source_hash=%s LIMIT 1''',key)
+        saved=cur.fetchone()
+        if saved:
+            result['flight']=_lower_metadata(saved)
+            result['flight']['state']=saved['state'] if saved['state'] in {'running','completed','unknown'} else None
+    if tables.get('receipt'):
+        cur.execute('''SELECT status AS result_status,code,created_at,updated_at,
+          result->>'failure_stage' AS failure_stage,result->>'failure_code' AS failure_code,
+          coverage->'complete' AS coverage_complete,provenance->>'processor' AS processor
+          FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
+            AND external_id=%s AND source_hash=%s AND media_kind=%s LIMIT 1''',(*key,kind))
+        saved=cur.fetchone()
+        if saved:
+            result['receipt']=_lower_metadata(saved)
+            result['receipt'].update(coverage_complete=saved.get('coverage_complete') if type(saved.get('coverage_complete')) is bool else None,
+              processor=saved.get('processor') if saved.get('processor') in {'knowledge_extraction','conversation_episode'} else None)
+    if result['flight'] is not None or result['receipt'] is not None:result.update(status='records_present',reason=None)
+    return result
+
+
+def _lower_metadata(row):
+    from tenant_chat_ai_provider import is_safe_failure_code
+    from tenant_media_admission import REASONS
+    code=row.get('code')
+    codes=CODES|set(REASONS)|{'vision_observation','legacy_exact_transcript','transcribed','document_text','text_extracted','awaiting_model','video_frames_sampled'}
+    result={'status':row.get('result_status') if row.get('result_status') in {'processed','partial','unavailable','unsupported','error','unknown','pending_processing'} else None,
+      'code':code if isinstance(code,str) and (code in codes or is_safe_failure_code(code)) else None,
+      'failure_stage':row.get('failure_stage') if row.get('failure_stage') in STAGES else None,
+      'failure_code':row.get('failure_code') if is_safe_failure_code(row.get('failure_code')) else None}
+    for key in ('created_at','updated_at'):
+        if key in row:result[key]=row[key].isoformat() if hasattr(row[key],'isoformat') else row[key]
+    return result
+
 def read(profile,args):
-    allowed={'channel_id','lead_id','request_id','limit','expected_tenant_id','expected_user_id'}
+    allowed={'channel_id','lead_id','request_id','limit','expected_tenant_id','expected_user_id','include_source_receipts'}
     if not isinstance(args,dict) or set(args)-allowed or not {'channel_id','lead_id'}<=set(args):
         raise TenantLinearError('Exact channel and lead required.',400)
+    include=args.get('include_source_receipts')=='1'
+    if 'include_source_receipts' in args and (not include or not args.get('request_id')):
+        raise TenantLinearError('Source receipt inspection requires one request UUID.',400)
     channel=identifier(args['channel_id'])
     if not isinstance(args['lead_id'],str) or not re.fullmatch(r'[1-9][0-9]{0,18}',args['lead_id']):
         raise TenantLinearError('Invalid lead.',400)
@@ -62,6 +118,8 @@ def read(profile,args):
               ORDER BY created_at DESC,request_id DESC LIMIT %s''',
               (tenant,channel,chosen['conversation_id'],lead,request,request,limit+1))
             rows=cur.fetchall()
+            if include:
+                for row in rows:row['_source_receipts']=_source_receipts(cur,tenant,channel,lead,row)
     from tenant_media_admission import REASONS
     from tenant_chat_ai_provider import is_safe_failure_code
     items=[]
@@ -82,5 +140,6 @@ def read(profile,args):
           'created_at':row['created_at'].isoformat() if hasattr(row['created_at'],'isoformat') else row['created_at'],
           'updated_at':row['updated_at'].isoformat() if hasattr(row['updated_at'],'isoformat') else row['updated_at'],
           'source_versions':sources,'media_failure':failure,'dispatch_proof':None})
+        if include:items[-1]['source_receipts']=row['_source_receipts']
     return {'coverage':'manual_runs_metadata_only','available':True,'items':items,'limited':len(rows)>limit,
       'limitations':['missing_reason_not_recoverable','dispatch_not_inferred','no_provider_or_media_probe']}
