@@ -52,6 +52,7 @@ def test_new_provider_form_auto_policy_same_bytes_no_prompt_or_confidence(monkey
     audio=wav()
     text,usage=provider.transcribe('synthetic-key','gpt-transcribe',audio,'wav','audio/wav',with_usage=True)
     assert text=='Synthetic speech' and usage['detected_languages']==['ru','az'] and usage['seconds']==0.1
+    assert post.call_args.args[0]=='https://api.openai.com/v1/audio/transcriptions'
     assert post.call_args.kwargs['data']=={'model':'gpt-transcribe','response_format':'json'}
     assert post.call_args.kwargs['files']['file'][1]==audio
     assert not post.call_args.kwargs['allow_redirects']
@@ -108,6 +109,7 @@ def test_video_new_adapter_does_not_force_response_language_or_claim_confidence(
     text,usage,diagnostics=provider.transcribe_video('synthetic','gpt-transcribe',wav(),'wav','audio/wav',expected_language='az')
     assert text=='Synthetic speech' and diagnostics['speech_state']=='uncertain'
     assert diagnostics['detected_languages']==['ru']
+    assert post.call_args.args[0]=='https://api.openai.com/v1/audio/transcriptions'
     assert post.call_args.kwargs['data']=={'model':'gpt-transcribe','response_format':'json'}
 
 
