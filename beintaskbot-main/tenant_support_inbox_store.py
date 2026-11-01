@@ -312,7 +312,8 @@ def detail(profile, ticket_id, before=None, message_id=None):
                 ticket['agent_name'] = agent.get('name') or ''
                 ticket['agent_enabled'] = bool(agent.get('enabled'))
                 ticket['summary_available'] = bool(agent.get('enabled') and ticket.get('company_enabled')
-                                                   and not ticket.get('company_emergency_stop'))
+                                                   and not ticket.get('company_emergency_stop')
+                                                   and str(current.get('model') or '').strip())
                 ticket['summary_current'] = bool(ticket.get('summary_agent_binding')) and (
                     ticket.get('summary_agent_binding') == binding(current)
                     and ticket.get('summary_scope_hash') == fingerprint(cur, material_scope))

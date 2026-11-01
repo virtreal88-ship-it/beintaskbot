@@ -147,6 +147,17 @@ def test_no_assigned_agent_blocks_company_summary_without_spend_or_fallback(db):
     assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_runs')[0]['n']==0
 
 
+def test_blank_assigned_model_never_uses_platform_default_or_reserves_ai(db,monkeypatch):
+    cipher=config_company(db)
+    db.execute("UPDATE saas_ai_agents SET model='' WHERE tenant_id=%s::uuid",(A,));db.commit()
+    monkeypatch.setenv('OPENAI_HISTORY_REPLY_MODEL','unrelated-platform-default')
+    with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate') as provider,patch.object(summary,'choose_api_credential') as credential:
+        page=manual()
+    provider.assert_not_called();credential.assert_not_called()
+    assert page['ticket']['agent_id']==AGENT and not page['ticket']['summary_available']
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_agent_runs')[0]['n']==0
+
+
 def test_summary_uses_current_assignment_instructions_language_and_exact_case(db):
     cipher=config_company(db)
     first,last=add(db,body='Only current problem'),add(db,body='Current supporting fact')

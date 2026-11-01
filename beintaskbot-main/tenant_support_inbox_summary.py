@@ -1,12 +1,13 @@
 """Optional support summaries through the existing provider and shared AI budgets."""
 from tenant_ai_testing_budget import TOKEN_USAGE_SQL
 import json
+import re
 import uuid
 from tenant_platform import _connect, _fernet
 from tenant_ai_agents_schema import ensure_schema
 from tenant_chat_ai_schema import ensure_schema as ensure_chat_schema
 from tenant_operator_access import authorize as _authorize
-from tenant_ai_agent_key_policy import choose_api_credential, platform_model, platform_model_allowed, platform_token_limit
+from tenant_ai_agent_key_policy import choose_api_credential, platform_model_allowed, platform_token_limit
 from tenant_chat_ai_policy import history
 from tenant_chat_ai_provider import generate
 from tenant_linear_policy import TenantLinearError, identifier
@@ -74,8 +75,8 @@ def reserve(tenant, ticket_id, profile=None, retry=False):
             agent = cur.fetchone() or {}
             if not agent.get('enabled') or not agent.get('settings_enabled') or agent.get('emergency_stop'):
                 raise TenantLinearError('Назначенный агент сейчас недоступен.', 409)
-            model = str(context.get('model') or platform_model())
-            if not model:
+            model = str(context.get('model') or '').strip()
+            if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', model):
                 raise TenantLinearError('Модель назначенного агента недоступна.', 409)
             company_key = ''
             if config_row.get('secrets'):
