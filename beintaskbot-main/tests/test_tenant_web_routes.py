@@ -17,6 +17,7 @@ MCP_API=(('POST','/mcp/ai-learning'),('GET','/mcp/ai-learning'),
 
 EXPECTED_API = (("POST","/api/platform/crm/deals/complete"),("GET","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/chat/send"),("POST","/api/platform/crm/chat/send-file"),("GET","/api/platform/diagnostics"),("GET","/api/platform/crm/chat/history"),("GET","/api/platform/crm/chat/attachment"),("GET","/api/platform/crm/chat/receipts"),("POST","/api/platform/crm/chat/receipts"),("GET","/api/platform/finance"),("POST","/api/platform/finance"),("GET","/api/platform/linear/settings"),("POST","/api/platform/linear/settings"),("GET","/api/platform/linear/tasks"),("POST","/api/platform/linear/tasks"),("GET","/api/platform/news"),("POST","/api/platform/news"),("GET","/api/platform/news/ai"),("POST","/api/platform/news/ai"),("GET","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai/settings"),("GET","/api/platform/chat/ai/models"),("POST","/api/platform/chat/ai/model-probe"),("POST","/api/platform/chat/ai"),("GET","/api/platform/news/telegram/settings"),("POST","/api/platform/news/telegram/settings"),("GET","/api/platform/news/telegram"),("POST","/api/platform/news/telegram"),("GET","/api/platform/news/public/{company}"))
 EXPECTED_API += (("GET","/api/platform/crm/chat/quote-receipt"),)
+EXPECTED_API += (("GET","/api/platform/notifications"),("POST","/api/platform/notifications/{notification_id}/read"))
 EXPECTED_API += tuple((method,path) for path,methods in [
  ('/api/platform/instructions',('GET','POST')),
  ('/api/platform/instructions/{lesson_id}',('GET','POST')),
@@ -115,7 +116,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('simulation/issues', ('GET',)), ('simulation/issues/{run_id}/review', ('POST',)),
     ('dashboard', ('GET',)), ('dashboard/events', ('GET',)),
 ] for method in methods)
-FACTORIES = ('instruction_handler', 'finance_handler', 'linear_handler', 'tasks_handler', 'news_handler',
+FACTORIES = ('notification_center_handler', 'instruction_handler', 'finance_handler', 'linear_handler', 'tasks_handler', 'news_handler',
     'news_telegram_handler', 'chat_ai_handler', 'chat_ai_model_handler', 'chat_send_handler', 'chat_receipt_handler', 'chat_upload_handler',
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler', 'historical_replay_handler',
     'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'administrator_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'dialog_consultations_handler', 'owner_asr_comparison_handler', 'dialog_audio_transcription_handler', 'night_report_handler', 'testing_handler', 'simulation_handler', 'ai_state_handler', 'ai_instructor_handler')
@@ -135,6 +136,7 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         self.module.register_feature_routes(self.app, self.context)
 
     async def resolve(self, method, path):
+        path=path.replace('{notification_id}', '00000000-0000-0000-0000-000000000001')
         request = make_mocked_request(method, path, app=self.app)
         match = await self.app.router.resolve(request)
         return request, match

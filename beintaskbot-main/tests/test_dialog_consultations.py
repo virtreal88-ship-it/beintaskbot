@@ -7,6 +7,7 @@ from test_tenant_support_inbox import database,db,A,B,CA,CB,AGENT,PROFILE,seed_j
 import tenant_dialog_consultations as flow
 import tenant_public_case as public
 import tenant_connect_transport as transport
+import tenant_notification_center as notification_center
 from tenant_linear_policy import TenantLinearError
 
 TARGET='120363411822115409@g.us'
@@ -15,7 +16,7 @@ REAL_QUEUE_SEND=transport.send_consultation_with_receipt
 @pytest.fixture
 def ready(db,monkeypatch):
     seed_job(db);flow.schema(db)
-    for module in (flow,public):monkeypatch.setattr(module,'_connect',lambda:db)
+    for module in (flow,public,notification_center):monkeypatch.setattr(module,'_connect',lambda:db)
     db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,99,'Developers',now())",(A,CA,TARGET))
     db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions) VALUES(%s::uuid,33,'operator','Employee','[\"dialogs\"]'::jsonb)",(A,))
     db.commit()
@@ -529,6 +530,9 @@ def test_actual_browser_ui_real_http_services_isolated_db(ready,monkeypatch):
         for method,path,resource in [('POST','/developer-marker','developer_marker'),('POST','/preview','preview'),('GET','/destinations','destinations'),
             ('POST','','prepare'),('POST','/{id}/dispatch','dispatch'),('GET','/replies','replies')]:
             app.router.add_route(method,prefix+path,handler(lambda _:PROFILE,origin,logging.getLogger(__name__),resource))
+        from tenant_notification_center_api import handler as notification_handler
+        app.router.add_get('/api/platform/notifications',notification_handler(lambda _:PROFILE,origin,logging.getLogger(__name__)))
+        app.router.add_post('/api/platform/notifications/{notification_id}/read',notification_handler(lambda _:PROFILE,origin,logging.getLogger(__name__),'read'))
         async def index(_):
             return web.Response(content_type='text/html',text='''<!doctype html><meta charset="utf-8">
               <style>@media(max-width:900px){.app-topbar{display:none}}</style>
