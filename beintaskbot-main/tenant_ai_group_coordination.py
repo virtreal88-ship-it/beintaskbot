@@ -739,7 +739,18 @@ def transition(cur, tenant, conversation, state, reason, actor):
 
 def view(cur, tenant, conversation):
     state = read(cur, tenant, conversation)
-    selected = authority(cur, tenant, None, conversation, allow_stopped=True)
+    # Legacy quarantine is channel-local. Resolve the one configured channel
+    # before asking for UI authority; passing None made a valid exact group
+    # permit look blocked after an owner resolved a legacy group binding.
+    channel = None
+    assignments = state.get('assignments')
+    if isinstance(assignments, list) and len(assignments) == 1 and isinstance(assignments[0], dict):
+        try:
+            from tenant_ai_dialog_scope import channel_scope
+            channel = channel_scope('connect', assignments[0].get('channel_id'))
+        except TenantLinearError:
+            channel = None
+    selected = authority(cur, tenant, channel, conversation, allow_stopped=True) if channel else None
     cur.execute('''SELECT c.connect_channel_id::text AS channel_id,c.lead_id,ch.name AS channel_name
       FROM saas_connect_conversations c JOIN saas_connect_channels ch
       ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id

@@ -152,11 +152,11 @@ def _legacy_resolution_payload(preview, *, cancel=False):
         **({'cancel_queued_work':True} if cancel else {})}}
 
 
-def _selected_channel_state(db, state='paused', revision=4):
+def _selected_channel_state(db, state='paused', revision=4, agent_id=AGENT):
     db.execute('''INSERT INTO saas_ai_conversation_state
       (tenant_id,provider,channel_id,conversation_id,agent_id,state,reason,revision)
       VALUES(%s::uuid,'connect',%s,%s,%s::uuid,%s,'existing_channel_state',%s)''',
-      (A,CA,G,AGENT,state,revision))
+      (A,CA,G,agent_id,state,revision))
     db.commit()
 
 
@@ -178,6 +178,47 @@ def test_owner_resolution_preserves_existing_stopped_selected_channel_state(grou
     assert result['automatic_replies_enabled'] is False
     assert groups.read(d.cursor(),A,G)['assignments']==[{'agent_id':AGENT,'channel_id':CA,'priority':0}]
     d.commit();group['send'].assert_not_called();group['generate'].assert_not_called()
+
+
+def test_resolved_group_binding_projects_agent_with_human_state_without_resuming(group):
+    from tenant_operator_dialogs import apply_group_view
+    from tenant_operator_list_snapshot import ListSnapshot
+
+    d=group['db'];selection=_legacy_group_fixture(group)
+    _selected_channel_state(d,state='human',revision=12,agent_id=None)
+    before=d.execute('''SELECT state,reason,revision,agent_id,agent_assignment_id
+      FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect'
+        AND channel_id=%s AND conversation_id=%s''',(A,CA,G));d.commit()
+
+    preview=groups.legacy_resolution_preview(PROFILE,selection)
+    assert preview['allowed'] and preview['evidence']['selected_channel_state']=={
+        'state':'human','revision':12,'agent_id':''}
+    result=groups.configure(PROFILE,_legacy_resolution_payload(preview))
+    assert result['state']=='paused' and result['automatic_replies_enabled'] is False
+
+    with d.cursor() as cur:
+        detail_group=groups.view(cur,A,G)
+        assert detail_group['primary_agent_id']==AGENT
+        assert detail_group['sending_channel_id']==CA
+        assert groups.authority(cur,A,CA,G,AGENT,allow_stopped=True)['primary_agent_id']==AGENT
+        dialog={'provider':'connect','conversation_id':G,'channel_id':CA,
+            'conversation_kind':'group','controls_allowed':True,'company_enabled':True,
+            'company_emergency_stop':False,'connected':True,'tenant_status':'active',
+            'company_auto_send_enabled':False}
+        apply_group_view(cur,A,dialog)
+        assert dialog['agent_id']==AGENT and dialog['agent_name']=='Night support'
+        assert dialog['state']=='paused' and dialog['ai_availability']=='stopped'
+        snapshot=ListSnapshot(cur,A,[{'provider':'connect','conversation_id':G}])
+        list_group=snapshot.group_view(G)
+        assert list_group['primary_agent_id']==AGENT
+        assert list_group['sending_channel_id']==CA
+    after=d.execute('''SELECT state,reason,revision,agent_id,agent_assignment_id
+      FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect'
+        AND channel_id=%s AND conversation_id=%s''',(A,CA,G));d.commit()
+    assert after==before,'projection must not rewrite the channel state to install an agent'
+    assert not d.execute('SELECT ai_legacy_blocked(%s::uuid,%s,%s,NULL) AS blocked',(A,CA,G))[0]['blocked']
+    assert d.execute('SELECT ai_legacy_blocked(%s::uuid,%s,%s,NULL) AS blocked',(A,CB,G))[0]['blocked']
+    group['send'].assert_not_called();group['generate'].assert_not_called()
 
 
 def test_owner_resolution_keeps_active_selected_channel_state_blocked(group):

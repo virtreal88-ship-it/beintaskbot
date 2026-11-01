@@ -24,8 +24,9 @@ class ListSnapshot:
             self.groups = {row['group_jid']: dict(row) for row in cur.fetchall()}
             cur.execute('''SELECT c.conversation_id,c.connect_channel_id::text AS channel_id,c.lead_id,
                 ch.name AS channel_name,ch.active,cs.state,
-                EXISTS(SELECT 1 FROM saas_ai_conversation_state legacy WHERE legacy.tenant_id=c.tenant_id
-                  AND legacy.provider='connect' AND legacy.channel_id='' AND legacy.conversation_id=c.conversation_id) AS legacy
+                ai_legacy_blocked(c.tenant_id,c.connect_channel_id::text,c.conversation_id,NULL) AS legacy_blocked,
+                EXISTS(SELECT 1 FROM saas_connect_dialog_links l WHERE l.tenant_id=c.tenant_id
+                  AND l.channel_id=c.connect_channel_id AND l.source_id=c.conversation_id AND l.active) AS active_source_link
               FROM saas_connect_conversations c JOIN saas_connect_channels ch
                 ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id
               LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id AND cs.provider='connect'
@@ -70,8 +71,9 @@ class ListSnapshot:
     def group_view(self, conversation):
         state = self.groups.get(conversation, {})
         channels = self.channels.get(conversation, [])
-        winner = choose(state.get('assignments'), self.agents) if state and not any(row['legacy'] for row in channels) else None
-        selected = next((row for row in channels if winner and row['channel_id'] == winner['channel_id'] and row['active']), None)
+        winner = choose(state.get('assignments'), self.agents) if state else None
+        selected = next((row for row in channels if winner and row['channel_id'] == winner['channel_id']
+                         and row['active'] and not row['legacy_blocked'] and not row['active_source_link']), None)
         if not selected:
             winner = None
         if winner and state.get('state') == 'active' and selected['state'] in ('human', 'paused'):
