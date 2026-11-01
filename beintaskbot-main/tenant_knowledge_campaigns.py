@@ -539,7 +539,9 @@ def _current_limit_diagnostics(cur,tenant,campaign,credential_source=None):
 
 def get(profile, campaign_id=None):
     with _connect() as conn:
-        store.schema(conn);create_schema(conn)
+        # The shared initializer owns campaign and quality tables. Repeating
+        # campaign DDL here lets concurrent reads deadlock on lock upgrades.
+        store.schema(conn)
         with conn.cursor() as cur:
             tenant,_,_=store.authorize(cur,profile)
             # The schema enforces at most one non-stopped campaign per tenant.
@@ -594,8 +596,6 @@ def get(profile, campaign_id=None):
               WHERE c.tenant_id=%s::uuid AND c.extraction_id IN (SELECT extraction_id FROM saas_knowledge_campaign_fragments
               WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid) GROUP BY c.status''',(tenant,tenant,row['id']))
             reviews={r['status']:r['n'] for r in cur.fetchall()}
-            from tenant_knowledge_quality import schema as quality_schema
-            quality_schema(cur)
             cur.execute('''SELECT retrieval_state,response_state,count(*) AS n FROM saas_knowledge_quality_checks
               WHERE tenant_id=%s::uuid AND campaign_id=%s::uuid GROUP BY retrieval_state,response_state''',(tenant,row['id']))
             quality=cur.fetchall()
