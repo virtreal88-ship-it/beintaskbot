@@ -321,7 +321,11 @@ def test_alias_protected_loader_and_transient_download_keep_exact_source(ready,m
     db.execute('UPDATE saas_crm_messages SET message_type=%s WHERE id=%s::uuid',(kind,data['message_row_id']));db.commit()
     monkeypatch.setattr(attachments,'_connect',lambda:db)
     monkeypatch.setattr(transport,'connect_route',lambda *a,**kw:{'channel_id':CA,'conversation_id':'client','api_key':'synthetic'})
-    with pytest.raises(Exception):attachments.load(PROFILE,41,data['message_id'],channel_id=CA,conversation_id='client')
+    # Protected attachment reads also support provider aliases. Normalization
+    # is transient; the ASR authority and fingerprint retain the original row.
+    loaded=attachments.load(PROFILE,41,data['message_id'],channel_id=CA,conversation_id='client')
+    assert str(loaded['row']['id'])==data['message_row_id'] and loaded['row']['message_type']=='audio'
+    assert db.execute('SELECT message_type FROM saas_crm_messages WHERE id=%s::uuid',(data['message_row_id'],))[0]['message_type']==kind
     async def checked(item,**kw):
         assert str(item['row']['id'])==data['message_row_id'] and item['row']['message_type']=='audio'
         assert kw['max_bytes']==10*1024*1024

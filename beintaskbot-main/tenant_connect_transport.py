@@ -1005,15 +1005,16 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     conn.commit()
                     return accepted
             independent_consultation_reply=False
-            if not outbound and not ai_origin and data.get('type')=='text':
+            if not outbound and not ai_origin and data.get('type') in {'text','image','video','audio','voice','document','ptt','voice_message','photo','file'}:
                 cur.execute('SAVEPOINT dialog_consultation_reply')
                 try:
                     from tenant_dialog_consultations import record_reply,known_reply
                     linked=record_reply(cur,tenant,channel_id,conversation,str(data.get('id') or event_id),
-                        str(data.get('text') or ''),data.get('quotedExternalMessageId'),
+                        str(data.get('text') or data.get('caption') or ''),data.get('quotedExternalMessageId'),
                         str(metadata.get('participant_name') or _phone_from_jid(metadata.get('participant_jid')) or metadata.get('display_name') or metadata.get('participant_jid') or conversation),
-                        event.get('occurred_at'))
-                    independent_consultation_reply=bool(linked) or known_reply(cur,tenant,channel_id,conversation,str(data.get('id') or event_id))
+                        event.get('occurred_at'),message_type=str(data.get('type') or 'text'),
+                        source_external_id='connect:'+str(data.get('id') or event_id))
+                    independent_consultation_reply=known_reply(cur,tenant,channel_id,conversation,str(data.get('id') or event_id))
                     cur.execute('RELEASE SAVEPOINT dialog_consultation_reply')
                 except Exception:
                     cur.execute('ROLLBACK TO SAVEPOINT dialog_consultation_reply')

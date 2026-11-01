@@ -27,6 +27,7 @@ EXPECTED_ASSETS = ["/assets/tenant-knowledge-campaigns.js","/assets/tenant-knowl
 
 EXPECTED_ASSETS += ['/app/instructions','/app/ai-instructor','/assets/tenant-instructions.js','/assets/tenant-instructions.css','/assets/tenant-instructor-lesson.js','/assets/tenant-instructor-lesson.css','/assets/tenant-ai-instructor.js','/assets/tenant-ai-instructor.css']
 EXPECTED_ASSETS += ['/assets/tenant-dialog-consultations.js','/assets/tenant-owner-asr-comparison.js']
+EXPECTED_ASSETS += ['/assets/tenant-support-consultations.js']
 EXPECTED_ASSETS += ['/assets/tenant-members-ui.js','/assets/tenant-members-ui.css']
 EXPECTED_ASSETS += ['/assets/tenant-ai-administrator-approvals.js','/assets/tenant-request-coordinator.js','/assets/tenant-view-demand.js']
 
@@ -38,6 +39,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialog-consultations/replies', ('GET',)),
     ('dialog-consultations/{id}/dispatch', ('POST',)),
     ('dialog-consultations/{id}/revoke', ('POST',)),
+    ('dialog-consultations/{id}/manual-reply', ('POST',)),
     ('dialog-consultations/replies/{id}/customer-replies', ('GET',)),
     ('dialog-consultations/replies/{id}/action', ('POST',)),
     ('dialog-consultations/replies/{id}/draft', ('POST',)),

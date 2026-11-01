@@ -681,11 +681,12 @@
       if(query.get('view')!=='dialogs'||query.get('open_dialog')!=='1'||query.get('provider')!=='connect')return null;
       const lead=query.get('lead_id')||'',channel=query.get('channel_id')||'',conversation=query.get('conversation_id')||'';
       if(!/^\d{1,20}$/.test(lead)||!/^[0-9a-f-]{36}$/i.test(channel)||!conversation||conversation.length>220||/[\u0000-\u001f\u007f]/.test(conversation))return null;
-      return {provider:'connect',lead_id:Number(lead),channel_id:channel,conversation_id:conversation};
+      const anchor=query.get('source_message_id')||'';if(anchor&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(anchor))return null;
+      return {provider:'connect',lead_id:Number(lead),channel_id:channel,conversation_id:conversation,...(anchor?{source_message_id:anchor}:{})};
     }catch{return null;}
   }
   function clearNotificationDialogRoute(){
-    try{const url=new URL(window.location.href);for(const key of ['open_dialog','provider','lead_id','channel_id','conversation_id'])url.searchParams.delete(key);window.history.replaceState(window.history.state,'',url.pathname+url.search+url.hash);}catch{}
+    try{const url=new URL(window.location.href);for(const key of ['open_dialog','provider','lead_id','channel_id','conversation_id','source_message_id'])url.searchParams.delete(key);window.history.replaceState(window.history.state,'',url.pathname+url.search+url.hash);}catch{}
   }
   function profileChanged(data){
     if($('operatorDialogs'))$('operatorDialogs').style.visibility='';

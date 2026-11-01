@@ -175,7 +175,7 @@ def prepare(profile,consultation_id,data):
 
 
 def dispatch(profile,consultation_id,request_id):
-    from tenant_connect_transport import connect_route,send_group_with_receipt
+    from tenant_connect_transport import connect_route,send_consultation_with_receipt
     key=identifier(consultation_id);request_id=identifier(request_id)
     with _connect() as conn:
         schema(conn)
@@ -187,7 +187,7 @@ def dispatch(profile,consultation_id,request_id):
             if not consult or consult['status']=='closed' or consult['ticket_status']=='resolved':raise TenantLinearError('Consultation is closed.',409)
             cur.execute('SELECT * FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid FOR UPDATE',(tenant,key,request_id));row=cur.fetchone()
             if not row or str(row['request_id'])!=request_id:raise TenantLinearError('Delivery is unavailable.',404)
-            if row['state']=='sent':return {'state':'sent','message_id':row['connect_message_id']}
+            if row['state'] in {'sent','pending'}:return {'state':row['state'],'message_id':row['connect_message_id']}
             if row['state']!='ready':raise TenantLinearError('Delivery outcome is unresolved; inspect it before retrying.',409)
             assert_route(cur,tenant,policy,'connect',consult['conversation_id'],str(consult['channel_id']))
             group=assert_route(cur,tenant,policy,'connect',row['conversation_id'],str(row['channel_id']))
@@ -218,7 +218,13 @@ def dispatch(profile,consultation_id,request_id):
             current_route=connect_route(cur,tenant,int(current_group['lead_id']))
             if not current_route or current_route['channel_id']!=str(row['channel_id']) or current_route['conversation_id']!=row['conversation_id']:
                 raise TenantLinearError('Destination group changed or is unavailable.',409)
-            attempted=True;receipt=send_group_with_receipt(current_route,body,request_id)
+            attempted=True;receipt=send_consultation_with_receipt(current_route,body,request_id)
+            if receipt.get('state')=='pending':
+                cur.execute("""UPDATE saas_consultation_group_deliveries SET state='pending',connect_message_id=%s,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='sending'""",
+                  (receipt['message_id'],tenant,key,request_id))
+                conn.commit()
+                return {'state':'pending','message_id':receipt['message_id']}
             cur.execute("""UPDATE saas_consultation_group_deliveries SET state='sent',connect_message_id=%s,provider_message_id=%s,updated_at=now()
               WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid AND state='sending' RETURNING consultation_id""",(receipt['message_id'],receipt['external_message_id'],tenant,key,request_id))
             if not cur.fetchone():raise TenantLinearError('Delivery receipt needs review.',409)
@@ -351,7 +357,11 @@ def record_group_reply(cur,tenant,channel,conversation,message_id,text,quoted_id
     if quoted and matches and (not item['quote_match'] or item['id'] not in {value.lower() for value in matches}):return None
     cur.execute('''INSERT INTO saas_consultation_group_replies(tenant_id,consultation_id,channel_id,conversation_id,message_id,body)
       VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s) ON CONFLICT DO NOTHING RETURNING message_id''',(tenant,item['id'],channel,conversation,str(message_id)[:200],text[:4000]))
-    return item['id'] if cur.fetchone() else None
+    inserted=cur.fetchone()
+    if inserted:
+        from tenant_dialog_consultations import record_reply
+        record_reply(cur,tenant,channel,conversation,message_id,text,quoted_id)
+    return item['id'] if inserted else None
 
 
 _REMOTE_PASSWORD=re.compile(r'(?i)(?:anydesk|парол|password|passcode|şifr)[^\n]{0,48}(?:[:=]\s*|\s+)[A-Za-z0-9!@#$%^&*_.-]{6,}')
@@ -448,6 +458,15 @@ def record_customer_send_receipt(cur,tenant,event_fingerprint,message_id):
     return True
 
 
+def _case_followup_mode(cur,tenant,agent_id):
+    # The caller holds the exact conversation state lock; assignment and mode
+    # stay stable until the follow-up transaction commits.
+    if not agent_id:return None
+    cur.execute('SELECT mode FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL AND enabled=TRUE FOR SHARE',
+      (tenant,agent_id))
+    return (cur.fetchone() or {}).get('mode')
+
+
 def enqueue_pilot_customer_followup(cur,tenant,group_channel,group_conversation,group_message_id):
     """Queue one scoped customer follow-up after an exact, signed group reply."""
     from tenant_ai_pilot import manual_live_job,is_pilot_group_target
@@ -482,6 +501,15 @@ def enqueue_pilot_customer_followup(cur,tenant,group_channel,group_conversation,
     state=cur.fetchone() or {}
     if (state.get('state')!='human' or not str(state.get('reason') or '').startswith('ai_developer_consultation:')
             or not state.get('agent_id')):
+        return False
+    mode=_case_followup_mode(cur,tenant,state['agent_id'])
+    if mode!='automatic':
+        cur.execute('''INSERT INTO saas_ai_pilot_followups(tenant_id,id,consultation_id,case_id,channel_id,
+          conversation_id,group_channel_id,group_conversation_id,group_message_id,group_reply,agent_id,state,error_code)
+          VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s,%s::uuid,'blocked',%s)
+          ON CONFLICT DO NOTHING''',(tenant,uuid.uuid4(),row['consultation_id'],row['case_id'],row['channel_id'],
+          row['conversation_id'],group_channel,group_conversation,group_message_id,text,state['agent_id'],
+          'manual_mode_requires_staff' if mode=='manual' else 'assigned_agent_unavailable'))
         return False
     cur.execute('''SELECT count(*) AS n FROM saas_ai_pilot_followups WHERE tenant_id=%s::uuid
       AND case_id=%s::uuid AND created_at>=date_trunc('day',now())''',(tenant,row['case_id']))
@@ -558,6 +586,11 @@ def materialize_pilot_followup(cur):
       WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s FOR UPDATE''',
       (followup['tenant_id'],str(followup['channel_id']),followup['conversation_id']))
     state=cur.fetchone() or {}
+    mode=_case_followup_mode(cur,followup['tenant_id'],state.get('agent_id'))
+    if mode!='automatic':
+        cur.execute("UPDATE saas_ai_pilot_followups SET state='blocked',error_code=%s,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",
+          ('manual_mode_requires_staff' if mode=='manual' else 'assigned_agent_unavailable',followup['tenant_id'],followup['id']))
+        return False
     if (state.get('state')!='human' or str(state.get('agent_id') or '')!=str(followup['agent_id'])
             or not str(state.get('reason') or '').startswith('ai_developer_consultation:')):
         cur.execute("UPDATE saas_ai_pilot_followups SET state='blocked',error_code='handoff_state_changed',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid",
@@ -641,6 +674,13 @@ def attach_pilot_customer_reply(cur,tenant,channel,conversation,message_id):
           AND channel_id=%s AND conversation_id=%s AND state='active' ''',(tenant,channel,conversation))
         return {'blocked':True}
     turn=rows[0]
+    cur.execute('''SELECT agent_id FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid
+      AND provider='connect' AND channel_id=%s AND conversation_id=%s FOR UPDATE''',(tenant,str(channel),conversation))
+    current=cur.fetchone() or {}
+    if _case_followup_mode(cur,tenant,current.get('agent_id'))!='automatic':
+        # Keep the waiting historical turn intact: consuming it would let the
+        # next customer message fall back to ordinary manual-live admission.
+        return {'blocked':True,'followup_id':turn['id'],'case_id':turn['case_id']}
     cur.execute('''INSERT INTO saas_support_events(tenant_id,event_key,ticket_id)
       VALUES(%s::uuid,%s,%s::uuid) ON CONFLICT(tenant_id,event_key) DO NOTHING
       RETURNING ticket_id::text AS ticket_id''',

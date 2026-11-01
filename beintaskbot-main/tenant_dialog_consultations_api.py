@@ -17,7 +17,7 @@ def handler(member,origin,logger,resource):
                     _expected({'expected_tenant_id':request.headers.get('X-Tenant-Id'),'expected_user_id':request.headers.get('X-User-Id')},profile)
                 if resource=='customer_replies':result=await asyncio.to_thread(flow.customer_replies,profile,request.match_info['id'])
                 elif resource=='destinations':result=await asyncio.to_thread(flow.destinations,profile)
-                else:result=await asyncio.to_thread(flow.inbox,profile,request.query.get('channel_id',''),request.query.get('conversation_id',''))
+                else:result=await asyncio.to_thread(flow.inbox,profile,request.query.get('channel_id',''),request.query.get('conversation_id',''),request.query.get('case_id',''))
             else:
                 _origin(request,origin)
                 if request.content_type!='application/json':raise TenantLinearError('Ожидается JSON.',415)
@@ -38,6 +38,7 @@ def handler(member,origin,logger,resource):
                 elif resource=='revoke':
                     if payload:raise TenantLinearError('Некорректный запрос.',400)
                     result=await asyncio.to_thread(flow.revoke,profile,key)
+                elif resource=='manual_reply':result=await asyncio.to_thread(flow.manual_reply,profile,key,payload)
                 elif resource=='draft':result=await asyncio.to_thread(flow.draft,profile,key,payload)
                 else:result=await asyncio.to_thread(flow.action,profile,key,payload)
             return web.json_response({'success':True,'result':result},headers=headers)

@@ -294,6 +294,24 @@ def processing_allowed(job, connection=None):
     return allowed
 
 
+def _manual_case_followup(cur,tenant,job,row):
+    """A saved developer turn never overrides the current Manual assignment.
+
+    Older linked jobs may predate the enqueue guard, so use their persisted
+    event payload as well as the worker's payload at the final admission fence.
+    No receipt, assignment, setting or customer message is changed here.
+    """
+    if row.get('agent_mode')!='manual':return False
+    payload=job.get('payload') if isinstance(job.get('payload'),dict) else {}
+    flags=('pilot_developer_followup','pilot_customer_case_reply')
+    if any(payload.get(key) is True for key in flags):return True
+    if not job.get('event_fingerprint'):return False
+    cur.execute('SELECT payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint=%s',
+      (tenant,str(job['event_fingerprint'])))
+    stored=(cur.fetchone() or {}).get('payload') or {}
+    return isinstance(stored,dict) and any(stored.get(key) is True for key in flags)
+
+
 def automatic_send_allowed(job, connection=None):
     """Guard automatic sends to the configured pilot dialog at the send boundary.
 
@@ -324,6 +342,7 @@ def automatic_send_allowed(job, connection=None):
                     if not _lock_scope(cur, tenant, scope):
                         return False
                     row, fingerprint = _snapshot(cur, tenant, scope)
+                    if _manual_case_followup(cur,tenant,job,row):return False
                     if (not fingerprint or row.get('conversation_state') != 'active'
                             or row.get('conversation_ai_enabled') is not True
                             or row.get('conversation_manual_hold') is True
@@ -350,6 +369,7 @@ def automatic_send_allowed(job, connection=None):
             if not _lock_scope(cur, tenant, scope):
                 return False
             row, fingerprint = _snapshot(cur, tenant, scope)
+            if _manual_case_followup(cur,tenant,job,row):return False
             if (not fingerprint or row.get('conversation_state') != 'active'
                     or row.get('conversation_ai_enabled') is not True
                     or row.get('conversation_manual_hold') is True

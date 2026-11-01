@@ -174,7 +174,8 @@ def listing(profile,case_id):
 def reply(profile,consultation_id,data):
     if not isinstance(data,dict) or set(data)!={'response','kind'} or data['kind'] not in {'diagnosis','hypothesis','confirmed_bug','workaround','deployed_fix'}: raise TenantLinearError('consultation_reply_invalid',400)
     with _connect() as conn:
-        schema(conn)
+        from tenant_dialog_consultations import schema as unified_schema,record_manual_reply
+        unified_schema(conn)
         with conn.cursor() as cur:
             tenant,actor=authorize(cur,profile)
             cur.execute('SELECT * FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,consultation_id));row=cur.fetchone()
@@ -187,6 +188,7 @@ def reply(profile,consultation_id,data):
                 raise TenantLinearError('consultation_reply_forbidden',403)
             text=str(data['response']).strip()
             if not text: raise TenantLinearError('consultation_reply_invalid',400)
+            record_manual_reply(cur,tenant,row,actor,text[:4000],data['kind'])
             status=data['kind'] if data['kind'] in {'confirmed_bug','workaround','deployed_fix'} else 'answered'
             cur.execute('UPDATE saas_internal_consultations SET response=%s,response_kind=%s,status=%s,answered_by=%s,answered_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(text[:4000],data['kind'],status,actor,tenant,consultation_id))
             if status in {'confirmed_bug','workaround','deployed_fix'}:
