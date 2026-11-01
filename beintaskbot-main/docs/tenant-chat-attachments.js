@@ -116,7 +116,7 @@
   function clear(dropCache=false){
     if(photoViewer){if(history.state?.operatorPhotoViewer===photoViewer.token){const state={...history.state};delete state.operatorPhotoViewer;history.replaceState(state,'',location.href);}closePhotoViewer(true);}
     epoch++;
-    active.forEach(controller=>{if(dropCache===true||!controller.audioReload){controller.abort();active.delete(controller);}});pendingKeys.clear();
+    active.forEach(controller=>{if(dropCache===true||!controller.audioReload){controller.abort();active.delete(controller);}});pendingKeys.forEach((controller,key)=>{if(dropCache===true||!controller.audioReload)pendingKeys.delete(key);});
     urls.forEach(url=>URL.revokeObjectURL(url));urls.clear();previews.forEach(preview=>stop(preview.media));previews.clear();
     document.querySelectorAll('[data-native-audio] audio').forEach(audio=>{audio.pause?.();audio.removeAttribute?.('src');audio.load?.();delete audio.dataset.mediaPreview;});
     if(dropCache===true){mediaCache.clear();cacheBytes=0;retryUntil.clear();loadedKeys.clear();}
@@ -155,7 +155,7 @@
         const proof=profilePolicy,sourceVersion=host.dataset.mediaVersion,sourceDialog=host.closest?.('[data-dialog-key]')?.dataset.dialogKey;
         const canRetain=()=>automatic&&freshProfile&&proof===profilePolicy&&who===identity(member)&&selected===(lead||host.dataset.attachmentLeadId)&&[...document.querySelectorAll('#chatRows [data-chat-attachment]')].some(next=>next.dataset.chatAttachment===host.dataset.chatAttachment&&next.dataset.mediaVersion===sourceVersion&&next.dataset.channelId===host.dataset.channelId&&next.dataset.conversationId===host.dataset.conversationId&&next.closest('[data-dialog-key]')?.dataset.dialogKey===sourceDialog);
         const timer=setTimeout(()=>controller.abort(),70000);
-        let blobUrl;
+        let blobUrl,restoreRetained=false;
         try{
           const query=mediaQuery(),cacheKey=previewKey();let blob=mediaCache.get(cacheKey),contentLength='',servedFilename=host.dataset.mediaFilename||'';
           if(cachedOnly&&!blob)return;
@@ -180,7 +180,7 @@
             // in the 32 MiB in-tab cache after playback or preview is closed.
             if(blob.size<=MAX_CACHE_BYTES){while(cacheBytes+blob.size>MAX_CACHE_BYTES&&mediaCache.size){const [oldKey,oldBlob]=mediaCache.entries().next().value;mediaCache.delete(oldKey);cacheBytes-=oldBlob.size;}if(cacheBytes+blob.size<=MAX_CACHE_BYTES){mediaCache.set(cacheKey,blob);cacheBytes+=blob.size;}}
           }
-          if(!valid()){if(canRetain()&&mediaCache.has(cacheKey)){loadedKeys.add(cacheKey);while(loadedKeys.size>3)loadedKeys.delete(loadedKeys.values().next().value);bind();}return;}
+          if(!valid()){if(canRetain()&&mediaCache.has(cacheKey)){loadedKeys.add(cacheKey);while(loadedKeys.size>3)loadedKeys.delete(loadedKeys.values().next().value);restoreRetained=true;}return;}
           if(!blob.size||blob.size>MAX_PREVIEW_BYTES){host.dataset.mediaPreviewState='too_large';updateMediaMenu(host);throw Error('Fayl ölçüsü düzgün deyil.');}
           blobUrl=URL.createObjectURL(blob);urls.add(blobUrl);
           const type=blob.type.split(';')[0],expected=String(host.dataset.mediaKind||'').toLowerCase();if(expected==='image'&&!type.startsWith('image/')){host.dataset.mediaPreviewState='invalid';updateMediaMenu(host);throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));}if(['audio','voice','voice_message','ptt'].includes(expected)&&!type.startsWith('audio/')&&type!=='application/ogg'){host.dataset.mediaPreviewState='invalid';updateMediaMenu(host);throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));}if(expected==='video'&&!type.startsWith('video/')){host.dataset.mediaPreviewState='invalid';updateMediaMenu(host);throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));}let node,media;
@@ -207,7 +207,7 @@
           if(host.insertBefore)host.insertBefore(node,button);else host.append(node);button.hidden=true;status.textContent='';
           delete host.dataset.mediaRetryAt;retryUntil.delete(retryKey(host,host.dataset.chatAttachment||''));host.dataset.mediaPreviewState='loaded';updateMediaMenu(host);if(!cachedOnly&&!automatic)void rememberAudio(host);
         }catch(error){if(blobUrl){URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);}if(valid()){if(automatic)blockAudioIntent(intentBinding,0);if(!host.dataset.mediaPreviewState||host.dataset.mediaPreviewState==='loaded')host.dataset.mediaPreviewState='retryable';status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;updateMediaMenu(host);}}
-        finally{clearTimeout(timer);active.delete(controller);if(pendingKeys.get(requestKey)===controller)pendingKeys.delete(requestKey);button.setAttribute('aria-busy','false');if(menuLoad)menuLoad.disabled=false;updateMediaMenu(host);}
+        finally{clearTimeout(timer);active.delete(controller);if(pendingKeys.get(requestKey)===controller)pendingKeys.delete(requestKey);button.setAttribute('aria-busy','false');if(menuLoad)menuLoad.disabled=false;updateMediaMenu(host);if(restoreRetained)bind();}
       };
       button.onclick=()=>load();
       if(member&&/^[a-f0-9]{64}$/.test(host.dataset.mediaVersion||'')&&loadedKeys.has(previewKey())&&mediaCache.has(previewKey()))void load(true);
@@ -230,7 +230,7 @@
     const revision=profileRevision,expected=profilePolicy;
     const flight=fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(response=>response.ok?response.json():null).then(data=>{
       if(revision!==profileRevision&&expected)return;
-      if(data?.member){const nextPolicy=policy(data);if(!member&&revision===profileRevision){member=data.member;profilePolicy=nextPolicy;}if(profilePolicy===nextPolicy&&member?.active!==false){freshProfile=true;bind();}}else forgetAudioIntent();
+      if(data?.member){const nextPolicy=policy(data);if(!member&&revision===profileRevision){member=data.member;profilePolicy=nextPolicy;}if(profilePolicy===nextPolicy&&member?.active!==false){freshProfile=true;bind();}}else if(revision===profileRevision)forgetAudioIntent();
     }).catch(()=>{});
     profileFetch=flight;return flight;
   }
