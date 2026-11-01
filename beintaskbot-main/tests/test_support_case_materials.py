@@ -18,9 +18,15 @@ OUTPUT = {key: 'Verified summary' for key in ('description','summary','suggestio
 
 def add(db, kind='text', body='', tenant=A, channel=CA, lead=41):
     key = str(uuid.uuid4())
+    # PGlite can commit several inserts in the same millisecond. Give this
+    # chronological fixture an explicit order instead of relying on UUID ties.
     db.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,
-      channel,direction,body,message_type) VALUES(%s::uuid,%s::uuid,%s,%s,%s,'incoming',%s,%s)''',
-      (key, tenant, lead, 'connect:' + key, 'connect:' + channel, body, kind))
+      channel,direction,body,message_type,happened_at)
+      SELECT %s::uuid,%s::uuid,%s,%s,%s,'incoming',%s,%s,
+        COALESCE(MAX(COALESCE(happened_at,created_at)),now()) + interval '1 second'
+      FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s''',
+      (key, tenant, lead, 'connect:' + key, 'connect:' + channel, body, kind,
+       tenant, lead, 'connect:' + channel))
     db.commit()
     return key
 
