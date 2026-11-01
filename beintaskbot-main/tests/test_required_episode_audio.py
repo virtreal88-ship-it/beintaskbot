@@ -45,7 +45,7 @@ def test_three_ready_voices_are_all_supplied_and_no_internal_coverage_is_sent(re
     copilot.run(PROFILE,data)
     lines=generated.call_args.args[3]
     for text in ['FIRST_FULL_SPEECH','SECOND_FULL_SPEECH','THIRD_FULL_SPEECH']:assert text in str(lines)
-    assert all(set(line)=={'speaker','text','at','source_id','media_kind','evidence_scope'} for line in lines)
+    assert all(set(line)=={'speaker','text','at','source_id','media_kind','evidence_scope','provenance','saved_visual_evidence'} for line in lines)
     asr.assert_not_called();generated.assert_called_once()
 
 
