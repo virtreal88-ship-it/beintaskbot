@@ -43,7 +43,7 @@ const A='00000000-0000-0000-0000-000000000101',CA='00000000-0000-0000-0000-00000
  assert.equal(d.querySelector('#operatorRows [role=option]').getAttribute('aria-selected'),'true','returning to the list preserves the selected conversation');
  await w.tenantOperator.openDialog(route);await settle();
   assert.equal(d.querySelector('[data-operator-group-settings]').textContent,'Настроить AI');
- assert.ok(d.querySelector('[data-operator-create-ticket]'));
+ const createTicket=d.querySelector('[data-operator-create-ticket]');assert.ok(createTicket);assert.equal(createTicket.getAttribute('aria-label'),'Создать обращение');assert.match(createTicket.textContent,/\+\s*Задача/,'ticket action is compact but keeps its short caption');
   d.querySelector('[data-operator-group-settings]').click();await settle();
   const modal=d.querySelector('#operatorGroupSettingsModal'),form=modal.querySelector('form'),select=form.querySelector('select');
  assert.equal(select.options.length,2);assert.equal(select.options[1].textContent,'<b>Support</b>');assert.equal(form.querySelector('b'),null);
