@@ -31,6 +31,7 @@ EXPECTED_ASSETS += ['/assets/tenant-dialog-consultations.js','/assets/tenant-own
 EXPECTED_ASSETS += ['/assets/tenant-support-consultations.js']
 EXPECTED_ASSETS += ['/assets/tenant-members-ui.js','/assets/tenant-members-ui.css']
 EXPECTED_ASSETS += ['/assets/tenant-ai-administrator-approvals.js','/assets/tenant-request-coordinator.js','/assets/tenant-view-demand.js']
+EXPECTED_ASSETS += ['/app/manifest.webmanifest','/app/pwa-sw.js','/app/pwa-icon-192.png','/app/pwa-icon-512.png','/app/apple-touch-icon.png','/assets/tenant-pwa.js']
 
 AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialog-consultations/developer-marker', ('POST',)),
@@ -232,7 +233,8 @@ class Assets(unittest.IsolatedAsyncioTestCase):
             response = await match.handler(request)
             self.assertEqual(response._path, ROOT/'docs'/filename)
             self.assertEqual(response.headers.get('Cache-Control'), cache)
-            self.assertEqual(response.headers.get('Service-Worker-Allowed'), '/app/' if url == '/app/push-sw.js' else None)
+            expected_scope = '/app/' if url == '/app/push-sw.js' else '/app' if url == '/app/pwa-sw.js' else None
+            self.assertEqual(response.headers.get('Service-Worker-Allowed'), expected_scope)
 
     def test_bot_composes_separate_legacy_and_tenant_route_groups(self):
         source = (ROOT/'bot.py').read_text(encoding='utf-8-sig')
@@ -253,6 +255,7 @@ class Assets(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("'"+url+"'", tenant_text)
             self.assertNotIn('"'+url+'"', tenant_text)
         self.assertIn('"/webapp", serve_webapp', tenant_text)
+        self.assertIn('"/app/", auth_api["app_page"]', tenant_text)
         self.assertIn('"/api/platform/integrations/kommo/callback"', tenant_text)
         self.assertIn('"/api/platform/register"', tenant_text)
         self.assertIn('"/api/action", handle_api_action', legacy_text)
