@@ -19,8 +19,8 @@ def language(value=None,profile=None):
 
 OWNER_APPROVED_PAYMENT_URL='https://million.az/attributes/beinaz_yigim'
 
-def redact(text,names=(),*,owner_payment_link=False):
-    text=str(text or '')[:30000]
+def redact(text,names=(),*,owner_payment_link=False,max_chars=30000):
+    text=str(text or '')[:max(0,min(60000,int(max_chars)))]
     known={str(n).strip() for n in names if n}
     known.update(part for name in list(known) for part in name.split() if len(part)>=3 and part[:1].isupper())
     for name in sorted(known,key=len,reverse=True):

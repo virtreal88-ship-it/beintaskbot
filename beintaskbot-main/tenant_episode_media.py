@@ -70,7 +70,7 @@ def _flight(authority, ref):
     with _connect() as conn:
         _schema(conn)
         with conn.cursor() as cur:
-            if ref.get('media_kind') in {'voice','audio'}:
+            if ref.get('media_kind') in {'voice','audio','voice_message','ptt'}:
                 # Serialize with the retained legacy ASR worker during rollout.
                 # Its old message-only receipt cannot certify a media version.
                 cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
@@ -97,6 +97,12 @@ def _flight(authority, ref):
                         if not may_process and not changed:
                             conn.commit()
                             return key,None,{'status':'unavailable','code':'legacy_voice_version_unverified'}
+            from tenant_dialog_audio_store import blocked
+            explicit=blocked(cur,authority.tenant,channel=ref['channel_id'],external=ref['external_id'])
+            if explicit:
+                conn.commit()
+                return key,None,{'status':'unknown' if explicit=='unknown' else 'unavailable',
+                    'code':'media_result_unknown' if explicit=='unknown' else 'audio_transcription_pending'}
             cur.execute('''INSERT INTO saas_episode_media_flights
               (tenant_id,channel_id,external_id,source_hash,token,state)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s::uuid,'running')

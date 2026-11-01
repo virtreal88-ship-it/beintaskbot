@@ -49,6 +49,7 @@ Response wrapper: `{ "success": true, "result": { ... } }`.
   },
   "allowed_actions": ["transcribe"],
   "blocked_reason": null,
+  "blocked_message": null,
   "cost_token": "<opaque-server-token>",
   "cost_token_expires_at": "<UTC>",
   "current_attempt": null,
@@ -125,6 +126,9 @@ No polling request or reload initiates work; GET polls status read-only.
 403: access/origin denied. 409: stale source/token/assignment/price/generation,
 paid pending/unknown, or unavailable adapter. 429: existing daily/monetary cap.
 Errors use `{ "success": false, "error": "<safe explanation>", "code": "<stable-code>" }`.
+GET resource conflicts include `scope_verified: true` only after the expected
+tenant/user headers were validated; identity mismatches never include this flag.
+`blocked_message` is an optional safe server explanation for a blocked preview.
 
 ## Durable schema and coordination
 
