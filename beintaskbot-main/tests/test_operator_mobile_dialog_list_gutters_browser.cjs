@@ -128,6 +128,12 @@ const server = http.createServer((req, res) => {
       const page = standaloneContext.pages()[0] || await standaloneContext.newPage();
       await page.route('**/*', request => new URL(request.request().url()).origin === origin ? request.continue() : request.abort());
       if (!page.url().startsWith(origin)) await page.goto(`${origin}/app?view=dialogs`, { waitUntil: 'domcontentloaded' });
+      // A Chromium --app window is a standalone-style window but does not itself
+      // claim an installed web app. Emulate the PWA display-mode media feature
+      // explicitly so this assertion tests the standalone CSS branch rather
+      // than depending on the runner's installed-app registry.
+      const standaloneCdp = await standaloneContext.newCDPSession(page);
+      await standaloneCdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'display-mode', value: 'standalone' }] });
       await page.evaluate(({ route, messages, profile }) => {
         document.querySelectorAll('.view').forEach(node => node.classList.toggle('active', node.id === 'view-dialogs'));
         window.alert = () => {};
