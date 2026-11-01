@@ -9,7 +9,7 @@ import json
 import re
 import uuid
 
-VERSION = 'product-label-v1'
+VERSION = 'product-label-block-v1'
 PRODUCER_RULE = (' For a single product image only, when exactly one printed packaging barcode and every digit '
     'are clearly visible, return ONLY this optional block: first line "Product packaging observed."; '
     'optional lines Product name: "<visible name>" and Product size: "<visible size>" using JSON-quoted '

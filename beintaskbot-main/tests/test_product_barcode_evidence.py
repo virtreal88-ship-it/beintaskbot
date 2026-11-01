@@ -159,11 +159,12 @@ def test_future_cache_keeps_only_typed_artifact_before_redaction(monkeypatch):
     invoke.assert_called_once()
 
 
-@pytest.mark.parametrize('mode',['typed','legacy_redacted','wrong_bytes','wrong_text'])
+@pytest.mark.parametrize('mode',['typed','legacy_redacted','wrong_bytes','wrong_text','old_protocol'])
 def test_cached_results_do_not_call_provider_or_reconstruct_old_masks(monkeypatch,mode):
     text=redact(OBS);typed=identifiers.artifact(OBS,text,HASH)
     if mode=='wrong_bytes':typed['image_sha256']='a'*64
     if mode=='wrong_text':typed['observation_hash']='b'*64
+    if mode=='old_protocol':typed['version']='product-label-v1'
     saved={'transcript':text,'metadata':{'product_barcode_artifact':typed} if mode!='legacy_redacted' else {}}
     fake_cache(monkeypatch,saved);item=cache_item();invoke=Mock(side_effect=AssertionError('No provider allowed'))
     output,_,fresh=cache.observe_once({},item,REF,CONTENT,'image/png',{},invoke)
