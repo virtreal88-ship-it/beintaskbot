@@ -59,7 +59,7 @@ def test_preview_is_readonly_then_single_asr_no_llm_or_send(ready):
     db,data,provider,download,sent=ready
     counts={t:db.execute('SELECT count(*) AS n FROM '+t)[0]['n'] for t in ('saas_chat_ai_runs','saas_dialog_audio_attempts','saas_ai_spend_reservations')};db.commit()
     preview=flow.preview(PROFILE,data)
-    assert preview['effective_model']=='gpt-transcribe' and preview['price']['reserve_microusd']==30000
+    assert preview['effective_model']=='gpt-4o-transcribe' and preview['price']['reserve_microusd']==60000
     assert preview['price']['max_duration_seconds']==300 and preview['allowed_actions']==['transcribe']
     provider.assert_not_called();download.assert_not_called()
     assert all(db.execute('SELECT count(*) AS n FROM '+t)[0]['n']==n for t,n in counts.items());db.commit()
@@ -67,9 +67,9 @@ def test_preview_is_readonly_then_single_asr_no_llm_or_send(ready):
     result=flow.execute(PROFILE,request)
     assert result['requested_attempt']['state']=='completed'
     assert result['latest_success']['text']=='synthetic speech'
-    assert sent==['gpt-transcribe']
+    assert sent==['gpt-4o-transcribe']
     assert db.execute('SELECT reserved_calls FROM saas_chat_ai_runs')==[{'reserved_calls':1}]
-    assert db.execute('SELECT model,reserved_microusd,actual_microusd,state FROM saas_ai_spend_reservations')==[{'model':'gpt-transcribe','reserved_microusd':30000,'actual_microusd':30000,'state':'settled'}]
+    assert db.execute('SELECT model,reserved_microusd,actual_microusd,state FROM saas_ai_spend_reservations')==[{'model':'gpt-4o-transcribe','reserved_microusd':60000,'actual_microusd':60000,'state':'settled'}]
     assert flow.execute(PROFILE,request)['requested_attempt']['id']==result['requested_attempt']['id']
     assert len(sent)==1 and download.call_count==1
 
@@ -158,10 +158,10 @@ def test_verified_old_whisper_reuse_keeps_actual_artifact_model(ready):
     db.execute('UPDATE saas_crm_messages SET body=%s,raw=%s::jsonb WHERE id=%s::uuid',('old verified speech',json.dumps(raw),data['message_row_id']));db.commit()
     preview=flow.preview(PROFILE,data)
     reused=flow.execute(PROFILE,command(data,preview,action='transcribe'))
-    assert reused['effective_model']=='gpt-transcribe' and reused['latest_success']['model']=='whisper-1'
+    assert reused['effective_model']=='gpt-4o-transcribe' and reused['latest_success']['model']=='whisper-1'
     assert reused['requested_attempt']['reserve_microusd']==0 and not sent
     fresh=flow.execute(PROFILE,command(data,flow.preview(PROFILE,data),action='retranscribe'))
-    assert fresh['latest_success']['model']=='gpt-transcribe' and len(sent)==1
+    assert fresh['latest_success']['model']=='gpt-4o-transcribe' and len(sent)==1
 
 
 def test_blocked_preview_has_stable_assignment_reason_and_safe_message(ready):
@@ -188,7 +188,7 @@ def test_matching_cache_unknown_blocks_but_unmatched_hold_is_never_refunded(read
     flow.execute(PROFILE,command(data,flow.preview(PROFILE,data)))
     assert len(sent)==1 and db.execute("SELECT state,reserved_microusd,actual_microusd FROM saas_ai_spend_reservations WHERE call_key='old:unknown'")==[{'state':'unknown','reserved_microusd':30000,'actual_microusd':None}]
     assert db.execute("SELECT state FROM saas_knowledge_media_cache WHERE fingerprint='unmatched-opaque-legacy-key'")==[{'state':'unknown'}]
-    assert sum(r['reserved_microusd'] for r in db.execute('SELECT reserved_microusd FROM saas_ai_spend_reservations'))==60000
+    assert sum(r['reserved_microusd'] for r in db.execute('SELECT reserved_microusd FROM saas_ai_spend_reservations'))==90000
 
 
 def test_stale_source_token_never_downloads_or_reserves(ready):
@@ -309,7 +309,7 @@ def test_paid_success_for_changed_source_is_history_only_never_reapplied(ready):
     assert first['requested_attempt']['state']=='completed' and not first['requested_attempt']['source_current']
     assert not first['latest_success'] and not first['message'].get('audio_transcript')
     assert first['history'][0]['text']=='old source paid speech'
-    assert db.execute('SELECT state,actual_microusd FROM saas_ai_spend_reservations')==[{'state':'settled','actual_microusd':30000}]
+    assert db.execute('SELECT state,actual_microusd FROM saas_ai_spend_reservations')==[{'state':'settled','actual_microusd':60000}]
 
 
 @pytest.mark.parametrize('kind',['voice_message','ptt'])
