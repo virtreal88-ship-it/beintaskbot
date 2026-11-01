@@ -29,7 +29,7 @@ async function installApp(page,{agent=true,getResult=resultShape(),postResult=nu
 async function setup(browser,options={}){
  const page=await browser.newPage({viewport:{width:390,height:844},hasTouch:true,isMobile:true});
  await page.route('https://test.local/**',route=>route.fulfill({status:200,contentType:'text/html',body:fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'')}));
- await page.goto('https://test.local/app?view=dialogs');
+ await page.goto('https://test.local/app?view=dialogs'+(options.siteLanguage?'&site_lang='+encodeURIComponent(options.siteLanguage):''));
  await installApp(page,options);return page;
 }
 async function openMenu(page){await page.locator('[data-message-id="row-voice-1"] [data-audio-transcription-menu] summary').click();}
@@ -50,8 +50,11 @@ async function waitForGet(page){await page.waitForFunction(()=>window.requests.s
    assert.equal(await page.locator('[data-audio-transcription-action="transcribe"]').count(),0);const article=page.locator('[data-message-id="row-voice-1"]');await article.locator('[data-audio-transcript] summary').click();assert.match(await article.innerText(),/Current exact transcript/,'GET may patch this exact message with its current transcript');assert.equal(await article.locator('audio').count(),1,'current transcript update preserves the native player');
    const menu=page.locator('[data-audio-transcription-menu]');await menu.locator('.operator-audio-transcription-history').nth(1).locator('summary').click();assert.match(await menu.innerText(),/Previous exact transcript/,'successful previous attempt remains available as history');await page.close();
   }
-  for(const [state,key] of [['pending','audioTranscriptionPending'],['unknown','audioTranscriptionUnknown']]){
-   const result=resultShape({state,allowed_actions:[],cost_token:null,current_attempt:{state:state==='pending'?'sending':'unknown'}});const page=await setup(browser,{getResult:result});await openMenu(page);await waitForGet(page);assert.equal(await page.locator('[data-audio-transcription-action]').count(),0,state+' cannot be forcibly retried');assert.notEqual(await page.locator('[data-audio-transcription-status]').textContent(),'');assert.equal(await page.evaluate(()=>window.requests.filter(r=>r.url.includes('/audio-transcription')&&r.method==='POST').length),0);await page.close();
+  for(const [state,requestedState,expected] of [
+   ['pending','sending','Расшифровка уже выполняется. Повторный запуск недоступен.'],
+   ['unknown','unknown','Не удалось подтвердить результат расшифровки. Повторный запуск заблокирован, чтобы избежать повторного списания.']
+  ]){
+   const result=resultShape({state,allowed_actions:[],cost_token:null,current_attempt:{state:requestedState},requested_attempt:{state:requestedState}});const page=await setup(browser,{getResult:result,siteLanguage:'ru'});await openMenu(page);await waitForGet(page);assert.equal(await page.locator('[data-audio-transcription-action]').count(),0,state+' cannot be forcibly retried');assert.equal(await page.locator('[data-audio-transcription-status]').textContent(),expected,state+' must have wording that matches its server state');assert.equal(await page.evaluate(()=>window.requests.filter(r=>r.url.includes('/audio-transcription')&&r.method==='POST').length),0,state+' never triggers another paid operation');await page.close();
   }
   {
    const page=await setup(browser,{agent:false});await openMenu(page);await page.waitForFunction(()=>document.querySelector('[data-audio-transcription-status]')?.textContent);assert.match(await page.locator('[data-audio-transcription-status]').innerText(),/AI-агент|AI agent/);assert.equal(await page.locator('[data-audio-transcription-actions] button').count(),1);assert.equal(await page.locator('[data-audio-transcription-actions] button').isDisabled(),true);assert.equal(await page.evaluate(()=>window.requests.filter(r=>r.url.includes('/audio-transcription')).length),0,'unassigned conversation shows a disabled action without calling the endpoint');await page.close();
