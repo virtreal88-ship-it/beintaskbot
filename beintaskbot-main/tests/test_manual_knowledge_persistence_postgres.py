@@ -84,17 +84,28 @@ def test_concurrent_manual_request_has_one_source_and_one_chunk_set(db,monkeypat
     import uuid
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
-    monkeypatch.setattr(agents,'_connect',lambda:psycopg.connect(db.dsn,row_factory=dict_row))
-    data={'create_request_id':str(uuid.uuid4()),'title':'Concurrent','kind':'text','content':'One atomic creation','active':True}
     barrier=Barrier(2)
+    class ConcurrentInsertCursor(psycopg.Cursor):
+        def execute(self,query,params=None,**kwargs):
+            if str(query).startswith('INSERT INTO saas_ai_knowledge_sources('):
+                # Both connections must finish the absent-source preflight.
+                # A start-of-function barrier alone often serializes at INSERT.
+                barrier.wait(timeout=10)
+            return super().execute(query,params,**kwargs)
+    monkeypatch.setattr(agents,'_connect',lambda:psycopg.connect(db.dsn,row_factory=dict_row,cursor_factory=ConcurrentInsertCursor))
     def create(index):
-        barrier.wait(timeout=10)
         try:return agents.save_knowledge(PROFILE,{**data,**({'content':'Conflicting concurrent payload'} if different_payload and index else {})})
         except TenantLinearError as error:return {'status':error.status}
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results=list(pool.map(create,range(2)))
-    assert {row['id'] for row in results if row.get('id')}=={data['create_request_id']}
-    assert [row['status'] for row in results if 'status' in row]==([409] if different_payload else [])
-    assert len(agents.list_knowledge(PROFILE))==1
+        for _ in range(32):
+            data={'create_request_id':str(uuid.uuid4()),'title':'Concurrent','kind':'text','content':'One atomic creation','active':True}
+            results=list(pool.map(create,range(2)))
+            assert {row['id'] for row in results if row.get('id')}=={data['create_request_id']}
+            assert [row['status'] for row in results if 'status' in row]==([409] if different_payload else [])
+    assert len(agents.list_knowledge(PROFILE))==32
     with psycopg.connect(db.dsn,row_factory=dict_row) as conn:
-        assert conn.execute('SELECT count(*) AS n FROM saas_ai_knowledge_chunks').fetchone()['n']==1
+        assert conn.execute('SELECT count(*) AS n FROM saas_ai_knowledge_chunks').fetchone()['n']==32
+        assert conn.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE action='ai_knowledge_created'").fetchone()['n']==32
+        assert conn.execute('''SELECT count(*) AS n FROM saas_ai_knowledge_sources s
+          JOIN saas_ai_knowledge_chunks c ON c.tenant_id=s.tenant_id AND c.source_id=s.id
+          WHERE c.content<>s.content''').fetchone()['n']==0

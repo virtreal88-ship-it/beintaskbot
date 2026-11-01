@@ -1060,9 +1060,15 @@ def save_knowledge(profile, data, *, source_id=None, connection=None):
                 if int((cur.fetchone() or {}).get('total') or 0) >= MAX_SOURCES:
                     raise TenantLinearError('Bilik mənbələrinin sayı həddə çatıb.')
                 source = create_request or uuid.uuid4()
+                # Manual request UUIDs can race on BOTH id and (tenant_id,id).
+                # Targeting only the PK leaves the second unique index able to
+                # raise UniqueViolation. Ignore any unique collision, then use
+                # the exact tenant/actor/payload receipt check below; never adopt
+                # a conflicting row. Keep the legacy creation path unchanged.
+                conflict = 'ON CONFLICT DO NOTHING' if create_request else 'ON CONFLICT (id) DO NOTHING'
                 cur.execute('''INSERT INTO saas_ai_knowledge_sources(id,tenant_id,title,kind,content,active,content_hash,created_by,agent_id,setup_key,provenance)
                   VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s::uuid,%s,%s::jsonb)
-                  ON CONFLICT (id) DO NOTHING RETURNING id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at''',
+                  '''+conflict+''' RETURNING id,tenant_id,agent_id,title,kind,content,active,content_hash,created_at,updated_at''',
                   (source, tenant, patch['title'], patch['kind'], patch['content'], patch['active'], digest, actor, bound_agent, retry_key,
                    _json({'manual_create_request':request_receipt} if request_receipt else {})))
                 result = _row(cur.fetchone())
