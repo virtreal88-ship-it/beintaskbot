@@ -40,6 +40,7 @@ on:
       - 'beintaskbot-main/tests/test_lazy_audio_state_browser.cjs'
       - 'beintaskbot-main/tests/test_voice_card_mobile_browser.cjs'
       - 'beintaskbot-main/tests/test_list_toolbar_mobile_browser.cjs'
+      - 'beintaskbot-main/tests/test_message_attachment_menu_browser.cjs'
       - 'beintaskbot-main/tests/test_audio_reload_intent_browser.cjs'
       - 'beintaskbot-main/tests/test_helper_request_identity_browser.cjs'
       - 'beintaskbot-main/tests/test_verified_dialog_phone.py'
@@ -200,3 +201,4 @@ jobs:
           node tests/test_tenant_chat_attachments_ui.cjs
           node tests/test_voice_card_mobile_browser.cjs
           node tests/test_list_toolbar_mobile_browser.cjs
+          node tests/test_message_attachment_menu_browser.cjs
