@@ -64,7 +64,9 @@ def handler(member_from_request,origin,logger,resource):
                 result=await asyncio.to_thread(mark_read if resource=='dialogs_read' else mark_all_read if resource=='dialogs_read_all' else run_copilot if resource=='copilot' else assignment_bulk_apply if resource=='agent_assignment_bulk' else grant_continuation if resource=='legacy_continuation' else recover_legacy if resource=='legacy_recovery' else register_employee if resource=='group_staff' else configure_group if resource=='group_coordination' else assign_agent if resource=='agent_assignment' else save_display_name,profile,payload)
             return web.json_response({'success':True,'result':result},headers=headers)
         except TenantLinearError as error:
-            return web.json_response({'success':False,'error':str(error),**({'scope_verified':True} if scope_verified and error.status==409 else {})},status=error.status,headers=headers)
+            return web.json_response({'success':False,'error':str(error),
+                **({'keep_request':error.keep_request} if resource=='copilot' and type(getattr(error,'keep_request',None)) is bool else {}),
+                **({'scope_verified':True} if scope_verified and error.status==409 else {})},status=error.status,headers=headers)
         except (TypeError,ValueError,KeyError):
             return web.json_response({'success':False,'error':'Некорректный запрос.'},status=400,headers=headers)
         except Exception:

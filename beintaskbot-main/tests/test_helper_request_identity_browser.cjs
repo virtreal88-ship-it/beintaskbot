@@ -25,6 +25,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  assert.equal((await call('chat','Synthetic question')).request_id,chat.request_id,'return to an unresolved logical request keeps its UUID');
  await open();assert.equal((await call('chat','Synthetic question')).request_id,chat.request_id,'background rerender preserves pending UUID');
  await page.evaluate(()=>{window.failure='lost';});assert.equal((await call('chat','Synthetic question')).request_id,chat.request_id);
+ await page.evaluate(()=>{window.keep=undefined;});const omitted=await call('chat','Missing keep flag');assert.equal((await call('chat','Missing keep flag')).request_id,omitted.request_id,'missing flag retains UUID');await page.evaluate(()=>{window.keep=null;});assert.equal((await call('chat','Missing keep flag')).request_id,omitted.request_id,'null flag cannot release UUID');await page.evaluate(()=>{window.keep=true;});
  await page.evaluate(()=>{window.failure='unknown';window.testMessages.push({id:'incoming-b',external_id:'connect:b',source:'connect',direction:'incoming',message_type:'image',body:'',author_type:'customer'});});await open();
  const media=await call('reply');assert.notEqual(media.request_id,first.request_id);assert.equal(media.include_media,true);
  const newMessage=await call('chat','Synthetic question');assert.notEqual(newMessage.request_id,chat.request_id);
