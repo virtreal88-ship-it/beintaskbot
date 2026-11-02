@@ -183,6 +183,8 @@ def test_owner_resolution_preserves_existing_stopped_selected_channel_state(grou
 def test_resolved_group_binding_projects_agent_with_human_state_without_resuming(group):
     from tenant_operator_dialogs import apply_group_view
     from tenant_operator_list_snapshot import ListSnapshot
+    from tenant_dialog_ai_context import resolve as resolve_dialog_ai_context
+    from tenant_operator_case_submission import assignment as resolve_case_assignment
 
     d=group['db'];selection=_legacy_group_fixture(group)
     _selected_channel_state(d,state='human',revision=12,agent_id=None)
@@ -201,6 +203,19 @@ def test_resolved_group_binding_projects_agent_with_human_state_without_resuming
         assert detail_group['primary_agent_id']==AGENT
         assert detail_group['sending_channel_id']==CA
         assert groups.authority(cur,A,CA,G,AGENT,allow_stopped=True)['primary_agent_id']==AGENT
+        assert groups.authority(cur,A,None,G,allow_stopped=True) is None
+        # This is the same assignment resolver used by manual Copilot and case
+        # submission. Human state deliberately has no agent_id; exact group
+        # assignment remains the authority for this selected channel.
+        selected=resolve_case_assignment(cur,A,CA,G)
+        assert selected=={'agent_id':AGENT,'agent_version':1,'assignment_revision':1,
+                          'agent_name':'Night support'}
+        context=resolve_dialog_ai_context(cur,A,{'channel_id':CA,'conversation_id':G})
+        assert context['agent_id']==AGENT and context['assignment_revision']==1
+        with pytest.raises(TenantLinearError):resolve_case_assignment(cur,A,CB,G)
+        with pytest.raises(TenantLinearError):resolve_case_assignment(cur,B,CA,G)
+        with pytest.raises(TenantLinearError):resolve_case_assignment(cur,A,CA,G,
+            {'agent_id':AGENT,'agent_version':1,'assignment_revision':0})
         dialog={'provider':'connect','conversation_id':G,'channel_id':CA,
             'conversation_kind':'group','controls_allowed':True,'company_enabled':True,
             'company_emergency_stop':False,'connected':True,'tenant_status':'active',

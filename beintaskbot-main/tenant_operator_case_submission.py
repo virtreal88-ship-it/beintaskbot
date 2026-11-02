@@ -15,7 +15,11 @@ def assignment(cur, tenant, channel, conversation, expected=None):
     if group_jid(conversation):
         from tenant_ai_group_coordination import lock_group, authority
         lock_group(cur,tenant,conversation)
-        selected=authority(cur,tenant,None,conversation,allow_stopped=True)
+        # The caller has already resolved this conversation on the requested
+        # Connect route. Keep the group authority check bound to that channel:
+        # a NULL channel can still hit the legacy quarantine path and reject a
+        # valid, explicitly scoped group assignment.
+        selected=authority(cur,tenant,channel,conversation,allow_stopped=True)
         if not selected:raise TenantLinearError('Сначала назначьте агента этому диалогу.',409)
         cur.execute('SELECT id AS agent_id,version,name FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE',
                     (tenant,selected['primary_agent_id']))
