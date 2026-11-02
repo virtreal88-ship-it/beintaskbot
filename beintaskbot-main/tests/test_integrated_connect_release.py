@@ -22,6 +22,9 @@ import tenant_ai_spend_budget as spend_budget
 @pytest.fixture
 def flow(db, monkeypatch):
     from cryptography.fernet import Fernet
+    monkeypatch.setenv('DATABASE_URL','postgresql://invalid.invalid/disabled')
+    forbidden_connection=Mock(side_effect=AssertionError('External database connections forbidden in isolated flow'))
+    monkeypatch.setattr('psycopg.connect',forbidden_connection)
     cipher=Fernet(Fernet.generate_key())
     for module in (runs,voice,transport,episode_media,evidence,images,spend_budget):
         monkeypatch.setattr(module,'_connect',lambda:db)
@@ -81,7 +84,8 @@ def flow(db, monkeypatch):
         job=runs.claim_next()
         if job: asyncio.run(worker.process_connect_one(job,Mock()))
         return job
-    return dict(db=db,inbound=inbound,process=process,speech=speech,generate=generation,send=send,summary=summary_call,observation=observation)
+    yield dict(db=db,inbound=inbound,process=process,speech=speech,generate=generation,send=send,summary=summary_call,observation=observation)
+    forbidden_connection.assert_not_called()
 
 def state(db):
     result=db.execute("SELECT state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect'",(A,))[0]['state']

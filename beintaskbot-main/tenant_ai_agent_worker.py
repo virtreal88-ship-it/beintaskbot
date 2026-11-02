@@ -1021,8 +1021,6 @@ async def process_connect_one(job, logger):
         if not pilot_case_turn:
             from tenant_episode_media import context_lines
             lines,missing=context_lines(context,rows,coverage=coverage_manifest)
-        coverage_manifest.seal(lines)
-        await asyncio.to_thread(_check_connect_media,job,reservation,lines=lines)
         context_media_ids={str(row.get('external_id') or '').removeprefix('connect:') for row in context}
         case_media_observation_ids=[]
         for artifact in case_media_artifacts:
@@ -1048,6 +1046,8 @@ async def process_connect_one(job, logger):
                       'text':'[A CASE-linked photo could not be opened or had no saved visual result. Its contents are unknown; do not claim to have analyzed it. Ask for re-upload only if needed to answer the concrete CASE question.]',
                       'at':str(artifact.get('happened_at') or '')})
                     missing+=1
+        coverage_manifest.seal(lines)
+        await asyncio.to_thread(_check_connect_media,job,reservation,lines=lines)
         query = str(source.get('body') or '')[:6000]
         from tenant_ai_pilot import manual_live_job
         pilot_initial_turn=manual_live_job(job) and not pilot_case_turn

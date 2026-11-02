@@ -40,8 +40,9 @@ def episode(rows, *, latest_request=False):
 
 
 def reference(row, channel, lead):
-    external=str(row.get('external_id') or '')
-    if not external.startswith('connect:') and not str(row.get('channel') or '').startswith('connect:'):
+    external=str(row.get('_stored_external_id',row.get('external_id')) or '')
+    lead=int(row.get('_stored_lead_id') or lead)
+    if '_stored_external_id' not in row and not external.startswith('connect:') and not str(row.get('channel') or '').startswith('connect:'):
         external='connect:'+external
     return {'id':external,'external_id':external,'channel_id':str(channel),
             'lead_id':int(lead),'role':'client','happened_at':(row['happened_at'].isoformat()
@@ -458,9 +459,11 @@ class AutoExecution(Execution):
                 route=connect_route(cur,self.tenant,self.lead)
                 if not route or str(route['channel_id'])!=self.channel or route['conversation_id']!=self.conversation:
                     raise TenantLinearError('Attachment route changed.',409)
+                from tenant_connect_dialog_equivalence import lead_members
+                if int(lead) not in lead_members(cur,self.tenant,self.channel,self.lead):raise TenantLinearError('Attachment alias is no longer approved.',404)
                 cur.execute('''SELECT external_id,body,raw,message_type,direction,channel FROM saas_crm_messages
                   WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND external_id=%s
-                    AND direction='incoming' ''',(self.tenant,self.lead,'connect:'+self.channel,external))
+                    AND direction='incoming' ''',(self.tenant,int(lead),'connect:'+self.channel,external))
                 row=cur.fetchone()
                 if not row or row.get('message_type') not in KINDS:raise TenantLinearError('Attachment not in this conversation.',404)
         return {'provider':'connect','route':route,'row':dict(row),'message_id':external.removeprefix('connect:')}
@@ -583,7 +586,7 @@ def extend_episode(cur,tenant,leads,channel,rows,history_limit,*,latest_request=
             AND (COALESCE(happened_at,created_at),external_id)<(SELECT at,external_id FROM latest_customer)
           ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 1
         ) SELECT m.external_id,direction,body,message_type,COALESCE(happened_at,created_at) AS happened_at,
-            created_at,channel,raw FROM saas_crm_messages m,latest_customer latest
+            created_at,channel,raw,kommo_lead_id AS _stored_lead_id FROM saas_crm_messages m,latest_customer latest
           WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s
             AND direction='incoming' AND raw->>'verified_employee_id' IS NULL
             AND raw->>'ai_authored' IS DISTINCT FROM 'true'
@@ -596,7 +599,7 @@ def extend_episode(cur,tenant,leads,channel,rows,history_limit,*,latest_request=
         by_id={str(row['external_id']):row for row in rows}
         for row in cur.fetchall():by_id.setdefault(str(row['external_id']),row)
         return sorted(by_id.values(),key=lambda row:(str(row.get('happened_at') or row.get('created_at') or ''),str(row['external_id'])))
-    cur.execute('''SELECT external_id,direction,body,message_type,happened_at,created_at,channel,raw,
+    cur.execute('''SELECT external_id,direction,body,message_type,happened_at,created_at,channel,raw,kommo_lead_id AS _stored_lead_id,
         NOT EXISTS(SELECT 1 FROM saas_connect_conversations c JOIN saas_ai_conversation_state cs
           ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id
             AND cs.channel_id=c.connect_channel_id::text

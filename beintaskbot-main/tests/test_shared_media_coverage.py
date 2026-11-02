@@ -283,3 +283,89 @@ def test_schedule_closing_while_entering_send_lock_stops_send(flow,monkeypatch):
         return original(*args,**kwargs)
     monkeypatch.setattr(transport,'send_ai_reply_if_active',close)
     f['process']();f['generate'].assert_called_once();f['send'].assert_not_called()
+
+
+def approved_alias(flow):
+    import tenant_connect_dialog_equivalence as equivalent
+    f=flow;db=f['db']
+    with db.cursor() as cur:equivalent.schema(cur)
+    # Keep canonical job route 41; the retained approved physical source stays on 43.
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,'retained-source',43)",(A,CA))
+    db.execute("INSERT INTO saas_connect_dialog_links(tenant_id,channel_id,source_id,canonical_id,source_lead,canonical_lead,pair_id,snapshot) VALUES(%s::uuid,%s::uuid,'retained-source','client',43,41,'synthetic-approved','{}')",(A,CA))
+    source='connect:'+str(uuid.uuid4())
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type,body,happened_at) VALUES(%s::uuid,%s::uuid,43,%s,%s,'incoming','text','Retained current fact',clock_timestamp()-interval '30 seconds')",(str(uuid.uuid4()),A,source,'connect:'+CA));db.commit()
+    return source
+
+
+def test_approved_linked_physical_text_is_frozen_without_rewriting_lead(flow):
+    f=flow;source=approved_alias(f);f['inbound']('text','Question about the retained fact')
+    f['process']();f['generate'].assert_called_once();f['send'].assert_called_once()
+    assert 'Retained current fact' in str(f['generate'].call_args.args[3])
+    # Capture frozen proof via the actual guarded send below in the revocation cases.
+    assert f['db'].execute('SELECT kommo_lead_id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',(A,source))[0]['kommo_lead_id']==43
+
+
+@pytest.mark.parametrize('stage',['expert','send'])
+@pytest.mark.parametrize('mutation',['inactive','revoked','wrong_channel','wrong_tenant'])
+def test_alias_membership_is_reproved_at_generation_and_locked_send(flow,monkeypatch,stage,mutation):
+    from test_tenant_support_inbox import B,CB
+    f=flow;db=f['db'];source=approved_alias(f);f['inbound']('text','Current question')
+    def mutate():
+        if mutation=='revoked':db.execute('DELETE FROM saas_connect_dialog_links WHERE tenant_id=%s::uuid',(A,))
+        else:
+            db.execute('UPDATE saas_connect_dialog_links SET active=FALSE WHERE tenant_id=%s::uuid',(A,))
+            if mutation in {'wrong_channel','wrong_tenant'}:
+                # An unrelated retained link cannot authorize this channel/tenant source.
+                target_tenant,target_channel=(B,CB) if mutation=='wrong_tenant' else (A,CB)
+                db.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'Other') ON CONFLICT DO NOTHING",(target_tenant,target_channel))
+                db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,'retained-source',143),(%s::uuid,%s::uuid,'unrelated-canonical',141)",(target_tenant,target_channel,target_tenant,target_channel))
+                db.execute("INSERT INTO saas_connect_dialog_links(tenant_id,channel_id,source_id,canonical_id,source_lead,canonical_lead,pair_id,snapshot) VALUES(%s::uuid,%s::uuid,'retained-source','unrelated-canonical',143,141,'wrong-scope','{}')",(target_tenant,target_channel))
+        db.commit()
+    if stage=='expert':
+        async def expert(*args,**kwargs):mutate();return None
+        monkeypatch.setattr(worker,'request_expert',expert)
+    else:
+        original=transport.send_ai_reply_if_active
+        def send(*args,**kwargs):
+            assert any(ref['external_id']==source and ref['lead_id']==43 for ref in kwargs['coverage_manifest'].refs)
+            mutate();return original(*args,**kwargs)
+        monkeypatch.setattr(transport,'send_ai_reply_if_active',send)
+    f['process']();f['send'].assert_not_called()
+    if stage=='expert':f['generate'].assert_not_called()
+    else:f['generate'].assert_called_once()
+
+
+@pytest.mark.parametrize('flag',['pilot_developer_followup','pilot_customer_case_reply'])
+def test_text_only_case_seals_after_appended_archived_context(flow,monkeypatch,flag):
+    import tenant_ai_agent_run_store as runs
+    import tenant_connect_images as images
+    import tenant_consultation_group as groups
+    f=flow;f['inbound']('text','Text-only current CASE question')
+    job=runs.claim_next();job['payload'].update({flag:True,'case_id':str(uuid.uuid4()),'consultation_id':str(uuid.uuid4())})
+    artifact={'message_id':'archived-other-turn','cached_observation':{'relevance':'relevant','text':'Saved archived fact','source':'case_receipt'},'analysis_expected':False}
+    monkeypatch.setattr(images,'prepare_case',AsyncMock(return_value=([],set(),[artifact])))
+    monkeypatch.setattr(images,'persist_case_observations',Mock(return_value=[]));monkeypatch.setattr(images,'validate_cached_case_observations',Mock(return_value=['archived-other-turn']))
+    monkeypatch.setattr(groups,'record_pilot_followup_action',Mock(return_value=True));monkeypatch.setattr(groups,'record_group_turn_action',Mock(return_value=True))
+    f['generate'].return_value=(json.dumps({'action':'customer_update','message':'Fixture answer','evidence_quote':'','media_observations':[]}),{'total_tokens':3})
+    asyncio.run(worker.process_connect_one(job,Mock()))
+    f['generate'].assert_called_once();f['send'].assert_called_once()
+    assert 'Saved archived fact' in str(f['generate'].call_args.args[3])
+
+
+def test_approved_physical_voice_load_and_cached_proof_keep_alias_fence(flow,monkeypatch):
+    f=flow;db=f['db'];source=approved_alias(f)
+    db.execute("UPDATE saas_crm_messages SET message_type='voice',body='' WHERE tenant_id=%s::uuid AND external_id=%s",(A,source));db.commit()
+    f['inbound']('text','Explain this approved retained voice')
+    proofs=[];original=transport.send_ai_reply_if_active
+    def send(*args,**kwargs):
+        proof=kwargs['coverage_manifest'].proof();proofs.append(proof)
+        assert any(ref['external_id']==source and ref['lead_id']==43 for ref in proof['refs'])
+        with db.cursor() as cur:MediaCoverage.validate_proof(cur,A,CA,41,proof)
+        return original(*args,**kwargs)
+    monkeypatch.setattr(transport,'send_ai_reply_if_active',send)
+    f['process']();f['generate'].assert_called_once();f['send'].assert_called_once()
+    assert 'Salam, qiymet nedir?' in str(f['generate'].call_args.args[3])
+    db.execute('UPDATE saas_connect_dialog_links SET active=FALSE WHERE tenant_id=%s::uuid',(A,));db.commit()
+    with db.cursor() as cur:
+        with pytest.raises(CoverageError,match='incomplete'):MediaCoverage.validate_proof(cur,A,CA,41,proofs[0])
+    f['generate'].assert_called_once();f['send'].assert_called_once()

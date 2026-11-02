@@ -763,7 +763,7 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
             from tenant_connect_dialog_equivalence import lead_members
             history_leads=lead_members(cur,tenant,channel_id,lead_id)
             cur.execute('''SELECT * FROM (
-              SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,m.created_at,m.id,m.channel,m.raw,
+              SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,m.created_at,m.id,m.channel,m.raw,m.kommo_lead_id AS _stored_lead_id,
                 COALESCE(v.state,'') AS voice_state,
                 NOT EXISTS (SELECT 1 FROM saas_connect_conversations c
                   JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id
@@ -783,6 +783,7 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
             annotate_rows(cur, tenant, rows)
     return [{'external_id': str(row.get('external_id') or '').removeprefix('connect:'),
              '_stored_external_id':str(row.get('external_id') or ''),
+             '_stored_lead_id':int(row.get('_stored_lead_id') or lead_id),
              'direction': str(row.get('direction') or ''), 'body': str(row.get('body') or ''),
              'message_type': str(row.get('message_type') or 'text'), 'media_url': str(row.get('media_url') or ''),
              'has_attachment': bool(row.get('media_url')) or str(row.get('message_type') or 'text') != 'text',

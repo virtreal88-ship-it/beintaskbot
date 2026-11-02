@@ -69,7 +69,7 @@ class MediaCoverage:
         self.tenant,self.channel,self.lead=str(tenant),str(channel),int(lead)
         self.required=tuple(required_media(rows,latest_request=latest_request))
         selected=list(chosen)+([rows[-1]] if rows else [])
-        self.refs=tuple(copy.deepcopy(reference({**row,'external_id':row.get('_stored_external_id',row.get('external_id')),'channel':'connect:'+self.channel},self.channel,self.lead)) for row in selected)
+        self.refs=tuple(copy.deepcopy(reference({**row,'external_id':row.get('_stored_external_id',row.get('external_id')),'channel':'connect:'+self.channel},self.channel,int(row.get('_stored_lead_id') or self.lead))) for row in selected)
         self.coverage={id(row):False for row in self.required}
         self.receipts=None;self.lines_hash=None;self.job=None;self.reservation=None;self.line_sources={}
 
@@ -117,9 +117,12 @@ class MediaCoverage:
         if (str(tenant),str(channel),int(lead))!=(self.tenant,self.channel,self.lead):raise CoverageError(code='media_manifest_scope_changed')
         self.check(lines,wire)
         from tenant_episode_media import revalidate_sources
+        from tenant_connect_dialog_equivalence import lead_members
+        approved=set(int(lead) for lead in lead_members(cur,self.tenant,self.channel,self.lead))
+        if any(str(ref.get('channel_id'))!=self.channel or int(ref.get('lead_id') or 0) not in approved for ref in self.refs):raise CoverageError(code='media_manifest_scope_changed')
         try:revalidate_sources(cur,self.tenant,self.refs)
         except TenantLinearError:raise CoverageError(code='media_source_changed') from None
-        self.validate_selection(cur)
+        self.validate_selection(cur,approved)
         if self.job is not None:
             job=self.job;reservation=self.reservation
             cur.execute("""SELECT 1 FROM saas_ai_agent_jobs j JOIN saas_ai_agents a
@@ -136,10 +139,10 @@ class MediaCoverage:
             # Catch committed late input even before enqueue advances revision.
             exclude_ai=(" AND NOT (direction='outgoing' AND (lower(COALESCE(author_name,''))='ai agent' OR COALESCE(raw->>'ai_authored','false')='true'))" if self.job is not None else '')
             cur.execute("""SELECT external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid
-              AND channel=%s AND kommo_lead_id=%s
+              AND channel=%s AND kommo_lead_id=ANY(%s::bigint[])
               """+exclude_ai+"""
               ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 1""",
-              (self.tenant,'connect:'+self.channel,self.lead))
+              (self.tenant,'connect:'+self.channel,[self.lead] if self.latest_request else sorted(approved)))
             latest=cur.fetchone()
             if not latest or str(latest['external_id']).removeprefix('connect:')!=str(self.refs[-1]['external_id']).removeprefix('connect:'):
                 raise CoverageError(code='media_episode_advanced')
@@ -148,7 +151,7 @@ class MediaCoverage:
             if next_open(self.reservation.get('schedule') or {}):raise CoverageError(code='media_parent_changed')
 
 
-    def validate_selection(self,cur):
+    def validate_selection(self,cur,approved):
         if self.cutoff is None:return
         from tenant_episode_media import episode
         cur.execute("""SELECT external_id,direction,message_type,
@@ -159,9 +162,9 @@ class MediaCoverage:
               AND cs.channel_id=c.connect_channel_id::text
             WHERE c.tenant_id=m.tenant_id AND 'connect:'||c.connect_channel_id::text=m.channel
               AND c.lead_id=m.kommo_lead_id AND m.created_at<=cs.resumed_at) AS voice_eligible
-          FROM saas_crm_messages m WHERE tenant_id=%s::uuid AND channel=%s AND kommo_lead_id=%s
+          FROM saas_crm_messages m WHERE tenant_id=%s::uuid AND channel=%s AND kommo_lead_id=ANY(%s::bigint[])
             AND COALESCE(happened_at,created_at)>=%s::timestamptz-interval '10 minutes'
-          ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 257""",(self.tenant,'connect:'+self.channel,self.lead,self.cutoff))
+          ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 257""",(self.tenant,'connect:'+self.channel,[self.lead] if self.latest_request else sorted(approved),self.cutoff))
         fetched=list(reversed(cur.fetchall()))
         view=fetched
         if self.latest_request:
@@ -187,7 +190,7 @@ class MediaCoverage:
         if not isinstance(refs,list) or not isinstance(selected,list) or len(refs)>257 or len(selected)>256:
             raise CoverageError(code='media_manifest_invalid')
         if any(not isinstance(item,(list,tuple)) or len(item)!=2 or any(not isinstance(value,str) or len(value)>500 for value in item) for item in selected):raise CoverageError(code='media_manifest_invalid')
-        if any(not isinstance(ref,dict) or str(ref.get('channel_id'))!=str(channel) or str(ref.get('lead_id'))!=str(lead) for ref in refs):raise CoverageError(code='media_manifest_scope_changed')
+        if any(not isinstance(ref,dict) or str(ref.get('channel_id'))!=str(channel) or not str(ref.get('lead_id') or '').isdigit() for ref in refs):raise CoverageError(code='media_manifest_scope_changed')
         manifest=cls([],proof.get('tenant'),proof.get('channel'),proof.get('lead') or 0,latest_request=proof.get('latest_request') is True)
         manifest.refs=tuple(refs);manifest.selected=sorted(tuple(item) for item in selected)
         manifest.cutoff=proof.get('cutoff');manifest.receipts=();manifest.lines_hash=proof.get('lines_hash')

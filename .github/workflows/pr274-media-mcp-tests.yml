@@ -24,6 +24,7 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
       BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=55439 user=postgres password=isolated-video-fixture dbname=postgres
     defaults:
       run:

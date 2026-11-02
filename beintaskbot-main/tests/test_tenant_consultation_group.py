@@ -287,6 +287,10 @@ def test_actual_pilot_handoff_publishes_linked_case_photo_without_eager_download
 
 
 def test_actual_worker_creates_case_snapshot_then_sends_same_revision_link_once(db,monkeypatch):
+    # Publication fixture supplies synthetic run/lease IDs; actual manifest
+    # SQL authorization is covered by test_shared_media_coverage.
+    monkeypatch.setattr('tenant_media_coverage.MediaCoverage.validate',lambda *_a,**_k:None)
+    monkeypatch.setattr('tenant_connect_voice.active',lambda *_a,**_k:True)
     import json
     import tenant_ai_agent_worker as worker
     import tenant_ai_agent_connect as connect
@@ -1007,6 +1011,12 @@ def test_agent_group_answer_uses_case_turn_receipt_and_stub_transport(db,monkeyp
 
 
 def test_full_agent_worker_answers_developer_in_group_from_case_fact(db,monkeypatch):
+    monkeypatch.setattr('tenant_connect_images._connect',lambda:db)
+    monkeypatch.setattr('tenant_episode_media.AutoExecution.check_sources',lambda *_a,**_k:None)
+    # Publication fixture supplies synthetic run/lease IDs; actual manifest
+    # SQL authorization is covered by test_shared_media_coverage.
+    monkeypatch.setattr('tenant_media_coverage.MediaCoverage.validate',lambda *_a,**_k:None)
+    monkeypatch.setattr('tenant_connect_voice.active',lambda *_a,**_k:True)
     import tenant_ai_agent_worker as worker
     consult,case=setup_case(db,monkeypatch)
     db.execute("UPDATE saas_internal_consultations SET recipient_id=NULL,delivery_state='pilot_group_sent' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,consult));db.commit()
