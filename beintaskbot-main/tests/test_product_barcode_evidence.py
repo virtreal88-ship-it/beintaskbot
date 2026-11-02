@@ -257,4 +257,17 @@ def test_fresh_prepare_only_exposes_typed_candidate_not_generic_digits(monkeypat
     line=_bounded_conversation([photo])[0]
     assert (EAN in line['text'])==eligible
     assert '994501234567' not in line['text']
+    # The raw receipt handed to persistence is unchanged; both draft paths
+    # prove coverage against the same safe, in-memory observation projection.
+    original=episode._finish.call_args.args[4]
+    assert original['observations'][0]['text']==text
+    assert photo['_episode_receipt'] is not original
+    assert photo['_episode_receipt']['observations'][0]['text']==evidence._safe_text(text)
+    from tenant_media_coverage import MediaCoverage
+    for manual in (False,True):
+        coverage=MediaCoverage([photo],TENANT,CHANNEL,auth.lead,latest_request=manual)
+        if manual:lines=_bounded_conversation([photo],audio_coverage=coverage.coverage,coverage_manifest=coverage)
+        else:lines,_=episode.context_lines([photo],[photo],coverage=coverage)
+        coverage.seal(lines)
+        coverage.check(lines,provider.request_payload('gpt-4.1','reply',lines,''))
     http.assert_called_once()

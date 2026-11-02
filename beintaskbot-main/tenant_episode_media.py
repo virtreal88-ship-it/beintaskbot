@@ -40,8 +40,9 @@ def episode(rows, *, latest_request=False):
 
 
 def reference(row, channel, lead):
-    external=str(row.get('external_id') or '')
-    if not external.startswith('connect:') and not str(row.get('channel') or '').startswith('connect:'):
+    external=str(row.get('_stored_external_id',row.get('external_id')) or '')
+    lead=int(row.get('_stored_lead_id') or lead)
+    if '_stored_external_id' not in row and not external.startswith('connect:') and not str(row.get('channel') or '').startswith('connect:'):
         external='connect:'+external
     return {'id':external,'external_id':external,'channel_id':str(channel),
             'lead_id':int(lead),'role':'client','happened_at':(row['happened_at'].isoformat()
@@ -196,10 +197,23 @@ def apply_episode_receipt(row,message,receipt,*,authority=None,ref=None,saved=No
     row['_copilot_attachment_text']=message['text']
     row['_episode_receipt']=receipt
     if authority is not None and ref is not None and ref['media_kind']=='image':
+        from copy import deepcopy
         from tenant_product_identifiers import context as product_context
         from tenant_media_evidence import _safe_text
         row['_copilot_attachment_text']=product_context(authority.tenant,ref,saved or {
             'status':receipt.get('status'),'coverage':receipt.get('coverage',{}),'result':receipt})+'\n'+_safe_text(message['text'])
+        # Coverage compares the private rendered projection, not raw persisted
+        # OCR. Keep the original receipt (and typed provenance) untouched.
+        projected=deepcopy(receipt)
+        fields=[(projected,'observation')]
+        if isinstance(projected.get('observations'),list):
+            fields.extend((item,'text') for item in projected['observations'] if isinstance(item,dict))
+        for item,key in fields:
+            value=item.get(key)
+            if isinstance(value,str):
+                item[key]=_safe_text(value)
+                if len(value)>4000:projected['truncated']=True
+        row['_episode_receipt']=projected
 
 
 def prepare(authority, rows):
@@ -470,9 +484,11 @@ class AutoExecution(Execution):
                 route=connect_route(cur,self.tenant,self.lead)
                 if not route or str(route['channel_id'])!=self.channel or route['conversation_id']!=self.conversation:
                     raise TenantLinearError('Attachment route changed.',409)
+                from tenant_connect_dialog_equivalence import lead_members
+                if int(lead) not in lead_members(cur,self.tenant,self.channel,self.lead):raise TenantLinearError('Attachment alias is no longer approved.',404)
                 cur.execute('''SELECT external_id,body,raw,message_type,direction,channel FROM saas_crm_messages
                   WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s AND external_id=%s
-                    AND direction='incoming' ''',(self.tenant,self.lead,'connect:'+self.channel,external))
+                    AND direction='incoming' ''',(self.tenant,int(lead),'connect:'+self.channel,external))
                 row=cur.fetchone()
                 if not row or row.get('message_type') not in KINDS:raise TenantLinearError('Attachment not in this conversation.',404)
         return {'provider':'connect','route':route,'row':dict(row),'message_id':external.removeprefix('connect:')}
@@ -526,36 +542,50 @@ def evidence_query(rows,source_id,*,max_chars=1000):
     return '\n'.join(parts)
 
 
-def context_lines(context,local_rows):
+def context_lines(context,local_rows,*,coverage=None):
     """One normalized evidence representation, with latest/historical provenance."""
-    own={str(r.get('external_id')):r for r in local_rows}
+    from tenant_media_coverage import component_spans
+    canonical=lambda value:str(value or '').removeprefix('connect:')
+    local_channels={str(row.get('_episode_channel') or row.get('channel') or '').removeprefix('connect:') for row in local_rows if row.get('_episode_channel') or row.get('channel')}
+    default_channel=coverage.channel if coverage else (next(iter(local_channels)) if len(local_channels)==1 else '')
+    row_channel=lambda row:str(row.get('_episode_channel') or row.get('channel') or default_channel).removeprefix('connect:')
+    own={(row_channel(r),canonical(r.get('external_id'))):r for r in local_rows}
     lines=[];missing=0;used=0
     for row in reversed(context):
         source=str(row.get('external_id') or '')
-        local=own.get(source,{})
-        channel=str(row.get('channel') or '').removeprefix('connect:')
-        if channel and local.get('_episode_channel') and channel!=local['_episode_channel']:local={}
+        channel=str(row.get('channel') or default_channel).removeprefix('connect:')
+        local=own.get((channel,canonical(source)),{})
         if not local:
-            local=own.get(str(row.get('photo_message_id') or row.get('document_message_id') or ''),{})
+            local=own.get((channel,canonical(row.get('photo_message_id') or row.get('document_message_id'))),{})
         kind=str(row.get('message_type') or 'text')
         receipt=local.get('_episode_receipt') or {}
         body=str(row.get('body') or '')[:2000]
+        spans=[]
         if kind in KINDS:
             body=str(local.get('_copilot_context_body') or '')
             body+='\n'+(local.get('_copilot_media_notice') or '[Historical or other-channel attachment; not analyzed for this request]')
-            body+='\n'+str(local.get('_copilot_attachment_text') or '')[:10000]
+            appendix=str(local.get('_copilot_attachment_text') or '')
+            spans=[(len(body)+1+start,len(body)+1+end) for start,end in component_spans(local,appendix)]
+            body+='\n'+appendix[:10000]
             if receipt.get('status')!='processed' and local.get('_historical_media_status')!='processed':missing+=1
         if used>=24000:break
         available=min(4000,24000-used)
         if len(body)>available:body=body[:max(0,available-70)]+'\n[Evidence shortened; do not infer omitted contents]'
+        if coverage and id(local) in coverage.coverage:
+            coverage.coverage[id(local)]=bool(spans) and all(end<=len(body) and body[start:end]==appendix[a:b]
+                for (start,end),(a,b) in zip(spans,component_spans(local,appendix)))
         used+=len(body)
         from tenant_dialog_evidence import provenance, speaker
         evidence_row={**local,**row,'_copilot_attachment_text':local.get('_copilot_attachment_text','')}
-        lines.append({'speaker':speaker(row),
+        line={'speaker':speaker(row),
                       'text':body,'at':str(row.get('happened_at') or ''),'source_id':source,
                       'media_kind':kind,'evidence_scope':'current_episode' if receipt else 'historical',
                       'provenance':provenance(evidence_row),
-                      **({'sender':row.get('author_name',''),'source_channels':row['source_channels']} if 'source_channels' in row else {})})
+                      **({'sender':row.get('author_name',''),'source_channels':row['source_channels']} if 'source_channels' in row else {})}
+        if coverage:
+            if local:line['source_id']=str(local.get('_stored_external_id',local.get('external_id')) or '')
+            coverage.register_line(line,local)
+        lines.append(line)
     lines.reverse()
     return lines,missing
 
@@ -581,7 +611,7 @@ def extend_episode(cur,tenant,leads,channel,rows,history_limit,*,latest_request=
             AND (COALESCE(happened_at,created_at),external_id)<(SELECT at,external_id FROM latest_customer)
           ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 1
         ) SELECT m.external_id,direction,body,message_type,COALESCE(happened_at,created_at) AS happened_at,
-            created_at,channel,raw FROM saas_crm_messages m,latest_customer latest
+            created_at,channel,raw,kommo_lead_id AS _stored_lead_id FROM saas_crm_messages m,latest_customer latest
           WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s
             AND direction='incoming' AND raw->>'verified_employee_id' IS NULL
             AND raw->>'ai_authored' IS DISTINCT FROM 'true'
@@ -594,7 +624,7 @@ def extend_episode(cur,tenant,leads,channel,rows,history_limit,*,latest_request=
         by_id={str(row['external_id']):row for row in rows}
         for row in cur.fetchall():by_id.setdefault(str(row['external_id']),row)
         return sorted(by_id.values(),key=lambda row:(str(row.get('happened_at') or row.get('created_at') or ''),str(row['external_id'])))
-    cur.execute('''SELECT external_id,direction,body,message_type,happened_at,created_at,channel,raw,
+    cur.execute('''SELECT external_id,direction,body,message_type,happened_at,created_at,channel,raw,kommo_lead_id AS _stored_lead_id,
         NOT EXISTS(SELECT 1 FROM saas_connect_conversations c JOIN saas_ai_conversation_state cs
           ON cs.tenant_id=c.tenant_id AND cs.provider='connect' AND cs.conversation_id=c.conversation_id
             AND cs.channel_id=c.connect_channel_id::text

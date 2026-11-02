@@ -14,6 +14,7 @@ from tenant_ai_agent_run_store import (claim_next, defer_job,
     record_pilot_initial_rejection,
     reserve_run, retry_or_fail, skip_job)
 from tenant_ai_agent_send import send_agent
+from tenant_media_coverage import CoverageError,COVERAGE_CODES
 from tenant_chat_ai_policy import history
 from tenant_dialog_greeting import greeting_context
 from tenant_chat_ai_provider import ChatAIProviderError, INSTRUCTIONS, generate, transcribe
@@ -274,6 +275,19 @@ def _expert_evidence(expert_result):
     return sources or None
 
 
+def _check_connect_media(job,reservation,*,lines=None,wire=None):
+    manifest=reservation.get('_media_coverage')
+    if manifest is None:return
+    assert_job_allowed(job)
+    assert_reservation_current(job,reservation)
+    from tenant_connect_voice import active
+    from tenant_media_coverage import CoverageError
+    if not active(job,reservation):raise CoverageError(code='media_parent_changed')
+    from tenant_ai_agent_run_store import _connect
+    with _connect() as conn:
+        with conn.cursor() as cur:manifest.validate(cur,str(job['tenant_id']),str(job['channel_id']),int(job['lead_id']),lines=lines,wire=wire)
+
+
 async def _send_policy_reply(job,reservation,source,text,kommo_request,wait_slot,logger,*,stop_after_reply=False):
     """Send a policy reply through the ordinary final send guards exactly once."""
     from tenant_ai_agent_run_store import finish_superseded, finish_sent
@@ -295,10 +309,12 @@ async def _send_policy_reply(job,reservation,source,text,kommo_request,wait_slot
                     with source_connect() as conn:
                         with conn.cursor() as cur:revalidate_sources(cur,str(job['tenant_id']),reservation['_source_versions'])
                 await asyncio.to_thread(validate_policy_sources)
+            await asyncio.to_thread(_check_connect_media,job,reservation)
             message_id=await asyncio.to_thread(send_ai_reply_if_active,str(job['tenant_id']),int(job['lead_id']),
                 str(job['channel_id']),str(job['conversation_id']),str(text)[:8000],str(reservation['run_id']),
                 int(reservation.get('conversation_revision') or 0),pilot_scope_fenced=job.get('_pilot_scope_fenced') is True,
-                stop_after_reply=stop_after_reply)
+                stop_after_reply=stop_after_reply,
+                **({'coverage_manifest':reservation['_media_coverage']} if reservation.get('_media_coverage') is not None else {}))
             if not message_id:
                 await asyncio.to_thread(finish_superseded,job,reservation,'no_answer_conversation_changed')
                 return False
@@ -319,6 +335,10 @@ async def _send_policy_reply(job,reservation,source,text,kommo_request,wait_slot
             await asyncio.to_thread(stop_without_answer,job,reservation,'ai_no_answer_reply_deferred')
             return False
         return result.get('state')=='accepted'
+    except CoverageError as error:
+        code=error.code if error.code in COVERAGE_CODES else 'required_media_incomplete'
+        await asyncio.to_thread(finish_superseded,job,reservation,code)
+        return False
     except Exception:
         # Unknown provider outcomes are never retried. Close the dialog to
         # further AI processing while preserving an existing human handoff.
@@ -333,6 +353,7 @@ async def _apply_no_answer_policy(job,reservation,policy,signal,source,query,lin
                                   *,assessment=None,expert_result=None,pilot_group_destination=False,
                                   case_message_ids=None):
     """Run one configured missing-evidence action, then stop or continue safely."""
+    if job.get('provider')=='connect':await asyncio.to_thread(_check_connect_media,job,reservation,lines=lines)
     from tenant_ai_agent_no_answer import (selected_action, clarification_decision,
         clear_clarifications, stop_without_answer)
     from tenant_ai_agent_run_store import finish_superseded
@@ -818,6 +839,7 @@ async def process_connect_one(job, logger):
     """
     reservation = None
     episode_execution = None
+    coverage_manifest = None
     phase = 'connect_admission'
     try:
         from tenant_ai_agent_connect import (history as connect_history, scope_matches,
@@ -852,6 +874,13 @@ async def process_connect_one(job, logger):
             await asyncio.to_thread(handoff, job, early_handoff)
             return
         pilot_media_turn=bool((job.get('payload') or {}).get('pilot_developer_followup') or (job.get('payload') or {}).get('pilot_customer_case_reply'))
+        from tenant_media_coverage import MediaCoverage
+        coverage_manifest=MediaCoverage(rows,tenant,str(job['channel_id']),int(job['lead_id']))
+        if pilot_media_turn and coverage_manifest.required:
+            await asyncio.to_thread(skip_job,job,'case_required_media_coverage_unavailable');return
+        try:coverage_manifest.supported()
+        except CoverageError:
+            await asyncio.to_thread(skip_job,job,'required_video_full_coverage_unavailable');return
         voice = is_audio(source) and pilot_media_turn
         if is_audio(source) and source.get('voice_eligible') is False and not source.get('transcript'):
             await asyncio.to_thread(skip_job, job, 'voice_before_resume')
@@ -937,6 +966,9 @@ async def process_connect_one(job, logger):
             await asyncio.to_thread(prepare_episode,episode_execution,rows)
             reservation['_source_versions']=getattr(episode_execution,'source_refs',[])
             await asyncio.to_thread(episode_execution.check_sources)
+        coverage_manifest.bind_job(job,reservation)
+        reservation['_media_coverage']=coverage_manifest
+        coverage_manifest.prepared()
         # Cached voice text is used in later text/voice turns without another
         # provider call. The history formatter preserves the audio marker.
         from tenant_ai_agent_connect import group_context
@@ -988,7 +1020,7 @@ async def process_connect_one(job, logger):
             missing = 1 if str(source.get('message_type') or 'text').casefold() not in {'text',''} else 0
         if not pilot_case_turn:
             from tenant_episode_media import context_lines
-            lines,missing=context_lines(context,rows)
+            lines,missing=context_lines(context,rows,coverage=coverage_manifest)
         context_media_ids={str(row.get('external_id') or '').removeprefix('connect:') for row in context}
         case_media_observation_ids=[]
         for artifact in case_media_artifacts:
@@ -1014,6 +1046,8 @@ async def process_connect_one(job, logger):
                       'text':'[A CASE-linked photo could not be opened or had no saved visual result. Its contents are unknown; do not claim to have analyzed it. Ask for re-upload only if needed to answer the concrete CASE question.]',
                       'at':str(artifact.get('happened_at') or '')})
                     missing+=1
+        coverage_manifest.seal(lines)
+        await asyncio.to_thread(_check_connect_media,job,reservation,lines=lines)
         query = str(source.get('body') or '')[:6000]
         from tenant_ai_pilot import manual_live_job
         pilot_initial_turn=manual_live_job(job) and not pilot_case_turn
@@ -1080,6 +1114,7 @@ async def process_connect_one(job, logger):
             prompt += '\n\n' + prompt_instructions()
         assert_job_allowed(job)
         if not pilot_case_turn:await asyncio.to_thread(episode_execution.check_sources)
+        await asyncio.to_thread(_check_connect_media,job,reservation,lines=lines)
         expert_result = await request_expert(job, reservation, problem=query, lines=lines, triggers=matched,
             checks=['Exact Connect channel and conversation verified', 'Unavailable media count: '+str(missing)],
             previous_actions=['Voice transcription available'] if transcripts else [])
@@ -1100,6 +1135,7 @@ async def process_connect_one(job, logger):
             await asyncio.to_thread(finish_superseded,job,reservation,'image_parent_inactive');return
         if not pilot_case_turn:await asyncio.to_thread(episode_execution.check_sources)
         assert_reservation_current(job,reservation)
+        await asyncio.to_thread(_check_connect_media,job,reservation,lines=lines)
         draft, usage = await asyncio.to_thread(generate, reservation['api_key'], model, 'reply', lines, '',
                                         instructions=prompt,
                                         extra_context={'greeting_context':greeting_context(lines), 'language':reservation['agent_language'], 'style':reservation['agent_style'],
@@ -1107,7 +1143,8 @@ async def process_connect_one(job, logger):
                                                        'latest_client_message':query, 'unprocessed_media_count':missing,
                                                        'image_message_ids_for_analysis':[image['message_id'] for image in images],
                                                        **({'pilot_developer_context':pilot_developer_context} if pilot_developer_context else {}),
-                                                       **({'internal_expert_advisory':expert_result} if expert_result else {})}, images=images, with_usage=True)
+                                                       **({'internal_expert_advisory':expert_result} if expert_result else {})}, images=images, with_usage=True,
+                                        before_dispatch=lambda wire:_check_connect_media(job,reservation,lines=lines,wire=wire))
         first_generation_usage=dict(usage or {})
         if pending_audio:
             audio_usage = reservation.get('voice_usage') or {}
@@ -1243,13 +1280,15 @@ async def process_connect_one(job, logger):
                 advisory=no_answer.get('expert_result')
                 assert_job_allowed(job)
                 assert_reservation_current(job,reservation)
+                await asyncio.to_thread(_check_connect_media,job,reservation,lines=lines)
                 draft,usage=await asyncio.to_thread(generate,reservation['api_key'],model,'reply',lines,'',
                     instructions=prompt+'\n\n'+prompt_instructions(),
                     extra_context={'greeting_context':greeting_context(lines), 'language':reservation['agent_language'],'style':reservation['agent_style'],
                     'knowledge':verified_knowledge,'latest_client_message_id':source_id,'latest_client_message':query,
                       'unprocessed_media_count':missing,'image_message_ids_for_analysis':[image['message_id'] for image in images],
                       **({'pilot_developer_context':pilot_developer_context} if pilot_developer_context else {}),
-                      **({'internal_expert_advisory':advisory} if advisory else {})},images=images,with_usage=True)
+                      **({'internal_expert_advisory':advisory} if advisory else {})},images=images,with_usage=True,
+                    before_dispatch=lambda wire:_check_connect_media(job,reservation,lines=lines,wire=wire))
                 total_usage={key:first_generation_usage.get(key,0)+int((usage or {}).get(key) or 0)
                     +int((reservation.get('voice_usage') or {}).get(key) or 0)
                     for key in ('input_tokens','output_tokens','total_tokens')}
@@ -1325,10 +1364,11 @@ async def process_connect_one(job, logger):
         if auto:
             phase = 'connect_send'
             handoff_after_reply = any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matched)
-            send_options = {'pilot_scope_fenced':job.get('_pilot_scope_fenced') is True}
+            send_options = {'pilot_scope_fenced':job.get('_pilot_scope_fenced') is True,'coverage_manifest':coverage_manifest}
             if handoff_after_reply:
                 send_options['handoff_fingerprint'] = job['event_fingerprint']
             def route_and_send():
+                _check_connect_media(job,reservation,lines=lines)
                 if not pilot_case_turn:episode_execution.check_sources()
                 return send_ai_reply_if_active(tenant, int(job['lead_id']), str(job['channel_id']),
                                                str(job['conversation_id']), draft[:8000], reservation['run_id'],
@@ -1348,6 +1388,10 @@ async def process_connect_one(job, logger):
         else:
             await asyncio.to_thread(retry_or_fail, job, 'worker_stopped')
         raise
+    except CoverageError as error:
+        code=error.code if error.code in COVERAGE_CODES else 'required_media_incomplete'
+        if reservation:await asyncio.to_thread(finish_superseded,job,reservation,code)
+        else:await asyncio.to_thread(skip_job,job,code)
     except TenantLinearError as error:
         if reservation:
             await asyncio.to_thread(finish_unknown, job, reservation, 'connect_send_unknown' if phase == 'connect_send' else 'connect_generation_unknown')

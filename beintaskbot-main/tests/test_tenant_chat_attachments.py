@@ -1,6 +1,10 @@
 """No real credentials, files, database or external messages used."""
 import asyncio
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 import unittest
 import threading
@@ -160,6 +164,122 @@ class Api(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.download.call_count,1)
         self.assertEqual(self.load.call_count,4)
 
+    async def test_cache_only_miss_never_starts_or_joins_provider_work(self):
+        self.query['cache_only']='1'
+        result=await self.handle(SimpleNamespace(query=self.query))
+        self.assertEqual(result['status'],204)
+        self.download.assert_not_called();self.provider.assert_not_called()
+        self.assertFalse(self.module.MEDIA_INFLIGHT)
+        self.assertEqual(self.load.call_count,1)
+
+    async def test_cache_only_hit_still_rechecks_authority(self):
+        await self.handle(SimpleNamespace(query=self.query))
+        self.query['cache_only']='1'
+        self.load.reset_mock()
+        result=await self.handle(SimpleNamespace(query=self.query))
+        self.assertEqual(result['body'],b'picture')
+        self.assertEqual(self.load.call_count,2)
+        self.download.assert_called_once()
+        self.load.side_effect=TenantLinearError('Revoked',403)
+        denied=await self.handle(SimpleNamespace(query=self.query))
+        self.assertEqual(denied['status'],403)
+        self.assertNotIn('body',denied)
+
+    async def test_new_authorized_session_reuses_server_cache_without_browser_hint(self):
+        await self.handle(SimpleNamespace(query=self.query))
+        new_session={**SESSION,'session_id':'synthetic-new-session'}
+        handle=self.module.handler(lambda _:new_session,self.provider,Mock())
+        self.load.reset_mock()
+        result=await handle(SimpleNamespace(query={**self.query,'cache_only':'1'}))
+        self.assertEqual(result['body'],b'picture')
+        self.assertEqual(self.load.call_count,2)
+        self.download.assert_called_once()
+        signed_out=self.module.handler(lambda _:None,self.provider,Mock())
+        denied=await signed_out(SimpleNamespace(query={**self.query,'cache_only':'1'}))
+        self.assertEqual(denied['status'],403)
+        self.assertNotIn('body',denied)
+
+    async def test_cache_hits_until_thirty_minutes_without_extending_ttl(self):
+        self.assertEqual(self.module.MEDIA_CACHE_TTL,1800)
+        with patch.object(self.module.time,'monotonic',return_value=1000):
+            await self.handle(SimpleNamespace(query=self.query))
+        self.load.reset_mock()
+        with patch.object(self.module.time,'monotonic',return_value=2799.999):
+            hit=await self.handle(SimpleNamespace(query={**self.query,'cache_only':'1'}))
+        self.assertEqual(hit['body'],b'picture')
+        self.assertEqual(self.load.call_count,2)
+        # Reading near expiry does not slide the insertion-based deadline.
+        with patch.object(self.module.time,'monotonic',return_value=2800):
+            boundary=await self.handle(SimpleNamespace(query={**self.query,'cache_only':'1'}))
+        self.assertEqual(boundary['status'],204)
+        with patch.object(self.module.time,'monotonic',return_value=2801):
+            result=await self.handle(SimpleNamespace(query={**self.query,'cache_only':'1'}))
+        self.assertEqual(result['status'],204)
+        self.download.assert_called_once()
+
+    async def test_thirty_minute_expiry_is_lazy_until_cache_read(self):
+        with patch.object(self.module.time,'monotonic',return_value=1000):
+            await self.handle(SimpleNamespace(query=self.query))
+        with patch.object(self.module.time,'monotonic',return_value=2801):
+            self.assertEqual(len(self.module.MEDIA_CACHE),1)
+            result=await self.handle(SimpleNamespace(query={**self.query,'cache_only':'1'}))
+        self.assertEqual(result['status'],204)
+        self.assertFalse(self.module.MEDIA_CACHE)
+        self.assertEqual(self.module.handler.__globals__['MEDIA_CACHE_BYTES'],0)
+        self.download.assert_called_once()
+
+    async def test_real_32mib_lru_and_oversize_entry_limit_are_unchanged(self):
+        limit=32*1024*1024
+        self.assertEqual(self.module.MEDIA_CACHE_LIMIT,limit)
+        a,b=b'a'*(limit//2),b'b'*(limit//2)
+        with patch.object(self.module.time,'monotonic',return_value=1000):
+            self.module._cache_put(('synthetic','a'),(a,'image/png','a.png'))
+            self.module._cache_put(('synthetic','b'),(b,'image/png','b.png'))
+            self.assertEqual(self.module.handler.__globals__['MEDIA_CACHE_BYTES'],limit)
+            self.assertIs(self.module._cache_get(('synthetic','a'))[0],a)
+            self.module._cache_put(('synthetic','c'),(b'c','image/png','c.png'))
+            self.assertIsNone(self.module._cache_get(('synthetic','b')))
+            self.assertIs(self.module._cache_get(('synthetic','a'))[0],a)
+            self.module._cache_put(('synthetic','oversize'),(b'x'*(limit+1),'video/mp4','large.mp4'))
+            self.assertIsNone(self.module._cache_get(('synthetic','oversize')))
+        self.assertEqual(self.module.handler.__globals__['MEDIA_CACHE_BYTES'],len(a)+1)
+
+    async def test_fresh_process_starts_with_empty_ram_cache(self):
+        await self.handle(SimpleNamespace(query=self.query))
+        self.assertTrue(self.module.MEDIA_CACHE)
+        script='''import socket, psycopg
+def forbidden(*args, **kwargs):
+    raise AssertionError("Restart cache check must not use a database or network")
+psycopg.connect = forbidden
+socket.getaddrinfo = forbidden
+socket.socket.connect = forbidden
+import tenant_chat_attachment_api as api
+assert api.MEDIA_CACHE_TTL == 1800
+assert not api.MEDIA_CACHE and api.MEDIA_CACHE_BYTES == 0 and not api.MEDIA_INFLIGHT
+print("cache-empty")
+'''
+        result=await asyncio.to_thread(subprocess.run,[sys.executable,'-c',script],
+            cwd=Path(__file__).resolve().parents[1],
+            env={**os.environ,'DATABASE_URL':'postgresql://invalid.invalid/disabled'},
+            check=True,capture_output=True,text=True,timeout=15)
+        self.assertEqual(result.stdout.strip(),'cache-empty')
+
+    async def test_current_process_cache_loss_returns_miss_without_provider_replay(self):
+        await self.handle(SimpleNamespace(query=self.query))
+        self.module.MEDIA_CACHE.clear()
+        self.module.handler.__globals__['MEDIA_CACHE_BYTES']=0
+        result=await self.handle(SimpleNamespace(query={**self.query,'cache_only':'1'}))
+        self.assertEqual(result['status'],204)
+        self.download.assert_called_once()
+
+    async def test_current_memory_eviction_returns_miss_without_provider_replay(self):
+        self.module.handler.__globals__['MEDIA_CACHE_LIMIT']=8
+        await self.handle(SimpleNamespace(query=self.query))
+        await self.handle(SimpleNamespace(query={**self.query,'message_id':'synthetic-second-photo'}))
+        result=await self.handle(SimpleNamespace(query={**self.query,'cache_only':'1'}))
+        self.assertEqual(result['status'],204)
+        self.assertEqual(self.download.call_count,2)
+
     async def test_audio_range_is_served_from_authorized_attachment(self):
         request=SimpleNamespace(query=self.query,headers={'Range':'bytes=1-3'})
         result=await self.handle(request)
@@ -180,6 +300,33 @@ class Api(unittest.IsolatedAsyncioTestCase):
         a,b=await asyncio.gather(first,second)
         self.assertEqual(a['body'],b['body'])
         self.assertEqual(self.download.call_count,1)
+
+    async def test_disconnecting_one_request_does_not_cancel_shared_download(self):
+        started,release=threading.Event(),threading.Event()
+        def slow_download(*_args):
+            started.set();release.wait(2);return b'picture','image/png'
+        self.download.side_effect=slow_download
+        first=asyncio.create_task(self.handle(SimpleNamespace(query=self.query)))
+        self.assertTrue(await asyncio.to_thread(started.wait,1))
+        second=asyncio.create_task(self.handle(SimpleNamespace(query=self.query)))
+        await asyncio.sleep(.01);first.cancel()
+        with self.assertRaises(asyncio.CancelledError):await first
+        release.set();result=await second
+        self.assertEqual(result['body'],b'picture');self.download.assert_called_once()
+
+    async def test_changed_source_version_is_denied_before_provider(self):
+        result=await self.handle(SimpleNamespace(query={**self.query,'expected_media_version':'stale'}))
+        self.assertEqual(result['status'],409);self.download.assert_not_called()
+
+    async def test_auto_preview_requires_connect_photo_and_reserves_tenant_budget(self):
+        from tenant_media_evidence import media_version
+        result=await self.handle(SimpleNamespace(query={**self.query,'auto_preview':'1','expected_media_version':media_version({})}))
+        self.assertEqual(result['status'],400);self.download.assert_not_called()
+        admit=self.module.admit
+        for n in range(8):admit({'tenant_id':TENANT,'telegram_id':n},automatic_photo=True)
+        with self.assertRaises(TenantLinearError) as error:admit({'tenant_id':TENANT,'telegram_id':900},automatic_photo=True)
+        self.assertEqual(error.exception.status,429)
+        admit({'tenant_id':TENANT,'telegram_id':900})
 
     async def test_other_company_rejected_before_database_or_network(self):
         result=await self.handle(SimpleNamespace(query={**self.query,'expected_tenant_id':'other'}))

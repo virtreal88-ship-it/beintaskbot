@@ -25,7 +25,7 @@ def test_exact_model_capabilities(model,expected):
 class PhotoWorker(WorkerVoice):
  def setUp(self):
   super().setUp();self.rows=[row(kind='image',text='Synthetic error caption')]
-  self.evidence={'status':'processed','code':'vision_observation','observation':'Visible error E17',
+  self.evidence={'status':'processed','coverage':{'complete':True},'code':'vision_observation','observation':'Visible error E17',
                  'observations':[{'origin':{},'text':'Visible error E17'}]}
  async def test_saved_observation_reaches_agent_without_resending_image_bytes(self):
   await self.process()
@@ -36,8 +36,7 @@ class PhotoWorker(WorkerVoice):
  async def test_failed_photo_is_explicit_without_invented_image_content(self):
   self.evidence={'status':'error','code':'media_unavailable'}
   await self.process()
-  assert 'media_unavailable' in str(self.generate.call_args.args[3])
-  assert self.generate.call_args.kwargs['extra_context']['unprocessed_media_count']==1
+  self.generate.assert_not_called();self.send.assert_not_called();self.superseded.assert_called_once()
  async def test_manual_photo_remains_draft(self):
   self.reserve.side_effect=lambda *a,**k:{**RESERVATION,'mode':'manual'}
   await self.process();self.generate.assert_called_once();self.send.assert_not_called()
@@ -50,8 +49,7 @@ class PhotoWorker(WorkerVoice):
  async def test_foreign_channel_cannot_reuse_local_message_receipt(self):
   foreign={**row(kind='image'),'channel':'different-channel'}
   with patch.object(adapter,'group_context',return_value=[foreign]):await self.process()
-  assert 'Visible error E17' not in str(self.generate.call_args.args[3])
-  assert self.generate.call_args.kwargs['extra_context']['unprocessed_media_count']==1
+  self.generate.assert_not_called();self.send.assert_not_called();self.superseded.assert_called_once()
 
 # Inherit no unrelated voice assertions in the photo-specific fixture.
 for _name in list(WorkerVoice.__dict__):

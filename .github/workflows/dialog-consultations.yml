@@ -37,8 +37,15 @@ on:
       - 'beintaskbot-main/tenant_ai_state_api.py'
       - 'beintaskbot-main/tenant_manual_ai_run_diagnostics.py'
       - 'beintaskbot-main/tests/test_manual_ai_run_diagnostics.py'
+      - 'beintaskbot-main/tests/test_manual_ai_source_receipts.py'
       - 'beintaskbot-main/tenant_dialog_evidence.py'
       - 'beintaskbot-main/tenant_episode_media.py'
+      - 'beintaskbot-main/tenant_media_coverage.py'
+      - 'beintaskbot-main/tenant_ai_agent_worker.py'
+      - 'beintaskbot-main/tenant_connect_transport.py'
+      - 'beintaskbot-main/tenant_ai_agent_connect.py'
+      - 'beintaskbot-main/tests/test_shared_media_coverage.py'
+      - 'beintaskbot-main/tests/test_connect_documents.py'
       - 'beintaskbot-main/tenant_media_evidence.py'
       - 'beintaskbot-main/tenant_product_identifiers.py'
       - 'beintaskbot-main/tests/test_product_barcode*.py'
@@ -51,6 +58,13 @@ on:
       - 'beintaskbot-main/tests/test_voice_card_mobile_browser.cjs'
       - 'beintaskbot-main/tests/test_list_toolbar_mobile_browser.cjs'
       - 'beintaskbot-main/tests/test_message_attachment_menu_browser.cjs'
+      - 'beintaskbot-main/tests/test_photo_preview_browser.cjs'
+      - 'beintaskbot-main/tests/test_visible_photo_autoload_browser.cjs'
+      - 'beintaskbot-main/tests/test_connect_media_backpressure.py'
+      - 'beintaskbot-main/tests/test_photo_thumbnail_projection.py'
+      - 'beintaskbot-main/tenant_chat_attachment_api.py'
+      - 'beintaskbot-main/tenant_connect_media.py'
+      - 'beintaskbot-main/tests/test_tenant_chat_attachments.py'
       - 'beintaskbot-main/tests/test_audio_reload_intent_browser.cjs'
       - 'beintaskbot-main/tests/test_helper_request_identity_browser.cjs'
       - 'beintaskbot-main/tests/test_verified_dialog_phone.py'
@@ -58,6 +72,8 @@ on:
       - 'beintaskbot-main/tenant_ai_spend_budget.py'
       - 'beintaskbot-main/tenant_schema_preflight.py'
       - 'beintaskbot-main/tests/test_request_schema_deadlocks.py'
+      - 'beintaskbot-main/tenant_knowledge_campaigns.py'
+      - 'beintaskbot-main/tests/test_campaign_read_schema_postgres.py'
       - 'beintaskbot-main/tenant_ai_asr_model.py'
       - 'beintaskbot-main/tenant_connect_voice.py'
       - 'beintaskbot-main/tenant_chat_ai_provider.py'
@@ -90,6 +106,7 @@ on:
       - 'beintaskbot-main/tests/test_tenant_notification_badge_browser.cjs'
       - 'beintaskbot-main/tests/test_dialog_developer*'
       - 'beintaskbot-main/tests/test_helper_type_full_app_browser.cjs'
+      - 'beintaskbot-main/tests/test_dialog_avatar_card_browser.cjs'
       - 'beintaskbot-main/tests/test_helper_modal_mobile_browser.cjs'
       - 'beintaskbot-main/tests/test_assigned_operator_copilot.py'
       - 'beintaskbot-main/tests/test_required_episode_audio.py'
@@ -143,11 +160,15 @@ jobs:
         run: |
           PYTHONPATH=.:tests python -m pytest -q -rs \
             tests/test_dialog_consultations.py \
+            tests/test_tenant_chat_attachments.py \
+            tests/test_connect_media_backpressure.py \
+            tests/test_photo_thumbnail_projection.py \
             tests/test_support_case_materials.py \
             tests/test_case_consultations_unified.py \
             tests/test_tenant_notification_center.py \
             tests/test_tenant_notification_center_postgres.py \
             tests/test_request_schema_deadlocks.py \
+            tests/test_campaign_read_schema_postgres.py \
             tests/test_case_consultation_media_replies.py \
             tests/test_tenant_support_inbox.py \
             tests/test_dialog_audio_result_durability.py \
@@ -168,14 +189,18 @@ jobs:
             tests/test_manual_knowledge_persistence_postgres.py \
             tests/test_dialog_media_grounding.py \
             tests/test_product_barcode_evidence.py \
+            tests/test_product_barcode_coverage.py \
             tests/test_product_barcode_postgres.py \
             tests/test_dialog_photo_receipts.py \
             tests/test_dialog_photo_receipts_postgres.py \
             tests/test_connect_group_history.py::test_group_context_retains_safe_staff_and_ai_provenance \
             tests/test_assigned_operator_copilot.py \
             tests/test_required_episode_audio.py \
+            tests/test_shared_media_coverage.py \
+            tests/test_connect_documents.py \
             tests/test_required_episode_photos.py \
             tests/test_manual_ai_run_diagnostics.py \
+            tests/test_manual_ai_source_receipts.py \
             tests/test_saved_only_copilot.py \
             tests/test_saved_only_copilot_postgres.py \
             tests/test_assigned_agent_prompt_parity.py \
@@ -191,6 +216,7 @@ jobs:
             tests/test_tenant_job_runner.py
           node tests/test_owner_asr_comparison_browser.cjs
           node tests/test_helper_type_full_app_browser.cjs
+          node tests/test_dialog_avatar_card_browser.cjs
           node tests/test_helper_modal_mobile_browser.cjs
           node tests/test_dialog_developer_browser.cjs
           node tests/test_dialog_consultations_ui.cjs
@@ -222,3 +248,5 @@ jobs:
           node tests/test_voice_card_mobile_browser.cjs
           node tests/test_list_toolbar_mobile_browser.cjs
           node tests/test_message_attachment_menu_browser.cjs
+          node tests/test_photo_preview_browser.cjs
+          node tests/test_visible_photo_autoload_browser.cjs

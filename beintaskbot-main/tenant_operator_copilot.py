@@ -49,46 +49,16 @@ from tenant_dialog_evidence import GROUNDING_RULE, provenance, speaker
 INSTRUCTIONS += GROUNDING_RULE
 
 
-def _required_media(rows,kinds):
-    from tenant_episode_media import episode
-    return [row for row in episode(rows,latest_request=True)
-            if str(row.get('message_type') or '').lower() in kinds]
 
 
-def _visual_components(row):
-    receipt=row.get('_episode_receipt') or {}
-    values=[]
-    if receipt.get('observation'):values.append(receipt['observation'])
-    observations=receipt.get('observations') or []
-    if not isinstance(observations,list):return []
-    for item in observations:
-        if not isinstance(item,dict) or not isinstance(item.get('text'),str) or not item['text'].strip():return []
-        values.append(item['text'])
-    return values if all(isinstance(value,str) and value.strip() for value in values) else []
 
 
-def _evidence_ready(row):
-    receipt=row.get('_episode_receipt') or {}
-    if receipt.get('status')!='processed':return False
-    if str(row.get('message_type') or '').lower()=='image':
-        return bool(_visual_components(row)) and (receipt.get('coverage') or {}).get('complete') is not False
-    return bool(str(receipt.get('transcript') or '').strip())
 
 
-def _component_spans(row,appendix):
-    receipt=row.get('_episode_receipt') or {}
-    if str(row.get('message_type') or '').lower() in {'image','document'}:
-        components=_visual_components(row);spans=[];cursor=0
-        markers=list(re.finditer(r'(?:^|\n)\[Untrusted (?:visual observation|saved visual observation(?: frame [^\]\n]{1,80})?|saved document text); not a confirmed solution\] ',appendix))
-        for component in components:
-            marker=next((match for match in markers if match.start()>=cursor and appendix.startswith(component,match.end())),None)
-            if marker is None:return []
-            spans.append((marker.end(),marker.end()+len(component)));cursor=spans[-1][1]
-        return spans
-    speech=str(receipt.get('transcript') or '')
-    footer='\n[Attachment status: '+str(receipt.get('status'))+'; '+str(receipt.get('code'))+'. Never infer unread contents.]'
-    component=appendix[:-len(footer)] if appendix.endswith(footer) else appendix
-    return [(len(component)-len(speech),len(component))] if speech and component.endswith(speech) else []
+
+
+from tenant_media_coverage import (required_media as _required_media, visual_components as _visual_components,
+    evidence_ready as _evidence_ready,component_spans as _component_spans,MediaCoverage,CoverageError)
 
 
 def _required_audio(rows):
@@ -123,6 +93,11 @@ def _episode_evidence_error(command,row,agent_context,*,context_limit=False):
             'Не все голосовые текущей серии прочитаны. AI-ответ не создан.')
     if image:
         message=({'az':'Cari fotoların təhlili AI kontekstinə tam sığmır. Cavab yaradılmadı; saxlanmış nəticələr qorunur.','en':'Current photo observations do not fit completely in the AI context. No reply was created; saved results are retained.'}.get(language,'Анализ текущих фото не помещается целиком в контекст AI. Ответ не создан; сохранённые результаты не потеряны.') if context_limit else {'az':'Cari seriyanın bütün fotoları təhlil edilməyib. AI cavabı yaradılmadı.','en':'Not all photos in the current series were analyzed. No AI reply was created.'}.get(language,'Не все фото текущей серии проанализированы. AI-ответ не создан.'))
+    if str(row.get('message_type') or '').lower() in {'video','document'}:
+        message={'az':'Cari əlavələr tam təhlil edilməyib və ya AI kontekstinə tam sığmır. Cavab yaradılmadı.','en':'Current attachments are incomplete or do not fit fully in the AI context. No reply was created.'}.get(language,'Текущие вложения не проанализированы полностью или не помещаются целиком в контекст AI. Ответ не создан.')
+        if str(row.get('message_type')).lower()=='document' and code in {'audio_evidence_incomplete','audio_context_incomplete'}:code='document_context_incomplete' if context_limit else 'document_evidence_incomplete'
+        if str(row.get('message_type')).lower()=='video':code='video_full_coverage_unavailable';stage='context_preparation'
+        command['_media_failure'].update(code=code,failure_stage=stage)
     reason=explanation(code,language)
     status=receipt.get('admission_status') if code in REASONS else 409
     error=TenantLinearError(message+(' '+reason if reason else '')+' ['+stage+': '+code+']',status if status in {403,409,429} else 409)
@@ -130,7 +105,7 @@ def _episode_evidence_error(command,row,agent_context,*,context_limit=False):
     return error
 
 
-def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message_chars=1200, audio_coverage=None):
+def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message_chars=1200, audio_coverage=None,coverage_manifest=None):
     """Keep the newest chronological evidence under a bounded prompt budget."""
     selected = []
     used = 0
@@ -176,7 +151,7 @@ def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message
             complete=complete and all(start>=len(body)-tail_length for start,end in spans)
             body = prefix[:room] + (body[-tail_length:] if tail_length else '')
         if audio_coverage is not None and id(row) in audio_coverage:audio_coverage[id(row)]=complete
-        selected.append({'_order':next(i for i,item in enumerate(rows) if item is row),'speaker': role, 'text': body,
+        line={'_order':next(i for i,item in enumerate(rows) if item is row),'speaker': role, 'text': body,
                          'at': str(row.get('happened_at') or ''),
                          'source_id': str(row.get('external_id') or ''),
                          'provenance':provenance(row),
@@ -186,7 +161,9 @@ def _bounded_conversation(rows, *, max_chars=14000, max_messages=20, max_message
                              (row.get('_episode_receipt') or {}).get('observation')) and bool(
                              (row.get('_copilot_attachment_text') or row.get('media_evidence_context') or '')[:80]) and
                              str(row.get('_copilot_attachment_text') or row.get('media_evidence_context') or '')[:80] in body,
-                         'media_kind':kind,'evidence_scope':'current_episode' if row.get('_episode_receipt') else 'historical'})
+                         'media_kind':kind,'evidence_scope':'current_episode' if row.get('_episode_receipt') else 'historical'}
+        selected.append(line)
+        if coverage_manifest is not None:coverage_manifest.register_line(line,row)
         used += len(body)
     selected.sort(key=lambda item:item['_order'])
     for item in selected:item.pop('_order')
@@ -376,7 +353,7 @@ def _clean(data):
             'include_media': include_media}
 
 
-def _hash(command, *, media_selection_version='current-episode-v5-complete-audio-photos'):
+def _hash(command, *, media_selection_version='current-episode-v6-shared-media-coverage'):
     value = {key: val for key, val in command.items() if key != 'request_id'}
     if command.get('mode')=='reply':value['media_selection_version']=('latest-customer-request-v3-audio-evidence' if command.get('_consultation_evidence') else media_selection_version)
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -413,7 +390,20 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
     from tenant_episode_media import ManualExecution
     execution=ManualExecution(tenant,actor,command,config,connection['updated_at'],secret['api_key'],model,
                               agent_context.get('language') or 'auto',rows)
+    manifest=None
     try:
+        if command['mode']=='reply' and consultation_evidence is None:manifest=MediaCoverage(rows,tenant,command['channel_id'],command['lead_id'],latest_request=True)
+        if consultation_evidence is not None:
+            from tenant_media_coverage import KINDS as required_kinds
+            snapshot_media=next((row for row in rows if str(row.get('message_type') or '').lower() in required_kinds),None)
+            if snapshot_media is not None:
+                error=_episode_evidence_error(command,snapshot_media,agent_context)
+                command['_media_failure']['code']='consultation_media_coverage_unavailable'
+                error.args=({'az':'Konsultasiya materiallarının tam təhlili təsdiqlənməyib. AI cavabı yaradılmadı.','en':'Consultation snapshot media lacks full verified coverage. No AI reply was created.'}.get(str(agent_context.get('language') or 'auto'),'Полный анализ вложений снимка консультации не подтверждён. AI-ответ не создан.'),)
+                raise error
+        if manifest:
+            try:manifest.supported()
+            except CoverageError as error:raise _episode_evidence_error(command,error.row,agent_context)
         if saved_only:
             from tenant_saved_only_copilot import prepare_saved
             media=prepare_saved(execution,rows)
@@ -430,10 +420,10 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
                 and (row.get('raw') if isinstance(row.get('raw'),dict) else {}).get('ai_authored') is not True),{})
         required_audio=_required_audio(rows) if command['mode']=='reply' and consultation_evidence is None else []
         required_images=_required_media(rows,{'image'}) if command['mode']=='reply' and consultation_evidence is None else []
-        required_media=required_audio+required_images+(_required_media(rows,{'document'}) if saved_only else [])
+        required_media=list(manifest.required) if manifest else []
         for required in required_media:
             receipt=required.get('_episode_receipt') or {}
-            if not (_visual_components(required) if saved_only and str(required.get('message_type')).lower()=='document' else _evidence_ready(required)):
+            if not _evidence_ready(required):
                 raise _episode_evidence_error(command,required,agent_context)
         if latest_row in required_audio:
             receipt=latest_row['_episode_receipt']
@@ -446,13 +436,19 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
         if not saved_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
         if isinstance(error,TenantLinearError):raise
         raise TenantLinearError('Не удалось подготовить вложения. Повторный анализ автоматически не запущен.',503) from None
-    audio_coverage={id(row):False for row in required_media}
-    bounded_lines = _bounded_conversation(rows,audio_coverage=audio_coverage)
+    audio_coverage=manifest.coverage if manifest else {}
+    bounded_lines = _bounded_conversation(rows,audio_coverage=audio_coverage,coverage_manifest=manifest)
     incomplete=next((row for row in required_media if not audio_coverage[id(row)]),None)
     if incomplete is not None:
         error=_episode_evidence_error(command,incomplete,agent_context,context_limit=True)
         if not saved_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
         raise error
+    if manifest:
+        try:manifest.seal(bounded_lines)
+        except CoverageError as failure:
+            error=_episode_evidence_error(command,failure.row or required_media[0],agent_context,context_limit=failure.context_limit)
+            if not saved_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
+            raise error
     if saved_only:
         supplied={line['source_id']:line['text'] for line in bounded_lines}
         for row in rows:
@@ -504,7 +500,7 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
         company=str(agent_context.get('company_instructions') or '')[:20000],
         agent=str(agent_context.get('instructions') or '')[:20000],
         style=agent_context.get('style'))
-    return {'execution':execution,'lines':lines,'request':request,'instructions':prompt,'extra_context':extra,
+    return {'execution':execution,'coverage_manifest':manifest,'lines':lines,'request':request,'instructions':prompt,'extra_context':extra,
             'images':images,'context_usage':context_usage,'knowledge':knowledge,'turns':turns}
 
 
@@ -574,7 +570,7 @@ def run(profile, data, *, consultation_reply_id=None):
             if existing:
                 if (int(existing['requested_by'])==actor and command['mode']=='reply'
                     and existing['input_hash']!=digest and any(existing['input_hash']==_hash(command,media_selection_version=version)
-                        for version in ('latest-customer-request-v3-audio-evidence','current-episode-v4-complete-audio'))):
+                        for version in ('latest-customer-request-v3-audio-evidence','current-episode-v4-complete-audio','current-episode-v5-complete-audio-photos'))):
                     pending=existing['status']!='completed'
                     error=TenantLinearError('Предыдущий запрос не подтверждён; повторный запуск заблокирован.' if pending else
                         'Правила проверки вложений обновлены. Нажмите «AI ответ» снова для нового проверенного черновика.',409)
@@ -583,6 +579,10 @@ def run(profile, data, *, consultation_reply_id=None):
                 if int(existing['requested_by']) != actor or existing['input_hash'] != digest:
                     raise TenantLinearError('Код запроса уже использован для другой операции.', 409)
                 if existing['status'] == 'completed' and existing.get('result') and str(existing['config_version']) == str(connection['updated_at']):
+                    if consultation_evidence is not None and any(str(row.get('message_type') or '').lower() in {'voice','audio','voice_message','ptt','image','video','document'} for row in original_rows):
+                        error=TenantLinearError('Полный анализ вложений снимка консультации не подтверждён. AI-ответ не выдан.',409)
+                        error.keep_request=True
+                        raise error
                     if command['mode']=='reply' and not existing['result'].get('source_versions'):
                         error=TenantLinearError('Сохранённый черновик не привязан к версии сообщений. Запросите новый черновик.',409)
                         error.keep_request=True
@@ -597,6 +597,11 @@ def run(profile, data, *, consultation_reply_id=None):
                           (tenant,command['lead_id'],'connect:'+command['channel_id']))
                         if str((cur.fetchone() or {}).get('external_id') or '')!=saved_refs[0]['external_id']:
                             raise TenantLinearError('В диалоге появились новые сообщения. Запросите актуальный черновик.',409)
+                    if command['mode']=='reply' and not command.get('_consultation_evidence'):
+                        try:MediaCoverage.validate_proof(cur,tenant,command['channel_id'],command['lead_id'],existing['result'].get('media_coverage'))
+                        except TenantLinearError as error:
+                            error.keep_request=False
+                            raise
                     return existing['result']
                 error = TenantLinearError('Результат предыдущего AI-запроса неизвестен; он не будет отправлен повторно.', 409)
                 error.keep_request = True
@@ -634,10 +639,21 @@ def run(profile, data, *, consultation_reply_id=None):
         # All modes recheck assignment/model immediately before paid text I/O.
         execution.check()
         if any(row.get('_episode_receipt') for row in rows):execution.check_sources()
+        manifest=context.get('coverage_manifest')
+        def coverage_guard(wire):
+            execution.check_sources()
+            with _connect() as conn:
+                with conn.cursor() as cur:manifest.validate(cur,tenant,command['channel_id'],command['lead_id'],lines=lines,wire=wire)
+        if manifest:
+            manifest.check(lines)
+            with _connect() as conn:
+                with conn.cursor() as cur:manifest.validate(cur,tenant,command['channel_id'],command['lead_id'],lines=lines)
         text, usage = generate(secret['api_key'], model, mode, lines, request,
                                instructions=prompt, extra_context=extra,
                                images=images,
-                               with_usage=True, max_output_tokens=900)
+                               with_usage=True, max_output_tokens=900,
+                               **({'before_dispatch':coverage_guard} if manifest else {}))
+        if manifest:manifest.check(lines)
         if not text or not text.strip():
             raise ValueError('empty copilot response')
     except Exception as error:
@@ -657,12 +673,17 @@ def run(profile, data, *, consultation_reply_id=None):
         'context_usage': context_usage if command['mode']=='reply' else None,
         'knowledge_sources': [{'title': item['title']} for item in knowledge]}
     if consultation_evidence is not None:result['consultation_agent_binding']=command['_agent_binding']
-    _finish(tenant, command, actor, result, turns, request, text)
+    try:
+        _finish(tenant, command, actor, result, turns, request, text,**({'coverage_manifest':manifest,'coverage_lines':lines} if manifest else {}))
+    except CoverageError:
+        _finish(tenant,command,actor,None,turns,request,'')
+        raise
+    if manifest:result['media_coverage']=manifest.proof()
     return result
 
 
 
-def _finish(tenant, command, actor, result, turns, request, answer):
+def _finish(tenant, command, actor, result, turns, request, answer, *, coverage_manifest=None,coverage_lines=None):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -672,6 +693,7 @@ def _finish(tenant, command, actor, result, turns, request, answer):
                 assert_route(cur, current_tenant, current_policy, 'connect', command['conversation_id'], command['channel_id'], command['lead_id'])
                 if not current_policy.can_use_chat_ai() or _agent_binding(_assigned_context(cur, tenant, command)) != command['_agent_binding']:
                     raise TenantLinearError('Назначение агента или доступ изменились. Результат AI скрыт.', 409)
+                if coverage_manifest is not None:coverage_manifest.validate(cur,tenant,command['channel_id'],command['lead_id'],lines=coverage_lines)
                 if command.get('_consultation_evidence'):
                     from tenant_dialog_consultations import original_evidence
                     original_evidence(cur,tenant,command['_consultation_evidence']['id'],command['channel_id'],command['conversation_id'],command['lead_id'])
@@ -690,6 +712,7 @@ def _finish(tenant, command, actor, result, turns, request, answer):
                 cur.execute("SELECT updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
                 status = 'completed' if str((cur.fetchone() or {}).get('updated_at') or '') == expected else 'unknown'
             stored = dict(result or {})
+            if result is not None and coverage_manifest is not None:stored['media_coverage']=coverage_manifest.proof()
             if result is None and command.get('_media_failure'):stored={'media_failure':command['_media_failure']}
             cur.execute("UPDATE saas_chat_ai_runs SET status=%s,result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending'",
                         (status, json.dumps(stored, ensure_ascii=False) if status == 'completed' or command.get('_media_failure') else None, tenant, command['request_id']))

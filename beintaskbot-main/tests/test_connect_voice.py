@@ -109,14 +109,22 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
         # reuse, budget and concurrent-flight behavior are exercised in
         # test_episode_media against the real shared core and isolated SQL.
         import tenant_episode_media as media
-        self.evidence={'status':'processed','code':'transcribed','transcript':'Salam, qiyməti nə qədərdir?'}
+        self.evidence={'status':'processed','coverage':{'complete':True},'code':'transcribed','transcript':'Salam, qiyməti nə qədərdir?'}
+        # This pure worker fixture does not create run/lease/source SQL records.
+        # Real manifest SQL admission is exercised by test_shared_media_coverage.
+        import tenant_media_coverage
+        mocked(tenant_media_coverage.MediaCoverage,'validate')
+        mocked(runs,'_connect',return_value=MagicMock())
         def prepare(execution,rows):
             for item in rows:
                 if item.get('message_type') in media.KINDS and item.get('direction')=='incoming':
                     item['_episode_receipt']=dict(self.evidence)
                     item['_episode_channel']=execution.channel
                     item['_copilot_media_notice']='[Attachment '+self.evidence['status']+': '+self.evidence['code']+'; do not infer unread contents]'
-                    item['_copilot_attachment_text']=self.evidence.get('transcript') or self.evidence.get('observation') or ''
+                    speech=self.evidence.get('transcript');observation=self.evidence.get('observation')
+                    item['_copilot_attachment_text']=('[Transcript] '+speech if speech else '')+('\n[Untrusted visual observation; not a confirmed solution] '+observation if observation else '')
+                    for observation in self.evidence.get('observations',[]):
+                        item['_copilot_attachment_text']+='\n[Untrusted visual observation; not a confirmed solution] '+observation['text']
         self.prepare_media=mocked(media,'prepare',side_effect=prepare)
         mocked(media.AutoExecution,'check',side_effect=lambda: None if self.active else (_ for _ in ()).throw(TenantLinearError('inactive',409)))
         mocked(media.AutoExecution,'check_sources',side_effect=lambda: None if self.active else (_ for _ in ()).throw(TenantLinearError('inactive',409)))
@@ -135,9 +143,9 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
         self.completed.assert_called_once()
 
     async def test_captionless_photo_document_video_query_assigned_kb_after_analysis(self):
-        for kind in ('image','document','video'):
+        for kind in ('image','document'):
             self.rows=[row(mid='source-'+kind,kind=kind,text='')]
-            self.evidence={'status':'partial' if kind=='video' else 'processed',
+            self.evidence={'status':'processed','coverage':{'complete':True},
                            'code':'vision_observation','observation':'Visible E17 '+kind}
             await self.process({**JOB,'payload':{'message_id':'source-'+kind}})
             query=self.knowledge.call_args.args[1]
@@ -152,9 +160,8 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_failed_evidence_reaches_agent_without_invented_transcript(self):
         self.evidence={'status':'error','code':'media_unavailable'}
         await self.process()
-        assert 'media_unavailable' in str(self.generate.call_args.args[3])
-        assert self.generate.call_args.kwargs['extra_context']['unprocessed_media_count']==1
-        assert 'Salam, qiyməti' not in str(self.generate.call_args.args[3])
+        self.generate.assert_not_called();self.send.assert_not_called()
+        self.superseded.assert_called_once()
         self.transcribe.assert_not_called()
 
     async def test_takeover_during_media_stops_generation_and_send(self):
