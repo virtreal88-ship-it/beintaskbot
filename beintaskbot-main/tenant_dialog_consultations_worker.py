@@ -75,7 +75,7 @@ def dispatch_auto_case(item_id):
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute('''SELECT a.enabled,a.mode,a.scopes,a.response_policy,s.enabled AS company_enabled,
-                  s.auto_send_enabled,s.emergency_stop,t.status AS tenant_status,m.role,m.active
+                  s.auto_send_enabled,s.emergency_stop,t.status AS tenant_status,t.owner_telegram_id,m.role,m.active
                   FROM saas_ai_agents a JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id
                   JOIN saas_tenants t ON t.id=a.tenant_id LEFT JOIN saas_tenant_members m
                     ON m.tenant_id=a.tenant_id AND m.telegram_id=%s
@@ -85,6 +85,7 @@ def dispatch_auto_case(item_id):
                 recipient_current=any(str(row.get('channel_id') or '')==str(item.get('channel_id') or '')
                     and row.get('conversation_id')==item.get('conversation_id') for row in destinations if isinstance(row,dict))
                 if (not owner or cfg.get('role')!='owner' or cfg.get('active') is not True
+                    or cfg.get('owner_telegram_id')!=owner
                     or cfg.get('enabled') is not True or cfg.get('mode')!='automatic'
                     or policy.get('auto_case_dispatch_enabled') is not True
                     or int(policy.get('auto_case_dispatch_owner_id') or 0)!=int(owner)

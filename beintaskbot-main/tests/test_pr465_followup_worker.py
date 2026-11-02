@@ -328,3 +328,74 @@ def test_done_requires_current_recipient_and_exact_saved_command(case_flow,chang
     with local.cursor() as cur:assert consultations.record_reply(cur,A,CA,target,mid,'/done',quote,source_external_id='connect:'+mid)
     local.commit()
     assert local.execute('SELECT status FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,case))[0]['status']!='resolved'
+
+
+def _queue_initial_case(f):
+    source=f['inbound']('text','New initial escalation')[0];assert f['process']()
+    with f['db'].cursor() as cur:
+        case=tickets.handoff_ticket(cur,{'tenant_id':A,'provider':'connect','channel_id':CA,
+          'conversation_id':'client','lead_id':41,'agent_id':AGENT,'event_fingerprint':'initial-case-'+source,
+          'source_message_id':source,'case_message_ids':[source]},'Initial developer escalation')
+    f['db'].commit()
+    return f['db'].execute('SELECT id::text FROM saas_ai_case_developer_dispatches WHERE tenant_id=%s::uuid AND case_id=%s::uuid ORDER BY destination_key',(A,case['id']))[0]['id']
+
+
+def test_initial_auto_dispatch_rejects_transferred_owner_even_if_old_owner_membership_remains(case_flow):
+    f=case_flow;local=f['db'];item=_queue_initial_case(f)
+    local.execute('UPDATE saas_tenants SET owner_telegram_id=44 WHERE id=%s::uuid',(A,));local.commit()
+    assert local.execute('SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=11',(A,))[0]=={'role':'owner','active':True}
+    dispatch.dispatch_auto_case(item)
+    f['developer_sends'].assert_not_called()
+    assert local.execute('SELECT state,reason FROM saas_ai_case_developer_dispatches WHERE id=%s::uuid',(item,))[0]=={'state':'blocked','reason':'automatic_dispatch_policy_or_owner_changed'}
+    assert not local.execute('SELECT consultation_id FROM saas_consultation_group_deliveries')
+
+
+def test_initial_auto_dispatch_rechecks_owner_transfer_after_preflight(case_flow,monkeypatch):
+    f=case_flow;local=f['db'];item=_queue_initial_case(f);prepared=[]
+    original_prepare=consultations.prepare
+    def prepare(*args,**kwargs):
+        result=original_prepare(*args,**kwargs);prepared.append(result['id'])
+        # The real worker preflight and snapshot preparation both succeeded.
+        # Transfer ownership alone, retaining the old active owner-role member.
+        local.execute('UPDATE saas_tenants SET owner_telegram_id=44 WHERE id=%s::uuid',(A,));local.commit()
+        return result
+    monkeypatch.setattr(consultations,'prepare',prepare)
+    dispatch.dispatch_auto_case(item)
+    assert len(prepared)==1
+    f['developer_sends'].assert_not_called()
+    assert local.execute('SELECT state FROM saas_ai_case_developer_dispatches WHERE id=%s::uuid',(item,))[0]['state']=='blocked'
+    assert local.execute('SELECT state FROM saas_consultation_group_deliveries WHERE consultation_id=%s::uuid',(prepared[0],))[0]['state']=='blocked'
+    assert local.execute('SELECT role,active FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=11',(A,))[0]=={'role':'owner','active':True}
+
+
+def test_initial_auto_dispatch_locks_tenant_owner_until_authoritative_receipt(case_flow):
+    import threading
+    import time
+    import psycopg
+    from psycopg.rows import dict_row
+    f=case_flow;local=f['db'];item=_queue_initial_case(f);started=threading.Event();finished=threading.Event();pids=[];errors=[];threads=[]
+    def factory():return psycopg.connect(local.dsn,row_factory=dict_row)
+    def transfer():
+        try:
+            with factory() as connection:
+                pids.append(connection.info.backend_pid);started.set()
+                connection.execute('UPDATE saas_tenants SET owner_telegram_id=44 WHERE id=%s::uuid',(A,))
+        except Exception as error:errors.append(error)
+        finally:finished.set()
+    def send(*_args):
+        thread=threading.Thread(target=transfer);threads.append(thread);thread.start();assert started.wait(5)
+        waiting=False;deadline=time.monotonic()+5
+        with factory() as observer:
+            while time.monotonic()<deadline:
+                row=observer.execute('SELECT wait_event_type FROM pg_stat_activity WHERE pid=%s',(pids[0],)).fetchone()
+                if row and row['wait_event_type']=='Lock':waiting=True;break
+                observer.commit();time.sleep(.01)
+        assert waiting and not finished.is_set(),'tenant ownership changed while the external developer send was in flight'
+        return {'message_id':'synthetic-initial-owner-queue','external_message_id':'PROVIDER_INITIAL_OWNER'}
+    f['developer_sends'].side_effect=send
+    dispatch.dispatch_auto_case(item)
+    for thread in threads:thread.join(10);assert not thread.is_alive()
+    assert not errors and finished.is_set(),errors
+    f['developer_sends'].assert_called_once()
+    assert local.execute('SELECT state FROM saas_ai_case_developer_dispatches WHERE id=%s::uuid',(item,))[0]['state']=='sent'
+    assert local.execute('SELECT owner_telegram_id FROM saas_tenants WHERE id=%s::uuid',(A,))[0]['owner_telegram_id']==44

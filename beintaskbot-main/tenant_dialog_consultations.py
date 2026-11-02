@@ -387,7 +387,7 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
                 if auto_dispatch_id:
                     lock_dialog(cur,tenant,'connect',str(item['channel_id']),item['conversation_id'])
                     cur.execute('''SELECT x.*,a.enabled AS agent_enabled,a.mode,a.scopes,a.response_policy,
-                      s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop,t.status AS tenant_status,
+                      s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop,t.status AS tenant_status,t.owner_telegram_id,
                       m.role,m.active,cs.state AS source_state,cs.revision AS current_source_revision,
                       cs.agent_id::text AS source_agent,cs.agent_assignment_id::text AS current_source_assignment,
                       c.case_id::text AS case_id,st.status AS case_status
@@ -401,7 +401,7 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
                       JOIN saas_ai_conversation_state cs ON cs.tenant_id=st.tenant_id AND cs.provider='connect'
                         AND cs.channel_id=st.channel_id::text AND cs.conversation_id=st.conversation_id
                       WHERE x.tenant_id=%s::uuid AND x.id=%s::uuid AND x.case_id=%s::uuid
-                        AND x.request_id=%s::uuid AND x.state='preparing' FOR UPDATE OF x,a,s,m,st,cs''',
+                        AND x.request_id=%s::uuid AND x.state='preparing' FOR UPDATE OF x,a,s,m,st,cs FOR SHARE OF t''',
                       (tenant,auto_dispatch_id,str(item.get('case_id') or ''),request))
                     gate=cur.fetchone() or {};configured=gate.get('response_policy') or {};recipients=configured.get('developer_destinations') or []
                     allowed_target=any(isinstance(row,dict) and str(row.get('channel_id') or '')==str(delivery['channel_id'])
@@ -410,6 +410,7 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
                     source_scope=scope_matches(gate.get('scopes') or [],str(item['channel_id']))
                     from tenant_ai_agent_runtime_flags import enabled as runtime_flag
                     if (not gate or gate.get('role')!='owner' or gate.get('active') is not True
+                        or gate.get('owner_telegram_id')!=actor
                         or gate.get('agent_enabled') is not True or gate.get('mode')!='automatic'
                         or configured.get('auto_case_dispatch_enabled') is not True
                         or int(configured.get('auto_case_dispatch_owner_id') or 0)!=int(actor)
