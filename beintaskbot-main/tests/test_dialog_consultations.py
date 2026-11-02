@@ -34,6 +34,8 @@ def prepared(ready,profile=PROFILE):
     db,data,sender=ready
     result=flow.prepare(profile,data,'https://crm.test')
     body=db.execute('SELECT body FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(A,data['request_id']))[0]['body'];db.commit()
+    assert 'CONSULT:' not in body
+    assert 'Фрагмент переписки' in body and 'https://crm.test/public/case/' in body
     return result,body.rsplit('/',1)[1]
 
 

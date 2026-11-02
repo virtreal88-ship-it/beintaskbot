@@ -301,7 +301,10 @@ def prepare(profile,data,origin):
               'text':_public_text(r['body']),'type':r['message_type'] if r['id'] in allowed else 'text','at':str(r['happened_at'])} for r in rows]
             ident=str(uuid.uuid4());share=str(uuid.uuid4());token=secrets.token_urlsafe(32)
             url=origin.rstrip('/')+'/public/case/'+token
-            body=summary.strip()+'\n\nCONSULT:'+ident+'\n'+url
+            # Keep the provider receipt/request key as the machine correlation.
+            # A quoted reply matches provider_message_id; the consultation UUID
+            # remains persisted in the ledger and is no longer shown to people.
+            body=summary.strip()+'\n\nФрагмент переписки (ссылка действует 7 дней):\n'+url
             cur.execute('''INSERT INTO saas_internal_consultations(tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,evidence,status,created_by)
               VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb,'waiting_specialist',%s)''',
               (tenant,ident,case_id,channel,source['conversation_id'],'employee:'+request,summary.strip(),_json({'input_hash':digest,'scope_hash':scope_hash,'share_id':share,'message_ids':selected}),actor))

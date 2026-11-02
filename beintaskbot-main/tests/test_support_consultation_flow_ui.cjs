@@ -33,14 +33,14 @@ async function setup({dialogs=true,agent=true}={}){
  await settle();return{dom,w,d,calls,state,controller,close(){controller.dispose();dom.window.close();}};
 }
 async function form(ctx){ctx.d.querySelector('#consultCreate').click();await settle();return ctx.d.querySelector('#caseDeveloperForm');}
-function fill(ctx,node){const summary=node.querySelector('#consultReason');summary.value='Printer cannot connect';node.querySelector('#caseConsultFirst').value='message-0';node.querySelector('#caseConsultLast').value='message-2';node.dispatchEvent(new ctx.w.Event('change',{bubbles:true}));for(const check of node.querySelectorAll('input[type=checkbox]'))check.checked=true;summary.dispatchEvent(new ctx.w.Event('input',{bubbles:true}));}
+function fill(ctx,node){const summary=node.querySelector('#consultReason');summary.value='Printer cannot connect';node.querySelector('#caseConsultFirst').value='message-0';node.querySelector('#caseConsultLast').value='message-2';node.dispatchEvent(new ctx.w.Event('change',{bubbles:true}));for(const check of node.querySelectorAll('input[type=checkbox]'))check.checked=true;summary.dispatchEvent(new ctx.w.Event('input',{bubbles:true}));const confirmation=node.querySelector('#caseConsultRecipientConfirm');confirmation.checked=true;confirmation.dispatchEvent(new ctx.w.Event('change',{bubbles:true}));}
 (async()=>{
  const ctx=await setup();
  assert.equal(ctx.calls.filter(call=>call.options.method==='POST').length,0,'reading does not send or run AI');
  const request=await form(ctx);assert.ok(request);assert.equal(request.querySelectorAll('#consultRecipient').length,1,'one Developer recipient');
  assert.equal(request.querySelector('#caseConsultFirst').value,'message-2','a public fragment starts with only the last message selected');
  assert.equal(request.querySelectorAll('input[type=checkbox]:checked').length,0,'files are explicitly selected');
- assert.equal(request.querySelector('[data-consultation-confirm]'),null,'no additional confirmation checkbox');
+ assert.ok(request.querySelector('#caseConsultRecipientConfirm')?.required,'every manual request requires explicit recipient confirmation');assert.equal(request.querySelector('#caseConsultSend').disabled,true,'preselected or single recipient cannot send without explicit confirmation');
  fill(ctx,request);request.dispatchEvent(new ctx.w.Event('submit',{cancelable:true}));request.dispatchEvent(new ctx.w.Event('submit',{cancelable:true}));await settle();
  const prepared=ctx.calls.filter(call=>call.path===base&&call.options.method==='POST'),sent=ctx.calls.filter(call=>call.path.endsWith('/dispatch'));
  assert.equal(prepared.length,1);assert.equal(sent.length,1);assert.equal(prepared[0].body.case_id,ticket.id);assert.deepEqual(prepared[0].body.message_ids,['message-0','message-1','message-2']);assert.deepEqual(prepared[0].body.media_ids,['message-1','message-2']);assert.equal(prepared[0].body.request_id,sent[0].body.request_id);
