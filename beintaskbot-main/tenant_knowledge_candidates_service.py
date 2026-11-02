@@ -66,6 +66,15 @@ def prepare(profile,data,review=None,training=None):
                     'case_version','case_plan_hash','case_extension_id','case_source_sha256')
                 exact_source=all(data.get(k)==route.get(k) for k in identity_keys)
                 approved=set(route.get('approved_channel_ids') or [])
+                exact_source=(exact_source
+                    and data.get('approved_channel_ids')==sorted(approved)
+                    and data.get('media_grant_id')==route.get('media_grant_id')
+                    and data.get('video_model')==route.get('video_model')
+                    and data.get('campaign_photo_model')==route.get('campaign_photo_model')
+                    and data.get('owner_retry_unknown',False) is route.get('owner_retry_unknown',False)
+                    and data.get('owner_retry_basis')==route.get('owner_retry_basis')
+                    and all(data.get(flag,False)==route.get(flag,False) for flag in
+                        ('allow_external_media','allow_paid_asr','allow_vision')))
                 if exact_source and data.get('channel_id') in approved:
                     from tenant_ai_group_coordination import group_jid,read as read_group
                     if group_jid(data.get('conversation_id')):

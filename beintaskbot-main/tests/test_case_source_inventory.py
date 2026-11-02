@@ -303,6 +303,11 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
     import tenant_knowledge_candidates_service as service
     monkeypatch.setattr(spending,'price',lambda model:(1,1))
     monkeypatch.setattr(spending,'media_price',lambda model,operation:1)
+    provider_calls=provider.call_count
+    tampered={**claimed['route'],'approved_channel_ids':[oldchannel],
+      'request_id':str(fragment['id'])}
+    with pytest.raises(TenantLinearError):service.prepare(PROFILE,tampered)
+    assert provider.call_count==provider_calls,'an unapproved case source cannot reach the model'
     prepared=service.prepare(PROFILE,{**claimed['route'],'request_id':str(fragment['id'])})
     assert prepared['id']==str(fragment['id'])
     db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',
