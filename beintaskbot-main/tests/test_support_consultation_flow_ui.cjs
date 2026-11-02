@@ -9,12 +9,12 @@ async function setup({dialogs=true,agent=true}={}){
  const dom=new JSDOM('<div id="host"></div><p id="notice"></p>',{url:'https://crm.test/app',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
  const member={tenant_id:'company-a',telegram_id:11,role:dialogs?'owner':'operator'};
  w.tenantI18n={language:'ru',date:value=>String(value)};w.tenantOperator={hasRight:right=>right==='dialogs'?dialogs:true};
- const state={consultations:[],replies:[],prepareError:null,losePrepareResponse:false,dispatchState:'pending'};
+ const state={autoDispatches:[],consultations:[],replies:[],prepareError:null,losePrepareResponse:false,dispatchState:'pending'};
  w.fetch=async(url,options={})=>{
   const path=new URL(url,w.location).pathname,body=options.body?JSON.parse(options.body):undefined;calls.push({path,body,options});
   if(path===base+'/preview')return ok({messages,case_id:ticket.id,has_earlier:false,customer_identity_preview:{name:'Synthetic customer',verified_phone:'+15550001111',phone_status:'verified'}});
   if(path===base+'/destinations')return ok({destinations:[{channel_id:'developer-channel',conversation_id:'developers@g.us',customer_name:'Developers',channel_name:'Support WhatsApp'}]});
-  if(path===base+'/replies')return ok({consultations:state.consultations,replies:state.replies});
+  if(path===base+'/replies')return ok({auto_dispatches:state.autoDispatches,consultations:state.consultations,replies:state.replies});
   if(path===base&&options.method==='POST'){
    if(state.prepareError)return{ok:false,status:409,json:async()=>({success:false,error:state.prepareError})};
    state.consultations=[{id:'consult-a',case_id:ticket.id,request_id:body.request_id,source_channel:ticket.channel_id,source_conversation:ticket.conversation_id,destination_channel:body.destination_channel_id,destination_conversation:body.destination_conversation_id,recipient:'Developers',reason:body.summary,state:'ready',can_dispatch:true,can_send:true,can_manual_reply:true,created_at:'2026-11-01T13:00:00Z',expires_at:'2099-11-08T13:00:00Z'}];
@@ -58,6 +58,8 @@ function fill(ctx,node){const summary=node.querySelector('#consultReason');summa
  [...lost.d.querySelectorAll('#consultRows button')].find(node=>node.textContent==='Отправить подготовленный запрос').click();await settle();assert.equal(lost.calls.filter(call=>call.path.endsWith('/dispatch')).length,1);assert.equal(lost.calls.filter(call=>call.path===base&&call.options.method==='POST').length,1,'recovery reuses the saved request');lost.close();
 
  const denied=await setup();denied.state.prepareError='Recipient is no longer marked Developer';const deniedForm=await form(denied);fill(denied,deniedForm);deniedForm.dispatchEvent(new denied.w.Event('submit',{cancelable:true}));await settle();assert.match(deniedForm.textContent,/Recipient is no longer marked Developer/);assert.equal(deniedForm.querySelector('#consultReason').value,'Printer cannot connect');denied.close();
+
+ const statuses=await setup();statuses.state.autoDispatches=[{id:'a',recipient:'Developer A',state:'reply_received'},{id:'b',recipient:'Developer B',state:'blocked',reason:'developer_route_blocked'},{id:'c',recipient:'Developer C',state:'blocked',reason:'automatic_dispatch_runtime_or_agent_scope_changed'},{id:'d',recipient:'Developer D',state:'blocked',reason:'source_dialog_state_or_assignment_changed'},{id:'e',recipient:'Developer E',state:'blocked',reason:'future_private_reason'}];[...statuses.d.querySelectorAll('.support-heading button')].find(button=>button.textContent==='Обновить').click();await settle();assert.match(statuses.d.querySelector('[data-auto-dispatch-recipient=a]').textContent,/Developer A.*ответ получен/);assert.match(statuses.d.querySelector('[data-auto-dispatch-recipient=b]').textContent,/Маршрут к разработчику недоступен/);assert.match(statuses.d.querySelector('[data-auto-dispatch-recipient=c]').textContent,/область доступа/);assert.match(statuses.d.querySelector('[data-auto-dispatch-recipient=d]').textContent,/Состояние диалога/);assert.doesNotMatch(statuses.d.querySelector('#consultRows').textContent,/developer_route_blocked|future_private_reason/);statuses.close();
 
  const legacy=await setup({dialogs:false});assert.match(legacy.d.querySelector('#consultRows').textContent,/Preserved old answer/);assert.equal(legacy.d.querySelector('#consultCreate').hidden,true);assert.equal(legacy.calls.some(call=>call.path===base+'/replies'),false,'support-only staff retain their previous internal-request access');legacy.close();
  console.log('PASS: one case developer request, explicit bounded files, pending receipts, late answers, manual records, recovery and legacy rights');

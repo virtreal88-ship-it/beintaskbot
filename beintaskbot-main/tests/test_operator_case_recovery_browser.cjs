@@ -1,0 +1,32 @@
+/* Real current operator UI; only API/provider boundaries use local fixtures. */
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
+const {chromium}=require('../.support-test-deps/node_modules/playwright');
+const {installOperatorCaseFixture}=require('./operator_case_ui_fixture.cjs');
+const docs=path.join(__dirname,'..','docs'),app=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8');
+const supportOpen=app.split('\n').find(line=>line.includes("document.addEventListener('tenant-support-open',event=>"));
+const server=http.createServer((req,res)=>{const filename=req.url.startsWith('/assets/')?path.join(docs,path.basename(req.url.split('?')[0])):null;if(filename&&fs.existsSync(filename)){res.writeHead(200,{'content-type':filename.endsWith('.css')?'text/css':'text/javascript'});res.end(fs.readFileSync(filename));return;}res.writeHead(200,{'content-type':'text/html'});res.end(app.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,''));});
+(async()=>{
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));let browser;
+ try{
+  browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});const origin='http://127.0.0.1:'+server.address().port;
+  async function setup(width){const context=await browser.newContext({viewport:{width,height:844}}),page=await context.newPage();await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());await page.goto(origin+'/app?view=dialogs');await page.evaluate(installOperatorCaseFixture,{});await page.addScriptTag({path:path.join(docs,'tenant-operator-i18n.js')});await page.evaluate(()=>window.tenantI18n.setLanguage('ru'));for(const file of ['tenant-chat-send.js','tenant-operator-dialogs.js','tenant-support-consultations.js'])await page.addScriptTag({path:path.join(docs,file)});await page.evaluate(supportOpen);await page.waitForSelector('[data-open-operator]');return{context,page};}
+  for(const width of [320,390,1024]){
+   const {context,page}=await setup(width);
+   try{
+    await page.evaluate(()=>window.tenantOperator.openDialog(window.caseUI.route));await page.locator('[data-operator-create-ticket]').click();let modal=page.locator('#operatorCreateCaseModal');await modal.waitFor();assert.equal(await modal.locator('select').inputValue(),'');assert.equal(await page.evaluate(()=>caseUI.calls.filter(c=>c.method==='POST'&&c.path.endsWith('/support-tickets')).length),0);await modal.locator('select').selectOption('0');await modal.locator('[type=checkbox]').check();await page.evaluate(()=>caseUI.createOutcome='lost');await modal.locator('[type=submit]').click();await modal.getByText(/Response lost/).waitFor();assert.equal(await modal.locator('select').isDisabled(),true);const payload=await page.evaluate(()=>caseUI.calls.find(c=>c.path.endsWith('/support-tickets')&&c.method==='POST').body);await page.keyboard.press('Escape');await modal.waitFor({state:'detached'});await page.locator('[data-operator-create-ticket]').click();await modal.waitFor();assert.equal(await modal.locator('select').isDisabled(),true);await modal.locator('[type=button]').focus();await page.keyboard.press('Tab');assert.equal(await modal.locator('[type=submit]').evaluate(node=>node===document.activeElement),true,'keyboard focus wraps within the create card');await page.evaluate(()=>caseUI.createOutcome='ok');await modal.locator('[type=submit]').click();await modal.waitFor({state:'detached'});const posts=await page.evaluate(()=>caseUI.calls.filter(c=>c.path.endsWith('/support-tickets')&&c.method==='POST'));assert.equal(posts.length,2);assert.deepEqual(posts[1].body,payload);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+   }finally{await context.close();}
+  }
+  for(const cached of [false,true]){
+   const {context,page}=await setup(390);
+   try{
+    if(cached)await page.evaluate(async()=>{await tenantOperator.openDialog(caseUI.route);tenantOperator.closeDialog(false,true);caseUI.holdHistory=true;});
+    await page.evaluate(()=>{const host=document.createElement('div');host.id='privateCase';document.body.append(host);window.tenantCaseConsultations.mount({host,ticket:{id:'case-with-reply',status:'new',lead_id:41,channel_id:'client-channel',conversation_id:'client-conversation',agent_id:'agent'},member:tenantProfileSnapshot.member,getMessages:()=>[],isCurrent:()=>true});});
+    await page.locator('#privateCase').getByRole('button',{name:'Проверить черновик и отправить вручную',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#chatText')?.value==='Private developer follow-up draft');
+    if(cached){await page.evaluate(()=>{caseUI.holdHistory=false;caseUI.releaseHistory();});await page.waitForFunction(()=>document.querySelector('#operatorConversationContent')?.getAttribute('aria-busy')==='false');}
+    assert.equal(await page.evaluate(()=>caseUI.calls.some(c=>c.path.endsWith('/chat/send'))),false);await page.evaluate(()=>{tenantOperator.closeDialog(false,true);const state={view:'dialogs',operatorDialog:caseUI.route};history.replaceState(state,'');dispatchEvent(new PopStateEvent('popstate',{state}));});await page.waitForFunction(()=>document.querySelector('#chatText')?.value==='Private developer follow-up draft');await page.waitForFunction(()=>Number(getComputedStyle(document.querySelector('#operatorConversationPane')).opacity)>.99);await page.screenshot({path:'/tmp/operator-private-case-draft-'+(cached?'cached':'server')+'.png'});
+    await page.evaluate(()=>caseUI.holdSend=true);await page.locator('#sendChat').evaluate(node=>{node.click();node.click();});await page.waitForFunction(()=>caseUI.calls.filter(c=>c.path.endsWith('/chat/send')).length===1);await page.evaluate(()=>{caseUI.holdSend=false;caseUI.releaseSend();});await page.waitForFunction(()=>document.querySelector('#chatText')?.value==='');assert.equal(await page.evaluate(()=>caseUI.calls.filter(c=>c.path.endsWith('/chat/send')).length),1);
+   }finally{await context.close();}
+  }
+  console.log('PASS Chromium: 320/390/1024px actual Create recovery; actual case Review draft -> cached/server/history composer -> one explicit normal Send');
+ }finally{if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}
+})().catch(error=>{console.error(error);process.exitCode=1;});
