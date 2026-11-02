@@ -49,7 +49,7 @@ async function fixture(browser,width=390,withoutLocks=false,height=844){
  return {page,context,state,errors,open,photo};
 }
 (async()=>{
- const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+ const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||(fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),args:['--no-sandbox']});
  try{
   for(const width of [320,390,1280]){
    cache.clear();requests.length=0;upstream.length=0;responseStatus=200;
