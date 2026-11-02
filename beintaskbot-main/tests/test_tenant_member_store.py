@@ -1,13 +1,17 @@
 import unittest
+from datetime import datetime, timezone
+import json
 from unittest.mock import patch
 
 import tenant_member_store
 
 
 class Cursor:
-    def __init__(self):
+    def __init__(self, existing=None):
         self.rowcount = 1
         self.queries = []
+        self.existing = existing
+        self.owner = {'tenant_id':'tenant-a','telegram_id':1,'role':'owner','active':True}
 
     def execute(self, query, params=None):
         self.queries.append((query, params))
@@ -16,13 +20,28 @@ class Cursor:
     def __exit__(self, *_args): return False
 
     def fetchone(self):
-        return {"tenant_id": "tenant-a", "telegram_id": 22, "display_name": "Operator",
-                "role": "operator", "permissions": ["tasks"], "active": True}
+        query, params = self.queries[-1]
+        if 'AS ready' in query: return {'ready': True}
+        if 'SELECT id,modules' in query: return {'id':'tenant-a','modules':{'tasks':True}}
+        if 'INSERT INTO saas_tenant_members' in query:
+            _, person, name, role, permissions, _ = params
+        elif 'UPDATE saas_tenant_members SET display_name' in query:
+            name, role, permissions, _, person = params
+        else: raise AssertionError(query)
+        return {'tenant_id':'tenant-a','telegram_id':person,'display_name':name,'role':role,
+                'permissions':json.loads(permissions),'active':True,
+                'updated_at':datetime(2026,11,2,tzinfo=timezone.utc)}
+
+    def fetchall(self):
+        query, _ = self.queries[-1]
+        if 'SELECT * FROM saas_tenant_members' in query:
+            return [self.owner] + ([self.existing] if self.existing else [])
+        return []
 
 
 class Connection:
-    def __init__(self):
-        self.cursor_value = Cursor()
+    def __init__(self, existing=None):
+        self.cursor_value = Cursor(existing)
         self.committed = False
 
     def __enter__(self): return self
@@ -52,16 +71,14 @@ class MemberStoreTests(unittest.TestCase):
                   'permissions':['tasks','support','employees','finance','legacy:retired'],'active':True}
         # This is the exact state sent by the visible checkbox editor: it only
         # knows its five checkboxes, while historical grants must survive.
-        connection = Connection()
-        owner={'tenant_id':'tenant-a','telegram_id':1,'role':'owner','active':True}
-        with patch.object(tenant_member_store, 'member', side_effect=[owner, existing]), \
-             patch.object(tenant_member_store, '_connect', return_value=connection), \
-             patch.object(tenant_member_store, '_ensure_schema'):
+        connection = Connection(existing)
+        with patch.object(tenant_member_store, '_connect', return_value=connection):
             tenant_member_store.upsert_member(tenant_id='tenant-a', owner_id=1, telegram_id=22,
                 display_name='Legacy', role='legacy_role', permissions=['tasks','support'])
-        params=connection.cursor_value.queries[0][1]
-        self.assertEqual(params[3], 'legacy_role')
-        self.assertEqual(set(__import__('json').loads(params[4])), {'tasks','support','employees','finance','legacy:retired'})
+        params=next(params for query,params in connection.cursor_value.queries
+                    if 'UPDATE saas_tenant_members SET display_name' in query)
+        self.assertEqual(params[1], 'legacy_role')
+        self.assertEqual(set(json.loads(params[2])), {'tasks','support','employees','finance','legacy:retired'})
 
     def test_whatsapp_number_normalization_is_exact_and_tenant_input_safe(self):
         normalize=tenant_member_store._whatsapp_digits
@@ -75,17 +92,17 @@ class MemberStoreTests(unittest.TestCase):
 
     def test_upsert_creates_member_and_audits_without_overwriting_owner(self):
         connection = Connection()
-        owner = {"tenant_id": "tenant-a", "telegram_id": 1, "role": "owner", "active": True}
-        with patch.object(tenant_member_store, "member", side_effect=[owner, None]), \
-             patch.object(tenant_member_store, "_connect", return_value=connection), \
-             patch.object(tenant_member_store, "_ensure_schema"):
+        with patch.object(tenant_member_store, "_connect", return_value=connection):
             result = tenant_member_store.upsert_member(tenant_id="tenant-a", owner_id=1,
                 telegram_id=22, display_name="Operator", role="operator", permissions=["tasks"])
         self.assertEqual(result["telegram_id"], 22)
         self.assertTrue(connection.committed)
-        self.assertEqual(len(connection.cursor_value.queries), 2)
-        self.assertIn("employee.created", connection.cursor_value.queries[1][1])
-        self.assertIn("role = CASE WHEN saas_tenant_members.role = 'owner' THEN 'owner'", connection.cursor_value.queries[0][0])
+        queries=connection.cursor_value.queries
+        self.assertTrue(any('employee.created' in params for _,params in queries))
+        insert=next(query for query,_ in queries if 'INSERT INTO saas_tenant_members' in query)
+        self.assertIn('DO NOTHING',insert)
+        self.assertTrue(any('ORDER BY telegram_id FOR UPDATE' in query for query,_ in queries))
+        self.assertFalse(any('ALTER ' in query or 'CREATE ' in query for query,_ in queries))
 
 
 if __name__ == "__main__":

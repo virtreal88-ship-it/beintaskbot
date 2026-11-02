@@ -2,6 +2,7 @@
 import hmac
 import re
 import uuid
+from psycopg.errors import UniqueViolation
 
 from tenant_platform_common import (
     _DEFAULT_MODULES, _DEFAULT_NOTIFICATIONS, _ROLE_PERMISSIONS,
@@ -16,6 +17,104 @@ from tenant_policy import TenantPolicy
 # when an employee card is updated; an older client must never erase them.
 _EDITOR_PERMISSION_KEYS = {"tasks", "deals", "customers", "dialogs", "support"}
 _RECOGNIZED_ROLES = {"owner", "admin", "manager", "operator", "worker", "master"}
+_CARD_FIELDS = {'display_name', 'role', 'permissions', 'active', 'whatsapp_numbers'}
+_GLOBAL_FIELDS = {'first_name', 'last_name', 'login', 'email', 'phone', 'avatar_url', 'account_status'}
+
+
+class MemberCardError(TenantPlatformError):
+    def __init__(self, code, status=400, *, fields=None, message=None):
+        super().__init__(message or code)
+        self.code, self.status, self.fields = code, status, fields or {}
+
+
+def _require_member_schema(conn):
+    """Startup installs these tables; employee requests never repair them."""
+    with conn.cursor() as cur:
+        cur.execute('''SELECT bool_and(to_regclass(name) IS NOT NULL) AS ready
+          FROM unnest(%s::text[]) AS required(name)''', ([
+            'saas_tenants', 'saas_tenant_members', 'saas_auth_users', 'saas_user_profiles',
+            'saas_tenant_member_whatsapp_numbers', 'saas_tenant_audit_events',
+            'saas_tenant_workflow_policies', 'saas_tenant_pipelines',
+            'saas_tenant_pipeline_stages'],))
+        if not (cur.fetchone() or {}).get('ready'):
+            raise MemberCardError('member_schema_unavailable', 503)
+
+
+def _version(row):
+    value = row.get('updated_at')
+    return value.isoformat() if hasattr(value, 'isoformat') else str(value or '')
+
+
+def _card_access(current, target):
+    reasons = {field: 'global_account_identity' for field in _GLOBAL_FIELDS}
+    editable = set(_CARD_FIELDS)
+    if current.get('role') != 'owner' and target.get('role') in {'owner', 'admin'}:
+        reasons.update({field: 'protected_member' for field in editable})
+        editable.clear()
+    else:
+        if target.get('role') == 'owner':
+            for field in ('role', 'permissions', 'active'):
+                editable.discard(field)
+                reasons[field] = 'owner_protected'
+        if int(current['telegram_id']) == int(target['telegram_id']):
+            editable.discard('active')
+            reasons['active'] = 'self_deactivation_forbidden'
+            if current.get('role') != 'owner':
+                for field in ('display_name', 'role', 'permissions', 'active'):
+                    editable.discard(field)
+                    reasons[field] = 'self_membership_protected'
+        if target.get('active') is False:
+            editable.discard('whatsapp_numbers')
+            reasons['whatsapp_numbers'] = 'member_inactive'
+    return sorted(editable), reasons
+
+
+def _locked_members(cur, tenant_id, owner_id, target_id=None):
+    # Match native-task/workflow order: tenant, canonical policy keys, numeric
+    # membership IDs. Include inactive targets so protected roles cannot hide.
+    cur.execute('SELECT id,modules FROM saas_tenants WHERE id=%s::uuid FOR SHARE', (tenant_id,))
+    company = cur.fetchone()
+    if not company:
+        raise MemberCardError('member_access_revoked', 403)
+    cur.execute('''SELECT policy_key FROM saas_tenant_workflow_policies
+      WHERE tenant_id=%s::uuid AND policy_key=ANY(%s::text[])
+      ORDER BY policy_key FOR SHARE''', (tenant_id, ['members', 'modules']))
+    cur.fetchall()
+    ids = sorted({int(owner_id)} | ({int(target_id)} if target_id is not None else set()))
+    cur.execute('''SELECT * FROM saas_tenant_members WHERE tenant_id=%s::uuid
+      AND telegram_id=ANY(%s::bigint[]) ORDER BY telegram_id FOR UPDATE''', (tenant_id, ids))
+    workflow = None
+    rows = {int(row['telegram_id']): dict(row) for row in cur.fetchall()}
+    current = rows.get(int(owner_id))
+    if current:
+        workflow = _read_tenant_workflow(cur, tenant_id)
+        current.update(modules=company.get('modules') or {}, workflow=workflow)
+    if not _can_manage_members(current):
+        raise MemberCardError('member_access_revoked', 403)
+    return current, rows.get(int(target_id)) if target_id is not None else None
+
+
+def _protected_target(current, target, *, require_active=False):
+    if not target:
+        raise MemberCardError('member_not_found', 404)
+    if current.get('role') != 'owner' and target.get('role') in {'owner', 'admin'}:
+        raise MemberCardError('member_field_read_only', 403, fields={'role': 'protected_member'})
+    if require_active and target.get('active') is False:
+        raise MemberCardError('member_inactive', 409, fields={'whatsapp_numbers': 'member_inactive'})
+
+
+def _audit_member(cur, tenant_id, owner_id, target, action, payload):
+    cur.execute('''INSERT INTO saas_tenant_audit_events
+      (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+      VALUES(%s,%s::uuid,%s,%s,'employee',%s,%s::jsonb)''',
+      (uuid.uuid4(), tenant_id, int(owner_id), action, str(target), _json(payload)))
+
+
+def _bump_member(cur, tenant_id, target):
+    cur.execute('''UPDATE saas_tenant_members
+      SET updated_at=GREATEST(clock_timestamp(),updated_at+interval '1 microsecond')
+      WHERE tenant_id=%s::uuid AND telegram_id=%s RETURNING *''', (tenant_id, target))
+    return cur.fetchone()
 
 def _can_manage_members(current: dict | None) -> bool:
     return bool(current and current.get('active') is not False
@@ -46,7 +145,7 @@ def create_tenant(*, name: str, industry: str, owner_telegram_id: int, owner_nam
 
 def member(tenant_id: str, telegram_id: int) -> dict | None:
     with _connect() as conn:
-        _ensure_schema(conn)
+        _require_member_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT m.*, au.email, t.name AS tenant_name, t.slug AS tenant_slug, t.status AS tenant_status,
@@ -116,6 +215,7 @@ def _member_payload(row: dict) -> dict:
         if allowed:
             effective.append(grant)
     result['effective_permissions'] = effective
+    result['card_version'] = _version(row)
     return result
 
 
@@ -125,7 +225,7 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
     if not _can_manage_members(current):
         raise TenantPlatformError("İcazə yoxdur.")
     with _connect() as conn:
-        _ensure_schema(conn)
+        _require_member_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT m.tenant_id, m.telegram_id, m.display_name, m.role, m.permissions, m.active, t.modules,
@@ -161,6 +261,7 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
         row['workflow'] = workflow
         value=_member_payload(row)
         value['whatsapp_numbers']=numbers.get(int(row['telegram_id']),[])
+        value['editable_fields'], value['read_only_reasons'] = _card_access(current, row)
         result.append(value)
     return result
 
@@ -185,152 +286,224 @@ def _whatsapp_digits(value):
     return digits if re.fullmatch(r'[1-9][0-9]{7,14}',digits) else ''
 
 
+def _normalize_numbers(numbers):
+    if not isinstance(numbers, list) or len(numbers) > 10:
+        raise MemberCardError('member_card_invalid', fields={'whatsapp_numbers': 'invalid'})
+    selected = {}
+    for item in numbers:
+        if not isinstance(item, dict) or set(item) - {'phone', 'recognition_enabled'}:
+            raise MemberCardError('member_card_invalid', fields={'whatsapp_numbers': 'invalid'})
+        digits = _whatsapp_digits(item.get('phone'))
+        enabled = item.get('recognition_enabled', True)
+        if not digits or type(enabled) is not bool:
+            raise MemberCardError('member_card_invalid', fields={'whatsapp_numbers': 'invalid'})
+        # Preserve the original first-occurrence semantics for duplicate input.
+        selected.setdefault(digits, enabled)
+    return sorted(selected.items())
+
+
+def _replace_numbers(cur, tenant_id, owner_id, target, selected):
+    # Foreign ownership is checked without taking another member's number
+    # locks. The existing tenant/phone unique key closes absent-row races.
+    cur.execute('''SELECT phone_digits,telegram_id FROM saas_tenant_member_whatsapp_numbers
+      WHERE tenant_id=%s::uuid AND phone_digits=ANY(%s::text[])''',
+      (tenant_id, [digits for digits, _ in selected]))
+    if any(int(row['telegram_id']) != target for row in cur.fetchall()):
+        raise MemberCardError('member_duplicate', 409, fields={'whatsapp_numbers': 'duplicate'})
+    cur.execute('DELETE FROM saas_tenant_member_whatsapp_numbers WHERE tenant_id=%s::uuid AND telegram_id=%s',
+                (tenant_id, target))
+    for digits, enabled in selected:
+        cur.execute('''INSERT INTO saas_tenant_member_whatsapp_numbers
+          (tenant_id,telegram_id,phone_digits,recognition_enabled,created_by)
+          VALUES(%s::uuid,%s,%s,%s,%s)''', (tenant_id, target, digits, enabled, int(owner_id)))
+
+
+def _unique_error(exc):
+    constraint = getattr(getattr(exc, 'diag', None), 'constraint_name', '') or ''
+    field = {'saas_auth_users_login_idx': 'login', 'saas_user_profiles_login_idx': 'login',
+             'saas_auth_users_email_key': 'email',
+             'saas_tenant_member_whatsapp_numbers_pkey': 'whatsapp_numbers'}.get(constraint)
+    if not field:
+        raise exc
+    # Called outside the connection context, after the whole write rolled back.
+    raise MemberCardError('member_duplicate', 409, fields={field: 'duplicate'}) from None
+
+
+def _selected_membership(current, existing, requested_role, permissions, *, target, strict=False):
+    if strict:
+        selected_role = str(requested_role)
+        if (selected_role == 'owner' and existing.get('role') != 'owner'
+                or selected_role not in _RECOGNIZED_ROLES and selected_role != str(existing.get('role'))):
+            raise MemberCardError('member_card_invalid', fields={'role': 'invalid'})
+    else:
+        selected_role = _role(str(requested_role or ''), owner=target == int(current['telegram_id']))
+    selected_permissions = _permissions(permissions, selected_role)
+    if existing and selected_role != 'owner':
+        preserved = [item for item in (existing.get('permissions') or []) if item not in _EDITOR_PERMISSION_KEYS]
+        selected_permissions = list(dict.fromkeys(selected_permissions + preserved))
+        existing_role = str(existing.get('role') or '')
+        if existing_role not in _RECOGNIZED_ROLES and requested_role == existing_role:
+            selected_role = existing_role
+    if current.get('role') != 'owner':
+        if selected_role in {'owner', 'admin'} or set(selected_permissions) - set(current.get('permissions') or []):
+            raise MemberCardError('member_field_read_only', 403, fields={'permissions': 'permission_scope'})
+        if existing and existing.get('role') in {'owner', 'admin'}:
+            raise MemberCardError('member_field_read_only', 403, fields={'role': 'protected_member'})
+    return selected_role, selected_permissions
+
+
+def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, changes):
+    if (not isinstance(expected_version, str) or not expected_version or len(expected_version) > 100
+            or not isinstance(changes, dict) or not changes or set(changes) - _CARD_FIELDS):
+        raise MemberCardError('member_card_invalid', fields={'changes': 'invalid'})
+    if 'display_name' in changes and (not isinstance(changes['display_name'], str)
+            or not changes['display_name'].strip() or len(changes['display_name'].strip()) > 120):
+        raise MemberCardError('member_card_invalid', fields={'display_name': 'invalid'})
+    if 'role' in changes and not isinstance(changes['role'], str):
+        raise MemberCardError('member_card_invalid', fields={'role': 'invalid'})
+    if 'active' in changes and type(changes['active']) is not bool:
+        raise MemberCardError('member_card_invalid', fields={'active': 'invalid'})
+    if 'permissions' in changes and (not isinstance(changes['permissions'], list)
+            or any(not isinstance(item, str) for item in changes['permissions'])):
+        raise MemberCardError('member_card_invalid', fields={'permissions': 'invalid'})
+    selected = _normalize_numbers(changes['whatsapp_numbers']) if 'whatsapp_numbers' in changes else None
+    try:
+        with _connect() as conn:
+            _require_member_schema(conn)
+            with conn.cursor() as cur:
+                current, existing = _locked_members(cur, tenant_id, owner_id, telegram_id)
+                _protected_target(current, existing)
+                if _version(existing) != expected_version:
+                    raise MemberCardError('member_card_conflict', 409, fields={'expected_version': 'version_conflict'})
+                editable, reasons = _card_access(current, existing)
+                forbidden = set(changes) - set(editable)
+                if forbidden:
+                    raise MemberCardError('member_field_read_only', 403,
+                                          fields={field: reasons.get(field, 'read_only') for field in forbidden})
+                role = existing['role']; permissions = list(existing.get('permissions') or [])
+                if 'permissions' in changes:
+                    hidden = set(changes['permissions']) - _EDITOR_PERMISSION_KEYS
+                    if hidden - set(existing.get('permissions') or []):
+                        raise MemberCardError('member_card_invalid', fields={'permissions': 'read_only'})
+                if set(changes) & {'display_name', 'role', 'permissions'} or changes.get('active') is True:
+                    role, permissions = _selected_membership(current, existing,
+                        changes.get('role', role), changes.get('permissions', permissions),
+                        target=telegram_id, strict=True)
+                    if 'permissions' not in changes:
+                        permissions = list(existing.get('permissions') or [])
+                if selected is not None:
+                    _replace_numbers(cur, tenant_id, owner_id, telegram_id, selected)
+                cur.execute('''UPDATE saas_tenant_members SET display_name=%s,role=%s,permissions=%s::jsonb,
+                  active=%s,updated_at=GREATEST(clock_timestamp(),updated_at+interval '1 microsecond')
+                  WHERE tenant_id=%s::uuid AND telegram_id=%s RETURNING *''',
+                  (changes.get('display_name', existing['display_name']).strip(), role, _json(permissions),
+                   changes.get('active', existing['active']), tenant_id, telegram_id))
+                row = cur.fetchone()
+                _audit_member(cur, tenant_id, owner_id, telegram_id, 'employee.card.updated',
+                              {'fields': sorted(changes), 'role': role})
+                receipt = {'telegram_id': telegram_id, 'card_version': _version(row)}
+            conn.commit()
+    except UniqueViolation as exc:
+        _unique_error(exc)
+    return receipt
+
+
 def set_member_whatsapp_numbers(*, tenant_id: str, owner_id: int, telegram_id: int,
                                 numbers: list[dict]) -> list[dict]:
-    """Replace one member's explicit WhatsApp recognition numbers, tenant-locally."""
-    current=member(tenant_id,owner_id)
-    if not _can_manage_members(current):
-        raise TenantPlatformError('İcazə yoxdur.')
-    try:target=int(telegram_id)
-    except (TypeError,ValueError):target=0
-    if target<=0 or not isinstance(numbers,list) or len(numbers)>10:
-        raise TenantPlatformError('WhatsApp nömrələri düzgün deyil.')
-    selected=[];seen=set()
-    for item in numbers:
-        if not isinstance(item,dict) or set(item)-{'phone','recognition_enabled'}:
-            raise TenantPlatformError('WhatsApp nömrələri düzgün deyil.')
-        digits=_whatsapp_digits(item.get('phone'))
-        if not digits:
-            raise TenantPlatformError('Nömrəni beynəlxalq formatda yazın; Azərbaycan üçün +994, 994 və ya 0 ilə başlayan lokal format uyğundur.')
-        if digits in seen:continue
-        seen.add(digits)
-        enabled=item.get('recognition_enabled',True)
-        if type(enabled) is not bool:raise TenantPlatformError('Nömrənin tanınma statusu düzgün deyil.')
-        selected.append((digits,enabled))
-    target_member=member(tenant_id,target)
-    if not target_member:
-        raise TenantPlatformError('Əməkdaş bu şirkətdə aktiv deyil.')
-    if current.get('role')!='owner' and target_member.get('role') in {'owner','admin'}:
-        raise TenantPlatformError('Administrator sahibin və ya başqa administratorun nömrələrini dəyişə bilməz.')
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            cur.execute('''SELECT phone_digits,telegram_id FROM saas_tenant_member_whatsapp_numbers
-              WHERE tenant_id=%s::uuid AND phone_digits=ANY(%s::text[]) FOR UPDATE''',
-              (tenant_id,[item[0] for item in selected]))
-            for row in cur.fetchall():
-                if int(row['telegram_id'])!=target:
-                    raise TenantPlatformError('Bu WhatsApp nömrəsi artıq başqa əməkdaşa məxsusdur.')
-            cur.execute('DELETE FROM saas_tenant_member_whatsapp_numbers WHERE tenant_id=%s::uuid AND telegram_id=%s',
-                        (tenant_id,target))
-            for digits,enabled in selected:
-                cur.execute('''INSERT INTO saas_tenant_member_whatsapp_numbers
-                  (tenant_id,telegram_id,phone_digits,recognition_enabled,created_by)
-                  VALUES(%s::uuid,%s,%s,%s,%s)''',(tenant_id,target,digits,enabled,int(owner_id)))
-            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-              VALUES(%s,%s::uuid,%s,'employee.whatsapp_numbers.updated','employee',%s,%s::jsonb)''',
-              (uuid.uuid4(),tenant_id,int(owner_id),str(target),_json({'number_count':len(selected)})))
-        conn.commit()
-    return [{'phone':'+'+digits,'recognition_enabled':enabled} for digits,enabled in selected]
+    """Compatible replacement; every successful write invalidates card versions."""
+    try: target = int(telegram_id)
+    except (TypeError, ValueError): target = 0
+    if target <= 0:
+        raise MemberCardError('member_card_invalid', fields={'telegram_id': 'invalid'})
+    selected = _normalize_numbers(numbers)
+    try:
+        with _connect() as conn:
+            _require_member_schema(conn)
+            with conn.cursor() as cur:
+                current, existing = _locked_members(cur, tenant_id, owner_id, target)
+                _protected_target(current, existing, require_active=True)
+                _replace_numbers(cur, tenant_id, owner_id, target, selected)
+                _bump_member(cur, tenant_id, target)
+                _audit_member(cur, tenant_id, owner_id, target, 'employee.whatsapp_numbers.updated',
+                              {'number_count': len(selected)})
+            conn.commit()
+    except UniqueViolation as exc:
+        _unique_error(exc)
+    return [{'phone': '+' + digits, 'recognition_enabled': enabled} for digits, enabled in selected]
 
 
 def add_member_whatsapp_number(*, tenant_id: str, owner_id: int, telegram_id: int, phone: str) -> dict:
-    """Add one explicitly attested employee number without replacing other numbers."""
-    current=member(tenant_id,owner_id)
-    if not _can_manage_members(current):
-        raise TenantPlatformError('İcazə yoxdur.')
-    try:target=int(telegram_id)
-    except (TypeError,ValueError):target=0
-    digits=_whatsapp_digits(phone)
-    if target<=0 or not digits:
-        raise TenantPlatformError('WhatsApp nömrələri düzgün deyil.')
-    target_member=member(tenant_id,target)
-    if not target_member:
-        raise TenantPlatformError('Əməkdaş bu şirkətdə aktiv deyil.')
-    if current.get('role')!='owner' and target_member.get('role') in {'owner','admin'}:
-        raise TenantPlatformError('Administrator sahibin və ya başqa administratorun nömrələrini dəyişə bilməz.')
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            cur.execute('''INSERT INTO saas_tenant_member_whatsapp_numbers
-              (tenant_id,telegram_id,phone_digits,recognition_enabled,created_by)
-              VALUES(%s::uuid,%s,%s,TRUE,%s)
-              ON CONFLICT(tenant_id,phone_digits) DO UPDATE
-                SET recognition_enabled=TRUE,updated_at=now()
-                WHERE saas_tenant_member_whatsapp_numbers.telegram_id=EXCLUDED.telegram_id
-              RETURNING telegram_id''',(tenant_id,target,digits,int(owner_id)))
-            if not cur.fetchone():
-                raise TenantPlatformError('Bu WhatsApp nömrəsi artıq başqa əməkdaşa məxsusdur.')
-            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-              VALUES(%s,%s::uuid,%s,'employee.whatsapp_number.attested','employee',%s,%s::jsonb)''',
-              (uuid.uuid4(),tenant_id,int(owner_id),str(target),_json({'recognition_enabled':True})))
-        conn.commit()
-    return {'phone':'+'+digits,'recognition_enabled':True}
-
-
-def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_name: str,
-                  role: str, permissions: list[str] | None = None) -> dict:
-    """Create or update an employee card keyed by their Telegram account ID.
-
-    This intentionally needs no invitation link: a person is admitted only
-    after Telegram proves that they own this exact numeric account ID.
-    """
-    current = member(tenant_id, owner_id)
-    if not _can_manage_members(current):
-        raise TenantPlatformError("İcazə yoxdur.")
+    """Add an explicitly attested number; keep participant-recognition idempotency."""
+    try: target = int(telegram_id)
+    except (TypeError, ValueError): target = 0
+    digits = _whatsapp_digits(phone)
+    if target <= 0 or not digits:
+        raise MemberCardError('member_card_invalid', fields={'whatsapp_numbers': 'invalid'})
     try:
-        target_id = int(telegram_id)
-    except (TypeError, ValueError):
-        target_id = 0
-    if target_id <= 0:
-        raise TenantPlatformError("Telegram ID düzgün deyil.")
-    name = str(display_name or "").strip()[:120]
+        with _connect() as conn:
+            _require_member_schema(conn)
+            with conn.cursor() as cur:
+                current, existing = _locked_members(cur, tenant_id, owner_id, target)
+                _protected_target(current, existing, require_active=True)
+                cur.execute('''INSERT INTO saas_tenant_member_whatsapp_numbers
+                  (tenant_id,telegram_id,phone_digits,recognition_enabled,created_by)
+                  VALUES(%s::uuid,%s,%s,TRUE,%s)
+                  ON CONFLICT(tenant_id,phone_digits) DO UPDATE SET recognition_enabled=TRUE,updated_at=now()
+                  WHERE saas_tenant_member_whatsapp_numbers.telegram_id=EXCLUDED.telegram_id RETURNING telegram_id''',
+                  (tenant_id, target, digits, int(owner_id)))
+                if not cur.fetchone():
+                    raise MemberCardError('member_duplicate', 409, fields={'whatsapp_numbers': 'duplicate'})
+                _bump_member(cur, tenant_id, target)
+                _audit_member(cur, tenant_id, owner_id, target, 'employee.whatsapp_number.attested',
+                              {'recognition_enabled': True})
+            conn.commit()
+    except UniqueViolation as exc:
+        _unique_error(exc)
+    return {'phone': '+' + digits, 'recognition_enabled': True}
+
+
+def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_name: str = '',
+                  role: str = 'worker', permissions: list[str] | None = None,
+                  expected_version=None, changes=None) -> dict:
+    """Keep legacy upsert compatible; the new card explicitly selects strict CAS."""
+    try: target = int(telegram_id)
+    except (TypeError, ValueError): target = 0
+    if target <= 0:
+        raise MemberCardError('member_card_invalid', fields={'telegram_id': 'invalid'})
+    if changes is not None or expected_version is not None:
+        return _strict_card_update(tenant_id=tenant_id, owner_id=owner_id, telegram_id=target,
+                                   expected_version=expected_version, changes=changes)
+    name = str(display_name or '').strip()[:120]
     if not name:
-        raise TenantPlatformError("Əməkdaşın adını yazın.")
-    is_owner = target_id == int(current["telegram_id"])
-    requested_role = str(role or "")
-    selected_role = _role(requested_role, owner=is_owner)
-    selected_permissions = _permissions(permissions, selected_role)
-    existing_member = member(tenant_id, target_id)
-    # A newer UI may not know a historical, now-retired grant.  Keep it
-    # visible/read-only and preserve it during an otherwise unrelated edit;
-    # authorization still fails closed because TenantPolicy does not infer it.
-    if existing_member and selected_role != 'owner':
-        # Keep any grant the current editor cannot safely represent.  Only the
-        # five explicitly rendered checkboxes may be changed by this update.
-        preserved = [item for item in (existing_member.get('permissions') or [])
-                     if item not in _EDITOR_PERMISSION_KEYS]
-        selected_permissions = list(dict.fromkeys(selected_permissions + preserved))
-        # Historical role keys remain readable.  Re-saving an untouched
-        # legacy role must not silently turn it into the normalization default.
-        existing_role = str(existing_member.get('role') or '')
-        if existing_role not in _RECOGNIZED_ROLES and requested_role == existing_role:
-            selected_role = existing_role
-    existed = existing_member is not None
-    if current.get('role') != 'owner':
-        if selected_role in {'owner', 'admin'} or set(selected_permissions) - set(current.get('permissions') or []):
-            raise TenantPlatformError('Administrator yalnız öz hüquqları daxilində əməkdaş idarə edə bilər.')
-        if existing_member and existing_member.get('role') in {'owner', 'admin'}:
-            raise TenantPlatformError('Administrator sahibin və ya başqa administratorun rolunu dəyişə bilməz.')
+        raise MemberCardError('member_card_invalid', fields={'display_name': 'invalid'})
     with _connect() as conn:
-        _ensure_schema(conn)
+        _require_member_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO saas_tenant_members (tenant_id, telegram_id, display_name, role, permissions, active, invited_by)
-                VALUES (%s::uuid, %s, %s, %s, %s::jsonb, TRUE, %s)
-                ON CONFLICT (tenant_id, telegram_id) DO UPDATE SET
-                    display_name = EXCLUDED.display_name,
-                    role = CASE WHEN saas_tenant_members.role = 'owner' THEN 'owner' ELSE EXCLUDED.role END,
-                    permissions = CASE WHEN saas_tenant_members.role = 'owner' THEN saas_tenant_members.permissions ELSE EXCLUDED.permissions END,
-                    active = TRUE,
-                    updated_at = now()
-                RETURNING tenant_id, telegram_id, display_name, role, permissions, active, created_at, updated_at
-            """, (tenant_id, target_id, name, selected_role, _json(selected_permissions), int(owner_id)))
+            current, existing = _locked_members(cur, tenant_id, owner_id, target)
+            if existing:
+                _protected_target(current, existing)
+            selected_role, selected_permissions = _selected_membership(current, existing, str(role or ''),
+                                                                       permissions, target=target)
+            if existing:
+                cur.execute('''UPDATE saas_tenant_members SET display_name=%s,
+                  role=CASE WHEN role='owner' THEN 'owner' ELSE %s END,
+                  permissions=CASE WHEN role='owner' THEN permissions ELSE %s::jsonb END,
+                  active=TRUE,updated_at=GREATEST(clock_timestamp(),updated_at+interval '1 microsecond')
+                  WHERE tenant_id=%s::uuid AND telegram_id=%s RETURNING *''',
+                  (name, selected_role, _json(selected_permissions), tenant_id, target))
+            else:
+                # A concurrently created protected membership must not be
+                # overwritten through a previously absent-target snapshot.
+                cur.execute('''INSERT INTO saas_tenant_members
+                  (tenant_id,telegram_id,display_name,role,permissions,active,invited_by)
+                  VALUES(%s::uuid,%s,%s,%s,%s::jsonb,TRUE,%s)
+                  ON CONFLICT(tenant_id,telegram_id) DO NOTHING RETURNING *''',
+                  (tenant_id, target, name, selected_role, _json(selected_permissions), int(owner_id)))
             row = cur.fetchone()
-            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-                           VALUES(%s,%s::uuid,%s,%s,'employee',%s,%s::jsonb)''',
-                        (uuid.uuid4(),tenant_id,int(owner_id),'employee.updated' if existed else 'employee.created',
-                         str(target_id),_json({'role':selected_role,'permission_count':len(selected_permissions)})))
+            if not row:
+                raise MemberCardError('member_card_conflict', 409)
+            _audit_member(cur, tenant_id, owner_id, target, 'employee.updated' if existing else 'employee.created',
+                          {'role': selected_role, 'permission_count': len(selected_permissions)})
         conn.commit()
     return _member_payload(row)
 
@@ -338,70 +511,85 @@ def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_na
 def provision_employee_account(*, tenant_id: str, owner_id: int, first_name: str, last_name: str,
                                login: str, password: str, role: str, permissions: list[str],
                                password_confirm: str, email: str = '', phone: str = '') -> dict:
-    """Owner-created login account and membership, atomically and without invites."""
-    current=member(tenant_id,owner_id)
-    if not _can_manage_members(current): raise TenantPlatformError('İcazə yoxdur.')
-    from tenant_email_auth import _hash_password, _password
-    username=re.sub(r'[^a-zA-Z0-9_.-]','',str(login or '').strip()).casefold()
-    if not re.fullmatch(r'[a-z0-9_.-]{3,64}',username): raise TenantPlatformError('Login 3–64 hərfdən ibarət olmalıdır.')
-    plain=_password(password)
+    """Create a new global account and tenant membership, never merge an account."""
+    from tenant_email_auth import _hash_password, _password, _email
+    username = re.sub(r'[^a-zA-Z0-9_.-]', '', str(login or '').strip()).casefold()
+    if not re.fullmatch(r'[a-z0-9_.-]{3,64}', username):
+        raise MemberCardError('member_card_invalid', fields={'login': 'invalid'})
+    try: plain = _password(password)
+    except TenantPlatformError:
+        raise MemberCardError('member_card_invalid', fields={'password': 'invalid'}) from None
     if not hmac.compare_digest(plain, str(password_confirm or '')):
-        raise TenantPlatformError('Parollar eyni deyil.')
-    first=' '.join(str(first_name or '').split())[:120];last=' '.join(str(last_name or '').split())[:120]
-    if len(first)<2 or len(last)<2: raise TenantPlatformError('Ad və soyad yazın.')
-    selected_role=_role(str(role or 'worker'));selected_permissions=_permissions(permissions,selected_role)
-    if current.get('role')!='owner' and (selected_role in {'owner','admin'} or set(selected_permissions)-set(current.get('permissions') or [])):
-        raise TenantPlatformError('Administrator yalnız öz hüquqları daxilində əməkdaş yarada bilər.')
-    address=str(email or '').strip().casefold() or None
+        raise MemberCardError('member_card_invalid', fields={'confirm_password': 'invalid'})
+    first = ' '.join(str(first_name or '').split())[:120]
+    last = ' '.join(str(last_name or '').split())[:120]
+    fields = {key: 'invalid' for key, value in [('first_name', first), ('last_name', last)] if len(value) < 2}
+    if fields:
+        raise MemberCardError('member_card_invalid', fields=fields)
+    address = str(email or '').strip().casefold() or None
     if address:
-        from tenant_email_auth import _email
-        address=_email(address)
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            # Keep these checks lockable. PostgreSQL rejects FOR UPDATE on a
-            # UNION, and the unique indexes remain the final race protection.
-            cur.execute('''SELECT 1 FROM saas_auth_users WHERE lower(login)=lower(%s)
-              OR (%s::text IS NOT NULL AND lower(email)=lower(%s)) FOR UPDATE''',(username,address,address))
-            if cur.fetchone(): raise TenantPlatformError('Login və ya email artıq istifadə olunur.')
-            cur.execute('SELECT 1 FROM saas_user_profiles WHERE lower(login)=lower(%s) FOR UPDATE',(username,))
-            if cur.fetchone(): raise TenantPlatformError('Login və ya email artıq istifadə olunur.')
-            cur.execute("SELECT nextval('saas_auth_actor_seq') AS actor_id");actor=int(cur.fetchone()['actor_id']);uid=uuid.uuid4();display=(first+' '+last).strip()
-            cur.execute('''INSERT INTO saas_auth_users(id,actor_id,email,phone,display_name,first_name,last_name,login,password_hash,tenant_id,verified_at,force_password_change)
-              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::uuid,now(),TRUE)''',(uid,actor,address,str(phone or '')[:40],display,first,last,username,_hash_password(plain),tenant_id))
-            cur.execute('''INSERT INTO saas_user_profiles(actor_id,first_name,last_name,phone,login) VALUES(%s,%s,%s,%s,%s)''',(actor,first,last,str(phone or '')[:40],username))
-            cur.execute('''INSERT INTO saas_tenant_members(tenant_id,telegram_id,display_name,role,permissions,active,invited_by)
-              VALUES(%s::uuid,%s,%s,%s,%s::jsonb,TRUE,%s)''',(tenant_id,actor,display,selected_role,_json(selected_permissions),owner_id))
-            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-              VALUES(%s,%s::uuid,%s,'employee.provisioned','employee',%s,%s::jsonb)''',(uuid.uuid4(),tenant_id,owner_id,str(actor),_json({'role':selected_role,'login':username,'has_email':bool(address)})))
-        conn.commit()
-    return {'actor_id':actor,'display_name':display,'login':username,'role':selected_role,'permissions':selected_permissions,'force_password_change':True}
+        try: address = _email(address)
+        except TenantPlatformError:
+            raise MemberCardError('member_card_invalid', fields={'email': 'invalid'}) from None
+    selected_role = _role(str(role or 'worker'))
+    selected_permissions = _permissions(permissions, selected_role)
+    hashed = _hash_password(plain)
+    try:
+        with _connect() as conn:
+            _require_member_schema(conn)
+            with conn.cursor() as cur:
+                current, _ = _locked_members(cur, tenant_id, owner_id)
+                if current.get('role') != 'owner' and (selected_role in {'owner', 'admin'}
+                        or set(selected_permissions) - set(current.get('permissions') or [])):
+                    raise MemberCardError('member_field_read_only', 403, fields={'permissions': 'permission_scope'})
+                cur.execute('''SELECT EXISTS(SELECT 1 FROM saas_auth_users WHERE lower(login)=lower(%s))
+                  OR EXISTS(SELECT 1 FROM saas_user_profiles WHERE lower(login)=lower(%s)) AS login_taken,
+                  EXISTS(SELECT 1 FROM saas_auth_users WHERE %s::text IS NOT NULL AND lower(email)=lower(%s)) AS email_taken''',
+                  (username, username, address, address))
+                duplicate = cur.fetchone()
+                fields = {key: 'duplicate' for key in ('login', 'email') if duplicate.get(key + '_taken')}
+                if fields:
+                    raise MemberCardError('member_duplicate', 409, fields=fields)
+                cur.execute("SELECT nextval('saas_auth_actor_seq') AS actor_id")
+                actor = int(cur.fetchone()['actor_id']); uid = uuid.uuid4(); display = (first + ' ' + last).strip()
+                cur.execute('''INSERT INTO saas_auth_users
+                  (id,actor_id,email,phone,display_name,first_name,last_name,login,password_hash,tenant_id,verified_at,force_password_change)
+                  VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::uuid,now(),TRUE)''',
+                  (uid, actor, address, str(phone or '')[:40], display, first, last, username, hashed, tenant_id))
+                cur.execute('''INSERT INTO saas_user_profiles(actor_id,first_name,last_name,phone,login)
+                  VALUES(%s,%s,%s,%s,%s)''', (actor, first, last, str(phone or '')[:40], username))
+                cur.execute('''INSERT INTO saas_tenant_members
+                  (tenant_id,telegram_id,display_name,role,permissions,active,invited_by)
+                  VALUES(%s::uuid,%s,%s,%s,%s::jsonb,TRUE,%s) RETURNING updated_at''',
+                  (tenant_id, actor, display, selected_role, _json(selected_permissions), owner_id))
+                version = _version(cur.fetchone())
+                _audit_member(cur, tenant_id, owner_id, actor, 'employee.provisioned',
+                              {'role': selected_role, 'login': username, 'has_email': bool(address)})
+            conn.commit()
+    except UniqueViolation as exc:
+        _unique_error(exc)
+    return {'actor_id': actor, 'display_name': display, 'login': username, 'role': selected_role,
+            'permissions': selected_permissions, 'force_password_change': True, 'card_version': version}
 
 
 def deactivate_member(*, tenant_id: str, owner_id: int, telegram_id: int) -> dict:
-    """Disable a former employee without deleting their audit record."""
-    current = member(tenant_id, owner_id)
-    if not _can_manage_members(current):
-        raise TenantPlatformError("İcazə yoxdur.")
-    if int(telegram_id) == int(current["telegram_id"]):
-        raise TenantPlatformError("Öz girişinizi bağlaya bilməzsiniz.")
+    """Compatible explicit deactivation, with fresh locked actor/target guards."""
     with _connect() as conn:
-        _ensure_schema(conn)
+        _require_member_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE saas_tenant_members SET active = FALSE, updated_at = now()
-                WHERE tenant_id = %s::uuid AND telegram_id = %s AND role <> 'owner'
-                  AND (%s='owner' OR role NOT IN ('admin'))
-                RETURNING tenant_id, telegram_id, display_name, role, permissions, active, created_at, updated_at
-            """, (tenant_id, int(telegram_id), current.get('role')))
+            target = int(telegram_id)
+            current, existing = _locked_members(cur, tenant_id, owner_id, target)
+            _protected_target(current, existing)
+            if target == int(owner_id):
+                raise MemberCardError('member_field_read_only', 403, fields={'active': 'self_deactivation_forbidden'})
+            if existing.get('role') == 'owner':
+                raise MemberCardError('member_field_read_only', 403, fields={'active': 'owner_protected'})
+            cur.execute('''UPDATE saas_tenant_members SET active=FALSE,
+              updated_at=GREATEST(clock_timestamp(),updated_at+interval '1 microsecond')
+              WHERE tenant_id=%s::uuid AND telegram_id=%s RETURNING *''', (tenant_id, target))
             row = cur.fetchone()
-            if row:
-                cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-                               VALUES(%s,%s::uuid,%s,'employee.deactivated','employee',%s,'{}'::jsonb)''',
-                            (uuid.uuid4(),tenant_id,int(owner_id),str(telegram_id)))
+            _audit_member(cur, tenant_id, owner_id, target, 'employee.deactivated', {})
         conn.commit()
-    if not row:
-        raise TenantPlatformError("Əməkdaş tapılmadı.")
     return _member_payload(row)
 
 
