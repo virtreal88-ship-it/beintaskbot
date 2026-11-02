@@ -93,7 +93,6 @@ def own_receipt(session, lead_id, request_id):
 
 
 def can_send(session, lead_id):
-    from tenant_ai_group_coordination import group_jid
     try:
         lead_id = int(lead_id)
         if not 0 < lead_id < 2**63:
@@ -103,7 +102,7 @@ def can_send(session, lead_id):
     with _connect() as conn:
         with conn.cursor() as cur:
             _, connection, _ = authority(cur, session, lead_id)
-            return connection[0] == 'connect' and not group_jid(connection[2])
+            return connection[0] == 'connect' and bool(re.fullmatch(r'[0-9]{5,22}@(s\.whatsapp\.net|lid)',connection[2]))
 
 
 def record_acceptance(session, item, receipt):
@@ -172,14 +171,13 @@ def record_acceptance(session, item, receipt):
 
 
 async def run(session, command, content, logger):
-    from tenant_ai_group_coordination import group_jid
     item = await asyncio.to_thread(reserve, session, command)
     if 'cached_result' in item:
         return await check(session, command['lead_id'], command['request_id'])
     if item['connection'][0] != 'connect':
         await asyncio.to_thread(finish, item, 'blocked')
         raise TenantLinearError('Səs yalnız Connect dialoqunda göndərilə bilər.', 409)
-    if group_jid(item['connection'][2]):
+    if not re.fullmatch(r'[0-9]{5,22}@(s\.whatsapp\.net|lid)',item['connection'][2]):
         await asyncio.to_thread(finish, item, 'blocked')
         raise TenantLinearError('Qrup dialoqlarında səs göndərilməsi hələ əlçatan deyil.', 409)
     started = False

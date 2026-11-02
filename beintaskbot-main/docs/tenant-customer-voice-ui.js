@@ -10,7 +10,7 @@
       denied:'Доступ к микрофону запрещён. Разрешите микрофон в настройках сайта браузера и попробуйте снова.',
       unavailable:'Микрофон недоступен. Проверьте устройство и разрешения браузера.',unsupported:'Этот браузер не поддерживает безопасную запись. Попробуйте обновить браузер.',
       busy:'Микрофон уже используется в другой вкладке или голосовом режиме.',storage:'Не удалось сохранить запись на устройстве. Отправка недоступна.',limit:'Превышен размер записи. Запишите более короткое сообщение.',error:'Не удалось записать или проверить голосовое сообщение.',
-      conflict:'В этом диалоге уже есть другая сохранённая запись. Откройте её перед продолжением.'},
+      conflict:'В этом диалоге уже есть другая сохранённая запись. Откройте её перед продолжением.',disabled:'Отправка голосовых временно отключена.'},
     az:{mic:'Səs yaz',stop:'Dayandır',cancel:'Ləğv et',discard:'Yazını sil',retrySave:'Yazını yenidən saxla',send:'Səsi göndər',check:'Vəziyyəti yoxla',
       requesting:'Mikrofon icazəsi gözlənilir…',recording:'Yazılır',saving:'Yazı cihazda saxlanılır…',draft:'Göndərməzdən əvvəl dinləyin. Yazı göndərilənə, silinənə və ya hesabdan çıxana qədər cihazda saxlanılır.',
       sending:'Göndərilir…',unknown:'Nəticə məlum deyil. Təkrar göndərmə bağlıdır; vəziyyəti yoxlayın.',accepted:'Provayder qəbul etdi. Müştəriyə çatdırılma hələ təsdiqlənməyib.',
@@ -18,7 +18,7 @@
       denied:'Mikrofon icazəsi verilməyib. Brauzerdə sayt üçün mikrofon icazəsini açıb yenidən yoxlayın.',
       unavailable:'Mikrofon əlçatan deyil. Cihazı və brauzer icazələrini yoxlayın.',unsupported:'Bu brauzer təhlükəsiz səs yazısını dəstəkləmir. Brauzeri yeniləyin.',
       busy:'Mikrofon başqa vərəqdə və ya səs rejimində istifadə olunur.',storage:'Yazını cihazda saxlamaq mümkün olmadı. Göndərmə əlçatan deyil.',limit:'Yazının ölçüsü böyükdür. Daha qısa səs yazın.',error:'Səsi yazmaq və ya vəziyyətini yoxlamaq mümkün olmadı.',
-      conflict:'Bu dialoq üçün başqa saxlanmış yazı var. Davam etməzdən əvvəl onu açın.'},
+      conflict:'Bu dialoq üçün başqa saxlanmış yazı var. Davam etməzdən əvvəl onu açın.',disabled:'Səs göndərilməsi müvəqqəti bağlıdır.'},
     en:{mic:'Record voice message',stop:'Stop',cancel:'Cancel',discard:'Delete recording',retrySave:'Try saving again',send:'Send voice message',check:'Check status',
       requesting:'Waiting for microphone permission…',recording:'Recording',saving:'Saving recording on this device…',draft:'Listen before sending. The recording stays on this device until sent, deleted or you sign out.',
       sending:'Sending…',unknown:'The outcome is unknown. Resending is disabled; check the status.',accepted:'The provider accepted the message. Customer delivery is not yet confirmed.',
@@ -26,7 +26,7 @@
       denied:'Microphone access is blocked. Allow the microphone in your browser’s site settings and try again.',
       unavailable:'Microphone unavailable. Check the device and browser permissions.',unsupported:'This browser cannot record safely. Try updating your browser.',
       busy:'The microphone is already in use in another tab or voice mode.',storage:'The recording could not be saved on this device. Sending is unavailable.',limit:'The recording is too large. Record a shorter message.',error:'Could not record or check the voice message.',
-      conflict:'Another recording is saved for this dialog. Open it before continuing.'}
+      conflict:'Another recording is saved for this dialog. Open it before continuing.',disabled:'Voice sending is temporarily unavailable.'}
   };
   const lang=()=>words[window.tenantI18n?.language]||words.en;
   const text=key=>lang()[key]||lang().error;
@@ -48,9 +48,9 @@
     if(!same(session))return;
     const snap=session.recorder.snapshot(), entry=session.entry, recording=['requesting','recording','stopping'].includes(snap.state);
     const unstored=snap.state==='ready'&&!entry;
-    session.mic.hidden=recording||unstored||!!entry||session.saving;
+    session.mic.hidden=!session.maySend||recording||unstored||!!entry||session.saving;
     session.stop.hidden=snap.state!=='recording';session.cancel.hidden=!recording;
-    session.discard.hidden=!entry||entry.state!=='draft';session.send.hidden=!entry||entry.state!=='draft';
+    session.discard.hidden=!entry||entry.state!=='draft';session.send.hidden=!session.maySend||!entry||entry.state!=='draft';
     session.retrySave.hidden=!unstored;session.discardUnstored.hidden=!unstored;
     session.check.hidden=!entry||entry.state==='draft';
     for(const node of [session.mic,session.stop,session.cancel,session.discard,session.retrySave,session.discardUnstored,session.send,session.check]) node.disabled=!!session.busy||!!session.saving;
@@ -96,8 +96,8 @@
     session.mic?.remove();session.host?.remove();
   }
   function node(tag,label,handler){const n=document.createElement(tag);if(label)n.textContent=text(label);if(tag==='button'){n.type='button';n.className='outline';n.onclick=handler;}return n;}
-  function create(scopeValue){
-    const session={scope:scopeValue,entry:null,busy:false,saving:false,message:'',release:null,host:node('section'),url:'',renderedId:''};
+  function create(scopeValue,maySend){
+    const session={scope:scopeValue,maySend,entry:null,busy:false,saving:false,message:'',release:null,host:node('section'),url:'',renderedId:''};
     session.host.className='operator-customer-voice';session.host.setAttribute('aria-label',text('mic'));session.host.style.cssText='display:grid;gap:8px;min-width:0;margin-top:8px';
     session.mic=node('button','mic',()=>void start(session));session.mic.classList.add('operator-voice-mic');session.mic.textContent='🎙';session.mic.title=text('mic');session.mic.setAttribute('aria-label',text('mic'));session.mic.style.cssText='min-width:44px;min-height:44px';
     session.stop=node('button','stop',()=>session.recorder.stop());session.cancel=node('button','cancel',()=>{session.message='';session.recorder.cancel();draw(session);});
@@ -110,13 +110,33 @@
     actions.append(session.stop,session.cancel,session.discard,session.retrySave,session.discardUnstored,session.send,session.check,session.duration);
     session.host.append(session.audio,actions,session.status);
     session.recorder=window.createTenantVoiceRecorder({onChange:snapshot=>recorderChanged(session,snapshot)});
-    session.timer=setInterval(()=>{if(session.recorder.snapshot().state==='recording')draw(session);},1000);
+    session.timer=setInterval(()=>{const state=session.recorder.snapshot().state;if(state==='recording')draw(session);
+      const interval=['recording','requesting'].includes(state)?5000:30000;
+      if(Date.now()-(session.capabilityCheckedAt||0)>interval)void refreshCapability(session);},1000);
     return session;
+  }
+  async function refreshCapability(session){
+    if(session.capabilityPromise)return session.capabilityPromise;
+    session.capabilityPromise=(async()=>{
+      const query=new URLSearchParams({lead_id:session.scope.lead,expected_tenant_id:session.scope.tenant,expected_user_id:session.scope.user});
+      const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),8000);
+      try{
+        const response=await fetch('/api/platform/crm/chat/voice-capability?'+query,{credentials:'same-origin',cache:'no-store',signal:controller.signal}),result=await readJson(response);
+        if(!same(session))return false;
+        if(response.status===401||(response.status===409&&result.error_code==='voice_identity_changed')){await forgetUser();return false;}
+        if(response.status===403){stopCurrent(true);return false;}
+        session.maySend=!!(response.ok&&result.enabled===true);session.capabilityCheckedAt=Date.now();
+      }catch{if(!same(session))return false;session.maySend=false;session.capabilityCheckedAt=Date.now();}finally{clearTimeout(timeout);}
+      if(!session.maySend){const state=session.recorder.snapshot().state;if(state==='recording')session.recorder.stop();else if(state==='requesting')session.recorder.cancel();session.message=text('disabled');}
+      draw(session);return session.maySend;
+    })();
+    try{return await session.capabilityPromise;}finally{session.capabilityPromise=null;}
   }
   async function start(session){
     if(!same(session)||session.busy||session.entry)return;
     session.busy=true;session.message='';draw(session);
     try{
+      if(!await refreshCapability(session))return;
       if(!voiceBroadcast)throw Error('microphone_exclusion_unsupported');
       session.epoch=await store.activeEpoch(session.scope.tenant,session.scope.user);
       if(!same(session))return;
@@ -143,9 +163,10 @@
     draw(session);if(same(session))await operator()?.openDialog?.({...operator().currentDialog},true);
   }
   async function send(session){
-    const entry=session.entry;if(!same(session)||!entry||entry.state!=='draft'||session.busy)return;
+    const entry=session.entry;if(!same(session)||!session.maySend||!entry||entry.state!=='draft'||session.busy)return;
     session.busy=true;session.message='';draw(session);
     try{
+      if(!await refreshCapability(session))return;
       if(!await store.claim(session.scope.key,entry.request_id)){session.entry=await store.get(session.scope.key)||null;session.message=text('unknown');return;}
       session.entry={...entry,state:'sending'};draw(session);
       const command={request_id:entry.request_id,lead_id:Number(session.scope.lead),expected_tenant_id:session.scope.tenant,expected_user_id:session.scope.user};
@@ -154,6 +175,12 @@
       try{response=await fetch('/api/platform/crm/chat/send-voice',{method:'POST',credentials:'same-origin',body:data});result=await readJson(response);}
       catch{await store.markUnknown(session.scope.key,entry.request_id);session.entry=await store.get(session.scope.key)||null;session.message=text('unknown');return;}
       if(response.ok&&result.success&&result.provider_accepted===true){await accepted(session,entry,result);return;}
+      if(response.status===401||response.status===403||(response.status===409&&result.error_code==='voice_identity_changed')){
+        if(result.keep_request===false)await store.releaseDraft(session.scope.key,entry.request_id,crypto.randomUUID());
+        else await store.markUnknown(session.scope.key,entry.request_id);
+        if(!same(session))return;
+        if(response.status===401||response.status===409)await forgetUser();else stopCurrent(true);return;
+      }
       if(!response.ok&&response.status<500&&result.keep_request===false){await store.releaseDraft(session.scope.key,entry.request_id,crypto.randomUUID());session.entry=await store.get(session.scope.key)||null;session.message=result.error||text('error');return;}
       await store.markUnknown(session.scope.key,entry.request_id);session.entry=await store.get(session.scope.key)||null;session.message=text('unknown');
     }catch{session.message=text('storage');}
@@ -165,6 +192,9 @@
     try{
       const query=new URLSearchParams({lead_id:session.scope.lead,request_id:entry.request_id,expected_tenant_id:session.scope.tenant,expected_user_id:session.scope.user});
       const response=await fetch('/api/platform/crm/chat/voice-receipt?'+query,{credentials:'same-origin',cache:'no-store'}),result=await readJson(response);
+      if(!same(session)){if(response.ok&&result.success&&result.provider_accepted===true)await store.removeAccepted(session.scope.key,entry.request_id);return;}
+      if(response.status===401||(response.status===409&&result.error_code==='voice_identity_changed')){await forgetUser();return;}
+      if(response.status===403){stopCurrent(true);return;}
       if(response.ok&&result.success&&result.provider_accepted===true)await accepted(session,entry,result);
       else session.message=text('unknown');
     }catch{session.message=text('unknown');}finally{session.busy=false;draw(session);}
@@ -198,15 +228,16 @@
     const route=scope(),actions=document.querySelector('.operator-composer-actions'),composer=document.querySelector('.operator-composer'),sendButton=document.getElementById('sendChat');
     if(!route||!actions||!composer||!sendButton||sendButton.disabled){if(current){const old=current;current=null;closeSession(old);}return;}
     lastUser={tenant:route.tenant,user:route.user};
-    if(current?.scope.key===route.key&&current.scope.policy===route.policy){actions.insertBefore(current.mic,sendButton);composer.append(current.host);draw(current);scanStatuses(current);return;}
+    if(current?.scope.key===route.key&&current.scope.policy===route.policy){actions.insertBefore(current.mic,sendButton);composer.append(current.host);draw(current);scanStatuses(current);if(Date.now()-(current.capabilityCheckedAt||0)>30000)void refreshCapability(current);return;}
     const token=++revision;if(current){const old=current;current=null;closeSession(old);}
     const query=new URLSearchParams({lead_id:route.lead,expected_tenant_id:route.tenant,expected_user_id:route.user});
     try{
       const ownerVersion=await store.ownerVersion();
       const response=await fetch('/api/platform/crm/chat/voice-capability?'+query,{credentials:'same-origin',cache:'no-store'}),result=await readJson(response);
-      if(token!==revision||scope()?.key!==route.key||scope()?.policy!==route.policy||!response.ok||!result.enabled)return;
+      if(token!==revision||scope()?.key!==route.key||scope()?.policy!==route.policy||!response.ok)return;
+      if(!result.enabled&&(!result.recovery_enabled||!await store.get(route.key)))return;
       if(!await store.activate(route.tenant,route.user,ownerVersion)||token!==revision)return;
-      const session=create(route);session.saving=true;current=session;
+      const session=create(route,result.enabled===true);session.saving=true;current=session;
       actions.insertBefore(session.mic,sendButton);composer.append(session.host);draw(session);
       try{voiceBroadcast?.postMessage({active:true,tenant:route.tenant,user:route.user});session.entry=await store.get(route.key)||null;}
       catch{session.message=text('storage');}
@@ -223,7 +254,7 @@
   document.addEventListener('tenant-auth-invalid',()=>{void forgetUser().catch(()=>{});});
   document.addEventListener('tenant-profile',()=>{const active=scope();if(lastUser&&active&&(active.tenant!==lastUser.tenant||active.user!==lastUser.user))void forgetUser().catch(()=>{});else if(current&&(active?.key!==current.scope.key||active?.policy!==current.scope.policy))stopCurrent();});
   document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='dialogs')stopCurrent();});
-  document.addEventListener('visibilitychange',()=>{if(document.hidden&&current?.recorder.snapshot().state==='recording')current.recorder.stop();});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden&&current?.recorder.snapshot().state==='recording')current.recorder.stop();else if(!document.hidden&&current)void refreshCapability(current);});
   window.addEventListener('pagehide',()=>{if(current?.recorder.snapshot().state==='recording')current.recorder.stop();});
   void attach();
 })();

@@ -42,7 +42,8 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.request.headers = {'Origin':'https://crm.pro.az'}
         raw = json.dumps({**self.data,'expected_tenant_id':'other'}).encode()
         self.reader.next.side_effect = [Part('command',[raw]),self.file,None]
-        self.assertEqual((await self.handle(self.request))['status'],409)
+        changed=await self.handle(self.request);self.assertEqual(changed['status'],409)
+        self.assertEqual(changed['data']['error_code'],'voice_identity_changed')
         self.can.assert_not_called(); self.prepare.assert_not_called(); self.send.assert_not_awaited()
 
     async def test_denied_scope_and_oversize_never_decode(self):
@@ -56,3 +57,28 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.mod.handler.__globals__['enabled']=lambda:False
         self.assertEqual((await self.handle(self.request))['status'],404)
         self.request.multipart.assert_not_awaited(); self.send.assert_not_awaited()
+
+    async def test_disabled_feature_keeps_authorized_receipt_recovery(self):
+        scope={'lead_id':'7','request_id':'synthetic','message_row_id':'row',
+               'expected_tenant_id':'company-a','expected_user_id':'20'}
+        request=SimpleNamespace(query=scope)
+        globals_=self.mod.receipt_handler.__globals__;globals_['enabled']=lambda:False
+        lookup=AsyncMock(return_value={'state':'unknown'});visible=AsyncMock(return_value={'delivery_state':'sent'})
+        globals_['check']=lookup;globals_['check_visible']=visible
+        receipt=await self.mod.receipt_handler(lambda _:self.session,Mock())(request)
+        status=await self.mod.status_handler(lambda _:self.session,Mock())(request)
+        capability=await self.mod.capability_handler(lambda _:self.session,Mock())(request)
+        self.assertEqual(receipt['data']['state'],'unknown');self.assertEqual(status['data']['delivery_state'],'sent')
+        self.assertFalse(capability['data']['enabled']);self.assertTrue(capability['data']['recovery_enabled'])
+        lookup.assert_awaited_once();visible.assert_awaited_once()
+        scope['expected_tenant_id']='other'
+        mismatch=await self.mod.receipt_handler(lambda _:self.session,Mock())(request)
+        self.assertEqual(mismatch['status'],409);self.assertEqual(mismatch['data']['error_code'],'voice_identity_changed')
+
+    async def test_expired_session_uses_401_for_all_voice_endpoints(self):
+        request=SimpleNamespace(query={'expected_tenant_id':'company-a','expected_user_id':'20','lead_id':'7'})
+        globals_=self.mod.handler.__globals__;globals_['enabled']=lambda:True
+        handlers=[self.mod.handler(lambda _:None,'https://crm.pro.az',Mock()),self.mod.receipt_handler(lambda _:None,Mock()),
+                  self.mod.status_handler(lambda _:None,Mock()),self.mod.capability_handler(lambda _:None,Mock())]
+        for handler in handlers:
+            with self.subTest(handler=handler):self.assertEqual((await handler(request))['status'],401)

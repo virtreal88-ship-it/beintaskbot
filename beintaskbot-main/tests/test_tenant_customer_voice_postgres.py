@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 import psycopg
 from psycopg.rows import dict_row
 from tenant_customer_voice_service import record_acceptance, visible_receipt, save_visible_status
+from tenant_connect_transport import _pause_unverified_outbound_audio
 from tenant_linear_policy import TenantLinearError
 
 BASE = os.environ.get('VOICE_TEST_POSTGRES_URL')
@@ -43,6 +44,11 @@ class VoiceHistoryPostgres(unittest.TestCase):
                 UNIQUE(tenant_id,external_id))''')
             conn.execute('''CREATE TABLE saas_tenant_audit_events(id uuid,tenant_id uuid,actor_telegram_id bigint,action text,
                 entity_type text,entity_id text,payload jsonb)''')
+            conn.execute('''CREATE TABLE saas_ai_conversation_state(tenant_id uuid,provider text,channel_id text,conversation_id text,
+                state text,reason text,revision int default 1,updated_at timestamptz default now(),
+                UNIQUE(tenant_id,provider,channel_id,conversation_id))''')
+            conn.execute('''CREATE TABLE saas_ai_agent_jobs(tenant_id uuid,provider text,channel_id text,conversation_id text,
+                state text,lease_token uuid,lease_until timestamptz,error_code text,updated_at timestamptz default now())''')
             conn.commit()
 
     @classmethod
@@ -53,7 +59,7 @@ class VoiceHistoryPostgres(unittest.TestCase):
     def setUp(self):
         self.factory = lambda: psycopg.connect(self.dsn,row_factory=dict_row)
         with self.factory() as conn:
-            conn.execute('TRUNCATE saas_chat_send_receipts,saas_crm_messages,saas_tenant_audit_events')
+            conn.execute('TRUNCATE saas_chat_send_receipts,saas_crm_messages,saas_tenant_audit_events,saas_ai_conversation_state,saas_ai_agent_jobs')
             conn.execute('INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,state,route) VALUES(%s,%s,%s,%s,%s,%s::jsonb)',
                          (TENANT,20,REQUEST,7,'unknown',json.dumps({'voice_protocol':True,'channel_id':CHANNEL,'conversation_id':JID})))
             conn.commit()
@@ -79,6 +85,42 @@ class VoiceHistoryPostgres(unittest.TestCase):
         self.assertEqual(saved['state'],'accepted'); self.assertEqual(saved['message_id'],MESSAGE)
         self.assertEqual(len(audit),1);self.assertEqual(audit[0]['actor_telegram_id'],20)
         self.mark.assert_called_once()
+
+    def test_ambiguous_audio_pauses_only_active_exact_scope_and_cancels_its_jobs(self):
+        other='00000000-0000-0000-0000-000000000999'
+        with self.factory() as conn:
+            for tenant,channel,conversation,state in [(TENANT,CHANNEL,JID,'active'),(TENANT,other,JID,'active'),
+                                                       (TENANT,CHANNEL,'other@s.whatsapp.net','active'),(other,CHANNEL,JID,'active')]:
+                conn.execute('INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,state,reason) VALUES(%s,\'connect\',%s,%s,%s,\'existing\')',(tenant,channel,conversation,state))
+            for state in ['queued','processing','drafted']:
+                conn.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,provider,channel_id,conversation_id,state) VALUES(%s,'connect',%s,%s,%s)",(TENANT,CHANNEL,JID,state))
+            conn.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,provider,channel_id,conversation_id,state) VALUES(%s,'connect',%s,%s,'queued')",(other,CHANNEL,JID))
+            with conn.cursor() as cur:_pause_unverified_outbound_audio(cur,TENANT,CHANNEL,JID)
+            states=conn.execute('SELECT tenant_id::text,channel_id,conversation_id,state,reason FROM saas_ai_conversation_state').fetchall()
+            jobs=conn.execute('SELECT tenant_id::text,state,error_code FROM saas_ai_agent_jobs ORDER BY tenant_id,state').fetchall()
+            conn.commit()
+        changed=[row for row in states if row['state']=='paused'];self.assertEqual(len(changed),1)
+        self.assertEqual(changed[0]['reason'],'unverified_outbound_audio')
+        self.assertEqual(sum(row['state']=='skipped' and row['error_code']=='unverified_outbound_audio' for row in jobs),2)
+        self.assertEqual(sum(row['state']=='queued' and row['tenant_id']==other for row in jobs),1)
+
+    def test_ambiguous_audio_creates_paused_gate_and_never_changes_human(self):
+        with self.factory() as conn:
+            with conn.cursor() as cur:_pause_unverified_outbound_audio(cur,TENANT,CHANNEL,JID)
+            row=conn.execute('SELECT state,reason FROM saas_ai_conversation_state').fetchone()
+            self.assertEqual(row,{'state':'paused','reason':'unverified_outbound_audio'})
+            conn.execute("UPDATE saas_ai_conversation_state SET state='paused',reason='automatic_assignment_pending'")
+            with conn.cursor() as cur:_pause_unverified_outbound_audio(cur,TENANT,CHANNEL,JID)
+            row=conn.execute('SELECT state,reason FROM saas_ai_conversation_state').fetchone()
+            self.assertEqual(row,{'state':'paused','reason':'unverified_outbound_audio'})
+            conn.execute("UPDATE saas_ai_conversation_state SET state='paused',reason='automatic_assignment_no_eligible_agent'")
+            with conn.cursor() as cur:_pause_unverified_outbound_audio(cur,TENANT,CHANNEL,JID)
+            row=conn.execute('SELECT state,reason FROM saas_ai_conversation_state').fetchone()
+            self.assertEqual(row,{'state':'paused','reason':'unverified_outbound_audio'})
+            conn.execute("UPDATE saas_ai_conversation_state SET state='human',reason='explicit_handoff'")
+            with conn.cursor() as cur:_pause_unverified_outbound_audio(cur,TENANT,CHANNEL,JID)
+            row=conn.execute('SELECT state,reason FROM saas_ai_conversation_state').fetchone()
+            self.assertEqual(row,{'state':'human','reason':'explicit_handoff'});conn.commit()
 
     def test_early_unknown_provider_echo_is_reconciled_in_place(self):
         row_id=str(uuid.uuid4())
