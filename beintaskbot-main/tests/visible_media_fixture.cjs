@@ -39,8 +39,8 @@ async function fixture(browser,srv,{width=390,height=844,withoutLocks=false,mess
    return status===200?send(binary):route.fulfill({status,headers:{'Retry-After':'17'},json:{error:'Synthetic upstream failure'}}).catch(()=>{});
   }
   if(req.method()!=='GET'&&/copilot|transcrib|dispatch|chat\/send/.test(name)){srv.paidOrSend++;assert.fail('Opening media dispatched AI/ASR/send');}
-  let result={};if(name.endsWith('/dialogs/history'))result={dialog:state.dialog,messages:state.messages,next_before:null};
-  else if(name.endsWith('/dialogs'))result={dialogs:[{...state.dialog,last_message_id:'last',last_message_direction:'incoming',last_message_text:'Synthetic voice',last_message_at:'2026-10-21T10:00:00Z'}],channels:[{id:'connect:'+state.dialog.channel_id,name:'WhatsApp'}],agents:[],next_offset:null};
+  let result={};if(name.endsWith('/dialogs/history'))result={dialog:state.dialog,messages:state.messages,next_before:null,...(Object.hasOwn(state,'readThroughId')?{read_through_message_id:state.readThroughId}:{})};
+  else if(name.endsWith('/dialogs'))result={dialogs:[{...state.dialog,last_message_id:state.lastMessageId||'last',last_message_direction:'incoming',last_message_text:'Synthetic voice',last_message_at:'2026-10-21T10:00:00Z'}],channels:[{id:'connect:'+state.dialog.channel_id,name:'WhatsApp'}],agents:[],next_offset:null};
   else if(name.endsWith('/developer-marker'))result={enabled:false};else if(name.endsWith('/replies'))result={replies:[],consultations:[]};
   return route.fulfill({json:{success:true,result}});
  });

@@ -310,7 +310,18 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     value['participant_jid'] = participant_jid
     value['participant_alt'] = participant_alt
     value['source'] = 'connect' if str(value.get('channel') or '').startswith('connect:') else 'kommo'
+    value.pop('delivery_state', None)
     if value['source'] == 'connect':
+        # Display only a persisted provider/receipt status; viewing a dialog or
+        # an outgoing row alone never proves delivery or customer readership.
+        if direction == 'outgoing':
+            status = raw.get('status') if isinstance(raw, dict) else None
+            if not isinstance(status, str):
+                status = None
+            if status in {'pending', 'retrying', 'unknown', 'failed', 'sent', 'delivered', 'read'}:
+                value['delivery_state'] = status
+            elif status in {'accepted', 'queued', 'sending', 'reserved'}:
+                value['delivery_state'] = 'pending'
         # Only validated provider identifiers leave the server; raw webhook data stays private.
         for key,target in (('externalMessageId','provider_message_id'),('quotedExternalMessageId','quoted_provider_message_id')):
             identifier_value=raw.get(key) if isinstance(raw,dict) else None
