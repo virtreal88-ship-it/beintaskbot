@@ -286,8 +286,15 @@ def _schema_current(conn):
                 AND c.confrelid='saas_ai_agent_history_identities'::regclass))
           AND EXISTS(SELECT 1 FROM pg_trigger
             WHERE tgrelid='saas_ai_agents'::regclass
-              AND tgname='saas_ai_agent_history_identity_sync' AND tgenabled<>'D')
-          AND to_regprocedure('ai_legacy_blocked(uuid,text,text,text)') IS NOT NULL
+              AND tgname='saas_ai_agent_history_identity_sync' AND tgenabled IN ('O','A'))
+          AND position('saas_ai_group_channel_legacy_permits' in
+            pg_get_functiondef(to_regprocedure('ai_legacy_blocked(uuid,text,text,text)')))>0
+          AND EXISTS(SELECT 1 FROM pg_constraint
+            WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_developer_route_fk'
+              AND confrelid='saas_connect_conversations'::regclass AND contype='f' AND convalidated)
+          AND EXISTS(SELECT 1 FROM pg_constraint
+            WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_developer_pair_check'
+              AND contype='c' AND convalidated)
           AND NOT EXISTS(SELECT 1 FROM pg_constraint
             WHERE conrelid='saas_ai_agent_settings'::regclass AND conname IN
               ('saas_ai_agent_settings_auto_send_enabled_check',
@@ -301,7 +308,8 @@ def _schema_current(conn):
               ('saas_ai_agent_jobs','saas_ai_agent_jobs_state_check','sent'),
               ('saas_ai_agent_drafts','saas_ai_agent_drafts_state_check','sending'),
               ('saas_ai_agent_settings','saas_ai_agent_settings_operating_mode_check','simulation'),
-              ('saas_ai_agent_settings','saas_ai_agent_settings_support_case_extraction_mode_check','automatic')
+              ('saas_ai_agent_settings','saas_ai_agent_settings_support_case_extraction_mode_check','automatic'),
+              ('saas_knowledge_candidates','saas_knowledge_candidates_status_check','archived')
             ) AS expected(relation, name, value)
             WHERE NOT EXISTS(SELECT 1 FROM pg_constraint c
               WHERE c.conrelid=to_regclass(expected.relation) AND c.conname=expected.name

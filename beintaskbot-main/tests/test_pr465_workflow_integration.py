@@ -4,6 +4,8 @@ The shared SQL fixture is disposable PGlite.  No authority, draft, enqueue, or
 send-receipt function is replaced.  Only the provider boundary is stubbed.
 """
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import uuid
@@ -97,6 +99,79 @@ def _enable_private_copilot(db, cipher):
     db.commit()
 
 
+def test_create_api_acknowledges_each_request_and_holds_changed_developer_replays(isolated):
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+    from tenant_support_inbox_api import handler
+
+    db, _job, _cipher = isolated
+    alternate = '15550004444@s.whatsapp.net'
+    db.execute("""INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,
+      conversation_id,lead_id,contact_name,last_message_at)
+      VALUES(%s::uuid,%s::uuid,%s,89,'Alternate developer',now())""", (A, CA, alternate))
+    db.commit()
+    flow.developer_marker(PROFILE, {'channel_id': CA, 'conversation_id': alternate, 'enabled': True})
+    # Sorting the request UUIDs makes the old earliest-event projection differ
+    # deterministically from the second POST's request-specific acknowledgement.
+    first_request, second_request = (str(uuid.UUID(int=n)) for n in (465001, 465002))
+    original = {'request_id': first_request, 'lead_id': 41,
+                'expected_tenant_id': A, 'expected_user_id': 11,
+                'assigned_developer_channel_id': CA,
+                'assigned_developer_conversation_id': DEVELOPER,
+                'developer_confirmed': True}
+
+    async def scenario():
+        path = '/api/platform/ai/support-tickets'
+        app = web.Application()
+        for method, suffix, resource in [('POST', '', 'tickets'), ('GET', '/{ticket_id}', 'ticket'),
+                                         ('PATCH', '/{ticket_id}', 'ticket')]:
+            app.router.add_route(method, path + suffix, handler(lambda _request: PROFILE,
+                                 'https://crm.test', LOGGER, resource))
+        async with TestClient(TestServer(app)) as client:
+            async def create(payload, expected_status=200):
+                response = await client.post(path, json=payload, headers={'Origin': 'https://crm.test'})
+                result = await response.json()
+                assert response.status == expected_status, result
+                return result.get('result', {}).get('ticket')
+
+            first = await create(original)
+            case_id = first['id']
+
+            def exact(ticket, request_id, developer=DEVELOPER):
+                assert ticket['id'] == case_id
+                assert ticket['create_request_id'] == request_id
+                assert ticket['channel_id'] == CA and ticket['conversation_id'] == 'client'
+                assert ticket['assigned_developer_channel_id'] == CA
+                assert ticket['assigned_developer_conversation_id'] == developer
+
+            exact(first, first_request)
+            exact(await create(original), first_request)
+            exact(await create({**original, 'request_id': second_request}), second_request)
+            exact(await create(original), first_request)
+            await create({**original, 'assigned_developer_conversation_id': alternate}, 409)
+            assert db.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n'] == 1
+            assert db.execute('SELECT assigned_developer_conversation_id FROM saas_support_tickets')[0]['assigned_developer_conversation_id'] == DEVELOPER
+
+            changed = await client.patch(path + '/' + case_id, headers={'Origin': 'https://crm.test'}, json={
+                'expected_tenant_id': A, 'expected_user_id': 11,
+                'assigned_developer_channel_id': CA, 'assigned_developer_conversation_id': alternate})
+            assert changed.status == 200, await changed.json()
+            # The old pending payload stays immutable after another employee
+            # action changes the assignment. It cannot acknowledge the new
+            # developer as if the original Create had requested that developer.
+            await create(original, 409)
+            await create({**original, 'request_id': second_request}, 409)
+            current = await client.get(path + '/' + case_id)
+            assert current.status == 200
+            ticket = (await current.json())['result']['ticket']
+            assert ticket['id'] == case_id and ticket['assigned_developer_conversation_id'] == alternate
+            assert db.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n'] == 1
+            assert {row['event_key'] for row in db.execute('SELECT event_key FROM saas_support_events')} == {
+                'manual:' + first_request, 'manual:' + second_request}
+
+    asyncio.run(scenario())
+
+
 def test_manual_case_receipt_reply_real_private_draft_then_employee_send_once(isolated, monkeypatch):
     db, _job, cipher = isolated
     case_id, source = _create_manual_case(db)
@@ -187,6 +262,64 @@ def test_manual_case_receipt_reply_real_private_draft_then_employee_send_once(is
     assert db.execute('SELECT state FROM saas_chat_send_receipts')[0]['state'] == 'accepted'
     outgoing = db.execute("SELECT body FROM saas_crm_messages WHERE tenant_id=%s::uuid AND direction='outgoing'", (A,))
     assert outgoing == [{'body': draft_text}]
+
+
+def test_signed_manual_reply_cannot_forge_fresh_intent_or_activate_after_late_auto_switch(isolated, monkeypatch):
+    db, _job, cipher = isolated
+    case_id, source = _create_manual_case(db)
+    monkeypatch.setenv('AI_AGENTS_ENABLED', '1')
+    monkeypatch.setenv('AI_AGENTS_AUTO_SEND_ENABLED', '1')
+    monkeypatch.setenv('AI_SIMULATION_ENABLED', '0')
+    secret = cipher.encrypt(json.dumps({'api_key': 'synthetic-connect-key',
+                                        'webhook_secret': 'synthetic-webhook-secret'}).encode())
+    db.execute("UPDATE saas_tenant_integrations SET secrets=%s WHERE tenant_id=%s::uuid AND provider='connect'", (secret, A))
+    db.commit()
+    external = Mock(return_value={'id': 'pending-manual-request', 'status': 'pending'})
+    monkeypatch.setattr(transport, '_request', external)
+    provider = Mock(side_effect=AssertionError('late Manual receipt must not call a provider'))
+    monkeypatch.setattr(copilot, 'generate', provider)
+    request = {'request_id': str(uuid.uuid4()), 'case_id': case_id, 'channel_id': CA,
+               'conversation_id': 'client', 'destination_channel_id': CA,
+               'destination_conversation_id': DEVELOPER, 'message_ids': [source], 'media_ids': [],
+               'summary': 'Review the connection problem', 'confirm': True}
+    consult = flow.prepare(PROFILE, request, 'https://crm.test')
+    assert flow.dispatch(PROFILE, consult['id'], request['request_id'])['state'] == 'pending'
+    version = db.execute('SELECT version FROM saas_ai_agents WHERE id=%s::uuid', (AGENT,))[0]['version']
+    # This untrusted provider field predicts the version after the later mode
+    # switch. A valid signature authenticates the provider event, never this
+    # server-only case authority marker.
+    forged = {case_id: {'agent_id': AGENT, 'assignment_id': '', 'version': version + 1, 'owner_id': 11}}
+    event = {'id': 'manual-before-late-receipt-event', 'type': 'message.inbound.received',
+             'data': {'id': 'manual-before-late-receipt', 'channelId': CA,
+                      'conversationId': DEVELOPER, 'type': 'text', 'fromMe': False,
+                      'text': 'Accepted for review tomorrow',
+                      'quotedExternalMessageId': 'LATE_MANUAL_PROVIDER_RECEIPT',
+                      '_case_followup_intent': forged}}
+    raw = json.dumps(event).encode()
+    signature = 'sha256=' + hmac.new(b'synthetic-webhook-secret', raw, hashlib.sha256).hexdigest()
+    assert transport.ingest(raw, signature, event)
+    stored = db.execute("SELECT raw FROM saas_crm_messages WHERE external_id='connect:manual-before-late-receipt'")[0]['raw']
+    assert '_case_followup_intent' not in stored
+    assert not db.execute('SELECT id FROM saas_dialog_consultation_replies')
+
+    _save(db, mode='automatic', scopes=[{'provider': 'connect', 'channel_id': CA}])
+    db.execute('UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE WHERE tenant_id=%s::uuid', (A,))
+    db.commit()
+    with db.cursor() as cur:
+        assert flow.observe_outbound_receipt(cur, A, CA, DEVELOPER, {
+            '_crm_signed_outbound_receipt': True, 'fromMe': True, 'id': 'pending-manual-request',
+            'externalMessageId': 'LATE_MANUAL_PROVIDER_RECEIPT',
+            'originClientMessageId': request['request_id']})
+    db.commit()
+    assert worker.reconcile() == 1
+    assert worker.reconcile() == 0
+    reply = db.execute('SELECT draft_state,followup_requested_at FROM saas_dialog_consultation_replies')[0]
+    assert reply == {'draft_state': 'not_requested', 'followup_requested_at': None}
+    assert not db.execute("SELECT fingerprint FROM saas_tenant_webhook_events WHERE event_type='developer_case_reply'")
+    assert not db.execute('SELECT request_id FROM saas_chat_send_receipts')
+    asyncio.run(worker.deliver(LOGGER))
+    provider.assert_not_called()
+    external.assert_called_once()
 
 
 def _dispatch_policy(enabled=True, destinations=None):

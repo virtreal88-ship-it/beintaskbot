@@ -183,3 +183,29 @@ def test_parallel_missing_core_column_bootstraps_then_cold_requests_read_only(da
     finally:
         with psycopg.connect(database.dsn, row_factory=dict_row) as conn:
             schema.ensure_schema(conn)
+
+
+@pytest.mark.parametrize('legacy_shape', ['candidate_status', 'developer_route', 'developer_pair', 'group_function'])
+def test_existing_columns_do_not_hide_an_unapplied_nested_migration(probe, legacy_shape):
+    with psycopg.connect(probe, row_factory=dict_row) as conn:
+        if legacy_shape == 'candidate_status':
+            conn.execute('ALTER TABLE saas_knowledge_candidates DROP CONSTRAINT saas_knowledge_candidates_status_check')
+            conn.execute("""ALTER TABLE saas_knowledge_candidates ADD CONSTRAINT saas_knowledge_candidates_status_check
+                CHECK(status IN ('pending_review','needs_clarification','approved','knowledge_published','rejected'))""")
+        elif legacy_shape == 'developer_route':
+            conn.execute('ALTER TABLE saas_support_tickets DROP CONSTRAINT saas_support_developer_route_fk')
+        elif legacy_shape == 'developer_pair':
+            conn.execute('ALTER TABLE saas_support_tickets DROP CONSTRAINT saas_support_developer_pair_check')
+        else:
+            from tenant_ai_legacy_permit import schema as legacy_schema
+            with conn.cursor() as cur:
+                legacy_schema(cur)
+    try:
+        with psycopg.connect(probe, row_factory=dict_row) as conn:
+            assert not schema._schema_current(conn)
+            schema.ensure_schema(conn)
+            assert schema._schema_current(conn)
+            assert [row['value'] for row in conn.execute('SELECT value FROM ai_schema_cold_probe ORDER BY id')] == ['committed', 'committed']
+    finally:
+        with psycopg.connect(probe, row_factory=dict_row) as conn:
+            schema.ensure_schema(conn)
