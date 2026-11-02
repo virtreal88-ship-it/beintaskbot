@@ -25,7 +25,8 @@ if (document.body.dataset.appUi === 'kwid') {
   const language=()=>window.tenantI18n?.language||document.documentElement.lang||'az'
   const crmLabels={ru:{tasks:'Задачи',customers:'Контакты',companies:'Компании',deals:'Сделки',instructions:'Инструкции'},az:{tasks:'Tapşırıqlar',customers:'Əlaqələr',companies:'Şirkətlər',deals:'Sövdələşmələr',instructions:'Təlimatlar'},en:{tasks:'Tasks',customers:'Contacts',companies:'Companies',deals:'Deals',instructions:'Instructions'}}
   const aiLabels={ru:{ai_administrator:'Обучение AI',ai_agents:'AI-агенты',ai_dashboard:'AI-панель',knowledge_center:'Центр знаний',support_cases:'Кейсы поддержки',ai_testing:'Тестирование AI'},az:{ai_administrator:'AI təlimi',ai_agents:'AI agentlər',ai_dashboard:'AI paneli',knowledge_center:'Bilik mərkəzi',support_cases:'Dəstək halları',ai_testing:'AI sınağı'},en:{ai_administrator:'AI Learning',ai_agents:'AI agents',ai_dashboard:'AI Dashboard',knowledge_center:'Knowledge Center',support_cases:'Support Cases',ai_testing:'AI testing'}}
-  const pageLabel=page=>crmLabels[language()]?.[page]||aiLabels[language()]?.[page]||t(page)
+  const employeeLabels={ru:'Сотрудники и доступ',az:'Əməkdaşlar və giriş',en:'Employees and access'}
+  const pageLabel=page=>page==='employees'?employeeLabels[language()]||employeeLabels.en:crmLabels[language()]?.[page]||aiLabels[language()]?.[page]||t(page)
   const originalHeader=sidebar.firstElementChild, brand=originalHeader.querySelector('.brand')
   const header=document.createElement('div');header.className='app-sidebar-header'
   const collapse=document.createElement('button');collapse.type='button';collapse.className='app-icon-button';collapse.innerHTML=icon(icons.chevron)
@@ -63,7 +64,7 @@ if (document.body.dataset.appUi === 'kwid') {
   document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeUserMenu();mobileMenu(false)}})
   applyTheme()
 
-  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support','night_report']},{id:'crm',label:'CRM',pages:['tasks','customers','companies','deals','hot_orders']},{id:'ai',label:'AI',pages:['ai_agents','ai_dashboard','ai_administrator','knowledge_center','support_cases','ai_testing']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['integrations','settings','profile']}]
+  const groups=[{id:'operator',label:t('operatorWorkspace'),pages:['dialogs','support','night_report']},{id:'crm',label:'CRM',pages:['tasks','customers','companies','deals','hot_orders']},{id:'ai',label:'AI',pages:['ai_agents','ai_dashboard','ai_administrator','knowledge_center','support_cases','ai_testing']},{id:'management',label:'İdarəetmə',pages:['approvals','linear','news','finance']},{id:'company',label:'Şirkət',pages:['employees','integrations','settings','profile']}]
   const containers=new Map()
   for(const group of groups){
     const section=document.createElement('div');section.className='app-nav-group';section.dataset.group=group.id
