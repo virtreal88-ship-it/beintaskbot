@@ -26,6 +26,8 @@ def isolated_flow_connector(db,original_connect,forbidden_connection):
         import re
         supplied=conninfo_to_dict(provided_dsn)
         assert supplied.get('host') in {'127.0.0.1','localhost','::1'}
+        assert not supplied.get('service')
+        assert supplied.get('hostaddr') in {None,'127.0.0.1','::1'}
         assert re.fullmatch(r'test_channel_[0-9a-f]{32}',supplied.get('dbname',''))
     def isolated_connect(conninfo='',*args,**kwargs):
         if provided_dsn and conninfo==provided_dsn and not args and set(kwargs)<={'row_factory','autocommit'}:
@@ -571,3 +573,14 @@ def test_flow_connector_only_allows_explicit_disposable_database(mode):
     else:
         with pytest.raises(AssertionError,match='External database'):connect(supplied,**kwargs)
         real.assert_not_called();forbidden.assert_called_once_with()
+
+
+@pytest.mark.parametrize('suffix',[
+    ' hostaddr=203.0.113.1',' service=untrusted',' host=example.invalid',' dbname=not_disposable',
+])
+def test_flow_connector_rejects_redirecting_or_non_disposable_dsn(suffix):
+    from types import SimpleNamespace
+    real=Mock();denied=Mock()
+    dsn='host=127.0.0.1 dbname=test_channel_'+'a'*32+suffix
+    with pytest.raises(AssertionError):isolated_flow_connector(SimpleNamespace(dsn=dsn),real,denied)
+    real.assert_not_called();denied.assert_not_called()
