@@ -71,6 +71,8 @@ on:
       - 'beintaskbot-main/tests/test_photo_preview_browser.cjs'
       - 'beintaskbot-main/tests/test_visible_photo_autoload_browser.cjs'
       - 'beintaskbot-main/tests/test_visible_audio_autoload_browser.cjs'
+      - 'beintaskbot-main/tests/test_message_footer_browser.cjs'
+      - 'beintaskbot-main/tests/test_message_delivery_projection.py'
       - 'beintaskbot-main/tests/visible_media_fixture.cjs'
       - 'beintaskbot-main/tests/test_connect_media_backpressure.py'
       - 'beintaskbot-main/tests/test_photo_thumbnail_projection.py'
@@ -177,6 +179,7 @@ jobs:
           python -m pytest -q -rs \
             tests/test_dialog_consultations.py \
             tests/test_tenant_chat_attachments.py \
+            tests/test_message_delivery_projection.py \
             tests/test_connect_media_backpressure.py \
             tests/test_photo_thumbnail_projection.py \
             tests/test_support_case_materials.py \
@@ -278,3 +281,4 @@ jobs:
           node tests/test_photo_preview_browser.cjs
           node tests/test_visible_photo_autoload_browser.cjs
           node tests/test_visible_audio_autoload_browser.cjs
+          node tests/test_message_footer_browser.cjs

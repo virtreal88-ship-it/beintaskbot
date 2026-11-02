@@ -115,9 +115,8 @@
     if(primary){primary.hidden=true;primary.disabled=busy||blocked;primary.textContent=busy?text('loading','Loading…'):['retryable','rate_limited'].includes(host.dataset.mediaPreviewState)||host.dataset.mediaPreviewState==='unavailable'&&host.dataset.photoAutoFailed==='true'?text('retryAttachment','Retry loading'):text('loadAttachment','Load file');}
     if(menuLoad)menuLoad.disabled=busy||blocked;
     const status=host.querySelector('[data-media-load-status]'),language=window.tenantI18n?.language||'en';
-    const ready=({ru:'Файл загружен',az:'Səs yükləndi',en:'Audio loaded'})[language]||'Audio loaded';
     const idle=({ru:'Аудио не загружено',az:'Səs yüklənməyib',en:'Audio not loaded'})[language]||'Audio not loaded';
-    if(status){if(loaded&&!status.textContent.trim())status.textContent=ready;else if(!loaded&&!busy&&status.textContent===ready)status.textContent=idle;}
+    if(status&&['Файл загружен','Səs yükləndi','Audio loaded'].includes(status.textContent.trim()))status.textContent=loaded?'':idle;
     host.dataset.audioState=busy?'loading':loaded?'loaded':host.dataset.mediaPreviewState||'unloaded';
   }
   const identity=m=>m?.tenant_id+':'+m?.telegram_id;
