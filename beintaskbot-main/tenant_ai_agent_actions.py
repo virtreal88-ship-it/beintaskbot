@@ -179,9 +179,14 @@ def handoff(job,reason,*,source_message_id='',expected_conversation_revision=Non
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='completed',completed_at=now(),error_code='human_handoff' WHERE tenant_id=%s::uuid AND fingerprint=%s",(tenant,job['event_fingerprint']))
                 cur.execute("SELECT telegram_id FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE AND role IN ('owner','admin')",(tenant,))
                 for member in cur.fetchall():
+                    notification_id=uuid.uuid4()
+                    target='/app?view=deals&deal_id='+str(job['lead_id'])
+                    if job['provider']=='connect':
+                        target=('/app?view=support&support_ticket_id='+str(ticket['id'])+
+                                '&notification_id='+str(notification_id)) if ticket and ticket.get('id') else ''
                     cur.execute('''INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body,target_url)
                       VALUES(%s,%s::uuid,%s,%s,'AI: менеджер должен ответить',%s,%s)''',
-                      (uuid.uuid4(),tenant,member['telegram_id'],'ai_handoff:'+chat+':'+job['event_fingerprint'],str(reason)[:240],'/app?view=deals&deal_id='+str(job['lead_id'])))
+                      (notification_id,tenant,member['telegram_id'],'ai_handoff:'+chat+':'+job['event_fingerprint'],str(reason)[:240],target))
             elif changed and preserve_active:
                 cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',lease_token=NULL,lease_until=NULL,error_code='support_case_created',updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider='connect' AND conversation_id=%s AND scope_channel_id=%s AND event_fingerprint=%s AND state='processing' AND lease_token=%s AND revision=%s",
                   (tenant,job['agent_id'],chat,job_scope(job),job['event_fingerprint'],job['lease_token'],job['revision']))

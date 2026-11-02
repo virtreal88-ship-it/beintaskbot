@@ -335,7 +335,7 @@ def listing(profile, status='unresolved', assignee='', offset=0, search='', chan
             'next_offset': offset+50 if len(rows)>50 else None}
 
 
-def detail(profile, ticket_id, before=None, message_id=None):
+def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=None):
     ticket_id=identifier(ticket_id)
     with _connect() as conn:
         ensure_schema(conn)
@@ -345,6 +345,10 @@ def detail(profile, ticket_id, before=None, message_id=None):
             ticket = cur.fetchone()
             if not ticket:
                 raise TenantLinearError('Обращение не найдено.', 404)
+            notification_context=None
+            if notification_id is not None:
+                from tenant_notification_center import case_context
+                notification_context=case_context(cur,profile,notification_id,ticket_id)
             ticket=_attach_verified_contact_identity(cur,tenant,ticket)
             from tenant_support_summary_history import versions as summary_versions, fingerprint as summary_fingerprint,applied_version,pending_request
             summary_history = summary_versions(cur,tenant,ticket_id)
@@ -414,11 +418,13 @@ def detail(profile, ticket_id, before=None, message_id=None):
               WHERE e.tenant_id=%s::uuid AND e.provider='connect' AND e.channel_id=%s AND e.conversation_id=%s
               ORDER BY e.created_at DESC LIMIT 10''',(tenant,str(ticket['channel_id']),ticket['conversation_id']))
             expert_results=[public(row) for row in cur.fetchall()]
-    return {'expert_results':expert_results,'ticket':public(ticket),'summary_history':summary_history,
+    result={'expert_results':expert_results,'ticket':public(ticket),'summary_history':summary_history,
             'summary_pending_request':summary_pending_request,'messages':[public(row) for row in reversed(rows[:50])],
             'attached_media':attached_media,'scope':scope_metadata,
             'focus_message':public(focus_message) if focus_message else None,
             'next_before':str(rows[49]['id']) if len(rows)>50 else None}
+    if notification_id is not None:result['notification_context']=notification_context
+    return result
 
 
 def available_case_media(profile,ticket_id,before=None):

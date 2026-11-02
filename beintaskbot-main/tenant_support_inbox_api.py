@@ -31,7 +31,17 @@ def handler(member_from_request, origin, logger, resource):
                 elif resource=='ticket_messages':
                     result=await asyncio.to_thread(available_case_messages,profile,request.match_info['ticket_id'],request.query.get('before'))
                 else:
-                    result = await asyncio.to_thread(detail,profile,request.match_info['ticket_id'],request.query.get('before'),request.query.get('message_id'))
+                    options={}
+                    if 'notification_id' in request.query:
+                        fields=('notification_id','expected_tenant_id','expected_user_id')
+                        if any(len(request.query.getall(key,[]))!=1 for key in fields):
+                            raise TenantLinearError('notification_context_invalid',400)
+                        _expected({key:request.query[key] for key in fields[1:]},profile)
+                        from tenant_linear_policy import identifier
+                        try:options['notification_id']=identifier(request.query['notification_id'])
+                        except TenantLinearError:
+                            raise TenantLinearError('notification_context_invalid',400) from None
+                    result = await asyncio.to_thread(detail,profile,request.match_info['ticket_id'],request.query.get('before'),request.query.get('message_id'),**options)
             else:
                 _origin(request,origin)
                 if request.content_type!='application/json': raise TenantLinearError('Ожидается JSON.',415)

@@ -60,7 +60,12 @@ def _eligible(cur, tenant, actor, policy):
         "WHEN '" + module + "' THEN " + ('TRUE' if policy.allows(module) else 'FALSE')
         for module in modules) + " WHEN 'account' THEN TRUE WHEN 'approvals' THEN " + (
         'TRUE' if policy.privileged and any(policy.allows(m) for m in ('tasks', 'deals', 'hot_orders')) else 'FALSE') + ' ELSE FALSE END'
-    cur.execute("SELECT to_regclass('saas_dialog_consultation_replies') IS NOT NULL AS replies, to_regclass('saas_support_tickets') IS NOT NULL AS tickets, to_regclass('saas_connect_dialog_links') IS NOT NULL AS links")
+    cur.execute("""SELECT to_regclass('saas_dialog_consultation_replies') IS NOT NULL AS replies,
+      to_regclass('saas_support_tickets') IS NOT NULL AS tickets,
+      to_regclass('saas_connect_dialog_links') IS NOT NULL AS links,
+      to_regclass('saas_support_events') IS NOT NULL AS events,
+      to_regclass('saas_internal_consultations') IS NOT NULL AS consultations,
+      to_regclass('saas_tenant_webhook_events') IS NOT NULL AS webhooks""")
     ready = cur.fetchone() or {}
     consult_joins = ''
     consult_columns = 'NULL::text AS reply_id,NULL::text AS consultation_id,NULL::text AS source_channel,NULL::text AS source_conversation,NULL::bigint AS source_lead,NULL::text AS case_id'
@@ -78,6 +83,61 @@ def _eligible(cur, tenant, actor, policy):
         if ready.get('links'):
             consult_guard += ''' AND NOT EXISTS(SELECT 1 FROM saas_connect_dialog_links dl
               WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.channel_id AND dl.source_id=c.conversation_id AND dl.active)'''
+    # Recover old links from exact durable event receipts, before applying
+    # module visibility. Never infer a case from the latest ticket or a lead
+    # number that could belong to either Connect or Kommo.
+    case_joins=''
+    proof_ctes=[]
+    proof_params=[]
+    handoff_case='NULL::text'
+    consultation_case='NULL::text'
+    consultation_id='NULL::text'
+    consultation_reason="''::text"
+    if ready.get('tickets') and ready.get('events'):
+        proof_ctes.append('''handoff_proofs AS MATERIALIZED (
+          SELECT DISTINCT 'ai_handoff:'||st.conversation_id||':'||substring(se.event_key from 9) AS notification_event_key,
+            st.id::text AS case_id FROM saas_support_events se
+          JOIN saas_support_tickets st ON st.tenant_id=se.tenant_id AND st.id=se.ticket_id
+          JOIN saas_connect_conversations cv ON cv.tenant_id=st.tenant_id
+            AND cv.connect_channel_id=st.channel_id AND cv.conversation_id=st.conversation_id
+          JOIN saas_connect_channels cc ON cc.tenant_id=cv.tenant_id AND cc.connect_channel_id=cv.connect_channel_id
+          WHERE se.tenant_id=%s::uuid AND se.event_key LIKE 'handoff:%%'
+        ), handoff_unique AS MATERIALIZED (
+          SELECT notification_event_key,min(case_id) AS case_id,count(*) AS matches
+          FROM handoff_proofs GROUP BY notification_event_key
+        )''')
+        proof_params.append(tenant)
+        case_joins+=''' LEFT JOIN handoff_unique hu ON hu.notification_event_key=n.event_key
+          LEFT JOIN handoff_proofs he ON he.notification_event_key=n.event_key
+            AND he.case_id=lower(substring(n.target_url from '[?&]support_ticket_id=([^&#]+)'))'''
+        handoff_case="""CASE WHEN COALESCE(substring(n.target_url from '[?&]support_ticket_id=([^&#]+)'),'')=''
+          THEN CASE WHEN hu.matches=1 THEN hu.case_id END ELSE he.case_id END"""
+    if ready.get('tickets') and ready.get('consultations'):
+        case_joins+=''' LEFT JOIN saas_internal_consultations ic ON ic.tenant_id=n.tenant_id
+          AND n.event_key='ai_consultation:'||ic.request_key
+          LEFT JOIN saas_support_tickets it ON it.tenant_id=ic.tenant_id AND it.id=ic.case_id
+            AND it.channel_id=ic.channel_id AND it.conversation_id=ic.conversation_id
+          LEFT JOIN saas_connect_conversations iv ON iv.tenant_id=it.tenant_id
+            AND iv.connect_channel_id=it.channel_id AND iv.conversation_id=it.conversation_id
+          LEFT JOIN saas_connect_channels ich ON ich.tenant_id=iv.tenant_id AND ich.connect_channel_id=iv.connect_channel_id'''
+        consultation_case='CASE WHEN ich.connect_channel_id IS NOT NULL THEN it.id::text END'
+        consultation_id='ic.id::text'
+        consultation_reason="COALESCE(NULLIF(ic.evidence->>'reason_code',''),ic.evidence->>'signal','')"
+    kommo_proven='FALSE'
+    if ready.get('webhooks'):
+        proof_ctes.append('''kommo_proofs AS MATERIALIZED (
+          SELECT DISTINCT 'ai_handoff:'||(payload->>'chat_id')||':'||fingerprint AS notification_event_key,
+            payload->>'lead_id' AS lead_id FROM saas_tenant_webhook_events
+          WHERE tenant_id=%s::uuid AND provider='kommo'
+        )''')
+        proof_params.append(tenant)
+        case_joins+=''' LEFT JOIN kommo_proofs kp ON kp.notification_event_key=n.event_key
+          AND kp.lead_id=substring(n.target_url from '[?&]deal_id=([^&#]+)')'''
+        kommo_proven='kp.notification_event_key IS NOT NULL'
+    case_columns='''COALESCE('''+handoff_case+','+consultation_case+''') AS case_target_id,
+        '''+consultation_id+''' AS case_consultation_id,
+        CASE WHEN '''+handoff_case+''' IS NOT NULL THEN n.body ELSE '''+consultation_reason+''' END AS case_reason_code,
+        ('''+kommo_proven+''') AS kommo_proven'''
     ticket_guard = "p.target_ticket=''"
     if ready.get('tickets'):
         ticket_guard += ''' OR EXISTS(SELECT 1 FROM saas_support_tickets st
@@ -99,8 +159,8 @@ def _eligible(cur, tenant, actor, policy):
             deal_scope.append('(' + clause + ')')
     deal_guard = '''p.target_deal='' OR EXISTS(SELECT 1 FROM saas_crm_deals d
       WHERE d.tenant_id=p.tenant_id AND d.kommo_lead_id::text=p.target_deal AND d.deleted_at IS NULL AND (''' + (' OR '.join(deal_scope) or 'FALSE') + '))'
-    sql = '''WITH personal AS NOT MATERIALIZED (
-      SELECT n.*,''' + consult_columns + ''',
+    sql = 'WITH '+(', '.join(proof_ctes)+', ' if proof_ctes else '')+'''personal AS NOT MATERIALIZED (
+      SELECT n.*,''' + consult_columns + ',' + case_columns + ''',
         split_part(n.event_key,':',1)='dialog_consultation' AS is_reply,
         (''' + consult_guard + ''') AS reply_allowed,
         COALESCE(substring(n.target_url from '[?&]view=([^&#]+)'),'') AS target_view,
@@ -109,10 +169,17 @@ def _eligible(cur, tenant, actor, policy):
         COALESCE(substring(n.target_url from '[?&]channel_id=([^&#]+)'),'') AS target_channel,
         COALESCE(substring(n.target_url from '[?&]conversation_id=([^&#]+)'),'') AS target_conversation,
         COALESCE(substring(n.target_url from '[?&]deal_id=([^&#]+)'),'') AS target_deal
-      FROM saas_tenant_notifications n ''' + consult_joins + '''
+      FROM saas_tenant_notifications n ''' + consult_joins + case_joins + '''
       WHERE n.tenant_id=%s::uuid AND n.telegram_id=%s
     ), classified AS NOT MATERIALIZED (
-      SELECT personal.*,CASE WHEN is_reply THEN 'dialogs'
+      SELECT personal.*,CASE WHEN is_reply THEN 'legacy'
+        WHEN case_target_id IS NOT NULL THEN 'case'
+        WHEN event_key ~ '^(ai_handoff|ai_consultation):' AND NOT kommo_proven THEN 'unavailable'
+        ELSE 'legacy' END AS target_state,
+        CASE WHEN event_key ~ '^ai_handoff:' THEN 'ai_handoff'
+          WHEN event_key ~ '^ai_consultation:' THEN 'ai_consultation' END AS event_kind,
+        CASE WHEN is_reply THEN 'dialogs'
+        WHEN case_target_id IS NOT NULL THEN 'support'
         WHEN target_view<>'' THEN target_view
         WHEN event_key ~ '(^|:)task(_|:)' THEN 'tasks'
         WHEN event_key ~ '(^|:)hot_order(_|:)' THEN 'hot_orders'
@@ -123,11 +190,12 @@ def _eligible(cur, tenant, actor, policy):
     ), eligible AS NOT MATERIALIZED (
       SELECT p.* FROM classified p WHERE CASE WHEN p.is_reply THEN p.reply_allowed ELSE
         (p.target_url='' OR p.target_url ~ '^/app([?][^#[:cntrl:]]*)?$') AND (''' + module_case + ''')
-        AND (p.target_view<>'support' OR (''' + ticket_guard + '''))
+        AND (p.target_state='case' OR (
+        (p.target_view<>'support' OR (''' + ticket_guard + '''))
         AND (p.target_view<>'dialogs' OR (''' + dialog_guard + '''))
-        AND (p.target_view NOT IN ('deals','customers') OR (''' + deal_guard + ''')) END
+        AND (p.target_view NOT IN ('deals','customers') OR (''' + deal_guard + ''')))) END
     ) '''
-    return sql, [tenant, actor, *deal_args]
+    return sql, [*proof_params, tenant, actor, *deal_args]
 
 
 def _cursor(value, status):
@@ -151,7 +219,8 @@ def _public(row):
     value = {key: str(row[key]) if row.get(key) is not None else None
              for key in ('id', 'event_key', 'created_at', 'read_at', 'reply_id')}
     value.update(title=str(row.get('title') or '')[:200], body=str(row.get('body') or '')[:1000],
-                 target_url=str(row.get('target_url') or ''), kind='consultation' if row.get('is_reply') else row.get('module') or 'account')
+                 target_url=str(row.get('target_url') or ''), kind='consultation' if row.get('is_reply') else row.get('module') or 'account',
+                 target_state=row.get('target_state') or 'legacy')
     if row.get('is_reply'):
         value['consultation_id'] = str(row['consultation_id'])
         value['case_id'] = str(row['case_id']) if row.get('case_id') else None
@@ -161,7 +230,34 @@ def _public(row):
         if row.get('case_id'):
             params['support_ticket_id'] = row['case_id']
         value['target_url'] = '/app?' + urlencode(params)
+    elif value['target_state']=='case':
+        value.update(case_id=str(row['case_target_id']),event_kind=row['event_kind'],
+                     reason_code=str(row.get('case_reason_code') or ''))
+        if row.get('case_consultation_id'):
+            value['consultation_id']=str(row['case_consultation_id'])
+        value['target_url']='/app?'+urlencode({'view':'support','support_ticket_id':value['case_id'],
+                                             'notification_id':value['id']})
+    elif value['target_state']=='unavailable':
+        value.update(target_url='',event_kind=row.get('event_kind'),reason_code='')
     return value
+
+
+def case_context(cur,profile,notification_id,ticket_id):
+    """Exact personal event context on the existing authorized case transaction."""
+    key=identifier(notification_id)
+    ticket_id=identifier(ticket_id)
+    tenant,actor,policy=_access(cur,profile)
+    sql,params=_eligible(cur,tenant,actor,policy)
+    cur.execute(sql+'SELECT * FROM eligible WHERE id=%s::uuid',(*params,key))
+    row=cur.fetchone()
+    if not row:raise TenantLinearError('Уведомление недоступно.',404)
+    item=_public(row)
+    if item['target_state']!='case' or item.get('case_id')!=ticket_id:
+        raise TenantLinearError('notification_target_changed',409)
+    context={field:item[field] for field in ('case_id','event_key','event_kind','reason_code','created_at','title','body')}
+    context['notification_id']=key
+    if item.get('consultation_id'):context['consultation_id']=item['consultation_id']
+    return context
 
 
 def listing(profile, status='unread', limit=20, before=''):
@@ -197,20 +293,50 @@ def listing(profile, status='unread', limit=20, before=''):
             'next_before': next_before, 'status': status}
 
 
-def mark_read(profile, notification_id):
+_UNSET=object()
+
+
+def mark_read(profile, notification_id, *, opened_case_id=_UNSET,opened_event_key=_UNSET):
     key = identifier(notification_id)
+    receipt=opened_case_id is not _UNSET or opened_event_key is not _UNSET
+    if receipt:
+        if not isinstance(opened_case_id,str) or not isinstance(opened_event_key,str) or not 1<=len(opened_event_key)<=700:
+            raise TenantLinearError('Некорректный запрос.',400)
+        opened_case_id=identifier(opened_case_id)
     with _connect() as conn:
         with conn.cursor() as cur:
             tenant, actor, policy = _access(cur, profile)
+            if receipt:
+                # Serialize a scoped receipt before reading its projection.
+                # PostgreSQL may otherwise wait on UPDATE and then recheck a
+                # newer target row against an older subquery snapshot.
+                cur.execute('''SELECT id FROM saas_tenant_notifications
+                  WHERE tenant_id=%s::uuid AND telegram_id=%s AND id=%s::uuid FOR UPDATE''',
+                  (tenant,actor,key))
+                if not cur.fetchone():raise TenantLinearError('Уведомление недоступно.',404)
+                tenant,actor,policy=_access(cur,profile)
             sql, params = _eligible(cur, tenant, actor, policy)
-            cur.execute(sql + 'SELECT id,reply_id,event_key FROM eligible WHERE id=%s::uuid', (*params, key))
+            cur.execute(sql + 'SELECT * FROM eligible WHERE id=%s::uuid', (*params, key))
             row = cur.fetchone()
             if not row:
                 raise TenantLinearError('Уведомление недоступно.', 404)
-            cur.execute('''UPDATE saas_tenant_notifications SET read_at=COALESCE(read_at,now())
+            if receipt and (row.get('target_state')!='case' or row.get('case_target_id')!=opened_case_id or row['event_key']!=opened_event_key):
+                raise TenantLinearError('notification_target_changed',409)
+            update='''UPDATE saas_tenant_notifications SET read_at=COALESCE(read_at,now())
               WHERE tenant_id=%s::uuid AND telegram_id=%s AND (id=%s::uuid OR (%s AND event_key=%s))
-              RETURNING read_at''', (tenant, actor, key, bool(row.get('reply_id')), row['event_key']))
-            stamp = cur.fetchone()['read_at']
+              '''
+            values=(tenant, actor, key, bool(row.get('reply_id')), row['event_key'])
+            if receipt:
+                # Recheck in the mutation statement as well: a stale case
+                # receipt never acknowledges a newly rebound event.
+                update=sql+update+'''AND event_key=%s AND target_url=%s
+                  AND EXISTS(SELECT 1 FROM eligible p WHERE p.id=%s::uuid
+                  AND p.target_state='case' AND p.case_target_id=%s AND p.event_key=%s) '''
+                values=(*params,*values,row['event_key'],row['target_url'],key,opened_case_id,opened_event_key)
+            cur.execute(update+'RETURNING read_at',values)
+            changed=cur.fetchone()
+            if not changed:raise TenantLinearError('notification_target_changed',409)
+            stamp = changed['read_at']
             if row.get('reply_id'):
                 cur.execute('''INSERT INTO saas_dialog_consultation_reads(tenant_id,reply_id,actor_id)
                   VALUES(%s::uuid,%s::uuid,%s) ON CONFLICT DO NOTHING''', (tenant, row['reply_id'], actor))

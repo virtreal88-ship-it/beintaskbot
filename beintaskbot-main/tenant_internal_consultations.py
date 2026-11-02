@@ -154,9 +154,11 @@ def create_from_ai(job, *, recipient_id=None, reason, evidence, run_id=None, des
               (tenant,ident,case['id'],job['channel_id'],job['conversation_id'],key,consultation_summary,_json(evidence),status,
                recipient['telegram_id'] if recipient else None,run_id,'pilot_group_pending' if destination=='pilot_group' else 'internal_inbox'))
             if destination=='employee':
+                notification_id=uuid.uuid4()
+                target='/app?view=support&support_ticket_id='+str(case['id'])+'&notification_id='+str(notification_id)
                 cur.execute('''INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body,target_url)
-                  VALUES(%s,%s::uuid,%s,%s,'AI: требуется консультация разработчика',%s,'/app?view=support')
-                  ON CONFLICT DO NOTHING''',(uuid.uuid4(),tenant,recipient['telegram_id'],'ai_consultation:'+key,consultation_summary[:500]))
+                  VALUES(%s,%s::uuid,%s,%s,'AI: требуется консультация разработчика',%s,%s)
+                  ON CONFLICT DO NOTHING''',(notification_id,tenant,recipient['telegram_id'],'ai_consultation:'+key,consultation_summary[:500],target))
             # Group delivery has no employee binding or personal notification.
             # Employee delivery remains the existing separately verified path.
             enabled=False;binding=None
