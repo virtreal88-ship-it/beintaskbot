@@ -18,10 +18,13 @@ class NativeTaskTests(unittest.TestCase):
         self.assertEqual(cur.execute.call_count,1)
 
     def test_assignee_must_have_tenant_task_right(self):
-        cur=mock.MagicMock();cur.fetchone.return_value=None
-        with self.assertRaisesRegex(ValueError,'cannot use tasks'):tasks._assignee(cur,'tenant',9)
-        sql,args=cur.execute.call_args.args
-        self.assertIn('tenant_id=%s::uuid',sql);self.assertIn('active=TRUE',sql);self.assertEqual(args,('tenant',9))
+        person={'role':'worker','active':True,'permissions':[],'modules':{'tasks':True}}
+        self.assertFalse(tasks._eligible(person,{}))
+        person['permissions']=['tasks']
+        self.assertTrue(tasks._eligible(person,{}))
+        for denied in ({'active':False},{'modules':{'tasks':False}},
+                       {'permissions':['tasks','tasks:view']},{'permissions':['tasks:view','tasks:update']}):
+            with self.subTest(denied=denied):self.assertFalse(tasks._eligible({**person,**denied},{}))
 
 
 if __name__=='__main__':unittest.main()

@@ -3,7 +3,111 @@ from __future__ import annotations
 import uuid
 import hashlib
 from datetime import datetime,timedelta,timezone
-from tenant_platform_core import _connect,_ensure_schema
+from tenant_platform_core import _connect
+from tenant_policy import TenantPolicy
+from tenant_workflow_store import _read_tenant_workflow
+
+
+class NativeTaskAccessError(ValueError):
+    def __init__(self,code,status=403):
+        super().__init__(code)
+        self.code,self.status=code,status
+
+
+def _require_schema(conn):
+    """Startup owns schema installation; task reads/writes never repair it."""
+    with conn.cursor() as cur:
+        cur.execute('''SELECT bool_and(to_regclass(name) IS NOT NULL) AS ready
+          FROM unnest(%s::text[]) AS required(name)''',([
+            'saas_tenants','saas_tenant_members','saas_tenant_pipelines',
+            'saas_tenant_pipeline_stages','saas_tenant_workflow_policies',
+            'saas_crm_native_tasks','saas_crm_native_deals','saas_crm_native_contacts'],))
+        if not (cur.fetchone() or {}).get('ready'):
+            raise NativeTaskAccessError('task_schema_unavailable',503)
+
+
+def _tenant(cur,tenant_id,*,lock=False):
+    cur.execute('SELECT id,modules FROM saas_tenants WHERE id=%s::uuid'+(' FOR SHARE' if lock else ''),(tenant_id,))
+    row=cur.fetchone()
+    if not row:raise NativeTaskAccessError('task_access_revoked')
+    return row
+
+
+def _profiles(cur,tenant_id,company,ids=None,*,lock=False):
+    # Workflow writes update these policies before memberships. Notifications
+    # and unrelated policy rows are deliberately outside this fence.
+    if lock:
+        cur.execute('''SELECT policy_key FROM saas_tenant_workflow_policies
+          WHERE tenant_id=%s::uuid AND policy_key=ANY(%s::text[])
+          ORDER BY policy_key FOR SHARE''',(tenant_id,['members','modules']))
+        cur.fetchall()
+    args=[tenant_id]
+    clause=''
+    if ids is not None:
+        clause=' AND telegram_id=ANY(%s::bigint[])';args.append(sorted(set(ids)))
+    cur.execute('''SELECT tenant_id,telegram_id,display_name,role,permissions,active
+      FROM saas_tenant_members WHERE tenant_id=%s::uuid'''+clause+
+      ' ORDER BY telegram_id'+(' FOR SHARE' if lock else ''),args)
+    rows=cur.fetchall()
+    # Read pipeline/stage visibility at the admission point, after a pending
+    # membership/policy writer has committed. No stage locks invert FK checks.
+    workflow=_read_tenant_workflow(cur,tenant_id)
+    return {int(row['telegram_id']):{**dict(row),'tenant_id':str(tenant_id),
+        'modules':company.get('modules') or {},'workflow':workflow} for row in rows}
+
+
+def _actor(profiles,actor_id,action):
+    policy=TenantPolicy(profiles.get(int(actor_id)) or {})
+    # API creator authority retains its existing granular-action contract.
+    # Work eligibility below separately requires the actual /app task module.
+    if not policy.allows_action('tasks',action):
+        raise NativeTaskAccessError('task_access_revoked')
+    return policy
+
+
+def _in_manager_scope(policy,deal):
+    return any(str(deal.get('pipeline_id'))==str(item['pipeline_id'])
+      and (not item['status_ids'] or str(deal.get('stage_id')) in {str(value) for value in item['status_ids']})
+      for item in policy.pipeline_scope())
+
+
+def _eligible(profile,deal):
+    policy=TenantPolicy(profile or {})
+    return bool(profile and policy.allows('tasks') and policy.allows_action('tasks','view')
+        and policy.allows_action('tasks','update')
+        and (profile.get('role')!='manager' or _in_manager_scope(policy,deal)))
+
+
+def task_access_allowed(policy,row,actor_id):
+    if not row:return False
+    if policy.privileged:return True
+    if int(actor_id) not in {int(row.get('responsible_id') or 0),int(row.get('created_by') or 0)}:return False
+    return policy.profile.get('role')!='manager' or _in_manager_scope(policy,row)
+
+
+def _creation_deal_allowed(policy,deal,actor_id):
+    return bool(policy.privileged or (int(deal.get('responsible_id') or 0)==int(actor_id)
+      and (policy.profile.get('role')!='manager' or _in_manager_scope(policy,deal))))
+
+
+def _admit(cur,tenant_id,company,deal,responsible_id,actor_id=None,*,task=None,action='create'):
+    ids=[int(responsible_id)]
+    if actor_id is not None:ids.append(int(actor_id))
+    profiles=_profiles(cur,tenant_id,company,ids,lock=True)
+    if actor_id is not None:
+        policy=_actor(profiles,actor_id,action)
+        if task is not None:
+            if not task_access_allowed(policy,{**task,**deal,'created_by':task.get('created_by'),
+                    'responsible_id':task.get('responsible_id')},actor_id):
+                raise NativeTaskAccessError('task_unavailable',404)
+        elif not _creation_deal_allowed(policy,deal,actor_id):
+            raise NativeTaskAccessError('deal_unavailable',404)
+        if not policy.privileged and int(responsible_id)!=int(actor_id):
+            raise NativeTaskAccessError('forbidden_assignment')
+        if action=='create' and not policy.privileged and policy.requires_task_approval(
+                creator_id=int(actor_id),executor_id=int(responsible_id)):
+            raise NativeTaskAccessError('approval_required')
+    return _assignee(cur,tenant_id,responsible_id,deal=deal,profiles=profiles)
 
 
 def _id(value,label):
@@ -22,19 +126,21 @@ def _due(value):
     if dt.tzinfo is None:raise ValueError('due date needs timezone')
     return dt.astimezone(timezone.utc)
 
-def _assignee(cur,tenant_id,responsible_id):
+def _assignee(cur,tenant_id,responsible_id,*,deal=None,profiles=None):
     try:person=int(responsible_id)
     except (ValueError,TypeError):raise ValueError('invalid responsible') from None
-    cur.execute("""SELECT 1 FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s
-        AND active=TRUE AND (role='owner' OR permissions @> '[\"tasks\"]'::jsonb)""",(tenant_id,person))
-    if not cur.fetchone():raise ValueError('responsible cannot use tasks')
+    if profiles is None:
+        company=_tenant(cur,tenant_id,lock=True)
+        profiles=_profiles(cur,tenant_id,company,[person],lock=True)
+    if not _eligible(profiles.get(person),deal or {}):
+        raise NativeTaskAccessError('assignee_unavailable',409)
     return person
 
-def _deal(cur,tenant_id,deal_id):
+def _deal(cur,tenant_id,deal_id,*,lock=True):
     cur.execute("""SELECT id,title,contact_id,responsible_id,channel_id,conversation_id,pipeline_id,stage_id
-        FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE""",(tenant_id,deal_id))
+        FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL"""+(' FOR UPDATE' if lock else ''),(tenant_id,deal_id))
     row=cur.fetchone()
-    if not row:raise ValueError('deal unavailable')
+    if not row:raise NativeTaskAccessError('deal_unavailable',404)
     return row
 
 def _row(cur,tenant_id,task_id):
@@ -47,15 +153,19 @@ def _row(cur,tenant_id,task_id):
         WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.archived_at IS NULL""",(tenant_id,task_id))
     return cur.fetchone()
 
-def create_task(tenant_id,deal_id,text,responsible_id,*,due_at=None,created_by=None,idempotency_key=None):
+def create_task(tenant_id,deal_id,text,responsible_id,*,due_at=None,created_by=None,idempotency_key=None,actor_id=None):
     deal_id=_id(deal_id,'deal id'); text=_text(text)
     if not text:raise ValueError('invalid task text')
     due=_due(due_at); key='manual:'+_id(idempotency_key,'request id')
     created_by=int(created_by) if created_by else None
+    actor_id=int(actor_id) if actor_id is not None else created_by
+    if actor_id is not None and created_by!=actor_id:raise NativeTaskAccessError('task_access_revoked')
     with _connect() as conn:
-        _ensure_schema(conn)
+        _require_schema(conn)
         with conn.cursor() as cur:
-            deal=_deal(cur,tenant_id,deal_id); assignee=_assignee(cur,tenant_id,responsible_id)
+            company=_tenant(cur,tenant_id,lock=True)
+            deal=_deal(cur,tenant_id,deal_id)
+            assignee=_admit(cur,tenant_id,company,deal,responsible_id,actor_id)
             cur.execute("""INSERT INTO saas_crm_native_tasks
                 (id,tenant_id,deal_id,contact_id,channel_id,conversation_id,text,due_at,responsible_id,created_by,idempotency_key)
                 VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s)
@@ -87,7 +197,7 @@ def list_tasks(tenant_id,*,search='',responsible_id=None,scope=None,limit=100):
             parts.append('('+part+')')
         clause+=' AND ('+' OR '.join(parts)+')' if parts else ' AND FALSE'
     with _connect() as conn:
-        _ensure_schema(conn)
+        _require_schema(conn)
         with conn.cursor() as cur:
             cur.execute(f"""SELECT t.id,t.deal_id,d.title AS deal_title,t.contact_id,c.display_name AS contact_name,
                 t.channel_id,t.conversation_id,t.text,t.due_at,t.responsible_id,m.display_name AS responsible_name,
@@ -98,57 +208,108 @@ def list_tasks(tenant_id,*,search='',responsible_id=None,scope=None,limit=100):
                 WHERE {clause} ORDER BY (t.status='open') DESC,t.due_at ASC NULLS LAST,t.created_at DESC LIMIT %s""",[*args,max(1,min(int(limit),200))])
             return cur.fetchall()
 
-def task_options(tenant_id,actor_id,privileged=False):
+def task_options(tenant_id,actor_id,privileged=False,*,deal_id=None,task_id=None):
+    """The legacy privilege argument is not authority; resolve current rows."""
+    actor_id=int(actor_id)
     with _connect() as conn:
-        _ensure_schema(conn)
+        _require_schema(conn)
         with conn.cursor() as cur:
-            if privileged:
-                cur.execute("SELECT id,title,contact_id,channel_id,conversation_id FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 200",(tenant_id,))
-                deals=cur.fetchall()
-                cur.execute("SELECT telegram_id,display_name FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE AND (role='owner' OR permissions @> '[\"tasks\"]'::jsonb) ORDER BY display_name",(tenant_id,))
-                members=cur.fetchall()
-            else:
-                cur.execute("SELECT id,title,contact_id,channel_id,conversation_id FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND archived_at IS NULL AND responsible_id=%s ORDER BY updated_at DESC LIMIT 200",(tenant_id,int(actor_id)))
-                deals=cur.fetchall();members=[]
-    return {'deals':deals,'members':members}
+            company=_tenant(cur,tenant_id)
+            profiles=_profiles(cur,tenant_id,company)
+            policy=_actor(profiles,actor_id,'view')
+            cur.execute('''SELECT id,title,contact_id,channel_id,conversation_id,responsible_id,pipeline_id,stage_id
+              FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND archived_at IS NULL
+              ORDER BY updated_at DESC,id LIMIT 200''',(tenant_id,))
+            deals=[row for row in cur.fetchall() if _creation_deal_allowed(policy,row,actor_id)]
+            selected=None
+            if task_id:
+                task=_row(cur,tenant_id,_id(task_id,'task id'))
+                if not task_access_allowed(policy,task,actor_id):raise NativeTaskAccessError('task_unavailable',404)
+                selected=_deal(cur,tenant_id,str(task['deal_id']),lock=False)
+                if deal_id and _id(deal_id,'deal id')!=str(selected['id']):raise NativeTaskAccessError('deal_unavailable',404)
+                if not any(str(row['id'])==str(selected['id']) for row in deals):deals.insert(0,selected)
+            elif deal_id:
+                selected=next((row for row in deals if str(row['id'])==_id(deal_id,'deal id')),None)
+                if selected is None:raise NativeTaskAccessError('deal_unavailable',404)
+            elif deals:selected=deals[0]
+            people=profiles.values() if policy.privileged else [profiles[actor_id]]
+            members=[{'telegram_id':person['telegram_id'],'display_name':person['display_name']}
+              for person in people if selected and _eligible(person,selected)]
+            members.sort(key=lambda row:(row['display_name'],int(row['telegram_id'])))
+    fields=('id','title','contact_id','channel_id','conversation_id')
+    return {'deals':[{key:row.get(key) for key in fields} for row in deals], 'members':members,
+      'selected_deal_id':str(selected['id']) if selected else None,
+      'assignment':{'scope':'tenant' if policy.privileged else 'self','criterion':'active_tasks_view_update',
+        'status':'ready' if members else 'no_eligible_members' if selected else 'no_deals',
+        'can_manage_employees':policy.allows_action('employees','manage'),
+        'settings_available':policy.allows('settings')}}
 
 def get_task(tenant_id,task_id):
     task_id=_id(task_id,'task id')
     with _connect() as conn:
-        _ensure_schema(conn)
+        _require_schema(conn)
         with conn.cursor() as cur:return _row(cur,tenant_id,task_id)
 
-def update_task(tenant_id,task_id,text,responsible_id,*,due_at=None):
+def _locked_task(cur,tenant_id,task_id):
+    cur.execute('''SELECT id,deal_id,responsible_id,created_by FROM saas_crm_native_tasks
+      WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE''',(tenant_id,task_id))
+    return cur.fetchone()
+
+
+def _task_actor(cur,tenant_id,company,task,deal,actor_id,action,*,completion=False,archive=False):
+    if actor_id is None:return
+    policy=_actor(_profiles(cur,tenant_id,company,[int(actor_id)],lock=True),actor_id,action)
+    current={**deal,**task}
+    if not task_access_allowed(policy,current,actor_id):raise NativeTaskAccessError('task_unavailable',404)
+    if archive and not policy.privileged and int(task.get('created_by') or 0)!=int(actor_id):
+        raise NativeTaskAccessError('task_access_revoked')
+    if completion and not policy.privileged and policy.requires_task_approval(
+            creator_id=int(task.get('created_by') or 0),executor_id=int(task['responsible_id']),completion=True):
+        raise NativeTaskAccessError('approval_required')
+
+
+def update_task(tenant_id,task_id,text,responsible_id,*,due_at=None,actor_id=None):
     task_id=_id(task_id,'task id'); text=_text(text)
     if not text:raise ValueError('invalid task text')
     due=_due(due_at)
     with _connect() as conn:
-        _ensure_schema(conn)
+        _require_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("SELECT deal_id FROM saas_crm_native_tasks WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE",(tenant_id,task_id))
-            task=cur.fetchone()
+            company=_tenant(cur,tenant_id,lock=True)
+            task=_locked_task(cur,tenant_id,task_id)
             if not task: return None
-            _deal(cur,tenant_id,str(task['deal_id']));assignee=_assignee(cur,tenant_id,responsible_id)
+            deal=_deal(cur,tenant_id,str(task['deal_id']))
+            assignee=_admit(cur,tenant_id,company,deal,responsible_id,actor_id,task=task,action='update')
             cur.execute("UPDATE saas_crm_native_tasks SET text=%s,responsible_id=%s,due_at=%s,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL",(text,assignee,due,tenant_id,task_id))
             row=_row(cur,tenant_id,task_id)
         conn.commit()
     return row
 
-def set_task_state(tenant_id,task_id,status):
+def set_task_state(tenant_id,task_id,status,*,actor_id=None):
     if status not in {'open','completed'}:raise ValueError('invalid task status')
     with _connect() as conn:
-        _ensure_schema(conn)
+        _require_schema(conn)
         with conn.cursor() as cur:
+            company=_tenant(cur,tenant_id,lock=True)
+            task=_locked_task(cur,tenant_id,_id(task_id,'task id'))
+            if not task:return None
+            deal=_deal(cur,tenant_id,str(task['deal_id']))
+            _task_actor(cur,tenant_id,company,task,deal,actor_id,'update',completion=status=='completed')
             cur.execute("UPDATE saas_crm_native_tasks SET status=%s,completed_at=CASE WHEN %s='completed' THEN COALESCE(completed_at,now()) ELSE NULL END,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL RETURNING id",(status,status,tenant_id,_id(task_id,'task id')))
             row=cur.fetchone()
             result=_row(cur,tenant_id,task_id) if row else None
         conn.commit()
     return result
 
-def archive_task(tenant_id,task_id):
+def archive_task(tenant_id,task_id,*,actor_id=None):
     with _connect() as conn:
-        _ensure_schema(conn)
+        _require_schema(conn)
         with conn.cursor() as cur:
+            company=_tenant(cur,tenant_id,lock=True)
+            task=_locked_task(cur,tenant_id,_id(task_id,'task id'))
+            if not task:return False
+            deal=_deal(cur,tenant_id,str(task['deal_id']))
+            _task_actor(cur,tenant_id,company,task,deal,actor_id,'delete',archive=True)
             cur.execute("UPDATE saas_crm_native_tasks SET archived_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL RETURNING id",(tenant_id,_id(task_id,'task id')))
             result=cur.fetchone() is not None
         conn.commit()
@@ -168,7 +329,7 @@ def maybe_create_stage_task(cur,tenant_id,deal,*,event_key):
     due=datetime.now(timezone.utc).replace(microsecond=0)
     text=_text(trigger.get('text'))
     if not text:return None
-    try:assignee=_assignee(cur,tenant_id,assignee)
+    try:assignee=_assignee(cur,tenant_id,assignee,deal=deal)
     except (ValueError,TypeError):return None
     event_key='workflow:'+hashlib.sha256(str(event_key).encode('utf-8')).hexdigest()
     cur.execute("""INSERT INTO saas_crm_native_tasks(id,tenant_id,deal_id,contact_id,channel_id,conversation_id,text,due_at,responsible_id,created_by,idempotency_key)
