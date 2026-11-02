@@ -544,7 +544,6 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                 validate_binding(cur,tenant,agent_uuid,merged,previous)
                 # The recipient binding is server-owned; it lives in the
                 # persisted JSON but is never accepted from a browser patch.
-                stored_dispatch_owner=(previous.get('response_policy') or {}).get('auto_case_dispatch_owner_id')
                 (merged.get('response_policy') or {}).pop('auto_case_dispatch_owner_id',None)
                 merged['safety'] = safety_policy(merged.get('safety'))
                 from tenant_ai_agent_no_answer import validate_policy
@@ -553,9 +552,8 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                     merged['response_policy']['auto_case_dispatch_enabled']=False
                 if merged['response_policy'].get('auto_case_dispatch_enabled'):
                     _validate_case_developer_destinations(cur,profile,tenant,merged['response_policy'])
-                    # Revalidation above requires the current company owner.
-                    # Keep the original owner when that same owner saves; on
-                    # first enable, bind this server-verified owner.
+                    # Revalidation above requires the current company owner,
+                    # including after an ownership transfer.
                     merged['response_policy']['auto_case_dispatch_owner_id']=actor
                 else:
                     merged['response_policy'].pop('auto_case_dispatch_owner_id',None)
@@ -607,6 +605,9 @@ def _validate_case_developer_destinations(cur,profile,tenant,response_policy):
     if str(access_tenant)!=str(tenant):raise TenantLinearError('Developer recipients are outside this company.',403)
     if dialogs_policy.profile.get('role')!='owner':
         raise TenantLinearError('Only the owner can enable automatic external developer dispatch.',403)
+    cur.execute('SELECT owner_telegram_id FROM saas_tenants WHERE id=%s::uuid FOR SHARE',(tenant,))
+    if (cur.fetchone() or {}).get('owner_telegram_id')!=_actor:
+        raise TenantLinearError('Only the current company owner can enable automatic external developer dispatch.',403)
     for row in response_policy.get('developer_destinations') or []:
         developer_target(cur,tenant,dialogs_policy,row['channel_id'],row['conversation_id'])
 

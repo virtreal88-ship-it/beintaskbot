@@ -128,6 +128,10 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
         self.prepare_media=mocked(media,'prepare',side_effect=prepare)
         mocked(media.AutoExecution,'check',side_effect=lambda: None if self.active else (_ for _ in ()).throw(TenantLinearError('inactive',409)))
         mocked(media.AutoExecution,'check_sources',side_effect=lambda: None if self.active else (_ for _ in ()).throw(TenantLinearError('inactive',409)))
+        # This unit harness has no cases or SQL connection. Optional case
+        # context is absent; real case/source authority has isolated SQL tests.
+        import tenant_dialog_consultations as consultations
+        mocked(consultations,'active_case_developer_context',return_value=[])
 
     async def process(self, job=None):
         await worker.process_connect_one(job or JOB, Mock())

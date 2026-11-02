@@ -1408,6 +1408,8 @@ async def process_connect_one(job, logger):
                 await asyncio.to_thread(finish_superseded,job,reservation,'developer_case_dialog_revision_changed');return
             handoff_after_reply = any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matched)
             send_options = {'pilot_scope_fenced':job.get('_pilot_scope_fenced') is True,'coverage_manifest':coverage_manifest}
+            if developer_updates:
+                send_options['developer_reply_ids']=[item['source_id'].removeprefix('case-reply:') for item in developer_updates]
             if developer_followup:
                 send_options['case_followup_binding']=dict(job.get('payload') or {})
             if handoff_after_reply:

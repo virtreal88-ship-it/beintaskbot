@@ -7,6 +7,7 @@ was written into the tenant's own CRM history in the same transaction.
 from __future__ import annotations
 
 import hashlib
+import json
 from contextlib import nullcontext
 import re
 from tenant_ai_dialog_scope import channel_scope, job_scope, lock_dialog
@@ -166,7 +167,7 @@ def _bind_unique_connect_candidate(cur, tenant, channel_id, conversation_id, row
     return (agent, '') if cur.fetchone() else (None, 'existing_agent_preserved')
 
 
-def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id):
+def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id, *, blocking=True):
     """Bind one eligible direct dialog without enabling AI execution.
 
     This reconciliation is deliberately independent of company AI/send flags,
@@ -186,6 +187,22 @@ def reconcile_unassigned_connect_dialog(cur, tenant, channel_id, conversation_id
     from tenant_ai_group_coordination import group_jid
     if group_jid(conversation_id):
         return None, 'group_requires_coordinator'
+    # Configuration saves already hold the agent row. Assigned dialogs cannot
+    # be changed by this reconciler, so do not acquire their dialog fences in
+    # the opposite order to an active worker's dialog -> agent boundary.
+    cur.execute('''SELECT agent_id,agent_assignment_id FROM saas_ai_conversation_state
+      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s''',
+      (tenant,channel_id,conversation_id))
+    existing=cur.fetchone() or {}
+    if existing.get('agent_id') or existing.get('agent_assignment_id'):
+        return None,'existing_agent_preserved'
+    if not blocking:
+        # Batch configuration reconciliation is opportunistic. Never wait for
+        # a worker while holding its mutable agent/settings rows; a fresh
+        # inbound or later reconciliation can safely retry an unassigned route.
+        cur.execute('SELECT pg_try_advisory_xact_lock(hashtextextended(%s,0)) AS acquired',
+          ('ai-dialog:'+json.dumps([str(tenant),'connect',channel_id,conversation_id]),))
+        if not (cur.fetchone() or {}).get('acquired'):return None,'dialog_busy'
     lock_dialog(cur, tenant, 'connect', channel_id, conversation_id)
     cur.execute('''SELECT t.status,ch.active,
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=t.id
@@ -297,7 +314,7 @@ def reconcile_tenant_connect_assignments(cur, tenant, channel_ids=None):
     assigned = 0
     for row in rows:
         agent, _reason = reconcile_unassigned_connect_dialog(
-            cur, tenant, row['channel_id'], row['conversation_id'])
+            cur, tenant, row['channel_id'], row['conversation_id'],blocking=False)
         assigned += int(agent is not None)
     return {'checked': len(rows), 'assigned': assigned}
 

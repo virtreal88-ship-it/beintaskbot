@@ -207,6 +207,10 @@ def test_developer_context_is_limited_to_unique_case_containing_current_message(
     local,data,_=case_ready
     monkeypatch.setattr(flow,'_connect',lambda:local)
     result=flow.prepare(PROFILE,data,'https://crm.test');flow.dispatch(PROFILE,result['id'],data['request_id'])
+    import tenant_ai_group_coordination as coordination
+    coordination.create_schema(local)
+    local.execute("INSERT INTO saas_ai_group_staff(tenant_id,channel_id,jid,member_id,verified_by) VALUES(%s::uuid,%s::uuid,'15550001111@s.whatsapp.net',11,11) ON CONFLICT DO NOTHING",(A,CA))
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,raw) VALUES(%s::uuid,%s::uuid,99,'connect:context-reply','incoming',%s,'Завтра посмотрю',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'context-reply','quotedExternalMessageId':'PROVIDER_123','participantJid':'15550001111@s.whatsapp.net'})))
     with local.cursor() as cur:
         reply_id=flow.record_reply(cur,A,CA,TARGET,'context-reply','Завтра посмотрю','PROVIDER_123',author='Developer')
     assert reply_id
@@ -216,6 +220,9 @@ def test_developer_context_is_limited_to_unique_case_containing_current_message(
       'developer_case_followup':True,'case_id':data['case_id'],'developer_reply_message_id':reply_id}}
     context=flow.active_case_developer_context(job,source)
     assert len(context)==1 and context[0]['message']=='Завтра посмотрю'
+    local.execute("UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));local.commit()
+    assert flow.active_case_developer_context(job,source)==[]
+    local.execute("UPDATE saas_tenant_members SET active=TRUE WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));local.commit()
     job['payload']['developer_reply_message_id']=str(uuid.uuid4())
     assert flow.active_case_developer_context(job,source)==[]
     job['payload']['developer_reply_message_id']=reply_id
@@ -297,7 +304,7 @@ def test_group_case_followup_inherits_only_current_admitted_source_fence(case_re
     consultation=flow.prepare(PROFILE,{**data,'destination_conversation_id':direct},'https://crm.test')
     flow.dispatch(PROFILE,consultation['id'],data['request_id'])
     local.execute("UPDATE saas_support_tickets SET conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid",(group,A,data['case_id']))
-    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,99,'connect:developer-reply-group','incoming',%s,'We will check the cable','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'developer-reply-group','quotedExternalMessageId':'PROVIDER_123'})))
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,199,'connect:developer-reply-group','incoming',%s,'We will check the cable','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'developer-reply-group','quotedExternalMessageId':'PROVIDER_123'})))
     local.commit()
     with local.cursor() as cur:reply_id=flow.record_reply(cur,A,CA,direct,'developer-reply-group','We will check the cable','PROVIDER_123',author='Synthetic Developer',source_external_id='connect:developer-reply-group',fresh_followup=True)
     with local.cursor() as cur:assert connect_ai.enqueue_case_developer_followup(cur,A,reply_id,source_external_id='connect:developer-reply-group',quoted_message_id='PROVIDER_123')

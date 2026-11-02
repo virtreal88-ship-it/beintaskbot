@@ -592,7 +592,7 @@ def _verified_group_reply_author(cur,tenant,channel,conversation,source_external
         AND r.kommo_lead_id=v.lead_id AND r.channel='connect:'||s.channel_id::text AND r.direction='incoming'
         AND s.jid=ANY(ARRAY[r.raw->>'participantJid',r.raw->>'participantAlt',r.raw->>'senderJid']::text[])
       WHERE s.tenant_id=%s::uuid AND s.channel_id=%s::uuid AND s.member_id=%s
-      FOR SHARE OF s,m,r,v''',
+      FOR SHARE OF s,m,r FOR KEY SHARE OF v''',
       (conversation,str(source_external_id),tenant,channel,source_actor))
     return bool(cur.fetchone())
 
@@ -756,6 +756,18 @@ def active_case_developer_context(job,source_external_id,limit=10):
               JOIN saas_dialog_consultation_replies r ON r.tenant_id=c.tenant_id AND r.consultation_id=c.id
               WHERE t.tenant_id=%s::uuid AND t.channel_id=%s::uuid AND t.conversation_id=%s
                 AND t.id=%s::uuid AND t.status<>'resolved' AND c.status='answered' AND r.source_kind='provider'
+                AND EXISTS(SELECT 1 FROM saas_crm_messages rm
+                  JOIN saas_connect_conversations rv ON rv.tenant_id=rm.tenant_id AND rv.lead_id=rm.kommo_lead_id
+                    AND rv.connect_channel_id=r.channel_id AND rv.conversation_id=r.conversation_id
+                  JOIN saas_consultation_group_deliveries d ON d.tenant_id=r.tenant_id AND d.consultation_id=r.consultation_id
+                    AND d.channel_id=r.channel_id AND d.conversation_id=r.conversation_id AND d.state='sent'
+                    AND d.provider_message_id=rm.raw->>'quotedExternalMessageId'
+                  WHERE rm.tenant_id=r.tenant_id AND rm.external_id=r.source_external_id
+                    AND rm.channel='connect:'||r.channel_id::text AND rm.direction='incoming'
+                    AND (r.conversation_id NOT LIKE '%%@g.us' OR EXISTS(SELECT 1 FROM saas_ai_group_staff gs
+                      JOIN saas_tenant_members gm ON gm.tenant_id=gs.tenant_id AND gm.telegram_id=gs.member_id AND gm.active=TRUE
+                      WHERE gs.tenant_id=r.tenant_id AND gs.channel_id=r.channel_id AND gs.member_id=r.source_actor
+                        AND gs.jid=ANY(ARRAY[rm.raw->>'participantJid',rm.raw->>'participantAlt',rm.raw->>'senderJid']::text[]))))
                 AND (%s::uuid[] IS NULL OR r.id=ANY(%s::uuid[]))
               ORDER BY r.happened_at DESC,r.created_at DESC,r.id DESC LIMIT %s''',
               (tenant,channel,conversation,cases[0]['case_id'],exact_replies or None,exact_replies or None,max(len(exact_replies),max(1,min(int(limit),100)))))
@@ -815,6 +827,13 @@ def case_developer_followup_current(cur,tenant,payload):
       LIMIT 1 FOR UPDATE OF t,cs FOR SHARE OF a,s,tn,ch,source_ch,marker''',(tenant,case_id,reply_id,channel,conversation,channel,conversation,quote,quote))
     row=cur.fetchone()
     if not row:return False
+    cur.execute('''SELECT m.id FROM saas_crm_messages m JOIN saas_connect_conversations v
+      ON v.tenant_id=m.tenant_id AND v.connect_channel_id=%s::uuid AND v.conversation_id=%s
+        AND v.lead_id=m.kommo_lead_id
+      WHERE m.tenant_id=%s::uuid AND m.external_id=%s AND m.direction='incoming'
+        AND m.channel='connect:'||%s::uuid::text AND m.raw->>'quotedExternalMessageId'=%s
+      FOR SHARE OF m FOR KEY SHARE OF v''',(channel,conversation,tenant,row['source_external_id'],channel,quote))
+    if not cur.fetchone():return False
     if str(conversation).endswith('@g.us') and not _verified_group_reply_author(
         cur,tenant,channel,conversation,row.get('source_external_id'),row.get('source_actor')):return False
     if payload.get('developer_expected_agent_id') and str(row.get('agent_id') or '')!=str(payload['developer_expected_agent_id']):return False

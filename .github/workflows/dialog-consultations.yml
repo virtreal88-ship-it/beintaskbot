@@ -11,6 +11,14 @@ on:
       - 'beintaskbot-main/tests/test_support_case_materials*'
       - 'beintaskbot-main/docs/tenant-support-consultations.js'
       - 'beintaskbot-main/tests/test_case_consultations_unified.py'
+      - 'beintaskbot-main/tests/test_pr465_workflow_integration.py'
+      - 'beintaskbot-main/tests/test_pr465_followup_worker.py'
+      - 'beintaskbot-main/tests/test_ai_schema_cold_readiness.py'
+      - 'beintaskbot-main/tests/test_operator_case_recovery*'
+      - 'beintaskbot-main/tests/test_case_developer_settings_ui.cjs'
+      - 'beintaskbot-main/tests/operator_case_ui_fixture.cjs'
+      - 'beintaskbot-main/tests/isolated_database_guard/*'
+      - 'beintaskbot-main/tenant_ai_agents_schema.py'
       - 'beintaskbot-main/tenant_notification_center*.py'
       - 'beintaskbot-main/tests/test_tenant_notification_center*'
       - 'beintaskbot-main/tests/test_tenant_notification_bell_ux_browser.cjs'
@@ -162,6 +170,8 @@ jobs:
       - name: Exercise independent consultations and real PostgreSQL races
         env:
           PYTHONPATH: tests/isolated_database_guard:.:tests
+          NODE_PATH: .support-test-deps/node_modules
+          SUPPORT_CASES_JSDOM: ../.support-test-deps/node_modules/jsdom
         run: |
           python -m pytest -q -rs \
             tests/test_dialog_consultations.py \
@@ -170,6 +180,9 @@ jobs:
             tests/test_photo_thumbnail_projection.py \
             tests/test_support_case_materials.py \
             tests/test_case_consultations_unified.py \
+            tests/test_pr465_workflow_integration.py \
+            tests/test_pr465_followup_worker.py \
+            tests/test_ai_schema_cold_readiness.py \
             tests/test_tenant_ai_pilot_worker.py \
             tests/test_tenant_ai_agent_no_answer.py \
             tests/test_tenant_ai_agent_no_answer_postgres.py \
@@ -237,6 +250,9 @@ jobs:
           node tests/test_support_ticket_modal_browser.cjs
           node tests/test_tenant_support_inbox_ui.cjs
           node tests/test_operator_case_submission_ui.cjs
+          node tests/test_operator_case_recovery_ui.cjs
+          node tests/test_operator_case_recovery_browser.cjs
+          node tests/test_case_developer_settings_ui.cjs
           node tests/test_tenant_push_dialog_route_ui.cjs
           node tests/test_tenant_notification_badge_browser.cjs
           node tests/test_dialog_photo_status_ui.cjs
