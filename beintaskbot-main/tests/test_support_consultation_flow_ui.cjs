@@ -9,12 +9,12 @@ async function setup({dialogs=true,agent=true}={}){
  const dom=new JSDOM('<div id="host"></div><p id="notice"></p>',{url:'https://crm.test/app',runScripts:'outside-only'}),w=dom.window,d=w.document,calls=[];
  const member={tenant_id:'company-a',telegram_id:11,role:dialogs?'owner':'operator'};
  w.tenantI18n={language:'ru',date:value=>String(value)};w.tenantOperator={hasRight:right=>right==='dialogs'?dialogs:true};
- const state={consultations:[],replies:[],prepareError:null,losePrepareResponse:false,dispatchState:'pending'};
+ const state={autoDispatches:[],consultations:[],replies:[],prepareError:null,losePrepareResponse:false,dispatchState:'pending'};
  w.fetch=async(url,options={})=>{
   const path=new URL(url,w.location).pathname,body=options.body?JSON.parse(options.body):undefined;calls.push({path,body,options});
-  if(path===base+'/preview')return ok({messages,case_id:ticket.id,has_earlier:false});
+  if(path===base+'/preview')return ok({messages,case_id:ticket.id,has_earlier:false,customer_identity_preview:{name:'Synthetic customer',verified_phone:'+15550001111',phone_status:'verified'}});
   if(path===base+'/destinations')return ok({destinations:[{channel_id:'developer-channel',conversation_id:'developers@g.us',customer_name:'Developers',channel_name:'Support WhatsApp'}]});
-  if(path===base+'/replies')return ok({consultations:state.consultations,replies:state.replies});
+  if(path===base+'/replies')return ok({auto_dispatches:state.autoDispatches,consultations:state.consultations,replies:state.replies});
   if(path===base&&options.method==='POST'){
    if(state.prepareError)return{ok:false,status:409,json:async()=>({success:false,error:state.prepareError})};
    state.consultations=[{id:'consult-a',case_id:ticket.id,request_id:body.request_id,source_channel:ticket.channel_id,source_conversation:ticket.conversation_id,destination_channel:body.destination_channel_id,destination_conversation:body.destination_conversation_id,recipient:'Developers',reason:body.summary,state:'ready',can_dispatch:true,can_send:true,can_manual_reply:true,created_at:'2026-11-01T13:00:00Z',expires_at:'2099-11-08T13:00:00Z'}];
@@ -33,17 +33,17 @@ async function setup({dialogs=true,agent=true}={}){
  await settle();return{dom,w,d,calls,state,controller,close(){controller.dispose();dom.window.close();}};
 }
 async function form(ctx){ctx.d.querySelector('#consultCreate').click();await settle();return ctx.d.querySelector('#caseDeveloperForm');}
-function fill(ctx,node){const summary=node.querySelector('#consultReason');summary.value='Printer cannot connect';node.querySelector('#caseConsultFirst').value='message-0';node.querySelector('#caseConsultLast').value='message-2';node.dispatchEvent(new ctx.w.Event('change',{bubbles:true}));for(const check of node.querySelectorAll('input[type=checkbox]'))check.checked=true;summary.dispatchEvent(new ctx.w.Event('input',{bubbles:true}));}
+function fill(ctx,node){const summary=node.querySelector('#consultReason');summary.value='Printer cannot connect';node.querySelector('#caseConsultFirst').value='message-0';node.querySelector('#caseConsultLast').value='message-2';node.dispatchEvent(new ctx.w.Event('change',{bubbles:true}));for(const check of node.querySelectorAll('input[type=checkbox]'))check.checked=true;summary.dispatchEvent(new ctx.w.Event('input',{bubbles:true}));const confirmation=node.querySelector('#caseConsultRecipientConfirm');confirmation.checked=true;confirmation.dispatchEvent(new ctx.w.Event('change',{bubbles:true}));}
 (async()=>{
  const ctx=await setup();
  assert.equal(ctx.calls.filter(call=>call.options.method==='POST').length,0,'reading does not send or run AI');
- const request=await form(ctx);assert.ok(request);assert.equal(request.querySelectorAll('#consultRecipient').length,1,'one Developer recipient');
+ const request=await form(ctx);assert.ok(request);assert.equal(request.querySelectorAll('#consultRecipient').length,1,'one Developer recipient');assert.equal(request.querySelector('#caseConsultIdentityConsent').checked,false,'public identity is opt-in');assert.match(request.querySelector('#caseConsultIdentityPreview').textContent,/не будут опубликованы/);
  assert.equal(request.querySelector('#caseConsultFirst').value,'message-2','a public fragment starts with only the last message selected');
  assert.equal(request.querySelectorAll('input[type=checkbox]:checked').length,0,'files are explicitly selected');
- assert.equal(request.querySelector('[data-consultation-confirm]'),null,'no additional confirmation checkbox');
+ assert.ok(request.querySelector('#caseConsultRecipientConfirm')?.required,'every manual request requires explicit recipient confirmation');assert.equal(request.querySelector('#caseConsultSend').disabled,true,'preselected or single recipient cannot send without explicit confirmation');
  fill(ctx,request);request.dispatchEvent(new ctx.w.Event('submit',{cancelable:true}));request.dispatchEvent(new ctx.w.Event('submit',{cancelable:true}));await settle();
  const prepared=ctx.calls.filter(call=>call.path===base&&call.options.method==='POST'),sent=ctx.calls.filter(call=>call.path.endsWith('/dispatch'));
- assert.equal(prepared.length,1);assert.equal(sent.length,1);assert.equal(prepared[0].body.case_id,ticket.id);assert.deepEqual(prepared[0].body.message_ids,['message-0','message-1','message-2']);assert.deepEqual(prepared[0].body.media_ids,['message-1','message-2']);assert.equal(prepared[0].body.request_id,sent[0].body.request_id);
+ assert.equal(prepared.length,1);assert.equal(sent.length,1);assert.equal(prepared[0].body.case_id,ticket.id);assert.deepEqual(prepared[0].body.message_ids,['message-0','message-1','message-2']);assert.deepEqual(prepared[0].body.media_ids,['message-1','message-2']);assert.equal(prepared[0].body.request_id,sent[0].body.request_id);assert.equal(prepared[0].body.include_customer_identity,true);
  assert.match(ctx.d.querySelector('#consultRows').textContent,/принял запрос в очередь/);assert.equal(ctx.d.querySelector('#consultCreate').disabled,true);assert.equal(ctx.d.querySelector('textarea'),null,'no manual answer field until explicitly opened');
  assert.equal(ctx.calls.some(call=>/attachment|public-share/.test(call.path)),false,'sending uses the bounded snapshot service and does not load media');
  ctx.state.consultations[0].state='sent';ctx.state.replies=[{id:'provider-reply',consultation_id:'consult-a',body:'Replace the cable',author:'Developer',source_kind:'provider',draft_state:'not_requested',can_draft:true,happened_at:'2026-11-01T13:30:00Z',url:'/app?view=dialogs&open_dialog=1&lead_id=41'}];
@@ -58,6 +58,8 @@ function fill(ctx,node){const summary=node.querySelector('#consultReason');summa
  [...lost.d.querySelectorAll('#consultRows button')].find(node=>node.textContent==='Отправить подготовленный запрос').click();await settle();assert.equal(lost.calls.filter(call=>call.path.endsWith('/dispatch')).length,1);assert.equal(lost.calls.filter(call=>call.path===base&&call.options.method==='POST').length,1,'recovery reuses the saved request');lost.close();
 
  const denied=await setup();denied.state.prepareError='Recipient is no longer marked Developer';const deniedForm=await form(denied);fill(denied,deniedForm);deniedForm.dispatchEvent(new denied.w.Event('submit',{cancelable:true}));await settle();assert.match(deniedForm.textContent,/Recipient is no longer marked Developer/);assert.equal(deniedForm.querySelector('#consultReason').value,'Printer cannot connect');denied.close();
+
+ const statuses=await setup();statuses.state.autoDispatches=[{id:'a',recipient:'Developer A',state:'reply_received'},{id:'b',recipient:'Developer B',state:'blocked',reason:'developer_route_blocked'},{id:'c',recipient:'Developer C',state:'blocked',reason:'automatic_dispatch_runtime_or_agent_scope_changed'},{id:'d',recipient:'Developer D',state:'blocked',reason:'source_dialog_state_or_assignment_changed'},{id:'e',recipient:'Developer E',state:'blocked',reason:'future_private_reason'}];[...statuses.d.querySelectorAll('.support-heading button')].find(button=>button.textContent==='Обновить').click();await settle();assert.match(statuses.d.querySelector('[data-auto-dispatch-recipient=a]').textContent,/Developer A.*ответ получен/);assert.match(statuses.d.querySelector('[data-auto-dispatch-recipient=b]').textContent,/Маршрут к разработчику недоступен/);assert.match(statuses.d.querySelector('[data-auto-dispatch-recipient=c]').textContent,/область доступа/);assert.match(statuses.d.querySelector('[data-auto-dispatch-recipient=d]').textContent,/Состояние диалога/);assert.doesNotMatch(statuses.d.querySelector('#consultRows').textContent,/developer_route_blocked|future_private_reason/);statuses.close();
 
  const legacy=await setup({dialogs:false});assert.match(legacy.d.querySelector('#consultRows').textContent,/Preserved old answer/);assert.equal(legacy.d.querySelector('#consultCreate').hidden,true);assert.equal(legacy.calls.some(call=>call.path===base+'/replies'),false,'support-only staff retain their previous internal-request access');legacy.close();
  console.log('PASS: one case developer request, explicit bounded files, pending receipts, late answers, manual records, recovery and legacy rights');

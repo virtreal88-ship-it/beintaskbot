@@ -2,23 +2,367 @@
 from threading import Lock
 from tenant_platform import _ensure_schema
 
+# Compatibility hint for older startup callers; never a readiness authority.
 _ready = False
 _lock = Lock()
 
 
+# Keep this contract aligned with the core and nested additive migrations.
+# Read PostgreSQL catalogs on every call: readiness belongs to this database,
+# search_path and transaction, never to a process-local Boolean.
+_SCHEMA_COLUMNS = {
+    'saas_ai_agent_action_runs': (
+        'action_key action_type agent_id created_at event_fingerprint id payload result state '
+        'tenant_id updated_at '
+    ).split(),
+    'saas_ai_agent_drafts': (
+        'agent_id chat_id created_at draft handoff_after_send id lead_id run_id '
+        'send_started_at source_fingerprint source_ids source_message_id state talk_id '
+        'tenant_id '
+    ).split(),
+    'saas_ai_agent_history_identities': (
+        'deleted_at deleted_by display_name id tenant_id '
+    ).split(),
+    'saas_ai_agent_jobs': (
+        'agent_id attempts channel_id chat_id conversation_id due_at error_code '
+        'event_fingerprint lead_id lease_token lease_until provider revision scope_channel_id '
+        'state talk_id tenant_id updated_at '
+    ).split(),
+    'saas_ai_agent_runs': (
+        'agent_id created_at error_code event_fingerprint generated_at id model '
+        'reserved_calls result revision state tenant_id updated_at '
+    ).split(),
+    'saas_ai_agent_settings': (
+        'auto_send_enabled company_instructions crm_actions_enabled emergency_stop enabled '
+        'max_replies_per_chat native_crm_actions_enabled operating_mode '
+        'support_case_extraction_channels support_case_extraction_enabled '
+        'support_case_extraction_mode support_case_extraction_started_at tenant_id updated_at '
+        'updated_by '
+    ).split(),
+    'saas_ai_agent_token_usage': (
+        'agent_id created_at id input_tokens model output_tokens reserved_tokens run_id '
+        'tenant_id total_tokens '
+    ).split(),
+    'saas_ai_agent_triggers': (
+        'actions agent_id condition created_at enabled id name setup_key tenant_id '
+        'trigger_type updated_at version '
+    ).split(),
+    'saas_ai_agents': (
+        'archived_at archived_by archived_replaced_by created_at created_by delay_seconds '
+        'enabled expert_policy id instructions language mode model name response_policy role '
+        'safety schedule scopes setup_key style tenant_id updated_at version '
+    ).split(),
+    'saas_ai_case_developer_dispatches': (
+        'agent_id case_id channel_id consultation_id conversation_id created_at '
+        'destination_key event_key id owner_id reason request_id source_assignment_id '
+        'source_revision state tenant_id updated_at '
+    ).split(),
+    'saas_ai_channel_legacy_state': (
+        'captured_at conversation_id original provider reason resolved_channel tenant_id '
+    ).split(),
+    'saas_ai_compat_migrations': (
+        'applied_at version '
+    ).split(),
+    'saas_ai_conversation_state': (
+        'agent_assignment_id agent_id assigned_to channel_id conversation_id '
+        'first_inbound_message_id last_agent_message_id last_inbound_message_id provider '
+        'reason resumed_at revision state tenant_id updated_at '
+    ).split(),
+    'saas_ai_expert_tasks': (
+        'channel_id completed_at conversation_id created_at deadline error_code '
+        'expert_agent_id expert_version grounded_sources id parent_run_id principal_agent_id '
+        'provider result status tenant_id '
+    ).split(),
+    'saas_ai_group_channel_legacy_permits': (
+        'actor agent_id channel_id granted_at group_jid legacy_revision preview_hash provider '
+        'tenant_id '
+    ).split(),
+    'saas_ai_group_coordination': (
+        'assigned_to assignments group_jid provider reason resumed_at revision state '
+        'tenant_id updated_at '
+    ).split(),
+    'saas_ai_group_deliveries': (
+        'created_at event_key group_jid provider revision run_id tenant_id '
+    ).split(),
+    'saas_ai_group_events': (
+        'channel_id claimed created_at event_key group_jid provider revision tenant_id '
+    ).split(),
+    'saas_ai_group_staff': (
+        'channel_id jid member_id tenant_id verified_at verified_by '
+    ).split(),
+    'saas_ai_knowledge_chunks': (
+        'chunk_no content search_vector source_id tenant_id '
+    ).split(),
+    'saas_ai_knowledge_sources': (
+        'active agent_id content content_hash created_at created_by id kind provenance '
+        'setup_key tenant_id title updated_at '
+    ).split(),
+    'saas_ai_legacy_permits': (
+        'actor agent_id channel_id channel_revision conversation_id granted_at '
+        'legacy_revision tenant_id '
+    ).split(),
+    'saas_ai_media_grants': (
+        'approved_at approved_by campaign_id cap_microusd created_at created_by id revoked_at '
+        'status tenant_id '
+    ).split(),
+    'saas_ai_no_answer_state': (
+        'agent_id channel_id clarification_count conversation_id last_inbound_id provider '
+        'tenant_id updated_at '
+    ).split(),
+    'saas_ai_pilot_confirmations': (
+        'channel_id conversation_id kwid_confirmed_at kwid_confirmed_by kwid_expires_at '
+        'owner_approved_at owner_approved_by owner_expires_at scope_fingerprint tenant_id '
+        'updated_at '
+    ).split(),
+    'saas_ai_pilot_episode_cutoffs': (
+        'channel_id conversation_id reset_at reset_by tenant_id '
+    ).split(),
+    'saas_ai_pilot_episode_resets': (
+        'channel_id conversation_id request_id reset_at reset_by tenant_id '
+    ).split(),
+    'saas_ai_scope_migrations': (
+        'applied_at version '
+    ).split(),
+    'saas_ai_test_sessions': (
+        'agent_id created_at created_by id pending_turn reason reply_count revision scope '
+        'state tenant_id updated_at '
+    ).split(),
+    'saas_ai_test_turns': (
+        'client_text created_at id input_hash reserved_tokens response session_id snapshot '
+        'state tenant_id total_tokens trace updated_at '
+    ).split(),
+    'saas_ai_worker_health': (
+        'last_seen_at worker '
+    ).split(),
+    'saas_connect_voice_receipts': (
+        'channel_id created_at error_code external_id model run_id state tenant_id updated_at '
+    ).split(),
+    'saas_knowledge_batch_items': (
+        'batch_id error_code extraction_id message_count ordinal route status tenant_id '
+    ).split(),
+    'saas_knowledge_batches': (
+        'active_until completed_at continuations created_at created_by deadline id params '
+        'request_key routes routes_truncated status tenant_id '
+    ).split(),
+    'saas_knowledge_campaign_fragments': (
+        'campaign_id created_at error_code extraction_id id lease_token lease_until '
+        'reservation result route source_key status tenant_id updated_at '
+    ).split(),
+    'saas_knowledge_campaign_sources': (
+        'campaign_id channel_id conversation_id history_mode next_start period_end '
+        'period_start source_key status tenant_id '
+    ).split(),
+    'saas_knowledge_campaigns': (
+        'analysis_agent_id approved_at approved_by created_at created_by id max_calls '
+        'max_cost_microusd max_tokens media_policy photo_model progress reserved_calls '
+        'reserved_kinds reserved_tokens sources status tenant_id updated_at version '
+        'video_model '
+    ).split(),
+    'saas_knowledge_candidate_knowledge_reviews': (
+        'candidate_id created_at reviewed_by source_hash source_id source_title tenant_id '
+    ).split(),
+    'saas_knowledge_candidate_sources': (
+        'agent_id candidate_id source_id tenant_id '
+    ).split(),
+    'saas_knowledge_candidates': (
+        'archived_at archived_by archived_from_status content content_hash created_at '
+        'extraction_id id quality_flags reviewed_at reviewed_by status tenant_id updated_at '
+        'version '
+    ).split(),
+    'saas_knowledge_case_source_reviews': (
+        'candidate_id claims_snapshot created_at extraction_id message_id prior_ref '
+        'receipt_source_hash review_note reviewed_by reviewed_ref revision source_hash '
+        'tenant_id '
+    ).split(),
+    'saas_knowledge_extractions': (
+        'completed_at created_at created_by deadline error_code fingerprint id media_results '
+        'request_key route source_digest source_refs status tenant_id '
+    ).split(),
+    'saas_knowledge_media_cache': (
+        'created_at fingerprint metadata state tenant_id token transcript usage '
+    ).split(),
+    'saas_knowledge_quality_checks': (
+        'agent_id campaign_id created_at id response_state retrieval_state source_id '
+        'source_updated_at state tenant_id '
+    ).split(),
+    'saas_media_evidence_receipts': (
+        'channel_id code coverage created_at direction external_id media_kind provenance '
+        'result source_hash status tenant_id updated_at '
+    ).split(),
+    'saas_operator_dialog_reads': (
+        'channel_id conversation_id last_read_at last_read_message_id lead_id provider '
+        'telegram_id tenant_id updated_at '
+    ).split(),
+    'saas_support_completions': (
+        'actor_id channel_id conversation_id created_at input_hash request_id tenant_id '
+        'ticket_id '
+    ).split(),
+    'saas_support_events': (
+        'event_key tenant_id ticket_id '
+    ).split(),
+    'saas_support_ticket_messages': (
+        'created_at event_key message_id tenant_id ticket_id '
+    ).split(),
+    'saas_support_tickets': (
+        'assigned_developer_channel_id assigned_developer_conversation_id assigned_to '
+        'channel_id completion_note completion_outcome conversation_id created_at created_by '
+        'description history_scope id knowledge_candidate_requested next_steps reason '
+        'resolved_at source status suggestions summary summary_agent_binding '
+        'summary_scope_hash summary_state tenant_id updated_at '
+    ).split(),
+    'saas_crm_messages': 'id tenant_id external_id direction author_name raw'.split(),
+    'saas_tenant_members': 'tenant_id telegram_id'.split(),
+    'saas_tenants': ['id'],
+    'saas_tenant_webhook_events': (
+        'tenant_id fingerprint received_at attempts available_at completed_at error_code event_type external_id lease_token '
+        'lease_until payload provider state '
+    ).split(),
+}
+_SCHEMA_INDEXES = [
+    'saas_ai_accepted_run_idx',
+    'saas_ai_agent_drafts_pending_idx',
+    'saas_ai_agent_jobs_ready_idx',
+    'saas_ai_agent_runs_usage_idx',
+    'saas_ai_agent_token_usage_daily_idx',
+    'saas_ai_agent_triggers_active_idx',
+    'saas_ai_agent_triggers_setup_key_idx',
+    'saas_ai_agents_active_idx',
+    'saas_ai_agents_setup_key_idx',
+    'saas_ai_agents_tenant_idx',
+    'saas_ai_expert_dialog_idx',
+    'saas_ai_expert_parent_specialist',
+    'saas_ai_inbound_diagnostics_idx',
+    'saas_ai_knowledge_chunks_search_idx',
+    'saas_ai_knowledge_sources_setup_key_idx',
+    'saas_ai_knowledge_tenant_idx',
+    'saas_ai_media_grants_once_idx',
+    'saas_ai_test_session_actor_idx',
+    'saas_ai_test_token_day_idx',
+    'saas_ai_test_turn_session_idx',
+    'saas_knowledge_campaign_active_idx',
+    'saas_knowledge_campaign_pending_idx',
+    'saas_knowledge_extraction_route_idx',
+    'saas_knowledge_queue_all_idx',
+    'saas_knowledge_review_queue_idx',
+    'saas_media_evidence_lookup_idx',
+    'saas_operator_dialog_reads_member_idx',
+    'saas_support_open_route_idx',
+    'saas_support_queue_idx',
+    'saas_support_ticket_messages_order_idx',
+    'saas_tenant_webhook_external_id_idx',
+    'saas_tenant_webhook_queue_idx',
+]
+
+
+def _schema_current(conn):
+    """Certify the selected schema without DDL, locks on business rows or commits."""
+    from tenant_schema_preflight import ready
+    from tenant_ai_spend_budget import _SCHEMA_COLUMNS as spend_columns, _SCHEMA_INDEXES as spend_indexes
+    from tenant_connect_transport import _SCHEMA_COLUMNS as connect_columns, _SCHEMA_INDEXES as connect_indexes
+    from tenant_ai_agent_deletion_schema import _HISTORICAL_AGENT_FKS
+    import json
+    columns = {**_SCHEMA_COLUMNS, **spend_columns, **connect_columns}
+    indexes = [*_SCHEMA_INDEXES, *spend_indexes, *connect_indexes]
+    with conn.cursor() as cur:
+        if not ready(cur, columns, indexes):
+            return False
+        # Column presence alone cannot certify the channel-key migration,
+        # retirement of Test Mode, archive/history foreign keys or their trigger.
+        history_fks = {table: [f'{table}_{column}_history_identity_fkey' for column in names]
+                       for table, names in _HISTORICAL_AGENT_FKS.items()}
+        cur.execute("""SELECT
+          EXISTS(SELECT 1 FROM saas_ai_scope_migrations WHERE version=1)
+          AND EXISTS(SELECT 1 FROM saas_ai_compat_migrations WHERE version=1)
+          AND NOT EXISTS(SELECT 1 FROM saas_ai_agent_settings
+            WHERE operating_mode='test' OR
+              (support_case_extraction_enabled AND support_case_extraction_mode='off'))
+          AND NOT EXISTS (
+            SELECT 1 FROM jsonb_each(%s::jsonb) AS expected(relation, names)
+            CROSS JOIN LATERAL jsonb_array_elements_text(expected.names) AS name(value)
+            WHERE NOT EXISTS (
+              SELECT 1 FROM pg_constraint c
+              WHERE c.conrelid=to_regclass(expected.relation) AND c.conname=name.value::name
+                AND c.contype='f' AND c.convalidated
+                AND c.confrelid='saas_ai_agent_history_identities'::regclass))
+          AND EXISTS(SELECT 1 FROM pg_trigger
+            WHERE tgrelid='saas_ai_agents'::regclass
+              AND tgname='saas_ai_agent_history_identity_sync' AND tgenabled IN ('O','A'))
+          AND position('saas_ai_group_channel_legacy_permits' in
+            pg_get_functiondef(to_regprocedure('ai_legacy_blocked(uuid,text,text,text)')))>0
+          AND EXISTS(SELECT 1 FROM pg_constraint
+            WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_developer_route_fk'
+              AND confrelid='saas_connect_conversations'::regclass AND contype='f' AND convalidated)
+          AND EXISTS(SELECT 1 FROM pg_constraint
+            WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_developer_pair_check'
+              AND contype='c' AND convalidated)
+          AND NOT EXISTS(SELECT 1 FROM pg_constraint
+            WHERE conrelid='saas_ai_agent_settings'::regclass AND conname IN
+              ('saas_ai_agent_settings_auto_send_enabled_check',
+               'saas_ai_agent_settings_crm_actions_enabled_check'))
+          AND NOT EXISTS(SELECT 1 FROM pg_constraint
+            WHERE conrelid='saas_ai_expert_tasks'::regclass
+              AND conname='saas_ai_expert_tasks_tenant_id_parent_run_id_key')
+          AND NOT EXISTS (
+            SELECT 1 FROM (VALUES
+              ('saas_ai_agents','saas_ai_agents_mode_check','automatic'),
+              ('saas_ai_agent_jobs','saas_ai_agent_jobs_state_check','sent'),
+              ('saas_ai_agent_drafts','saas_ai_agent_drafts_state_check','sending'),
+              ('saas_ai_agent_settings','saas_ai_agent_settings_operating_mode_check','simulation'),
+              ('saas_ai_agent_settings','saas_ai_agent_settings_support_case_extraction_mode_check','automatic'),
+              ('saas_knowledge_candidates','saas_knowledge_candidates_status_check','archived')
+            ) AS expected(relation, name, value)
+            WHERE NOT EXISTS(SELECT 1 FROM pg_constraint c
+              WHERE c.conrelid=to_regclass(expected.relation) AND c.conname=expected.name
+                AND c.convalidated AND position(expected.value in pg_get_constraintdef(c.oid))>0)) AS ready""",
+            (json.dumps(history_fks),))
+        return (cur.fetchone() or {}).get('ready') is True
+
+
+def _ensure_platform_schema(conn):
+    _ensure_schema(conn)
+    # The platform's compatibility cache is process-local. A worker may also
+    # initialize another database or namespace; it must still receive its own
+    # foundation rather than inheriting readiness from the first connection.
+    from tenant_schema_preflight import ready
+    with conn.cursor() as cur:
+        if ready(cur, {
+            'saas_tenants': ['id'],
+            'saas_tenant_members': ['tenant_id', 'telegram_id'],
+            'saas_tenant_webhook_events': ['tenant_id', 'fingerprint', 'received_at'],
+            'saas_crm_messages': ['id', 'tenant_id', 'external_id'],
+        }, []):
+            return
+        from tenant_platform_schema import (migrate_identity_schema,
+                                            migrate_operations_schema,
+                                            migrate_crm_schema)
+        cur.execute("SELECT pg_advisory_xact_lock(hashtextextended('tenant-platform-schema',0))")
+        migrate_identity_schema(cur)
+        migrate_operations_schema(cur)
+        migrate_crm_schema(cur)
+
+
 def ensure_schema(conn):
     global _ready
-    _ensure_schema(conn)
-    # Monetary reservations are additive and shared by every AI execution
-    # path.  Creating them with the core AI schema avoids worker-specific
-    # ledgers or migrations.
-    from tenant_ai_spend_budget import ensure_schema as ensure_spend_schema
-    ensure_spend_schema(conn)
-    if _ready:
+    if _schema_current(conn):
         return
     with _lock:
-        if _ready:
+        # Missing-schema bootstrap shares Connect/Spend's transaction lock and
+        # takes it before any application DDL. Recheck after cross-process wait.
+        from tenant_schema_preflight import lock_schema
+        with conn.cursor() as cur:
+            lock_schema(cur)
+        if _schema_current(conn):
             return
+        _ensure_platform_schema(conn)
+        # The legacy platform initializer can commit its own bootstrap. Restore
+        # the common migration lock before installing the remaining AI schema.
+        with conn.cursor() as cur:
+            lock_schema(cur)
+        if _schema_current(conn):
+            return
+        # Monetary reservations are shared by every AI execution path.
+        from tenant_ai_spend_budget import ensure_schema as ensure_spend_schema
+        ensure_spend_schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ('tenant-ai-agents-schema',))
             from tenant_ai_pilot import schema as pilot_schema

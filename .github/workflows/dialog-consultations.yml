@@ -11,6 +11,15 @@ on:
       - 'beintaskbot-main/tests/test_support_case_materials*'
       - 'beintaskbot-main/docs/tenant-support-consultations.js'
       - 'beintaskbot-main/tests/test_case_consultations_unified.py'
+      - 'beintaskbot-main/tests/test_pr465_workflow_integration.py'
+      - 'beintaskbot-main/tests/test_manual_case_saved_media.py'
+      - 'beintaskbot-main/tests/test_pr465_followup_worker.py'
+      - 'beintaskbot-main/tests/test_ai_schema_cold_readiness.py'
+      - 'beintaskbot-main/tests/test_operator_case_recovery*'
+      - 'beintaskbot-main/tests/test_case_developer_settings_ui.cjs'
+      - 'beintaskbot-main/tests/operator_case_ui_fixture.cjs'
+      - 'beintaskbot-main/tests/isolated_database_guard/*'
+      - 'beintaskbot-main/tenant_ai_agents_schema.py'
       - 'beintaskbot-main/tenant_notification_center*.py'
       - 'beintaskbot-main/tests/test_tenant_notification_center*'
       - 'beintaskbot-main/tests/test_tenant_notification_bell_ux_browser.cjs'
@@ -20,6 +29,7 @@ on:
       - 'beintaskbot-main/tests/test_support_consultation_flow_ui.cjs'
       - 'beintaskbot-main/tests/test_support_ticket_modal_browser.cjs'
       - 'beintaskbot-main/tests/test_tenant_support_inbox*'
+      - 'beintaskbot-main/tests/test_operator_case_submission_ui.cjs'
       - 'beintaskbot-main/tenant_dialog_audio*.py'
       - 'beintaskbot-main/tests/test_dialog_audio_transcription*'
       - 'beintaskbot-main/tests/test_dialog_audio_result_durability.py'
@@ -157,12 +167,16 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg
-          python -m pip install -r requirements.txt pytest
+          python -m pip install -r requirements.txt pytest pytest-asyncio
           npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0 playwright@1.62.1
           node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
       - name: Exercise independent consultations and real PostgreSQL races
+        env:
+          PYTHONPATH: tests/isolated_database_guard:.:tests
+          NODE_PATH: .support-test-deps/node_modules
+          SUPPORT_CASES_JSDOM: ../.support-test-deps/node_modules/jsdom
         run: |
-          PYTHONPATH=.:tests python -m pytest -q -rs \
+          python -m pytest -q -rs \
             tests/test_dialog_consultations.py \
             tests/test_tenant_chat_attachments.py \
             tests/test_message_delivery_projection.py \
@@ -170,6 +184,13 @@ jobs:
             tests/test_photo_thumbnail_projection.py \
             tests/test_support_case_materials.py \
             tests/test_case_consultations_unified.py \
+            tests/test_pr465_workflow_integration.py \
+            tests/test_manual_case_saved_media.py \
+            tests/test_pr465_followup_worker.py \
+            tests/test_ai_schema_cold_readiness.py \
+            tests/test_tenant_ai_pilot_worker.py \
+            tests/test_tenant_ai_agent_no_answer.py \
+            tests/test_tenant_ai_agent_no_answer_postgres.py \
             tests/test_tenant_notification_center.py \
             tests/test_tenant_notification_center_postgres.py \
             tests/test_request_schema_deadlocks.py \
@@ -233,6 +254,10 @@ jobs:
           node tests/test_developer_media_reply_ui.cjs
           node tests/test_support_ticket_modal_browser.cjs
           node tests/test_tenant_support_inbox_ui.cjs
+          node tests/test_operator_case_submission_ui.cjs
+          node tests/test_operator_case_recovery_ui.cjs
+          node tests/test_operator_case_recovery_browser.cjs
+          node tests/test_case_developer_settings_ui.cjs
           node tests/test_tenant_push_dialog_route_ui.cjs
           node tests/test_tenant_notification_badge_browser.cjs
           node tests/test_dialog_photo_status_ui.cjs

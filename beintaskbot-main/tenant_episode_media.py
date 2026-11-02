@@ -224,15 +224,16 @@ def apply_episode_receipt(row,message,receipt,*,authority=None,ref=None,saved=No
         row['_episode_receipt']=projected
 
 
-def prepare(authority, rows):
+def prepare(authority, rows, *, saved_only=False,snapshot=False):
     """Process every selected episode attachment before draft generation."""
     from tenant_knowledge_media import collect
     profile={'tenant_id':authority.tenant}
     manual=getattr(authority,'latest_request',False)
-    selected=episode(rows,latest_request=manual)
+    selected=list(rows) if snapshot else episode(rows,latest_request=manual)
     if manual:
         for row in selected:row['_manual_request_source']=True
-    authority.source_refs=initial_source_refs(authority,rows,selected)
+    authority.source_refs=([reference(row,authority.channel,authority.lead) for row in selected]
+      if snapshot else initial_source_refs(authority,rows,selected))
     selected_ids={str(row.get('external_id')) for row in selected}
     for row in rows:
         if str(row.get('message_type') or '').lower() not in KINDS:continue
@@ -243,11 +244,25 @@ def prepare(authority, rows):
         authority.check()
         ref=reference(row,authority.channel,authority.lead)
         if not any(source_hash(saved)==source_hash(ref) and saved['external_id']==ref['external_id'] for saved in authority.source_refs):authority.source_refs.append(ref)
-        authority.validate(ref)
+        if snapshot and saved_only:
+            # Frozen rows already passed original_evidence + current case
+            # authority above. Revalidate their exact private source versions
+            # without entering the attachment download/analysis adapter.
+            with _connect() as conn:
+                with conn.cursor() as cur:revalidate_sources(cur,authority.tenant,[ref])
+        else:authority.validate(ref)
         prior=reusable(profile,ref)
+        if snapshot and prior:
+            from tenant_media_coverage import digest
+            row['_snapshot_receipt_version']=digest(prior)
         message={'text':'','ref':ref['id']}
         if prior:
             receipt={'id':ref['id'],'kind':ref['media_kind'],**apply_reusable(message,prior)}
+        elif saved_only:
+            # A developer continuation reuses the exact admitted evidence. It
+            # must never turn a historical/missing result into new paid work.
+            from tenant_media_coverage import CoverageError
+            raise CoverageError(row)
         else:
             key,token,receipt=_flight(authority,ref)
             if token:
@@ -437,6 +452,11 @@ class ManualExecution(Execution):
                     from tenant_dialog_consultations import original_evidence
                     original_evidence(cur,self.tenant,self.command['_consultation_evidence']['id'],
                                       self.channel,self.conversation,self.lead)
+                    if self.command['_consultation_evidence'].get('case_id'):
+                        from tenant_dialog_consultations import _case_reply_binding,case_developer_followup_current
+                        binding=_case_reply_binding(cur,self.tenant,self.command['_consultation_evidence']['id'])
+                        if not binding or not case_developer_followup_current(cur,self.tenant,binding):
+                            raise TenantLinearError('The case or developer authority changed.',409)
                 else:
                     cur.execute('''SELECT external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid
                       AND kommo_lead_id=%s AND channel=%s ORDER BY COALESCE(happened_at,created_at) DESC,external_id DESC LIMIT 1''',
@@ -466,6 +486,7 @@ class AutoExecution(Execution):
     def __init__(self,job,reservation):
         self.job,self.reservation=job,reservation
         payload = job.get('payload') if isinstance(job.get('payload'), dict) else {}
+        self.latest_request=payload.get('developer_case_followup') is True
         if job.get('provider') != 'connect' or payload.get('pilot_developer_followup') or payload.get('pilot_customer_case_reply'):
             self.shared_asr_context = ''
         self.tenant,self.channel,self.conversation,self.lead=str(job['tenant_id']),str(job['channel_id']),str(job['conversation_id']),int(job['lead_id'])

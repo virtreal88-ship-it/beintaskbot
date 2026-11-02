@@ -11,8 +11,8 @@ import subprocess
 import threading
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock
+from cryptography.fernet import Fernet
 
 import pytest
 from aiohttp import web
@@ -27,10 +27,14 @@ import tenant_dialog_consultations_worker as worker
 import tenant_public_case as public
 import tenant_support_inbox_store as tickets
 import tenant_connect_transport as transport
+import tenant_operator_copilot as copilot
+import tenant_episode_media as episode_media
+import tenant_media_evidence as evidence
 from tenant_support_inbox_api import handler
 from tenant_dialog_consultations_api import handler as consultation_handler
 
 ROOT = Path(__file__).resolve().parents[1]
+ACTUAL_CONNECT_ROUTE=transport.connect_route
 
 
 @pytest.fixture(scope='module')
@@ -52,7 +56,18 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db, monkeypat
     db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type) VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','image')", (image, A, 'connect:'+str(uuid.uuid4()), 'connect:'+CA))
     with db.cursor() as cur:
         tickets.record_case_selected_message_ids(cur, A, case, [image], 'local-browser-selected-photo')
-    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets) VALUES(%s::uuid,'connect','connected',%s)", (A, b'synthetic'))
+    cipher=Fernet(Fernet.generate_key())
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets) VALUES(%s::uuid,'connect','connected',%s)",
+      (A,cipher.encrypt(json.dumps({'api_key':'synthetic','webhook_secret':'synthetic-secret'}).encode())))
+    # Reuse complete exact-version screenshot evidence in the private draft;
+    # no browser step may download or analyze an attachment eagerly.
+    with db.cursor() as cur:
+        cur.execute('SELECT external_id,body,message_type,raw,direction FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,image))
+        ref=episode_media.reference(cur.fetchone(),CA,41)
+        evidence.persist(cur,A,[ref],[{'id':ref['id'],'status':'processed','coverage':{'kind':'image','complete':True},
+          'observation':'Synthetic screenshot shows the reported amount.'}],processor='isolated_fixture')
+        cur.execute('SELECT count(*) AS n FROM saas_media_evidence_receipts WHERE tenant_id=%s::uuid AND external_id=%s',(A,ref['external_id']))
+        assert cur.fetchone()['n']==1
     db.commit()
     if getattr(db, 'dsn', None):
         import psycopg
@@ -60,13 +75,13 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db, monkeypat
         factory = lambda: psycopg.connect(db.dsn, row_factory=dict_row)
     else:
         factory = lambda: db
-    for module in (legacy, internal, consultations, worker, public, tickets, transport):
+    for module in (legacy, internal, consultations, worker, public, tickets, transport,copilot,episode_media,evidence):
         monkeypatch.setattr(module, '_connect', factory)
-    transport_route = lambda _cur, _tenant, lead, **_kwargs: {'api_key': 'synthetic', 'channel_id': CA, 'conversation_id': GROUP if int(lead) == 99 else 'client'}
-    monkeypatch.setattr(transport, 'connect_route', transport_route)
-    monkeypatch.setattr(transport, '_fernet', lambda: SimpleNamespace(decrypt=lambda _: b'{"webhook_secret":"synthetic-secret"}'))
-    monkeypatch.setattr('tenant_ai_agent_connect.enqueue', lambda *_args, **_kwargs: None)
-    monkeypatch.setattr('tenant_knowledge_live_queue.enqueue', lambda *_args, **_kwargs: None)
+    # setup_case has a legacy route stub; this browser test exercises the real
+    # current route/credential checks against the synthetic encrypted connector.
+    monkeypatch.setattr(transport,'connect_route',ACTUAL_CONNECT_ROUTE)
+    monkeypatch.setattr(transport, '_fernet', lambda:cipher)
+    monkeypatch.setattr(copilot, '_fernet', lambda:cipher)
     monkeypatch.setattr(transport, 'send_consultation_with_receipt', REAL_QUEUE_SEND)
     # The real transport helper validates a synthetic Connect queue receipt.
     # No actual HTTP provider, media download or model is available in this test.
@@ -81,9 +96,13 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db, monkeypat
     media_download = Mock(side_effect=AssertionError('No eager media download'))
     monkeypatch.setattr(transport.requests, 'request', provider_http)
     monkeypatch.setattr(transport, 'download_connect_message_media', media_download)
-    draft_generation = Mock(return_value={'text': 'We are checking.'})
-    monkeypatch.setattr('tenant_operator_copilot.run', draft_generation)
+    from test_pr465_workflow_integration import _enable_private_copilot
+    _enable_private_copilot(db,cipher)
+    draft_generation = Mock(return_value=('We are checking.',{'total_tokens':2}))
+    monkeypatch.setattr(copilot,'generate',draft_generation)
     consultations.developer_marker(PROFILE, {'channel_id': CA, 'conversation_id': GROUP, 'enabled': True})
+    tickets.update(PROFILE,case,{'assigned_developer_channel_id':CA,'assigned_developer_conversation_id':GROUP})
+    db.execute("INSERT INTO saas_ai_group_staff(tenant_id,channel_id,jid,member_id,verified_by) VALUES(%s::uuid,%s::uuid,'15550001111@s.whatsapp.net',11,11)",(A,CA));db.commit()
     sock = socket.socket(); sock.bind(('127.0.0.1', 0)); sock.listen(16)
     origin = 'http://127.0.0.1:'+str(sock.getsockname()[1])
     loop, ready, state = asyncio.new_event_loop(), threading.Event(), {}
@@ -113,6 +132,7 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db, monkeypat
             event = {'id': 'e2e-inbound-'+index, 'type': 'message.inbound.received', 'data': {
                 'id': 'e2e-reply-'+index, 'channelId': CA, 'conversationId': GROUP, 'isGroup': True, 'fromMe': False,
                 'type': 'text', 'quotedExternalMessageId': 'PROVIDER_'+index, 'participantName': 'Developer',
+                'participantJid':'15550001111@s.whatsapp.net',
                 'text': 'CONSULT:'+delivery['consultation_id']+' We are investigating'}}
             accepted = await asyncio.to_thread(signed, event)
             thread = await asyncio.to_thread(consultations.inbox, PROFILE, case_id=case)
@@ -167,7 +187,11 @@ def test_chromium_real_local_backend_signed_reply_and_unsent_draft(db, monkeypat
         assert first['draft'] == 'We are checking.' and first['body'].endswith('We are investigating')
         assert draft_generation.call_count == 1
         assert len(consultations.inbox(PROFILE, case_id=case)['replies']) == 2
-        assert worker.pending() == []
+        # The first reply was explicitly drafted; the second fresh Manual
+        # reply remains in its private queue and has sent nothing to a client.
+        replies=consultations.inbox(PROFILE,case_id=case)['replies']
+        assert {item['id'] for item in worker.pending()}=={replies[0]['id']}
+        assert replies[0]['draft_state']=='pending' and replies[-1]['draft_state']=='completed'
         assert not provider_http.called and not media_download.called and not unexpected
         for item in sends:
             token = re.search(r'/public/case/([A-Za-z0-9_-]+)', item['body']).group(1)

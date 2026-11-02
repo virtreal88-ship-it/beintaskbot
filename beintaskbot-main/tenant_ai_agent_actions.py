@@ -98,13 +98,18 @@ def matching_triggers(triggers,text,*,first_inquiry=False,phone=''):
     return matches
 
 
-def handoff(job,reason,*,source_message_id='',expected_conversation_revision=None,case_message_ids=None):
+def handoff(job,reason,*,source_message_id='',expected_conversation_revision=None,case_message_ids=None,preserve_active=False,reservation=None):
     from tenant_support_inbox_store import handoff_ticket, summarize_created, handoff_recorded
     ticket = None
     tenant=str(job['tenant_id']);chat=str(job['chat_id'])
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            group_jid=None
+            if job['provider']=='connect':
+                from tenant_ai_group_coordination import group_jid as _group_jid,lock_group,authority
+                group_jid=_group_jid(chat)
+                if group_jid:lock_group(cur,tenant,chat)
             lock_dialog(cur, tenant, job["provider"], job.get("channel_id"), chat)
             if source_message_id:
                 # A generated handoff is valid only while this exact inbound
@@ -133,6 +138,12 @@ def handoff(job,reason,*,source_message_id='',expected_conversation_revision=Non
                         (expected_conversation_revision is not None
                          and int(state.get('revision') or 0)!=expected_conversation_revision)):
                     return False
+                if preserve_active and group_jid:
+                    # Creating a case must not stop a client group or leave a
+                    # new follow-up with implicit group authority. Preserve the
+                    # active group only while the exact assigned agent remains
+                    # authorized under the group lock.
+                    if not authority(cur,tenant,scope,chat,job.get('agent_id')):return False
                 try: source_key=str(uuid.UUID(str(source_message_id)))
                 except (ValueError,TypeError,AttributeError): return False
                 cur.execute('''SELECT external_id FROM saas_crm_messages
@@ -144,16 +155,25 @@ def handoff(job,reason,*,source_message_id='',expected_conversation_revision=Non
                     return False
             if handoff_recorded(cur, job):
                 return False
-            if job['provider'] == 'connect':
+            if job['provider'] == 'connect' and not preserve_active:
                 from tenant_ai_group_coordination import stop
                 stop(cur, tenant, chat, reason=reason)
-            cur.execute('''UPDATE saas_ai_conversation_state SET state='human',reason=%s,revision=revision+1,updated_at=now()
-              WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND channel_id=%s AND state<>'human' RETURNING agent_id''',
-              (str(reason)[:240],tenant,job['provider'],chat,job_scope(job)))
-            changed=cur.fetchone()
+            if preserve_active:
+                cur.execute('''SELECT agent_id::text AS agent_id,state,revision FROM saas_ai_conversation_state
+                  WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND channel_id=%s FOR UPDATE''',
+                  (tenant,job['provider'],chat,job_scope(job)))
+                active=cur.fetchone() or {}
+                if active.get('state')!='active' or str(active.get('agent_id') or '')!=str(job['agent_id']):return False
+                if expected_conversation_revision is not None and int(active.get('revision') or 0)!=int(expected_conversation_revision):return False
+                changed=active
+            else:
+                cur.execute('''UPDATE saas_ai_conversation_state SET state='human',reason=%s,revision=revision+1,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND channel_id=%s AND state<>'human' RETURNING agent_id''',
+                  (str(reason)[:240],tenant,job['provider'],chat,job_scope(job)))
+                changed=cur.fetchone()
             ticket = handoff_ticket(cur,{**job,'source_message_id':source_message_id,
                 'case_message_ids':case_message_ids or []},reason)
-            if changed:
+            if changed and not preserve_active:
                 cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='human_handoff',updated_at=now() WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s AND scope_channel_id=%s AND state IN ('queued','processing')",(tenant,job['provider'],chat,job_scope(job)))
                 cur.execute("UPDATE saas_ai_agent_runs SET state='superseded',updated_at=now() WHERE tenant_id=%s::uuid AND event_fingerprint=%s AND state='generating'",(tenant,job['event_fingerprint']))
                 cur.execute("UPDATE saas_tenant_webhook_events SET state='completed',completed_at=now(),error_code='human_handoff' WHERE tenant_id=%s::uuid AND fingerprint=%s",(tenant,job['event_fingerprint']))
@@ -162,6 +182,11 @@ def handoff(job,reason,*,source_message_id='',expected_conversation_revision=Non
                     cur.execute('''INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body,target_url)
                       VALUES(%s,%s::uuid,%s,%s,'AI: менеджер должен ответить',%s,%s)''',
                       (uuid.uuid4(),tenant,member['telegram_id'],'ai_handoff:'+chat+':'+job['event_fingerprint'],str(reason)[:240],'/app?view=deals&deal_id='+str(job['lead_id'])))
+            elif changed and preserve_active:
+                cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',lease_token=NULL,lease_until=NULL,error_code='support_case_created',updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider='connect' AND conversation_id=%s AND scope_channel_id=%s AND event_fingerprint=%s AND state='processing' AND lease_token=%s AND revision=%s",
+                  (tenant,job['agent_id'],chat,job_scope(job),job['event_fingerprint'],job['lease_token'],job['revision']))
+                cur.execute("UPDATE saas_ai_agent_runs SET state='superseded',error_code='support_case_created',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",(tenant,(reservation or {}).get('run_id')))
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='completed',completed_at=now(),error_code='support_case_created' WHERE tenant_id=%s::uuid AND fingerprint=%s",(tenant,job['event_fingerprint']))
         conn.commit()
     summarize_created(tenant, ticket)
     return bool(changed)

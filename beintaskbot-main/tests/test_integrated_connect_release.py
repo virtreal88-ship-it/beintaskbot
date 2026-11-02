@@ -14,6 +14,7 @@ import tenant_connect_voice as voice
 import tenant_connect_transport as transport
 import tenant_episode_media as episode_media
 import tenant_media_evidence as evidence
+import tenant_dialog_consultations as consultations
 import tenant_connect_images as images
 import tenant_knowledge_media as media_core
 import tenant_chat_ai_provider as provider
@@ -45,7 +46,7 @@ def flow(db, monkeypatch):
     forbidden_connection=Mock()
     monkeypatch.setattr(psycopg,'connect',isolated_flow_connector(db,psycopg.connect,forbidden_connection))
     cipher=Fernet(Fernet.generate_key())
-    for module in (runs,voice,transport,episode_media,evidence,images,spend_budget):
+    for module in (runs,voice,transport,episode_media,evidence,images,spend_budget,consultations):
         monkeypatch.setattr(module,'_connect',lambda:db)
     monkeypatch.setattr(transport,'_fernet',lambda:cipher)
     for name in ('AI_AGENTS_ENABLED','AI_AGENTS_AUTO_SEND_ENABLED'):

@@ -185,7 +185,11 @@ def test_reconciliation_missing_raw_ids_advances_past_first_bounded_page(case_re
     assert worker.reconcile()==2
     assert worker.reconcile()==0
     assert local.execute('SELECT count(*) AS n FROM saas_dialog_consultation_replies')[0]['n']==102
-    assert worker.pending()==[]
+    # Exact quoted case replies now enter the bounded manual employee-review
+    # queue; merely reading this queue never sends a customer message.
+    pending=worker.pending()
+    assert len(pending)==10
+    assert all(row['tenant_id']==A and row['created_by']==11 for row in pending)
 
 
 def test_authoritative_source_external_id_never_falls_back_to_later_different_file(case_ready):

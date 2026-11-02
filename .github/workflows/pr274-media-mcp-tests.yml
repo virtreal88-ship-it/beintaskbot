@@ -61,6 +61,8 @@ jobs:
       - name: Install Chromium for owner-review UI regression
         run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
       - name: Run media and MCP regression tests
+        env:
+          PYTHONPATH: tests/isolated_database_guard:.:tests
         run: >-
           python -m pytest -q -rs
           tests/test_ai_administrator_read.py
@@ -126,9 +128,11 @@ jobs:
           tests/test_instruction_videos.py
           tests/test_instruction_video_postgres.py
       - name: Run instruction card regression
+        env:
+          PYTHONPATH: tests/isolated_database_guard:.:tests
         run: |
           export CHROMIUM_EXECUTABLE_PATH="$(node -e "console.log(require('./.support-test-deps/node_modules/playwright').chromium.executablePath())")"
-          PYTHONPATH=.:tests python -m pytest -q tests/test_tenant_consultation_group.py tests/test_group_consultation_receipt.py tests/test_support_group_local_e2e.py tests/test_group_consultation_postgres.py
+          python -m pytest -q tests/test_tenant_consultation_group.py tests/test_group_consultation_receipt.py tests/test_support_group_local_e2e.py tests/test_group_consultation_postgres.py
           node tests/test_tenant_support_inbox_ui.cjs
           node tests/test_support_group_browser.cjs
           PLAYWRIGHT_MODULE=../.support-test-deps/node_modules/playwright node tests/test_photo_viewer_browser.cjs

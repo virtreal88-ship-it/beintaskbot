@@ -5,6 +5,7 @@ import pytest
 from unittest.mock import AsyncMock, Mock
 from test_tenant_support_inbox import database, db, A, B, CA, AGENT, PROFILE, manual
 import tenant_consultation_group as flow
+import tenant_dialog_consultations as case_flow
 import tenant_support_inbox_store as tickets
 import tenant_connect_transport as transport
 from tenant_linear_policy import TenantLinearError
@@ -26,6 +27,9 @@ def setup_case(db, monkeypatch):
     from types import SimpleNamespace
     monkeypatch.setitem(sys.modules,'legacy_runtime_config',SimpleNamespace(CANONICAL_WEB_ORIGIN='https://crm.pro.az'))
     monkeypatch.setattr(flow, '_connect', lambda: db)
+    # The worker now reads optional unified case context before generation.
+    # Keep that real read on this same disposable SQL database.
+    monkeypatch.setattr(case_flow, '_connect', lambda: db)
     flow.schema(db)
     db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,99,'Group',now())",(A,CA,GROUP))
     db.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,state,reason) VALUES(%s::uuid,%s,'human','existing')",(A,GROUP))

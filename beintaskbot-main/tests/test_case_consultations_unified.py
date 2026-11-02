@@ -1,8 +1,9 @@
 """Unified case consultation regressions: isolated SQL and synthetic receipts only."""
+import json
 import uuid
 from unittest.mock import Mock
 import pytest
-from test_tenant_support_inbox import database,db,A,B,CA,CB,PROFILE,manual
+from test_tenant_support_inbox import database,db,A,B,CA,CB,AGENT,PROFILE,manual
 from test_dialog_consultations import ready,TARGET
 import tenant_dialog_consultations as flow
 import tenant_dialog_consultations_worker as worker
@@ -10,6 +11,7 @@ import tenant_consultation_group as legacy
 import tenant_internal_consultations as internal
 import tenant_connect_transport as transport
 import tenant_public_case as public
+import tenant_support_inbox_store as inbox_store
 from tenant_linear_policy import TenantLinearError
 
 
@@ -44,6 +46,20 @@ def test_case_prepare_public_snapshot_and_owner_gate_no_agent_required(case_read
     with pytest.raises(TenantLinearError):flow.prepare({'tenant_id':A,'telegram_id':33},{**data,'request_id':str(uuid.uuid4())},'https://crm.test')
 
 
+def test_old_share_scope_hash_without_identity_flag_still_blocks_duplicate(case_ready):
+    import hashlib
+    local,data,_=case_ready
+    result=flow.prepare(PROFILE,data,'https://crm.test')
+    old_scope={**data,'channel_id':data['channel_id'],'destination_channel_id':data['destination_channel_id'],
+      'message_ids':sorted(data['message_ids']),'media_ids':[],'summary':data['summary'].strip()}
+    old_scope.pop('request_id');old_scope.pop('include_customer_identity',None)
+    legacy_hash=hashlib.sha256(json.dumps(old_scope,sort_keys=True).encode()).hexdigest()
+    local.execute("UPDATE saas_internal_consultations SET evidence=jsonb_set(evidence,'{scope_hash}',to_jsonb(%s::text)) WHERE tenant_id=%s::uuid AND id=%s::uuid",(legacy_hash,A,result['id']))
+    local.commit()
+    with pytest.raises(TenantLinearError,match='уже подготовлен или отправлен'):
+      flow.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4())},'https://crm.test')
+
+
 def test_case_public_selection_cannot_escape_material_scope(case_ready):
     local,data,_=case_ready
     chosen=data['message_ids'][0]
@@ -60,7 +76,7 @@ def test_case_public_selection_cannot_escape_material_scope(case_ready):
     assert local.execute('SELECT selected_message_ids FROM saas_public_case_shares')[0]['selected_message_ids']==[chosen]
 
 
-def test_case_pending_receipt_reconciles_late_reply_and_never_auto_drafts(case_ready):
+def test_case_pending_receipt_reconciles_manual_reply_into_confirmable_draft_queue(case_ready):
     local,data,sender=case_ready
     sender.return_value={'state':'pending','message_id':'case-queue','external_message_id':None}
     result=flow.prepare(PROFILE,data,'https://crm.test')
@@ -75,11 +91,316 @@ def test_case_pending_receipt_reconciles_late_reply_and_never_auto_drafts(case_r
     assert worker.reconcile()==0
     reply=flow.inbox(PROFILE,case_id=data['case_id'])['replies'][0]
     assert reply['author']=='Developer' and reply['body']=='Replace cable'
-    assert reply['draft_state']=='not_requested'
+    assert reply['draft_state']=='pending'
     assert 'support_ticket_id='+data['case_id'] in reply['url']
-    assert worker.pending()==[]
+    pending=worker.pending();assert len(pending)==1 and pending[0]['id']==reply['id']
     assert sender.call_count==1
     assert local.execute('SELECT count(*) AS n FROM saas_tenant_notifications')[0]['n']==1
+
+
+@pytest.mark.asyncio
+async def test_manual_case_reply_generates_employee_reviewable_draft_without_customer_send(case_ready,monkeypatch):
+    local,data,sender=case_ready
+    monkeypatch.setattr(transport,'send_ai_reply',lambda *_a,**_k:pytest.fail('Manual mode sent to the customer'))
+    monkeypatch.setattr(transport,'send_ai_reply_if_active',lambda *_a,**_k:pytest.fail('Manual mode sent to the customer'))
+    result=flow.prepare(PROFILE,data,'https://crm.test');flow.dispatch(PROFILE,result['id'],data['request_id'])
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,99,'connect:manual-mode-reply','incoming',%s,'Завтра посмотрю','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'manual-mode-reply','quotedExternalMessageId':'PROVIDER_123'})));local.commit()
+    with local.cursor() as cur:
+        reply_id=flow.record_reply(cur,A,CA,TARGET,'manual-mode-reply','Завтра посмотрю','PROVIDER_123',
+            author='Synthetic Developer',source_external_id='connect:manual-mode-reply')
+    local.commit();assert reply_id
+    assert len(worker.pending())==1
+    calls=[]
+    def reviewed_draft(profile,rid,request):
+        calls.append((profile,rid,request))
+        local.execute("UPDATE saas_dialog_consultation_replies SET draft_state='completed',draft='Accepted; developer plans to review tomorrow.' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,rid));local.commit()
+        return {'customer_message_sent':False,'text':'Accepted; developer plans to review tomorrow.'}
+    monkeypatch.setattr(flow,'draft',reviewed_draft)
+    import logging
+    await worker.deliver(logging.getLogger('case-draft-test'))
+    row=local.execute('SELECT draft_state,draft FROM saas_dialog_consultation_replies WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,reply_id))[0]
+    assert row=={'draft_state':'completed','draft':'Accepted; developer plans to review tomorrow.'}
+    assert calls and sender.call_count==1,'only the existing developer dispatch occurred; no customer send was attempted'
+    assert local.execute("SELECT count(*) AS n FROM saas_tenant_notifications WHERE event_key='dialog_consultation:'||%s",(reply_id,))[0]['n']==1
+
+
+def test_case_manual_draft_revalidates_open_case_and_assignment(case_ready,monkeypatch):
+    local,data,sender=case_ready;destination='synthetic-manual-developer'
+    local.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name) VALUES(%s::uuid,%s::uuid,%s,9101,'Synthetic Developer')",(A,CA,destination));local.commit()
+    flow.developer_marker(PROFILE,{'channel_id':CA,'conversation_id':destination,'enabled':True})
+    local.execute("UPDATE saas_support_tickets SET assigned_developer_channel_id=%s::uuid,assigned_developer_conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid",(CA,destination,A,data['case_id']));local.commit()
+    monkeypatch.setattr(transport,'connect_route',lambda _cur,_tenant,lead,**_kw:{'channel_id':CA,'conversation_id':destination if lead==9101 else 'client','api_key':'synthetic'})
+    request={'request_id':str(uuid.uuid4()),'case_id':data['case_id'],'channel_id':CA,'conversation_id':'client',
+      'destination_channel_id':CA,'destination_conversation_id':destination,'message_ids':data['message_ids'],
+      'media_ids':[],'summary':'Synthetic case summary','confirm':True,'include_customer_identity':False}
+    result=flow.prepare(PROFILE,request,'https://crm.test');assert flow.dispatch(PROFILE,result['id'],request['request_id'])['state']=='sent'
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,9101,'connect:manual-case-reply','incoming',%s,'Developer update','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'manual-case-reply','quotedExternalMessageId':'PROVIDER_123'})));local.commit()
+    with local.cursor() as cur:reply_id=flow.record_reply(cur,A,CA,destination,'manual-case-reply','Developer update','PROVIDER_123',author='Synthetic Developer',source_external_id='connect:manual-case-reply')
+    local.commit();assert reply_id
+    import tenant_operator_copilot as copilot
+    mock=Mock(return_value={'text':'Employee approved draft text'});monkeypatch.setattr(copilot,'run',mock)
+    assert flow.draft(PROFILE,reply_id,{'request_id':str(uuid.uuid4())})=={'text':'Employee approved draft text','customer_message_sent':False}
+    assert sender.call_count==1 and mock.call_count==1
+    # The case and recipient can change while Copilot is generating. A stale
+    # draft is discarded at persistence time and never becomes a send action.
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,9101,'connect:manual-case-reply-2','incoming',%s,'Second developer update','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'manual-case-reply-2','quotedExternalMessageId':'PROVIDER_123'})));local.commit()
+    with local.cursor() as cur:reply_two=flow.record_reply(cur,A,CA,destination,'manual-case-reply-2','Second developer update','PROVIDER_123',author='Synthetic Developer',source_external_id='connect:manual-case-reply-2')
+    local.commit();assert reply_two
+    def close_during_generation(*_args,**_kwargs):
+        local.execute("UPDATE saas_support_tickets SET status='resolved' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,data['case_id']));local.commit()
+        return {'text':'Stale close draft'}
+    monkeypatch.setattr(copilot,'run',close_during_generation)
+    with pytest.raises(TenantLinearError):flow.draft(PROFILE,reply_two,{'request_id':str(uuid.uuid4())})
+    assert local.execute("SELECT draft_state FROM saas_dialog_consultation_replies WHERE id=%s::uuid",(reply_two,))[0]['draft_state']!='completed'
+    local.execute("UPDATE saas_support_tickets SET status='new' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,data['case_id']));local.commit()
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,9101,'connect:manual-case-reply-3','incoming',%s,'Third developer update','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'manual-case-reply-3','quotedExternalMessageId':'PROVIDER_123'})));local.commit()
+    with local.cursor() as cur:reply_three=flow.record_reply(cur,A,CA,destination,'manual-case-reply-3','Third developer update','PROVIDER_123',author='Synthetic Developer',source_external_id='connect:manual-case-reply-3')
+    local.commit();assert reply_three
+    def reassign_during_generation(*_args,**_kwargs):
+        local.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name) VALUES(%s::uuid,%s::uuid,'changed-developer',9102,'Changed developer')",(A,CA))
+        local.execute("UPDATE saas_support_tickets SET assigned_developer_conversation_id='changed-developer' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,data['case_id']));local.commit()
+        return {'text':'Stale reassignment draft'}
+    monkeypatch.setattr(copilot,'run',reassign_during_generation)
+    with pytest.raises(TenantLinearError):flow.draft(PROFILE,reply_three,{'request_id':str(uuid.uuid4())})
+    assert sender.call_count==1
+
+
+def test_resolution_requires_explicit_command_quote_and_assigned_developer(case_ready):
+    local,data,sender=case_ready
+    local.execute('''UPDATE saas_support_tickets SET assigned_developer_channel_id=%s::uuid,
+      assigned_developer_conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid''',
+      (CA,TARGET,A,data['case_id']));local.commit()
+    result=flow.prepare(PROFILE,data,'https://crm.test')
+    flow.dispatch(PROFILE,result['id'],data['request_id'])
+    import tenant_ai_group_coordination as group_coordination
+    group_coordination.create_schema(local)
+    local.execute("INSERT INTO saas_ai_group_staff(tenant_id,channel_id,jid,member_id,verified_by) VALUES(%s::uuid,%s::uuid,'15550001111@s.whatsapp.net',11,11) ON CONFLICT DO NOTHING",(A,CA))
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,99,'connect:ordinary-reply','incoming',%s,'Завтра посмотрю','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'ordinary-reply','participantJid':'15550001111@s.whatsapp.net'})));local.commit()
+    with local.cursor() as cur:
+        ordinary=flow.record_reply(cur,A,CA,TARGET,'ordinary-reply','Завтра посмотрю','PROVIDER_123',author='Developer',source_external_id='connect:ordinary-reply',source_actor=11)
+    local.commit()
+    assert ordinary and local.execute('SELECT status FROM saas_support_tickets WHERE id=%s::uuid',(data['case_id'],))[0]['status']=='new'
+    with local.cursor() as cur:
+        assert flow.record_reply(cur,A,CA,TARGET,'unquoted-done','/done',author='Developer') is None
+    local.commit()
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,99,'connect:explicit-done','incoming',%s,'/done','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'explicit-done','participantJid':'15550001111@s.whatsapp.net','quotedExternalMessageId':'PROVIDER_123'})));local.commit()
+    with local.cursor() as cur:
+        resolved=flow.record_reply(cur,A,CA,TARGET,'explicit-done','/done','PROVIDER_123',author='Developer',source_external_id='connect:explicit-done',source_actor=11)
+    local.commit()
+    assert resolved
+    row=local.execute('SELECT status,completion_outcome FROM saas_support_tickets WHERE id=%s::uuid',(data['case_id'],))[0]
+    assert row=={'status':'resolved','completion_outcome':'resolved_confirmed'}
+    assert flow.record_reply(local.cursor(),A,CA,TARGET,'explicit-done','/done','PROVIDER_123',author='Developer') is None
+
+
+def test_resolution_command_from_unassigned_destination_only_records_answer(case_ready):
+    local,data,_=case_ready
+    result=flow.prepare(PROFILE,data,'https://crm.test');flow.dispatch(PROFILE,result['id'],data['request_id'])
+    with local.cursor() as cur:
+        ident=flow.record_reply(cur,A,CA,TARGET,'unassigned-done','/решено','PROVIDER_123',author='Developer')
+    local.commit()
+    assert ident
+    assert local.execute('SELECT status FROM saas_support_tickets WHERE id=%s::uuid',(data['case_id'],))[0]['status']=='new'
+
+
+def test_developer_context_is_limited_to_unique_case_containing_current_message(case_ready,monkeypatch):
+    local,data,_=case_ready
+    monkeypatch.setattr(flow,'_connect',lambda:local)
+    result=flow.prepare(PROFILE,data,'https://crm.test');flow.dispatch(PROFILE,result['id'],data['request_id'])
+    import tenant_ai_group_coordination as coordination
+    coordination.create_schema(local)
+    local.execute("INSERT INTO saas_ai_group_staff(tenant_id,channel_id,jid,member_id,verified_by) VALUES(%s::uuid,%s::uuid,'15550001111@s.whatsapp.net',11,11) ON CONFLICT DO NOTHING",(A,CA))
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,raw) VALUES(%s::uuid,%s::uuid,99,'connect:context-reply','incoming',%s,'Завтра посмотрю',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'context-reply','quotedExternalMessageId':'PROVIDER_123','participantJid':'15550001111@s.whatsapp.net'})))
+    with local.cursor() as cur:
+        reply_id=flow.record_reply(cur,A,CA,TARGET,'context-reply','Завтра посмотрю','PROVIDER_123',author='Developer')
+    assert reply_id
+    local.commit()
+    source=local.execute('SELECT external_id FROM saas_crm_messages WHERE id=%s::uuid',(data['message_ids'][0],))[0]['external_id']
+    job={'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':'client','payload':{
+      'developer_case_followup':True,'case_id':data['case_id'],'developer_reply_message_id':reply_id}}
+    context=flow.active_case_developer_context(job,source)
+    assert len(context)==1 and context[0]['message']=='Завтра посмотрю'
+    local.execute("UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));local.commit()
+    assert flow.active_case_developer_context(job,source)==[]
+    local.execute("UPDATE saas_tenant_members SET active=TRUE WHERE tenant_id=%s::uuid AND telegram_id=11",(A,));local.commit()
+    job['payload']['developer_reply_message_id']=str(uuid.uuid4())
+    assert flow.active_case_developer_context(job,source)==[]
+    job['payload']['developer_reply_message_id']=reply_id
+    job['payload']['case_id']=str(uuid.uuid4())
+    assert flow.active_case_developer_context(job,source)==[]
+    job['payload']['case_id']=data['case_id']
+    assert flow.active_case_developer_context(job,'unrelated-message')==[]
+
+
+def test_verified_developer_reply_enqueues_one_automatic_client_followup(case_ready,monkeypatch):
+    local,data,sender=case_ready
+    monkeypatch.setenv('AI_AGENTS_ENABLED','1');monkeypatch.setenv('AI_AGENTS_AUTO_SEND_ENABLED','1')
+    monkeypatch.setattr(flow,'_connect',lambda:local)
+    direct='synthetic-developer-direct'
+    local.execute("UPDATE saas_ai_conversation_state SET state='active',agent_id=%s::uuid WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(AGENT,A,CA))
+    local.execute("UPDATE saas_ai_agents SET mode='automatic',enabled=TRUE,scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT))
+    local.execute("UPDATE saas_ai_agent_settings SET enabled=TRUE,auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
+    local.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,199,'Synthetic Developer',now())",(A,CA,direct))
+    flow.developer_marker(PROFILE,{'channel_id':CA,'conversation_id':direct,'enabled':True})
+    local.execute('''UPDATE saas_support_tickets SET assigned_developer_channel_id=%s::uuid,
+      assigned_developer_conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid''',(CA,direct,A,data['case_id']))
+    local.execute("UPDATE saas_crm_messages SET external_id='connect:m1' WHERE tenant_id=%s::uuid AND external_id='m1'",(A,));local.commit()
+    selected={**data,'case_id':data['case_id'],'destination_conversation_id':direct}
+    import tenant_connect_transport as connect_transport
+    monkeypatch.setattr(connect_transport,'connect_route',lambda _cur,_tenant,lead,**_kw:{'channel_id':CA,'conversation_id':direct if lead==199 else 'client','api_key':'synthetic'})
+    consultation=flow.prepare(PROFILE,selected,'https://crm.test')
+    assert flow.dispatch(PROFILE,consultation['id'],selected['request_id'])['state']=='sent'
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,199,'connect:developer-reply-1','incoming',%s,'Завтра посмотрю','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'developer-reply-1','quotedExternalMessageId':'PROVIDER_123'})));local.commit()
+    with local.cursor() as cur:
+      reply_id=flow.record_reply(cur,A,CA,direct,'developer-reply-1','Завтра посмотрю','PROVIDER_123',author='Synthetic Developer',source_external_id='connect:developer-reply-1',fresh_followup=True)
+    assert reply_id
+    local.execute("UPDATE saas_ai_agent_jobs SET state='skipped'");local.commit()
+    # Webhook/reply receipt is already stored, but its enqueue was lost. The
+    # scheduled reconciler must recover it idempotently without provider POST.
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'connect:newer-client-message','incoming',%s,'A newer unrelated question','text',now()+interval '1 minute')",(uuid.uuid4(),A,'connect:'+CA));local.commit()
+    worker.reconcile()
+    assert local.execute("SELECT count(*) AS n FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND event_type='developer_case_reply'",(A,))[0]['n']==0
+    local.execute("DELETE FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id='connect:newer-client-message'",(A,));local.commit()
+    worker.reconcile();worker.reconcile()
+    event=local.execute("SELECT event_type,fingerprint,payload::jsonb AS payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND event_type='developer_case_reply'",(A,))[0]
+    job=local.execute("SELECT state,revision,event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id='client'",(A,))[0]
+    assert event['payload']['developer_case_followup'] is True
+    assert event['payload']['case_id']==data['case_id'] and event['payload']['developer_reply_message_id']==reply_id
+    assert event['payload']['expected_conversation_revision']==1
+    assert job['state']=='queued' and job['event_fingerprint']==event['fingerprint']
+    assert local.execute("SELECT count(*) AS n FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND event_type='developer_case_reply'",(A,))[0]['n']==1
+    assert sender.call_count==1
+    assert local.execute("SELECT count(*) AS n FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND event_type='developer_case_reply'",(A,))[0]['n']==1
+    assert sender.call_count==1
+
+
+def test_group_case_followup_inherits_only_current_admitted_source_fence(case_ready,monkeypatch):
+    import hashlib
+    import tenant_ai_agent_connect as connect_ai
+    import tenant_ai_group_coordination as groups
+    local,data,_sender=case_ready;monkeypatch.setenv('AI_AGENTS_ENABLED','1');monkeypatch.setenv('AI_AGENTS_AUTO_SEND_ENABLED','1')
+    monkeypatch.setattr(flow,'_connect',lambda:local);monkeypatch.setattr(groups,'_connect',lambda:local);groups.create_schema(local)
+    group='120363431037910651@g.us';direct='synthetic-developer-direct'
+    local.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at,conversation_kind) VALUES(%s::uuid,%s::uuid,%s,299,'Synthetic customer group',now(),'group') ON CONFLICT DO NOTHING",(A,CA,group))
+    local.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,199,'Synthetic Developer',now()) ON CONFLICT DO NOTHING",(A,CA,direct))
+    monkeypatch.setattr(transport,'connect_route',lambda _cur,_tenant,lead,**_kw:{'channel_id':CA,'conversation_id':direct if lead==199 else 'client','api_key':'synthetic'})
+    local.execute("UPDATE saas_ai_conversation_state SET conversation_id=%s,state='active',agent_id=%s::uuid WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s",(group,AGENT,A,CA))
+    local.execute("UPDATE saas_support_tickets SET assigned_developer_channel_id=%s::uuid,assigned_developer_conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid",(CA,direct,A,data['case_id']))
+    local.execute("UPDATE saas_ai_agents SET mode='automatic',enabled=TRUE,scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}]),A,AGENT))
+    local.execute("UPDATE saas_ai_agent_settings SET enabled=TRUE,auto_send_enabled=TRUE WHERE tenant_id=%s::uuid",(A,))
+    flow.developer_marker(PROFILE,{'channel_id':CA,'conversation_id':direct,'enabled':True})
+    local.execute("UPDATE saas_crm_messages SET external_id='connect:m1' WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))
+    groups.configure(PROFILE,{'conversation_id':group,'expected_revision':0,'assignments':[{'agent_id':AGENT,'channel_id':CA,'priority':10}]})
+    local.execute("UPDATE saas_ai_group_coordination SET state='active',reason='',resumed_at=now()-interval '5 minutes' WHERE tenant_id=%s::uuid AND group_jid=%s",(A,group))
+    local.execute("UPDATE saas_ai_conversation_state SET state='active',agent_id=%s::uuid WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s",(AGENT,A,CA,group))
+    source=str(uuid.uuid4());source_id='new-group-source'
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,created_at,happened_at) VALUES(%s::uuid,%s::uuid,41,%s,'incoming',%s,'New group issue','text',clock_timestamp(),clock_timestamp()+interval '1 second')",(source,A,'connect:'+source_id,'connect:'+CA))
+    local.execute("INSERT INTO saas_support_ticket_messages(tenant_id,ticket_id,message_id,event_key) VALUES(%s::uuid,%s::uuid,%s::uuid,'new-group-source')",(A,data['case_id'],source))
+    admission=groups.admit(local.cursor(),A,CA,group,source_id,source_id)
+    assert admission
+    source_fingerprint=hashlib.sha256(('connect:'+source_id).encode()).hexdigest()
+    local.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,external_id,event_type,payload,state) VALUES(%s::uuid,%s,'connect',%s,'incoming_message',%s::jsonb,'completed') ON CONFLICT DO NOTHING",(A,source_fingerprint,source_id,json.dumps({'message_id':source_id,'channel_id':CA,'conversation_id':group,**admission})))
+    local.commit()
+    consultation=flow.prepare(PROFILE,{**data,'destination_conversation_id':direct},'https://crm.test')
+    flow.dispatch(PROFILE,consultation['id'],data['request_id'])
+    local.execute("UPDATE saas_support_tickets SET conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid",(group,A,data['case_id']))
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,199,'connect:developer-reply-group','incoming',%s,'We will check the cable','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'developer-reply-group','quotedExternalMessageId':'PROVIDER_123'})))
+    local.commit()
+    with local.cursor() as cur:reply_id=flow.record_reply(cur,A,CA,direct,'developer-reply-group','We will check the cable','PROVIDER_123',author='Synthetic Developer',source_external_id='connect:developer-reply-group',fresh_followup=True)
+    with local.cursor() as cur:assert connect_ai.enqueue_case_developer_followup(cur,A,reply_id,source_external_id='connect:developer-reply-group',quoted_message_id='PROVIDER_123')
+    event=local.execute("SELECT payload::jsonb AS payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND event_type='developer_case_reply'",(A,))[0]['payload']
+    assert event['group_event_key']==admission['group_event_key'] and event['group_revision']==admission['group_revision']
+    local.execute("UPDATE saas_ai_group_coordination SET state='human',revision=revision+1 WHERE tenant_id=%s::uuid AND group_jid=%s",(A,group));local.commit()
+    from tenant_ai_group_coordination import job_allowed
+    assert not job_allowed(local.cursor(),{'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':group,'agent_id':AGENT,'payload':event})
+
+
+def test_auto_dispatch_reply_resolution_notification_full_offline_flow(case_ready,monkeypatch):
+    local,data,sender=case_ready
+    # Explicitly enable only the runtime gates inside this isolated SQL fixture.
+    # No provider transport is reachable; the sender remains a spy.
+    monkeypatch.setenv('AI_AGENTS_ENABLED','1')
+    monkeypatch.setenv('AI_AGENTS_AUTO_SEND_ENABLED','1')
+    local.execute("UPDATE saas_ai_conversation_state SET state='active',agent_id=%s::uuid WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(AGENT,A,CA))
+    local.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT))
+    local.execute("UPDATE saas_support_tickets SET status='resolved' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,data['case_id']))
+    local.execute("UPDATE saas_crm_messages SET external_id='connect:m1' WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))
+    second_target='120363411822115410@g.us'
+    local.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,98,'Synthetic Dev 2',now())",(A,CA,second_target))
+    local.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,state,reason) VALUES(%s::uuid,%s,'human','fixture') ON CONFLICT DO NOTHING",(A,second_target));local.commit()
+    flow.developer_marker(PROFILE,{'channel_id':CA,'conversation_id':second_target,'enabled':True})
+    config={'auto_case_dispatch_enabled':True,'auto_case_dispatch_owner_id':11,
+      'developer_destinations':[{'channel_id':CA,'conversation_id':TARGET},{'channel_id':CA,'conversation_id':second_target}]}
+    local.execute("UPDATE saas_ai_agents SET mode='automatic',response_policy=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps(config),A,AGENT))
+    local.execute('UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE WHERE tenant_id=%s::uuid',(A,));local.commit()
+    job={'tenant_id':A,'provider':'connect','agent_id':AGENT,'conversation_id':'client','chat_id':'client',
+      'channel_id':CA,'lead_id':41,'event_fingerprint':'automatic-case-event','source_message_id':'m1',
+      'case_message_ids':['m1']}
+    with local.cursor() as cur:receipt=inbox_store.handoff_ticket(cur,job,'synthetic escalation')
+    local.commit();assert receipt['created'] is True
+    outboxes=local.execute("SELECT id::text FROM saas_ai_case_developer_dispatches WHERE case_id=%s::uuid ORDER BY destination_key",(receipt['id'],))
+    assert len(outboxes)==2
+    import tenant_connect_transport as connect_transport
+    monkeypatch.setattr(connect_transport,'connect_route',lambda _cur,_tenant,lead,**_kw:{'channel_id':CA,'conversation_id':TARGET if lead==99 else second_target,'api_key':'synthetic'})
+    for outbox in outboxes:worker.dispatch_auto_case(outbox['id'])
+    assert sender.call_count==2, local.execute('SELECT state,reason FROM saas_ai_case_developer_dispatches WHERE case_id=%s::uuid',(receipt['id'],))
+    rows=local.execute('SELECT state,consultation_id::text FROM saas_ai_case_developer_dispatches WHERE case_id=%s::uuid',(receipt['id'],))
+    assert len(rows)==2 and all(row['state']=='sent' and row['consultation_id'] for row in rows)
+    # A positive provider receipt can arrive after an earlier pending/unknown
+    # projection. Reconciliation must mark sent without queueing another POST.
+    late=local.execute('''SELECT x.id::text,x.request_id::text FROM saas_ai_case_developer_dispatches x
+      WHERE x.case_id=%s::uuid ORDER BY x.destination_key LIMIT 1''',(receipt['id'],))[0]
+    local.execute("UPDATE saas_ai_case_developer_dispatches SET state='unknown' WHERE id=%s::uuid",(late['id'],))
+    local.execute("UPDATE saas_consultation_group_deliveries SET state='unknown' WHERE tenant_id=%s::uuid AND request_id=%s::uuid",(A,late['request_id']));local.commit()
+    worker.reconcile_auto_dispatches()
+    assert local.execute("SELECT state FROM saas_ai_case_developer_dispatches WHERE id=%s::uuid",(late['id'],))[0]['state']=='unknown'
+    local.execute("UPDATE saas_consultation_group_deliveries SET state='sent' WHERE tenant_id=%s::uuid AND request_id=%s::uuid",(A,late['request_id']));local.commit()
+    worker.reconcile_auto_dispatches()
+    assert local.execute("SELECT state FROM saas_ai_case_developer_dispatches WHERE id=%s::uuid",(late['id'],))[0]['state']=='sent'
+    assert all(row['id']!=late['id'] for row in worker.auto_dispatch_queue())
+    assert sender.call_count==2
+    # Auto fan-out recipients are correlated through their own sent receipts;
+    # no single CRM assignee is required. Group senders must be tenant verified.
+    import tenant_ai_group_coordination as group_coordination
+    group_coordination.create_schema(local)
+    local.execute("INSERT INTO saas_ai_group_staff(tenant_id,channel_id,jid,member_id,verified_by) VALUES(%s::uuid,%s::uuid,'15550001111@s.whatsapp.net',11,11) ON CONFLICT DO NOTHING",(A,CA))
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,99,'connect:auto-answer','incoming',%s,'Завтра посмотрю','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'auto-answer','participantJid':'15550001111@s.whatsapp.net','quotedExternalMessageId':'PROVIDER_123'})));local.commit()
+    with local.cursor() as cur:
+        answer=flow.record_reply(cur,A,CA,TARGET,'auto-answer','Завтра посмотрю','PROVIDER_123',author='Developer',source_external_id='connect:auto-answer',source_actor=11,fresh_followup=True)
+    local.commit()
+    assert answer and local.execute('SELECT status FROM saas_support_tickets WHERE id=%s::uuid',(receipt['id'],))[0]['status']!='resolved'
+    assert local.execute('SELECT draft_state FROM saas_dialog_consultation_replies WHERE id=%s::uuid',(answer,))[0]['draft_state']=='not_requested'
+    from tenant_ai_agent_connect import enqueue_case_developer_followup
+    local.execute("UPDATE saas_ai_agent_jobs SET state='skipped'");local.commit()
+    with local.cursor() as cur:
+        assert enqueue_case_developer_followup(cur,A,answer,source_external_id='connect:auto-answer',quoted_message_id='PROVIDER_123')
+    local.commit()
+    followup=local.execute("SELECT event_type,fingerprint,payload::jsonb AS payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND event_type='developer_case_reply'",(A,))[0]
+    assert followup['payload']['case_id']==receipt['id'] and followup['payload']['developer_reply_message_id']==answer
+    assert followup['payload']['developer_case_followup'] is True
+    assert local.execute("SELECT count(*) AS n FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND provider='connect' AND conversation_id='client' AND event_fingerprint=%s",(A,followup['fingerprint']))[0]['n']==1
+    with local.cursor() as cur:assert flow.case_developer_followup_current(cur,A,followup['payload'])
+    monkeypatch.setattr(transport,'_connect',lambda:local);monkeypatch.setattr(transport,'_schema',lambda _conn:None);monkeypatch.setattr(transport,'lock_dialog',lambda *_a,**_k:None)
+    final_provider_send=Mock(return_value='must-not-send');monkeypatch.setattr(transport,'send_ai_reply',final_provider_send)
+    local.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name) VALUES(%s::uuid,%s::uuid,'other-developer',9001,'Synthetic alternate developer')",(A,CB))
+    local.execute("UPDATE saas_support_tickets SET assigned_developer_channel_id=%s::uuid,assigned_developer_conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid",(CB,'other-developer',A,receipt['id']));local.commit()
+    with local.cursor() as cur:assert not flow.case_developer_followup_current(cur,A,followup['payload'])
+    assert transport.send_ai_reply_if_active(A,41,CA,'client','Synthetic follow-up',str(uuid.uuid4()),1,case_followup_binding=followup['payload']) is None
+    local.execute("UPDATE saas_support_tickets SET assigned_developer_channel_id=NULL,assigned_developer_conversation_id=NULL WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,receipt['id']));local.commit()
+    local.execute("UPDATE saas_support_tickets SET status='resolved' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,receipt['id']));local.commit()
+    with local.cursor() as cur:assert not flow.case_developer_followup_current(cur,A,followup['payload'])
+    assert transport.send_ai_reply_if_active(A,41,CA,'client','Synthetic follow-up',str(uuid.uuid4()),1,
+        case_followup_binding=followup['payload']) is None
+    assert not final_provider_send.called
+    local.execute("UPDATE saas_support_tickets SET status='new' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,receipt['id']));local.commit()
+    job['source_message_id']='connect:m1'
+    assert flow.active_case_developer_context(job,'connect:m1')[0]['message']=='Завтра посмотрю'
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,99,'connect:auto-done','incoming',%s,'/решено','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'auto-done','participantJid':'15550001111@s.whatsapp.net','quotedExternalMessageId':'PROVIDER_123'})));local.commit()
+    with local.cursor() as cur:
+        done=flow.record_reply(cur,A,CA,TARGET,'auto-done','/решено','PROVIDER_123',author='Developer',source_external_id='connect:auto-done',source_actor=11)
+    local.commit()
+    assert done and local.execute('SELECT status,completion_outcome FROM saas_support_tickets WHERE id=%s::uuid',(receipt['id'],))[0]=={'status':'resolved','completion_outcome':'resolved_confirmed'}
+    assert local.execute("SELECT count(*) AS n FROM saas_tenant_notifications WHERE event_key='dialog_consultation:'||%s",(done,))[0]['n']==1
 
 
 def test_legacy_case_marker_and_saved_reply_project_to_common_thread(case_ready):
@@ -254,7 +575,7 @@ def test_failed_explicit_case_draft_never_becomes_background_paid_retry(case_rea
     # A historical incorrect pending state also cannot restore paid case work.
     local.execute("UPDATE saas_dialog_consultation_replies SET draft_state='pending' WHERE id=%s::uuid",(rid,));local.commit()
     assert worker.pending()==[]
-    assert run.call_count==1
+    assert run.call_count==0,'invalid quote correlation is rejected before the paid copilot call'
 
 
 @pytest.mark.parametrize('state',['ready','pending','unknown','sent'])

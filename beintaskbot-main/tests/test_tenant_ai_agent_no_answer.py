@@ -10,8 +10,18 @@ def test_new_policy_defaults_are_safe_and_existing_policy_can_remain_disabled():
     assert validate_policy(None) == {
         'enabled': False, 'action': 'stop', 'fallback_action': 'stop',
         'max_clarifications': 1, 'stop_reply': '', 'developer_id': None,
+        'auto_case_dispatch_enabled':False,'developer_destinations':[],
     }
     assert validate_policy({'enabled': False})['enabled'] is False
+
+
+def test_automatic_case_dispatch_requires_one_to_five_explicit_developers():
+    row={'channel_id':'00000000-0000-0000-0000-0000000000c9','conversation_id':'developers@g.us'}
+    configured=validate_policy({'auto_case_dispatch_enabled':True,'developer_destinations':[row]})
+    assert configured['auto_case_dispatch_enabled'] is True
+    assert configured['developer_destinations']==[row]
+    with pytest.raises(TenantLinearError):validate_policy({'auto_case_dispatch_enabled':True})
+    with pytest.raises(TenantLinearError):validate_policy({'developer_destinations':[row]*6})
 
 
 @pytest.mark.parametrize('value', [
@@ -176,7 +186,7 @@ async def test_manual_developer_consultation_handoffs_then_uses_internal_only_re
     calls=[]
     async def fake_to_thread(fn,*args,**kwargs): return fn(*args,**kwargs)
     monkeypatch.setattr(worker.asyncio,'to_thread',fake_to_thread)
-    async def current_handoff(job,reservation,source,reason):
+    async def current_handoff(job,reservation,source,reason,**kwargs):
         calls.append(('handoff',reason));return True
     monkeypatch.setattr(worker,'_handoff_current_connect',current_handoff)
     monkeypatch.setattr(consultations,'create_from_ai',lambda job,**kwargs:calls.append(('consultation',kwargs)) or {'created':True,'status':'waiting_specialist','customer_message_sent':False})
@@ -223,7 +233,7 @@ async def test_initial_consultation_ack_requires_group_receipt(monkeypatch,group
     calls=[]
     async def fake_to_thread(fn,*args,**kwargs): return fn(*args,**kwargs)
     monkeypatch.setattr(worker.asyncio,'to_thread',fake_to_thread)
-    async def current_handoff(*_args):calls.append('handoff');return True
+    async def current_handoff(*_args,**_kwargs):calls.append('handoff');return True
     monkeypatch.setattr(worker,'_handoff_current_connect',current_handoff)
     monkeypatch.setattr(pilot,'manual_live_job',lambda _job:True)
     monkeypatch.setattr(consultations,'create_from_ai',lambda *_args,**_kwargs:
@@ -240,7 +250,8 @@ async def test_initial_consultation_ack_requires_group_receipt(monkeypatch,group
     policy={'enabled':True,'action':'consult_developer','developer_id':11,'fallback_action':'stop',
         'max_clarifications':1,'stop_reply':''}
     result=await worker._apply_no_answer_policy(job,{'run_id':'run','conversation_revision':1},policy,
-        'unsupported_evidence',{'external_id':'source-1'},'customer report',[],[],None,None,Logger())
+        'unsupported_evidence',{'external_id':'source-1'},'customer report',[],[],None,None,Logger(),
+        pilot_group_destination=True)
     receipt=result['consultation']
     assert receipt['pilot_group_delivery']['state']==group_state
     assert ('pilot_customer_ack' in receipt)==(expected_ack is not None)

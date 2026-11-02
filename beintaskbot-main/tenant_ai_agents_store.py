@@ -201,6 +201,9 @@ def save_settings(profile, data):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
+            if (patch.get('response_policy') and
+                    'auto_case_dispatch_owner_id' in patch['response_policy']):
+                raise TenantLinearError('Automatic dispatch owner is server managed.',403)
             if any(patch.get(key) is True for key in ('auto_send_enabled','crm_actions_enabled','native_crm_actions_enabled')) and profile.get('role') != 'owner':
                 raise TenantLinearError('Avtomatik göndərmə və CRM yazılarını yalnız şirkət sahibi aça bilər.',403)
             if patch.get('enabled') is True and not platform_service_ready():
@@ -416,6 +419,11 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
+            if creating and patch.get('mode')!='automatic':
+                patch['response_policy']['auto_case_dispatch_enabled']=False
+            if patch.get('response_policy') and patch['response_policy'].get('auto_case_dispatch_enabled'):
+                _validate_case_developer_destinations(cur,profile,tenant,patch['response_policy'])
+                if creating:patch['response_policy']['auto_case_dispatch_owner_id']=actor
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('ai-agent-config:'+tenant,))
             # A retry after a browser/network interruption must return the
             # original disabled agent.  The key is also employee-scoped so an
@@ -534,9 +542,21 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                 merged.update(patch)
                 from tenant_ai_expert_policy import validate_binding
                 validate_binding(cur,tenant,agent_uuid,merged,previous)
+                # The recipient binding is server-owned; it lives in the
+                # persisted JSON but is never accepted from a browser patch.
+                (merged.get('response_policy') or {}).pop('auto_case_dispatch_owner_id',None)
                 merged['safety'] = safety_policy(merged.get('safety'))
                 from tenant_ai_agent_no_answer import validate_policy
                 merged['response_policy'] = validate_policy(merged.get('response_policy'))
+                if merged.get('mode')!='automatic':
+                    merged['response_policy']['auto_case_dispatch_enabled']=False
+                if merged['response_policy'].get('auto_case_dispatch_enabled'):
+                    _validate_case_developer_destinations(cur,profile,tenant,merged['response_policy'])
+                    # Revalidation above requires the current company owner,
+                    # including after an ownership transfer.
+                    merged['response_policy']['auto_case_dispatch_owner_id']=actor
+                else:
+                    merged['response_policy'].pop('auto_case_dispatch_owner_id',None)
                 if merged['response_policy']['enabled']:
                     if merged['role']!='primary':
                         raise TenantLinearError('No-answer behavior is configured only on a Primary agent.',409)
@@ -576,6 +596,20 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                 reconcile_tenant_connect_assignments(cur, tenant)
         if connection is None: conn.commit()
     return result
+
+
+def _validate_case_developer_destinations(cur,profile,tenant,response_policy):
+    """Bind auto-dispatch recipients to the same visible, active Developer targets as manual sends."""
+    from tenant_dialog_consultations import access,developer_target
+    access_tenant,_actor,dialogs_policy=access(cur,profile,'dialogs')
+    if str(access_tenant)!=str(tenant):raise TenantLinearError('Developer recipients are outside this company.',403)
+    if dialogs_policy.profile.get('role')!='owner':
+        raise TenantLinearError('Only the owner can enable automatic external developer dispatch.',403)
+    cur.execute('SELECT owner_telegram_id FROM saas_tenants WHERE id=%s::uuid FOR SHARE',(tenant,))
+    if (cur.fetchone() or {}).get('owner_telegram_id')!=_actor:
+        raise TenantLinearError('Only the current company owner can enable automatic external developer dispatch.',403)
+    for row in response_policy.get('developer_destinations') or []:
+        developer_target(cur,tenant,dialogs_policy,row['channel_id'],row['conversation_id'])
 
 
 def _require_owner(cur, tenant, actor):

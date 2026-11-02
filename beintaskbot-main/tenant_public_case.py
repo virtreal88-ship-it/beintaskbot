@@ -50,6 +50,7 @@ def _schema(conn):
         cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS snapshot_revision INTEGER NOT NULL DEFAULT 1")
         cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS is_partial BOOLEAN NOT NULL DEFAULT FALSE")
         cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()")
+        cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS public_identity JSONB NOT NULL DEFAULT '{}'::jsonb")
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS saas_public_case_shares_revision_idx ON saas_public_case_shares(tenant_id,ticket_id,group_channel_id,group_conversation_id,revision_key) WHERE revision_key<>''")
     conn.commit()
 
@@ -381,7 +382,7 @@ def read(token,client=''):
     digest=hashlib.sha256(token.encode()).hexdigest();_rate_limit(hashlib.sha256(str(client or 'unknown').encode()).hexdigest())
     with _connect() as conn:
         with conn.cursor() as cur:
-            cur.execute('''SELECT id::text,public_messages,selected_media_ids,updated_at,revision_key,snapshot_revision,is_partial FROM saas_public_case_shares
+            cur.execute('''SELECT id::text,public_messages,selected_media_ids,public_identity,updated_at,revision_key,snapshot_revision,is_partial FROM saas_public_case_shares
               WHERE token_hash=%s AND revoked_at IS NULL AND expires_at>now()''',(digest,))
             row=cur.fetchone()
     if not row:raise TenantLinearError('Страница недоступна.',404)

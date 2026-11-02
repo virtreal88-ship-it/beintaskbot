@@ -205,11 +205,12 @@ _SCHEMA_INDEXES = ['saas_connect_dialog_links_canonical',
 
 
 def _schema(conn) -> None:
-    _ensure_schema(conn)
     with conn.cursor() as cur:
         from tenant_schema_preflight import ready, lock_schema
         if ready(cur, _SCHEMA_COLUMNS, _SCHEMA_INDEXES):
             return
+    _ensure_schema(conn)
+    with conn.cursor() as cur:
         lock_schema(cur)
         if ready(cur, _SCHEMA_COLUMNS, _SCHEMA_INDEXES):
             return
@@ -767,6 +768,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
     metadata = _conversation_metadata(data, conversation)
     accepted = False
     queued_payload = None
+    case_followup_intent=None
     with _connect() as conn:
         # AI schema initialization also prepares Connect tables. Never hold
         # Connect DDL locks while waiting for the AI schema's process lock.
@@ -825,7 +827,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             if not cur.fetchone():
                 return False
             data={k:v for k,v in data.items() if k not in {
-                '_crm_provider_conversation_id','_crm_owner_assertion_id','pilot_test_role_override'}}
+                '_crm_provider_conversation_id','_crm_owner_assertion_id','pilot_test_role_override','_case_followup_intent'}}
             original_conversation = conversation
             conversation, identity_conflict = _canonical_direct_conversation(
                 cur, tenant, channel_id, conversation, data, metadata)
@@ -1057,6 +1059,12 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     return accepted
             independent_consultation_reply=False
             if not outbound and not ai_origin and data.get('type') in {'text','image','video','audio','voice','document','ptt','voice_message','photo','file'}:
+                if message_inserted:
+                    # The signed fresh webhook admits a possible continuation.
+                    # Keeping it on the original CRM source survives an early
+                    # reply whose outbound quote receipt is reconciled later.
+                    from tenant_dialog_consultations import admit_case_followup_intent
+                    admit_case_followup_intent(cur,tenant,channel_id,conversation,'connect:'+str(data.get('id') or event_id))
                 cur.execute('SAVEPOINT dialog_consultation_reply')
                 try:
                     from tenant_dialog_consultations import record_reply,known_reply
@@ -1064,7 +1072,10 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                         str(data.get('text') or data.get('caption') or ''),data.get('quotedExternalMessageId'),
                         str(metadata.get('participant_name') or _phone_from_jid(metadata.get('participant_jid')) or metadata.get('display_name') or metadata.get('participant_jid') or conversation),
                         event.get('occurred_at'),message_type=str(data.get('type') or 'text'),
-                        source_external_id='connect:'+str(data.get('id') or event_id))
+                        source_external_id='connect:'+str(data.get('id') or event_id),
+                        source_actor=employee if coordinated and employee is not None else None)
+                    if linked and data.get('quotedExternalMessageId'):
+                        case_followup_intent=(tenant,linked,'connect:'+str(data.get('id') or event_id),str(data['quotedExternalMessageId']))
                     independent_consultation_reply=known_reply(cur,tenant,channel_id,conversation,str(data.get('id') or event_id))
                     cur.execute('RELEASE SAVEPOINT dialog_consultation_reply')
                 except Exception:
@@ -1077,6 +1088,20 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                 # durable. This is developer evidence, not a new customer turn
                 # for destination AI, extraction, learning or simulation.
                 conn.commit()
+                # Release the developer dialog and source-write locks before
+                # acquiring a different (client) dialog fence. The fresh
+                # admission above is durable if this derived enqueue fails.
+                if case_followup_intent:
+                    try:
+                        from tenant_ai_agent_connect import enqueue_case_developer_followup
+                        with conn.cursor() as continuation_cur:
+                            enqueue_case_developer_followup(continuation_cur,case_followup_intent[0],case_followup_intent[1],
+                                source_external_id=case_followup_intent[2],quoted_message_id=case_followup_intent[3])
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+                        import logging
+                        logging.getLogger(__name__).warning('Case developer follow-up admission deferred; reply receipt preserved')
                 return accepted
             if (not outbound and message_inserted and coordinated and not ai_origin and data.get('type')=='text'
                     and ('CASE:' in str(data.get('text') or '').upper() or data.get('quotedExternalMessageId'))):
@@ -1318,7 +1343,8 @@ def download_connect_message_media(route: dict, message_id: str, expected_type: 
 
 def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversation_id: str,
                             text: str, run_id: str, expected_revision: int, *, handoff_fingerprint: str = '',
-                            pilot_scope_fenced: bool = False, stop_after_reply: bool = False, coverage_manifest=None) -> str | None:
+                            pilot_scope_fenced: bool = False, stop_after_reply: bool = False, coverage_manifest=None,
+                            case_followup_binding=None, developer_reply_ids=None) -> str | None:
     """Serialize Connect send with an observed human takeover.
 
     The row lock intentionally spans the short Connect request. If the human
@@ -1339,6 +1365,11 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
         conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, "connect", channel_id, conversation_id)
+            if case_followup_binding is not None:
+                from tenant_dialog_consultations import case_developer_followup_current
+                if not case_developer_followup_current(cur,tenant,case_followup_binding):
+                    conn.rollback()
+                    return None
             if coordinated:
                 # Lock candidate settings before choosing the scheduled speaker.
                 cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid ORDER BY id FOR SHARE',(tenant,))
@@ -1409,6 +1440,21 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
                 if not allowed(coverage_manifest.job,connection=conn):return None
                 coverage_manifest.validate(cur,tenant,channel_id,lead_id)
             message_id = send_ai_reply(route, text, run_id)
+            # A normal customer turn may already answer a fresh developer
+            # intent that arrived while that turn owned the job. Consume it
+            # only with this positive receipt, preventing later paid backfill.
+            for reply_id in developer_reply_ids or []:
+                reply_id=str(uuid.UUID(str(reply_id)))
+                fingerprint=hashlib.sha256(('connect:developer-case-reply:'+reply_id).encode()).hexdigest()
+                cur.execute('''INSERT INTO saas_tenant_webhook_events
+                  (tenant_id,fingerprint,provider,external_id,event_type,payload,state,completed_at)
+                  SELECT %s::uuid,%s,'connect',%s,'developer_case_reply',%s::jsonb,'completed',now()
+                  WHERE EXISTS(SELECT 1 FROM saas_dialog_consultation_replies WHERE tenant_id=%s::uuid AND id=%s::uuid
+                    AND followup_requested_at IS NOT NULL)
+                  ON CONFLICT(tenant_id,fingerprint) DO UPDATE SET state='completed',completed_at=now(),error_code=''
+                    WHERE saas_tenant_webhook_events.state IN ('queued','processing','superseded','skipped')''',
+                  (tenant,fingerprint,'case-developer-reply:'+reply_id,
+                   _json({'developer_reply_message_id':reply_id,'accepted_customer_run_id':str(run_id)}),tenant,reply_id))
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,'AI Agent',%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
                         (uuid.uuid4(),tenant,int(lead_id),'connect:'+message_id,'connect:'+channel_id,text,_json({'source':'connect','status':'accepted','run_id':str(run_id)})))

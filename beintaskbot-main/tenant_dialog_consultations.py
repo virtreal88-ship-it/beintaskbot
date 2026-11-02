@@ -18,16 +18,16 @@ from tenant_public_case import _schema as share_schema, _public_text, _MEDIA_TYP
 
 def schema(conn):
     with conn.cursor() as cur:
+        cur.execute('''SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='saas_dialog_consultation_replies'
+          AND column_name='followup_requested_at') AND to_regclass('saas_dialog_developer_markers') IS NOT NULL
+          AND EXISTS(SELECT 1 FROM pg_constraint WHERE conname='saas_public_snapshot_owner_check') AS ready''')
+        if (cur.fetchone() or {}).get('ready'):return
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_dialog_developer_markers(
           tenant_id UUID NOT NULL,channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,
           enabled BOOLEAN NOT NULL DEFAULT FALSE,updated_by BIGINT NOT NULL,updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY(tenant_id,channel_id,conversation_id),
           FOREIGN KEY(tenant_id) REFERENCES saas_tenants(id) ON DELETE CASCADE)''')
     conn.commit()
-    with conn.cursor() as cur:
-        cur.execute('''SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='saas_dialog_consultation_replies'
-          AND column_name='source_external_id') AND EXISTS(SELECT 1 FROM pg_constraint WHERE conname='saas_public_snapshot_owner_check') AS ready''')
-        if (cur.fetchone() or {}).get('ready'):return
     legacy_schema(conn)
     share_schema(conn)
     with conn.cursor() as cur:
@@ -38,6 +38,7 @@ def schema(conn):
         cur.execute('ALTER TABLE saas_public_case_shares ALTER COLUMN ticket_id DROP NOT NULL')
         cur.execute('ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS consultation_id UUID NULL')
         cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS source_versions JSONB NOT NULL DEFAULT '{}'::jsonb")
+        cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS public_identity JSONB NOT NULL DEFAULT '{}'::jsonb")
         cur.execute("""DO $$ BEGIN
           IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='saas_public_case_shares'::regclass AND conname='saas_public_consultation_fk') THEN
             ALTER TABLE saas_public_case_shares ADD CONSTRAINT saas_public_consultation_fk
@@ -69,6 +70,7 @@ def schema(conn):
         cur.execute('ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS source_actor BIGINT NULL')
         cur.execute("ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS message_type TEXT NOT NULL DEFAULT 'text'")
         cur.execute("ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS source_external_id TEXT NOT NULL DEFAULT ''")
+        cur.execute('ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS followup_requested_at TIMESTAMPTZ NULL')
         cur.execute('CREATE INDEX IF NOT EXISTS saas_dialog_consultation_pending_idx ON saas_dialog_consultation_replies(tenant_id,created_at) WHERE handled_at IS NULL')
     conn.commit()
 
@@ -150,6 +152,25 @@ def developer_target(cur,tenant,policy,channel,conversation):
     return target
 
 
+def auto_case_dispatch_source_current(cur,tenant,channel,conversation,agent_id,event_fingerprint):
+    """Pin the current source channel and the original admitted group fence."""
+    from tenant_ai_dialog_scope import lock_dialog
+    from tenant_ai_group_coordination import group_jid,job_allowed
+    lock_dialog(cur,tenant,'connect',channel,conversation)
+    cur.execute('''SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid
+      AND connect_channel_id=%s::uuid AND active=TRUE FOR SHARE''',(tenant,channel))
+    if not cur.fetchone():return False
+    if not group_jid(conversation):return True
+    cur.execute('''SELECT payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid
+      AND fingerprint=%s AND provider='connect' AND event_type='incoming_message'
+      AND payload->>'channel_id'=%s AND payload->>'conversation_id'=%s''',
+      (tenant,event_fingerprint,str(channel),conversation))
+    payload=(cur.fetchone() or {}).get('payload')
+    if not isinstance(payload,dict) or str(payload.get('primary_agent_id') or '')!=str(agent_id):return False
+    return job_allowed(cur,{'provider':'connect','tenant_id':tenant,'channel_id':str(channel),
+      'conversation_id':conversation,'agent_id':str(agent_id),'payload':payload})
+
+
 def destinations(profile):
     with _connect() as conn:
         schema(conn)
@@ -208,6 +229,7 @@ def preview(profile,data):
                 conversation=str(source.get('conversation_id') or '')
                 suffix=next((suffix for suffix in ('@s.whatsapp.net','@c.us') if conversation.endswith(suffix)),'')
                 if suffix:phone=_preview_phone(conversation[:-len(suffix)])
+            verified_phone=_verified_contact_phone(cur,tenant,data['channel_id'],source.get('conversation_id'))
             messages=[]
             for row in rows:
                 value={key:str(item) if isinstance(item,uuid.UUID) or hasattr(item,'isoformat') else item for key,item in dict(row).items()};author=value.get('author_name') or '';raw=value.get('raw') or {}
@@ -220,6 +242,8 @@ def preview(profile,data):
                 for private in ('raw','media_url','channel','ordered_at'):value.pop(private,None)
                 messages.append(value)
             return {'messages':messages,'case_id':case_id or None,'has_earlier':has_earlier,'scope':case_scope,
+                    'customer_identity_preview':{'name':customer_name,'verified_phone':verified_phone,
+                        'phone_status':'verified' if verified_phone else 'unknown'},
                     'source':{'channel_id':data['channel_id'],'conversation_id':data['conversation_id'],'lead_id':source['lead_id']}}
 
 
@@ -239,10 +263,21 @@ def _preview_phone(value):
     return phone[:28] if re.fullmatch(r'\+?[0-9][0-9 ()-]{4,25}',phone) else ''
 
 
+def _verified_contact_phone(cur,tenant,channel,conversation):
+    cur.execute("SELECT to_regclass('saas_connect_direct_identities') AS ready")
+    if not (cur.fetchone() or {}).get('ready'):return ''
+    from tenant_connect_direct_identity import verified_phone_jid
+    jid=verified_phone_jid(cur,tenant,channel,conversation)
+    return '+'+jid.split('@',1)[0] if jid else ''
+
+
 def prepare(profile,data,origin):
     required={'request_id','channel_id','conversation_id','destination_channel_id','destination_conversation_id','message_ids','media_ids','summary','confirm'}
-    if not isinstance(data,dict) or set(data) not in (required,required|{'case_id'}) or data['confirm'] is not True:
+    optional={'case_id','include_customer_identity'}
+    if not isinstance(data,dict) or not required.issubset(data) or set(data)-required-optional or data['confirm'] is not True:
         raise TenantLinearError('Подтвердите получателя и выбранный фрагмент.',400)
+    include_identity=data.get('include_customer_identity',False)
+    if type(include_identity) is not bool:raise TenantLinearError('Параметр публикации личности некорректен.',400)
     request=identifier(data['request_id']);channel=identifier(data['channel_id']);dest=identifier(data['destination_channel_id'])
     case_id=identifier(data['case_id']) if data.get('case_id') else None
     summary=data['summary']
@@ -251,7 +286,8 @@ def prepare(profile,data,origin):
     media=_valid_ids(data['media_ids']);selected=_valid_ids(data['message_ids'],required=True)
     if not set(media)<=set(selected):raise TenantLinearError('Файлы должны входить в выбранный фрагмент.',400)
     normalized={**data,'request_id':request,'channel_id':channel,'destination_channel_id':dest,
-        'message_ids':selected,'media_ids':sorted(media),'summary':summary.strip()}
+        'message_ids':selected,'media_ids':sorted(media),'summary':summary.strip(),
+        'include_customer_identity':include_identity}
     if case_id:normalized['case_id']=case_id
     else:normalized.pop('case_id',None)
     digest=hashlib.sha256(json.dumps(normalized,sort_keys=True).encode()).hexdigest()
@@ -281,10 +317,15 @@ def prepare(profile,data,origin):
             scope={**normalized,'media_ids':sorted(allowed)}
             scope.pop('request_id')
             scope_hash=hashlib.sha256(json.dumps(scope,sort_keys=True).encode()).hexdigest()
+            # Legacy requests omitted the new opt-in key. Treat omission and
+            # explicit false as the same content so UUID rotation cannot evade
+            # uncertainty/duplicate guards created before this field existed.
+            legacy_scope=dict(scope);legacy_scope.pop('include_customer_identity',None)
+            legacy_scope_hash=hashlib.sha256(json.dumps(legacy_scope,sort_keys=True).encode()).hexdigest()
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('dialog-consultation-scope:'+tenant+':'+scope_hash,))
             cur.execute('''SELECT d.state FROM saas_internal_consultations c JOIN saas_consultation_group_deliveries d
               ON d.tenant_id=c.tenant_id AND d.consultation_id=c.id WHERE c.tenant_id=%s::uuid
-              AND c.evidence->>'scope_hash'=%s AND d.state IN ('ready','sending','pending','unknown','sent') LIMIT 1''',(tenant,scope_hash))
+              AND c.evidence->>'scope_hash'=ANY(%s::text[]) AND d.state IN ('ready','sending','pending','unknown','sent') LIMIT 1''',(tenant,[scope_hash,legacy_scope_hash]))
             if cur.fetchone():raise TenantLinearError('Этот фрагмент уже подготовлен или отправлен. Проверьте существующую консультацию; повтор отключён.',409)
             # Prevent collision with unrelated legacy delivery / AI request identities.
             cur.execute('''SELECT 1 FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND request_id=%s::uuid
@@ -299,21 +340,32 @@ def prepare(profile,data,origin):
             # Explicit subset, immutable snapshot. Original evidence is never rewritten.
             public=[{'id':r['id'],'speaker':'Müştəri' if r['direction']=='incoming' else 'Əməkdaş',
               'text':_public_text(r['body']),'type':r['message_type'] if r['id'] in allowed else 'text','at':str(r['happened_at'])} for r in rows]
+            identity={}
+            if include_identity:
+                name=_human_preview_name(source.get('manual_display_name') or source.get('contact_name') or source.get('customer_name'),source.get('conversation_id'))
+                phone=_verified_contact_phone(cur,tenant,channel,source['conversation_id'])
+                identity={'customer_name':name,'verified_phone':phone,'phone_status':'verified' if phone else 'unknown'}
+                if name:
+                    for row in public:
+                        if row['speaker']=='Müştəri':row['speaker']=name
             ident=str(uuid.uuid4());share=str(uuid.uuid4());token=secrets.token_urlsafe(32)
             url=origin.rstrip('/')+'/public/case/'+token
-            body=summary.strip()+'\n\nCONSULT:'+ident+'\n'+url
+            # Keep the provider receipt/request key as the machine correlation.
+            # A quoted reply matches provider_message_id; the consultation UUID
+            # remains persisted in the ledger and is no longer shown to people.
+            body=summary.strip()+'\n\nФрагмент переписки (ссылка действует 7 дней):\n'+url
             cur.execute('''INSERT INTO saas_internal_consultations(tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,evidence,status,created_by)
               VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb,'waiting_specialist',%s)''',
               (tenant,ident,case_id,channel,source['conversation_id'],'employee:'+request,summary.strip(),_json({'input_hash':digest,'scope_hash':scope_hash,'share_id':share,'message_ids':selected}),actor))
             cur.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,consultation_id,channel_id,conversation_id,
-              group_channel_id,group_conversation_id,token_hash,selected_message_ids,selected_media_ids,public_messages,created_by,expires_at,source_versions,is_partial)
-              VALUES(%s::uuid,%s::uuid,NULL,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,now()+interval '7 days',%s::jsonb,%s)''',
-              (share,tenant,ident,channel,source['conversation_id'],dest,target['conversation_id'],hashlib.sha256(token.encode()).hexdigest(),_json(selected),_json(allowed),_json(public),actor,_json({r['id']:version(r) for r in rows}),len(allowed)!=len(media)))
+              group_channel_id,group_conversation_id,token_hash,selected_message_ids,selected_media_ids,public_messages,created_by,expires_at,source_versions,is_partial,public_identity)
+              VALUES(%s::uuid,%s::uuid,NULL,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,now()+interval '7 days',%s::jsonb,%s,%s::jsonb)''',
+              (share,tenant,ident,channel,source['conversation_id'],dest,target['conversation_id'],hashlib.sha256(token.encode()).hexdigest(),_json(selected),_json(allowed),_json(public),actor,_json({r['id']:version(r) for r in rows}),len(allowed)!=len(media),_json(identity)))
             cur.execute('''INSERT INTO saas_consultation_group_deliveries(tenant_id,consultation_id,request_id,case_id,channel_id,conversation_id,body,body_hash,state,created_by)
               VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,'ready',%s)''',
               (tenant,ident,request,case_id,dest,target['conversation_id'],body,hashlib.sha256(body.encode()).hexdigest(),actor))
             from tenant_ai_agents_store import _audit
-            _audit(cur,tenant,actor,'dialog_consultation_prepared','consultation',ident,{'destination_channel_id':dest,'message_ids':selected,'share_id':share})
+            _audit(cur,tenant,actor,'dialog_consultation_prepared','consultation',ident,{'destination_channel_id':dest,'message_ids':selected,'share_id':share,'customer_identity_published':include_identity})
         conn.commit()
     return {'id':ident,'case_id':case_id,'request_id':request,'state':'ready','created':True,'recipient':target['customer_name'],'message_count':len(selected),'expires_in_days':7}
 
@@ -330,7 +382,7 @@ def _consult(cur,profile,key,*,manual=False,sending=False):
     return tenant,actor,policy,item,source
 
 
-def dispatch(profile,key,request):
+def dispatch(profile,key,request,*,auto_dispatch_id=None):
     from tenant_connect_transport import connect_route,send_consultation_with_receipt
     request=identifier(request)
     with _connect() as conn:
@@ -350,7 +402,66 @@ def dispatch(profile,key,request):
             with conn.cursor() as cur:
                 tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
                 from tenant_ai_dialog_scope import lock_dialog
-                lock_dialog(cur,tenant,'connect',str(delivery['channel_id']),delivery['conversation_id'])
+                routes={(str(delivery['channel_id']),delivery['conversation_id'])}
+                if auto_dispatch_id:routes.add((str(item['channel_id']),item['conversation_id']))
+                from tenant_ai_group_coordination import group_jid,lock_group
+                for group in sorted({group_jid(conversation) for _channel,conversation in routes if group_jid(conversation)}):
+                    lock_group(cur,tenant,group)
+                for channel,conversation in sorted(routes):lock_dialog(cur,tenant,'connect',channel,conversation)
+                if auto_dispatch_id:
+                    cur.execute('''SELECT x.*,a.enabled AS agent_enabled,a.mode,a.scopes,a.response_policy,
+                      s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop,t.status AS tenant_status,t.owner_telegram_id,
+                      m.role,m.active,cs.state AS source_state,cs.revision AS current_source_revision,
+                      cs.agent_id::text AS source_agent,cs.agent_assignment_id::text AS current_source_assignment,
+                      c.case_id::text AS case_id,st.status AS case_status
+                      FROM saas_ai_case_developer_dispatches x
+                      JOIN saas_ai_agents a ON a.tenant_id=x.tenant_id AND a.id=x.agent_id
+                      JOIN saas_ai_agent_settings s ON s.tenant_id=x.tenant_id
+                      JOIN saas_tenants t ON t.id=x.tenant_id
+                      JOIN saas_tenant_members m ON m.tenant_id=x.tenant_id AND m.telegram_id=x.owner_id
+                      JOIN saas_internal_consultations c ON c.tenant_id=x.tenant_id AND c.id=x.consultation_id
+                      JOIN saas_support_tickets st ON st.tenant_id=c.tenant_id AND st.id=c.case_id
+                      JOIN saas_connect_channels source_ch ON source_ch.tenant_id=st.tenant_id
+                        AND source_ch.connect_channel_id=st.channel_id AND source_ch.active=TRUE
+                      JOIN saas_ai_conversation_state cs ON cs.tenant_id=st.tenant_id AND cs.provider='connect'
+                        AND cs.channel_id=st.channel_id::text AND cs.conversation_id=st.conversation_id
+                      WHERE x.tenant_id=%s::uuid AND x.id=%s::uuid AND x.case_id=%s::uuid
+                        AND x.request_id=%s::uuid AND x.state='preparing' FOR UPDATE OF x,st,cs FOR SHARE OF a,s,m,t,source_ch''',
+                      (tenant,auto_dispatch_id,str(item.get('case_id') or ''),request))
+                    gate=cur.fetchone() or {};configured=gate.get('response_policy') or {};recipients=configured.get('developer_destinations') or []
+                    allowed_target=any(isinstance(row,dict) and str(row.get('channel_id') or '')==str(delivery['channel_id'])
+                        and row.get('conversation_id')==delivery['conversation_id'] for row in recipients)
+                    from tenant_ai_agent_connect import scope_matches
+                    source_scope=scope_matches(gate.get('scopes') or [],str(item['channel_id']))
+                    from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+                    if (not gate or gate.get('role')!='owner' or gate.get('active') is not True
+                        or gate.get('owner_telegram_id')!=actor
+                        or gate.get('agent_enabled') is not True or gate.get('mode')!='automatic'
+                        or configured.get('auto_case_dispatch_enabled') is not True
+                        or int(configured.get('auto_case_dispatch_owner_id') or 0)!=int(actor)
+                        or int(gate.get('owner_id') or 0)!=int(actor) or not allowed_target or not source_scope
+                        or gate.get('company_enabled') is not True or gate.get('auto_send_enabled') is not True
+                        or gate.get('emergency_stop') is True or gate.get('tenant_status') not in {'active','trial'}
+                        or gate.get('case_status')=='resolved' or gate.get('source_state')!='active'
+                        or str(gate.get('source_agent') or '')!=str(gate.get('agent_id') or '')
+                        or gate.get('current_source_revision') is None or int(gate.get('source_revision') or -1)!=int(gate.get('current_source_revision') or -2)
+                        or str(gate.get('source_assignment_id') or '')!=str(gate.get('current_source_assignment') or '')):
+                        raise TenantLinearError('Автоматическая отправка остановлена: настройки, назначение или состояние диалога изменились.',409)
+                    if not runtime_flag('AI_AGENTS_ENABLED') or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'):
+                        raise TenantLinearError('Автоматическая отправка отключена глобальной настройкой.',409)
+                    if not auto_case_dispatch_source_current(cur,tenant,str(item['channel_id']),item['conversation_id'],
+                        str(gate['agent_id']),str(gate['event_key'])):
+                        raise TenantLinearError('Исходная группа, канал или допуск события изменились.',409)
+                    cur.execute('''SELECT source_revision,source_assignment_id,agent_id::text,owner_id,
+                      channel_id::text,conversation_id FROM saas_ai_case_developer_dispatches
+                      WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE''',(tenant,auto_dispatch_id))
+                    source_guard=cur.fetchone() or {}
+                    if (str(source_guard.get('agent_id') or '')!=str(gate.get('agent_id') or '')
+                        or str(source_guard.get('channel_id') or '')!=str(delivery['channel_id'])
+                        or source_guard.get('conversation_id')!=delivery['conversation_id']
+                        or int(source_guard.get('source_revision') or -1)!=int(gate.get('current_source_revision') or -2)
+                        or str(source_guard.get('source_assignment_id') or '')!=str(gate.get('current_source_assignment') or '')):
+                        raise TenantLinearError('Состояние диалога изменилось после постановки в очередь.',409)
                 target=developer_target(cur,tenant,policy,str(delivery['channel_id']),delivery['conversation_id'])
                 cur.execute('''SELECT 1 FROM saas_public_case_shares WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid
                   AND revoked_at IS NULL AND expires_at>now() FOR SHARE''',(tenant,key))
@@ -429,8 +540,13 @@ def _reply_notice(cur,tenant,consultation_id,reply_id,text):
           (uuid.uuid4(),tenant,recipient,'dialog_consultation:'+reply_id,source['customer'],text[:180],deep_link(source,reply_id)))
 
 
-def _store_reply(cur,tenant,consultation_id,channel,conversation,message_id,text,author='',at=None,*,source_kind='provider',source_actor=None,message_type='text',source_external_id=''):
-    cur.execute('SELECT case_id FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,consultation_id))
+def _store_reply(cur,tenant,consultation_id,channel,conversation,message_id,text,author='',at=None,*,source_kind='provider',source_actor=None,message_type='text',source_external_id='',explicit_resolution=False,request_draft=False,quoted_message_id='',fresh_followup=False):
+    cur.execute('''SELECT c.case_id,a.mode AS case_agent_mode FROM saas_internal_consultations c
+      LEFT JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+      LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect'
+        AND cs.channel_id=t.channel_id::text AND cs.conversation_id=t.conversation_id
+      LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
+      WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid FOR UPDATE OF c''',(tenant,consultation_id))
     consult=cur.fetchone()
     if not consult:return None
     if source_external_id:message_id=message_identity(source_external_id,{'id':message_id})
@@ -446,17 +562,38 @@ def _store_reply(cur,tenant,consultation_id,channel,conversation,message_id,text
       (tenant,channel,conversation,list(aliases),str(source_external_id or ''),str(source_external_id or '')))
     if cur.fetchone():return None
     ident=str(uuid.uuid4())
-    # Case replies never start paid AI merely because old evidence was reconciled.
-    draft_state='pending' if consult['case_id'] is None and source_kind=='provider' and message_type=='text' else 'not_requested'
+    # Manual-mode case replies use the existing employee-confirmed draft queue.
+    # Automatic cases are handled by the source-scoped continuation worker.
+    if consult.get('case_id') and request_draft is True:
+        cur.execute('''SELECT EXISTS(SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid
+          AND external_id=%s AND channel='connect:'||%s::uuid::text AND direction='incoming'
+          AND raw->>'quotedExternalMessageId'=%s) AS verified_quote''',
+          (tenant,source_external_id,channel,str(quoted_message_id or '')))
+        request_draft=bool((cur.fetchone() or {}).get('verified_quote'))
+    draft_state='pending' if source_kind=='provider' and message_type=='text' and (
+        consult.get('case_id') is None or (consult.get('case_agent_mode')=='manual' and request_draft is True)) else 'not_requested'
     cur.execute('''INSERT INTO saas_dialog_consultation_replies(tenant_id,id,consultation_id,channel_id,conversation_id,message_id,author,body,happened_at,draft_state,source_kind,source_actor,message_type,source_external_id)
       VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,COALESCE(%s::timestamptz,now()),%s,%s,%s,%s,%s)
       ON CONFLICT DO NOTHING RETURNING id''',
       (tenant,ident,consultation_id,channel,conversation,message_id,str(author or '')[:180],text[:4000],at,draft_state,source_kind,source_actor,message_type,str(source_external_id or '')[:240]))
     if not cur.fetchone():return None
+    if consult.get('case_id') and request_draft is True and fresh_followup is True and consult.get('case_agent_mode')=='automatic':
+        # Only a newly observed exact provider reply admits continuation work.
+        # Old records deliberately keep NULL, including after mode changes.
+        cur.execute('''UPDATE saas_dialog_consultation_replies SET followup_requested_at=now()
+          WHERE tenant_id=%s::uuid AND id=%s::uuid''',(tenant,ident))
     cur.execute('''UPDATE saas_internal_consultations SET status='answered',answered_at=COALESCE(%s::timestamptz,now()),
       response=%s,response_kind=%s WHERE tenant_id=%s::uuid AND id=%s::uuid
         AND (answered_at IS NULL OR answered_at<=COALESCE(%s::timestamptz,now()))''',
       (at,text[:4000],'manual_reply' if source_kind=='manual' else 'developer_reply',tenant,consultation_id,at))
+    resolution_binding=_case_reply_binding(cur,tenant,ident) if explicit_resolution and source_kind=='provider' and consult.get('case_id') else None
+    if resolution_binding and case_developer_followup_current(cur,tenant,resolution_binding):
+        # A case resolves only on an exact command quoted against the sent
+        # receipt for this consultation. The ordinary reply remains answered.
+        cur.execute('''UPDATE saas_support_tickets SET status='resolved',resolved_at=COALESCE(resolved_at,now()),
+          completion_outcome='resolved_confirmed',completion_note=%s,updated_at=now()
+          WHERE tenant_id=%s::uuid AND id=%s::uuid AND status<>'resolved' ''',
+          ('Developer confirmed completion via /done or /решено.',tenant,consult['case_id']))
     _reply_notice(cur,tenant,consultation_id,ident,text)
     return ident
 
@@ -476,17 +613,80 @@ def message_identity(external,raw=None):
     return value if isinstance(value,str) and value else external.removeprefix('connect:')
 
 
+def _verified_group_reply_author(cur,tenant,channel,conversation,source_external_id,source_actor):
+    if type(source_actor) is not int or not str(conversation or '').endswith('@g.us') or not source_external_id:return False
+    cur.execute('''SELECT s.member_id FROM saas_ai_group_staff s
+      JOIN saas_tenant_members m ON m.tenant_id=s.tenant_id AND m.telegram_id=s.member_id AND m.active=TRUE
+      JOIN saas_connect_conversations v ON v.tenant_id=s.tenant_id AND v.connect_channel_id=s.channel_id AND v.conversation_id=%s
+      JOIN saas_crm_messages r ON r.tenant_id=s.tenant_id AND r.external_id=%s
+        AND r.kommo_lead_id=v.lead_id AND r.channel='connect:'||s.channel_id::text AND r.direction='incoming'
+        AND s.jid=ANY(ARRAY[r.raw->>'participantJid',r.raw->>'participantAlt',r.raw->>'senderJid']::text[])
+      WHERE s.tenant_id=%s::uuid AND s.channel_id=%s::uuid AND s.member_id=%s
+      FOR SHARE OF s,m,r FOR KEY SHARE OF v''',
+      (conversation,str(source_external_id),tenant,channel,source_actor))
+    return bool(cur.fetchone())
+
+
+def verified_group_reply_actor(cur,tenant,channel,conversation,source_external_id):
+    """Recover only a unique current staff actor from stored provider metadata."""
+    if not str(conversation or '').endswith('@g.us') or not source_external_id:return None
+    cur.execute('''SELECT DISTINCT s.member_id FROM saas_ai_group_staff s
+      JOIN saas_tenant_members m ON m.tenant_id=s.tenant_id AND m.telegram_id=s.member_id AND m.active=TRUE
+      JOIN saas_connect_conversations v ON v.tenant_id=s.tenant_id AND v.connect_channel_id=s.channel_id
+        AND v.conversation_id=%s
+      JOIN saas_crm_messages r ON r.tenant_id=s.tenant_id AND r.kommo_lead_id=v.lead_id
+        AND r.external_id=%s AND r.channel='connect:'||s.channel_id::text AND r.direction='incoming'
+        AND s.jid=ANY(ARRAY[r.raw->>'participantJid',r.raw->>'participantAlt',r.raw->>'senderJid']::text[])
+      WHERE s.tenant_id=%s::uuid AND s.channel_id=%s::uuid LIMIT 2''',
+      (conversation,source_external_id,tenant,channel))
+    rows=cur.fetchall()
+    return int(rows[0]['member_id']) if len(rows)==1 else None
+
+
 def _reply_kind(value):
     kind=str(value or 'text').lower()
     return {'voice':'audio','voice_message':'audio','ptt':'audio','photo':'image','file':'document'}.get(kind,kind)
 
 
-def record_reply(cur,tenant,channel,conversation,message_id,text,quoted=None,author='',at=None,*,message_type='text',source_external_id=''):
+def admit_case_followup_intent(cur,tenant,channel,conversation,source_external_id):
+    """Stamp a fresh signed ingress with its current automatic case authority.
+
+    The caller invokes this only after inserting a new verified provider source.
+    A late quote receipt can recover this admission, never recreate it later.
+    """
+    cur.execute('''SELECT t.id::text AS case_id,cs.agent_id::text AS agent_id,
+        COALESCE(cs.agent_assignment_id::text,'') AS assignment_id,a.version,tn.owner_telegram_id
+      FROM saas_consultation_group_deliveries d
+      JOIN saas_internal_consultations c ON c.tenant_id=d.tenant_id AND c.id=d.consultation_id
+      JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id AND t.status<>'resolved'
+      JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect'
+        AND cs.channel_id=t.channel_id::text AND cs.conversation_id=t.conversation_id AND cs.state='active'
+      JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id AND a.enabled=TRUE AND a.mode='automatic'
+      JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id AND s.enabled=TRUE AND s.auto_send_enabled=TRUE AND s.emergency_stop=FALSE
+      JOIN saas_tenants tn ON tn.id=t.tenant_id
+      WHERE d.tenant_id=%s::uuid AND d.channel_id=%s::uuid AND d.conversation_id=%s
+        AND d.state IN ('sending','pending','unknown','sent')''',(tenant,channel,conversation))
+    admitted={str(row['case_id']):{'agent_id':row['agent_id'],'assignment_id':row['assignment_id'],
+      'version':row['version'],'owner_id':row['owner_telegram_id']} for row in cur.fetchall()}
+    if admitted:
+        cur.execute('''UPDATE saas_crm_messages SET raw=jsonb_set(raw,'{_case_followup_intent}',%s::jsonb)
+          WHERE tenant_id=%s::uuid AND external_id=%s AND channel=%s AND direction='incoming' ''',
+          (_json(admitted),tenant,source_external_id,'connect:'+str(channel)))
+    return admitted
+
+
+def record_reply(cur,tenant,channel,conversation,message_id,text,quoted=None,author='',at=None,*,message_type='text',source_external_id='',source_actor=None,fresh_followup=False):
     """Correlate only signed provider evidence, including legacy CASE replies."""
     kind=_reply_kind(message_type)
     if kind not in {'text',*_MEDIA_TYPES} or not isinstance(text,str) or not isinstance(message_id,str) or not message_id or len(message_id)>200:return None
     if kind=='text' and not text.strip():return None
     source_external_id=source_external_id or 'connect:'+message_id
+    if source_actor is None:
+        source_actor=verified_group_reply_actor(cur,tenant,channel,conversation,source_external_id)
+    cur.execute('''SELECT raw->'_case_followup_intent' AS intent,raw->>'quotedExternalMessageId' AS quote_id,body AS source_body FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid AND external_id=%s AND channel='connect:'||%s::uuid::text AND direction='incoming' ''',
+      (tenant,source_external_id,channel))
+    saved_intent=cur.fetchone() or {}
     message_id=message_identity(source_external_id,{'id':message_id})
     cur.execute("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='saas_dialog_consultation_replies' AND column_name='source_external_id') AS ready")
     if not (cur.fetchone() or {}).get('ready'):return None
@@ -501,10 +701,236 @@ def record_reply(cur,tenant,channel,conversation,message_id,text,quoted=None,aut
       (quoted,tenant,channel,conversation,quoted,marker));rows=cur.fetchall()
     if len(rows)!=1:return None
     item=rows[0]
+    if fresh_followup is not True and isinstance(saved_intent.get('intent'),dict):
+        cur.execute('''SELECT t.id::text AS case_id,cs.agent_id::text AS agent_id,
+            COALESCE(cs.agent_assignment_id::text,'') AS assignment_id,a.version,tn.owner_telegram_id
+          FROM saas_internal_consultations c JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+          JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect'
+            AND cs.channel_id=t.channel_id::text AND cs.conversation_id=t.conversation_id
+          JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
+          JOIN saas_tenants tn ON tn.id=t.tenant_id WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid''',(tenant,item['id']))
+        current=cur.fetchone() or {}
+        admission=saved_intent['intent'].get(str(current.get('case_id') or ''))
+        fresh_followup=isinstance(admission,dict) and admission=={'agent_id':current.get('agent_id'),
+          'assignment_id':current.get('assignment_id'),'version':current.get('version'),'owner_id':current.get('owner_telegram_id')}
     if quoted and marker and (not item['quote_match'] or item['id']!=marker):return None
+    assigned_developer=False
+    if item.get('id') and quoted and item['quote_match']:
+        cur.execute('''SELECT t.assigned_developer_channel_id::text AS channel_id,
+            t.assigned_developer_conversation_id AS conversation_id
+          FROM saas_internal_consultations c JOIN saas_support_tickets t
+            ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+          WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid''',(tenant,item['id']))
+        assignment=cur.fetchone() or {}
+        assigned_developer=(str(assignment.get('channel_id') or '')==str(channel)
+                            and str(assignment.get('conversation_id') or '')==str(conversation))
+        if not assigned_developer:
+            cur.execute('''SELECT EXISTS(
+              SELECT 1 FROM saas_consultation_group_deliveries d
+              JOIN saas_internal_consultations c ON c.tenant_id=d.tenant_id AND c.id=d.consultation_id
+              JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+              JOIN saas_dialog_developer_markers m ON m.tenant_id=d.tenant_id AND m.channel_id=d.channel_id
+                AND m.conversation_id=d.conversation_id AND m.enabled=TRUE
+              JOIN saas_connect_channels ch ON ch.tenant_id=d.tenant_id AND ch.connect_channel_id=d.channel_id AND ch.active=TRUE
+              JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect'
+                AND cs.channel_id=t.channel_id::text AND cs.conversation_id=t.conversation_id
+              JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
+              WHERE d.tenant_id=%s::uuid AND d.consultation_id=%s::uuid AND d.channel_id=%s::uuid
+                AND d.conversation_id=%s AND d.state='sent' AND d.provider_message_id=%s
+                AND a.enabled=TRUE AND a.mode='automatic'
+                AND a.response_policy->>'auto_case_dispatch_enabled'='true'
+                AND COALESCE(a.response_policy->'developer_destinations','[]'::jsonb) @> %s::jsonb
+                AND t.status<>'resolved') AS allowed''',
+              (tenant,item['id'],channel,conversation,quoted,json.dumps([{'channel_id':str(channel),'conversation_id':str(conversation)}])))
+            assigned_developer=bool((cur.fetchone() or {}).get('allowed'))
+    group_sender_ok=not str(conversation or '').endswith('@g.us') or _verified_group_reply_author(
+      cur,tenant,channel,conversation,source_external_id or 'connect:'+message_id,source_actor)
+    resolution=(kind=='text' and bool(re.fullmatch(r'\s*/(?:done|решено)\s*',text,re.I))
+                and bool(quoted) and bool(item['quote_match']) and assigned_developer and group_sender_ok
+                and saved_intent.get('quote_id')==quoted and saved_intent.get('source_body')==text)
     body=text.strip() or {'audio':'Аудиосообщение разработчика — без расшифровки','image':'Изображение разработчика','video':'Видео разработчика','document':'Документ разработчика'}.get(kind,'Вложение разработчика')
     return _store_reply(cur,tenant,item['id'],channel,conversation,message_id,body,author,at,
-      message_type=kind,source_external_id=source_external_id or 'connect:'+message_id)
+      source_actor=source_actor if type(source_actor) is int else None,
+      message_type=kind,source_external_id=source_external_id or 'connect:'+message_id,
+      explicit_resolution=resolution,request_draft=bool(quoted and item.get('quote_match')),quoted_message_id=quoted or '',fresh_followup=fresh_followup)
+
+
+def active_case_developer_context(job,source_external_id,limit=10):
+    """Return developer replies only for the unique open case containing this message."""
+    if str(job.get('provider') or '')!='connect':return []
+    tenant=str(job.get('tenant_id') or '');channel=str(job.get('channel_id') or '');conversation=str(job.get('conversation_id') or '')
+    try:uuid.UUID(tenant);uuid.UUID(channel)
+    except (ValueError,TypeError):return []
+    source=str(source_external_id or '').strip()
+    payload=job.get('payload') if isinstance(job.get('payload'),dict) else {}
+    exact_reply=str(payload.get('developer_reply_message_id') or '')
+    exact_replies=[str(item.get('developer_reply_message_id') or '') for item in payload.get('developer_reply_bindings',[]) if isinstance(item,dict)] or ([exact_reply] if exact_reply else [])
+    exact_case=str(payload.get('case_id') or '')
+    if job.get('developer_case_followup') or payload.get('developer_case_followup'):
+        if not exact_reply or not exact_case:return []
+    if not tenant or not channel or not conversation or not source:return []
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute('''SELECT DISTINCT t.id::text AS case_id
+              FROM saas_support_tickets t JOIN saas_support_ticket_messages cm
+                ON cm.tenant_id=t.tenant_id AND cm.ticket_id=t.id
+              JOIN saas_crm_messages m ON m.tenant_id=cm.tenant_id AND m.id=cm.message_id
+              WHERE t.tenant_id=%s::uuid AND t.channel_id=%s::uuid AND t.conversation_id=%s
+                AND t.status<>'resolved' AND m.external_id=ANY(%s::text[])''',
+              (tenant,channel,conversation,list(dict.fromkeys([source,'connect:'+source.removeprefix('connect:')]))))
+            cases=cur.fetchall()
+            if len(cases)!=1:return []
+            if exact_case and str(cases[0]['case_id'])!=exact_case:return []
+            cur.execute('''SELECT r.id::text AS reply_id,r.author,r.body,r.happened_at,c.reason,c.status AS consultation_status
+              FROM saas_support_tickets t
+              JOIN saas_internal_consultations c ON c.tenant_id=t.tenant_id AND c.case_id=t.id
+              JOIN saas_dialog_consultation_replies r ON r.tenant_id=c.tenant_id AND r.consultation_id=c.id
+              WHERE t.tenant_id=%s::uuid AND t.channel_id=%s::uuid AND t.conversation_id=%s
+                AND t.id=%s::uuid AND t.status<>'resolved' AND c.status='answered' AND r.source_kind='provider'
+                AND EXISTS(SELECT 1 FROM saas_crm_messages rm
+                  JOIN saas_connect_conversations rv ON rv.tenant_id=rm.tenant_id AND rv.lead_id=rm.kommo_lead_id
+                    AND rv.connect_channel_id=r.channel_id AND rv.conversation_id=r.conversation_id
+                  JOIN saas_consultation_group_deliveries d ON d.tenant_id=r.tenant_id AND d.consultation_id=r.consultation_id
+                    AND d.channel_id=r.channel_id AND d.conversation_id=r.conversation_id AND d.state='sent'
+                    AND d.provider_message_id=rm.raw->>'quotedExternalMessageId'
+                  WHERE rm.tenant_id=r.tenant_id AND rm.external_id=r.source_external_id
+                    AND rm.channel='connect:'||r.channel_id::text AND rm.direction='incoming'
+                    AND (r.conversation_id NOT LIKE '%%@g.us' OR EXISTS(SELECT 1 FROM saas_ai_group_staff gs
+                      JOIN saas_tenant_members gm ON gm.tenant_id=gs.tenant_id AND gm.telegram_id=gs.member_id AND gm.active=TRUE
+                      WHERE gs.tenant_id=r.tenant_id AND gs.channel_id=r.channel_id AND gs.member_id=r.source_actor
+                        AND gs.jid=ANY(ARRAY[rm.raw->>'participantJid',rm.raw->>'participantAlt',rm.raw->>'senderJid']::text[]))))
+                AND (%s::uuid[] IS NULL OR r.id=ANY(%s::uuid[]))
+              ORDER BY r.happened_at DESC,r.created_at DESC,r.id DESC LIMIT %s''',
+              (tenant,channel,conversation,cases[0]['case_id'],exact_replies or None,exact_replies or None,max(len(exact_replies),max(1,min(int(limit),100)))))
+            rows=cur.fetchall()
+    return [{'source_id':'case-reply:'+str(row.get('reply_id') or ''),
+             'title':'Verified developer reply',
+             'content':str(row.get('body') or '')[:2000],
+             'developer':str(row.get('author') or 'Разработчик')[:120],
+             'message':str(row.get('body') or '')[:2000],
+             'received_at':str(row.get('happened_at') or ''),
+             'case_status':'open'} for row in reversed(rows)]
+
+
+def case_developer_followup_current(cur,tenant,payload):
+    """Fail closed unless the exact queued provider reply still has authority."""
+    if not isinstance(payload,dict):return False
+    bindings=payload.get('developer_reply_bindings')
+    if bindings is not None:
+        if not isinstance(bindings,list) or not bindings:return False
+        if any(not isinstance(item,dict) or item.get('case_id')!=payload.get('case_id') for item in bindings):return False
+        return all(case_developer_followup_current(cur,tenant,{**item,'developer_reply_bindings':None}) for item in bindings)
+    try:
+        case_id=str(uuid.UUID(str(payload.get('case_id') or '')))
+        reply_id=str(uuid.UUID(str(payload.get('developer_reply_message_id') or '')))
+        channel=str(uuid.UUID(str(payload.get('developer_reply_channel_id') or '')))
+        conversation=str(payload.get('developer_reply_conversation_id') or '')
+        quote=str(payload.get('developer_quoted_message_id') or '')
+    except (ValueError,TypeError):return False
+    if not conversation or not quote:return False
+    cur.execute('''SELECT t.status,t.assigned_developer_channel_id::text AS assigned_channel,
+        t.assigned_developer_conversation_id,
+        cs.agent_id::text AS agent_id,a.mode,a.enabled,a.response_policy,
+        s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop,
+        a.scopes,tn.status AS tenant_status,tn.owner_telegram_id,r.source_actor,r.source_external_id,
+        t.channel_id::text AS client_channel,cs.agent_assignment_id::text AS assignment_id
+      FROM saas_support_tickets t
+      JOIN saas_internal_consultations c ON c.tenant_id=t.tenant_id AND c.case_id=t.id
+      JOIN saas_dialog_consultation_replies r ON r.tenant_id=c.tenant_id AND r.consultation_id=c.id
+      JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect'
+        AND cs.channel_id=t.channel_id::text AND cs.conversation_id=t.conversation_id
+      JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
+      JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id
+      JOIN saas_tenants tn ON tn.id=t.tenant_id
+      JOIN saas_connect_channels ch ON ch.tenant_id=r.tenant_id AND ch.connect_channel_id=r.channel_id AND ch.active=TRUE
+      JOIN saas_connect_channels source_ch ON source_ch.tenant_id=t.tenant_id AND source_ch.connect_channel_id=t.channel_id AND source_ch.active=TRUE
+      JOIN saas_dialog_developer_markers marker ON marker.tenant_id=r.tenant_id AND marker.channel_id=r.channel_id
+        AND marker.conversation_id=r.conversation_id AND marker.enabled=TRUE
+      WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.status<>'resolved'
+        AND r.id=%s::uuid AND r.source_kind='provider' AND r.channel_id=%s::uuid
+        AND r.conversation_id=%s AND c.status='answered'
+        AND EXISTS(SELECT 1 FROM saas_consultation_group_deliveries d
+          WHERE d.tenant_id=c.tenant_id AND d.consultation_id=c.id AND d.state='sent'
+            AND d.channel_id=%s::uuid AND d.conversation_id=%s AND d.provider_message_id=%s)
+        AND EXISTS(SELECT 1 FROM saas_crm_messages rm WHERE rm.tenant_id=r.tenant_id
+          AND rm.external_id=r.source_external_id AND rm.channel='connect:'||r.channel_id::text
+          AND rm.direction='incoming' AND rm.raw->>'quotedExternalMessageId'=%s)
+      LIMIT 1 FOR UPDATE OF t,cs FOR SHARE OF a,s,tn,ch,source_ch,marker''',(tenant,case_id,reply_id,channel,conversation,channel,conversation,quote,quote))
+    row=cur.fetchone()
+    if not row:return False
+    cur.execute('''SELECT m.id FROM saas_crm_messages m JOIN saas_connect_conversations v
+      ON v.tenant_id=m.tenant_id AND v.connect_channel_id=%s::uuid AND v.conversation_id=%s
+        AND v.lead_id=m.kommo_lead_id
+      WHERE m.tenant_id=%s::uuid AND m.external_id=%s AND m.direction='incoming'
+        AND m.channel='connect:'||%s::uuid::text AND m.raw->>'quotedExternalMessageId'=%s
+      FOR SHARE OF m FOR KEY SHARE OF v''',(channel,conversation,tenant,row['source_external_id'],channel,quote))
+    if not cur.fetchone():return False
+    if str(conversation).endswith('@g.us') and not _verified_group_reply_author(
+        cur,tenant,channel,conversation,row.get('source_external_id'),row.get('source_actor')):return False
+    if payload.get('developer_expected_agent_id') and str(row.get('agent_id') or '')!=str(payload['developer_expected_agent_id']):return False
+    if 'developer_expected_assignment_id' in payload and str(row.get('assignment_id') or '')!=str(payload['developer_expected_assignment_id'] or ''):return False
+    assigned=(str(row.get('assigned_channel') or '')==channel and
+              str(row.get('assigned_developer_conversation_id') or '')==conversation and
+              str(payload.get('developer_expected_assignment_channel_id') or '')==channel and
+              str(payload.get('developer_expected_assignment_conversation_id') or '')==conversation)
+    # Assignment changes invalidate a queued reply even when the old automatic
+    # recipient remains in the agent's destination list.
+    if (str(row.get('assigned_channel') or '')!=str(payload.get('developer_expected_assignment_channel_id') or '')
+        or str(row.get('assigned_developer_conversation_id') or '')!=str(payload.get('developer_expected_assignment_conversation_id') or '')):
+        return False
+    policy=row.get('response_policy') if isinstance(row.get('response_policy'),dict) else {}
+    if row.get('mode')=='automatic':
+        from tenant_ai_agent_connect import scope_matches
+        if (row.get('tenant_status') not in {'active','trial'} or not scope_matches(row.get('scopes'),row['client_channel'])):return False
+        # Automatic fanout belongs to the current owner, including after an
+        # ownership or permission change. Browser JSON is never authority.
+        if policy.get('auto_case_dispatch_enabled') is True:
+            owner=policy.get('auto_case_dispatch_owner_id')
+            if type(owner) is not int or owner!=row.get('owner_telegram_id'):return False
+            try:
+                verified_tenant,_,owner_policy=access(cur,{'tenant_id':tenant,'telegram_id':owner},'dialogs')
+                if str(verified_tenant)!=str(tenant):return False
+                developer_target(cur,tenant,owner_policy,channel,conversation)
+            except TenantLinearError:return False
+    auto=(row.get('mode')=='automatic' and row.get('enabled') is True
+      and row.get('company_enabled') is True and row.get('auto_send_enabled') is True
+      and row.get('emergency_stop') is not True and policy.get('auto_case_dispatch_enabled') is True
+      and any(isinstance(x,dict) and str(x.get('channel_id'))==channel and str(x.get('conversation_id'))==conversation
+        for x in policy.get('developer_destinations',[])))
+    if not assigned and not auto:return False
+    cur.execute('''SELECT EXISTS(SELECT 1 FROM saas_ai_case_developer_dispatches
+      WHERE tenant_id=%s::uuid AND case_id=%s::uuid AND channel_id=%s::uuid
+        AND conversation_id=%s AND state IN ('sent','pending','unknown','preparing')) AS delivered''',
+      (tenant,case_id,channel,conversation))
+    auto_receipt=bool((cur.fetchone() or {}).get('delivered'))
+    return assigned or (auto and auto_receipt)
+
+
+def case_developer_followup_is_current(tenant,payload):
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            return case_developer_followup_current(cur,tenant,payload)
+
+
+def _case_reply_binding(cur,tenant,reply_id):
+    cur.execute('''SELECT t.id::text AS case_id,r.id::text AS reply_id,r.channel_id::text AS reply_channel,
+        r.conversation_id AS reply_conversation,r.source_external_id,
+        t.assigned_developer_channel_id::text AS assigned_channel,t.assigned_developer_conversation_id,
+        m.raw->>'quotedExternalMessageId' AS quote_id
+      FROM saas_dialog_consultation_replies r
+      JOIN saas_internal_consultations c ON c.tenant_id=r.tenant_id AND c.id=r.consultation_id
+      JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+      JOIN saas_crm_messages m ON m.tenant_id=r.tenant_id AND m.external_id=r.source_external_id
+        AND m.channel='connect:'||r.channel_id::text AND m.direction='incoming'
+      WHERE r.tenant_id=%s::uuid AND r.id=%s::uuid AND r.source_kind='provider'
+        AND r.message_type='text' AND t.status<>'resolved' LIMIT 1''',(tenant,reply_id))
+    row=cur.fetchone()
+    if not row or not row.get('quote_id'):return None
+    return {'case_id':str(row['case_id']),'developer_reply_message_id':str(row['reply_id']),
+      'developer_reply_channel_id':str(row['reply_channel']),'developer_reply_conversation_id':str(row['reply_conversation']),
+      'developer_quoted_message_id':str(row['quote_id']),
+      'developer_expected_assignment_channel_id':str(row.get('assigned_channel') or ''),
+      'developer_expected_assignment_conversation_id':str(row.get('assigned_developer_conversation_id') or '')}
 
 
 def record_manual_reply(cur,tenant,consultation,actor,text,kind):
@@ -636,7 +1062,27 @@ def inbox(profile,channel='',conversation='',case_id=''):
                     'can_send':not row.get('case_id') or policy.profile.get('role')=='owner',
                     'can_manual_reply':policy.profile.get('role') in {'owner','admin'} or row.get('recipient_id') in {None,actor},
                     'message_ids':row['message_ids'] or [],'media_ids':row['media_ids'] or []})
-            return {'case_id':case_id or None,'replies':result,'consultations':consultations,
+            auto_dispatches=[]
+            if case_id:
+                cur.execute("SELECT to_regclass('saas_ai_case_developer_dispatches') AS ready")
+                if (cur.fetchone() or {}).get('ready'):
+                    cur.execute('''SELECT x.id::text,
+                      CASE WHEN st.status='resolved' THEN 'resolved'
+                        WHEN EXISTS(SELECT 1 FROM saas_internal_consultations c JOIN saas_dialog_consultation_replies r
+                          ON r.tenant_id=c.tenant_id AND r.consultation_id=c.id AND r.source_kind='provider'
+                          WHERE c.tenant_id=x.tenant_id AND c.case_id=x.case_id AND c.id=x.consultation_id
+                            AND r.channel_id=x.channel_id AND r.conversation_id=x.conversation_id
+                            AND EXISTS(SELECT 1 FROM saas_consultation_group_deliveries d
+                              WHERE d.tenant_id=c.tenant_id AND d.consultation_id=c.id AND d.channel_id=x.channel_id
+                                AND d.conversation_id=x.conversation_id AND d.state='sent')) THEN 'reply_received'
+                        ELSE x.state END AS state,x.reason,x.created_at,x.updated_at,
+                      COALESCE(NULLIF(v.display_name,''),NULLIF(v.contact_name,''),x.conversation_id) AS recipient
+                      FROM saas_ai_case_developer_dispatches x LEFT JOIN saas_connect_conversations v
+                        ON v.tenant_id=x.tenant_id AND v.connect_channel_id=x.channel_id AND v.conversation_id=x.conversation_id
+                      JOIN saas_support_tickets st ON st.tenant_id=x.tenant_id AND st.id=x.case_id
+                      WHERE x.tenant_id=%s::uuid AND x.case_id=%s::uuid ORDER BY x.created_at,x.id''',(tenant,case_id))
+                    auto_dispatches=[{k:str(v) if isinstance(v,uuid.UUID) or hasattr(v,'isoformat') else v for k,v in dict(row).items()} for row in cur.fetchall()]
+            return {'case_id':case_id or None,'replies':result,'consultations':consultations,'auto_dispatches':auto_dispatches,
                 'unhandled':sum(r['handled_at'] is None for r in result),'unread':sum(r['read_at'] is None for r in result),
                 'notification_unread_count':notification_unread_count}
 
@@ -698,11 +1144,23 @@ def draft(profile,reply_id,data):
             # All employee paths lock consultation before reply, including handling.
             cur.execute('SELECT * FROM saas_dialog_consultation_replies WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,reply_id));reply=cur.fetchone()
             if reply.get('message_type','text')!='text':raise TenantLinearError('Сначала просмотрите вложение и при необходимости добавьте текстовый ответ вручную.',409)
+            case_binding=_case_reply_binding(cur,tenant,reply_id) if consult.get('case_id') else None
+            if consult.get('case_id') and (not case_binding or not case_developer_followup_current(cur,tenant,case_binding)):
+                raise TenantLinearError('Обращение или назначение изменилось. Черновик устарел.',409)
             from tenant_operator_copilot import _assigned_context,_agent_binding
             assigned=_assigned_context(cur,tenant,{'channel_id':str(consult['channel_id']),'conversation_id':consult['conversation_id']})
             binding=_agent_binding(assigned)
             if reply['draft_state']=='completed' and reply.get('draft_binding')==binding:
-                original_evidence(cur,tenant,reply_id,str(consult['channel_id']),consult['conversation_id'],int(source['lead_id']))
+                rows,_summary,versions=original_evidence(cur,tenant,reply_id,str(consult['channel_id']),consult['conversation_id'],int(source['lead_id']))
+                from tenant_media_coverage import KINDS,MediaCoverage
+                if any(str(row.get('message_type') or '').lower() in KINDS for row in rows):
+                    cur.execute('SELECT status,result FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(tenant,reply.get('draft_request_id')))
+                    saved=cur.fetchone() or {};result=saved.get('result') if isinstance(saved.get('result'),dict) else {}
+                    proof=result.get('media_coverage');expected={'reply_id':reply_id,'conversation_id':consult['conversation_id'],
+                      'source_versions':versions,'case_id':str(consult['case_id']) if consult.get('case_id') else None}
+                    if saved.get('status')!='completed' or result.get('text')!=reply['draft'] or not isinstance(proof,dict) or proof.get('snapshot')!=expected:
+                        raise TenantLinearError('Сохранённый черновик не имеет полного подтверждения вложений исходного снимка.',409)
+                    MediaCoverage.validate_proof(cur,tenant,str(consult['channel_id']),int(source['lead_id']),proof)
                 return {'text':reply['draft'],'customer_message_sent':False}
             if reply['draft_state'] not in {'pending','completed','not_requested'}:raise TenantLinearError('Предыдущий AI-запрос требует проверки; повтор отключён.',409)
             cur.execute("UPDATE saas_dialog_consultation_replies SET draft_state='sending',draft_request_id=%s::uuid WHERE tenant_id=%s::uuid AND id=%s::uuid",(request,tenant,reply_id))
@@ -718,6 +1176,10 @@ def draft(profile,reply_id,data):
         with _connect() as conn:
             with conn.cursor() as cur:
                 _consult(cur,profile,reply['consultation_id'],manual=True)
+                if consult.get('case_id'):
+                    current_binding=_case_reply_binding(cur,tenant,reply_id)
+                    if not current_binding or not case_developer_followup_current(cur,tenant,current_binding):
+                        raise TenantLinearError('Обращение или назначение изменилось. Черновик устарел.',409)
                 if result.get('consultation_agent_binding'):
                     from tenant_operator_copilot import _assigned_context,_agent_binding
                     current=_assigned_context(cur,tenant,{'channel_id':str(consult['channel_id']),'conversation_id':consult['conversation_id']})

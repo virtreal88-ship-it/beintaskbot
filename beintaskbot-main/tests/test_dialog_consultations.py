@@ -34,6 +34,8 @@ def prepared(ready,profile=PROFILE):
     db,data,sender=ready
     result=flow.prepare(profile,data,'https://crm.test')
     body=db.execute('SELECT body FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(A,data['request_id']))[0]['body'];db.commit()
+    assert 'CONSULT:' not in body
+    assert 'Фрагмент переписки' in body and 'https://crm.test/public/case/' in body
     return result,body.rsplit('/',1)[1]
 
 
@@ -52,6 +54,20 @@ def test_independent_employee_consultation_receipt_dedup_no_ticket(ready):
     assert db.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
     assert db.execute('SELECT case_id FROM saas_internal_consultations')[0]['case_id'] is None
     assert public.read(token)['public_messages'][0]['text']=='Internet is down'
+    assert public.read(token)['public_identity']=={}
+
+
+def test_new_public_snapshot_identity_requires_opt_in_and_uses_verified_phone_only(ready):
+    db,data,_=ready
+    db.execute('''CREATE TABLE IF NOT EXISTS saas_connect_direct_identities(
+      tenant_id UUID,connect_channel_id UUID,identity_key TEXT,canonical_conversation_id TEXT,verified_at TIMESTAMPTZ DEFAULT now())''')
+    db.execute('''INSERT INTO saas_connect_direct_identities(tenant_id,connect_channel_id,identity_key,canonical_conversation_id)
+      VALUES(%s::uuid,%s::uuid,'15551234567@s.whatsapp.net','client')''',(A,CA));db.commit()
+    db.execute("UPDATE saas_connect_conversations SET contact_name='Synthetic Customer' WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id='client'",(A,CA));db.commit()
+    data['include_customer_identity']=True
+    _result,token=prepared(ready)
+    public_data=public.read(token)
+    assert public_data['public_identity']=={'customer_name':'Synthetic Customer','verified_phone':'+15551234567','phone_status':'verified'}
 
 
 @pytest.mark.parametrize('change',[{'confirm':False},{'destination_channel_id':CB,'destination_conversation_id':'client'},

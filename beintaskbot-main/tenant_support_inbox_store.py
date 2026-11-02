@@ -209,6 +209,36 @@ def handoff_ticket(cur, job, reason):
     if receipt.get('id') and ids:
         record_case_message_membership(cur,str(job['tenant_id']),receipt['id'],job['channel_id'],
           job.get('conversation_id') or job.get('chat_id'),ids,'handoff:'+str(job['event_fingerprint']))
+    if receipt.get('created') and job.get('agent_id'):
+        cur.execute('''SELECT mode,response_policy FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND enabled=TRUE''',
+          (job['tenant_id'],job['agent_id']))
+        agent=cur.fetchone() or {};policy=agent.get('response_policy') or {}
+        destinations=policy.get('developer_destinations') if isinstance(policy.get('developer_destinations'),list) else []
+        if agent.get('mode')=='automatic' and policy.get('auto_case_dispatch_enabled') is True:
+            cur.execute('''SELECT revision,agent_assignment_id,state,agent_id::text AS agent_id
+              FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect'
+                AND channel_id=%s AND conversation_id=%s''',
+              (job['tenant_id'],str(job['channel_id']),str(job.get('conversation_id') or job.get('chat_id'))))
+            source_state=cur.fetchone() or {}
+            # Schema bootstrap is intentionally outside this business path.
+            cur.execute("SELECT to_regclass('saas_ai_case_developer_dispatches') AS ready")
+            if not (cur.fetchone() or {}).get('ready'):
+                return receipt
+            event_key=str(job.get('event_fingerprint') or '')[:500]
+            if destinations:
+                for target in destinations:
+                    channel=str(target.get('channel_id') or '');conversation=str(target.get('conversation_id') or '')
+                    key=channel+'|'+conversation
+                    request=uuid.uuid5(uuid.NAMESPACE_URL,'auto-case-dispatch:'+str(job['tenant_id'])+':'+event_key+':'+key)
+                    cur.execute('''INSERT INTO saas_ai_case_developer_dispatches(tenant_id,id,case_id,agent_id,event_key,destination_key,channel_id,conversation_id,owner_id,request_id,source_revision,source_assignment_id)
+                      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s::uuid,%s,%s,%s::uuid,%s,%s::uuid) ON CONFLICT DO NOTHING''',
+                      (job['tenant_id'],uuid.uuid4(),receipt['id'],job['agent_id'],event_key,key,channel,conversation,policy.get('auto_case_dispatch_owner_id'),request,
+                       source_state.get('revision'),source_state.get('agent_assignment_id')))
+            else:
+                request=uuid.uuid5(uuid.NAMESPACE_URL,'auto-case-dispatch:'+str(job['tenant_id'])+':'+event_key+':blocked:no-recipient')
+                cur.execute('''INSERT INTO saas_ai_case_developer_dispatches(tenant_id,id,case_id,agent_id,event_key,destination_key,owner_id,request_id,state,reason)
+                  VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,'blocked',%s,%s::uuid,'blocked','no_developer_recipient_configured') ON CONFLICT DO NOTHING''',
+                  (job['tenant_id'],uuid.uuid4(),receipt['id'],job['agent_id'],event_key,policy.get('auto_case_dispatch_owner_id'),request))
     return receipt
 
 
@@ -224,9 +254,13 @@ def summarize_created(tenant, receipt):
 
 
 _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_message_at,c.last_message_at) AS last_message_at,ch.name AS channel_name,m.display_name AS assignee_name,
+ (SELECT substring(e.event_key from 8) FROM saas_support_events e WHERE e.tenant_id=t.tenant_id
+   AND e.ticket_id=t.id AND e.event_key LIKE 'manual:%%' ORDER BY e.event_key LIMIT 1) AS create_request_id,
  cs.state AS ai_state,cs.reason AS ai_reason,a.name AS agent_name,cs.agent_id AS agent_id,
  a.enabled AS agent_enabled,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,
  company.status AS tenant_status,j.state AS latest_job_state,j.error_code AS latest_job_error,
+ t.assigned_developer_channel_id::text AS assigned_developer_channel_id,
+ t.assigned_developer_conversation_id,COALESCE(NULLIF(dc.display_name,''),NULLIF(dc.contact_name,'')) AS assigned_developer_name,
  ch.active AS channel_active,cs.updated_at AS ai_updated_at,
  NOT ai_legacy_blocked(t.tenant_id,t.channel_id::text,t.conversation_id) AS unambiguous
  FROM saas_support_tickets t
@@ -240,9 +274,23 @@ _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_messag
  LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect' AND cs.conversation_id=t.conversation_id AND cs.channel_id=t.channel_id::text
  LEFT JOIN saas_ai_agents a ON a.tenant_id=t.tenant_id AND a.id=cs.agent_id
  LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.assigned_to
+ LEFT JOIN saas_connect_conversations dc ON dc.tenant_id=t.tenant_id
+   AND dc.connect_channel_id=t.assigned_developer_channel_id AND dc.conversation_id=t.assigned_developer_conversation_id
  LEFT JOIN LATERAL (SELECT COALESCE(happened_at,created_at) AS last_message_at FROM saas_crm_messages
    WHERE tenant_id=t.tenant_id AND kommo_lead_id=c.lead_id AND channel='connect:'||t.channel_id::text
    ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 1) lm ON TRUE'''
+
+
+def _attach_verified_contact_identity(cur,tenant,row):
+    """Expose only provider-verified direct identity; groups never become phone numbers."""
+    item=dict(row)
+    cur.execute("SELECT to_regclass('saas_connect_direct_identities') AS ready")
+    if not (cur.fetchone() or {}).get('ready'):
+        item['customer_verified_phone']='';return item
+    from tenant_connect_direct_identity import verified_phone_jid
+    jid=verified_phone_jid(cur,tenant,str(item.get('channel_id') or ''),str(item.get('conversation_id') or ''))
+    item['customer_verified_phone']='+'+jid.split('@',1)[0] if jid else ''
+    return item
 
 
 def eligible_members(cur, tenant):
@@ -282,7 +330,8 @@ def listing(profile, status='unresolved', assignee='', offset=0, search='', chan
             unresolved_count=int(cur.fetchone()['total'])
             cur.execute('SELECT connect_channel_id::text AS id,name FROM saas_connect_channels WHERE tenant_id=%s::uuid ORDER BY name',(tenant,))
             channels=[dict(row) for row in cur.fetchall()]
-    return {'tickets': [public(row) for row in rows[:50]], 'members': members, 'channels':channels, 'unresolved_count':unresolved_count,
+            safe_rows=[_attach_verified_contact_identity(cur,tenant,row) for row in rows[:50]]
+    return {'tickets': [public(row) for row in safe_rows], 'members': members, 'channels':channels, 'unresolved_count':unresolved_count,
             'next_offset': offset+50 if len(rows)>50 else None}
 
 
@@ -295,6 +344,7 @@ def detail(profile, ticket_id, before=None, message_id=None):
             ticket = cur.fetchone()
             if not ticket:
                 raise TenantLinearError('Обращение не найдено.', 404)
+            ticket=_attach_verified_contact_identity(cur,tenant,ticket)
             from tenant_support_case_context import load_scope, messages, metadata
             material_scope = load_scope(cur, tenant, ticket_id)
             scope_metadata = metadata(cur, material_scope)
@@ -461,8 +511,13 @@ def _attach_case_materials(profile,ticket_id,message_ids,*,media_only):
 
 
 def create(profile, data):
-    if not isinstance(data, dict) or set(data) - {'request_id','lead_id','channel_id','conversation_id','reason','description','message_ids'}:
+    if not isinstance(data, dict) or set(data) - {'request_id','lead_id','channel_id','conversation_id','reason','description','message_ids',
+        'assigned_developer_channel_id','assigned_developer_conversation_id','developer_confirmed'}:
         raise TenantLinearError('Некорректные поля обращения.')
+    if (data.get('developer_confirmed') is not True or not data.get('assigned_developer_channel_id')
+            or not isinstance(data.get('assigned_developer_conversation_id'),str)
+            or not data.get('assigned_developer_conversation_id').strip()):
+        raise TenantLinearError('Перед созданием обращения выберите и подтвердите разработчика.',409)
     if 'message_ids' in data and (not isinstance(data['message_ids'], list) or not 1 <= len(data['message_ids']) <= 80):
         raise TenantLinearError('Выберите от 1 до 80 сообщений обращения.')
     request_id = identifier(data.get('request_id'))
@@ -470,17 +525,37 @@ def create(profile, data):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
+            from tenant_dialog_consultations import access as dialogs_access,developer_target
+            access_tenant,_dialog_actor,dialogs_policy=dialogs_access(cur,profile,'dialogs')
+            if str(access_tenant)!=str(tenant):raise TenantLinearError('Получатель вне выбранной компании.',403)
+            destination=developer_target(cur,tenant,dialogs_policy,
+                identifier(data['assigned_developer_channel_id']),data['assigned_developer_conversation_id'])
             receipt = create_in_transaction(cur,tenant,data.get('channel_id'),data.get('conversation_id'),
                 data.get('reason') or 'Создано сотрудником','manual:'+request_id,actor=actor,
                 description=data.get('description',''),source='manual',lead_id=data.get('lead_id'),message_ids=data.get('message_ids'))
-            _audit(cur,tenant,actor,'support_create','support_ticket',receipt['id'])
+            cur.execute('''SELECT assigned_developer_channel_id::text,assigned_developer_conversation_id
+              FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE''',(tenant,receipt['id']))
+            existing=cur.fetchone() or {}
+            if not receipt.get('created') and (str(existing.get('assigned_developer_channel_id') or '')!=str(destination.get('channel_id') or destination['connect_channel_id'])
+                or str(existing.get('assigned_developer_conversation_id') or '')!=str(destination['conversation_id'])):
+                raise TenantLinearError('Обращение уже существует с другим разработчиком. Проверьте его назначение.',409)
+            if receipt.get('created'):
+                cur.execute('''UPDATE saas_support_tickets SET assigned_developer_channel_id=%s::uuid,
+                  assigned_developer_conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid''',
+                  (str(destination.get('channel_id') or destination['connect_channel_id']),destination['conversation_id'],tenant,receipt['id']))
+            _audit(cur,tenant,actor,'support_create','support_ticket',receipt['id'],
+              {'developer_confirmed':True,'developer_channel_id':str(destination.get('channel_id') or destination['connect_channel_id'])})
         conn.commit()
     summarize_created(tenant,receipt)
-    return detail(profile,receipt['id'])
+    result=detail(profile,receipt['id'])
+    # This response acknowledges this exact idempotent request, including a
+    # new explicit request that attached to an already open dialog case.
+    result['ticket']['create_request_id']=request_id
+    return result
 
 
 def update(profile, ticket_id, data):
-    if set(data)-{'status','assigned_to','description','next_steps','suggestions'}:
+    if set(data)-{'status','assigned_to','description','next_steps','suggestions','assigned_developer_channel_id','assigned_developer_conversation_id'}:
         raise TenantLinearError('Некорректные поля обращения.')
     if 'status' in data and data['status'] not in STATUSES:
         raise TenantLinearError('Некорректный статус.')
@@ -489,6 +564,24 @@ def update(profile, ticket_id, data):
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
             ticket_id = identifier(ticket_id)
+            cur.execute('SELECT channel_id::text,conversation_id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,ticket_id))
+            source_case=cur.fetchone()
+            if not source_case:raise TenantLinearError('Обращение не найдено.',404)
+            lock_dialog(cur,tenant,'connect',source_case['channel_id'],source_case['conversation_id'])
+            cur.execute('SELECT id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,ticket_id))
+            cur.fetchone()
+            if ('assigned_developer_channel_id' in data) != ('assigned_developer_conversation_id' in data):
+                raise TenantLinearError('Выберите чат разработчика целиком.')
+            if 'assigned_developer_channel_id' in data and data['assigned_developer_channel_id'] is not None:
+                from tenant_operator_access import access
+                tenant,_,developer_policy=access(cur,profile,'dialogs')
+                from tenant_dialog_consultations import developer_target
+                destination=developer_target(cur,tenant,developer_policy,
+                    identifier(data['assigned_developer_channel_id']),data['assigned_developer_conversation_id'])
+                data={**data,'assigned_developer_channel_id':str(destination.get('channel_id') or destination['connect_channel_id']),
+                      'assigned_developer_conversation_id':str(destination['conversation_id'])}
+            elif 'assigned_developer_channel_id' in data:
+                data={**data,'assigned_developer_channel_id':None,'assigned_developer_conversation_id':None}
             if 'assigned_to' in data and data['assigned_to'] is not None:
                 assigned = int(data['assigned_to'])
                 if assigned not in {int(m['telegram_id']) for m in eligible_members(cur,tenant)}:
@@ -499,6 +592,10 @@ def update(profile, ticket_id, data):
             for key, value in data.items():
                 fields.append(key+'=%s')
                 if key=='assigned_to': value = int(value) if value is not None else None
+                elif key=='assigned_developer_channel_id': value = identifier(value) if value is not None else None
+                elif key=='assigned_developer_conversation_id':
+                    if value is not None and (not isinstance(value,str) or not value or len(value)>200):
+                        raise TenantLinearError('Диалог разработчика недоступен.',404)
                 elif key!='status':
                     if not isinstance(value,str) or len(value)>4000: raise TenantLinearError('Слишком длинный текст.')
                 args.append(value)
@@ -545,6 +642,7 @@ def complete(profile, data):
             if int(selected.get('lead_id') or 0)!=lead_id:
                 raise TenantLinearError('Диалог изменился. Обновите его.',409)
             channel=str(selected['connect_channel_id']);conversation=str(selected['conversation_id'])
+            lock_dialog(cur,tenant,'connect',channel,conversation)
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('support-complete:'+tenant+':'+channel+':'+conversation,))
             cur.execute('SELECT actor_id,input_hash,ticket_id,channel_id,conversation_id FROM saas_support_completions WHERE tenant_id=%s::uuid AND request_id=%s::uuid FOR UPDATE',(tenant,request_id))
             previous=cur.fetchone()

@@ -12,9 +12,23 @@ import tenant_ai_spend_budget as spend
 import tenant_connect_transport as connect
 import tenant_operator_dialogs as dialogs
 import tenant_support_inbox_store as tickets
+import tenant_dialog_consultations as consultations
+
+DEVELOPER='synthetic-request-schema-developer'
+
+def manual_case_request(request_id):
+    return {'request_id':request_id,'lead_id':41,'assigned_developer_channel_id':CA,
+      'assigned_developer_conversation_id':DEVELOPER,'developer_confirmed':True}
+
+def mark_synthetic_developer(db):
+    consultations.schema(db)
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,143,'Synthetic Developer',now()) ON CONFLICT DO NOTHING",(A,CA,DEVELOPER))
+    db.execute("INSERT INTO saas_dialog_developer_markers(tenant_id,channel_id,conversation_id,enabled,updated_by) VALUES(%s::uuid,%s::uuid,%s,TRUE,11) ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET enabled=TRUE",(A,CA,DEVELOPER))
+    db.commit()
 
 
 def test_create_ticket_against_ingest_row_and_nested_schema_never_deadlocks(db, monkeypatch):
+    mark_synthetic_developer(db)
     factory=lambda:psycopg.connect(db.dsn,row_factory=dict_row)
     monkeypatch.setattr(tickets,'_connect',factory)
     monkeypatch.setattr(tickets,'summarize_created',lambda *a:None)
@@ -26,7 +40,7 @@ def test_create_ticket_against_ingest_row_and_nested_schema_never_deadlocks(db, 
     request_id=str(uuid.uuid4())
     def create():
         assert row_held.wait(10)
-        try:return ('created',tickets.create(PROFILE,{'request_id':request_id,'lead_id':41})['ticket']['id'])
+        try:return ('created',tickets.create(PROFILE,manual_case_request(request_id))['ticket']['id'])
         except psycopg.Error as error:return ('db_error',error.sqlstate,type(error).__name__)
     def ingest_schema_boundary():
         try:
@@ -42,7 +56,7 @@ def test_create_ticket_against_ingest_row_and_nested_schema_never_deadlocks(db, 
         outcomes=[future.result(timeout=20) for future in futures]
     assert all(result[0]!='db_error' for result in outcomes),outcomes
     original_id=next(result[1] for result in outcomes if result[0]=='created')
-    assert tickets.create(PROFILE,{'request_id':request_id,'lead_id':41})['ticket']['id']==original_id
+    assert tickets.create(PROFILE,manual_case_request(request_id))['ticket']['id']==original_id
     with factory() as conn:
         assert conn.execute('SELECT count(*) AS count FROM saas_support_tickets WHERE tenant_id=%s::uuid',(A,)).fetchone()['count']==1
 
@@ -110,6 +124,7 @@ def test_schema_readiness_is_scoped_to_committed_search_path(db):
 
 
 def test_parallel_repeated_case_create_dialog_reads_and_ingest_schema(db,monkeypatch):
+    mark_synthetic_developer(db)
     factory=lambda:psycopg.connect(db.dsn,row_factory=dict_row,options='-c statement_timeout=8000')
     monkeypatch.setattr(tickets,'_connect',factory);monkeypatch.setattr(dialogs,'_connect',factory)
     monkeypatch.setattr(tickets,'summarize_created',lambda *a:None)
@@ -118,7 +133,7 @@ def test_parallel_repeated_case_create_dialog_reads_and_ingest_schema(db,monkeyp
         barrier.wait(10)
         if index<6:
             key=same_request if index<4 else str(uuid.uuid4())
-            return ('case',tickets.create(PROFILE,{'request_id':key,'lead_id':41})['ticket']['id'])
+            return ('case',tickets.create(PROFILE,manual_case_request(key))['ticket']['id'])
         if index==6:return ('list',len(dialogs.listing(PROFILE)['dialogs']))
         if index==7:return ('history',len(dialogs.history(PROFILE,'connect',41,CA,'client')['messages']))
         with factory() as conn:

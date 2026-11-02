@@ -87,7 +87,7 @@ def retryable_audio_download_failure(receipt, ref):
         and provenance.get('source_version') == source_hash(ref))
 
 
-def reusable(profile, ref):
+def reusable(profile, ref, *, connection=None):
     """Return only the exact-tenant/channel/version terminal receipt, if any."""
     if not isinstance(profile, dict) or not profile.get('tenant_id'):
         return None
@@ -97,7 +97,8 @@ def reusable(profile, ref):
     if not (external and channel and ref.get('media_kind')):
         return None
     try:
-        with _connect() as conn:
+        from contextlib import nullcontext
+        with (nullcontext(connection) if connection is not None else _connect()) as conn:
             with conn.cursor() as cur:
                 from tenant_dialog_audio_store import current_ref
                 explicit=current_ref(cur,tenant,ref)

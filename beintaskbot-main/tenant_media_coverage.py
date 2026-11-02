@@ -59,22 +59,32 @@ def component_spans(row,appendix):
 
 class MediaCoverage:
     """One server-created proof, reused at wire and locked send boundaries."""
-    def __init__(self,rows,tenant,channel,lead,*,latest_request=False):
+    def __init__(self,rows,tenant,channel,lead,*,latest_request=False,snapshot=None):
         from tenant_episode_media import reference,episode
         self.latest_request=latest_request
-        chosen=episode(rows,latest_request=latest_request)
+        self.snapshot=copy.deepcopy(snapshot)
+        chosen=list(rows) if snapshot is not None else episode(rows,latest_request=latest_request)
         if len(chosen)>256:raise CoverageError(code='media_episode_source_limit')
         self.selected=sorted((str(row.get('external_id') or '').removeprefix('connect:'),str(row.get('message_type') or 'text').lower()) for row in chosen)
         self.cutoff=str(chosen[-1].get('happened_at') or '') if chosen else None
         self.tenant,self.channel,self.lead=str(tenant),str(channel),int(lead)
-        self.required=tuple(required_media(rows,latest_request=latest_request))
-        selected=list(chosen)+([rows[-1]] if rows else [])
+        self.required=tuple(row for row in chosen if str(row.get('message_type') or '').lower() in KINDS)
+        selected=list(chosen)+([rows[-1]] if rows and snapshot is None else [])
         self.refs=tuple(copy.deepcopy(reference({**row,'external_id':row.get('_stored_external_id',row.get('external_id')),'channel':'connect:'+self.channel},self.channel,int(row.get('_stored_lead_id') or self.lead))) for row in selected)
         self.coverage={id(row):False for row in self.required}
         self.receipts=None;self.lines_hash=None;self.job=None;self.reservation=None;self.line_sources={}
+        self.saved_receipts={}
 
     def bind_job(self,job,reservation):
         self.job=copy.deepcopy(job)
+        if (job.get('payload') or {}).get('developer_case_followup') is True:
+            # This continuation revisits the last customer burst after an AI
+            # acknowledgment. Keep that acknowledgment version fenced, while
+            # the latest-input comparison stays anchored to the customer.
+            source=str((job.get('payload') or {}).get('message_id') or '').removeprefix('connect:')
+            matching=[ref for ref in self.refs if str(ref.get('external_id') or '').removeprefix('connect:')==source]
+            if not matching:raise CoverageError(code='media_source_changed')
+            self.refs=tuple([ref for ref in self.refs if ref not in matching]+matching)
         self.reservation={key:reservation.get(key) for key in ('run_id','model','agent_version','conversation_revision','schedule')}
         self.reservation=copy.deepcopy(self.reservation)
 
@@ -99,6 +109,9 @@ class MediaCoverage:
             if not self.coverage.get(id(row)) or not supplied:raise CoverageError(row,context_limit=True)
         self.receipts=tuple(digest(row.get('_episode_receipt')) for row in self.required)
         self.lines_hash=digest(lines)
+        if self.snapshot is not None:
+            self.saved_receipts={str(row.get('_stored_external_id',row.get('external_id')) or ''):row.get('_snapshot_receipt_version') for row in self.required}
+            if any(not isinstance(value,str) or not value for value in self.saved_receipts.values()):raise CoverageError(code='media_manifest_missing')
 
     def check(self,lines=None,wire=None):
         self.prepared()
@@ -122,7 +135,8 @@ class MediaCoverage:
         if any(str(ref.get('channel_id'))!=self.channel or int(ref.get('lead_id') or 0) not in approved for ref in self.refs):raise CoverageError(code='media_manifest_scope_changed')
         try:revalidate_sources(cur,self.tenant,self.refs)
         except TenantLinearError:raise CoverageError(code='media_source_changed') from None
-        self.validate_selection(cur,approved)
+        if self.snapshot is not None:self.validate_snapshot(cur)
+        else:self.validate_selection(cur,approved)
         if self.job is not None:
             job=self.job;reservation=self.reservation
             cur.execute("""SELECT 1 FROM saas_ai_agent_jobs j JOIN saas_ai_agents a
@@ -135,7 +149,7 @@ class MediaCoverage:
                 AND (%s::text IS NULL OR a.version::text=%s) FOR SHARE OF j,a,r""",
               (reservation['run_id'],self.tenant,job['agent_id'],self.channel,job['conversation_id'],job['lease_token'],job['revision'],reservation['model'],str(reservation['agent_version']) if reservation['agent_version'] is not None else None,str(reservation['agent_version']) if reservation['agent_version'] is not None else None))
             if not cur.fetchone():raise CoverageError(code='media_parent_changed')
-        if self.refs:
+        if self.refs and self.snapshot is None:
             # Catch committed late input even before enqueue advances revision.
             exclude_ai=(" AND NOT (direction='outgoing' AND (lower(COALESCE(author_name,''))='ai agent' OR COALESCE(raw->>'ai_authored','false')='true'))" if self.job is not None else '')
             cur.execute("""SELECT external_id FROM saas_crm_messages WHERE tenant_id=%s::uuid
@@ -149,6 +163,30 @@ class MediaCoverage:
         if self.job is not None:
             from tenant_ai_agent_schedule import next_open
             if next_open(self.reservation.get('schedule') or {}):raise CoverageError(code='media_parent_changed')
+
+    def validate_snapshot(self,cur):
+        """Only a real authenticated frozen consultation can select this view."""
+        binding=self.snapshot
+        if (not isinstance(binding,dict) or set(binding)!={'reply_id','conversation_id','source_versions','case_id'}
+            or not isinstance(binding.get('conversation_id'),str) or not binding['conversation_id']
+            or not isinstance(binding.get('source_versions'),dict) or not 1<=len(binding['source_versions'])<=80):
+            raise CoverageError(code='media_manifest_invalid')
+        from tenant_dialog_consultations import original_evidence,_case_reply_binding,case_developer_followup_current
+        try:
+            rows,_summary,versions=original_evidence(cur,self.tenant,binding['reply_id'],self.channel,binding['conversation_id'],self.lead)
+        except TenantLinearError:raise CoverageError(code='media_source_changed') from None
+        selected=sorted((str(row.get('external_id') or '').removeprefix('connect:'),str(row.get('message_type') or 'text').lower()) for row in rows)
+        if versions!=binding['source_versions'] or selected!=self.selected:raise CoverageError(code='media_source_changed')
+        from tenant_media_evidence import reusable
+        media_refs={str(ref['external_id']):ref for ref in self.refs if ref.get('media_kind') in KINDS}
+        if not isinstance(self.saved_receipts,dict) or set(media_refs)!=set(self.saved_receipts):raise CoverageError(code='media_manifest_missing')
+        for external,ref in media_refs.items():
+            saved=reusable({'tenant_id':self.tenant},ref,connection=cur.connection)
+            if not saved or digest(saved)!=self.saved_receipts[external]:raise CoverageError(code='media_source_changed')
+        if binding.get('case_id'):
+            authority=_case_reply_binding(cur,self.tenant,binding['reply_id'])
+            if not authority or str(authority.get('case_id'))!=str(binding['case_id']) or not case_developer_followup_current(cur,self.tenant,authority):
+                raise CoverageError(code='media_parent_changed')
 
 
     def validate_selection(self,cur,approved):
@@ -180,7 +218,8 @@ class MediaCoverage:
         self.check()
         return {'version':1,'complete':True,'tenant':self.tenant,'channel':self.channel,'lead':self.lead,
           'refs':copy.deepcopy(list(self.refs)),'selected':[list(item) for item in self.selected],'cutoff':self.cutoff,
-          'latest_request':self.latest_request,'lines_hash':self.lines_hash}
+          'latest_request':self.latest_request,'lines_hash':self.lines_hash,
+          **({'snapshot':copy.deepcopy(self.snapshot),'snapshot_receipts':copy.deepcopy(self.saved_receipts)} if self.snapshot is not None else {})}
 
     @classmethod
     def validate_proof(cls,cur,tenant,channel,lead,proof):
@@ -191,7 +230,8 @@ class MediaCoverage:
             raise CoverageError(code='media_manifest_invalid')
         if any(not isinstance(item,(list,tuple)) or len(item)!=2 or any(not isinstance(value,str) or len(value)>500 for value in item) for item in selected):raise CoverageError(code='media_manifest_invalid')
         if any(not isinstance(ref,dict) or str(ref.get('channel_id'))!=str(channel) or not str(ref.get('lead_id') or '').isdigit() for ref in refs):raise CoverageError(code='media_manifest_scope_changed')
-        manifest=cls([],proof.get('tenant'),proof.get('channel'),proof.get('lead') or 0,latest_request=proof.get('latest_request') is True)
+        manifest=cls([],proof.get('tenant'),proof.get('channel'),proof.get('lead') or 0,latest_request=proof.get('latest_request') is True,snapshot=proof.get('snapshot'))
         manifest.refs=tuple(refs);manifest.selected=sorted(tuple(item) for item in selected)
+        manifest.saved_receipts=proof.get('snapshot_receipts',{})
         manifest.cutoff=proof.get('cutoff');manifest.receipts=();manifest.lines_hash=proof.get('lines_hash')
         manifest.validate(cur,tenant,channel,lead)
