@@ -60,6 +60,8 @@ on:
       - 'beintaskbot-main/tests/test_message_attachment_menu_browser.cjs'
       - 'beintaskbot-main/tests/test_photo_preview_browser.cjs'
       - 'beintaskbot-main/tests/test_visible_photo_autoload_browser.cjs'
+      - 'beintaskbot-main/tests/test_visible_audio_autoload_browser.cjs'
+      - 'beintaskbot-main/tests/visible_media_fixture.cjs'
       - 'beintaskbot-main/tests/test_connect_media_backpressure.py'
       - 'beintaskbot-main/tests/test_photo_thumbnail_projection.py'
       - 'beintaskbot-main/tenant_chat_attachment_api.py'
@@ -250,3 +252,4 @@ jobs:
           node tests/test_message_attachment_menu_browser.cjs
           node tests/test_photo_preview_browser.cjs
           node tests/test_visible_photo_autoload_browser.cjs
+          node tests/test_visible_audio_autoload_browser.cjs

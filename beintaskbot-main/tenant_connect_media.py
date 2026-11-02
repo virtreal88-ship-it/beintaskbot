@@ -19,7 +19,7 @@ IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
 AUDIO_TYPES = {'audio/ogg', 'application/ogg', 'audio/mpeg', 'audio/mp3', 'audio/mp4',
                'audio/opus', 'audio/x-m4a', 'audio/m4a', 'audio/wav', 'audio/x-wav', 'audio/webm', 'audio/flac', 'audio/x-flac', 'audio/aac'}
 
-# All callers (human previews, automatic photos and AI preparation), including
+# All callers (human previews, automatic photos/audio and AI preparation), including
 # other event loops in this worker, share Connect's two resolution slots.
 _media_lock = threading.Lock()
 _media_active = 0

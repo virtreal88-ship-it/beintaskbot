@@ -1,11 +1,10 @@
-/* Explicit bounded downloads. No remote URLs or credentials are put in the DOM. */
+/* Bounded visible photo/audio reads and explicit downloads. No provider URLs in the DOM. */
 (() => {
   let member, lead, epoch=0, profileRevision=0;
   const active=new Set(), urls=new Set(), previews=new Map(), mediaCache=new Map(), retryUntil=new Map(), loadedKeys=new Set(), pendingKeys=new Map();
   let cacheBytes=0;
   const AUDIO_INTENT_KEY='tenant.audio-reload-intent.v1',AUDIO_INTENT_TTL=3600000;
-  let profilePolicy='',freshProfile=false,autoRestoreAttempted=false,rememberSequence=0;
-  const restorePending=new WeakSet();
+  let profilePolicy='',freshProfile=false,rememberSequence=0;
   const hash=async value=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))].map(byte=>byte.toString(16).padStart(2,'0')).join('');
   const forgetAudioIntent=()=>{try{sessionStorage.removeItem(AUDIO_INTENT_KEY);}catch{}};
   function audioIntent(){try{const value=JSON.parse(sessionStorage.getItem(AUDIO_INTENT_KEY)||'null');if(!value)return null;if(Object.keys(value).some(key=>!['v','owner','scope','source','version','expires_at','blocked','retry_until'].includes(key))||value.v!==1||!['owner','scope','source','version'].every(key=>/^[a-f0-9]{64}$/.test(value[key]||''))||!Number.isFinite(value.expires_at)||value.expires_at<=Date.now()||value.expires_at>Date.now()+AUDIO_INTENT_TTL||typeof value.blocked!=='boolean'||!Number.isFinite(value.retry_until)||value.retry_until<0){forgetAudioIntent();return null;}return value;}catch{forgetAudioIntent();return null;}}
@@ -22,22 +21,31 @@
   async function rememberAudio(host){if(!['audio','voice','voice_message','ptt'].includes(host.dataset.mediaKind))return;const sequence=++rememberSequence;try{await profileFetch;const binding=await audioBinding(host);if(sequence===rememberSequence&&binding&&host.dataset.mediaPreviewState==='loaded'&&host.querySelector('audio')?.getAttribute('src')&&!host.querySelector('audio')?.error)writeAudioIntent({v:1,...binding,expires_at:Date.now()+AUDIO_INTENT_TTL,blocked:false,retry_until:0});}catch{}}
   function blockAudioIntent(binding,status,retry=0){const value=audioIntent();if(!value||!binding||!['owner','scope','source','version'].every(key=>value[key]===binding[key]))return;if([403,404,410].includes(status)){forgetAudioIntent();return;}writeAudioIntent({...value,blocked:true,retry_until:Math.max(value.retry_until,retry)});}
   async function failAudio(host,binding,status,retry=0){if(!['audio','voice','voice_message','ptt'].includes(host.dataset.mediaKind))return;try{if(!binding)await profileFetch;blockAudioIntent(binding||await audioBinding(host),status,retry);}catch{}}
-  async function restoreAudio(host,load){
-    if(restorePending.has(host)||autoRestoreAttempted||!freshProfile||!audioIntent())return;
-    restorePending.add(host);
-    try{const binding=await audioBinding(host),value=audioIntent();if(!binding||!value)return;
-      if(value.owner!==binding.owner){forgetAudioIntent();return;}
-      if(value.scope!==binding.scope||value.source!==binding.source)return;
-      if(value.version!==binding.version){forgetAudioIntent();return;}
+  async function restoreAudioCooldown(host){
+    // Legacy selected-audio hints may carry a failed outcome/cooldown. They no
+    // longer start an independent GET: visible audio uses the photo queue/lock.
+    if(!freshProfile||!audioIntent())return true;
+    try{const binding=await audioBinding(host),value=audioIntent();if(!binding||!value)return true;
+      if(value.owner!==binding.owner){forgetAudioIntent();return true;}
+      if(value.scope!==binding.scope||value.source!==binding.source)return true;
+      if(value.version!==binding.version){forgetAudioIntent();return true;}
       if(value.retry_until>Date.now())rememberRetry(host,host.querySelector('[data-media-open]'),value.retry_until);
-      if(value.blocked||value.retry_until>Date.now()||autoRestoreAttempted)return;
-      autoRestoreAttempted=true;await load(false,true,binding);
-    }catch{}finally{restorePending.delete(host);}
+      if(value.blocked||value.retry_until>Date.now()){
+        host.dataset.mediaPreviewState=value.retry_until>Date.now()?'rate_limited':'retryable';
+        const status=host.querySelector('[data-media-load-status]');if(status)status.textContent=value.retry_until>Date.now()?text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(Math.ceil((value.retry_until-Date.now())/1000))):text('mediaFailed','File could not be downloaded.');
+        updateMediaMenu(host);return false;
+      }
+    }catch{}return true;
   }
+  // Photo and voice/audio share this queue, lock, attempts and tenant cooldown.
+  const automaticKinds=new Set(['image','audio','voice','voice_message','ptt']);
   let photoQueue=[],photoObserver,photoQueued=new WeakSet(),photoProbed=new WeakSet();
   let photoReads=0,photoWake=null;
   const photoPending=new WeakSet(),photoAttempts=new Map(),photoCooldown=new Map();
-  const photoSource=host=>[identity(member),host.dataset.channelId,host.dataset.conversationId,host.dataset.attachmentLeadId,host.dataset.chatAttachment,host.dataset.mediaVersion].join('|');
+  const photoSource=host=>[identity(member),host.dataset.channelId,host.dataset.conversationId,host.dataset.attachmentLeadId,host.dataset.chatAttachment,host.dataset.mediaVersion,host.dataset.mediaKind].join('|');
+  const playing=preview=>['AUDIO','VIDEO'].includes(preview.media?.tagName)&&preview.media.paused===false&&!preview.media.ended;
+  const evictionCandidate=()=>[...previews].find(([,preview])=>!playing(preview)&&!photoVisible(preview.host))||[...previews].find(([,preview])=>!playing(preview));
+  const previewRoom=()=>previews.size<3||!!evictionCandidate();
   function photoVisible(host){
     if(document.hidden||!freshProfile||!member||!host.isConnected||!host.closest?.('#chatRows')||!host.closest('#view-dialogs')?.classList.contains('active'))return false;
     if(document.getElementById('operatorCopilotBackdrop')?.hidden===false)return false;
@@ -64,12 +72,13 @@
     const wait=(photoCooldown.get(String(member?.tenant_id||''))||0)-Date.now();
     if(wait>0){if(photoWake===null)photoWake=setTimeout(()=>{photoWake=null;pumpPhotoCache();},Math.min(3600000,wait+1));return;}
     const jobs=window.navigator?.locks?.request?2:1;
-    while(member&&photoReads<jobs){const index=photoQueue.findIndex(item=>photoVisible(item.host)&&canStartMedia(item.host));if(index<0)return;
+    while(member&&photoReads<jobs&&previewRoom()){const index=photoQueue.findIndex(item=>photoVisible(item.host)&&canStartMedia(item.host));if(index<0)return;
       const {host,load,source,revision}=photoQueue.splice(index,1)[0];if(host.querySelector('[data-media-preview]'))continue;
       photoReads++;photoPending.add(host);photoProbed.add(host);
       const same=()=>revision===epoch&&source===photoSource(host)&&photoVisible(host);
       const acquire=async()=>{
         if(!same()||(photoCooldown.get(String(member?.tenant_id||''))||0)>Date.now())return;
+        if(!await restoreAudioCooldown(host)||!same())return;
         if(await load(false,false,null,true)!=='cache_miss'||!same()||photoAttempts.get(source)===revision)return;
         photoAttempts.set(source,revision);while(photoAttempts.size>200)photoAttempts.delete(photoAttempts.keys().next().value);
         await load(false,false,null,false,true);
@@ -77,11 +86,11 @@
       // Serialize automatic acquisitions across same-origin tabs where supported.
       // Server admission/singleflight still enforces the shared bound without Web Locks.
       const work=window.navigator?.locks?.request?window.navigator.locks.request('tenant-visible-photos.'+String(member.tenant_id),acquire):acquire();
-      void work.catch(()=>{}).finally(()=>{photoReads--;photoPending.delete(host);pumpPhotoCache();});
+      void work.catch(()=>{}).finally(()=>{photoReads--;photoPending.delete(host);if(host.dataset.previewResidentWait==='true'){delete host.dataset.previewResidentWait;photoProbed.delete(host);enqueuePhoto(host);}pumpPhotoCache();});
     }
   }
   function queuePhotoCache(host,load){
-    if(!member||host.dataset.mediaKind!=='image'||host.dataset.connectMedia!=='true'||!host.closest?.('#chatRows')||!/^[a-f0-9]{64}$/.test(host.dataset.mediaVersion||''))return;
+    if(!member||!automaticKinds.has(host.dataset.mediaKind)||host.dataset.connectMedia!=='true'||!host.closest?.('#chatRows')||!/^[a-f0-9]{64}$/.test(host.dataset.mediaVersion||''))return;
     host._photoCacheLoad=load;
     if(photoQueued.has(host)){enqueuePhoto(host);pumpPhotoCache();return;}photoQueued.add(host);
     if(window.IntersectionObserver){if(!photoObserver)photoObserver=new IntersectionObserver(entries=>{for(const entry of entries){if(entry.isIntersecting)enqueuePhoto(entry.target);else photoProbed.delete(entry.target);}stopHiddenPhotos();},{threshold:.01});photoObserver.observe(host);}
@@ -101,9 +110,9 @@
     if(host?.dataset.nativeAudio!=='true')return;
     const audio=host.querySelector('.operator-native-audio'),busy=primary?.getAttribute('aria-busy')==='true';
     const loaded=!!audio?.getAttribute('src')&&audio?.dataset.mediaPreview==='audio';
-    const blocked=['unavailable','forbidden','too_large','invalid','terminal'].includes(host.dataset.mediaPreviewState);
+    const blocked=['unavailable','forbidden','too_large','invalid','terminal'].includes(host.dataset.mediaPreviewState)&&!(host.dataset.mediaPreviewState==='unavailable'&&host.dataset.photoAutoFailed==='true');
     if(audio){audio.hidden=false;audio.tabIndex=loaded?0:-1;const controls=audio.closest('.operator-audio-controls');if(controls){controls.inert=!loaded;controls.setAttribute('aria-disabled',String(!loaded));}}
-    if(primary){primary.hidden=loaded;primary.disabled=busy||blocked;primary.textContent=busy?text('loading','Loading…'):['retryable','rate_limited'].includes(host.dataset.mediaPreviewState)?text('retryAttachment','Retry loading'):text('loadAttachment','Load file');}
+    if(primary){primary.hidden=true;primary.disabled=busy||blocked;primary.textContent=busy?text('loading','Loading…'):['retryable','rate_limited'].includes(host.dataset.mediaPreviewState)||host.dataset.mediaPreviewState==='unavailable'&&host.dataset.photoAutoFailed==='true'?text('retryAttachment','Retry loading'):text('loadAttachment','Load file');}
     if(menuLoad)menuLoad.disabled=busy||blocked;
     const status=host.querySelector('[data-media-load-status]'),language=window.tenantI18n?.language||'en';
     const ready=({ru:'Файл загружен',az:'Səs yükləndi',en:'Audio loaded'})[language]||'Audio loaded';
@@ -206,6 +215,7 @@
           return;
         }
         if(!cachedOnly&&!canStartMedia(host)){status.textContent=busyText();return;}
+        if(!previewRoom()){host.dataset.previewResidentWait='true';status.textContent=busyText();return 'resident_busy';}
         const current=epoch,who=identity(member),selected=viewLead(host)||host.dataset.attachmentLeadId,controller=new AbortController();
         controller.audioReload=automatic;controller.connectMedia=host.dataset.connectMedia==='true';if(!cachedOnly){active.add(controller);pendingKeys.set(requestKey,controller);}button.disabled=true;button.setAttribute('aria-busy','true');if(menuLoad)menuLoad.disabled=true;status.textContent=' '+text('loading','Yüklənir…');updateMediaMenu(host);
         if(serverCacheOnly||photoAuto)controller.photoHost=host;
@@ -222,6 +232,7 @@
           else{
             const response=await fetch('/api/platform/crm/chat/attachment?'+query,
               {credentials:'same-origin',cache:'no-store',signal:controller.signal});
+            if(!valid()&&!canRetain())return;
             if(serverCacheOnly&&response.status===204){if(valid()){host.dataset.mediaPreviewState='unloaded';status.textContent='';}return 'cache_miss';}
             if(!response.ok){if(photoAuto&&[404,410].includes(response.status))host.dataset.photoAutoFailed='true';photoBackpressure(host,response);const data=await response.json().catch(()=>({}));const key=data.code==='media_duration_limit'?'mediaDuration':({404:'mediaUnavailable',410:'mediaUnavailable',413:'mediaLarge',415:'mediaInvalid',429:'mediaBusy'}[response.status]||'mediaFailed');await failAudio(host,intentBinding,response.status,response.status===429?Date.now()+retryDelay(response)*1000:0);if(response.status===429){const seconds=retryDelay(response),until=Date.now()+seconds*1000;rememberRetry(host,button,until,host.dataset.chatAttachment||'');host.dataset.mediaPreviewState='rate_limited';updateMediaMenu(host);throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds)));}host.dataset.mediaPreviewState=mediaFailureState(response.status);updateMediaMenu(host);throw Error(response.status===403?text('mediaForbidden','You do not have access to this file.'):response.status===404||response.status===410?text(key,'File is unavailable or expired.'):response.status===413?text(key,'File is too large.'):response.status===415?text(key,'File format is not supported.'):data.error||text('mediaFailed','File could not be downloaded.'));}
             servedFilename=dispositionName(response.headers.get('Content-Disposition'))||servedFilename;const declaredSize=Number(response.headers.get('Content-Length'));contentLength=response.headers.get('Content-Length')||'';
@@ -242,6 +253,7 @@
           }
           if(!valid()){if(canRetain()&&mediaCache.has(cacheKey)){loadedKeys.add(cacheKey);while(loadedKeys.size>3)loadedKeys.delete(loadedKeys.values().next().value);restoreRetained=true;}return;}
           if(!blob.size||blob.size>MAX_PREVIEW_BYTES){host.dataset.mediaPreviewState='too_large';updateMediaMenu(host);throw Error('Fayl ölçüsü düzgün deyil.');}
+          if(!previewRoom()){host.dataset.previewResidentWait='true';status.textContent=busyText();return 'resident_busy';}
           blobUrl=URL.createObjectURL(blob);urls.add(blobUrl);
           const type=blob.type.split(';')[0],expected=String(host.dataset.mediaKind||'').toLowerCase();if(expected==='image'&&!type.startsWith('image/')){host.dataset.mediaPreviewState='invalid';updateMediaMenu(host);throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));}if(['audio','voice','voice_message','ptt'].includes(expected)&&!type.startsWith('audio/')&&type!=='application/ogg'){host.dataset.mediaPreviewState='invalid';updateMediaMenu(host);throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));}if(expected==='video'&&!type.startsWith('video/')){host.dataset.mediaPreviewState='invalid';updateMediaMenu(host);throw Error(text('mediaInvalid','Fayl açıla bilmədi.'));}let node,media;
           if(['image/jpeg','image/png','image/webp','image/gif'].includes(type)){
@@ -261,18 +273,19 @@
             media.onerror=()=>{previews.delete(blobUrl);if(valid()){void failAudio(host,intentBinding,415);stop(media);loadedKeys.delete(cacheKey);const invalidBlob=mediaCache.get(cacheKey);if(invalidBlob===blob){cacheBytes-=invalidBlob.size;mediaCache.delete(cacheKey);}if(node.classList?.contains('operator-native-audio')){node.removeAttribute('src');node.load?.();delete node.dataset.mediaPreview;}else node.remove();host.dataset.mediaPreviewState='invalid';button.hidden=!!host.querySelector('.operator-native-audio');status.textContent=' '+text('mediaInvalid','Fayl açıla bilmədi. Yenidən yoxlayın.');updateMediaMenu(host);}URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);};
             if(media.tagName!=='AUDIO')media.src=blobUrl;
           }
-          // Keep at most three decoded previews in this tab, not the whole history.
-          if(previews.size>=3){const [oldUrl,old]=previews.entries().next().value;stop(old.media);if(old.node.classList?.contains('operator-native-audio')){old.node.removeAttribute('src');old.node.load?.();delete old.node.dataset.mediaPreview;old.button.hidden=true;delete old.host.dataset.mediaPreviewState;updateMediaMenu(old.host);}else{old.node.remove();old.button.hidden=false;delete old.host.dataset.mediaPreviewState;updateMediaMenu(old.host);}URL.revokeObjectURL(oldUrl);urls.delete(oldUrl);previews.delete(oldUrl);loadedKeys.delete(old.cacheKey);}
+          // Three resident previews, preferring idle/offscreen eviction. Never
+          // interrupt user playback to make room for a background acquisition.
+          if(previews.size>=3){const [oldUrl,old]=evictionCandidate();stop(old.media);if(old.node.classList?.contains('operator-native-audio')){old.node.removeAttribute('src');old.node.load?.();delete old.node.dataset.mediaPreview;old.button.hidden=true;delete old.host.dataset.mediaPreviewState;updateMediaMenu(old.host);}else{old.node.remove();old.button.hidden=false;delete old.host.dataset.mediaPreviewState;updateMediaMenu(old.host);}URL.revokeObjectURL(oldUrl);urls.delete(oldUrl);previews.delete(oldUrl);loadedKeys.delete(old.cacheKey);}
           previews.set(blobUrl,{node,button,media,host,cacheKey});if(mediaCache.has(cacheKey)){loadedKeys.delete(cacheKey);loadedKeys.add(cacheKey);while(loadedKeys.size>3)loadedKeys.delete(loadedKeys.values().next().value);}
           if(!node.closest?.('.operator-audio-controls')){if(host.insertBefore)host.insertBefore(node,button);else host.append(node);}button.hidden=true;status.textContent='';
-          delete host.dataset.mediaRetryAt;retryUntil.delete(retryKey(host,host.dataset.chatAttachment||''));host.dataset.mediaPreviewState='loaded';updateMediaMenu(host);if(!cachedOnly&&!automatic)void rememberAudio(host);
-        }catch(error){if(blobUrl){URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);}if(valid()){if(controller.photoStopped){host.dataset.mediaPreviewState='unloaded';status.textContent='';return;}if(automatic)blockAudioIntent(intentBinding,0);if(!host.dataset.mediaPreviewState||host.dataset.mediaPreviewState==='loaded')host.dataset.mediaPreviewState='retryable';status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;updateMediaMenu(host);}}
+          delete host.dataset.mediaRetryAt;retryUntil.delete(retryKey(host,host.dataset.chatAttachment||''));host.dataset.mediaPreviewState='loaded';updateMediaMenu(host);if(!cachedOnly&&!automatic&&!photoAuto&&!serverCacheOnly)void rememberAudio(host);
+          if(['AUDIO','VIDEO'].includes(media?.tagName)){media.addEventListener('pause',pumpPhotoCache);media.addEventListener('ended',pumpPhotoCache);}
+        }catch(error){if(blobUrl){URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);}if(valid()){if(controller.photoStopped){host.dataset.mediaPreviewState='unloaded';status.textContent='';return;}if(automatic)blockAudioIntent(intentBinding,0);if(!host.dataset.mediaPreviewState||['loaded','unloaded'].includes(host.dataset.mediaPreviewState))host.dataset.mediaPreviewState='retryable';status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;updateMediaMenu(host);}}
         finally{clearTimeout(timer);active.delete(controller);if(pendingKeys.get(requestKey)===controller)pendingKeys.delete(requestKey);button.setAttribute('aria-busy','false');if(menuLoad)menuLoad.disabled=false;updateMediaMenu(host);if(restoreRetained)bind();pumpPhotoCache();}
       };
       button.onclick=()=>load();
       if(member&&/^[a-f0-9]{64}$/.test(host.dataset.mediaVersion||'')&&loadedKeys.has(previewKey())&&mediaCache.has(previewKey()))void load(true);
-      else if(host.dataset.mediaKind==='image')queuePhotoCache(host,load);
-      else void restoreAudio(host,load);
+      else queuePhotoCache(host,load);
     });
   }
   document.addEventListener('tenant-profile',event=>{const nextPolicy=policy(event.detail),changed=!!profilePolicy&&profilePolicy!==nextPolicy;if(profilePolicy!==nextPolicy)profileRevision++;if(changed){freshProfile=false;forgetAudioIntent();clear(true);}member=event.detail.member;profilePolicy=nextPolicy;if(!member){freshProfile=false;forgetAudioIntent();}else if(changed)refreshAudioProfile();bind();});

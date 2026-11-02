@@ -31,7 +31,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     await page.goto('https://crm.test/app?view=dialogs');const documentLifetime=await page.evaluate(()=>window.documentLifetime);
     await page.locator('.operator-row').first().click();await page.locator('#dialogHelperType').waitFor({state:'attached'});
     // Decode a real synthetic WAV. Stable-source rerenders must keep this exact player.
-    await page.locator('[data-chat-attachment="voice-1"] [data-media-open]').click();
+    assert.equal(await page.locator('[data-chat-attachment="voice-1"] [data-media-open]').isVisible(),false,'visible voice loads automatically without a lower button');
     await page.waitForFunction(()=>document.querySelector('audio.operator-native-audio')?.readyState>=1);
     await page.evaluate(()=>{window.keptPlayer=document.querySelector('audio.operator-native-audio');window.keptPlayer.currentTime=2;window.keptPlayer.play();});
     const mediaCalls=()=>calls.filter(c=>c.path.endsWith('/crm/chat/attachment')).length;
