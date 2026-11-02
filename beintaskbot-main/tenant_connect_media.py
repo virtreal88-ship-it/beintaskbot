@@ -50,6 +50,8 @@ def _media_limited(seconds):
 
 def _run_media(item, max_bytes, preview_documents):
     # Acquisition outlives every caller's task AND event loop (AI uses asyncio.run).
+    # This is a coroutine deadline, not a hard wall clock: asyncio.run must join
+    # default-executor DNS threads. The physical slot stays held until it returns.
     async def acquire():
         async with asyncio.timeout(_MEDIA_FLIGHT_TIMEOUT):
             return await _download_media(item, max_bytes=max_bytes, preview_documents=preview_documents)

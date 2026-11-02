@@ -207,3 +207,32 @@ def test_background_classification_reserves_foreground_slot_through_joins_and_ca
         assert await media.download_media(item(message='auto-b'),automatic_photo=True)==(b'photo','image/png')
         assert transport.await_count==3
     asyncio.run(scenario())
+
+
+def test_blocking_dns_shutdown_keeps_physical_slots_until_actual_completion(monkeypatch):
+    # Model ThreadedResolver's getaddrinfo: cancellation cannot stop its OS thread.
+    release=threading.Event();cancelled=0;count_lock=threading.Lock()
+    async def acquire(*_args,**_kwargs):
+        nonlocal cancelled
+        try:await asyncio.to_thread(release.wait,3)
+        except asyncio.CancelledError:
+            with count_lock:cancelled+=1
+            raise
+    transport=AsyncMock(side_effect=acquire);monkeypatch.setattr(media,'_download_media',transport)
+    monkeypatch.setattr(media,'_MEDIA_FLIGHT_TIMEOUT',.02)
+    async def scenario():
+        a=asyncio.create_task(media.download_media(item(message='dns-a')))
+        b=asyncio.create_task(media.download_media(item(message='dns-b')))
+        try:
+            while cancelled<2:await asyncio.sleep(.001)
+            assert not a.done() and not b.done(), 'asyncio.run still joins the DNS-like executor work'
+            assert media._media_active==2 and len(media._media_flights)==2
+            for n in range(5):
+                with pytest.raises(TenantLinearError) as error:await media.download_media(item(message='overflow-'+str(n)))
+                assert error.value.status==429
+            assert transport.await_count==2, 'deadline must not release admission before physical completion'
+        finally:
+            release.set();results=await asyncio.gather(a,b,return_exceptions=True)
+        assert all(isinstance(result,TenantLinearError) and result.status==502 for result in results)
+        assert media._media_active==0 and not media._media_flights
+    asyncio.run(scenario())
