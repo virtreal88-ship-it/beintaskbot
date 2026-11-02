@@ -591,7 +591,7 @@
   $('deactivateStaleConnectWebhooks').onclick=deactivateStaleConnectWebhooks;
   $('testKommo').onclick=async()=>{const b=$('testKommo');b.disabled=true;try{const d=await api('/api/platform/integrations/kommo/test');$('integrationInfo').textContent=`Kommo işləyir: ${d.account?.name||'bağlantı təsdiqləndi'}`}catch(e){$('integrationInfo').textContent=e.message}finally{b.disabled=false}};
   $('disconnectKommo').onclick=async()=>{if(!confirm('Kommo bağlantısı ayrılsın? Yenidən qoşmaq üçün OAuth lazımdır.'))return;try{await api('/api/platform/integrations/disconnect',{method:'POST',body:JSON.stringify({provider:'kommo'})});loadSettings()}catch(e){alert(e.message)}};
-  $('logout').onclick=async()=>{if(!confirm('Bu cihazda sistemdən çıxmaq istəyirsiniz?'))return;const b=$('logout');b.disabled=true;try{if(window.tenantPushLogout)await window.tenantPushLogout();await api('/api/platform/logout',{method:'POST',body:'{}'});location.href='/login'}catch(e){alert(e.message)}finally{b.disabled=false}};
+  $('logout').onclick=async()=>{if(!confirm('Bu cihazda sistemdən çıxmaq istəyirsiniz?'))return;const b=$('logout');b.disabled=true;try{if(window.tenantPushLogout)await window.tenantPushLogout();await api('/api/platform/logout',{method:'POST',body:'{}'});try{await window.tenantCustomerVoiceForget?.()}catch{}location.href='/login'}catch(e){alert(e.message)}finally{b.disabled=false}};
   (async()=>{try{await api('/api/platform/me')}catch(e){if(e.message==='Request scope changed'){try{await window.tenantRequestCoordinator.revalidateProfile()}catch{location.href='/login';return}}else{location.href='/login';return}}
     activateView(state.view);
     renderProfile(state.me);
@@ -630,6 +630,10 @@
 <script src="/assets/tenant-night-agent-template.js"></script>
 <script src="/assets/tenant-agent-library.js"></script>
 <script src="/assets/tenant-operator-dialogs.js"></script>
+<script src="/assets/tenant-voice-recorder.js"></script>
+<script src="/assets/tenant-microphone-lease.js"></script>
+<script src="/assets/tenant-customer-voice-store.js"></script>
+<script src="/assets/tenant-customer-voice-ui.js"></script>
 <script src="/assets/tenant-dialog-consultations.js"></script>
 <script src="/assets/tenant-owner-asr-comparison.js"></script>
 <script src="/assets/tenant-saved-only-copilot.js"></script>

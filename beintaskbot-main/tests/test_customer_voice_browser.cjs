@@ -1,0 +1,95 @@
+/* Real Chromium, IndexedDB, Web Locks and synthetic Web Audio. No provider traffic. */
+const assert = require('node:assert/strict');
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const { chromium } = require('playwright');
+
+const docs = path.resolve(__dirname, '../docs');
+const scripts = ['tenant-voice-recorder.js','tenant-microphone-lease.js','tenant-customer-voice-store.js','tenant-customer-voice-ui.js'];
+const html = `<!doctype html><meta charset="utf-8"><div id="view-dialogs" class="active"><div class="operator-chat-scrollarea" style="height:80px;overflow:auto"><div id="chatRows"><article data-customer-voice-status="true" data-customer-voice-lead="7" data-message-id="6b9f1ac1-d693-4f9f-a400-d9b8372306f8">voice</article></div></div><div class="operator-composer">
+ <textarea id="chatText"></textarea><div class="operator-composer-actions"><button id="sendChat">send</button></div></div></div>
+ <script>window.tenantI18n={language:'ru'};const lead=new URLSearchParams(location.search).get('lead')||'7';
+ window.fixtureRoute={provider:'connect',lead_id:Number(lead),channel_id:'channel',conversation_id:'chat-'+lead};
+ window.tenantOperator={member:{tenant_id:'tenant',telegram_id:20},get currentDialog(){return window.fixtureRoute},openDialog:async()=>{window.reloads=(window.reloads||0)+1},updateCustomerVoiceDelivery:(id,state)=>{window.deliveryUpdate={id,state}}};
+ const contexts=[];Object.defineProperty(navigator.mediaDevices,'getUserMedia',{value:async()=>{if(window.denyMicrophone)throw new DOMException('denied','NotAllowedError');const c=new AudioContext(),o=c.createOscillator(),d=c.createMediaStreamDestination();o.connect(d);o.start();contexts.push([c,o]);return d.stream;}});</script>
+ ${scripts.map(s=>`<script src="/assets/${s}"></script>`).join('')}
+ <script>document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'))</script>`;
+
+async function main(){
+  const server=http.createServer((req,res)=>{
+    const name=(req.url||'').split('?')[0].replace(/^\/assets\//,'');
+    if(scripts.includes(name)){res.setHeader('content-type','application/javascript');return res.end(fs.readFileSync(path.join(docs,name)));}
+    res.setHeader('content-type','text/html; charset=utf-8');res.end(html);
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const origin=`http://127.0.0.1:${server.address().port}`;
+  const executablePath=process.env.CHROMIUM_EXECUTABLE_PATH || (fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':undefined);
+  const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{}),args:['--no-sandbox']});
+  let posts=0,checks=0,accepted=false,enabled=true;
+  const context=await browser.newContext();
+  await context.route('**/api/platform/crm/chat/**',async route=>{
+    const url=new URL(route.request().url());
+    if(url.pathname.endsWith('/voice-capability'))return route.fulfill({json:{success:true,enabled}});
+    if(url.pathname.endsWith('/voice-status'))return route.fulfill({json:{success:true,delivery_state:'read'}});
+    if(url.pathname.endsWith('/send-voice')){posts++;return route.abort('connectionfailed');}
+    if(url.pathname.endsWith('/voice-receipt')){checks++;return route.fulfill({json:accepted?
+      {success:true,state:'accepted',provider_accepted:true,delivery_state:'sent',delivered:false}:
+      {success:true,state:'unknown',provider_accepted:false,retry_safe:false}});}
+    throw Error('Unexpected request '+url.pathname);
+  });
+  try{
+    const page=await context.newPage();await page.setViewportSize({width:390,height:844});await page.goto(origin);await page.locator('.operator-voice-mic').waitFor({state:'visible'});
+    await page.waitForFunction(()=>window.deliveryUpdate?.state==='read');
+    await page.locator('.operator-voice-mic').click();await page.getByRole('button',{name:'Остановить'}).waitFor({state:'visible'});
+    const other=await context.newPage();await other.goto(origin+'/?lead=8');await other.locator('.operator-voice-mic').click();
+    await other.getByText('Микрофон уже используется в другой вкладке или голосовом режиме.').waitFor({state:'visible'});
+    await page.getByRole('button',{name:'Отменить'}).click();
+    await other.locator('.operator-voice-mic').click();await other.getByRole('button',{name:'Остановить'}).waitFor({state:'visible'});
+    await other.getByRole('button',{name:'Отменить'}).click();await other.close();
+    assert.equal(posts,0,'cancellation never sends');
+
+    await page.locator('.operator-voice-mic').click();await page.getByRole('button',{name:'Остановить'}).waitFor({state:'visible'});
+    await page.evaluate(()=>{document.dispatchEvent(new CustomEvent('tenant-chat-render'));document.querySelector('.operator-composer').innerHTML='<textarea id="chatText"></textarea><div class="operator-composer-actions"><button id="sendChat">send</button></div>';document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));});
+    await page.getByRole('button',{name:'Остановить'}).waitFor({state:'visible'});
+    await page.waitForTimeout(350);await page.getByRole('button',{name:'Остановить'}).click();
+    await page.getByRole('button',{name:'Отправить голосовое'}).waitFor({state:'visible'});
+    assert.equal(await page.locator('audio').isVisible(),true);assert.equal(posts,0,'preview never sends');
+
+    await page.evaluate(()=>{document.dispatchEvent(new CustomEvent('tenant-chat-close'));window.fixtureRoute={...window.fixtureRoute,lead_id:9,conversation_id:'chat-9'};document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));});
+    await page.locator('.operator-voice-mic').waitFor({state:'visible'});
+    assert.equal(await page.locator('.operator-customer-voice button').filter({hasText:'Отправить голосовое'}).isVisible(),false,'other dialog cannot send old audio');
+    await page.evaluate(()=>{document.dispatchEvent(new CustomEvent('tenant-chat-close'));window.fixtureRoute={...window.fixtureRoute,lead_id:7,conversation_id:'chat-7'};document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));});
+    await page.getByRole('button',{name:'Отправить голосовое'}).waitFor({state:'visible'});
+
+    await page.evaluate(()=>{const button=[...document.querySelectorAll('.operator-customer-voice button')].find(n=>n.textContent==='Отправить голосовое');button.click();button.click();});
+    await page.getByRole('button',{name:'Проверить статус'}).waitFor({state:'visible'});
+    assert.equal(posts,1,'one explicit send');
+    await page.reload();await page.getByRole('button',{name:'Проверить статус'}).waitFor({state:'visible'});
+    await page.getByRole('button',{name:'Проверить статус'}).click();assert.equal(posts,1,'unknown check is read-only');assert.equal(checks,1);
+    accepted=true;await page.getByRole('button',{name:'Проверить статус'}).click();
+    await page.getByText('Провайдер принял сообщение. Доставка клиенту пока не подтверждена.').waitFor({state:'visible'});
+    assert.equal(posts,1);assert.equal(checks,2);
+
+    await page.evaluate(()=>{window.denyMicrophone=true;});await page.locator('.operator-voice-mic').click();
+    await page.getByText('Доступ к микрофону запрещён. Разрешите микрофон в настройках сайта браузера и попробуйте снова.').waitFor({state:'visible'});
+    const race=await context.newPage();await race.goto(origin+'/?lead=11');
+    const create=async p=>p.evaluate(async()=>createTenantVoiceStore().createDraft({key:'synthetic-storage-race',request_id:crypto.randomUUID(),state:'draft',blob:new Blob(['synthetic'])}));
+    assert.equal((await Promise.all([create(page),create(race)])).filter(Boolean).length,1,'concurrent drafts cannot overwrite each other');
+    const id=await page.evaluate(async()=>(await createTenantVoiceStore().get('synthetic-storage-race')).request_id);
+    const claim=async p=>p.evaluate(async id=>createTenantVoiceStore().claim('synthetic-storage-race',id),id);
+    assert.equal((await Promise.all([claim(page),claim(race)])).filter(Boolean).length,1,'only one tab claims a draft');
+    await page.evaluate(async id=>{const s=createTenantVoiceStore();await s.markUnknown('synthetic-storage-race',id);if(await s.removeDraft('synthetic-storage-race',id))throw Error('unknown removed as draft');await s.removeAccepted('synthetic-storage-race',id);},id);
+    const logout=await page.evaluate(async()=>{
+      const s=createTenantVoiceStore(),a=JSON.stringify(['tenant','20','101','channel','a']),b=JSON.stringify(['tenant','20','102','channel','b']);
+      await s.createDraft({key:a,request_id:'draft-id',state:'draft',blob:new Blob(['private'])});
+      await s.createDraft({key:b,request_id:'pending-id',state:'draft',blob:new Blob(['private'])});await s.claim(b,'pending-id');
+      await window.tenantCustomerVoiceForget();return {draft:await s.get(a),pending:await s.get(b)};
+    });
+    assert.equal(logout.draft,undefined);assert.equal(logout.pending.state,'unknown');assert.equal(logout.pending.blob,null);
+    enabled=false;const disabled=await context.newPage();await disabled.goto(origin+'/?lead=10');await disabled.waitForTimeout(250);
+    assert.equal(await disabled.locator('.operator-voice-mic').count(),0,'disabled capability is not shown');
+    console.log('PASS Chromium: cancellation, two-tab exclusion, preview, dialog isolation, unknown recovery, permission error, disabled feature');
+  }finally{await context.close();await browser.close();await new Promise(resolve=>server.close(resolve));}
+}
+main().catch(error=>{console.error(error);process.exitCode=1});
