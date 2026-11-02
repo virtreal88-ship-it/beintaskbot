@@ -25,9 +25,13 @@ def resolve(cur, tenant, command):
 def binding(context):
     # Instructions/company instructions are included so a settings change also
     # invalidates cached results and in-flight responses.
-    return hashlib.sha256(json.dumps({k: str(context.get(k) or '') for k in
-        ('agent_id', 'version', 'assignment_revision', 'model', 'instructions', 'language', 'style', 'company_instructions')},
-        sort_keys=True).encode()).hexdigest()
+    value={k: str(context.get(k) or '') for k in
+        ('agent_id', 'version', 'assignment_revision', 'model', 'instructions', 'language', 'style', 'company_instructions')}
+    # Only server-created case-media work may bind to the current assignment
+    # channel while reading an approved historical source from another route.
+    if context.get('case_assignment_channel_id'):
+        value['case_assignment_channel_id']=str(context['case_assignment_channel_id'])
+    return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
 
 def require_assignment(cur, tenant, channel, conversation, expected_agent=None):
     from tenant_operator_case_submission import assignment

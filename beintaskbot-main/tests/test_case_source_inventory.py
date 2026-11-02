@@ -310,9 +310,39 @@ def test_historical_group_source_is_case_and_grant_bound(ready,monkeypatch):
     assert provider.call_count==provider_calls,'an unapproved case source cannot reach the model'
     prepared=service.prepare(PROFILE,{**claimed['route'],'request_id':str(fragment['id'])})
     assert prepared['id']==str(fragment['id'])
+    # The pre-provider fence must re-resolve the same assigned group channel;
+    # it may not silently fall back to the historical source channel.
+    before_preflight=provider.call_count
+    service.check_active(PROFILE,prepared)
+    assert prepared['route']['dialog_ai_context_channel_id']==CA
+    assert provider.call_count==before_preflight
+    altered_route={**prepared['route'],'dialog_ai_context_channel_id':oldchannel}
+    db.execute('UPDATE saas_knowledge_extractions SET route=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps(altered_route),A,prepared['id']));db.commit()
+    with pytest.raises(TenantLinearError):service.check_active(PROFILE,prepared)
+    db.execute('UPDATE saas_knowledge_extractions SET route=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps(prepared['route']),A,prepared['id']));db.commit()
+    altered_source={**prepared['route'],'channel_id':CA}
+    db.execute('UPDATE saas_knowledge_extractions SET route=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps(altered_source),A,prepared['id']));db.commit()
+    with pytest.raises(TenantLinearError):service.check_active(PROFILE,prepared)
+    assert provider.call_count==before_preflight
+    db.execute('UPDATE saas_knowledge_extractions SET route=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+      (json.dumps(prepared['route']),A,prepared['id']));db.commit()
+    db.execute("UPDATE saas_ai_media_grants SET status='revoked' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,campaign));db.commit()
+    with pytest.raises(TenantLinearError):service.check_active(PROFILE,prepared)
+    assert provider.call_count==before_preflight
+    db.execute("UPDATE saas_ai_media_grants SET status='active' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,campaign));db.commit()
     db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',
       (json.dumps({**raw,'mediaId':'changed'}),message));db.commit()
     with db.cursor() as cur,pytest.raises(TenantLinearError):worker.check_fence(cur,A,fragment['id'])
+    db.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',(json.dumps(raw),message));db.commit()
+    # Exercise the final assignment recheck and persistence path without
+    # invoking the mocked model or any media provider.
+    monkeypatch.setattr(spending,'_connect',lambda:db)
+    service.finish(PROFILE,prepared,values=[],usage=None,error='',attempted=False)
+    assert provider.call_count==before_preflight
+    assert db.execute('SELECT status FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,prepared['id']))[0]['status']=='completed'
 
 
 def test_verified_case_interval_allows_only_matching_current_channel_media(ready,monkeypatch):

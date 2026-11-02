@@ -28,6 +28,38 @@ Do not include names, contact details, addresses, identifiers, secrets, private 
 Write every explanatory case field in Azerbaijani (AZ), independent of the employee interface language or source conversation language. Translate title, symptoms, cause, proposed resolution, operator_actions and outcome into Azerbaijani; keep exact evidence quotes, product names, commands, errors, function names, numbers and message references unchanged. Preserve the meaning and certainty of the source; never add technical facts. No knowledge is published automatically.
 """
 
+def _resolve_dialog_context(cur,tenant,route,request_id=None):
+    """Revalidate AI identity on the exact assigned route for scoped case media."""
+    from tenant_dialog_ai_context import resolve as dialog_context
+    context_route=route
+    assignment_channel=route.get('dialog_ai_context_channel_id')
+    if assignment_channel:
+        approved=set(route.get('approved_channel_ids') or [])
+        case_extension=route.get('dialog_ai_context_case_extension_id')
+        if (not case_extension or not route.get('media_grant_id') or str(assignment_channel) not in approved
+                or str(route.get('channel_id') or '') not in approved or not request_id):
+            raise TenantLinearError('Case extension source changed.',409)
+        cur.execute('''SELECT f.route,c.status AS campaign_status,g.status AS grant_status,g.approved_at
+          FROM saas_knowledge_campaign_fragments f
+          JOIN saas_knowledge_campaigns c ON c.tenant_id=f.tenant_id AND c.id=f.campaign_id
+          JOIN saas_ai_media_grants g ON g.tenant_id=c.tenant_id AND g.campaign_id=c.id AND g.id=c.id
+          WHERE f.tenant_id=%s::uuid AND f.id=%s::uuid''',(tenant,request_id))
+        fragment=cur.fetchone()
+        stored=(fragment or {}).get('route') or {}
+        if (not fragment or fragment.get('campaign_status')!='running'
+                or fragment.get('grant_status')!='active' or not fragment.get('approved_at')
+                or any((stored.get(k)!=route.get(actual)) for k,actual in (
+                ('case_extension_id','dialog_ai_context_case_extension_id'),
+                ('channel_id','channel_id'),('conversation_id','conversation_id'),
+                ('media_grant_id','media_grant_id'),('analysis_agent_id','dialog_ai_agent_id'),
+                ('approved_channel_ids','approved_channel_ids')))):
+            raise TenantLinearError('Case extension source changed.',409)
+        context_route={**route,'channel_id':assignment_channel}
+    context=dialog_context(cur,tenant,context_route)
+    if assignment_channel:
+        context={**context,'case_assignment_channel_id':str(assignment_channel)}
+    return context
+
 
 class LiveExtractionDisabled(Exception):
     """A live queue job was safely stopped before its next provider call."""
@@ -52,7 +84,7 @@ def prepare(profile,data,review=None,training=None):
               JOIN saas_knowledge_campaigns c ON c.tenant_id=f.tenant_id AND c.id=f.campaign_id
               WHERE f.tenant_id=%s::uuid AND f.id=%s::uuid''',(tenant,request_id))
             campaign_source=cur.fetchone()
-            from tenant_dialog_ai_context import resolve as dialog_context, binding as dialog_binding
+            from tenant_dialog_ai_context import binding as dialog_binding
             context_command=data
             # A case-media fragment can contain approved historical sources
             # from another channel than the group's current assignment. Resolve
@@ -85,7 +117,9 @@ def prepare(profile,data,review=None,training=None):
                             and str(item.get('channel_id') or '') in approved]
                         if len(matches)==1:
                             context_command={**data,'channel_id':matches[0]['channel_id']}
-            context=dialog_context(cur,tenant,context_command)
+            context=_resolve_dialog_context(cur,tenant,context_command)
+            if context_command['channel_id']!=data['channel_id']:
+                context={**context,'case_assignment_channel_id':str(context_command['channel_id'])}
             if data.get('analysis_agent_id') and str(data['analysis_agent_id'])!=str(context['agent_id']):
                 raise TenantLinearError('Анализ выполняет назначенный агент диалога.',409)
             data={**data,'analysis_agent_id':str(context['agent_id'])}
@@ -166,6 +200,9 @@ def prepare(profile,data,review=None,training=None):
             item=review['snapshot'] if review else store.snapshot(cur,profile,data)
             item['route']['dialog_ai_binding']=dialog_binding(context)
             item['route']['dialog_ai_agent_id']=str(context['agent_id'])
+            if context.get('case_assignment_channel_id'):
+                item['route']['dialog_ai_context_channel_id']=context['case_assignment_channel_id']
+                item['route']['dialog_ai_context_case_extension_id']=str(data.get('case_extension_id') or '')
             if training:
                 from tenant_operator_case_submission import validate
                 target=validate(cur,profile,data,training)
@@ -480,8 +517,8 @@ def finish(profile,item,values,usage,error,attempted,proposal=None,accounting_us
                 if item.get('training'):
                     from tenant_operator_case_submission import assignment
                     assignment(cur,tenant,row['route']['channel_id'],row['route']['conversation_id'],item['training'])
-                from tenant_dialog_ai_context import resolve as dialog_context, binding as dialog_binding
-                current=dialog_context(cur,tenant,row['route'])
+                from tenant_dialog_ai_context import binding as dialog_binding
+                current=_resolve_dialog_context(cur,tenant,row['route'],row['id'])
                 if str(current['agent_id'])!=str(item['agent_id']) or row['route'].get('dialog_ai_binding')!=dialog_binding(current):
                     raise TenantLinearError('Назначение или настройки агента изменились.',409)
             except TenantLinearError:
@@ -585,8 +622,8 @@ def check_active(profile,item):
     with _connect() as conn:
         with conn.cursor() as cur:
             row=store.extraction_row(cur,item['tenant'],item['id']);store.evidence(cur,profile,row)
-            from tenant_dialog_ai_context import resolve as dialog_context, binding as dialog_binding
-            context=dialog_context(cur,item['tenant'],row['route'])
+            from tenant_dialog_ai_context import binding as dialog_binding
+            context=_resolve_dialog_context(cur,item['tenant'],row['route'],item['id'])
             if str(context['agent_id'])!=str(item['agent_id']) or row['route'].get('dialog_ai_binding')!=dialog_binding(context):
                 raise TenantLinearError('Назначение или настройки агента изменились.',409)
             cur.execute('SELECT emergency_stop,enabled FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid',(item['tenant'],))
