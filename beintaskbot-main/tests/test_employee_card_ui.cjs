@@ -35,12 +35,23 @@ const label=form=>[...form.querySelectorAll('input[name],select[name]')].map(nod
   const b2=await mount({row:{card_version:null,editable_fields:['display_name']}});try{const form=edit(b2);assert.equal(form.elements.namedItem('display_name').readOnly,true);submit(b2,form);await settle();assert.equal(writes(b2).length,0)}finally{b2.close()}
  }
  console.log('PASS EMP01 exact opaque version/local-only changes, inactive save stays inactive, explicit status transition and server-owned protected/self/owner restrictions fail closed');
- for(const language of ['ru','az','en']){
-  const b=await mount({language,row:{permissions:['tasks','finance','legacy:retained'],explicit_permissions:['tasks','finance','legacy:retained'],editable_fields:['active','whatsapp_numbers'],read_only_reasons:{display_name:'permission_scope',role:'permission_scope',permissions:'permission_scope'}}});try{
-   const form=edit(b);assert.equal(form.elements.namedItem('display_name').readOnly,true);assert.equal(form.elements.namedItem('role').disabled,true);assert.equal(form.querySelector('fieldset').disabled,true);assert.equal(form.elements.namedItem('active').disabled,false,'an explicitly allowed deactivation remains available');assert.match(form.textContent,{ru:/Сохранённые права сотрудника выходят за ваши полномочия/,az:/Əməkdaşın saxlanılan hüquqları sizin səlahiyyətlərinizdən kənardadır/,en:/retained permissions exceed your authority/}[language]);assert.match(form.textContent,/finance/);assert.match(form.textContent,/legacy:retained/);submit(b,form);await settle();assert.equal(writes(b).length,0,'readonly alias/role/permissions cannot submit an invented change');b.d.querySelector('[data-staff-close]').click();const numbers=edit(b,'numbers');assert.equal(numbers.querySelector('[data-number]').readOnly,false,'separately allowed WhatsApp action remains available');assert.equal(writes(b).length,0);
+ for(const language of ['ru','az','en'])for(const scope of ['hidden','visible']){
+  const hidden=scope==='hidden',permissions=hidden?['tasks','finance','legacy:retained']:['support'];
+  const b=await mount({language,row:{permissions,explicit_permissions:permissions,editable_fields:hidden?['active','whatsapp_numbers']:['permissions','active','whatsapp_numbers'],read_only_reasons:{display_name:'permission_scope',role:'permission_scope',...(hidden?{permissions:'permission_scope'}:{})}}});try{
+   const form=edit(b);assert.equal(form.elements.namedItem('display_name').readOnly,true);assert.equal(form.elements.namedItem('role').disabled,true);assert.equal(form.querySelector('fieldset').disabled,hidden);assert.equal(form.elements.namedItem('active').disabled,false,'an explicitly allowed deactivation remains available');assert.match(form.textContent,{ru:/Сохранённые права сотрудника выходят за ваши полномочия/,az:/Əməkdaşın saxlanılan hüquqları sizin səlahiyyətlərinizdən kənardadır/,en:/retained permissions exceed your authority/}[language]);
+   if(hidden){assert.match(form.textContent,/finance/);assert.match(form.textContent,/legacy:retained/)}
+   submit(b,form);await settle();assert.equal(writes(b).length,0,'readonly alias/role and unchanged permissions cannot invent a write');
+   if(hidden)b.d.querySelector('[data-staff-close]').click();
+   else{
+    const support=form.querySelector('[data-permission][value=support]');assert.equal(support.checked,true);support.checked=false;support.dispatchEvent(new b.w.Event('change',{bubbles:true}));
+    b.f.afterWriteMembers=[serverRow({permissions:[],explicit_permissions:[],effective_permissions:[],legacy_permissions:[],card_version:'permission-reduced-version'})];submit(b,form);await settle();
+    assert.deepEqual(writes(b)[0].body,{action:'update_member_card',expected_tenant_id:tenant,expected_user_id:11,telegram_id:22,expected_version:version,changes:{permissions:[]}},'explicit visible-right reduction sends no alias, role or active side effect');
+    const reopened=edit(b);assert.equal(reopened.querySelector('[data-permission][value=support]').checked,false);assert.equal(reopened.elements.namedItem('display_name').value,'PRIVATE EMPLOYEE A');assert.equal(reopened.elements.namedItem('active').checked,true);b.d.querySelector('[data-staff-close]').click();
+   }
+   const numbers=edit(b,'numbers');assert.equal(numbers.querySelector('[data-number]').readOnly,false,'separately allowed WhatsApp action remains available');assert.equal(writes(b).length,hidden?0:1);
   }finally{b.close()}
  }
- console.log('PASS EMP01 permission_scope is explained in RU/AZ/EN; retained grants make only server-restricted fields readonly, without removing grants or blocking allowed deactivation/WhatsApp');
+ console.log('PASS EMP01 permission_scope RU/AZ/EN: hidden grants preserve readonly controls; visible grants allow explicit permission-only reduction, with alias/status unchanged and allowed deactivation/WhatsApp retained');
  {
   const b=await mount();try{
    let form=edit(b);const support=form.querySelector('[data-permission][value=support]');support.checked=true;support.dispatchEvent(new b.w.Event('change',{bubbles:true}));submit(b,form);await settle();assert.deepEqual(writes(b)[0].body.changes.permissions,['support','tasks','legacy:retained']);

@@ -1,0 +1,76 @@
+name: Employee card consistency regression
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/employee-card-consistency.yml'
+      - 'beintaskbot-main/tenant_member_store.py'
+      - 'beintaskbot-main/tenant_members_api.py'
+      - 'beintaskbot-main/tenant_account_store.py'
+      - 'beintaskbot-main/tenant_browser_session.py'
+      - 'beintaskbot-main/tenant_policy.py'
+      - 'beintaskbot-main/tenant_workflow_store.py'
+      - 'beintaskbot-main/bot.py'
+      - 'beintaskbot-main/docs/tenant-members-ui.js'
+      - 'beintaskbot-main/tests/*employee_card*'
+      - 'beintaskbot-main/tests/test_tenant_member_store.py'
+      - 'beintaskbot-main/tests/test_tenant_members_api.py'
+      - 'beintaskbot-main/tests/isolated_database_guard/*'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  employee-card-consistency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=postgres
+      NODE_PATH: .support-test-deps/node_modules
+      SUPPORT_CASES_JSDOM: ../.support-test-deps/node_modules/jsdom
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt pytest pytest-asyncio
+      - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0 playwright@1.62.1
+      - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Select installed Chromium
+        run: |
+          node -e "const fs=require('node:fs');fs.appendFileSync(process.env.GITHUB_ENV,'CHROMIUM_EXECUTABLE_PATH='+require('./.support-test-deps/node_modules/playwright').chromium.executablePath()+'\n')"
+      - name: Native PostgreSQL card writes, races and actual cookie HTTP Chromium
+        env:
+          PYTHONPATH: tests/isolated_database_guard:.:tests
+        run: >-
+          python -m pytest -q -rs
+          tests/test_employee_card_consistency_postgres.py
+          tests/test_tenant_member_store.py
+          tests/test_tenant_members_api.py
+          tests/test_tenant_support_inbox.py::test_direct_login_employee_is_atomic_and_does_not_require_synthetic_email
+          tests/test_tenant_support_inbox.py::test_employee_rights_round_trip_preserves_hidden_and_legacy_grants
+      - name: Current employee forms and retained navigation lifecycle
+        run: |
+          node tests/test_employee_card_ui.cjs
+          node tests/test_company_employees_entry_ui.cjs
+          node tests/test_tenant_members_ui.cjs
+          node tests/test_tenant_members_invite_ui.cjs
+          node tests/test_staff_profile_lifecycle.cjs

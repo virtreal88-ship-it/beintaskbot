@@ -66,12 +66,16 @@ def _card_access(current, target):
         if target.get('active') is False:
             editable.discard('whatsapp_numbers')
             reasons['whatsapp_numbers'] = 'member_inactive'
-        hidden = set(target.get('permissions') or []) - _EDITOR_PERMISSION_KEYS
-        if current.get('role') != 'owner' and hidden - set(current.get('permissions') or []):
-            # These grants are deliberately retained by the legacy editor.
-            # The current actor cannot remove or reassign them, so no valid
-            # alias/role/permission edit (or reactivation) can pass that guard.
-            for field in ('display_name', 'role', 'permissions'):
+        grants = set(target.get('permissions') or [])
+        outside = grants - set(current.get('permissions') or [])
+        if current.get('role') != 'owner' and outside:
+            # Alias/role-only saves and reactivation retain the full grant
+            # set. Visible grants can first be reduced by a permitted rights
+            # save; preserved hidden grants cannot be removed by this editor.
+            restricted = ['display_name', 'role']
+            if outside - _EDITOR_PERMISSION_KEYS:
+                restricted.append('permissions')
+            for field in restricted:
                 if field in editable:
                     editable.remove(field)
                     reasons[field] = 'permission_scope'
