@@ -67,13 +67,18 @@ class LiveExtractionDisabled(Exception):
 
 
 def prepare(profile,data,review=None,training=None):
-    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','case_extension_id','photo_model','campaign_photo_model','video_model','media_grant_id','owner_retry_unknown','owner_retry_basis','case_source_sha256'}
+    allowed={'request_id','provider','channel_id','conversation_id','history_mode','before','message_ids','ticket_id','analysis_agent_id','period_start','period_end','language','language_explicit','allow_external_media','allow_paid_asr','retry_of','approved_channel_ids','allow_vision','source_version','case_id','case_version','case_plan_hash','case_extension_id','photo_model','campaign_photo_model','video_model','media_grant_id','owner_retry_unknown','owner_retry_basis','case_source_sha256'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректные параметры анализа.')
     for flag in ('allow_external_media','allow_paid_asr','allow_vision'):
         if flag in data and type(data[flag]) is not bool: raise TenantLinearError('Некорректное разрешение медиа.')
     if data.get('allow_paid_asr') and not data.get('allow_external_media'): raise TenantLinearError('Требуется разрешение передачи медиа.')
-    explicit_language='language' in data
-    data={**data,'language':language(data.get('language'),profile)}
+    if 'language_explicit' in data and type(data['language_explicit']) is not bool:
+        raise TenantLinearError('Некорректный выбор языка сводки.',400)
+    requested=language(data.get('language'),profile)
+    explicit_language=data.get('language_explicit') is True
+    if explicit_language and requested=='auto':raise TenantLinearError('Выберите явный язык сводки.',400)
+    data={**data,'language':requested if explicit_language else 'auto'}
+    if not explicit_language:data.pop('language_explicit',None)
     start,end=period(data)
     if start: data={**data,'period_start':start,'period_end':end}
     request_id=identifier(data.get('request_id'))
@@ -138,7 +143,8 @@ def prepare(profile,data,review=None,training=None):
                     # Before the AZ default, requests without a language used a
                     # language-less idempotency key. Permit that exact legacy retry.
                     legacy_shape={**shape};legacy_shape.pop('language',None)
-                    if explicit_language or replay['request_key']!=store.digest(legacy_shape):
+                    legacy_az={**shape,'language':'az'}
+                    if explicit_language or replay['request_key'] not in {store.digest(legacy_shape),store.digest(legacy_az)}:
                         raise TenantLinearError('request_id уже использован для другого запроса.',409)
                 return {'existing':request_id}
             failed_media_recovery=False
@@ -317,7 +323,7 @@ def prepare(profile,data,review=None,training=None):
                 item['messages'].pop(0);item['refs'].pop(0)
                 item['next_before']=item['refs'][0]['id']
             for index,message in enumerate(item['messages']): message['ref']='m'+str(index+1)
-            item['source_digest']=store.digest(item['messages'])
+            item['source_digest']=store.source_digest(item['messages'])
             item['route']['next_before']=item['next_before']
             content_route={'provider':'connect','conversation_id':item['route']['conversation_id'],'history_mode':item['route']['history_mode']}
             if item['route']['history_mode']=='channel': content_route['channel_id']=item['route']['channel_id']
@@ -646,14 +652,15 @@ def select_language(item):
     messages=[]
     for ref,message in zip(item['refs'],item['messages']):
         value={**message}
+        value['text']=message.get('customer_language_text',message.get('text','') if not ref.get('media_kind') else '')
         if ref.get('media_kind'):
             # Machine descriptions and missing-media placeholders cannot vote
             # as customer speech. Reuse only an already saved transcript.
             receipt=results.get(str(ref['id'])) or {}
             transcript=(receipt.get('result') or {}).get('transcript') or receipt.get('transcript')
-            value['text']=str(message.get('text') or '').split('[Attachment',1)[0]
             if receipt.get('status')=='processed' and isinstance(transcript,str):
                 value['text']+='\n'+transcript
+                value['customer_language_transcript']=transcript
         messages.append(value)
     selected=summary_language(item['route'].get('summary_language_policy') or {'mode':'legacy'},messages,
         explicit=item['route'].get('requested_summary_language'),legacy_language='az')

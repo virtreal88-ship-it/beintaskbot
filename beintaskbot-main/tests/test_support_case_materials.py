@@ -3,7 +3,7 @@ import json
 import uuid
 from unittest.mock import patch
 import pytest
-from test_tenant_support_inbox import database, db, A, B, CA, CB, AGENT, PROFILE, manual, seed_job, config_company
+from test_tenant_support_inbox import database, db, A, B, CA, CB, AGENT, PROFILE, manual, seed_job, config_company, regeneration_command
 import tenant_support_inbox_store as tickets
 import tenant_support_inbox_summary as summary
 import tenant_support_case_context as context
@@ -199,7 +199,7 @@ def test_inflight_summary_does_not_apply_after_context_change(db,change):
         db.commit()
         return json.dumps(OUTPUT),{'total_tokens':7}
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate',side_effect=provider):
-        summary.regenerate(PROFILE,ticket)
+        summary.regenerate(PROFILE,ticket,regeneration_command(PROFILE,ticket))
     page=tickets.detail(PROFILE,ticket)
     assert page['ticket']['summary_state']=='unavailable' and page['ticket']['summary']==''
     assert db.execute('SELECT total_tokens FROM saas_ai_agent_token_usage')[0]['total_tokens']==7
@@ -211,12 +211,12 @@ def test_saved_summary_is_historical_and_explicitly_regenerates_after_agent_edit
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate',return_value=(json.dumps(OUTPUT),{})) as provider:
         ticket=manual()['ticket']['id']
         assert tickets.detail(PROFILE,ticket)['ticket']['summary_current']
-        summary.regenerate(PROFILE,ticket)
+        summary.summarize(A,ticket,PROFILE)
         assert provider.call_count==1
         db.execute("UPDATE saas_ai_agents SET instructions='Changed instructions',version=version+1 WHERE tenant_id=%s::uuid",(A,));db.commit()
         page=tickets.detail(PROFILE,ticket)
         assert not page['ticket']['summary_current'] and page['ticket']['summary']==OUTPUT['summary']
-        summary.regenerate(PROFILE,ticket)
+        summary.regenerate(PROFILE,ticket,regeneration_command(PROFILE,ticket))
         assert provider.call_count==2
         assert tickets.detail(PROFILE,ticket)['ticket']['summary_current']
 
@@ -242,7 +242,7 @@ def test_new_exact_media_receipt_invalidates_summary_without_changing_crm_source
         page=tickets.detail(PROFILE,ticket)
         assert page['ticket']['summary']==OUTPUT['summary'] and not page['ticket']['summary_current']
         assert provider.call_count==1
-        summary.regenerate(PROFILE,ticket)
+        summary.regenerate(PROFILE,ticket,regeneration_command(PROFILE,ticket))
         assert provider.call_count==2
         assert 'New saved transcript proving a different issue' in json.dumps(provider.call_args.args[3])
         assert tickets.detail(PROFILE,ticket)['ticket']['summary_current']
@@ -255,7 +255,7 @@ def test_receipt_arriving_during_generation_withholds_stale_summary(db):
         save_audio_receipt(db,audio,'Speech became available during the request')
         return json.dumps(OUTPUT),{'total_tokens':11}
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate',side_effect=provider):
-        summary.regenerate(PROFILE,ticket)
+        summary.regenerate(PROFILE,ticket,regeneration_command(PROFILE,ticket))
     page=tickets.detail(PROFILE,ticket)
     assert page['ticket']['summary']=='' and page['ticket']['summary_state']=='unavailable'
     assert db.execute('SELECT total_tokens FROM saas_ai_agent_token_usage')[0]['total_tokens']==11
@@ -281,7 +281,7 @@ def test_long_case_summary_preserves_problem_and_recent_evidence_with_fixed_budg
     tickets.attach_case_messages(PROFILE,ticket,newer[:80])
     tickets.attach_case_messages(PROFILE,ticket,newer[80:])
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate',return_value=(json.dumps(OUTPUT),{})) as provider:
-        summary.regenerate(PROFILE,ticket)
+        summary.regenerate(PROFILE,ticket,regeneration_command(PROFILE,ticket))
     lines=provider.call_args.args[3]
     assert len(lines)==80
     assert any('Original problem: duplicate printing.' in row['text'] for row in lines)

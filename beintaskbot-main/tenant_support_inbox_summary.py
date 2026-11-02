@@ -128,8 +128,11 @@ def reserve(tenant, ticket_id, profile=None, retry=False, command=None):
                 AND external_id=ANY(%s::text[])''',
               (tenant, str(ticket['channel_id']), [row['external_id'] for row in rows]))
             completed_voice = {row['external_id'] for row in cur.fetchall()}
-            rows = [{**row, 'transcript': row['body'] if row['external_id'] in completed_voice else ''} for row in rows]
-            from tenant_media_evidence import annotate_rows
+            from tenant_media_evidence import annotate_rows,media_version
+            rows=[{**row,'transcript':row['body'] if row['external_id'] in completed_voice
+              and isinstance((row.get('raw') or {}).get('voice_transcription'),dict)
+              and row['raw']['voice_transcription'].get('media_version')==media_version(row.get('raw') or {}) else ''}
+              for row in rows]
             annotate_rows(cur, tenant, rows)
             language_rows = customer_evidence(cur,tenant,rows,ticket['channel_id'],ticket['conversation_id'])
             selection = summary_language(read_policy(cur, tenant), language_rows,
@@ -208,15 +211,22 @@ def finish(item, result, usage):
                   suggestions=CASE WHEN suggestions=%s THEN %s ELSE suggestions END,
                   next_steps=CASE WHEN next_steps=%s THEN %s ELSE next_steps END,
                   summary_state='completed',summary_agent_binding=%s,summary_scope_hash=%s,updated_at=now()
-                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND summary_state='generating' ''',
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND summary_state='generating'
+                  RETURNING description,summary,suggestions,next_steps''',
                   (item['original']['description'],result['description'],result['summary'],item['original']['suggestions'],result['suggestions'],item['original']['next_steps'],result['next_steps'],item['agent_binding'],item['scope_hash'],tenant,ticket_id))
+                applied=cur.fetchone()
+                if not applied:result=None
             else:
                 cur.execute("UPDATE saas_support_tickets SET summary_state=CASE WHEN summary<>'' THEN 'completed' ELSE 'unavailable' END WHERE tenant_id=%s::uuid AND id=%s::uuid AND summary_state='generating' AND EXISTS (SELECT 1 FROM saas_tenants WHERE id=tenant_id AND status IN ('active','onboarding','ready_for_integration'))", (tenant,ticket_id))
             _audit(cur, tenant, item['actor'], 'support_summary_generated', 'support_ticket', ticket_id,
                    {'run_id': item['run_id'], 'request_id': (item.get('command') or {}).get('request_id'),
                     'state': 'applied' if result else 'conflict' if proposal else 'unavailable',
+                    'request_state':'applied' if result else 'conflict' if proposal else
+                      'unknown' if item.get('generation_attempted') else 'blocked',
                     'language': item['summary_language'], 'previous': item['original'], 'proposal': proposal,
-                    'base_hash': item['summary_hash']})
+                    'base_hash': item['summary_hash'],'applied_hash':text_fingerprint(applied) if result else None,
+                    'applied_content':content(applied) if result else None,
+                    'scope_hash':item['scope_hash'],'agent_binding':item['agent_binding']})
         conn.commit()
 
 
@@ -232,7 +242,8 @@ def summarize(tenant, ticket_id, profile=None, retry=False, command=None):
             with _connect() as conn:
                 with conn.cursor() as cur: _assert_current(cur,item)
             transcripts = {row['external_id']: row['transcript'] for row in item['rows'] if row.get('transcript')}
-            rows = [{**row, 'body': ''} if row.get('transcript') else row for row in item['rows']]
+            rows = [{**row, 'body': ''} if row.get('transcript') or row.get('message_type') in {'voice','audio'} else row
+                    for row in item['rows']]
             # The shared formatter caps each ordinary chat context at 30.
             # A selected case can contain up to 80; retain its earliest facts
             # instead of silently replacing them with the latest acknowledgments.
@@ -252,6 +263,7 @@ def summarize(tenant, ticket_id, profile=None, retry=False, command=None):
             context = item['agent_context']
             guidance = assigned_guidance(company=context.get('company_instructions'), agent=context.get('instructions'),
                                          style=context.get('style'), scope='Only this support case and its selected materials.')
+            item['generation_attempted']=True
             text, usage = generate(item['key'],item['model'],'summary',lines,'',instructions=INSTRUCTIONS + guidance + language_instructions(item['summary_language']),
                 extra_context={'handoff_reason':item['reason'], 'assigned_agent_language':context.get('language') or 'auto',
                                'summary_language':item['summary_language'],
@@ -289,4 +301,10 @@ def regenerate(profile, ticket_id, data=None):
     command={**data,'request_id':identifier(data.get('request_id')),
              'language':language(data.get('language'),optional=True)}
     summarize(str(profile['tenant_id']),ticket_id,profile,retry=True,command=command)
-    return detail(profile,ticket_id)
+    result=detail(profile,ticket_id)
+    from tenant_support_summary_history import request_status
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            tenant,_=_authorize(cur,profile)
+            result['summary_request']=request_status(cur,tenant,ticket_id,command['request_id'])
+    return result

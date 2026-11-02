@@ -24,6 +24,7 @@ import tenant_support_inbox_summary as summaries
 import tenant_summary_language as languages
 import tenant_knowledge_candidates_store as candidate_store
 import tenant_knowledge_candidates_service as candidates
+import tenant_knowledge_improve as improve
 import tenant_ai_agent_run_store as runs
 import tenant_ai_spend_budget as spending
 import tenant_night_report_store as night_report
@@ -73,7 +74,7 @@ def language_db(db, monkeypatch):
     monkeypatch.setenv('AI_TENANT_SPEND_LIMITS_MICROUSD', '{}')
     factory = lambda: psycopg.connect(db.dsn, row_factory=dict_row)
     for module in (languages, cases, summaries, consultations, company_admin, candidate_store,
-                   candidates, runs, spending, night_report, evidence, episode):
+                   candidates, runs, spending, night_report, evidence, episode, knowledge_media):
         monkeypatch.setattr(module, '_connect', factory)
     for module in (workflow, members, groups):
         monkeypatch.setattr(module, '_connect', factory)
@@ -121,12 +122,25 @@ def _messages(f, messages, *, tenant=A, channel=CA, lead=41):
           clock_timestamp()+(%s * interval '1 second'))""",
           (ident, tenant, lead, 'connect:' + ident, value['direction'], 'connect:' + channel,
            value.get('body', ''), value['kind'], json.dumps(value['raw']), index))
-        if value.get('saved_transcript'):
+        if value.get('saved_transcript') or value.get('saved_receipt'):
             row = f['db'].execute('SELECT external_id,body,message_type,raw,channel FROM saas_crm_messages WHERE id=%s::uuid', (ident,))[0]
             ref = episode.reference(row, channel, lead)
             with f['db'].cursor() as cur:
-                evidence.persist(cur, tenant, [ref], [{'id': ref['id'], 'status': 'processed',
-                    'code': 'transcribed', 'transcript': value['saved_transcript']}], processor='conversation_episode')
+                receipt = value.get('saved_receipt') or {'status': 'processed',
+                    'code': 'transcribed', 'transcript': value['saved_transcript']}
+                evidence.persist(cur, tenant, [ref], [{'id': ref['id'], **receipt}], processor='conversation_episode')
+        if value.get('legacy_voice'):
+            raw = dict(value['raw'])
+            raw['voice_transcription'] = {'media_version': evidence.media_version(raw)}
+            if value['legacy_voice'] == 'missing_version':
+                raw['voice_transcription'] = {}
+            if value['legacy_voice'] == 'replaced':
+                raw['mediaId'] = 'replacement-media-version'
+            f['db'].execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid', (json.dumps(raw), ident))
+            f['db'].execute("""INSERT INTO saas_connect_voice_receipts
+              (tenant_id,channel_id,external_id,run_id,model,state)
+              VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'synthetic-asr','completed')""",
+              (tenant, channel, 'connect:' + ident, str(uuid.uuid4())))
         result.append(ident)
     f['db'].commit()
     return result
@@ -361,6 +375,7 @@ def test_regeneration_explicit_language_wins_and_preserves_previous_manual_versi
     request = _regenerate(before, language='en')
     regenerated = summaries.regenerate({**PROFILE, 'locale': 'az'}, ticket_id, request)
     _assert_language(f, regenerated, 'en', method='explicit')
+    assert regenerated['summary_request'] == {'request_id': request['request_id'], 'state': 'applied'}
     matching = [version for version in regenerated['summary_history'] if version.get('request_id') == request['request_id']]
     assert len(matching) == 1 and matching[0]['state'] == 'applied'
     assert matching[0]['previous'] == previous
@@ -410,7 +425,8 @@ def test_employee_edit_during_generation_saves_comparison_without_overwriting_cu
     assert after['ticket']['description'] == 'Concurrent manual edit, preserve verbatim'
     assert after['ticket']['next_steps'] == 'Call the customer after checking SKU-42'
     assert after['ticket']['summary'] == original['summary']
-    assert after['ticket']['summary_language'] == original['summary_language']
+    assert after['ticket']['summary_language'] is None
+    assert after['summary_request'] == {'request_id': command['request_id'], 'state': 'conflict'}
     proposals = [version for version in after['summary_history'] if version.get('request_id') == command['request_id']]
     assert len(proposals) == 1 and proposals[0]['state'] == 'conflict'
     assert SUMMARY['en'] in proposals[0]['proposal']['summary']
@@ -433,6 +449,9 @@ def test_unknown_regeneration_is_not_paid_again_on_same_request(language_db):
     assert after['ticket']['summary'] == result['ticket']['summary']
     history = [version for version in after['summary_history'] if version.get('request_id') == command['request_id']]
     assert len(history) == 1 and history[0]['state'] == 'unavailable'
+    assert history[0]['request_state'] == 'unknown'
+    assert after['summary_request'] == {'request_id': command['request_id'], 'state': 'unknown'}
+    assert after['ticket']['summary_language'] == result['ticket']['summary_language']
     assert f['db'].execute("SELECT count(*) AS n FROM saas_ai_agent_runs WHERE state='unknown'")[0]['n'] == 1
 
 
@@ -520,7 +539,8 @@ def test_actual_training_candidate_generation_uses_same_language_policy(language
     monkeypatch.setattr(candidates, 'generate', generate)
     result = candidates.analyze({**PROFILE, 'locale': ui, 'language': ui}, {'request_id': str(uuid.uuid4()),
         'provider': 'connect', 'channel_id': CA, 'conversation_id': 'client',
-        'message_ids': source_ids, 'analysis_agent_id': AGENT, **({'language': explicit} if explicit else {})})
+        'message_ids': source_ids, 'analysis_agent_id': AGENT,
+        **({'language': explicit, 'language_explicit': True} if explicit else {})})
     generate.assert_called_once()
     assert len(result['candidates']) == 1, (result['request'], generate.call_args.kwargs['extra_context'].get('output_language'),
         {code: label in generate.call_args.kwargs['instructions'] for code, label in languages.LANGUAGES.items()})
@@ -536,3 +556,257 @@ def test_actual_training_candidate_generation_uses_same_language_policy(language
     reloaded = candidate_store.detail({**PROFILE, 'locale': 'en'}, card['id'])
     assert reloaded['candidate']['content_language'] == expected and reloaded['candidate']['title'] == saved['candidate']['title']
     generate.assert_called_once()
+
+
+def _training(f, monkeypatch, messages, *, expected, **extra):
+    """Actual bounded snapshot, admission, generation receipt and saved candidate."""
+    source_ids = _messages(f, messages)
+
+    def generated(_key, _model, mode, rows, _draft, **kwargs):
+        assert mode == 'knowledge_extraction'
+        assert kwargs['extra_context']['output_language'] == expected
+        return json.dumps({'cards': [_candidate_response(expected, [row['ref'] for row in rows])]},
+                          ensure_ascii=False), {'total_tokens': 25}
+
+    generate = Mock(side_effect=generated)
+    monkeypatch.setattr(candidates, 'generate', generate)
+    data = {'request_id': str(uuid.uuid4()), 'provider': 'connect', 'channel_id': CA,
+            'conversation_id': 'client', 'message_ids': source_ids, 'analysis_agent_id': AGENT, **extra}
+    result = candidates.analyze({**PROFILE, 'locale': 'en', 'language': 'en'}, data)
+    assert len(result['candidates']) == 1, result['request']
+    return result, generate, data
+
+
+@pytest.mark.parametrize('marker,expected', [(None, 'ru'), (False, 'ru'), (True, 'az')])
+def test_old_cached_ui_language_is_ignored_until_employee_explicitly_selects_language(language_db, monkeypatch, marker, expected):
+    f = language_db
+    _policy()
+    result, generation, _data = _training(f, monkeypatch, [RU], expected=expected, language='az',
+        **({'language_explicit': marker} if marker is not None else {}))
+    selected = result['request']['route']['summary_language']
+    assert selected['language'] == expected
+    assert selected['method'] == ('explicit' if marker else 'customer_detected')
+    generation.assert_called_once()
+
+
+@pytest.mark.parametrize('mode,expected,incomplete', [
+    ('current', 'en', False), ('missing_version', 'az', True), ('replaced', 'az', True)])
+def test_support_legacy_voice_requires_completed_exact_current_media_version(language_db, mode, expected, incomplete):
+    f = language_db
+    result, _ids = _case(f, [{'body': EN, 'kind': 'voice', 'legacy_voice': mode,
+        'raw': {'mediaId': 'original-synthetic-voice', 'fileLength': 123}}], expected=expected)
+    selected = _assert_language(f, result, expected,
+        method='customer_detected' if mode == 'current' else 'fallback')
+    assert selected['media_incomplete'] is incomplete
+    assert f['provider'].call_args.kwargs['extra_context']['media_incomplete'] is incomplete
+    f['provider'].assert_called_once()
+
+
+@pytest.mark.parametrize('kind,receipt', [
+    ('image', {'status': 'processed', 'code': 'observed', 'observation': EN * 4}),
+    ('voice', {'status': 'partial', 'code': 'partial', 'transcript': EN * 4})])
+def test_support_machine_observation_and_partial_audio_cannot_vote_as_customer_speech(language_db, kind, receipt):
+    f = language_db
+    result, _ids = _case(f, [{'body': '', 'kind': kind,
+        'raw': {'mediaId': 'synthetic-saved-evidence'}, 'saved_receipt': receipt}])
+    selected = _assert_language(f, result, 'az', method='fallback')
+    assert selected['media_incomplete'] is (kind == 'voice')
+    f['provider'].assert_called_once()
+
+
+@pytest.mark.parametrize('kind,status', [('image', 'processed'), ('voice', 'partial')])
+def test_training_reuses_saved_media_without_treating_english_machine_output_as_customer_language(language_db, monkeypatch, kind, status):
+    f = language_db
+    _policy()
+    ids = _messages(f, [{'body': '', 'kind': kind, 'raw': {'mediaId': 'saved-machine-output'}}])
+    data = {'provider': 'connect', 'channel_id': CA, 'conversation_id': 'client',
+            'message_ids': ids, 'analysis_agent_id': AGENT}
+    with f['factory']() as conn, conn.cursor() as cur:
+        snapshot = candidate_store.snapshot(cur, PROFILE, data)
+        ref = snapshot['refs'][0]
+        receipt = {'id': ref['id'], 'status': status, 'code': 'observed' if kind == 'image' else 'partial',
+                   'observation' if kind == 'image' else 'transcript': EN * 4}
+        evidence.persist(cur, A, [ref], [receipt])
+
+    def generated(_key, _model, mode, rows, _draft, **kwargs):
+        assert mode in {'knowledge_extraction', 'knowledge_improvement'}
+        assert kwargs['extra_context']['output_language'] == 'az'
+        # The model can read the saved observation, but it is not customer speech.
+        assert EN in rows[0]['text']
+        assert not kwargs.get('images')
+        if mode == 'knowledge_improvement':
+            return json.dumps({'title': SUMMARY['az'], 'symptoms': [SUMMARY['az']], 'cause_text': '',
+                'resolution_steps': [], 'operator_actions': [], 'outcome_text': SUMMARY['az']}), {'total_tokens': 25}
+        return json.dumps({'cards': [_candidate_response('az', [row['ref'] for row in rows])]},
+                          ensure_ascii=False), {'total_tokens': 25}
+
+    generation = Mock(side_effect=generated)
+    monkeypatch.setattr(candidates, 'generate', generation)
+    result = candidates.analyze(PROFILE, {**data, 'request_id': str(uuid.uuid4())})
+    assert len(result['candidates']) == 1, result['request']
+    assert result['request']['route']['summary_language']['method'] == 'fallback'
+    assert result['candidates'][0]['content_language'] == 'az'
+    generation.assert_called_once()
+    if kind == 'image':
+        value = result['candidates'][0]
+        proposed = improve.improve({**PROFILE, 'locale': 'en'}, value['id'], {
+            'request_id': str(uuid.uuid4()), 'expected_version': value['version'], 'mode': 'improve'})
+        assert proposed['language_selection']['language'] == 'az'
+        assert proposed['language_selection']['method'] == 'fallback'
+        assert proposed['proposal']['content_language'] == 'az'
+        assert candidate_store.detail(PROFILE, value['id'])['candidate']['version'] == value['version']
+        assert generation.call_count == 2
+
+
+def test_employee_summary_fields_detach_current_ai_label_and_preserve_exact_ai_history(language_db):
+    f = language_db
+    result, _ids = _case(f, [AZ])
+    ticket_id = result['ticket']['id']
+    history = copy.deepcopy(result['summary_history'])
+    cases.update(PROFILE, ticket_id, {'description': RU, 'suggestions': 'Проверить SKU-42 / 49.00'})
+    after = cases.detail({**PROFILE, 'locale': 'en'}, ticket_id)
+    assert after['ticket']['description'] == RU
+    assert after['ticket']['summary'] == result['ticket']['summary']
+    assert after['ticket']['summary_language'] is None
+    assert after['summary_history'] == history
+    assert history[0]['language']['language'] == 'az'
+    assert history[0]['applied_content']['summary'] == result['ticket']['summary']
+    f['provider'].assert_called_once()
+
+
+def test_matching_applied_language_survives_more_than_ten_later_unknown_requests(language_db):
+    f = language_db
+    result, _ids = _case(f, [AZ])
+    f['provider'].side_effect = TimeoutError('Synthetic unknown outcome, never retry automatically')
+    requests = []
+    for _ in range(11):
+        request = _regenerate(result, language='en')
+        requests.append(request)
+        with pytest.raises(TimeoutError):
+            summaries.regenerate(PROFILE, result['ticket']['id'], request)
+    after = summaries.regenerate(PROFILE, result['ticket']['id'], requests[0])
+    assert after['summary_request'] == {'request_id': requests[0]['request_id'], 'state': 'unknown'}
+    assert after['ticket']['summary_language'] == result['ticket']['summary_language']
+    assert after['ticket']['summary_hash'] == result['ticket']['summary_hash']
+    assert len(after['summary_history']) == 10
+    assert all(version['state'] == 'unavailable' for version in after['summary_history'])
+    assert all(version.get('request_id') != requests[0]['request_id'] for version in after['summary_history'])
+    assert f['provider'].call_count == 12
+
+
+@pytest.mark.parametrize('fixed,explicit,expected', [('ru', None, 'ru'), ('ru', 'tr', 'tr'), (None, None, 'en')])
+def test_actual_improvement_requires_explicit_apply_preserves_versions_and_language_provenance(language_db, monkeypatch, fixed, explicit, expected):
+    f = language_db
+    _policy()
+    initial, generation, _data = _training(f, monkeypatch, [EN, {'body': RU, 'direction': 'outgoing'}], expected='en')
+    value = initial['candidates'][0]
+    original = candidate_store.detail(PROFILE, value['id'])['candidate']
+    if fixed:
+        _policy(mode='fixed', fixed=fixed)
+    proposal_text = SUMMARY[expected] + ' SKU-42 / 49.00'
+
+    def generated(_key, _model, mode, _rows, _draft, **kwargs):
+        assert mode == 'knowledge_improvement'
+        assert kwargs['extra_context']['output_language'] == expected
+        assert kwargs['extra_context']['summary_language']['language'] == expected
+        return json.dumps({'title': proposal_text, 'symptoms': [proposal_text], 'cause_text': '',
+            'resolution_steps': [], 'operator_actions': [], 'outcome_text': proposal_text},
+            ensure_ascii=False), {'total_tokens': 25}
+
+    generation.side_effect = generated
+    command = {'request_id': str(uuid.uuid4()), 'expected_version': value['version'],
+        'mode': 'improve', 'language': explicit or 'az', 'clarifications': 'Employee note in Russian: проверить завтра',
+        **({'language_explicit': True} if explicit else {})}
+    proposed = improve.improve({**PROFILE, 'locale': 'ru'}, value['id'], command)
+    assert proposed['requires_explicit_save'] is True and proposed['proposal']['content_language'] == expected
+    assert proposed['language_selection']['method'] == ('explicit' if explicit else 'company_fixed' if fixed else 'customer_detected')
+    assert candidate_store.detail(PROFILE, value['id'])['candidate'] == original
+    replayed = improve.improve(PROFILE, value['id'], command)
+    assert replayed['proposal'] == proposed['proposal'] and generation.call_count == 2
+    saved = candidate_store.mutate(PROFILE, value['id'], {'expected_version': value['version'], **proposed['proposal']})['candidate']
+    assert saved['version'] == value['version'] + 1
+    assert saved['title'] == proposal_text and saved['content_language'] == expected
+    assert saved['language_selection'] == proposed['language_selection']
+    assert saved['language_history'][0]['previous_version'] == value['version']
+    assert saved['language_history'][0]['previous_content']['title'] == original['title']
+    assert saved['language_history'][0]['content']['title'] == proposal_text
+    with pytest.raises(TenantLinearError) as stale:
+        candidate_store.mutate(PROFILE, value['id'], {'expected_version': value['version'], **proposed['proposal']})
+    assert stale.value.status == 409
+    _policy(mode='fixed', fixed='az')
+    reopened = candidate_store.detail({**PROFILE, 'locale': 'az'}, value['id'])['candidate']
+    assert reopened['title'] == proposal_text and reopened['language_selection'] == proposed['language_selection']
+    assert generation.call_count == 2
+
+
+def test_unified_group_language_excludes_employee_registered_only_on_historical_source_channel(language_db, monkeypatch):
+    f = language_db
+    _policy()
+    group = '120363400000888@g.us'
+    f['db'].execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'Synthetic historical channel')", (A, CB))
+    for channel, lead in ((CA, 43), (CB, 44)):
+        f['db'].execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,conversation_kind) VALUES(%s::uuid,%s::uuid,%s,%s,'group')", (A, channel, group, lead))
+    f['db'].execute('UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+        (json.dumps([{'provider': 'connect', 'channel_id': CA, 'allow_group_messages': True}]), A, AGENT))
+    f['db'].execute("INSERT INTO saas_ai_group_staff(tenant_id,channel_id,jid,member_id,verified_by) VALUES(%s::uuid,%s::uuid,'15550001111@s.whatsapp.net',33,11)", (A, CB))
+    f['db'].commit()
+    groups.configure(PROFILE, {'conversation_id': group, 'expected_revision': 0,
+        'assignments': [{'agent_id': AGENT, 'channel_id': CA, 'priority': 0}]})
+    _messages(f, [{'body': EN, 'raw': {'participantJid': '15550009999@s.whatsapp.net'}}], lead=43)
+    _messages(f, [{'body': RU * 6, 'raw': {'participantJid': '15550001111@s.whatsapp.net'}}], channel=CB, lead=44)
+
+    def generated(_key, _model, mode, rows, _draft, **kwargs):
+        assert mode == 'knowledge_extraction'
+        assert kwargs['extra_context']['output_language'] == 'en'
+        assert any(row['summary_language_role'] == 'operator' and RU in row['text'] for row in rows)
+        return json.dumps({'cards': [_candidate_response('en', [row['ref'] for row in rows])]}), {'total_tokens': 25}
+
+    generation = Mock(side_effect=generated)
+    monkeypatch.setattr(candidates, 'generate', generation)
+    result = candidates.analyze(PROFILE, {'request_id': str(uuid.uuid4()), 'provider': 'connect',
+        'channel_id': CA, 'conversation_id': group, 'history_mode': 'unified_group', 'analysis_agent_id': AGENT})
+    assert set(result['request']['route']['source_channels']) == {CA, CB}
+    assert result['request']['route']['summary_language']['language'] == 'en'
+    assert result['candidates'][0]['content_language'] == 'en'
+    generation.assert_called_once()
+
+
+@pytest.mark.parametrize('state', ['completed', 'unknown'])
+def test_preupgrade_extraction_digest_new_language_annotations_do_not_admit_another_paid_attempt(language_db, monkeypatch, state):
+    f = language_db
+    ids = _messages(f, [AZ])
+    data = {'request_id': str(uuid.uuid4()), 'provider': 'connect', 'channel_id': CA,
+        'conversation_id': 'client', 'message_ids': ids, 'analysis_agent_id': AGENT, 'language': 'az'}
+
+    def generated(_key, _model, _mode, rows, _draft, **_kwargs):
+        if state == 'unknown':
+            raise TimeoutError('Synthetic preupgrade provider outcome unknown')
+        return json.dumps({'cards': [_candidate_response('az', [row['ref'] for row in rows])]}), {'total_tokens': 25}
+
+    generation = Mock(side_effect=generated)
+    monkeypatch.setattr(candidates, 'generate', generation)
+    original = candidates.analyze(PROFILE, data)
+    assert original['request']['status'] == state
+    with f['factory']() as conn, conn.cursor() as cur:
+        snapshot = candidate_store.snapshot(cur, PROFILE, data)
+    old_messages = [{key: value for key, value in row.items()
+        if key not in {'summary_language_role', 'customer_language_text'}} for row in snapshot['messages']]
+    old_digest = candidate_store.digest(old_messages)
+    stored = f['db'].execute('SELECT source_digest,fingerprint FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid AND id=%s::uuid',
+        (A, original['request']['id']))[0]
+    assert stored['source_digest'] == old_digest
+    # Persist the exact pre-feature fingerprint and route shape, without the
+    # two newly derived language annotations. Existing receipts stay authoritative.
+    old_fingerprint = candidate_store.digest([
+        {'provider': 'connect', 'conversation_id': 'client', 'history_mode': 'channel', 'channel_id': CA},
+        snapshot['refs'], old_digest, AGENT, 'summary-fixture-model', 'az', None])
+    assert stored['fingerprint'] == old_fingerprint
+    f['db'].execute("""UPDATE saas_knowledge_extractions SET source_digest=%s,fingerprint=%s,
+      route=route-'summary_language'-'summary_language_policy'-'requested_summary_language'
+      WHERE tenant_id=%s::uuid AND id=%s::uuid""", (old_digest, old_fingerprint, A, original['request']['id']))
+    f['db'].commit()
+    repeated = candidates.analyze({**PROFILE, 'locale': 'ru'}, {**data, 'request_id': str(uuid.uuid4())})
+    assert repeated['request']['id'] == original['request']['id']
+    assert repeated['request']['status'] == state
+    generation.assert_called_once()
+    assert f['db'].execute('SELECT count(*) AS n FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid', (A,))[0]['n'] == 1

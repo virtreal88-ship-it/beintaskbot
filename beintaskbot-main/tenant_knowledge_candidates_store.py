@@ -94,6 +94,13 @@ def author_role(row):
     return {'incoming':'customer','outgoing':'operator'}.get(row.get('direction'),'system')
 
 
+def source_digest(messages):
+    # Language-only annotations must not mint another paid attempt for an
+    # unchanged pre-upgrade completed/unknown extraction snapshot.
+    return digest([{key:value for key,value in message.items()
+      if key not in {'summary_language_role','customer_language_text','customer_language_transcript'}} for message in messages])
+
+
 def _preview_sender_names(cur, tenant, policy, binding, chosen, rows):
     """Resolve human-readable message authors for the bounded training preview.
 
@@ -227,6 +234,7 @@ def snapshot(cur,profile,data):
     for row in rows:
         body=redact(row.get('body'),names)[:min(1500,remaining)]
         kind=row.get('message_type') or 'text'
+        customer_language_text=body if kind not in {'voice','audio'} else ''
         if not body.strip() and kind=='text': continue
         if kind!='text': body=(body+'\n[Attachment pending_processing: contents not read]').strip()
         raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
@@ -239,7 +247,7 @@ def snapshot(cur,profile,data):
             media_version=digest({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')})
             ref.update(media_kind=kind,external_id=row.get('external_id'),media_version=media_version,happened_at=str(row.get('happened_at') or row.get('created_at') or ''))
         refs.append(ref);messages.append({'ref':'m'+str(len(refs)),'role':role,'text':body,
-          'summary_language_role':language_roles[str(row['id'])]})
+          'summary_language_role':language_roles[str(row['id'])], 'customer_language_text':customer_language_text})
         preview_metadata.append({'message_type':str(kind),'happened_at':str(row.get('happened_at') or row.get('created_at') or ''),
                                  'sender_name':preview_sender_names.get(str(row['id'])) or ''})
         remaining-=len(body)
@@ -252,7 +260,7 @@ def snapshot(cur,profile,data):
     for index,message in enumerate(messages): message['ref']='m'+str(index+1)
     if remaining<=0 and len(refs)<len(rows): next_before=refs[0]['id']
     binding['source_channels']=sorted(channels)
-    return {'tenant':tenant,'actor':actor,'route':binding,'refs':refs,'messages':messages,'preview_metadata':preview_metadata,'source_digest':digest(messages),'next_before':next_before,'ticket':{'status':ticket['status'],'completion_outcome':ticket.get('completion_outcome') or '','completion_note':ticket.get('completion_note') or ''} if ticket else None}
+    return {'tenant':tenant,'actor':actor,'route':binding,'refs':refs,'messages':messages,'preview_metadata':preview_metadata,'source_digest':source_digest(messages),'next_before':next_before,'ticket':{'status':ticket['status'],'completion_outcome':ticket.get('completion_outcome') or '','completion_note':ticket.get('completion_note') or ''} if ticket else None}
 
 
 _MEDIA_IDENTITY_FIELDS=('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')
@@ -551,6 +559,14 @@ def public_card(cur,row,content_language='az',source_route=None,tenant=None,dial
     # route records the language requested when the card was generated.
     value.setdefault('content_language',content_language if content_language in {'ru','az','en','tr'} else 'az')
     value['language_selection']=(source_route or {}).get('summary_language')
+    cur.execute('''SELECT created_at,payload FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid
+      AND entity_type='knowledge_candidate' AND entity_id=%s AND action='knowledge_candidate_edit'
+      ORDER BY created_at DESC,id DESC LIMIT 10''',(row['tenant_id'],str(row['id'])))
+    language_history=[{'created_at':str(item['created_at']),**(item.get('payload') or {})}
+                      for item in cur.fetchall() if (item.get('payload') or {}).get('previous_content')]
+    value['language_history']=language_history
+    if language_history and language_history[0].get('language_selection'):
+        value['language_selection']=language_history[0]['language_selection']
     reason=approval_reason(value)
     value['result_confirmed']=value['outcome']['status']=='confirmed'
     value['clarification_status']='required' if reason else 'not_required'
@@ -1398,6 +1414,26 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
                     if set(inside)!=added or set(rows)!=set(added)|{value['start_message_id'],value['end_message_id']}:
                         raise TenantLinearError('Нельзя добавить подтверждение вне выбранных границ обращения.',409)
                 value=enforce_confirmation(value,items)
+                from tenant_summary_language import read_policy,DETECTOR_VERSION
+                # A stored completed proposal is authoritative provenance only
+                # while the candidate version and exact explanatory fields match.
+                explanatory={key:value[key] for key in ('title','symptoms','cause','resolution_steps',
+                  'operator_actions','outcome','clarification_note')}
+                cur.execute('''SELECT e.route->'summary_language' AS selection
+                  FROM saas_knowledge_extractions e JOIN saas_ai_agent_runs r ON r.tenant_id=e.tenant_id AND r.id=e.id
+                  WHERE e.tenant_id=%s::uuid AND e.status='completed' AND r.state='completed'
+                    AND e.route->'review'->>'candidate_id'=%s AND e.route->'review'->>'version'=%s
+                    AND r.result @> %s::jsonb ORDER BY e.created_at DESC,e.id DESC LIMIT 1''',
+                  (tenant,str(row['id']),str(row['version']),_json(explanatory)))
+                proposal_selection=cur.fetchone()
+                if proposal_selection and proposal_selection.get('selection'):
+                    edit_selection=proposal_selection['selection']
+                    value['content_language']=edit_selection['language']
+                else:
+                    language_policy=read_policy(cur,tenant)
+                    edit_selection={'language':value['content_language'],'method':'employee_edit',
+                      'policy_version':language_policy['version'],'policy_source':language_policy['source'],
+                      'detector_version':DETECTOR_VERSION}
                 cur.execute('UPDATE saas_knowledge_candidates SET content=%s::jsonb,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid',(_json(value),tenant,row['id']))
             elif action=='clarify':
                 if set(data)-{'expected_version','clarification_note'}: raise TenantLinearError('Неизвестное поле.')
@@ -1450,6 +1486,9 @@ def mutate(profile,candidate_id,data,action='edit',*,connection=None):
             else: raise TenantLinearError('Некорректное действие.')
             audit_action='knowledge_candidate_delegated_publish' if action=='delegated_approve' else 'knowledge_candidate_'+action
             audit_data={'delegation_policy_id':str(delegation['id']),'agent_ids':agents,'channel_id':channel_id} if action=='delegated_approve' else {'message_count':message_count} if action=='boundaries' else {}
+            if action=='edit':
+                audit_data={'previous_content':row['content'],'previous_version':row['version'],
+                  'content':value,'language_selection':edit_selection}
             _audit(cur,tenant,actor,audit_action,'knowledge_candidate',row['id'],audit_data)
             if connection is not None:
                 cur.execute('SELECT * FROM saas_knowledge_candidates WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,candidate_id))

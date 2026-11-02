@@ -345,10 +345,10 @@ def detail(profile, ticket_id, before=None, message_id=None):
             if not ticket:
                 raise TenantLinearError('Обращение не найдено.', 404)
             ticket=_attach_verified_contact_identity(cur,tenant,ticket)
-            from tenant_support_summary_history import versions as summary_versions, fingerprint as summary_fingerprint
+            from tenant_support_summary_history import versions as summary_versions, fingerprint as summary_fingerprint,applied_version
             summary_history = summary_versions(cur,tenant,ticket_id)
             ticket['summary_hash'] = summary_fingerprint(ticket)
-            applied_summary = next((version for version in summary_history if version.get('state')=='applied'),None)
+            applied_summary = applied_version(cur,tenant,ticket_id,ticket['summary_hash'])
             ticket['summary_language'] = applied_summary.get('language') if applied_summary else None
             from tenant_support_case_context import load_scope, messages, metadata
             material_scope = load_scope(cur, tenant, ticket_id)

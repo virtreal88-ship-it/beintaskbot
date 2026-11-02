@@ -107,9 +107,12 @@ def customer_evidence(cur, tenant, rows, channel_id, conversation_id):
     group = str(conversation_id).endswith('@g.us')
     staff = set()
     if group:
-        cur.execute('SELECT jid FROM saas_ai_group_staff WHERE tenant_id=%s::uuid AND channel_id=%s::uuid',
-                    (tenant, channel_id))
-        staff = {str(row['jid']) for row in cur.fetchall()}
+        channels=sorted({str(source.get('channel_id')) for row in rows for source in row.get('sources') or []
+                         if source.get('channel_id')}|{str(row.get('source_channel_id') or channel_id) for row in rows})
+        cur.execute('SELECT channel_id::text AS channel_id,jid FROM saas_ai_group_staff WHERE tenant_id=%s::uuid AND channel_id::text=ANY(%s::text[])',
+                    (tenant, channels))
+        staff = {(str(row['channel_id']),str(row['jid'])) for row in cur.fetchall()}
+    employees={}
     result = []
     for row in rows:
         raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}
@@ -119,11 +122,20 @@ def customer_evidence(cur, tenant, rows, channel_id, conversation_id):
         elif raw.get('verified_employee_id') is not None or raw.get('fromMe') is True:
             role = 'operator'
         elif group:
-            participant = raw.get('participantJid') or raw.get('participant_jid')
-            if not isinstance(participant, str) or not re.fullmatch(r'\d{5,22}@(s\.whatsapp\.net|lid)', participant):
+            from tenant_operator_dialogs import _participant_fields
+            from tenant_ai_group_coordination import verified_employee
+            participant,_,_ = _participant_fields(raw)
+            if not isinstance(participant, str) or not re.fullmatch(r'\d{5,22}@(s\.whatsapp\.net|c\.us|lid)', participant):
                 role = 'system'
-            elif participant in staff:
-                role = 'operator'
+            else:
+                channels={str(row.get('source_channel_id') or channel_id)}|{str(source['channel_id'])
+                    for source in row.get('sources') or [] if source.get('channel_id')}
+                for source_channel in sorted(channels):
+                    key=(source_channel,participant)
+                    if key not in employees:
+                        employees[key]=verified_employee(cur,tenant,{'participantJid':participant,'channelId':source_channel})
+                    if key in staff or employees[key] is not None:
+                        role='operator';break
         result.append({**row, 'role': role})
     return result
 
@@ -150,7 +162,9 @@ def _customer_text(message):
             or raw.get('verified_employee_id') is not None or raw.get('ai_authored') is True
             or raw.get('run_id') or message.get('author_name') == 'AI Agent'):
         return ''
-    if message.get('message_type') not in (None, 'text'):
+    if 'customer_language_text' in message:
+        value=str(message['customer_language_text'] or '')+'\n'+str(message.get('customer_language_transcript') or '')
+    elif message.get('message_type') not in (None, 'text'):
         # Only already verified reusable evidence may supply media text.
         value = message.get('transcript') or message.get('_copilot_attachment_text') or ''
         saved = message.get('media_evidence') or {}

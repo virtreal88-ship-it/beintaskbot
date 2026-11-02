@@ -274,7 +274,7 @@ def tick():
         end_at=(message_at+timedelta(microseconds=1)).isoformat()
         response=analyze(profile,{
           'request_id':request_id,'provider':'connect','channel_id':str(item['channel_id']),
-          'conversation_id':item['conversation_id'],'history_mode':'channel','language':'az',
+          'conversation_id':item['conversation_id'],'history_mode':'channel',
           'period_start':(pilot_scope() or {}).get('start_after') or (item.get('extraction_started_at').isoformat() if isinstance(item.get('extraction_started_at'),datetime) else str(item.get('extraction_started_at') or item['last_message_at'])),'period_end':end_at},
           before_provider=lambda: require_extraction_enabled(item))
         request=response.get('request') or {}
