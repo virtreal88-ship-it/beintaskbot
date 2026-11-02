@@ -17,7 +17,7 @@ assert.match(backend,/manual_display_name/,'manual group and contact names need 
 assert.match(ui,/dialogs\/display-name/,'the operator UI must save names through the tenant API');
 assert.match(l10n,/displayNameHint/,'manual-name guidance remains localized without a permanent editor block');
 assert.doesNotMatch(ui,/m\.author_name\|\|m\.participant_jid\|\|t\('groupParticipant'\)/,'a raw participant JID must not be shown as a guessed display name');
-assert.match(ui,/operatorEditConversationName/,'contact and group names must be edited from the compact title');
+assert.match(ui,/operatorClientCardOpen/,'contact and group names are edited from the avatar card');
 assert.match(ui,/data-participant-menu/,'group participant editing must be available from a compact name context menu');
 assert.doesNotMatch(ui,/operator-participant-edit/,'group participant messages must not show permanent pencil actions');
 assert.doesNotMatch(ui,/Изменить имя участника/,'the message body must not render the former large participant edit button');
