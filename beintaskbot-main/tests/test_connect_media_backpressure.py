@@ -8,9 +8,9 @@ import tenant_connect_media as media
 from tenant_linear_policy import TenantLinearError
 
 
-def item(tenant='tenant-a', channel='channel-a', message='photo-a', version=1):
+def item(tenant='tenant-a', channel='channel-a', message='photo-a', version=1, kind='image'):
     return {'route':{'tenant_id':tenant,'channel_id':channel,'conversation_id':'dialog-a'},
-            'message_id':message,'row':{'message_type':'image','raw':{'timestamp':version}}}
+            'message_id':message,'row':{'message_type':kind,'raw':{'timestamp':version}}}
 
 
 @pytest.fixture(autouse=True)
@@ -185,26 +185,44 @@ def test_acquisition_deadline_releases_slot_even_without_waiters(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_background_classification_reserves_foreground_slot_through_joins_and_cancel(monkeypatch):
+@pytest.mark.parametrize('kind',['image','audio','voice'])
+def test_background_classification_reserves_foreground_slot_through_joins_and_cancel(monkeypatch,kind):
     async def scenario():
         ready,release=threading.Event(),threading.Event()
         async def acquire(*_args,**_kwargs):
             ready.set();await released(release);return b'photo','image/png'
         transport=AsyncMock(side_effect=acquire);monkeypatch.setattr(media,'_download_media',transport)
-        auto_a=asyncio.create_task(media.download_media(item(),automatic_photo=True));await started(ready)
+        auto_a=asyncio.create_task(media.download_media(item(kind=kind),automatic_photo=True));await started(ready)
         with pytest.raises(TenantLinearError) as error:
-            await media.download_media(item(message='auto-b'),automatic_photo=True)
+            await media.download_media(item(message='auto-b',kind=kind),automatic_photo=True)
         assert error.value.status==429
-        ai=asyncio.create_task(media.download_media(item(message='ai')))
-        joined_ai=asyncio.create_task(media.download_media(item()))
+        ai=asyncio.create_task(media.download_media(item(message='ai',kind=kind)))
+        joined_ai=asyncio.create_task(media.download_media(item(kind=kind)))
         while media._media_active<2:await asyncio.sleep(.001)
         auto_a.cancel()
         with pytest.raises(asyncio.CancelledError):await auto_a
         assert media._media_auto_active==1 and not joined_ai.done()
-        with pytest.raises(TenantLinearError):await media.download_media(item(message='auto-b'),automatic_photo=True)
+        with pytest.raises(TenantLinearError):await media.download_media(item(message='auto-b',kind=kind),automatic_photo=True)
         assert transport.await_count==2
         release.set();assert await joined_ai==await ai==(b'photo','image/png')
-        assert await media.download_media(item(message='auto-b'),automatic_photo=True)==(b'photo','image/png')
+        assert await media.download_media(item(message='auto-b',kind=kind),automatic_photo=True)==(b'photo','image/png')
+        assert transport.await_count==3
+    asyncio.run(scenario())
+
+
+def test_mixed_photo_audio_and_ai_share_the_existing_physical_slots(monkeypatch):
+    async def scenario():
+        ready,release=threading.Event(),threading.Event()
+        async def acquire(*_args,**_kwargs):ready.set();await released(release);return b'synthetic','audio/ogg'
+        transport=AsyncMock(side_effect=acquire);monkeypatch.setattr(media,'_download_media',transport)
+        photo=asyncio.create_task(media.download_media(item(),automatic_photo=True));await started(ready)
+        with pytest.raises(TenantLinearError) as error:await media.download_media(item(message='audio',kind='audio'),automatic_photo=True)
+        assert error.value.status==429
+        ai=asyncio.create_task(media.download_media(item(message='ai-voice',kind='voice')))
+        while transport.await_count<2:await asyncio.sleep(.001)
+        assert media._media_active==2 and media._media_auto_active==1
+        release.set();await asyncio.gather(photo,ai)
+        assert await media.download_media(item(message='audio',kind='audio'),automatic_photo=True)==(b'synthetic','audio/ogg')
         assert transport.await_count==3
     asyncio.run(scenario())
 
