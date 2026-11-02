@@ -12,7 +12,7 @@ async function setup({dialogs=true,agent=true}={}){
  const state={consultations:[],replies:[],prepareError:null,losePrepareResponse:false,dispatchState:'pending'};
  w.fetch=async(url,options={})=>{
   const path=new URL(url,w.location).pathname,body=options.body?JSON.parse(options.body):undefined;calls.push({path,body,options});
-  if(path===base+'/preview')return ok({messages,case_id:ticket.id,has_earlier:false});
+  if(path===base+'/preview')return ok({messages,case_id:ticket.id,has_earlier:false,customer_identity_preview:{name:'Synthetic customer',verified_phone:'+15550001111',phone_status:'verified'}});
   if(path===base+'/destinations')return ok({destinations:[{channel_id:'developer-channel',conversation_id:'developers@g.us',customer_name:'Developers',channel_name:'Support WhatsApp'}]});
   if(path===base+'/replies')return ok({consultations:state.consultations,replies:state.replies});
   if(path===base&&options.method==='POST'){
@@ -37,13 +37,13 @@ function fill(ctx,node){const summary=node.querySelector('#consultReason');summa
 (async()=>{
  const ctx=await setup();
  assert.equal(ctx.calls.filter(call=>call.options.method==='POST').length,0,'reading does not send or run AI');
- const request=await form(ctx);assert.ok(request);assert.equal(request.querySelectorAll('#consultRecipient').length,1,'one Developer recipient');
+ const request=await form(ctx);assert.ok(request);assert.equal(request.querySelectorAll('#consultRecipient').length,1,'one Developer recipient');assert.equal(request.querySelector('#caseConsultIdentityConsent').checked,false,'public identity is opt-in');assert.match(request.querySelector('#caseConsultIdentityPreview').textContent,/не будут опубликованы/);
  assert.equal(request.querySelector('#caseConsultFirst').value,'message-2','a public fragment starts with only the last message selected');
  assert.equal(request.querySelectorAll('input[type=checkbox]:checked').length,0,'files are explicitly selected');
  assert.ok(request.querySelector('#caseConsultRecipientConfirm')?.required,'every manual request requires explicit recipient confirmation');assert.equal(request.querySelector('#caseConsultSend').disabled,true,'preselected or single recipient cannot send without explicit confirmation');
  fill(ctx,request);request.dispatchEvent(new ctx.w.Event('submit',{cancelable:true}));request.dispatchEvent(new ctx.w.Event('submit',{cancelable:true}));await settle();
  const prepared=ctx.calls.filter(call=>call.path===base&&call.options.method==='POST'),sent=ctx.calls.filter(call=>call.path.endsWith('/dispatch'));
- assert.equal(prepared.length,1);assert.equal(sent.length,1);assert.equal(prepared[0].body.case_id,ticket.id);assert.deepEqual(prepared[0].body.message_ids,['message-0','message-1','message-2']);assert.deepEqual(prepared[0].body.media_ids,['message-1','message-2']);assert.equal(prepared[0].body.request_id,sent[0].body.request_id);
+ assert.equal(prepared.length,1);assert.equal(sent.length,1);assert.equal(prepared[0].body.case_id,ticket.id);assert.deepEqual(prepared[0].body.message_ids,['message-0','message-1','message-2']);assert.deepEqual(prepared[0].body.media_ids,['message-1','message-2']);assert.equal(prepared[0].body.request_id,sent[0].body.request_id);assert.equal(prepared[0].body.include_customer_identity,true);
  assert.match(ctx.d.querySelector('#consultRows').textContent,/принял запрос в очередь/);assert.equal(ctx.d.querySelector('#consultCreate').disabled,true);assert.equal(ctx.d.querySelector('textarea'),null,'no manual answer field until explicitly opened');
  assert.equal(ctx.calls.some(call=>/attachment|public-share/.test(call.path)),false,'sending uses the bounded snapshot service and does not load media');
  ctx.state.consultations[0].state='sent';ctx.state.replies=[{id:'provider-reply',consultation_id:'consult-a',body:'Replace the cable',author:'Developer',source_kind:'provider',draft_state:'not_requested',can_draft:true,happened_at:'2026-11-01T13:30:00Z',url:'/app?view=dialogs&open_dialog=1&lead_id=41'}];

@@ -12,8 +12,13 @@ for (const action of ['stop', 'handoff', 'create_task', 'clarify', 'call_expert'
 }
 assert.match(html, /id="aiNoAnswerFallback"[\s\S]*?value="stop"[\s\S]*?value="handoff"/);
 assert.match(html, /id="aiNoAnswerLimit"[\s\S]*?value="1"[\s\S]*?value="2"[\s\S]*?value="3"/);
-assert.match(js, /response_policy:\{enabled:\$\('aiNoAnswerEnabled'\)\.checked,action:/,
-  'Agent save must persist the selected no-answer policy.');
+assert.match(html,/id="aiCaseAutoDispatch"[\s\S]*?id="aiCaseDeveloperRecipients"[\s\S]*?id="aiCaseDispatchStatus"/,
+  'Agent editor exposes default-off, multiple developer recipients and a status preview.');
+assert.match(js,/api\('dialog-consultations\/destinations'\)/,'Recipient options come from the current authorized Developer destination list.');
+assert.match(js,/auto_case_dispatch_enabled:\$\('aiCaseAutoDispatch'\)\.checked&&\$\('aiAgentMode'\)\.value==='automatic'/,
+  'Automatic dispatch is explicitly disabled in Manual Mode.');
+assert.match(js,/response_policy:\{enabled:/,
+  'Agent save persists policy and dispatch settings without sending server-only fields back.');
 assert.match(js, /responsePolicy\.enabled===true/,
   'Existing agents must remain opt-out until explicitly enabled.');
 for (const lang of ['ru', 'az', 'en']) {

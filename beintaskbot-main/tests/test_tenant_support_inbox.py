@@ -151,6 +151,62 @@ def test_case_developer_assignment_rejects_unmarked_destination(db,monkeypatch):
     with pytest.raises(TenantLinearError):store.update(PROFILE,ticket,{'assigned_developer_channel_id':CA,'assigned_developer_conversation_id':'ordinary@g.us'})
 
 
+def test_auto_dispatch_setting_revalidates_every_selected_developer_route(db,monkeypatch):
+    from tenant_dialog_consultations import schema as consultation_schema,developer_marker
+    from tenant_ai_agents_store import _validate_case_developer_destinations
+    import tenant_dialog_consultations as flow
+    monkeypatch.setattr(flow,'_connect',lambda:db);consultation_schema(db)
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,'synthetic-dev@g.us',88,'Synthetic Dev',now())",(A,CA));db.commit()
+    developer_marker(PROFILE,{'channel_id':CA,'conversation_id':'synthetic-dev@g.us','enabled':True})
+    with db.cursor() as cur:
+        _validate_case_developer_destinations(cur,PROFILE,A,{'auto_case_dispatch_enabled':True,
+          'developer_destinations':[{'channel_id':CA,'conversation_id':'synthetic-dev@g.us'}]})
+    with pytest.raises(TenantLinearError):
+        with db.cursor() as cur:
+            _validate_case_developer_destinations(cur,PROFILE,A,{'auto_case_dispatch_enabled':True,
+              'developer_destinations':[{'channel_id':CA,'conversation_id':'client'}]})
+
+
+def test_support_cards_expose_verified_direct_phone_but_never_group_address(db):
+    db.execute('''CREATE TABLE IF NOT EXISTS saas_connect_direct_identities(
+      tenant_id UUID,connect_channel_id UUID,identity_key TEXT,canonical_conversation_id TEXT,verified_at TIMESTAMPTZ DEFAULT now())''')
+    db.execute("INSERT INTO saas_connect_direct_identities(tenant_id,connect_channel_id,identity_key,canonical_conversation_id) VALUES(%s::uuid,%s::uuid,'15550001111@s.whatsapp.net','client')",(A,CA))
+    direct=manual()['ticket']['id']
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,'synthetic-team@g.us',99,'Synthetic Team',now())",(A,CA))
+    group=manual(lead_id=99)['ticket']['id'];db.commit()
+    by_id={row['id']:row for row in store.listing(PROFILE)['tickets']}
+    assert by_id[direct]['customer_verified_phone']=='+15550001111'
+    assert by_id[group]['customer_verified_phone']==''
+    assert 'synthetic-team@g.us' not in str(by_id[group].get('phone') or '')
+
+
+def test_automatic_case_dispatch_intents_are_created_only_for_new_opted_in_cases(db):
+    job=seed_job(db)
+    db.execute("UPDATE saas_crm_messages SET external_id='connect:m1' WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))
+    db.execute("UPDATE saas_ai_agents SET mode='automatic',response_policy=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      (json.dumps({'auto_case_dispatch_enabled':True,'auto_case_dispatch_owner_id':11,'developer_destinations':[{'channel_id':CA,'conversation_id':'synthetic-dev@g.us'}]}),A,AGENT));db.commit()
+    with db.cursor() as cur:
+        receipt=store.handoff_ticket(cur,{**job,'source_message_id':'m1','case_message_ids':['m1']},'synthetic escalation')
+    db.commit()
+    assert receipt['created'] is True
+    rows=db.execute('SELECT state,owner_id,channel_id::text AS channel_id,conversation_id FROM saas_ai_case_developer_dispatches')
+    assert rows==[{'state':'queued','owner_id':11,'channel_id':CA,'conversation_id':'synthetic-dev@g.us'}]
+    with db.cursor() as cur:
+        retry=store.handoff_ticket(cur,{**job,'source_message_id':'m1','case_message_ids':['m1']},'synthetic escalation')
+    db.commit()
+    assert retry['created'] is False
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_case_developer_dispatches')[0]['n']==1
+
+
+def test_automatic_case_dispatch_is_off_by_default(db):
+    job=seed_job(db)
+    with db.cursor() as cur:
+        receipt=store.handoff_ticket(cur,{**job,'source_message_id':'m1','case_message_ids':['m1']},'synthetic escalation')
+    db.commit()
+    assert receipt['created'] is True
+    assert db.execute('SELECT count(*) AS n FROM saas_ai_case_developer_dispatches')[0]['n']==0
+
+
 def test_direct_login_employee_is_atomic_and_does_not_require_synthetic_email(db, monkeypatch):
     monkeypatch.setattr(member_store, '_connect', lambda: db)
     created=member_store.provision_employee_account(

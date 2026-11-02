@@ -209,6 +209,35 @@ def handoff_ticket(cur, job, reason):
     if receipt.get('id') and ids:
         record_case_message_membership(cur,str(job['tenant_id']),receipt['id'],job['channel_id'],
           job.get('conversation_id') or job.get('chat_id'),ids,'handoff:'+str(job['event_fingerprint']))
+    if receipt.get('created') and job.get('agent_id'):
+        cur.execute('''SELECT mode,response_policy FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid AND enabled=TRUE''',
+          (job['tenant_id'],job['agent_id']))
+        agent=cur.fetchone() or {};policy=agent.get('response_policy') or {}
+        destinations=policy.get('developer_destinations') if isinstance(policy.get('developer_destinations'),list) else []
+        if agent.get('mode')=='automatic' and policy.get('auto_case_dispatch_enabled') is True:
+            cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_case_developer_dispatches(
+              tenant_id UUID NOT NULL, id UUID NOT NULL, case_id UUID NOT NULL, agent_id UUID NOT NULL,
+              event_key TEXT NOT NULL, destination_key TEXT NOT NULL, channel_id UUID NULL, conversation_id TEXT NULL, owner_id BIGINT NULL,
+              request_id UUID NOT NULL, state TEXT NOT NULL DEFAULT 'queued', reason TEXT NOT NULL DEFAULT '',
+              consultation_id UUID NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              PRIMARY KEY(tenant_id,id), UNIQUE(tenant_id,event_key,destination_key), UNIQUE(tenant_id,request_id),
+              FOREIGN KEY(tenant_id,case_id) REFERENCES saas_support_tickets(tenant_id,id) ON DELETE CASCADE,
+              FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE,
+              CHECK(state IN ('queued','preparing','sent','pending','unknown','blocked')) )''')
+            event_key=str(job.get('event_fingerprint') or '')[:500]
+            if destinations:
+                for target in destinations:
+                    channel=str(target.get('channel_id') or '');conversation=str(target.get('conversation_id') or '')
+                    key=channel+'|'+conversation
+                    request=uuid.uuid5(uuid.NAMESPACE_URL,'auto-case-dispatch:'+str(job['tenant_id'])+':'+event_key+':'+key)
+                    cur.execute('''INSERT INTO saas_ai_case_developer_dispatches(tenant_id,id,case_id,agent_id,event_key,destination_key,channel_id,conversation_id,owner_id,request_id)
+                      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s::uuid,%s,%s,%s::uuid) ON CONFLICT DO NOTHING''',
+                      (job['tenant_id'],uuid.uuid4(),receipt['id'],job['agent_id'],event_key,key,channel,conversation,policy.get('auto_case_dispatch_owner_id'),request))
+            else:
+                request=uuid.uuid5(uuid.NAMESPACE_URL,'auto-case-dispatch:'+str(job['tenant_id'])+':'+event_key+':blocked:no-recipient')
+                cur.execute('''INSERT INTO saas_ai_case_developer_dispatches(tenant_id,id,case_id,agent_id,event_key,destination_key,owner_id,request_id,state,reason)
+                  VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,'blocked',%s,%s::uuid,'blocked','no_developer_recipient_configured') ON CONFLICT DO NOTHING''',
+                  (job['tenant_id'],uuid.uuid4(),receipt['id'],job['agent_id'],event_key,policy.get('auto_case_dispatch_owner_id'),request))
     return receipt
 
 
@@ -249,6 +278,18 @@ _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_messag
    ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 1) lm ON TRUE'''
 
 
+def _attach_verified_contact_identity(cur,tenant,row):
+    """Expose only provider-verified direct identity; groups never become phone numbers."""
+    item=dict(row)
+    cur.execute("SELECT to_regclass('saas_connect_direct_identities') AS ready")
+    if not (cur.fetchone() or {}).get('ready'):
+        item['customer_verified_phone']='';return item
+    from tenant_connect_direct_identity import verified_phone_jid
+    jid=verified_phone_jid(cur,tenant,str(item.get('channel_id') or ''),str(item.get('conversation_id') or ''))
+    item['customer_verified_phone']='+'+jid.split('@',1)[0] if jid else ''
+    return item
+
+
 def eligible_members(cur, tenant):
     cur.execute('''SELECT telegram_id,display_name,role FROM saas_tenant_members m WHERE tenant_id=%s::uuid AND active=TRUE
       AND (role='owner' OR (role<>'master' AND permissions @> '["support"]'::jsonb) OR (role='admin' AND EXISTS (SELECT 1 FROM saas_tenant_workflow_policies p
@@ -286,7 +327,8 @@ def listing(profile, status='unresolved', assignee='', offset=0, search='', chan
             unresolved_count=int(cur.fetchone()['total'])
             cur.execute('SELECT connect_channel_id::text AS id,name FROM saas_connect_channels WHERE tenant_id=%s::uuid ORDER BY name',(tenant,))
             channels=[dict(row) for row in cur.fetchall()]
-    return {'tickets': [public(row) for row in rows[:50]], 'members': members, 'channels':channels, 'unresolved_count':unresolved_count,
+            safe_rows=[_attach_verified_contact_identity(cur,tenant,row) for row in rows[:50]]
+    return {'tickets': [public(row) for row in safe_rows], 'members': members, 'channels':channels, 'unresolved_count':unresolved_count,
             'next_offset': offset+50 if len(rows)>50 else None}
 
 
@@ -299,6 +341,7 @@ def detail(profile, ticket_id, before=None, message_id=None):
             ticket = cur.fetchone()
             if not ticket:
                 raise TenantLinearError('Обращение не найдено.', 404)
+            ticket=_attach_verified_contact_identity(cur,tenant,ticket)
             from tenant_support_case_context import load_scope, messages, metadata
             material_scope = load_scope(cur, tenant, ticket_id)
             scope_metadata = metadata(cur, material_scope)

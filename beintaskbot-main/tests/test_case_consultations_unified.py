@@ -1,8 +1,9 @@
 """Unified case consultation regressions: isolated SQL and synthetic receipts only."""
+import json
 import uuid
 from unittest.mock import Mock
 import pytest
-from test_tenant_support_inbox import database,db,A,B,CA,CB,PROFILE,manual
+from test_tenant_support_inbox import database,db,A,B,CA,CB,AGENT,PROFILE,manual
 from test_dialog_consultations import ready,TARGET
 import tenant_dialog_consultations as flow
 import tenant_dialog_consultations_worker as worker
@@ -10,6 +11,7 @@ import tenant_consultation_group as legacy
 import tenant_internal_consultations as internal
 import tenant_connect_transport as transport
 import tenant_public_case as public
+import tenant_support_inbox_store as inbox_store
 from tenant_linear_policy import TenantLinearError
 
 
@@ -127,6 +129,44 @@ def test_developer_context_is_limited_to_unique_case_containing_current_message(
     context=flow.active_case_developer_context(job,source)
     assert len(context)==1 and context[0]['message']=='Завтра посмотрю'
     assert flow.active_case_developer_context(job,'unrelated-message')==[]
+
+
+def test_auto_dispatch_reply_resolution_notification_full_offline_flow(case_ready,monkeypatch):
+    local,data,sender=case_ready
+    local.execute("UPDATE saas_support_tickets SET status='resolved' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,data['case_id']))
+    local.execute("UPDATE saas_crm_messages SET external_id='connect:m1' WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))
+    second_target='120363411822115410@g.us'
+    local.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,98,'Synthetic Dev 2',now())",(A,CA,second_target))
+    local.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,state,reason) VALUES(%s::uuid,%s,'human','fixture') ON CONFLICT DO NOTHING",(A,second_target));local.commit()
+    flow.developer_marker(PROFILE,{'channel_id':CA,'conversation_id':second_target,'enabled':True})
+    config={'auto_case_dispatch_enabled':True,'auto_case_dispatch_owner_id':11,
+      'developer_destinations':[{'channel_id':CA,'conversation_id':TARGET},{'channel_id':CA,'conversation_id':second_target}]}
+    local.execute("UPDATE saas_ai_agents SET mode='automatic',response_policy=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps(config),A,AGENT))
+    local.execute('UPDATE saas_ai_agent_settings SET auto_send_enabled=TRUE WHERE tenant_id=%s::uuid',(A,));local.commit()
+    job={'tenant_id':A,'provider':'connect','agent_id':AGENT,'conversation_id':'client','chat_id':'client',
+      'channel_id':CA,'lead_id':41,'event_fingerprint':'automatic-case-event','source_message_id':'m1',
+      'case_message_ids':['m1']}
+    with local.cursor() as cur:receipt=inbox_store.handoff_ticket(cur,job,'synthetic escalation')
+    local.commit();assert receipt['created'] is True
+    outboxes=local.execute("SELECT id::text FROM saas_ai_case_developer_dispatches WHERE case_id=%s::uuid ORDER BY destination_key",(receipt['id'],))
+    assert len(outboxes)==2
+    import tenant_connect_transport as connect_transport
+    monkeypatch.setattr(connect_transport,'connect_route',lambda _cur,_tenant,lead,**_kw:{'channel_id':CA,'conversation_id':TARGET if lead==99 else second_target,'api_key':'synthetic'})
+    for outbox in outboxes:worker.dispatch_auto_case(outbox['id'])
+    assert sender.call_count==2
+    rows=local.execute('SELECT state,consultation_id::text FROM saas_ai_case_developer_dispatches WHERE case_id=%s::uuid',(receipt['id'],))
+    assert len(rows)==2 and all(row['state']=='sent' and row['consultation_id'] for row in rows)
+    with local.cursor() as cur:
+        answer=flow.record_reply(cur,A,CA,TARGET,'auto-answer','Завтра посмотрю','PROVIDER_123',author='Developer')
+    local.commit()
+    assert answer and local.execute('SELECT status FROM saas_support_tickets WHERE id=%s::uuid',(receipt['id'],))[0]['status']!='resolved'
+    job['source_message_id']='connect:m1'
+    assert flow.active_case_developer_context(job,'connect:m1')[0]['message']=='Завтра посмотрю'
+    with local.cursor() as cur:
+        done=flow.record_reply(cur,A,CA,TARGET,'auto-done','/решено','PROVIDER_123',author='Developer')
+    local.commit()
+    assert done and local.execute('SELECT status,completion_outcome FROM saas_support_tickets WHERE id=%s::uuid',(receipt['id'],))[0]=={'status':'resolved','completion_outcome':'resolved_confirmed'}
+    assert local.execute("SELECT count(*) AS n FROM saas_tenant_notifications WHERE event_key='dialog_consultation:'||%s",(done,))[0]['n']==1
 
 
 def test_legacy_case_marker_and_saved_reply_project_to_common_thread(case_ready):

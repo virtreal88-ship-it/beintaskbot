@@ -38,6 +38,7 @@ def schema(conn):
         cur.execute('ALTER TABLE saas_public_case_shares ALTER COLUMN ticket_id DROP NOT NULL')
         cur.execute('ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS consultation_id UUID NULL')
         cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS source_versions JSONB NOT NULL DEFAULT '{}'::jsonb")
+        cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS public_identity JSONB NOT NULL DEFAULT '{}'::jsonb")
         cur.execute("""DO $$ BEGIN
           IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='saas_public_case_shares'::regclass AND conname='saas_public_consultation_fk') THEN
             ALTER TABLE saas_public_case_shares ADD CONSTRAINT saas_public_consultation_fk
@@ -208,6 +209,7 @@ def preview(profile,data):
                 conversation=str(source.get('conversation_id') or '')
                 suffix=next((suffix for suffix in ('@s.whatsapp.net','@c.us') if conversation.endswith(suffix)),'')
                 if suffix:phone=_preview_phone(conversation[:-len(suffix)])
+            verified_phone=_verified_contact_phone(cur,tenant,data['channel_id'],source.get('conversation_id'))
             messages=[]
             for row in rows:
                 value={key:str(item) if isinstance(item,uuid.UUID) or hasattr(item,'isoformat') else item for key,item in dict(row).items()};author=value.get('author_name') or '';raw=value.get('raw') or {}
@@ -220,6 +222,8 @@ def preview(profile,data):
                 for private in ('raw','media_url','channel','ordered_at'):value.pop(private,None)
                 messages.append(value)
             return {'messages':messages,'case_id':case_id or None,'has_earlier':has_earlier,'scope':case_scope,
+                    'customer_identity_preview':{'name':customer_name,'verified_phone':verified_phone,
+                        'phone_status':'verified' if verified_phone else 'unknown'},
                     'source':{'channel_id':data['channel_id'],'conversation_id':data['conversation_id'],'lead_id':source['lead_id']}}
 
 
@@ -239,10 +243,21 @@ def _preview_phone(value):
     return phone[:28] if re.fullmatch(r'\+?[0-9][0-9 ()-]{4,25}',phone) else ''
 
 
+def _verified_contact_phone(cur,tenant,channel,conversation):
+    cur.execute("SELECT to_regclass('saas_connect_direct_identities') AS ready")
+    if not (cur.fetchone() or {}).get('ready'):return ''
+    from tenant_connect_direct_identity import verified_phone_jid
+    jid=verified_phone_jid(cur,tenant,channel,conversation)
+    return '+'+jid.split('@',1)[0] if jid else ''
+
+
 def prepare(profile,data,origin):
     required={'request_id','channel_id','conversation_id','destination_channel_id','destination_conversation_id','message_ids','media_ids','summary','confirm'}
-    if not isinstance(data,dict) or set(data) not in (required,required|{'case_id'}) or data['confirm'] is not True:
+    optional={'case_id','include_customer_identity'}
+    if not isinstance(data,dict) or not required.issubset(data) or set(data)-required-optional or data['confirm'] is not True:
         raise TenantLinearError('Подтвердите получателя и выбранный фрагмент.',400)
+    include_identity=data.get('include_customer_identity',False)
+    if type(include_identity) is not bool:raise TenantLinearError('Параметр публикации личности некорректен.',400)
     request=identifier(data['request_id']);channel=identifier(data['channel_id']);dest=identifier(data['destination_channel_id'])
     case_id=identifier(data['case_id']) if data.get('case_id') else None
     summary=data['summary']
@@ -299,6 +314,14 @@ def prepare(profile,data,origin):
             # Explicit subset, immutable snapshot. Original evidence is never rewritten.
             public=[{'id':r['id'],'speaker':'Müştəri' if r['direction']=='incoming' else 'Əməkdaş',
               'text':_public_text(r['body']),'type':r['message_type'] if r['id'] in allowed else 'text','at':str(r['happened_at'])} for r in rows]
+            identity={}
+            if include_identity:
+                name=_human_preview_name(source.get('manual_display_name') or source.get('contact_name') or source.get('customer_name'),source.get('conversation_id'))
+                phone=_verified_contact_phone(cur,tenant,channel,source['conversation_id'])
+                identity={'customer_name':name,'verified_phone':phone,'phone_status':'verified' if phone else 'unknown'}
+                if name:
+                    for row in public:
+                        if row['speaker']=='Müştəri':row['speaker']=name
             ident=str(uuid.uuid4());share=str(uuid.uuid4());token=secrets.token_urlsafe(32)
             url=origin.rstrip('/')+'/public/case/'+token
             # Keep the provider receipt/request key as the machine correlation.
@@ -309,14 +332,14 @@ def prepare(profile,data,origin):
               VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb,'waiting_specialist',%s)''',
               (tenant,ident,case_id,channel,source['conversation_id'],'employee:'+request,summary.strip(),_json({'input_hash':digest,'scope_hash':scope_hash,'share_id':share,'message_ids':selected}),actor))
             cur.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,consultation_id,channel_id,conversation_id,
-              group_channel_id,group_conversation_id,token_hash,selected_message_ids,selected_media_ids,public_messages,created_by,expires_at,source_versions,is_partial)
-              VALUES(%s::uuid,%s::uuid,NULL,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,now()+interval '7 days',%s::jsonb,%s)''',
-              (share,tenant,ident,channel,source['conversation_id'],dest,target['conversation_id'],hashlib.sha256(token.encode()).hexdigest(),_json(selected),_json(allowed),_json(public),actor,_json({r['id']:version(r) for r in rows}),len(allowed)!=len(media)))
+              group_channel_id,group_conversation_id,token_hash,selected_message_ids,selected_media_ids,public_messages,created_by,expires_at,source_versions,is_partial,public_identity)
+              VALUES(%s::uuid,%s::uuid,NULL,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,now()+interval '7 days',%s::jsonb,%s,%s::jsonb)''',
+              (share,tenant,ident,channel,source['conversation_id'],dest,target['conversation_id'],hashlib.sha256(token.encode()).hexdigest(),_json(selected),_json(allowed),_json(public),actor,_json({r['id']:version(r) for r in rows}),len(allowed)!=len(media),_json(identity)))
             cur.execute('''INSERT INTO saas_consultation_group_deliveries(tenant_id,consultation_id,request_id,case_id,channel_id,conversation_id,body,body_hash,state,created_by)
               VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,'ready',%s)''',
               (tenant,ident,request,case_id,dest,target['conversation_id'],body,hashlib.sha256(body.encode()).hexdigest(),actor))
             from tenant_ai_agents_store import _audit
-            _audit(cur,tenant,actor,'dialog_consultation_prepared','consultation',ident,{'destination_channel_id':dest,'message_ids':selected,'share_id':share})
+            _audit(cur,tenant,actor,'dialog_consultation_prepared','consultation',ident,{'destination_channel_id':dest,'message_ids':selected,'share_id':share,'customer_identity_published':include_identity})
         conn.commit()
     return {'id':ident,'case_id':case_id,'request_id':request,'state':'ready','created':True,'recipient':target['customer_name'],'message_count':len(selected),'expires_in_days':7}
 
@@ -522,6 +545,25 @@ def record_reply(cur,tenant,channel,conversation,message_id,text,quoted=None,aut
         assignment=cur.fetchone() or {}
         assigned_developer=(str(assignment.get('channel_id') or '')==str(channel)
                             and str(assignment.get('conversation_id') or '')==str(conversation))
+        if not assigned_developer:
+            cur.execute('''SELECT EXISTS(
+              SELECT 1 FROM saas_consultation_group_deliveries d
+              JOIN saas_internal_consultations c ON c.tenant_id=d.tenant_id AND c.id=d.consultation_id
+              JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+              JOIN saas_dialog_developer_markers m ON m.tenant_id=d.tenant_id AND m.channel_id=d.channel_id
+                AND m.conversation_id=d.conversation_id AND m.enabled=TRUE
+              JOIN saas_connect_channels ch ON ch.tenant_id=d.tenant_id AND ch.connect_channel_id=d.channel_id AND ch.active=TRUE
+              JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect'
+                AND cs.channel_id=t.channel_id::text AND cs.conversation_id=t.conversation_id
+              JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
+              WHERE d.tenant_id=%s::uuid AND d.consultation_id=%s::uuid AND d.channel_id=%s::uuid
+                AND d.conversation_id=%s AND d.state='sent' AND d.provider_message_id=%s
+                AND a.enabled=TRUE AND a.mode='automatic'
+                AND a.response_policy->>'auto_case_dispatch_enabled'='true'
+                AND COALESCE(a.response_policy->'developer_destinations','[]'::jsonb) @> %s::jsonb
+                AND t.status<>'resolved') AS allowed''',
+              (tenant,item['id'],channel,conversation,quoted,json.dumps([{'channel_id':str(channel),'conversation_id':str(conversation)}])))
+            assigned_developer=bool((cur.fetchone() or {}).get('allowed'))
     resolution=(kind=='text' and bool(re.fullmatch(r'\s*/(?:done|решено)\s*',text,re.I))
                 and bool(quoted) and bool(item['quote_match']) and assigned_developer)
     body=text.strip() or {'audio':'Аудиосообщение разработчика — без расшифровки','image':'Изображение разработчика','video':'Видео разработчика','document':'Документ разработчика'}.get(kind,'Вложение разработчика')
@@ -691,7 +733,17 @@ def inbox(profile,channel='',conversation='',case_id=''):
                     'can_send':not row.get('case_id') or policy.profile.get('role')=='owner',
                     'can_manual_reply':policy.profile.get('role') in {'owner','admin'} or row.get('recipient_id') in {None,actor},
                     'message_ids':row['message_ids'] or [],'media_ids':row['media_ids'] or []})
-            return {'case_id':case_id or None,'replies':result,'consultations':consultations,
+            auto_dispatches=[]
+            if case_id:
+                cur.execute("SELECT to_regclass('saas_ai_case_developer_dispatches') AS ready")
+                if (cur.fetchone() or {}).get('ready'):
+                    cur.execute('''SELECT x.id::text,x.state,x.reason,x.created_at,x.updated_at,
+                      COALESCE(NULLIF(v.display_name,''),NULLIF(v.contact_name,''),x.conversation_id) AS recipient
+                      FROM saas_ai_case_developer_dispatches x LEFT JOIN saas_connect_conversations v
+                        ON v.tenant_id=x.tenant_id AND v.connect_channel_id=x.channel_id AND v.conversation_id=x.conversation_id
+                      WHERE x.tenant_id=%s::uuid AND x.case_id=%s::uuid ORDER BY x.created_at,x.id''',(tenant,case_id))
+                    auto_dispatches=[{k:str(v) if isinstance(v,uuid.UUID) or hasattr(v,'isoformat') else v for k,v in dict(row).items()} for row in cur.fetchall()]
+            return {'case_id':case_id or None,'replies':result,'consultations':consultations,'auto_dispatches':auto_dispatches,
                 'unhandled':sum(r['handled_at'] is None for r in result),'unread':sum(r['read_at'] is None for r in result),
                 'notification_unread_count':notification_unread_count}
 

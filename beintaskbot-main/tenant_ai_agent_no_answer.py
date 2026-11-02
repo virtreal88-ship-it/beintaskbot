@@ -14,7 +14,8 @@ FALLBACK_ACTIONS = {'stop', 'handoff'}
 def validate_policy(value):
     if value is None:
         value = {}
-    allowed = {'enabled', 'action', 'fallback_action', 'max_clarifications', 'stop_reply', 'developer_id'}
+    allowed = {'enabled', 'action', 'fallback_action', 'max_clarifications', 'stop_reply', 'developer_id',
+               'auto_case_dispatch_enabled','developer_destinations'}
     if not isinstance(value, dict) or set(value) - allowed:
         raise TenantLinearError('No-answer policy is invalid.')
     enabled = value.get('enabled', False)
@@ -33,8 +34,25 @@ def validate_policy(value):
     if action=='consult_developer':
         if type(developer) is not int or developer <= 0: raise TenantLinearError('A designated developer is required.')
     elif developer is not None: raise TenantLinearError('Developer is only valid for developer consultation.')
+    auto_dispatch=value.get('auto_case_dispatch_enabled',False)
+    destinations=value.get('developer_destinations',[])
+    if type(auto_dispatch) is not bool:raise TenantLinearError('Automatic case dispatch setting is invalid.')
+    if not isinstance(destinations,list) or len(destinations)>5:raise TenantLinearError('Choose up to five developer destinations.')
+    normalized=[];seen=set()
+    from tenant_linear_policy import identifier
+    for row in destinations:
+        if not isinstance(row,dict) or set(row)!={'channel_id','conversation_id'}:
+            raise TenantLinearError('Developer destination is invalid.')
+        channel=identifier(row['channel_id']);conversation=row['conversation_id']
+        if not isinstance(conversation,str) or not conversation.strip() or len(conversation)>160:
+            raise TenantLinearError('Developer destination is invalid.')
+        item={'channel_id':channel,'conversation_id':conversation.strip()}
+        key=(item['channel_id'],item['conversation_id'])
+        if key not in seen:seen.add(key);normalized.append(item)
+    if auto_dispatch and not normalized:raise TenantLinearError('Select at least one developer for automatic case dispatch.')
     return {'enabled': enabled, 'action': action, 'fallback_action': fallback,
-            'max_clarifications': limit, 'stop_reply': reply.strip(),'developer_id':developer}
+            'max_clarifications': limit, 'stop_reply': reply.strip(),'developer_id':developer,
+            'auto_case_dispatch_enabled':auto_dispatch,'developer_destinations':normalized}
 
 
 def assess(raw, knowledge):

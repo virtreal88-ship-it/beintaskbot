@@ -45,13 +45,13 @@
     $('supportMine').setAttribute('aria-pressed',String(assignee.value==='me'));
   }
   function badge(count){const node=$('supportUnresolvedCount');if(node){node.textContent=String(count);node.hidden=count===0;node.setAttribute('aria-label',t('unresolved')+': '+count);}}
-  function displayName(ticket){return ticket.contact_name||ticket.phone||t('customer');}
+  function displayName(ticket){return ticket.contact_name||t('customer');}
   const ticketStatus=ticket=>ticket.completion_outcome==='test_stopped'?t('testStoppedUnresolved'):t(ticket.status);
   async function load(append=false){
     if(!member||!allowed())return;install();const revision=++listRevision,version=epoch;
     try{const result=await api('?'+new URLSearchParams({status:$('supportStatus').value,assignee:$('supportAssignee').value,search:$('supportSearch').value,channel_id:$('supportChannel').value,offset:append?nextOffset||0:0}));if(revision!==listRevision)return;
       members=result.members;channels=result.channels||[];rows=append?rows.concat(result.tickets):result.tickets;nextOffset=result.next_offset;badge(result.unresolved_count||0);filterOptions();
-      $('supportRows').innerHTML=rows.map(ticket=>`<article class="support-row"><div><small title="${esc(ticket.id)}">#${esc(ticket.id.slice(0,8).toUpperCase())}</small><b data-user-content>${esc(displayName(ticket))}</b><small data-user-content>${esc(ticket.channel_name||ticket.channel_id)} · WhatsApp</small></div><div data-user-content>${esc(ticket.description)}<small>${ticket.source==='ai_handoff'?t('human'):t('new')}</small></div><div><b>${ticketStatus(ticket)}</b><small data-user-content>${esc(ticket.assignee_name||t('unassigned'))}</small><small>${t('lastMessage')}: ${esc(i18n.date(ticket.last_message_at))}</small><button type="button" class="support-link" data-support-id="${esc(ticket.id)}">${t('open')}</button></div></article>`).join('')||`<p>${t('empty')}</p>`;
+      $('supportRows').innerHTML=rows.map(ticket=>`<article class="support-row"><div><small title="${esc(ticket.id)}">#${esc(ticket.id.slice(0,8).toUpperCase())}</small><b data-user-content>${esc(displayName(ticket))}</b>${ticket.customer_verified_phone?`<small data-user-content>${esc(ticket.customer_verified_phone)}</small>`:''}<small data-user-content>${esc(ticket.channel_name||ticket.channel_id)} · WhatsApp</small></div><div data-user-content>${esc(ticket.description)}<small>${ticket.source==='ai_handoff'?t('human'):t('new')}</small></div><div><b>${ticketStatus(ticket)}</b><small data-user-content>${esc(ticket.assignee_name||t('unassigned'))}</small><small>${t('lastMessage')}: ${esc(i18n.date(ticket.last_message_at))}</small><button type="button" class="support-link" data-support-id="${esc(ticket.id)}">${t('open')}</button></div></article>`).join('')||`<p>${t('empty')}</p>`;
       $('supportMore').hidden=nextOffset===null;$('supportRows').querySelectorAll('[data-support-id]').forEach(button=>button.onclick=()=>open(button.dataset.supportId,'',false,true));if(!modalOpen)notice('');
     }catch(error){if(version===epoch&&revision===listRevision)notice(error.message);}
   }

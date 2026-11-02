@@ -19,6 +19,101 @@ def pending(limit=10):
             return [dict(r) for r in cur.fetchall()]
 
 
+def auto_dispatch_queue(limit=10):
+    """Read only freshly queued automatic CASE dispatch intents."""
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('saas_ai_case_developer_dispatches') AS ready")
+            if not (cur.fetchone() or {}).get('ready'):return []
+            cur.execute("SELECT id::text FROM saas_ai_case_developer_dispatches WHERE state='queued' ORDER BY created_at,id LIMIT %s",(limit,))
+            return [row['id'] for row in cur.fetchall()]
+
+
+def reconcile_auto_dispatches():
+    """Project the existing consultation receipt ledger; never resubmit a provider POST."""
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('saas_ai_case_developer_dispatches') AS ready")
+            if not (cur.fetchone() or {}).get('ready'):return
+            cur.execute('''UPDATE saas_ai_case_developer_dispatches x SET
+                consultation_id=d.consultation_id,
+                state=CASE d.state WHEN 'ready' THEN 'queued' WHEN 'sent' THEN 'sent' WHEN 'pending' THEN 'pending'
+                    WHEN 'unknown' THEN 'unknown' WHEN 'blocked' THEN 'blocked' ELSE x.state END,
+                reason=CASE WHEN d.state='blocked' THEN 'developer_route_blocked' ELSE x.reason END,updated_at=now()
+              FROM saas_consultation_group_deliveries d
+              WHERE x.request_id=d.request_id AND x.state IN ('preparing','queued')''')
+            cur.execute("UPDATE saas_ai_case_developer_dispatches SET state='unknown',reason='dispatch_outcome_requires_receipt_reconciliation',updated_at=now() WHERE state='preparing' AND updated_at<now()-interval '5 minutes'")
+        conn.commit()
+
+
+def dispatch_auto_case(item_id):
+    """Prepare and send one owner-authorized auto CASE request through the existing receipt path."""
+    import uuid
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute('''UPDATE saas_ai_case_developer_dispatches SET state='preparing',updated_at=now()
+              WHERE id=%s::uuid AND state='queued' RETURNING *''',(item_id,))
+            item=cur.fetchone()
+            if not item:return
+        conn.commit()
+    tenant=str(item['tenant_id']);owner=item.get('owner_id');profile={'tenant_id':tenant,'telegram_id':owner}
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute('''SELECT a.enabled,a.mode,a.response_policy,s.enabled AS company_enabled,
+                  s.auto_send_enabled,s.emergency_stop,t.status AS tenant_status,m.role,m.active
+                  FROM saas_ai_agents a JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id
+                  JOIN saas_tenants t ON t.id=a.tenant_id LEFT JOIN saas_tenant_members m
+                    ON m.tenant_id=a.tenant_id AND m.telegram_id=%s
+                  WHERE a.tenant_id=%s::uuid AND a.id=%s::uuid''',(owner,tenant,item['agent_id']))
+                cfg=cur.fetchone() or {};policy=cfg.get('response_policy') or {}
+                if (not owner or cfg.get('role')!='owner' or cfg.get('active') is not True
+                    or cfg.get('enabled') is not True or cfg.get('mode')!='automatic'
+                    or policy.get('auto_case_dispatch_enabled') is not True
+                    or int(policy.get('auto_case_dispatch_owner_id') or 0)!=int(owner)
+                    or cfg.get('company_enabled') is not True or cfg.get('auto_send_enabled') is not True
+                    or cfg.get('emergency_stop') is True or cfg.get('tenant_status') not in {'active','trial'}):
+                    raise TenantLinearError('automatic_dispatch_policy_or_owner_changed',409)
+                if not item.get('channel_id') or not item.get('conversation_id'):
+                    raise TenantLinearError('developer_destination_not_configured',409)
+                cur.execute('''SELECT t.channel_id::text AS channel_id,t.conversation_id,t.description,t.status
+                  FROM saas_support_tickets t WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid''',(tenant,item['case_id']))
+                case=cur.fetchone()
+                if not case or case['status']=='resolved':raise TenantLinearError('case_no_longer_open',409)
+        from tenant_dialog_consultations import preview,prepare,dispatch
+        source={'case_id':str(item['case_id']),'channel_id':case['channel_id'],'conversation_id':case['conversation_id']}
+        material=preview(profile,source)
+        messages=[row for row in material.get('messages',[]) if row.get('direction') in {'incoming','outgoing'}][-30:]
+        if not messages:raise TenantLinearError('case_has_no_publishable_messages',409)
+        request=str(item['request_id']);target={'channel_id':str(item['channel_id']),'conversation_id':item['conversation_id']}
+        consultation=prepare(profile,{'request_id':request,'case_id':str(item['case_id']),
+          'channel_id':case['channel_id'],'conversation_id':case['conversation_id'],
+          'destination_channel_id':target['channel_id'],'destination_conversation_id':target['conversation_id'],
+          'message_ids':[str(row['id']) for row in messages],'media_ids':[],
+          'summary':str(case.get('description') or 'Требуется помощь разработчика')[:2600],
+          'confirm':True,'include_customer_identity':False},'https://crm.pro.az')
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE saas_ai_case_developer_dispatches SET consultation_id=%s::uuid,updated_at=now() WHERE id=%s::uuid AND state='preparing'",(consultation['id'],item_id))
+            conn.commit()
+        result=dispatch(profile,consultation['id'],request)
+        state=result.get('state') if result.get('state') in {'sent','pending','unknown','blocked'} else 'unknown'
+        reason=str(result.get('error') or '')[:240]
+    except TenantLinearError as error:
+        state='blocked';reason=str(error)[:240]
+    except Exception:
+        state='unknown';reason='dispatch_result_requires_receipt_reconciliation'
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute('''UPDATE saas_ai_case_developer_dispatches SET state=%s,reason=%s,updated_at=now()
+              WHERE id=%s::uuid AND state='preparing' ''',(state,reason,item_id))
+            if state=='blocked' and item.get('owner_id'):
+                cur.execute('''INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body,target_url)
+                  VALUES(%s::uuid,%s::uuid,%s,%s,'Автоотправка обращения заблокирована',%s,%s) ON CONFLICT DO NOTHING''',
+                  (uuid.uuid4(),tenant,item['owner_id'],'auto_case_dispatch:'+str(item_id),reason,'/app?view=support&support_ticket_id='+str(item['case_id'])))
+        conn.commit()
+
+
 def reconcile():
     """Recover correlation after webhook-before-receipt or a transient DB error.
 
@@ -110,6 +205,9 @@ def reconcile():
 
 async def deliver(logger):
     await asyncio.to_thread(reconcile)
+    await asyncio.to_thread(reconcile_auto_dispatches)
+    for item_id in await asyncio.to_thread(auto_dispatch_queue):
+        await asyncio.to_thread(dispatch_auto_case,item_id)
     for item in await asyncio.to_thread(pending):
         try:
             # Normal Copilot revalidates membership, employee AI permission,
