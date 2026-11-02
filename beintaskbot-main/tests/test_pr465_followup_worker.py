@@ -314,3 +314,17 @@ def test_fresh_reply_while_customer_job_owns_progress_is_consumed_by_its_receipt
     assert f['generate'].call_args.kwargs['extra_context']['verified_developer_case_updates'][0]['source_id']=='case-reply:'+reply
     dispatch.reconcile();dispatch.reconcile()
     assert f['process']() is None;f['send'].assert_called_once();f['generate'].assert_called_once()
+
+
+@pytest.mark.parametrize('change',['revoked','source_quote_missing','source_body_mismatch'])
+def test_done_requires_current_recipient_and_exact_saved_command(case_flow,change):
+    f=case_flow;local=f['db'];source=f['inbound']('text','Original report')[0];assert f['process']()
+    case=f['create_case']([source]);f['send'].reset_mock();f['generate'].reset_mock()
+    target='synthetic-developer-1';mid=str(uuid.uuid4());quote='PROVIDER_'+target
+    raw={'id':mid,'quotedExternalMessageId':quote}
+    if change=='source_quote_missing':raw.pop('quotedExternalMessageId')
+    if change=='revoked':consultations.developer_marker(PROFILE,{'channel_id':CA,'conversation_id':target,'enabled':False})
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,raw) VALUES(%s::uuid,%s::uuid,91,%s,'incoming',%s,%s,%s::jsonb)",(uuid.uuid4(),A,'connect:'+mid,'connect:'+CA,'I will look tomorrow' if change=='source_body_mismatch' else '/done',json.dumps(raw)))
+    with local.cursor() as cur:assert consultations.record_reply(cur,A,CA,target,mid,'/done',quote,source_external_id='connect:'+mid)
+    local.commit()
+    assert local.execute('SELECT status FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,case))[0]['status']!='resolved'

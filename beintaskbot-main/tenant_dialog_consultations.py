@@ -557,7 +557,8 @@ def _store_reply(cur,tenant,consultation_id,channel,conversation,message_id,text
       response=%s,response_kind=%s WHERE tenant_id=%s::uuid AND id=%s::uuid
         AND (answered_at IS NULL OR answered_at<=COALESCE(%s::timestamptz,now()))''',
       (at,text[:4000],'manual_reply' if source_kind=='manual' else 'developer_reply',tenant,consultation_id,at))
-    if explicit_resolution and source_kind=='provider' and consult.get('case_id'):
+    resolution_binding=_case_reply_binding(cur,tenant,ident) if explicit_resolution and source_kind=='provider' and consult.get('case_id') else None
+    if resolution_binding and case_developer_followup_current(cur,tenant,resolution_binding):
         # A case resolves only on an exact command quoted against the sent
         # receipt for this consultation. The ordinary reply remains answered.
         cur.execute('''UPDATE saas_support_tickets SET status='resolved',resolved_at=COALESCE(resolved_at,now()),
@@ -653,7 +654,7 @@ def record_reply(cur,tenant,channel,conversation,message_id,text,quoted=None,aut
     source_external_id=source_external_id or 'connect:'+message_id
     if source_actor is None:
         source_actor=verified_group_reply_actor(cur,tenant,channel,conversation,source_external_id)
-    cur.execute('''SELECT raw->'_case_followup_intent' AS intent FROM saas_crm_messages
+    cur.execute('''SELECT raw->'_case_followup_intent' AS intent,raw->>'quotedExternalMessageId' AS quote_id,body AS source_body FROM saas_crm_messages
       WHERE tenant_id=%s::uuid AND external_id=%s AND channel='connect:'||%s::uuid::text AND direction='incoming' ''',
       (tenant,source_external_id,channel))
     saved_intent=cur.fetchone() or {}
@@ -716,7 +717,8 @@ def record_reply(cur,tenant,channel,conversation,message_id,text,quoted=None,aut
     group_sender_ok=not str(conversation or '').endswith('@g.us') or _verified_group_reply_author(
       cur,tenant,channel,conversation,source_external_id or 'connect:'+message_id,source_actor)
     resolution=(kind=='text' and bool(re.fullmatch(r'\s*/(?:done|решено)\s*',text,re.I))
-                and bool(quoted) and bool(item['quote_match']) and assigned_developer and group_sender_ok)
+                and bool(quoted) and bool(item['quote_match']) and assigned_developer and group_sender_ok
+                and saved_intent.get('quote_id')==quoted and saved_intent.get('source_body')==text)
     body=text.strip() or {'audio':'Аудиосообщение разработчика — без расшифровки','image':'Изображение разработчика','video':'Видео разработчика','document':'Документ разработчика'}.get(kind,'Вложение разработчика')
     return _store_reply(cur,tenant,item['id'],channel,conversation,message_id,body,author,at,
       source_actor=source_actor if type(source_actor) is int else None,

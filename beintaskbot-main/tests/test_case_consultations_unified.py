@@ -183,7 +183,7 @@ def test_resolution_requires_explicit_command_quote_and_assigned_developer(case_
     with local.cursor() as cur:
         assert flow.record_reply(cur,A,CA,TARGET,'unquoted-done','/done',author='Developer') is None
     local.commit()
-    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,99,'connect:explicit-done','incoming',%s,'/done','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'explicit-done','participantJid':'15550001111@s.whatsapp.net'})));local.commit()
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,99,'connect:explicit-done','incoming',%s,'/done','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'explicit-done','participantJid':'15550001111@s.whatsapp.net','quotedExternalMessageId':'PROVIDER_123'})));local.commit()
     with local.cursor() as cur:
         resolved=flow.record_reply(cur,A,CA,TARGET,'explicit-done','/done','PROVIDER_123',author='Developer',source_external_id='connect:explicit-done',source_actor=11)
     local.commit()
@@ -395,7 +395,7 @@ def test_auto_dispatch_reply_resolution_notification_full_offline_flow(case_read
     local.execute("UPDATE saas_support_tickets SET status='new' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,receipt['id']));local.commit()
     job['source_message_id']='connect:m1'
     assert flow.active_case_developer_context(job,'connect:m1')[0]['message']=='Завтра посмотрю'
-    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,99,'connect:auto-done','incoming',%s,'/решено','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'auto-done','participantJid':'15550001111@s.whatsapp.net'})));local.commit()
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,99,'connect:auto-done','incoming',%s,'/решено','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'auto-done','participantJid':'15550001111@s.whatsapp.net','quotedExternalMessageId':'PROVIDER_123'})));local.commit()
     with local.cursor() as cur:
         done=flow.record_reply(cur,A,CA,TARGET,'auto-done','/решено','PROVIDER_123',author='Developer',source_external_id='connect:auto-done',source_actor=11)
     local.commit()
