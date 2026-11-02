@@ -1,0 +1,34 @@
+name: Customer voice recording foundation
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/customer-voice-foundation.yml'
+      - 'beintaskbot-main/docs/tenant-voice-recorder.js'
+      - 'beintaskbot-main/tenant_customer_voice.py'
+      - 'beintaskbot-main/tenant_connect_voice.py'
+      - 'beintaskbot-main/tests/test_tenant_voice_recorder.cjs'
+      - 'beintaskbot-main/tests/test_tenant_customer_voice.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  recording:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt
+      - run: command -v ffmpeg && command -v ffprobe
+      - run: node --test tests/test_tenant_voice_recorder.cjs
+      - run: python -m unittest discover -s tests -p test_tenant_customer_voice.py -v
