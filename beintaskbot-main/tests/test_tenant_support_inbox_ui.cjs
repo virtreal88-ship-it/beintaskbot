@@ -18,6 +18,7 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  const dom=setup(async(url,init={})=>{
    calls.push({url,init});
    if(url==='/api/platform/me')return{ok:true,json:async()=>({member:profile})};
+   if(url==='/api/platform/ai/dialog-consultations/destinations')return response({destinations:[{channel_id:'developer-channel',conversation_id:'synthetic-dev@g.us',customer_name:'Synthetic Developer'}]});
    if(url.includes('?'))return response({tickets:[ticket],members,next_offset:null});
    const body=init.body?JSON.parse(init.body):{};
    if(init.method==='PATCH')Object.assign(ticket,body);
@@ -46,7 +47,11 @@ function setup(fetch,url='https://crm.test/app',rights=true){
  assert.ok(calls.some(x=>x.url.includes('status=waiting')));
  doc.dispatchEvent(new dom.window.CustomEvent('tenant-chat-open',{detail:{lead_id:41}}));
  doc.querySelector('#supportCreateFromChat').click();await settle();
- const creation=calls.find(x=>x.url==='/api/platform/ai/support-tickets'&&x.init.method==='POST');assert.equal(JSON.parse(creation.init.body).lead_id,41);assert.ok(JSON.parse(creation.init.body).request_id);
+ assert.equal(calls.some(x=>x.url==='/api/platform/ai/support-tickets'&&x.init.method==='POST'),false,'manual create first requires a developer choice');
+ const createPicker=doc.querySelector('#supportCreateDeveloperPicker'),recipient=doc.querySelector('#supportCreateDeveloper');assert.ok(createPicker&&!createPicker.hidden&&recipient);
+ recipient.value='0';recipient.dispatchEvent(new dom.window.Event('change',{bubbles:true}));doc.querySelector('#supportCreateDeveloperConfirm').checked=true;
+ createPicker.querySelector('form').dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await settle();
+ const creation=calls.find(x=>x.url==='/api/platform/ai/support-tickets'&&x.init.method==='POST'),created=JSON.parse(creation.init.body);assert.equal(created.lead_id,41);assert.ok(created.request_id);assert.equal(created.assigned_developer_channel_id,'developer-channel');assert.equal(created.assigned_developer_conversation_id,'synthetic-dev@g.us');assert.equal(created.developer_confirmed,true);
  assert.ok(!calls.some(x=>/handoff|resume|pause/.test(x.url)),'queue must not change AI state');
  dom.window.close();
  // A delayed response for company A must never be rendered after switching to company B.

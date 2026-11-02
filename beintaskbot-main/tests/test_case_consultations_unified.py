@@ -46,6 +46,20 @@ def test_case_prepare_public_snapshot_and_owner_gate_no_agent_required(case_read
     with pytest.raises(TenantLinearError):flow.prepare({'tenant_id':A,'telegram_id':33},{**data,'request_id':str(uuid.uuid4())},'https://crm.test')
 
 
+def test_old_share_scope_hash_without_identity_flag_still_blocks_duplicate(case_ready):
+    import hashlib
+    local,data,_=case_ready
+    result=flow.prepare(PROFILE,data,'https://crm.test')
+    old_scope={**data,'channel_id':data['channel_id'],'destination_channel_id':data['destination_channel_id'],
+      'message_ids':sorted(data['message_ids']),'media_ids':[],'summary':data['summary'].strip()}
+    old_scope.pop('request_id');old_scope.pop('include_customer_identity',None)
+    legacy_hash=hashlib.sha256(json.dumps(old_scope,sort_keys=True).encode()).hexdigest()
+    local.execute("UPDATE saas_internal_consultations SET evidence=jsonb_set(evidence,'{scope_hash}',to_jsonb(%s::text)) WHERE tenant_id=%s::uuid AND id=%s::uuid",(legacy_hash,A,result['id']))
+    local.commit()
+    with pytest.raises(TenantLinearError,match='уже подготовлен или отправлен'):
+      flow.prepare(PROFILE,{**data,'request_id':str(uuid.uuid4())},'https://crm.test')
+
+
 def test_case_public_selection_cannot_escape_material_scope(case_ready):
     local,data,_=case_ready
     chosen=data['message_ids'][0]
@@ -133,6 +147,12 @@ def test_developer_context_is_limited_to_unique_case_containing_current_message(
 
 def test_auto_dispatch_reply_resolution_notification_full_offline_flow(case_ready,monkeypatch):
     local,data,sender=case_ready
+    # Explicitly enable only the runtime gates inside this isolated SQL fixture.
+    # No provider transport is reachable; the sender remains a spy.
+    monkeypatch.setenv('AI_AGENTS_ENABLED','1')
+    monkeypatch.setenv('AI_AGENTS_AUTO_SEND_ENABLED','1')
+    local.execute("UPDATE saas_ai_conversation_state SET state='active',agent_id=%s::uuid WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(AGENT,A,CA))
+    local.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT))
     local.execute("UPDATE saas_support_tickets SET status='resolved' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,data['case_id']))
     local.execute("UPDATE saas_crm_messages SET external_id='connect:m1' WHERE tenant_id=%s::uuid AND external_id='m1'",(A,))
     second_target='120363411822115410@g.us'
@@ -153,9 +173,22 @@ def test_auto_dispatch_reply_resolution_notification_full_offline_flow(case_read
     import tenant_connect_transport as connect_transport
     monkeypatch.setattr(connect_transport,'connect_route',lambda _cur,_tenant,lead,**_kw:{'channel_id':CA,'conversation_id':TARGET if lead==99 else second_target,'api_key':'synthetic'})
     for outbox in outboxes:worker.dispatch_auto_case(outbox['id'])
-    assert sender.call_count==2
+    assert sender.call_count==2, local.execute('SELECT state,reason FROM saas_ai_case_developer_dispatches WHERE case_id=%s::uuid',(receipt['id'],))
     rows=local.execute('SELECT state,consultation_id::text FROM saas_ai_case_developer_dispatches WHERE case_id=%s::uuid',(receipt['id'],))
     assert len(rows)==2 and all(row['state']=='sent' and row['consultation_id'] for row in rows)
+    # A positive provider receipt can arrive after an earlier pending/unknown
+    # projection. Reconciliation must mark sent without queueing another POST.
+    late=local.execute('''SELECT x.id::text,x.request_id::text FROM saas_ai_case_developer_dispatches x
+      WHERE x.case_id=%s::uuid ORDER BY x.destination_key LIMIT 1''',(receipt['id'],))[0]
+    local.execute("UPDATE saas_ai_case_developer_dispatches SET state='unknown' WHERE id=%s::uuid",(late['id'],))
+    local.execute("UPDATE saas_consultation_group_deliveries SET state='unknown' WHERE tenant_id=%s::uuid AND request_id=%s::uuid",(A,late['request_id']));local.commit()
+    worker.reconcile_auto_dispatches()
+    assert local.execute("SELECT state FROM saas_ai_case_developer_dispatches WHERE id=%s::uuid",(late['id'],))[0]['state']=='unknown'
+    local.execute("UPDATE saas_consultation_group_deliveries SET state='sent' WHERE tenant_id=%s::uuid AND request_id=%s::uuid",(A,late['request_id']));local.commit()
+    worker.reconcile_auto_dispatches()
+    assert local.execute("SELECT state FROM saas_ai_case_developer_dispatches WHERE id=%s::uuid",(late['id'],))[0]['state']=='sent'
+    assert all(row['id']!=late['id'] for row in worker.auto_dispatch_queue())
+    assert sender.call_count==2
     with local.cursor() as cur:
         answer=flow.record_reply(cur,A,CA,TARGET,'auto-answer','Завтра посмотрю','PROVIDER_123',author='Developer')
     local.commit()

@@ -66,14 +66,14 @@ async function agentTests(){
   w.eval(read('docs/tenant-ai-agents.js'));assert.equal(requests.length,1);requests[0].resolve(response(profile));await settle();
   assert.equal(requests.length,1,'hidden agents must not load settings, models, simulation or pilot');
   const show=()=>{w.document.getElementById('view-ai_agents').classList.add('active');emit('tenant-view',{view:'ai_agents'});};show();show();
-  assert.equal(requests.length,5,'independent initial agent reads run in parallel and duplicate events join');
+  assert.equal(requests.length,6,'independent initial agent reads including authorized developer recipients run in parallel and duplicate events join');
   assert.equal(w.document.getElementById('aiAgentList').getAttribute('aria-busy'),'true');assert.doesNotMatch(w.document.getElementById('aiAgentList').textContent,/noAgents/);
-  for(const request of requests.slice(1,5))reply(request,request.url.endsWith('/agents')?[]:{});
+  for(const request of requests.slice(1,6))reply(request,request.url.endsWith('/agents')?[]:{});
   await settle();for(const request of requests.slice(5))reply(request,{});await settle();
   assert.match(w.document.getElementById('aiAgentList').textContent,/noAgents/,'only a successful empty response means no agents');
-  show();const failed=requests.filter(r=>r.url.endsWith('/agents')).at(-1);reply(failed,{},500);for(const request of requests.slice(-4))if(request!==failed)reply(request,{});await settle();
+  show();const failed=requests.filter(r=>r.url.endsWith('/agents')).at(-1);reply(failed,{},500);for(const request of requests.slice(-5))if(request!==failed)reply(request,{});await settle();
   assert.match(w.document.getElementById('aiAgentList').textContent,/error/);assert.equal(w.document.getElementById('aiAgentList').getAttribute('aria-busy'),'false');
-  show();const pending=requests.slice(-4);emit('tenant-profile',{...profile,member:{...profile.member,tenant_id:'00000000-0000-0000-0000-000000000102'}});
+  show();const pending=requests.slice(-5);emit('tenant-profile',{...profile,member:{...profile.member,tenant_id:'00000000-0000-0000-0000-000000000102'}});
   for(const request of pending)reply(request,request.url.endsWith('/agents')?[{id:'old',name:'OLD TENANT',enabled:false}]:{});await settle();
   assert.doesNotMatch(w.document.getElementById('aiAgentList').textContent,/OLD TENANT/);
   emit('tenant-profile',{...profile,capabilities:{modules:{ai_agents:false}}});assert.doesNotMatch(w.document.getElementById('aiAgentList').textContent,/OLD TENANT|noAgents/);
@@ -222,12 +222,12 @@ async function sameScopePendingFocusTests(){
  }finally{w.close();}
  const a=browser('ai_agents');
  try{
-  a.w.tenantProfileSnapshot=profile;a.w.eval(read('docs/tenant-ai-agents.js'));const obsolete=a.requests.slice();assert.equal(obsolete.length,4);
-  a.w.dispatchEvent(new a.w.Event('focus'));a.requests.at(-1).resolve(response(profile));await settle();const replacement=a.requests.slice(5,9);assert.equal(replacement.length,4,'same-profile focus replaces obsolete agent load');
+  a.w.tenantProfileSnapshot=profile;a.w.eval(read('docs/tenant-ai-agents.js'));const obsolete=a.requests.slice();assert.equal(obsolete.length,5);
+  a.w.dispatchEvent(new a.w.Event('focus'));a.requests.at(-1).resolve(response(profile));await settle();const replacement=a.requests.slice(6,11);assert.equal(replacement.length,5,'same-profile focus replaces obsolete agent load');
   for(const request of replacement)a.reply(request,request.url.endsWith('/agents')?[]:{});await settle();
   for(const request of obsolete)a.reply(request,request.url.endsWith('/agents')?[{id:'old',name:'OBSOLETE'}]:{});await settle();
   assert.match(a.w.document.getElementById('aiAgentList').textContent,/noAgents/);assert.doesNotMatch(a.w.document.getElementById('aiAgentList').textContent,/OBSOLETE/);assert.equal(a.w.document.getElementById('aiAgentList').getAttribute('aria-busy'),'false');
-  a.w.dispatchEvent(new a.w.Event('focus'));a.requests.at(-1).resolve(response(profile));await settle();const warm=a.requests.slice(-4);assert.equal(warm.filter(request=>request.url.endsWith('/agents')).length,1,'warm ready focus starts fresh agent reads');
+  a.w.dispatchEvent(new a.w.Event('focus'));a.requests.at(-1).resolve(response(profile));await settle();const warm=a.requests.slice(-5);assert.equal(warm.filter(request=>request.url.endsWith('/agents')).length,1,'warm ready focus starts fresh agent reads');
   for(const request of warm)a.reply(request,request.url.endsWith('/agents')?[]:{});await settle();assert.equal(a.w.document.querySelector('[data-ai-overview-create]').disabled,false,'configuration readiness recovers after warm focus');
 
  }finally{a.w.close();}

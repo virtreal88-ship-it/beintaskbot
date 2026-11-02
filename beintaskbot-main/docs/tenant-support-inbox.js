@@ -5,6 +5,7 @@
   const statuses=['new','waiting','in_progress','resolved'];
   const mediaTitle=kind=>t(({image:'photo',audio:'voiceMessage',voice:'voiceMessage',video:'video',document:'file',text:'caseTextMessage'})[kind]||'attachment');
   const endpoint=(window.TENANT_AI_AGENTS_CONFIG?.endpoint||'/api/platform/ai/')+'support-tickets';
+  const dialogEndpoint=endpoint.replace(/support-tickets$/,'dialog-consultations');
   const consultationEndpoint=endpoint.replace(/support-tickets$/,'internal-consultations');
   let member=null,epoch=0,listRevision=0,detailRevision=0,members=[],channels=[],selected=null,nextOffset=null,nextBefore=null,rows=[],timer,directTicketKey='',returnFocus=null,modalOpen=false,routeChange=false,bodyOverflow='',drafts=new Map(),ticketMedia=new Map(),detailData=null;
   const identity=person=>person?String(person.tenant_id)+':'+String(person.telegram_id):'';
@@ -14,14 +15,15 @@
   function rememberMessages(items){if(!detailData)return;for(const item of items||[])if(item.id)detailData.messages.set(String(item.id),{...detailData.messages.get(String(item.id)),...item});}
   function appendMaterialMessages(){const host=$('supportHistory');if(!host||!detailData)return;const items=materialMessages(),known=new Map([...host.querySelectorAll('[data-message-id]')].map(node=>[node.dataset.messageId,node]));if(!known.size&&items.length)host.replaceChildren();for(let index=0;index<items.length;index++){const item=items[index],key=String(item.id);if(known.has(key)){const body=known.get(key).querySelector('[data-message-body]');if(body)body.textContent=item.body||mediaTitle(item.message_type);continue;}const template=document.createElement('template');template.innerHTML=messages([item],detailData.ticket);const node=template.content.firstElementChild;const next=items.slice(index+1).map(row=>known.get(String(row.id))).find(Boolean);host.insertBefore(node,next||null);known.set(key,node);}}
   function refreshMaterialControls(){if(detailData&&selected===detailData.ticket.id)renderConsultations(detailData.ticket);}
-  async function api(path='',method='GET',data){
+  async function apiAt(base,path='',method='GET',data){
     const current=member,version=epoch;
-    const response=await fetch(endpoint+path,{method,credentials:'same-origin',cache:'no-store',headers:data?{'Content-Type':'application/json'}:{},...(data?{body:JSON.stringify({...data,expected_tenant_id:current?.tenant_id,expected_user_id:current?.telegram_id})}:{})});
+    const response=await fetch(base+path,{method,credentials:'same-origin',cache:'no-store',headers:data?{'Content-Type':'application/json'}:{},...(data?{body:JSON.stringify({...data,expected_tenant_id:current?.tenant_id,expected_user_id:current?.telegram_id})}:{})});
     const payload=await response.json();
     if(!document?.body||version!==epoch||identity(current)!==identity(member))throw new Error(t('companyChanged'));
     if(!response.ok||!payload.success)throw new Error(payload.error||t('error'));
     return payload.result;
   }
+  const api=(path='',method='GET',data)=>apiAt(endpoint,path,method,data);
   function install(){
     const page=$('operatorSupport');if(!page||$('supportInbox'))return;
     const panel=document.createElement('article');panel.id='supportInbox';
@@ -227,8 +229,9 @@
   document.addEventListener('tenant-chat-open',event=>{
     const lead=event.detail.lead_id,version=epoch;if(!member||!allowed())return;
     const host=$('modalContent');if(!host||$('supportCreateFromChat')||host.querySelector('[data-operator-dialog]'))return;
-    const button=document.createElement('button');button.type='button';button.className='outline';button.id='supportCreateFromChat';button.textContent=t('createTicket');host.prepend(button);const requestId=crypto.randomUUID();
-    button.onclick=async()=>{button.disabled=true;try{await api('','POST',{request_id:requestId,lead_id:lead});if(version!==epoch)return;button.textContent=t('ticketSaved');await load();}catch(error){if(version===epoch){button.textContent=error.message;button.disabled=false;}}};
+    const button=document.createElement('button');button.type='button';button.className='outline';button.id='supportCreateFromChat';button.textContent=t('createTicket');host.prepend(button);
+    const picker=document.createElement('div');picker.id='supportCreateDeveloperPicker';picker.hidden=true;host.prepend(picker);
+    button.onclick=async()=>{button.disabled=true;try{const result=await apiAt(dialogEndpoint,'/destinations');if(version!==epoch)return;const targets=result.destinations||[];if(!targets.length)throw new Error(({ru:'Нет доступных диалогов, отмеченных как «Разработчик».',az:'«Tərtibatçı» kimi işarələnmiş əlçatan dialoq yoxdur.',en:'No accessible dialogue is marked Developer.'}[i18n.language]||'No accessible Developer recipient.'));const select=document.createElement('select');select.id='supportCreateDeveloper';select.required=true;select.append(new Option(t('chooseDeveloper')||'Выберите разработчика',''));targets.forEach((item,index)=>select.append(new Option((item.customer_name||item.contact_name||item.conversation_id)+(item.channel_name?' · '+item.channel_name:''),String(index))));const confirm=document.createElement('input');confirm.type='checkbox';confirm.required=true;confirm.id='supportCreateDeveloperConfirm';const label=document.createElement('label');label.append(confirm,document.createTextNode(t('confirmDeveloper')||'Подтверждаю назначение разработчика'));const form=document.createElement('form');form.append(select,label);const submit=document.createElement('button');submit.type='submit';submit.className='primary';submit.textContent=t('createTicket');form.append(submit);picker.replaceChildren(form);picker.hidden=false;button.hidden=true;form.onsubmit=async event=>{event.preventDefault();const target=targets[Number(select.value)];if(!target||!confirm.checked)return;submit.disabled=true;const requestId=crypto.randomUUID();try{await api('','POST',{request_id:requestId,lead_id:lead,assigned_developer_channel_id:target.channel_id,assigned_developer_conversation_id:target.conversation_id,developer_confirmed:true});if(version!==epoch)return;picker.hidden=true;button.hidden=false;button.textContent=t('ticketSaved');await load();}catch(error){if(version===epoch){notice(error.message);submit.disabled=false;}}};}catch(error){if(version===epoch){button.textContent=error.message;button.disabled=false;}}};
   });
   function profileChanged(data){const person=data.member;if(!allowed()||identity(person)!==identity(member)||JSON.stringify(person?.permissions)!==JSON.stringify(member?.permissions)||person?.active!==member?.active){epoch++;listRevision++;detailRevision++;directTicketKey='';selected=null;detailData?.consultationUI?.dispose();clearTicketMedia();detailData=null;drafts.clear();rows=[];members=[];channels=[];nextOffset=null;nextBefore=null;if($('supportRows'))$('supportRows').replaceChildren();if($('supportDetail')){$('supportDetail').hidden=true;$('supportDetailContent')?.replaceChildren();modalOpen=false;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');returnFocus=null;}badge(0);notice('');}member=person;if(allowed()){load();openDirectTicket();}}
   document.addEventListener('keydown',trapTicketFocus);

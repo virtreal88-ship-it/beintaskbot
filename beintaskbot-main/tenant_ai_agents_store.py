@@ -201,6 +201,9 @@ def save_settings(profile, data):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
+            if (patch.get('response_policy') and
+                    'auto_case_dispatch_owner_id' in patch['response_policy']):
+                raise TenantLinearError('Automatic dispatch owner is server managed.',403)
             if any(patch.get(key) is True for key in ('auto_send_enabled','crm_actions_enabled','native_crm_actions_enabled')) and profile.get('role') != 'owner':
                 raise TenantLinearError('Avtomatik göndərmə və CRM yazılarını yalnız şirkət sahibi aça bilər.',403)
             if patch.get('enabled') is True and not platform_service_ready():
@@ -539,6 +542,10 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                 merged.update(patch)
                 from tenant_ai_expert_policy import validate_binding
                 validate_binding(cur,tenant,agent_uuid,merged,previous)
+                # The recipient binding is server-owned; it lives in the
+                # persisted JSON but is never accepted from a browser patch.
+                stored_dispatch_owner=(previous.get('response_policy') or {}).get('auto_case_dispatch_owner_id')
+                (merged.get('response_policy') or {}).pop('auto_case_dispatch_owner_id',None)
                 merged['safety'] = safety_policy(merged.get('safety'))
                 from tenant_ai_agent_no_answer import validate_policy
                 merged['response_policy'] = validate_policy(merged.get('response_policy'))
@@ -546,7 +553,10 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                     merged['response_policy']['auto_case_dispatch_enabled']=False
                 if merged['response_policy'].get('auto_case_dispatch_enabled'):
                     _validate_case_developer_destinations(cur,profile,tenant,merged['response_policy'])
-                    merged['response_policy']['auto_case_dispatch_owner_id']=actor
+                    # Revalidation above requires the current company owner.
+                    # Keep the original owner when that same owner saves; on
+                    # first enable, bind this server-verified owner.
+                    merged['response_policy']['auto_case_dispatch_owner_id']=stored_dispatch_owner or actor
                 else:
                     merged['response_policy'].pop('auto_case_dispatch_owner_id',None)
                 if merged['response_policy']['enabled']:

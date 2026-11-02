@@ -16,6 +16,7 @@ import tenant_platform_schema as platform_schema
 import tenant_chat_ai_schema as chat_schema
 import tenant_ai_agent_actions as actions
 import tenant_ai_agent_connect as connect_ai
+import tenant_ai_agents_store as agents_store
 import tenant_ai_agents_store as agents
 import tenant_ai_agent_run_store as run_store
 import tenant_support_inbox_store as store
@@ -121,8 +122,22 @@ def db(database,monkeypatch):
     database.rollback()
 
 
+def prepare_manual_developer():
+    target='synthetic-dev@g.us'
+    connection=store._connect()
+    consultations._ready=False
+    consultations.schema(connection)
+    connection.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,88,'Synthetic Developer',now()) ON CONFLICT DO NOTHING",(A,CA,target))
+    connection.execute("INSERT INTO saas_dialog_developer_markers(tenant_id,channel_id,conversation_id,enabled,updated_by) VALUES(%s::uuid,%s::uuid,%s,TRUE,11) ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET enabled=TRUE",(A,CA,target))
+    connection.commit()
+    return target
+
+
 def manual(**values):
-    return store.create(PROFILE,{'request_id':str(uuid.uuid4()),'lead_id':41,**values})
+    target=prepare_manual_developer()
+    return store.create(PROFILE,{'request_id':str(uuid.uuid4()),'lead_id':41,
+        'assigned_developer_channel_id':CA,'assigned_developer_conversation_id':target,
+        'developer_confirmed':True,**values})
 
 
 def test_case_developer_assignment_is_tenant_scoped_and_separate_from_crm_assignee(db,monkeypatch):
@@ -165,6 +180,35 @@ def test_auto_dispatch_setting_revalidates_every_selected_developer_route(db,mon
         with db.cursor() as cur:
             _validate_case_developer_destinations(cur,PROFILE,A,{'auto_case_dispatch_enabled':True,
               'developer_destinations':[{'channel_id':CA,'conversation_id':'client'}]})
+
+
+def test_auto_dispatch_owner_binding_survives_edit_disable_and_rejects_forgery(db,monkeypatch):
+    seed_job(db)
+    from tenant_dialog_consultations import schema as consultation_schema,developer_marker
+    import tenant_dialog_consultations as flow
+    monkeypatch.setattr(agents_store,'_connect',lambda:db);monkeypatch.setattr(flow,'_connect',lambda:db)
+    consultation_schema(db)
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,'settings-dev@g.us',89,'Synthetic Developer',now()) ON CONFLICT DO NOTHING",(A,CA))
+    developer_marker(PROFILE,{'channel_id':CA,'conversation_id':'settings-dev@g.us','enabled':True})
+    db.execute("UPDATE saas_ai_agents SET mode='automatic' WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT));db.commit()
+    enabled=agents_store.save_agent(PROFILE,{'expected_version':1,'response_policy':{
+      'enabled':False,'action':'stop','fallback_action':'stop','max_clarifications':1,'stop_reply':'',
+      'auto_case_dispatch_enabled':True,'developer_destinations':[{'channel_id':CA,'conversation_id':'settings-dev@g.us'}]}},agent_id=AGENT)
+    assert enabled['response_policy']['auto_case_dispatch_owner_id']==11
+    edited=agents_store.save_agent(PROFILE,{'expected_version':enabled['version'],'name':'Night support edited','response_policy':{
+      'enabled':False,'action':'stop','fallback_action':'stop','max_clarifications':1,'stop_reply':'',
+      'auto_case_dispatch_enabled':True,'developer_destinations':[{'channel_id':CA,'conversation_id':'settings-dev@g.us'}]}},agent_id=AGENT)
+    assert edited['response_policy']['auto_case_dispatch_owner_id']==11
+    with pytest.raises(TenantLinearError):
+        agents_store.save_agent(PROFILE,{'expected_version':edited['version'],'response_policy':{
+          'enabled':False,'action':'stop','fallback_action':'stop','max_clarifications':1,'stop_reply':'',
+          'auto_case_dispatch_enabled':True,'developer_destinations':[{'channel_id':CA,'conversation_id':'settings-dev@g.us'}],
+          'auto_case_dispatch_owner_id':22}},agent_id=AGENT)
+    disabled=agents_store.save_agent(PROFILE,{'expected_version':edited['version'],'response_policy':{
+      'enabled':False,'action':'stop','fallback_action':'stop','max_clarifications':1,'stop_reply':'',
+      'auto_case_dispatch_enabled':False,'developer_destinations':[]}},agent_id=AGENT)
+    assert disabled['response_policy']['auto_case_dispatch_enabled'] is False
+    assert 'auto_case_dispatch_owner_id' not in disabled['response_policy']
 
 
 def test_support_cards_expose_verified_direct_phone_but_never_group_address(db):
@@ -320,7 +364,9 @@ def test_attach_media_is_owner_only_even_with_dialog_grant(db,monkeypatch):
 
 def test_route_and_event_dedup_even_after_resolution(db):
     with patch.object(store,'summarize_created'):
-        data={'request_id':str(uuid.uuid4()),'lead_id':41}
+        prepare_manual_developer()
+        data={'request_id':str(uuid.uuid4()),'lead_id':41,'assigned_developer_channel_id':CA,
+          'assigned_developer_conversation_id':'synthetic-dev@g.us','developer_confirmed':True}
         first=store.create(PROFILE,data)['ticket']['id']
         assert store.create(PROFILE,data)['ticket']['id']==first
         assert manual()['ticket']['id']==first
@@ -403,6 +449,22 @@ def test_handoff_creates_one_waiting_ticket_and_event_receipt(db):
     db.commit()
     assert receipt['id']==tickets[0]['id'] and not receipt['created']
     assert store.listing(PROFILE)['tickets']==[]
+
+
+def test_handoff_without_bootstrapped_auto_outbox_schema_fails_closed_without_runtime_ddl(db):
+    from tenant_support_inbox_schema import create_schema
+    job=seed_job(db)
+    db.execute("UPDATE saas_ai_agents SET mode='automatic',response_policy=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",
+      (json.dumps({'auto_case_dispatch_enabled':True,'auto_case_dispatch_owner_id':11,
+       'developer_destinations':[{'channel_id':CA,'conversation_id':'synthetic-dev@g.us'}]}),A,AGENT))
+    db.execute('DROP TABLE saas_ai_case_developer_dispatches');db.commit()
+    # Case creation is still durable; request path detects absent bootstrap and
+    # does not opportunistically issue CREATE TABLE under the business lock.
+    with db.cursor() as cur:receipt=store.handoff_ticket(cur,{**job,'event_fingerprint':'missing-outbox-schema'},'Synthetic issue')
+    db.commit()
+    assert receipt and receipt['created'] is True
+    assert db.execute("SELECT to_regclass('saas_ai_case_developer_dispatches') AS ready")[0]['ready'] is None
+    create_schema(db)
 
 
 def handoff_claim(db, job, source=None):
@@ -674,6 +736,7 @@ def test_http_origin_identity_and_tenant_scope(db):
     from aiohttp import web
     from aiohttp.test_utils import TestClient,TestServer
     from tenant_support_inbox_api import handler
+    prepare_manual_developer()
     async def scenario():
         current=dict(PROFILE)
         app=web.Application()
@@ -683,7 +746,8 @@ def test_http_origin_identity_and_tenant_scope(db):
         app.router.add_route('GET','/tickets/{ticket_id}',handler(member,'https://crm.test',logging.getLogger(__name__),'ticket'))
         app.router.add_route('PATCH','/tickets/{ticket_id}',handler(member,'https://crm.test',logging.getLogger(__name__),'ticket'))
         async with TestClient(TestServer(app)) as client:
-            data={'request_id':str(uuid.uuid4()),'lead_id':41,'expected_tenant_id':A,'expected_user_id':11}
+            data={'request_id':str(uuid.uuid4()),'lead_id':41,'expected_tenant_id':A,'expected_user_id':11,
+              'assigned_developer_channel_id':CA,'assigned_developer_conversation_id':'synthetic-dev@g.us','developer_confirmed':True}
             assert (await client.post('/tickets',json=data)).status==403
             assert (await client.post('/tickets',headers={'Origin':'https://evil.test'},json=data)).status==403
             assert (await client.post('/tickets',headers={'Origin':'https://crm.test'},json={**data,'expected_tenant_id':B})).status==409

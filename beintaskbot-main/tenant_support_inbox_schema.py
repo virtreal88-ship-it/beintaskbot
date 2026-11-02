@@ -61,5 +61,19 @@ def create_schema(conn):
           PRIMARY KEY(tenant_id,ticket_id,message_id),
           FOREIGN KEY(tenant_id,ticket_id) REFERENCES saas_support_tickets(tenant_id,id) ON DELETE CASCADE,
           FOREIGN KEY(message_id) REFERENCES saas_crm_messages(id) ON DELETE CASCADE)''')
+        # Durable fan-out intent for newly-created AI cases. This belongs in
+        # schema bootstrap, never in the webhook/case mutation transaction.
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_case_developer_dispatches(
+          tenant_id UUID NOT NULL, id UUID NOT NULL, case_id UUID NOT NULL, agent_id UUID NOT NULL,
+          event_key TEXT NOT NULL, destination_key TEXT NOT NULL, channel_id UUID NULL, conversation_id TEXT NULL,
+          owner_id BIGINT NULL, request_id UUID NOT NULL, source_revision BIGINT NULL,
+          source_assignment_id UUID NULL, state TEXT NOT NULL DEFAULT 'queued', reason TEXT NOT NULL DEFAULT '',
+          consultation_id UUID NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,id), UNIQUE(tenant_id,event_key,destination_key), UNIQUE(tenant_id,request_id),
+          FOREIGN KEY(tenant_id,case_id) REFERENCES saas_support_tickets(tenant_id,id) ON DELETE CASCADE,
+          FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE,
+          CHECK(state IN ('queued','preparing','sent','pending','unknown','blocked')) )''')
+        cur.execute('ALTER TABLE saas_ai_case_developer_dispatches ADD COLUMN IF NOT EXISTS source_revision BIGINT NULL')
+        cur.execute('ALTER TABLE saas_ai_case_developer_dispatches ADD COLUMN IF NOT EXISTS source_assignment_id UUID NULL')
         cur.execute('''CREATE INDEX IF NOT EXISTS saas_support_ticket_messages_order_idx
           ON saas_support_ticket_messages(tenant_id,ticket_id,created_at,message_id)''')

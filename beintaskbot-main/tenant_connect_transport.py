@@ -1065,6 +1065,19 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                         str(metadata.get('participant_name') or _phone_from_jid(metadata.get('participant_jid')) or metadata.get('display_name') or metadata.get('participant_jid') or conversation),
                         event.get('occurred_at'),message_type=str(data.get('type') or 'text'),
                         source_external_id='connect:'+str(data.get('id') or event_id))
+                    if linked and data.get('quotedExternalMessageId'):
+                        cur.execute('SAVEPOINT case_developer_followup')
+                        try:
+                            from tenant_ai_agent_connect import enqueue_case_developer_followup
+                            enqueue_case_developer_followup(cur,tenant,linked,
+                                source_external_id='connect:'+str(data.get('id') or event_id),
+                                quoted_message_id=str(data.get('quotedExternalMessageId')))
+                            cur.execute('RELEASE SAVEPOINT case_developer_followup')
+                        except Exception:
+                            cur.execute('ROLLBACK TO SAVEPOINT case_developer_followup')
+                            cur.execute('RELEASE SAVEPOINT case_developer_followup')
+                            import logging
+                            logging.getLogger(__name__).warning('Case developer follow-up admission deferred; reply receipt preserved')
                     independent_consultation_reply=known_reply(cur,tenant,channel_id,conversation,str(data.get('id') or event_id))
                     cur.execute('RELEASE SAVEPOINT dialog_consultation_reply')
                 except Exception:

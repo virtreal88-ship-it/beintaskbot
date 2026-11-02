@@ -710,6 +710,92 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
     return queued
 
 
+def enqueue_case_developer_followup(cur,tenant,reply_id,*,source_external_id='',quoted_message_id=''):
+    """Queue one client reply from a quoted, assigned developer response.
+
+    The developer webhook is never admitted as a customer turn. This creates
+    a separate idempotent client-dialog job anchored to the latest customer
+    message in the same open case and captures the active conversation revision.
+    """
+    if not quoted_message_id:return False
+    cur.execute('''SELECT r.id::text AS reply_id,c.case_id::text,t.channel_id::text AS client_channel,
+      t.conversation_id,t.assigned_developer_channel_id::text AS dev_channel,
+      t.assigned_developer_conversation_id AS dev_conversation,cs.agent_id::text AS agent_id,
+      cs.state AS dialog_state,cs.revision AS dialog_revision,cs.agent_assignment_id::text AS assignment_id,
+      m.id::text AS source_id,m.external_id,m.body,m.message_type,m.kommo_lead_id AS lead_id,
+      a.enabled AS agent_enabled,a.mode,a.scopes,a.schedule,a.delay_seconds,
+      s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop,tn.status AS tenant_status,
+      ch.active AS channel_active
+      FROM saas_dialog_consultation_replies r
+      JOIN saas_internal_consultations c ON c.tenant_id=r.tenant_id AND c.id=r.consultation_id
+      JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+      JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect'
+        AND cs.channel_id=t.channel_id::text AND cs.conversation_id=t.conversation_id
+      JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
+      JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id
+      JOIN saas_tenants tn ON tn.id=t.tenant_id
+      JOIN saas_connect_channels ch ON ch.tenant_id=t.tenant_id AND ch.connect_channel_id=t.channel_id AND ch.active=TRUE
+      JOIN LATERAL (SELECT x.id,x.external_id,x.body,x.message_type,x.kommo_lead_id
+        FROM saas_support_ticket_messages cm JOIN saas_crm_messages x
+          ON x.tenant_id=cm.tenant_id AND x.id=cm.message_id
+        WHERE cm.tenant_id=t.tenant_id AND cm.ticket_id=t.id AND x.direction='incoming'
+          AND x.channel='connect:'||t.channel_id::text
+        ORDER BY COALESCE(x.happened_at,x.created_at) DESC,x.id DESC LIMIT 1) m ON TRUE
+      WHERE r.id=%s::uuid AND r.source_kind='provider' AND r.message_type='text'
+        AND c.tenant_id=%s::uuid AND t.status<>'resolved'
+        AND r.channel_id=t.assigned_developer_channel_id
+        AND r.conversation_id=t.assigned_developer_conversation_id
+        AND r.source_external_id=%s
+        AND EXISTS(SELECT 1 FROM saas_consultation_group_deliveries d
+          JOIN saas_internal_consultations dc ON dc.tenant_id=d.tenant_id AND dc.id=d.consultation_id
+          WHERE d.tenant_id=r.tenant_id AND dc.case_id=t.id AND d.state='sent'
+            AND d.channel_id=t.assigned_developer_channel_id AND d.conversation_id=t.assigned_developer_conversation_id
+            AND d.provider_message_id=%s)
+        AND EXISTS(SELECT 1 FROM saas_connect_conversations d WHERE d.tenant_id=r.tenant_id
+          AND d.connect_channel_id=r.channel_id AND d.conversation_id=r.conversation_id
+          AND d.conversation_id NOT LIKE '%%@g.us' AND d.conversation_id NOT LIKE '%%@broadcast')
+        AND EXISTS(SELECT 1 FROM saas_support_ticket_messages cm WHERE cm.tenant_id=t.tenant_id
+          AND cm.ticket_id=t.id AND cm.message_id=m.id)
+      FOR UPDATE OF t,cs''',(reply_id,tenant,str(source_external_id),str(quoted_message_id)))
+    row=cur.fetchone() or {}
+    if not row:return False
+    from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+    if (row.get('dialog_state')!='active' or not row.get('agent_id') or row.get('agent_enabled') is not True
+        or row.get('mode')!='automatic' or row.get('company_enabled') is not True
+        or row.get('auto_send_enabled') is not True or row.get('emergency_stop') is True
+        or row.get('tenant_status') not in {'active','trial'} or row.get('channel_active') is not True
+        or not scope_matches(row.get('scopes'),str(row['client_channel']))
+        or not runtime_flag('AI_AGENTS_ENABLED') or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')):
+        return False
+    from tenant_ai_group_coordination import group_jid
+    if group_jid(row['conversation_id']):return False
+    channel_scope('connect',row['client_channel'])
+    event_fingerprint=hashlib.sha256(('connect:developer-case-reply:'+str(reply_id)).encode()).hexdigest()
+    source_external=str(row['external_id'] or '')
+    source_id=source_external.removeprefix('connect:')
+    payload={'message_id':source_id,'channel_id':str(row['client_channel']),'conversation_id':str(row['conversation_id']),
+      'text':str(row['body'] or '')[:8000],'message_type':str(row['message_type'] or 'text')[:40],
+      'first_inquiry':False,'phone':'','developer_case_followup':True,'case_id':str(row['case_id']),
+      'developer_reply_message_id':str(reply_id),'expected_conversation_revision':int(row['dialog_revision'])}
+    cur.execute('''INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,external_id,event_type,payload,state,available_at)
+      VALUES(%s::uuid,%s,'connect',%s,'developer_case_reply',%s::jsonb,'queued',now())
+      ON CONFLICT(tenant_id,fingerprint) DO NOTHING RETURNING fingerprint''',
+      (tenant,event_fingerprint,'case-developer-reply:'+str(reply_id),_json(payload)))
+    if not cur.fetchone():return False
+    cur.execute("UPDATE saas_tenant_webhook_events SET state='superseded',completed_at=now(),error_code='developer_case_reply' WHERE tenant_id=%s::uuid AND provider='connect' AND state IN ('queued','processing') AND payload->>'conversation_id'=%s AND payload->>'channel_id'=%s AND fingerprint<>%s",
+      (tenant,row['conversation_id'],str(row['client_channel']),event_fingerprint))
+    cur.execute('''INSERT INTO saas_ai_agent_jobs
+      (tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,channel_id,event_fingerprint,due_at,state)
+      VALUES(%s::uuid,%s::uuid,'connect',%s,%s,'',%s,%s,%s,now()+(%s*interval '1 second'),'queued')
+      ON CONFLICT(tenant_id,agent_id,provider,scope_channel_id,conversation_id) DO UPDATE SET
+        lead_id=EXCLUDED.lead_id,chat_id=EXCLUDED.chat_id,channel_id=EXCLUDED.channel_id,
+        event_fingerprint=EXCLUDED.event_fingerprint,revision=saas_ai_agent_jobs.revision+1,
+        state='queued',due_at=EXCLUDED.due_at,lease_token=NULL,lease_until=NULL,attempts=0,error_code='',updated_at=now()''',
+      (tenant,row['agent_id'],row['conversation_id'],int(row['lead_id']),row['conversation_id'],
+       row['client_channel'],event_fingerprint,max(0,min(int(row.get('delay_seconds') or 0),300))))
+    return True
+
+
 def finish_sent_after_reply_handoff(job: dict, reservation: dict, message_id: str) -> bool:
     """Persist an accepted Connect reply and atomically hand the chat to staff.
 

@@ -215,24 +215,25 @@ def handoff_ticket(cur, job, reason):
         agent=cur.fetchone() or {};policy=agent.get('response_policy') or {}
         destinations=policy.get('developer_destinations') if isinstance(policy.get('developer_destinations'),list) else []
         if agent.get('mode')=='automatic' and policy.get('auto_case_dispatch_enabled') is True:
-            cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_case_developer_dispatches(
-              tenant_id UUID NOT NULL, id UUID NOT NULL, case_id UUID NOT NULL, agent_id UUID NOT NULL,
-              event_key TEXT NOT NULL, destination_key TEXT NOT NULL, channel_id UUID NULL, conversation_id TEXT NULL, owner_id BIGINT NULL,
-              request_id UUID NOT NULL, state TEXT NOT NULL DEFAULT 'queued', reason TEXT NOT NULL DEFAULT '',
-              consultation_id UUID NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-              PRIMARY KEY(tenant_id,id), UNIQUE(tenant_id,event_key,destination_key), UNIQUE(tenant_id,request_id),
-              FOREIGN KEY(tenant_id,case_id) REFERENCES saas_support_tickets(tenant_id,id) ON DELETE CASCADE,
-              FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE,
-              CHECK(state IN ('queued','preparing','sent','pending','unknown','blocked')) )''')
+            cur.execute('''SELECT revision,agent_assignment_id,state,agent_id::text AS agent_id
+              FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect'
+                AND channel_id=%s AND conversation_id=%s''',
+              (job['tenant_id'],str(job['channel_id']),str(job.get('conversation_id') or job.get('chat_id'))))
+            source_state=cur.fetchone() or {}
+            # Schema bootstrap is intentionally outside this business path.
+            cur.execute("SELECT to_regclass('saas_ai_case_developer_dispatches') AS ready")
+            if not (cur.fetchone() or {}).get('ready'):
+                return receipt
             event_key=str(job.get('event_fingerprint') or '')[:500]
             if destinations:
                 for target in destinations:
                     channel=str(target.get('channel_id') or '');conversation=str(target.get('conversation_id') or '')
                     key=channel+'|'+conversation
                     request=uuid.uuid5(uuid.NAMESPACE_URL,'auto-case-dispatch:'+str(job['tenant_id'])+':'+event_key+':'+key)
-                    cur.execute('''INSERT INTO saas_ai_case_developer_dispatches(tenant_id,id,case_id,agent_id,event_key,destination_key,channel_id,conversation_id,owner_id,request_id)
-                      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s::uuid,%s,%s,%s::uuid) ON CONFLICT DO NOTHING''',
-                      (job['tenant_id'],uuid.uuid4(),receipt['id'],job['agent_id'],event_key,key,channel,conversation,policy.get('auto_case_dispatch_owner_id'),request))
+                    cur.execute('''INSERT INTO saas_ai_case_developer_dispatches(tenant_id,id,case_id,agent_id,event_key,destination_key,channel_id,conversation_id,owner_id,request_id,source_revision,source_assignment_id)
+                      VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s::uuid,%s,%s,%s::uuid,%s,%s::uuid) ON CONFLICT DO NOTHING''',
+                      (job['tenant_id'],uuid.uuid4(),receipt['id'],job['agent_id'],event_key,key,channel,conversation,policy.get('auto_case_dispatch_owner_id'),request,
+                       source_state.get('revision'),source_state.get('agent_assignment_id')))
             else:
                 request=uuid.uuid5(uuid.NAMESPACE_URL,'auto-case-dispatch:'+str(job['tenant_id'])+':'+event_key+':blocked:no-recipient')
                 cur.execute('''INSERT INTO saas_ai_case_developer_dispatches(tenant_id,id,case_id,agent_id,event_key,destination_key,owner_id,request_id,state,reason)
@@ -508,8 +509,13 @@ def _attach_case_materials(profile,ticket_id,message_ids,*,media_only):
 
 
 def create(profile, data):
-    if not isinstance(data, dict) or set(data) - {'request_id','lead_id','channel_id','conversation_id','reason','description','message_ids'}:
+    if not isinstance(data, dict) or set(data) - {'request_id','lead_id','channel_id','conversation_id','reason','description','message_ids',
+        'assigned_developer_channel_id','assigned_developer_conversation_id','developer_confirmed'}:
         raise TenantLinearError('Некорректные поля обращения.')
+    if (data.get('developer_confirmed') is not True or not data.get('assigned_developer_channel_id')
+            or not isinstance(data.get('assigned_developer_conversation_id'),str)
+            or not data.get('assigned_developer_conversation_id').strip()):
+        raise TenantLinearError('Перед созданием обращения выберите и подтвердите разработчика.',409)
     if 'message_ids' in data and (not isinstance(data['message_ids'], list) or not 1 <= len(data['message_ids']) <= 80):
         raise TenantLinearError('Выберите от 1 до 80 сообщений обращения.')
     request_id = identifier(data.get('request_id'))
@@ -517,10 +523,20 @@ def create(profile, data):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
+            from tenant_dialog_consultations import access as dialogs_access,developer_target
+            access_tenant,_dialog_actor,dialogs_policy=dialogs_access(cur,profile,'dialogs')
+            if str(access_tenant)!=str(tenant):raise TenantLinearError('Получатель вне выбранной компании.',403)
+            destination=developer_target(cur,tenant,dialogs_policy,
+                identifier(data['assigned_developer_channel_id']),data['assigned_developer_conversation_id'])
             receipt = create_in_transaction(cur,tenant,data.get('channel_id'),data.get('conversation_id'),
                 data.get('reason') or 'Создано сотрудником','manual:'+request_id,actor=actor,
                 description=data.get('description',''),source='manual',lead_id=data.get('lead_id'),message_ids=data.get('message_ids'))
-            _audit(cur,tenant,actor,'support_create','support_ticket',receipt['id'])
+            if receipt.get('created'):
+                cur.execute('''UPDATE saas_support_tickets SET assigned_developer_channel_id=%s::uuid,
+                  assigned_developer_conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid''',
+                  (str(destination.get('channel_id') or destination['connect_channel_id']),destination['conversation_id'],tenant,receipt['id']))
+            _audit(cur,tenant,actor,'support_create','support_ticket',receipt['id'],
+              {'developer_confirmed':True,'developer_channel_id':str(destination.get('channel_id') or destination['connect_channel_id'])})
         conn.commit()
     summarize_created(tenant,receipt)
     return detail(profile,receipt['id'])
