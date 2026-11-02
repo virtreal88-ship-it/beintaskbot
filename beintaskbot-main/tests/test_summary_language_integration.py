@@ -754,17 +754,24 @@ def test_unified_group_language_excludes_employee_registered_only_on_historical_
         'assignments': [{'agent_id': AGENT, 'channel_id': CA, 'priority': 0}]})
     _messages(f, [{'body': EN, 'raw': {'participantJid': '15550009999@s.whatsapp.net'}}], lead=43)
     _messages(f, [{'body': RU * 6, 'raw': {'participantJid': '15550001111@s.whatsapp.net'}}], channel=CB, lead=44)
+    command = {'request_id': str(uuid.uuid4()), 'provider': 'connect', 'channel_id': CA,
+        'conversation_id': group, 'history_mode': 'unified_group', 'analysis_agent_id': AGENT}
+    with f['factory']() as conn, conn.cursor() as cur:
+        snapshot = candidate_store.snapshot(cur, PROFILE, command)
+    assert {ref['channel_id'] for ref in snapshot['refs']} == {CA, CB}
+    assert any(row['summary_language_role'] == 'operator' and RU in row['text']
+               for row in snapshot['messages'])
 
     def generated(_key, _model, mode, rows, _draft, **kwargs):
         assert mode == 'knowledge_extraction'
         assert kwargs['extra_context']['output_language'] == 'en'
-        assert any(row['summary_language_role'] == 'operator' and RU in row['text'] for row in rows)
+        assert all(set(row) == {'ref', 'role', 'text'} for row in rows)
+        assert any(EN in row['text'] for row in rows) and any(RU in row['text'] for row in rows)
         return json.dumps({'cards': [_candidate_response('en', [row['ref'] for row in rows])]}), {'total_tokens': 25}
 
     generation = Mock(side_effect=generated)
     monkeypatch.setattr(candidates, 'generate', generation)
-    result = candidates.analyze(PROFILE, {'request_id': str(uuid.uuid4()), 'provider': 'connect',
-        'channel_id': CA, 'conversation_id': group, 'history_mode': 'unified_group', 'analysis_agent_id': AGENT})
+    result = candidates.analyze(PROFILE, command)
     assert set(result['request']['route']['source_channels']) == {CA, CB}
     assert result['request']['route']['summary_language']['language'] == 'en'
     assert result['candidates'][0]['content_language'] == 'en'

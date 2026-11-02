@@ -1110,6 +1110,11 @@ async def process_connect_one(job, logger):
               'from completed work; say the request was accepted and the developer plans to review it tomorrow when stated, without promising a resolution date. '
               'Do not claim the case is resolved unless its server state is resolved.')
         pilot_developer_context={}
+        consultation_summary=None
+        if pilot_case_turn:
+            from tenant_consultation_summary import for_job,group_instructions
+            consultation_summary=await asyncio.to_thread(for_job,job)
+            prompt+=group_instructions(consultation_summary)
         developer_reply=str(pilot_payload.get('developer_reply') or '')[:4000]
         if pilot_case_turn and developer_reply:
             pilot_developer_context={'case_id':str(payload.get('case_id') or ''),
@@ -1184,6 +1189,7 @@ async def process_connect_one(job, logger):
                                                        'image_message_ids_for_analysis':[image['message_id'] for image in images],
                                                        **({'verified_developer_case_updates':developer_updates} if developer_updates else {}),
                                                        **({'pilot_developer_context':pilot_developer_context} if pilot_developer_context else {}),
+                                                       **({'consultation_summary_language':consultation_summary['selection']} if consultation_summary else {}),
                                                        **({'internal_expert_advisory':expert_result} if expert_result else {})}, images=images, with_usage=True,
                                         before_dispatch=lambda wire:_check_connect_media(job,reservation,lines=lines,wire=wire))
         first_generation_usage=dict(usage or {})
@@ -1299,7 +1305,10 @@ async def process_connect_one(job, logger):
                 await asyncio.to_thread(finish_superseded,job,reservation,'pilot_case_decision_unverified')
                 return
             pilot_action=pilot_decision['action']
-            if not await asyncio.to_thread(record_pilot_followup_action,job,pilot_action):
+            if not await asyncio.to_thread(record_pilot_followup_action,job,pilot_action,
+                    **({'summary_language':consultation_summary['selection'],
+                        'summary_text':pilot_decision['message']}
+                       if pilot_action=='group_answer' and consultation_summary else {})):
                 await asyncio.to_thread(finish_superseded,job,reservation,'pilot_case_turn_stale')
                 return
             if pilot_action=='no_action':
@@ -1392,11 +1401,13 @@ async def process_connect_one(job, logger):
                     # A clarification reply reuses the CASE followup row, so
                     # include its monotonic turn number in the idempotency key.
                     turn_id=(str(pilot_payload.get('pilot_followup_id') or '')+':'+
-                             str(int(pilot_payload.get('customer_turn_number') or 0))))
+                             str(int(pilot_payload.get('customer_turn_number') or 0))),
+                    summary_language=consultation_summary['selection'] if consultation_summary else None)
                 if receipt.get('state')!='sent':
                     await asyncio.to_thread(finish_unknown,job,reservation,'pilot_group_send_unconfirmed')
                     return
-                await asyncio.to_thread(record_group_turn_action,job,'group_answer',str(receipt.get('message_id') or ''))
+                await asyncio.to_thread(record_group_turn_action,job,'group_answer',str(receipt.get('message_id') or ''),
+                    summary_language=consultation_summary['selection'] if consultation_summary else None)
                 await asyncio.to_thread(finish_sent,job,reservation,str(receipt.get('message_id') or ''))
                 return
             except Exception:

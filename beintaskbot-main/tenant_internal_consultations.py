@@ -111,6 +111,8 @@ def create_from_ai(job, *, recipient_id=None, reason, evidence, run_id=None, des
         with conn.cursor() as cur:
             tenant=str(job['tenant_id'])
             recipient=_recipient(cur,tenant,recipient_id) if destination=='employee' else None
+            from tenant_ai_dialog_scope import lock_dialog
+            lock_dialog(cur,tenant,'connect',job['channel_id'],job['conversation_id'])
             # Bind to the ticket recorded by this exact handoff event. A
             # newer ticket in the same dialog can belong to a different issue.
             cur.execute('''SELECT t.id FROM saas_support_events e JOIN saas_support_tickets t
@@ -127,15 +129,34 @@ def create_from_ai(job, *, recipient_id=None, reason, evidence, run_id=None, des
             key='ai:'+str(job['agent_id'])+':'+str(job.get('event_fingerprint') or '')
             cur.execute('SELECT id,status FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND request_key=%s FOR UPDATE',(tenant,key));old=cur.fetchone()
             if old: return {'id':str(old['id']),'status':old['status'],'created':False,'customer_message_sent':False}
+            from tenant_consultation_summary import for_case
+            cur.execute('''SELECT message_id::text AS id FROM saas_support_ticket_messages
+              WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND event_key=%s''',
+              (tenant,case['id'],'handoff:'+str(job.get('event_fingerprint') or '')))
+            selected_ids=[row['id'] for row in cur.fetchall()]
+            if not selected_ids:
+                ids=list(evidence.get('case_message_ids') or []) if isinstance(evidence,dict) else []
+                source=evidence.get('source_external_id') if isinstance(evidence,dict) else None
+                if source:ids.append(source)
+                ids=[str(value) if str(value).startswith('connect:') else 'connect:'+str(value) for value in ids[:31]]
+                cur.execute('''SELECT m.id::text AS id FROM saas_support_ticket_messages cm JOIN saas_crm_messages m
+                  ON m.tenant_id=cm.tenant_id AND m.id=cm.message_id
+                  WHERE cm.tenant_id=%s::uuid AND cm.ticket_id=%s::uuid AND m.channel=%s AND m.external_id=ANY(%s::text[])''',
+                  (tenant,case['id'],'connect:'+str(job['channel_id']),ids))
+                selected_ids=[row['id'] for row in cur.fetchall()]
+            ai_summary=for_case(cur,tenant,str(case['id']),channel_id=job['channel_id'],
+              conversation_id=job['conversation_id'],selected_ids=selected_ids)
+            evidence={**(evidence if isinstance(evidence,dict) else {}),'ai_summary':ai_summary,'reason_code':str(reason)[:1000]}
+            consultation_summary=ai_summary['text'][:1000]
             status='waiting_specialist' if _hours() else 'queued_after_hours';ident=uuid.uuid4()
             cur.execute('''INSERT INTO saas_internal_consultations(tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,evidence,status,recipient_id,ai_run_id,created_by,delivery_state)
               VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb,%s,%s,%s::uuid,NULL,%s)''',
-              (tenant,ident,case['id'],job['channel_id'],job['conversation_id'],key,str(reason)[:1000],_json(evidence if isinstance(evidence,dict) else {}),status,
+              (tenant,ident,case['id'],job['channel_id'],job['conversation_id'],key,consultation_summary,_json(evidence),status,
                recipient['telegram_id'] if recipient else None,run_id,'pilot_group_pending' if destination=='pilot_group' else 'internal_inbox'))
             if destination=='employee':
                 cur.execute('''INSERT INTO saas_tenant_notifications(id,tenant_id,telegram_id,event_key,title,body,target_url)
                   VALUES(%s,%s::uuid,%s,%s,'AI: требуется консультация разработчика',%s,'/app?view=support')
-                  ON CONFLICT DO NOTHING''',(uuid.uuid4(),tenant,recipient['telegram_id'],'ai_consultation:'+key,str(reason)[:500]))
+                  ON CONFLICT DO NOTHING''',(uuid.uuid4(),tenant,recipient['telegram_id'],'ai_consultation:'+key,consultation_summary[:500]))
             # Group delivery has no employee binding or personal notification.
             # Employee delivery remains the existing separately verified path.
             enabled=False;binding=None
@@ -158,7 +179,8 @@ def create_from_ai(job, *, recipient_id=None, reason, evidence, run_id=None, des
                 cur.execute('''INSERT INTO saas_consultation_telegram_deliveries(tenant_id,consultation_id,recipient_id,chat_id,binding_verified_at)
                   VALUES(%s::uuid,%s::uuid,%s,%s,%s::timestamptz) ON CONFLICT DO NOTHING''',(tenant,ident,recipient['telegram_id'],binding['chat_id'],binding['verified_at']))
                 cur.execute('UPDATE saas_internal_consultations SET delivery_state=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',('telegram_pending',tenant,ident))
-            _audit(cur,tenant,None,'ai_internal_consultation_created','consultation',ident,{'case_id':str(case['id']),'recipient_id':recipient['telegram_id'] if recipient else None,'destination':destination,'status':status,'internal_only':True})
+            _audit(cur,tenant,None,'ai_internal_consultation_created','consultation',ident,{'case_id':str(case['id']),'recipient_id':recipient['telegram_id'] if recipient else None,'destination':destination,'status':status,'internal_only':True,
+              'summary_state':ai_summary['state'],'summary_language':ai_summary['language'],'summary_hash':ai_summary['summary_hash']})
         conn.commit();return {'id':str(ident),'status':status,'created':True,'customer_message_sent':False,
                               'recipient_id':recipient['telegram_id'] if recipient else None,
                               'delivery':'pilot_group_pending' if destination=='pilot_group' else ('telegram_pending' if enabled else 'internal_inbox')}

@@ -180,16 +180,19 @@ def _customer_text(message):
     return value[:6000]
 
 
-_ACKNOWLEDGEMENTS = set('спасибо благодарю благодарим большое огромное очень всем вам вас вашу за помощь помогли помогло все работает теперь хорошо да нет thank thanks you your for help very much so everyone works worked now great okay ok yes no cox chox sag olun sagol sagolun tesekkur tesekkurler yaxsi oldu aydindir evet hayir cok'.split())
+_ACKNOWLEDGEMENTS = set('спасибо благодарю благодарим большое огромное очень всем вам вас вашу за помощь помогли помогло все работает теперь хорошо да нет ок ага thank thanks you your for help very much so everyone works worked now great okay ok yes no cox chox sag olun sagol sagolun tesekkur tesekkurler yaxsi oldu aydindir evet hayir cok'.split())
+_TECHNICAL=re.compile(r'программ|ошиб|обновл|слома|сохраня|открыва|подключ|сбой|save|fail|error|acilmiyor|calismiyor|silinmir|islemir|duzelmir|xeta')
 
 
 def _scores(text):
     tokens = re.findall(r'[^\W\d_]+', _plain(text), re.UNICODE)
-    if len(tokens) < 3 or sum(map(len, tokens)) < 12:
+    if len(tokens) < 2 or sum(map(len, tokens)) < (8 if len(tokens)==2 else 12):
         return None
     if all(token in _ACKNOWLEDGEMENTS for token in tokens):
         return None
-    if sum(len(token) for token in tokens if re.search('[а-яё]', token)) >= 10:
+    if len(tokens)==2 and not _TECHNICAL.search(' '.join(tokens)):
+        return None
+    if sum(len(token) for token in tokens if re.search('[а-яё]', token)) >= (8 if len(tokens)==2 else 10):
         return 'ru', min(30, len(tokens)), len(tokens)
     scores = {code: sum(token in words for token in tokens) for code, words in _WORDS.items()}
     # Shared words cannot make diacritic-free Azerbaijani into Turkish.

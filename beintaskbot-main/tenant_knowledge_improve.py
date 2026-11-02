@@ -125,7 +125,8 @@ def improve(profile,candidate_id,data):
                     settings=cur.fetchone()
                     if not settings or not settings['enabled'] or settings['emergency_stop']: raise TenantLinearError('AI stopped.',409)
             attempted=True
-            raw,usage=service.generate(item['key'],item['model'],'knowledge_improvement',item['messages'],'',instructions=(TRANSLATION_PROMPT if mode=='translate' else PROMPT)+language_instructions(selection),
+            provider_messages=[{key:message[key] for key in ('ref','role','text')} for message in item['messages']]
+            raw,usage=service.generate(item['key'],item['model'],'knowledge_improvement',provider_messages,'',instructions=(TRANSLATION_PROMPT if mode=='translate' else PROMPT)+language_instructions(selection),
                 extra_context=context,with_usage=True,max_output_tokens=1800,request_timeout=25)
             editorial=json.loads(raw)
             if mode=='translate':
