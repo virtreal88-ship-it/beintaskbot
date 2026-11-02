@@ -113,6 +113,9 @@ def dispatch_auto_case(item_id):
                     or item.get('source_revision') is None or int(source_state.get('revision') or 0)!=int(item['source_revision'])
                     or str(source_state.get('assignment_id') or '')!=str(item.get('source_assignment_id') or '')):
                     raise TenantLinearError('source_dialog_state_or_assignment_changed',409)
+                if not flow.auto_case_dispatch_source_current(cur,tenant,case['channel_id'],case['conversation_id'],
+                    str(item['agent_id']),str(item['event_key'])):
+                    raise TenantLinearError('source_dialog_state_or_assignment_changed',409)
                 from tenant_dialog_consultations import access,developer_target
                 tenant_check,_actor,dialogs_policy=access(cur,profile,'dialogs')
                 if str(tenant_check)!=tenant:raise TenantLinearError('developer_recipient_company_changed',403)

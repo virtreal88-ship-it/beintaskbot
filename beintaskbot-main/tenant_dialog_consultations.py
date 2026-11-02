@@ -152,6 +152,25 @@ def developer_target(cur,tenant,policy,channel,conversation):
     return target
 
 
+def auto_case_dispatch_source_current(cur,tenant,channel,conversation,agent_id,event_fingerprint):
+    """Pin the current source channel and the original admitted group fence."""
+    from tenant_ai_dialog_scope import lock_dialog
+    from tenant_ai_group_coordination import group_jid,job_allowed
+    lock_dialog(cur,tenant,'connect',channel,conversation)
+    cur.execute('''SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid
+      AND connect_channel_id=%s::uuid AND active=TRUE FOR SHARE''',(tenant,channel))
+    if not cur.fetchone():return False
+    if not group_jid(conversation):return True
+    cur.execute('''SELECT payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid
+      AND fingerprint=%s AND provider='connect' AND event_type='incoming_message'
+      AND payload->>'channel_id'=%s AND payload->>'conversation_id'=%s''',
+      (tenant,event_fingerprint,str(channel),conversation))
+    payload=(cur.fetchone() or {}).get('payload')
+    if not isinstance(payload,dict) or str(payload.get('primary_agent_id') or '')!=str(agent_id):return False
+    return job_allowed(cur,{'provider':'connect','tenant_id':tenant,'channel_id':str(channel),
+      'conversation_id':conversation,'agent_id':str(agent_id),'payload':payload})
+
+
 def destinations(profile):
     with _connect() as conn:
         schema(conn)
@@ -383,9 +402,13 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
             with conn.cursor() as cur:
                 tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
                 from tenant_ai_dialog_scope import lock_dialog
-                lock_dialog(cur,tenant,'connect',str(delivery['channel_id']),delivery['conversation_id'])
+                routes={(str(delivery['channel_id']),delivery['conversation_id'])}
+                if auto_dispatch_id:routes.add((str(item['channel_id']),item['conversation_id']))
+                from tenant_ai_group_coordination import group_jid,lock_group
+                for group in sorted({group_jid(conversation) for _channel,conversation in routes if group_jid(conversation)}):
+                    lock_group(cur,tenant,group)
+                for channel,conversation in sorted(routes):lock_dialog(cur,tenant,'connect',channel,conversation)
                 if auto_dispatch_id:
-                    lock_dialog(cur,tenant,'connect',str(item['channel_id']),item['conversation_id'])
                     cur.execute('''SELECT x.*,a.enabled AS agent_enabled,a.mode,a.scopes,a.response_policy,
                       s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop,t.status AS tenant_status,t.owner_telegram_id,
                       m.role,m.active,cs.state AS source_state,cs.revision AS current_source_revision,
@@ -398,10 +421,12 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
                       JOIN saas_tenant_members m ON m.tenant_id=x.tenant_id AND m.telegram_id=x.owner_id
                       JOIN saas_internal_consultations c ON c.tenant_id=x.tenant_id AND c.id=x.consultation_id
                       JOIN saas_support_tickets st ON st.tenant_id=c.tenant_id AND st.id=c.case_id
+                      JOIN saas_connect_channels source_ch ON source_ch.tenant_id=st.tenant_id
+                        AND source_ch.connect_channel_id=st.channel_id AND source_ch.active=TRUE
                       JOIN saas_ai_conversation_state cs ON cs.tenant_id=st.tenant_id AND cs.provider='connect'
                         AND cs.channel_id=st.channel_id::text AND cs.conversation_id=st.conversation_id
                       WHERE x.tenant_id=%s::uuid AND x.id=%s::uuid AND x.case_id=%s::uuid
-                        AND x.request_id=%s::uuid AND x.state='preparing' FOR UPDATE OF x,a,s,m,st,cs FOR SHARE OF t''',
+                        AND x.request_id=%s::uuid AND x.state='preparing' FOR UPDATE OF x,st,cs FOR SHARE OF a,s,m,t,source_ch''',
                       (tenant,auto_dispatch_id,str(item.get('case_id') or ''),request))
                     gate=cur.fetchone() or {};configured=gate.get('response_policy') or {};recipients=configured.get('developer_destinations') or []
                     allowed_target=any(isinstance(row,dict) and str(row.get('channel_id') or '')==str(delivery['channel_id'])
@@ -424,6 +449,9 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
                         raise TenantLinearError('Автоматическая отправка остановлена: настройки, назначение или состояние диалога изменились.',409)
                     if not runtime_flag('AI_AGENTS_ENABLED') or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'):
                         raise TenantLinearError('Автоматическая отправка отключена глобальной настройкой.',409)
+                    if not auto_case_dispatch_source_current(cur,tenant,str(item['channel_id']),item['conversation_id'],
+                        str(gate['agent_id']),str(gate['event_key'])):
+                        raise TenantLinearError('Исходная группа, канал или допуск события изменились.',409)
                     cur.execute('''SELECT source_revision,source_assignment_id,agent_id::text,owner_id,
                       channel_id::text,conversation_id FROM saas_ai_case_developer_dispatches
                       WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE''',(tenant,auto_dispatch_id))

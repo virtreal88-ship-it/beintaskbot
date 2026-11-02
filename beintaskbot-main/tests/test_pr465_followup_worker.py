@@ -399,3 +399,115 @@ def test_initial_auto_dispatch_locks_tenant_owner_until_authoritative_receipt(ca
     f['developer_sends'].assert_called_once()
     assert local.execute('SELECT state FROM saas_ai_case_developer_dispatches WHERE id=%s::uuid',(item,))[0]['state']=='sent'
     assert local.execute('SELECT owner_telegram_id FROM saas_tenants WHERE id=%s::uuid',(A,))[0]['owner_telegram_id']==44
+
+
+def _queue_initial_group_case(f,monkeypatch):
+    import hashlib
+    import tenant_ai_group_coordination as groups
+    local=f['db'];group='120363400000004465@g.us';source=str(uuid.uuid4())
+    monkeypatch.setattr(groups,'_connect',lambda:local)
+    local.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,conversation_kind,contact_name) VALUES(%s::uuid,%s::uuid,%s,4465,'group','Source customer group')",(A,CA,group))
+    local.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}]),A,AGENT))
+    local.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,agent_id,state) VALUES(%s::uuid,'connect',%s,%s,%s::uuid,'active')",(A,CA,group,AGENT))
+    local.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,state,assignments) VALUES(%s::uuid,%s,'active',%s::jsonb)",(A,group,json.dumps([{'agent_id':AGENT,'channel_id':CA,'priority':0}])))
+    local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,happened_at) VALUES(%s::uuid,%s::uuid,4465,%s,'incoming',%s,'Group escalation',clock_timestamp())",(uuid.uuid4(),A,'connect:'+source,'connect:'+CA))
+    fingerprint=hashlib.sha256(('connect:'+source).encode()).hexdigest()
+    with local.cursor() as cur:
+        admission=groups.admit(cur,A,CA,group,source,source);assert admission
+        payload={'message_id':source,'channel_id':CA,'conversation_id':group,**admission}
+        cur.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,external_id,event_type,payload,state) VALUES(%s::uuid,%s,'connect',%s,'incoming_message',%s::jsonb,'completed')",(A,fingerprint,source,json.dumps(payload)))
+        case=tickets.handoff_ticket(cur,{'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':group,
+          'lead_id':4465,'agent_id':AGENT,'event_fingerprint':fingerprint,'source_message_id':source,
+          'case_message_ids':[source],'payload':payload},'Initial group escalation')
+    local.commit()
+    item=local.execute('SELECT id::text FROM saas_ai_case_developer_dispatches WHERE tenant_id=%s::uuid AND case_id=%s::uuid ORDER BY destination_key',(A,case['id']))[0]['id']
+    return item,group,admission['group_revision'],fingerprint
+
+
+def test_initial_group_auto_dispatch_accepts_exact_current_admission(case_flow,monkeypatch):
+    f=case_flow;item,_group,_revision,_fingerprint=_queue_initial_group_case(f,monkeypatch)
+    dispatch.dispatch_auto_case(item)
+    f['developer_sends'].assert_called_once()
+    assert f['db'].execute('SELECT state FROM saas_ai_case_developer_dispatches WHERE id=%s::uuid',(item,))[0]['state']=='sent'
+
+
+@pytest.mark.parametrize('change',['stop','configure','missing_admission'])
+@pytest.mark.parametrize('window',['queued','after_preflight'])
+def test_initial_group_auto_dispatch_rejects_changed_or_missing_original_admission(case_flow,monkeypatch,change,window):
+    import tenant_ai_group_coordination as groups
+    f=case_flow;local=f['db'];item,group,revision,fingerprint=_queue_initial_group_case(f,monkeypatch);prepared=[]
+    def mutate():
+        if change=='configure':groups.configure(PROFILE,{'conversation_id':group,'expected_revision':revision,'assignments':[]})
+        elif change=='stop':
+            with local.cursor() as cur:groups.stop(cur,A,group,reason='verified_employee_reply',actor=11)
+            local.commit()
+        else:
+            local.execute("UPDATE saas_tenant_webhook_events SET payload=payload-'group_event_key' WHERE tenant_id=%s::uuid AND fingerprint=%s",(A,fingerprint));local.commit()
+    if window=='queued':mutate()
+    else:
+        original=consultations.prepare
+        def prepare(*args,**kwargs):
+            result=original(*args,**kwargs);prepared.append(result['id']);mutate();return result
+        monkeypatch.setattr(consultations,'prepare',prepare)
+    dispatch.dispatch_auto_case(item)
+    f['developer_sends'].assert_not_called()
+    assert local.execute('SELECT state FROM saas_ai_case_developer_dispatches WHERE id=%s::uuid',(item,))[0]['state']=='blocked'
+    assert local.execute("SELECT state,revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id=%s",(A,CA,group))[0]=={'state':'active','revision':1}
+    assert len(prepared)==(1 if window=='after_preflight' else 0)
+
+
+def test_initial_auto_dispatch_rechecks_distinct_source_channel_after_final_consult(case_flow,monkeypatch):
+    import psycopg
+    from test_tenant_support_inbox import CB
+    f=case_flow;local=f['db'];destination='synthetic-developer-1'
+    local.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'Separate developer channel')",(A,CB))
+    local.execute("UPDATE saas_connect_conversations SET connect_channel_id=%s::uuid WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s",(CB,A,CA,destination));local.commit()
+    consultations.developer_marker(PROFILE,{'channel_id':CB,'conversation_id':destination,'enabled':True})
+    local.execute("UPDATE saas_ai_agents SET response_policy=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps({'auto_case_dispatch_enabled':True,'auto_case_dispatch_owner_id':11,'developer_destinations':[{'channel_id':CB,'conversation_id':destination}]}),A,AGENT));local.commit()
+    item=_queue_initial_case(f);calls=[];original=consultations._consult
+    def consult(*args,**kwargs):
+        result=original(*args,**kwargs);calls.append(True)
+        if len(calls)==2:
+            with psycopg.connect(local.dsn) as revoked:
+                revoked.execute("SET LOCAL statement_timeout='3000ms'")
+                revoked.execute('UPDATE saas_connect_channels SET active=FALSE WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid',(A,CA))
+        return result
+    monkeypatch.setattr(consultations,'_consult',consult)
+    dispatch.dispatch_auto_case(item)
+    assert len(calls)==2
+    f['developer_sends'].assert_not_called()
+    assert local.execute('SELECT state FROM saas_ai_case_developer_dispatches WHERE id=%s::uuid',(item,))[0]['state']=='blocked'
+    assert local.execute('SELECT active FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid',(A,CB))[0]['active'] is True
+
+
+def test_concurrent_initial_fanout_keeps_shared_owner_reads_without_lock_upgrade_deadlock(case_flow,monkeypatch):
+    import threading
+    import psycopg
+    from psycopg.rows import dict_row
+    f=case_flow;local=f['db'];_queue_initial_case(f)
+    items=[row['id'] for row in local.execute('SELECT id::text FROM saas_ai_case_developer_dispatches WHERE tenant_id=%s::uuid ORDER BY destination_key',(A,))];local.commit()
+    assert len(items)==2
+    def factory():
+        connection=psycopg.connect(local.dsn,row_factory=dict_row)
+        connection.execute("SET statement_timeout='15000ms'")
+        return connection
+    for module in (consultations,dispatch,transport):monkeypatch.setattr(module,'_connect',factory)
+    barrier=threading.Barrier(2);calls={};errors=[];original=consultations._consult
+    def consult(*args,**kwargs):
+        value=original(*args,**kwargs);name=threading.current_thread().name;calls[name]=calls.get(name,0)+1
+        if calls[name]==2:
+            # Both real final transactions already hold owner membership and
+            # tenant SHARE locks before competing for the same client fence.
+            barrier.wait(10)
+        return value
+    monkeypatch.setattr(consultations,'_consult',consult)
+    def send(item):
+        try:dispatch.dispatch_auto_case(item)
+        except Exception as error:errors.append(error)
+    threads=[threading.Thread(target=send,args=(item,),name='initial-fanout-'+str(index),daemon=True) for index,item in enumerate(items)]
+    for thread in threads:thread.start()
+    for thread in threads:thread.join(25);assert not thread.is_alive(),'initial fanout deadlocked after both owner reads'
+    assert not errors,errors
+    assert sorted(calls.values())==[2,2]
+    assert f['developer_sends'].call_count==2
+    assert {row['state'] for row in local.execute('SELECT state FROM saas_ai_case_developer_dispatches WHERE tenant_id=%s::uuid',(A,))}=={'sent'}
