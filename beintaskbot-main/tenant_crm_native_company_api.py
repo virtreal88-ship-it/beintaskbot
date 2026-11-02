@@ -7,6 +7,7 @@ from tenant_crm_native_companies import create_company,get_company,list_companie
 from tenant_request_origin import require_json_post
 from tenant_linear_policy import TenantLinearError
 from tenant_policy import TenantPolicy
+from tenant_crm_request_context import require_expected_context, CRMContextError
 
 
 def _jsonable(v):
@@ -28,6 +29,7 @@ def handler(member_from_request,origin,logger):
             try:UUID(ident)
             except (TypeError,ValueError):return web.json_response({'success':False,'error':'invalid_id'},status=400)
         try:
+            require_expected_context(request, profile)
             if request.method=='GET':
                 if not policy.allows_action('customers','view'):
                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
@@ -54,6 +56,9 @@ def handler(member_from_request,origin,logger):
             else:return web.json_response({'success':False,'error':'method_not_allowed'},status=405)
             if result is None or result is False:return web.json_response({'success':False,'error':'not_found'},status=404)
             return web.json_response({'success':True,'data':_jsonable(result)},headers={'Cache-Control':'no-store'})
+        except CRMContextError as exc:
+            return web.json_response({'success':False,'error':exc.code,'code':exc.code},status=exc.status,
+                                     headers={'Cache-Control':'no-store','Vary':'Cookie'})
         except TenantLinearError:return web.json_response({'success':False,'error':'invalid_origin'},status=403)
         except (ValueError,TypeError):return web.json_response({'success':False,'error':'invalid_company'},status=400)
         except Exception:

@@ -7,6 +7,20 @@ from tenant_crm_native_contacts import create_contact, get_contact, list_contact
 from tenant_request_origin import require_json_post
 from tenant_linear_policy import TenantLinearError
 from tenant_policy import TenantPolicy
+from tenant_crm_contact_listing import directory, ContactsDirectoryError
+from tenant_crm_request_context import require_expected_context as _expected_identity, CRMContextError
+
+
+def _listing_query(request):
+    allowed = {'listing', 'source', 'search', 'limit', 'offset', 'row_key', 'legacy_deal_id',
+               'expected_tenant_id', 'expected_user_id'}
+    if set(request.query) - allowed or any(len(request.query.getall(key)) != 1
+                                         for key in request.query if hasattr(request.query, 'getall')):
+        raise ContactsDirectoryError('contacts_invalid_query')
+    if request.query.get('listing') != '1':
+        raise ContactsDirectoryError('contacts_invalid_query')
+    return {key: request.query[key] for key in ('source', 'search', 'limit', 'offset', 'row_key', 'legacy_deal_id')
+            if key in request.query}
 
 
 def _jsonable(value):
@@ -25,7 +39,7 @@ def handler(member_from_request, origin, logger):
     async def handle(request):
         profile = member_from_request(request)
         if not profile:
-            return web.json_response({'success': False, 'error': 'forbidden'}, status=403,
+            return web.json_response({'success': False, 'error': 'forbidden', 'code': 'contacts_forbidden'}, status=403,
                                      headers={'Cache-Control': 'no-store'})
         policy=TenantPolicy(profile)
         tenant_id = str(profile['tenant_id'])
@@ -36,6 +50,14 @@ def handler(member_from_request, origin, logger):
             except (TypeError, ValueError):
                 return web.json_response({'success': False, 'error': 'invalid_id'}, status=400)
         try:
+            _expected_identity(request, profile)
+            if 'listing' in request.query:
+                if request.method != 'GET' or contact_id:
+                    raise ContactsDirectoryError('contacts_invalid_query')
+                query = _listing_query(request)
+                result = await asyncio.to_thread(directory, profile, **query)
+                return web.json_response({'success': True, **_jsonable(result)},
+                                         headers={'Cache-Control': 'no-store', 'Vary': 'Cookie'})
             if request.method == 'GET':
                 if not policy.allows_action('customers','view'):
                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
@@ -81,6 +103,9 @@ def handler(member_from_request, origin, logger):
                         logger.warning('CRM contact sync enqueue unavailable: tenant=%s',tenant_id)
             return web.json_response({'success': True, 'data': _jsonable(result)},
                                      headers={'Cache-Control': 'no-store'})
+        except (ContactsDirectoryError, CRMContextError) as exc:
+            return web.json_response({'success': False, 'error': exc.code, 'code': exc.code},
+                                     status=exc.status, headers={'Cache-Control': 'no-store', 'Vary': 'Cookie'})
         except TenantLinearError:
             return web.json_response({'success': False, 'error': 'invalid_origin'}, status=403,
                                      headers={'Cache-Control': 'no-store'})
@@ -89,6 +114,9 @@ def handler(member_from_request, origin, logger):
                                      headers={'Cache-Control': 'no-store'})
         except Exception:
             logger.exception('Native CRM contact operation failed')
+            if 'listing' in request.query:
+                return web.json_response({'success':False,'error':'contacts_unavailable','code':'contacts_unavailable'},
+                                         status=503,headers={'Cache-Control':'no-store','Vary':'Cookie'})
             return web.json_response({'success': False, 'error': 'contact_operation_failed'}, status=503,
                                      headers={'Cache-Control': 'no-store'})
     return handle

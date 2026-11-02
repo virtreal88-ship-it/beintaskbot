@@ -7,6 +7,7 @@ from tenant_crm_native_deals import create_deal,get_deal,list_deals,update_deal,
 from tenant_request_origin import require_json_post
 from tenant_linear_policy import TenantLinearError
 from tenant_policy import TenantPolicy
+from tenant_crm_request_context import require_expected_context, CRMContextError
 
 
 def _jsonable(value):
@@ -28,6 +29,7 @@ def handler(member_from_request,origin,logger):
             try: UUID(deal_id)
             except (TypeError,ValueError): return web.json_response({'success':False,'error':'invalid_id'},status=400)
         try:
+            require_expected_context(request, profile)
             if request.method=='GET':
                 if not policy.allows_action('deals','view'):
                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
@@ -56,6 +58,9 @@ def handler(member_from_request,origin,logger):
             except Exception:
                 logger.warning('CRM deal sync enqueue unavailable: tenant=%s',tenant_id)
             return web.json_response({'success':True,'deal':_jsonable(result)})
+        except CRMContextError as exc:
+            return web.json_response({'success':False,'error':exc.code,'code':exc.code},status=exc.status,
+                                     headers={'Cache-Control':'no-store','Vary':'Cookie'})
         except TenantLinearError:
             return web.json_response({'success':False,'error':'invalid_origin'},status=403,headers={'Cache-Control':'no-store'})
         except (ValueError,TypeError) as exc:
