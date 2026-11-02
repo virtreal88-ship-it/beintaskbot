@@ -91,7 +91,7 @@
     if (panel.id === 'staffManagement') return 'employees';
     if (panel.id === 'chakra-settings-root') return 'advanced';
     if (panel.id === 'connectWhatsAppSettings') return 'integrations';
-    if (panel.id === 'companyManagement') return 'companies';
+    if (['companyManagement','summaryLanguageSettings'].includes(panel.id)) return 'companies';
     if (['tenantLinearPanel','tcAiPanel','tnAiPanel','tnChannelPanel'].includes(panel.id)) return 'external-integration';
     if (panel.id === 'workflowPanel') return 'workflow';
     if (panel.querySelector('#inviteName,#members,#accessRequests')) return 'employees';

@@ -129,13 +129,18 @@ def dispatch_auto_case(item_id):
         material=preview(profile,source)
         messages=[row for row in material.get('messages',[]) if row.get('direction') in {'incoming','outgoing'}][-30:]
         if not messages:raise TenantLinearError('case_has_no_publishable_messages',409)
+        from tenant_consultation_summary import for_case
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                ai_summary=for_case(cur,tenant,str(item['case_id']),channel_id=case['channel_id'],
+                  conversation_id=case['conversation_id'],selected_ids=[str(row['id']) for row in messages])
         request=str(item['request_id']);target={'channel_id':str(item['channel_id']),'conversation_id':item['conversation_id']}
         consultation=prepare(profile,{'request_id':request,'case_id':str(item['case_id']),
           'channel_id':case['channel_id'],'conversation_id':case['conversation_id'],
           'destination_channel_id':target['channel_id'],'destination_conversation_id':target['conversation_id'],
           'message_ids':[str(row['id']) for row in messages],'media_ids':[],
-          'summary':str(case.get('description') or 'Требуется помощь разработчика')[:2600],
-          'confirm':True,'include_customer_identity':False},'https://crm.pro.az')
+          'summary':ai_summary['text'],
+          'confirm':True,'include_customer_identity':False},'https://crm.pro.az',ai_summary=ai_summary)
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("UPDATE saas_ai_case_developer_dispatches SET consultation_id=%s::uuid,updated_at=now() WHERE id=%s::uuid AND state='preparing'",(consultation['id'],item_id))

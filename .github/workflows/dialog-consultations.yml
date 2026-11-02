@@ -20,6 +20,18 @@ on:
       - 'beintaskbot-main/tests/operator_case_ui_fixture.cjs'
       - 'beintaskbot-main/tests/isolated_database_guard/*'
       - 'beintaskbot-main/tenant_ai_agents_schema.py'
+      - 'beintaskbot-main/tenant_summary_language.py'
+      - 'beintaskbot-main/tenant_consultation_summary.py'
+      - 'beintaskbot-main/tenant_support_summary_history.py'
+      - 'beintaskbot-main/tenant_company_admin_api.py'
+      - 'beintaskbot-main/tenant_workflow_store.py'
+      - 'beintaskbot-main/tenant_knowledge_candidates*.py'
+      - 'beintaskbot-main/tenant_knowledge_batches.py'
+      - 'beintaskbot-main/docs/tenant-summary-language.js'
+      - 'beintaskbot-main/tests/test_summary_language*'
+      - 'beintaskbot-main/tests/test_summary_group_worker_language.py'
+      - 'beintaskbot-main/tests/test_summary_consultation_language.py'
+      - 'beintaskbot-main/tests/summary_language_ui_fixture.cjs'
       - 'beintaskbot-main/tenant_ai_agent_startup.py'
       - 'beintaskbot-main/bot.py'
       - 'beintaskbot-main/tenant_internal_consultations.py'
@@ -203,6 +215,11 @@ jobs:
             tests/test_manual_case_saved_media.py \
             tests/test_pr465_followup_worker.py \
             tests/test_ai_schema_cold_readiness.py \
+            tests/test_summary_language.py \
+            tests/test_summary_language_integration.py \
+            tests/test_summary_language_batches.py \
+            tests/test_summary_group_worker_language.py \
+            tests/test_summary_consultation_language.py \
             tests/test_consultation_startup_upgrade_postgres.py \
             tests/test_tenant_ai_agent_startup.py \
             tests/test_legacy_app_bootstrap.py \
@@ -278,6 +295,8 @@ jobs:
           node tests/test_operator_case_recovery_ui.cjs
           node tests/test_operator_case_recovery_browser.cjs
           node tests/test_case_developer_settings_ui.cjs
+          node tests/test_summary_language_ui.cjs
+          node tests/test_summary_language_browser.cjs
           node tests/test_tenant_push_dialog_route_ui.cjs
           node tests/test_tenant_notification_badge_browser.cjs
           node tests/test_dialog_photo_status_ui.cjs

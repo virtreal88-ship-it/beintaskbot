@@ -720,7 +720,7 @@ def attach_pilot_customer_reply(cur,tenant,channel,conversation,message_id):
       'turn_number':int(turn.get('turn_number') or 0)+1}
 
 
-def record_pilot_followup_action(job,action):
+def record_pilot_followup_action(job,action,*,summary_language=None,summary_text=None):
     """Persist the model's bounded routing decision before any provider send."""
     allowed={'group_answer','customer_question','customer_update','no_action'}
     if action not in allowed:
@@ -747,11 +747,18 @@ def record_pilot_followup_action(job,action):
             cur.execute('''UPDATE saas_tenant_webhook_events SET payload=%s::jsonb
               WHERE tenant_id=%s::uuid AND fingerprint=%s AND state='processing' ''',
               (_json(payload),job['tenant_id'],job.get('event_fingerprint')))
+            if action=='group_answer' and summary_language and summary_text:
+                # A generated internal draft is distinct from a confirmed
+                # transport receipt. Existing pilot gates may still block it.
+                _audit(cur,str(job['tenant_id']),None,'ai_consultation_summary_proposed','consultation',
+                  str(payload.get('consultation_id') or ''),{'case_id':str(row['case_id']),
+                    'followup_id':followup_id,'event_fingerprint':str(job.get('event_fingerprint') or ''),
+                    'state':'draft','summary_language':summary_language,'summary_text':str(summary_text)})
         conn.commit()
     return True
 
 
-def record_group_turn_action(job,action,message_id):
+def record_group_turn_action(job,action,message_id,*,summary_language=None):
     if action not in {'group_answer','no_action'}:return False
     payload=job.get('payload') if isinstance(job.get('payload'),dict) else {}
     followup_id=str(payload.get('pilot_followup_id') or '')
@@ -770,6 +777,10 @@ def record_group_turn_action(job,action,message_id):
                   WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
                     AND conversation_id=%s AND state='active' AND agent_id=%s::uuid''',
                   (job['tenant_id'],job['channel_id'],job['conversation_id'],job['agent_id']))
+                if action=='group_answer' and summary_language:
+                    _audit(cur,str(job['tenant_id']),None,'ai_consultation_summary_update','consultation',
+                      str(payload.get('consultation_id') or ''),{'case_id':str(payload.get('case_id') or ''),
+                        'summary_language':summary_language,'message_id':str(message_id)})
         conn.commit()
     return updated
 
@@ -818,10 +829,26 @@ def parse_pilot_turn_decision(value,expected_media_ids=None):
             'media_observations':media_observations}
 
 
-def _case_group_body(consultation_id,case_id,summary,evidence,media_note='',turn_context=False):
+def _case_group_body(consultation_id,case_id,summary,evidence,media_note='',turn_context=False,summary_language=None):
     """Render the parser-selected exact client quote, never a generic history slice."""
     summary=' '.join(_redact_remote_password(str(summary or '')).split())[:1000]
     evidence=evidence if isinstance(evidence,dict) else {}
+    ai_summary=evidence.get('ai_summary')
+    if isinstance(ai_summary,dict) or summary_language:
+        from tenant_consultation_summary import COPY
+        ai_summary=ai_summary if isinstance(ai_summary,dict) else {}
+        selection=summary_language or ai_summary.get('selection') or {'language':'az'}
+        labels=COPY[selection['language']]
+        parts=['CASE:'+consultation_id]
+        if ai_summary.get('state')=='ready':parts.append(labels['summary']+': '+_redact_remote_password(ai_summary.get('text') or ''))
+        elif ai_summary:parts.append(str(ai_summary.get('text') or labels['unavailable']))
+        else:parts.append(labels['unknown'])
+        parts.append(labels['outcome'])
+        if turn_context and summary:parts.append(labels['update']+': '+summary)
+        if media_note:parts.append(media_note)
+        parts.append(labels['reply'].format(id=consultation_id))
+        parts.append('CRM: https://crm.pro.az/app?view=support&support_ticket_id='+case_id)
+        return '\n'.join(parts)
     case_summary=' '.join(_redact_remote_password(str(evidence.get('query') or '')).split())[:500]
     if re.match(r'^\[(?:image|video|audio|attachment)\b',case_summary,re.I):case_summary=''
     parts=['CASE:'+consultation_id]
@@ -837,7 +864,7 @@ def _case_group_body(consultation_id,case_id,summary,evidence,media_note='',turn
     return '\n'.join(parts)
 
 
-def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_external_id='',*,turn_id=None):
+def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_external_id='',*,turn_id=None,summary_language=None):
     """One-shot AI handoff delivery to the configured developer test group."""
     from tenant_ai_pilot import manual_live_job,configured_group_scope,configured_scope
     from tenant_ai_dialog_scope import lock_dialog
@@ -936,7 +963,7 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
             merged_evidence=consult.get('evidence') if isinstance(consult.get('evidence'),dict) else {}
             media_unverified=bool(source_media and source_media.get('message_type') in {'image','audio','voice','video','document'})
             body=_case_group_body(consultation_id,consult['case_id'],safe_summary if turn_id else '',
-                merged_evidence,'',bool(turn_id))
+                merged_evidence,'',bool(turn_id),summary_language)
             public_url=''
             if (not turn_id and len(str(merged_evidence.get('query') or '').strip())>=8
                     and isinstance(merged_evidence.get('case_message_ids'),list)):

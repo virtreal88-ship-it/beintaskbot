@@ -39,6 +39,11 @@ A,B,CA,CB,AGENT = [str(uuid.UUID(int=n)) for n in (101,102,201,202,301)]
 PROFILE={'tenant_id':A,'telegram_id':11}
 
 
+def regeneration_command(profile,ticket_id):
+    return {'request_id':str(uuid.uuid4()),'confirm_ai_cost':True,
+            'expected_summary_hash':store.detail(profile,ticket_id)['ticket']['summary_hash']}
+
+
 class Timestamp(str):
     def isoformat(self): return str(self)
 
@@ -734,10 +739,12 @@ def test_ai_does_not_overwrite_employee_edits(db):
         store.update(PROFILE,ticket,{'description':'Employee description','next_steps':'Check router'})
         return json.dumps(output),{}
     with patch.object(summary,'_fernet',return_value=cipher),patch.object(summary,'generate',side_effect=provider):
-        summary.regenerate(PROFILE,ticket)
+        summary.regenerate(PROFILE,ticket,regeneration_command(PROFILE,ticket))
     result=store.detail(PROFILE,ticket)['ticket']
     assert result['description']=='Employee description' and result['next_steps']=='Check router'
-    assert result['summary']=='AI'
+    assert result['summary']==''
+    versions=store.detail(PROFILE,ticket)['summary_history']
+    assert versions[0]['state']=='conflict' and versions[0]['proposal']['summary']=='AI'
 
 
 def test_summary_platform_cap_never_calls_provider(db):
@@ -748,9 +755,11 @@ def test_summary_platform_cap_never_calls_provider(db):
     db.execute("INSERT INTO saas_ai_agent_runs(tenant_id,id,agent_id,event_fingerprint,revision,model,state) VALUES(%s::uuid,%s::uuid,%s::uuid,'evt',1,'test','completed')",(A,run,AGENT))
     db.execute("INSERT INTO saas_ai_agent_token_usage(tenant_id,id,run_id,agent_id,model,total_tokens) VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,'test',10)",(A,str(uuid.uuid4()),run,AGENT));db.commit()
     with patch.object(summary,'choose_api_credential',return_value=('platform-key','platform')),patch.object(summary,'platform_model_allowed',return_value=True),patch.object(summary,'platform_token_limit',return_value=10),patch.object(summary,'generate') as provider:
-        summary.regenerate(PROFILE,ticket)
+        with pytest.raises(TenantLinearError) as error:
+            summary.regenerate(PROFILE,ticket,regeneration_command(PROFILE,ticket))
+        assert error.value.status==429
     provider.assert_not_called()
-    assert store.detail(PROFILE,ticket)['ticket']['summary_state']=='unavailable'
+    assert store.detail(PROFILE,ticket)['ticket']['summary_state']=='pending'
 
 
 def test_http_origin_identity_and_tenant_scope(db):

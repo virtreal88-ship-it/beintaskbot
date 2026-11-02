@@ -12,7 +12,8 @@ from tenant_knowledge_candidates_policy import FIELDS
 
 
 def payload(value,**extra):
-    return {'request_id':str(uuid.uuid4()),'expected_version':value['version'],'language':'en',**extra}
+    return {'request_id':str(uuid.uuid4()),'expected_version':value['version'],
+      **({'language_explicit':True} if extra.get('language') else {}),**extra}
 
 
 @pytest.mark.parametrize('method,message',[('remote','AnyDesk'),('phone','Помощь по телефону')])
@@ -32,7 +33,8 @@ def test_remote_phone_without_actions_needs_clarification(ready,method,message):
 def test_employee_can_clarify_remote_and_publish_with_evidence(ready):
     value=candidate(ready)
     changed=store.mutate(PROFILE,value['id'],{'expected_version':1,'resolution_method':'remote',
-        'operator_actions':['Сотрудник проверил соединение'],'resolution_steps':['Проверить соединение']})['candidate']
+        'operator_actions':['Сотрудник проверил соединение'],'resolution_steps':['Проверить соединение'],
+        'outcome':{**value['outcome'],'status':'confirmed'},'work_status':'resolved'})['candidate']
     assert changed['version']==2 and changed['result_confirmed'] and changed['can_approve']
     result=store.mutate(PROFILE,value['id'],{'expected_version':2,'agent_ids':[AGENT]},'approve')['candidate']
     assert result['status']=='approved'
@@ -41,7 +43,8 @@ def test_employee_can_clarify_remote_and_publish_with_evidence(ready):
 def test_informational_case_needs_no_technical_cause_or_steps(ready):
     value=candidate(ready)
     changed=store.mutate(PROFILE,value['id'],{'expected_version':1,'case_kind':'informational',
-        'resolution_steps':[],'cause':{'status':'unknown','text':''}})['candidate']
+        'resolution_steps':[],'cause':{'status':'unknown','text':''},
+        'outcome':{**value['outcome'],'status':'confirmed'}})['candidate']
     assert changed['can_approve'] and changed['clarification_status']=='not_required'
     assert store.mutate(PROFILE,value['id'],{'expected_version':2,'agent_ids':[AGENT]},'approve')['candidate']['status']=='approved'
 
@@ -49,7 +52,7 @@ def test_informational_case_needs_no_technical_cause_or_steps(ready):
 @pytest.mark.parametrize('lang',['ru','az','en'])
 def test_interface_language_does_not_change_extraction_language(ready,lang):
     d,generation,data=ready
-    result=service.analyze(PROFILE,{**data,'language':lang})
+    result=service.analyze({**PROFILE,'language':lang,'locale':lang},data)
     assert generation.call_args.kwargs['extra_context']['output_language']=='az'
     assert result['request']['route']['language']=='az'
 
@@ -100,7 +103,7 @@ def test_improve_proposal_only_explicit_save_and_idempotency(ready,lang):
     args=payload(value,language=lang,clarifications='user@example.com; пароль: synthetic-secret')
     result=improve.improve(PROFILE,value['id'],args)
     assert result['request']['status']=='completed' and result['requires_explicit_save']
-    assert result['language']=='az' and result['expected_version']==1
+    assert result['language']==lang and result['expected_version']==1
     proposal=result['proposal']
     assert proposal['cause']['status']==value['cause']['status'] and proposal['cause']['text']=='Причина пока не установлена'
     assert proposal['resolution_steps']==['Проверить настройки','Повторить синхронизацию']
@@ -111,7 +114,7 @@ def test_improve_proposal_only_explicit_save_and_idempotency(ready,lang):
     assert store.detail(PROFILE,value['id'])==before
     assert not d.execute('SELECT id FROM saas_ai_knowledge_sources');d.commit()
     context=generation.call_args.kwargs['extra_context']
-    assert context['output_language']=='az' and 'synthetic-secret' not in json.dumps(context)
+    assert context['output_language']==lang and 'synthetic-secret' not in json.dumps(context)
     assert 'user@example.com' not in json.dumps(context)
     assert improve.improve(PROFILE,value['id'],args)['proposal']==result['proposal']
     assert improve.improve(PROFILE,value['id'],{**args,'request_id':str(uuid.uuid4())})['proposal']==result['proposal']
@@ -124,10 +127,11 @@ def test_improve_proposal_only_explicit_save_and_idempotency(ready,lang):
 
 def test_improve_rejects_model_fact_injection_and_keeps_usage(ready):
     d,generation,data=ready;value=candidate(ready)
+    before=store.detail(PROFILE,value['id'])['candidate']
     generation.return_value=(json.dumps({'title':'Title','symptoms':['Symptom'],'cause':{'status':'confirmed','text':'Invented'}}),{'total_tokens':44})
     result=improve.improve(PROFILE,value['id'],payload(value))
     assert result['proposal'] is None and result['request']['status']=='failed'
-    assert store.detail(PROFILE,value['id'])['candidate']==value
+    assert store.detail(PROFILE,value['id'])['candidate']==before
     assert d.execute('SELECT total_tokens FROM saas_ai_agent_token_usage WHERE run_id=%s::uuid',(result['request']['id'],))[0]['total_tokens']==44
 
 
@@ -164,8 +168,8 @@ def test_improve_permissions_input_limits_and_request_binding(ready):
 
 def test_interface_language_independent_dedup_and_company_quota(ready,monkeypatch):
     d,generation,data=ready
-    first=service.analyze(PROFILE,{**data,'language':'ru'})
-    second=service.analyze(PROFILE,{**data,'request_id':str(uuid.uuid4()),'language':'az'})
+    first=service.analyze({**PROFILE,'locale':'ru'},data)
+    second=service.analyze({**PROFILE,'locale':'az'},{**data,'request_id':str(uuid.uuid4())})
     assert first['request']['id']==second['request']['id']
     value=first['candidates'][0]
     monkeypatch.setattr(service,'platform_token_limit',lambda *a:1)
@@ -178,6 +182,9 @@ def test_remote_success_confirmed_but_unknown_actions_blocks_publication(ready):
     raw=model_card();raw.update(resolution_method='remote',resolution_steps=[],operator_actions=[])
     generation.return_value=(json.dumps({'cards':[raw]}),{'total_tokens':20})
     value=candidate(ready)
+    assert not value['result_confirmed']
+    value=store.mutate(PROFILE,value['id'],{'expected_version':value['version'],
+      'outcome':{**value['outcome'],'status':'confirmed'},'work_status':'resolved'})['candidate']
     assert value['result_confirmed'] and value['clarification_status']=='required'
     assert value['approval_block_reason']=='operator_actions_required'
     assert not value['can_approve']
@@ -190,6 +197,9 @@ def test_information_confirmation_not_technical_resolution(ready,message):
     raw=model_card();raw.update(case_kind='informational',resolution_steps=[],cause={'status':'unknown','text':''})
     generation.return_value=(json.dumps({'cards':[raw]}),{'total_tokens':20})
     value=candidate(ready)
+    assert not value['result_confirmed']
+    value=store.mutate(PROFILE,value['id'],{'expected_version':value['version'],
+      'outcome':{**value['outcome'],'status':'confirmed'}})['candidate']
     assert value['can_approve']
     raw['case_kind']='technical';raw['resolution_steps']=['Проверить соединение']
     assert not store.enforce_confirmation(raw,[{'id':ref,'role':'customer','text':message} for ref in raw['source_message_ids']])['outcome']['status']=='confirmed'
@@ -258,6 +268,7 @@ def test_legacy_extraction_request_id_replay_remains_free(ready):
     d,generation,data=ready
     first=service.analyze(PROFILE,data)
     legacy={**data,'provider':'connect','history_mode':'channel'};legacy.pop('request_id')
+    legacy['dialog_ai_binding']=first['request']['route']['dialog_ai_binding']
     d.execute('UPDATE saas_knowledge_extractions SET request_key=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',
         (store.digest(legacy),A,first['request']['id']));d.commit()
     assert service.analyze(PROFILE,data)['request']['id']==first['request']['id']
