@@ -66,6 +66,18 @@ def _card_access(current, target):
         if target.get('active') is False:
             editable.discard('whatsapp_numbers')
             reasons['whatsapp_numbers'] = 'member_inactive'
+        hidden = set(target.get('permissions') or []) - _EDITOR_PERMISSION_KEYS
+        if current.get('role') != 'owner' and hidden - set(current.get('permissions') or []):
+            # These grants are deliberately retained by the legacy editor.
+            # The current actor cannot remove or reassign them, so no valid
+            # alias/role/permission edit (or reactivation) can pass that guard.
+            for field in ('display_name', 'role', 'permissions'):
+                if field in editable:
+                    editable.remove(field)
+                    reasons[field] = 'permission_scope'
+            if target.get('active') is False and 'active' in editable:
+                editable.remove('active')
+                reasons['active'] = 'permission_scope'
     return sorted(editable), reasons
 
 
@@ -233,14 +245,16 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
                        COALESCE(NULLIF(au.first_name,''),up.first_name,'') AS first_name,
                        COALESCE(NULLIF(au.last_name,''),up.last_name,'') AS last_name,
                        COALESCE(NULLIF(au.avatar_url,''),up.avatar_url,'') AS avatar_url,
-                       COALESCE(NULLIF(au.login,''),up.login,'') AS login, au.status AS account_status
+                       COALESCE(NULLIF(au.login,''),up.login,'') AS login, au.status AS account_status,
+                       COALESCE(m.telegram_id=%s AND au.tenant_id=m.tenant_id
+                         AND au.disabled_at IS NULL AND au.status='active',FALSE) AS password_change_available
                 FROM saas_tenant_members m
                 JOIN saas_tenants t ON t.id=m.tenant_id
                 LEFT JOIN saas_auth_users au ON au.actor_id = m.telegram_id
                 LEFT JOIN saas_user_profiles up ON up.actor_id = m.telegram_id
                 WHERE m.tenant_id = %s::uuid
                 ORDER BY CASE WHEN m.role = 'owner' THEN 0 ELSE 1 END, m.display_name, m.telegram_id
-            """, (tenant_id,))
+            """, (int(owner_id), tenant_id))
             rows = cur.fetchall()
             ids=[int(row['telegram_id']) for row in rows]
             numbers={member_id:[] for member_id in ids}

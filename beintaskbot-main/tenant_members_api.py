@@ -1,5 +1,6 @@
 """Tenant employee cards and Telegram invitation workflow."""
 import asyncio
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from aiohttp import web
@@ -142,8 +143,15 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
                                     'last_name', 'login', 'password', 'confirm_password', 'role',
                                     'permissions', 'email', 'phone'}:
                         return invalid({'changes': 'unknown_field'})
-                    if (data.get('role', 'worker') not in {'admin', 'manager', 'operator', 'worker', 'master'}
-                            or not isinstance(data.get('permissions', []), list)
+                    for key in ('first_name', 'last_name', 'login', 'password', 'confirm_password', 'email', 'phone'):
+                        if key in data and not isinstance(data[key], str):
+                            return invalid({key: 'invalid'})
+                    if not re.fullmatch(r'[a-zA-Z0-9_.-]{3,64}', str(data.get('login') or '').strip()):
+                        return invalid({'login': 'invalid'})
+                    if (not isinstance(data.get('role', 'worker'), str)
+                            or data.get('role', 'worker') not in {'admin', 'manager', 'operator', 'worker', 'master'}):
+                        return invalid({'role': 'invalid'})
+                    if (not isinstance(data.get('permissions', []), list)
                             or any(not isinstance(value, str) for value in data.get('permissions', []))):
                         return invalid({'permissions': 'invalid'})
                 if request.headers.get('Origin','').rstrip('/') != context.origin.rstrip('/'):
