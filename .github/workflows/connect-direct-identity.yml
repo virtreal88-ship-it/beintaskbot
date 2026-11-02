@@ -13,6 +13,7 @@ on:
       - 'beintaskbot-main/tenant_operator_access.py'
       - 'beintaskbot-main/tenant_ai_dialog*.py'
       - 'beintaskbot-main/tests/test_connect_*.py'
+      - 'beintaskbot-main/tests/isolated_database_guard/*'
   push:
     branches: [fix/connect-direct-identity-replay, fix/verified-phone-dialog-reconcile, fix/owner-asserted-dialog-merge]
 
@@ -34,6 +35,7 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=55439 user=postgres password=isolated-identity-fixture dbname=postgres
+      DATABASE_URL: postgresql://invalid.invalid/disabled
     defaults:
       run:
         working-directory: beintaskbot-main
@@ -50,6 +52,8 @@ jobs:
           python -m pip install -r requirements.txt pytest
           npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0
       - name: Exercise ingestion, retries, concurrency, history and scope isolation
+        env:
+          PYTHONPATH: tests/isolated_database_guard:.:tests
         run: >-
           python -m pytest -q --tb=short
           tests/test_connect_phone_evidence.py

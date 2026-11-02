@@ -603,13 +603,11 @@ def reset_pilot_test_dialog(profile, data):
         raise TenantLinearError('The exact two-target pilot scope is not configured.', 409)
     from tenant_platform import _connect
     from tenant_ai_agents_schema import ensure_schema
-    from tenant_consultation_group import schema as ensure_group_schema
+    from tenant_consultation_schema import require_schema as require_consultation_schema
     from tenant_ai_agents_store import _authorize, _audit
-    from tenant_internal_consultations import schema as ensure_consultation_schema
     with _connect() as conn:
         ensure_schema(conn)
-        ensure_consultation_schema(conn)
-        ensure_group_schema(conn)
+        require_consultation_schema(conn,'group')
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
             if str(tenant)!=scope['tenant_id']:

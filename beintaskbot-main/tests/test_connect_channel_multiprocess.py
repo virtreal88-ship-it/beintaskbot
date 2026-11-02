@@ -16,6 +16,7 @@ from test_connect_channel_isolation import channels
 import tenant_ai_agents_schema as schema
 import tenant_platform_schema as platform_schema
 import tenant_chat_ai_schema as chat_schema
+import tenant_dialog_consultations as consultations
 
 class RealDatabase:
     def __init__(self,dsn):self.dsn=dsn;self.conn=psycopg.connect(dsn,row_factory=dict_row)
@@ -41,6 +42,8 @@ def database():
     db=RealDatabase(make_conninfo(dsn,dbname=name))
     platform_schema._schema_ready=False;schema._ready=False;chat_schema._ready=False
     schema.ensure_schema(db);chat_schema.ensure_schema(db)
+    # Match the mandatory production bootstrap before request/queue tests run.
+    consultations.schema(db)
     db.execute('CREATE TABLE test_external_sends(channel TEXT,run_id TEXT)');db.commit()
     yield db
     db.conn.close()

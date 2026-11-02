@@ -18835,6 +18835,8 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_get("/health", health_check)
 
 async def start_webhook_server():
+    from tenant_ai_agent_startup import require_database_ready
+    await asyncio.to_thread(require_database_ready)
     app_web = web.Application(middlewares=[cors_middleware, canonical_web_origin_middleware, telegram_auth_middleware])
     _register_legacy_web_routes(app_web)
     _register_tenant_web_routes(app_web)
@@ -18864,8 +18866,8 @@ async def start_webhook_server():
         logger.exception("AI platform model probe failed before worker startup")
     # The durable AI queue is shared by Kommo and Connect.  It runs in the
     # existing Railway worker process, so no additional service is needed.
-    # It is deliberately started after the HTTP listener and isolated from it:
-    # an additive migration or queue failure must never take crm.pro.az down.
+    # Schema preparation completed before HTTP and Telegram startup. Worker
+    # startup only verifies readiness and cannot run migrations beside traffic.
     async def _start_tenant_ai_worker():
         try:
             from tenant_ai_agent_startup import start_worker
@@ -18878,7 +18880,7 @@ async def start_webhook_server():
             except Exception:
                 logger.warning("Connect outbound webhook subscription sync could not complete")
             await start_worker(app_web, tenant_ai_agent_worker, _tenant_kommo_request, logger,
-                               _wait_for_tenant_kommo_slot, prepare_database_first=True,
+                               _wait_for_tenant_kommo_slot,
                                simulation_worker=tenant_ai_simulation_worker)
             from tenant_ai_instructor_worker import enabled as instructor_worker_enabled, run_worker as tenant_ai_instructor_worker
             if instructor_worker_enabled():
@@ -19771,6 +19773,10 @@ async def handle_api_kpi(request: web.Request) -> web.Response:
 
 def main():
     global _bot_app, _telegram_bot_username
+    from tenant_ai_agent_startup import _prepare_database_with_retry,prepare_database
+    # A failure must escape before either listener or scheduler is created,
+    # including deployments where background AI processing is disabled.
+    _prepare_database_with_retry(prepare_database)
     start_http_thread(start_webhook_server, logger)
     async def post_init(application: Application) -> None:
         remove_retired_employee_access()

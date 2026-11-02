@@ -14,14 +14,23 @@ from tenant_linear_policy import TenantLinearError, identifier
 from tenant_operator_access import access, assert_route
 from tenant_consultation_group import schema as legacy_schema
 from tenant_public_case import _schema as share_schema, _public_text, _MEDIA_TYPES, _MEDIA_SECRET_MARKER
+from tenant_consultation_schema import require_schema,schema_ready
 
 
 def schema(conn):
+    """Explicit startup/bootstrap API; request paths only verify readiness."""
     with conn.cursor() as cur:
-        cur.execute('''SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='saas_dialog_consultation_replies'
-          AND column_name='followup_requested_at') AND to_regclass('saas_dialog_developer_markers') IS NOT NULL
-          AND EXISTS(SELECT 1 FROM pg_constraint WHERE conname='saas_public_snapshot_owner_check') AS ready''')
-        if (cur.fetchone() or {}).get('ready'):return
+        if schema_ready(cur):return
+        if schema_ready(cur,include_followup=False,include_public_identity=False):
+            # The deployed #467 foundation needs only these additive columns.
+            # Release each relation lock before touching another table; old
+            # readers may still be finishing during a rolling upgrade.
+            cur.execute('ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS followup_requested_at TIMESTAMPTZ NULL')
+            conn.commit()
+            cur.execute("ALTER TABLE saas_public_case_shares ADD COLUMN IF NOT EXISTS public_identity JSONB NOT NULL DEFAULT '{}'::jsonb")
+            conn.commit()
+            require_schema(conn)
+            return
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_dialog_developer_markers(
           tenant_id UUID NOT NULL,channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,
           enabled BOOLEAN NOT NULL DEFAULT FALSE,updated_by BIGINT NOT NULL,updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -73,6 +82,7 @@ def schema(conn):
         cur.execute('ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS followup_requested_at TIMESTAMPTZ NULL')
         cur.execute('CREATE INDEX IF NOT EXISTS saas_dialog_consultation_pending_idx ON saas_dialog_consultation_replies(tenant_id,created_at) WHERE handled_at IS NULL')
     conn.commit()
+    require_schema(conn)
 
 
 def route(cur,tenant,policy,channel,conversation,*,manual=False):
@@ -127,7 +137,7 @@ def developer_marker(profile,data):
         raise TenantLinearError('Некорректный запрос.',400)
     if 'enabled' in data and type(data['enabled']) is not bool:raise TenantLinearError('Некорректный запрос.',400)
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn)
         with conn.cursor() as cur:
             tenant,actor,_,_=_scope(cur,profile,data['channel_id'],data['conversation_id'])
             from tenant_ai_dialog_scope import lock_dialog
@@ -173,7 +183,7 @@ def auto_case_dispatch_source_current(cur,tenant,channel,conversation,agent_id,e
 
 def destinations(profile):
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn)
         with conn.cursor() as cur:
             tenant,_,policy=access(cur,profile,'dialogs')
             from tenant_operator_dialogs import projection
@@ -208,7 +218,7 @@ def selection(cur,tenant,source,message_ids):
 def preview(profile,data):
     if not isinstance(data,dict) or set(data) not in ({'channel_id','conversation_id'},{'channel_id','conversation_id','case_id'}):raise TenantLinearError('Некорректный запрос.',400)
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn)
         with conn.cursor() as cur:
             case_id=identifier(data['case_id']) if data.get('case_id') else ''
             tenant,_,_,source=_scope(cur,profile,data['channel_id'],data['conversation_id'],manual=True,case_id=case_id)
@@ -292,7 +302,7 @@ def prepare(profile,data,origin):
     else:normalized.pop('case_id',None)
     digest=hashlib.sha256(json.dumps(normalized,sort_keys=True).encode()).hexdigest()
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy,source=_scope(cur,profile,channel,data['conversation_id'],manual=True,case_id=case_id,sending=True)
             target=developer_target(cur,tenant,policy,dest,data['destination_conversation_id'])
@@ -386,7 +396,7 @@ def dispatch(profile,key,request,*,auto_dispatch_id=None):
     from tenant_connect_transport import connect_route,send_consultation_with_receipt
     request=identifier(request)
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy,item,_=_consult(cur,profile,key,manual=True,sending=True)
             cur.execute('SELECT * FROM saas_consultation_group_deliveries WHERE tenant_id=%s::uuid AND consultation_id=%s::uuid AND request_id=%s::uuid FOR UPDATE',(tenant,key,request));delivery=cur.fetchone()
@@ -985,7 +995,7 @@ def _reply_source(cur,tenant,policy,actor,row):
 
 def inbox(profile,channel='',conversation='',case_id=''):
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy=access(cur,profile,'dialogs')
             case_id=identifier(case_id) if case_id else ''
@@ -1091,7 +1101,7 @@ def action(profile,reply_id,data):
     if not isinstance(data,dict) or not ((set(data)=={'action'} and data['action'] in {'read','handled'}) or
         (set(data)=={'action','customer_message_id'} and data['action']=='link_customer_reply')):raise TenantLinearError('Некорректный запрос.',400)
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy=access(cur,profile,'dialogs')
             cur.execute('SELECT consultation_id FROM saas_dialog_consultation_replies WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,identifier(reply_id)));item=cur.fetchone()
@@ -1122,7 +1132,7 @@ def action(profile,reply_id,data):
 
 def revoke(profile,key):
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn)
         with conn.cursor() as cur:
             tenant,_,policy,consult,_=_consult(cur,profile,key)
             if consult.get('case_id') and policy.profile.get('role')!='owner':raise TenantLinearError('Только владелец может отозвать публичную ссылку обращения.',403)
@@ -1135,7 +1145,7 @@ def draft(profile,reply_id,data):
     if not isinstance(data,dict) or set(data)!={'request_id'}:raise TenantLinearError('Некорректный запрос.',400)
     request=identifier(data['request_id']);reply_id=identifier(reply_id)
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy=access(cur,profile,'dialogs')
             cur.execute('SELECT consultation_id FROM saas_dialog_consultation_replies WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,reply_id));reply=cur.fetchone()
@@ -1268,7 +1278,7 @@ def _customer_replies(cur,tenant,reply_id):
 
 def customer_replies(profile,reply_id):
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn)
         with conn.cursor() as cur:
             tenant,_,_=access(cur,profile,'dialogs')
             cur.execute('SELECT consultation_id FROM saas_dialog_consultation_replies WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,identifier(reply_id)))

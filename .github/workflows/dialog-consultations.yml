@@ -20,6 +20,19 @@ on:
       - 'beintaskbot-main/tests/operator_case_ui_fixture.cjs'
       - 'beintaskbot-main/tests/isolated_database_guard/*'
       - 'beintaskbot-main/tenant_ai_agents_schema.py'
+      - 'beintaskbot-main/tenant_ai_agent_startup.py'
+      - 'beintaskbot-main/bot.py'
+      - 'beintaskbot-main/tenant_internal_consultations.py'
+      - 'beintaskbot-main/tenant_consultation_schema.py'
+      - 'beintaskbot-main/tenant_consultation_group.py'
+      - 'beintaskbot-main/tenant_consultation_notification_worker.py'
+      - 'beintaskbot-main/tenant_ai_pilot.py'
+      - 'beintaskbot-main/tests/test_tenant_ai_agent_startup.py'
+      - 'beintaskbot-main/tests/test_legacy_app_bootstrap.py'
+      - 'beintaskbot-main/tests/test_consultation_startup_upgrade_postgres.py'
+      - 'beintaskbot-main/tests/test_tenant_consultation_notification_worker.py'
+      - 'beintaskbot-main/tests/test_tenant_ai_pilot.py'
+      - 'beintaskbot-main/tests/test_tenant_ai_pilot_reset_postgres.py'
       - 'beintaskbot-main/tenant_notification_center*.py'
       - 'beintaskbot-main/tests/test_tenant_notification_center*'
       - 'beintaskbot-main/tests/test_tenant_notification_bell_ux_browser.cjs'
@@ -157,6 +170,9 @@ jobs:
       DATABASE_URL: postgresql://invalid.invalid/disabled
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The upgrade fixture executes the exact previous production schema.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -188,6 +204,12 @@ jobs:
             tests/test_manual_case_saved_media.py \
             tests/test_pr465_followup_worker.py \
             tests/test_ai_schema_cold_readiness.py \
+            tests/test_consultation_startup_upgrade_postgres.py \
+            tests/test_tenant_ai_agent_startup.py \
+            tests/test_legacy_app_bootstrap.py \
+            tests/test_tenant_consultation_notification_worker.py \
+            tests/test_tenant_ai_pilot.py \
+            tests/test_tenant_ai_pilot_reset_postgres.py \
             tests/test_tenant_ai_pilot_worker.py \
             tests/test_tenant_ai_agent_no_answer.py \
             tests/test_tenant_ai_agent_no_answer_postgres.py \
