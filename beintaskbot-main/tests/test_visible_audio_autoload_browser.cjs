@@ -8,6 +8,8 @@ const settle=page=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(
    assert.equal(await f.card('voice-a').locator('[data-media-open]').isVisible(),false);assert.equal(await audio.evaluate(a=>a.paused),true,'byte acquisition never autoplays');
    assert.equal(await f.card('voice-a').locator('.operator-audio-controls').evaluate(n=>n.inert),false);
    const box=await audio.boundingBox();await f.page.mouse.click(box.x+20,box.y+box.height/2);await f.page.waitForFunction(()=>document.querySelector('audio')?.paused===false);await audio.evaluate(a=>a.pause());
+   await f.page.locator('article[data-message-id="voice-a"]').focus();await f.page.keyboard.press('Shift+F10');const menu=f.page.locator('.operator-reply-context-menu');await menu.waitFor();
+   assert.equal(await menu.locator('[data-context-file-action=load]').isVisible(),false,'loaded audio has no redundant Load menu item');assert.equal(await menu.evaluate(n=>n.contains(document.activeElement)&&document.activeElement.getClientRects().length>0),true,'keyboard menu focuses a visible usable command');await f.page.keyboard.press('Escape');
    assert.equal(s.requests.filter(r=>r.cacheOnly).length,1);assert.equal(s.requests.filter(r=>r.automatic).length,1);assert.equal(s.upstream.length,1);
    assert.equal(await f.page.evaluate(()=>sessionStorage.getItem('tenant.audio-reload-intent.v1')),null,'automatic visibility never writes a manual-selection hint');
    await f.page.reload();await f.loaded('voice-a');assert.equal(s.upstream.length,1,'reload uses server cache, no second upstream load');
