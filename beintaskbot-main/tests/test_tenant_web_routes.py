@@ -61,8 +61,6 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('instructor/jobs', ('GET','POST')), ('instructor/jobs/{job_id}', ('GET','POST')),
     ('instructor/jobs/{job_id}/artifacts/{artifact_id}', ('GET',)),
     ('agents/settings', ('GET','PATCH')),
-    ('agents/pilot-preflight', ('GET',)), ('agents/pilot/resume', ('POST',)), ('agents/pilot/reset', ('POST',)), ('agents/pilot/kwid-confirmation', ('POST',)),
-    ('agents/pilot/owner-approval', ('POST',)),
     ('knowledge/deduplication', ('GET','POST')),
     ('administrator/approvals', ('GET','POST')),
     ('agents', ('GET','POST')), ('agents/options', ('GET',)),
@@ -167,6 +165,11 @@ class Routes(unittest.IsolatedAsyncioTestCase):
 
     async def test_retired_real_dialog_test_and_draft_apis_are_not_routed(self):
         for method, path in [
+            ('GET', '/api/platform/ai/agents/pilot-preflight'),
+            ('POST', '/api/platform/ai/agents/pilot/resume'),
+            ('POST', '/api/platform/ai/agents/pilot/reset'),
+            ('POST', '/api/platform/ai/agents/pilot/kwid-confirmation'),
+            ('POST', '/api/platform/ai/agents/pilot/owner-approval'),
             ('GET', '/api/platform/ai/testing/kommo-context'),
             ('PATCH', '/api/platform/ai/agents/test-mode'),
             ('POST', '/api/platform/ai/agents/test-mode/verify'),
