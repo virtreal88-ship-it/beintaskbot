@@ -969,3 +969,43 @@ def test_restored_summary_command_is_scoped_to_exact_case_tenant_and_authorized_
         cases.detail(PROFILE, ticket_id)
     assert revoked.value.status == 403
     assert f['provider'].call_count == 3
+
+
+@pytest.mark.parametrize('state', ['applied', 'unknown'])
+def test_case_uuid_deep_link_aliases_preserve_summary_history_pending_command_and_replay_receipt(language_db, state):
+    f = language_db
+    page, _ids = _case(f, [AZ])
+    ticket_id = page['ticket']['id']
+    command = _regenerate(page, language='en')
+    if state == 'unknown':
+        f['provider'].side_effect = TimeoutError('Synthetic unknown generation before opening a UUID alias')
+        with pytest.raises(TimeoutError):
+            summaries.regenerate(PROFILE, ticket_id, command)
+    else:
+        f['output_language'] = 'en'
+        applied = summaries.regenerate(PROFILE, ticket_id, command)
+        assert applied['summary_request'] == {'request_id': command['request_id'], 'state': 'applied'}
+    canonical = cases.detail(PROFILE, ticket_id)
+    assert canonical['ticket']['summary_language']['language'] == ('en' if state == 'applied' else 'az')
+    assert canonical['summary_pending_request'] == (
+        {'command': command, 'state': 'unknown'} if state == 'unknown' else None)
+    aliases = (ticket_id.upper(), '{' + ticket_id.upper() + '}',
+               uuid.UUID(ticket_id).hex, uuid.UUID(ticket_id).urn)
+    fields = ('id', 'description', 'summary', 'suggestions', 'next_steps', 'summary_hash', 'summary_language')
+    for alias in aliases:
+        opened = cases.detail({**PROFILE, 'locale': 'ru'}, alias)
+        assert {key: opened['ticket'][key] for key in fields} == {key: canonical['ticket'][key] for key in fields}
+        assert opened['summary_history'] == canonical['summary_history']
+        assert opened['summary_pending_request'] == canonical['summary_pending_request']
+        replayed = summaries.regenerate(PROFILE, alias, command)
+        assert replayed['summary_request'] == {'request_id': command['request_id'], 'state': state}
+        assert replayed['summary_history'] == canonical['summary_history']
+        assert replayed['summary_pending_request'] == canonical['summary_pending_request']
+        assert replayed['ticket']['summary_hash'] == canonical['ticket']['summary_hash']
+        with pytest.raises(TenantLinearError) as foreign:
+            cases.detail({'tenant_id': B, 'telegram_id': 22}, alias)
+        assert foreign.value.status == 404
+    assert f['provider'].call_count == 2
+    assert f['db'].execute("""SELECT count(*) AS n FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid
+      AND entity_type='support_ticket' AND entity_id=%s AND action='support_summary_requested'""",
+      (A, ticket_id))[0]['n'] == 1

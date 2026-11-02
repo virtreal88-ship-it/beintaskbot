@@ -336,11 +336,12 @@ def listing(profile, status='unresolved', assignee='', offset=0, search='', chan
 
 
 def detail(profile, ticket_id, before=None, message_id=None):
+    ticket_id=identifier(ticket_id)
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
-            cur.execute(_SELECT + ' WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid', (tenant,identifier(ticket_id)))
+            cur.execute(_SELECT + ' WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid', (tenant,ticket_id))
             ticket = cur.fetchone()
             if not ticket:
                 raise TenantLinearError('Обращение не найдено.', 404)

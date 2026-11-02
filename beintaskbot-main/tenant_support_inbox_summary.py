@@ -291,6 +291,7 @@ def summarize(tenant, ticket_id, profile=None, retry=False, command=None):
 
 
 def regenerate(profile, ticket_id, data=None):
+    ticket_id=identifier(ticket_id)
     # Verify access even when the summary has already completed.
     detail(profile,ticket_id)
     if (not isinstance(data,dict) or set(data)-{'request_id','confirm_ai_cost','expected_summary_hash','language'}
