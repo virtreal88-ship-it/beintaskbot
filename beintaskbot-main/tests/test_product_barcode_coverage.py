@@ -61,13 +61,15 @@ def test_full_receipt_keeps_only_eligible_barcode_and_seals(reused,manual,same_p
 
 @pytest.mark.parametrize('reused',[False,True])
 @pytest.mark.parametrize('manual',[False,True])
-@pytest.mark.parametrize('damage',['partial','coverage','missing_component','context_limit','long_redaction'])
+@pytest.mark.parametrize('damage',['partial','coverage','truncated','missing_component','context_limit','long_redaction','long_numeric_redaction'])
 def test_projection_cannot_certify_incomplete_or_omitted_evidence(reused,manual,damage):
     def change(saved):
         if damage=='partial':saved['status']='partial'
         if damage=='coverage':saved['coverage']['complete']=False
+        if damage=='truncated':saved['result']['truncated']=True
         if damage=='missing_component':saved['result']['observations'].append({'text':'Required second visual fact.'})
     text=OBS+'\n'+('long incomplete observation '*190) if damage=='long_redaction' else None
+    if damage=='long_numeric_redaction':text='123456789 '*500+'\nRequired final fact'
     photo,authority,_=project(reused=reused,text=text,change=change)
     if damage=='missing_component':
         photo['_copilot_attachment_text']=photo['_copilot_attachment_text'].replace('Required second visual fact.','')

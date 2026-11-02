@@ -213,6 +213,14 @@ def apply_episode_receipt(row,message,receipt,*,authority=None,ref=None,saved=No
             if isinstance(value,str):
                 item[key]=_safe_text(value)
                 if len(value)>4000:projected['truncated']=True
+        # Reuse may already have bounded/masked the text. Its shorter view
+        # cannot erase a known truncation or an omitted original tail.
+        if isinstance(saved,dict) and isinstance(saved.get('result'),dict):
+            original=saved['result'];texts=[original.get('observation')]
+            if isinstance(original.get('observations'),list):
+                texts.extend(item.get('text') for item in original['observations'] if isinstance(item,dict))
+            if original.get('truncated') is True or any(isinstance(text,str) and len(text)>4000 for text in texts):
+                projected['truncated']=True
         row['_episode_receipt']=projected
 
 
