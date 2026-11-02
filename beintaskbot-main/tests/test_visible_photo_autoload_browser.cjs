@@ -7,9 +7,12 @@ const base={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'sy
 const message=(id='photo',version='a',kind='image')=>({id,external_id:id,source:'connect',source_lead_id:41,source_channel_id:channel,source_conversation_id:base.conversation_id,direction:'incoming',message_type:kind,media_version:version.repeat(64),body:'',analysis_state:'not_requested',happened_at:'2026-10-21T10:00:00Z'});
 const cache=new Set(),flights=new Map(),requests=[],upstream=[];let responseStatus=200,upstreamGate=null,automaticActive=0,enforceAutomaticSlot=false;
 const cacheKey=(url)=>[url.searchParams.get('expected_tenant_id'),url.searchParams.get('channel_id'),url.searchParams.get('conversation_id'),url.searchParams.get('message_id'),url.searchParams.get('expected_media_version')].join('|');
-async function fixture(browser,width=390,withoutLocks=false){
- const context=await browser.newContext({viewport:{width,height:844}}),page=await context.newPage(),errors=[];
- if(withoutLocks)await context.addInitScript(()=>Object.defineProperty(navigator,'locks',{value:undefined,configurable:true}));
+async function fixture(browser,width=390,withoutLocks=false,height=844){
+ const context=await browser.newContext({viewport:{width,height}}),page=await context.newPage(),errors=[];
+ if(withoutLocks)await context.addInitScript(()=>{
+  Object.defineProperty(navigator,'locks',{value:undefined,configurable:true});window.fixtureVisiblePhotos=new Set();
+  const Original=IntersectionObserver;window.IntersectionObserver=class extends Original{constructor(callback,options){super((entries,observer)=>{callback(entries,observer);for(const entry of entries)if(entry.isIntersecting&&['photo-a','photo-b'].includes(entry.target.dataset.chatAttachment))window.fixtureVisiblePhotos.add(entry.target.dataset.chatAttachment);},options);}};
+ });
  page.setDefaultTimeout(10000);
  const state={authed:true,tenant,user:33,dialog:{...base},messages:[message()]};page.on('pageerror',e=>errors.push(e.message));
  await context.route('**/*',async route=>{
@@ -17,7 +20,7 @@ async function fixture(browser,width=390,withoutLocks=false){
   if(name==='/app')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8')});
   if(name==='/login')return route.fulfill({contentType:'text/html',body:'<button id="fixtureLogin" onclick="fetch(\'/fixture/login\',{method:\'POST\'}).then(()=>location.href=\'/app?view=dialogs\')">Sign in</button>'});
   if(name==='/fixture/login'){state.authed=true;return route.fulfill({json:{success:true}});}
-  if(name.startsWith('/assets/')){const file=path.join(root,'docs',path.basename(name));return fs.existsSync(file)?route.fulfill({path:file}):route.fulfill({status:404,body:''});}
+  if(name.startsWith('/assets/')){const file=withoutLocks&&name.endsWith('/tenant-chat-attachments.js')&&process.env.PHOTO_AUTO_SCRIPT?process.env.PHOTO_AUTO_SCRIPT:path.join(root,'docs',path.basename(name));return fs.existsSync(file)?route.fulfill({path:file}):route.fulfill({status:404,body:''});}
   if(name==='/api/platform/me')return route.fulfill({json:state.authed?{success:true,member:{tenant_id:state.tenant,telegram_id:state.user,role:'worker',permissions:['dialogs'],active:true},capabilities:{modules:{dialogs:true}}}:{success:false}});
   if(name==='/api/platform/logout'){state.authed=false;return route.fulfill({json:{success:true}});}
   if(name.endsWith('/crm/chat/attachment')){
@@ -79,15 +82,21 @@ async function fixture(browser,width=390,withoutLocks=false){
    }finally{await f.context.close();}
   }
   cache.clear();requests.length=0;upstream.length=0;responseStatus=200;enforceAutomaticSlot=true;
-  upstreamGate=new Promise(resolve=>setTimeout(resolve,150));
-  const fallback=await fixture(browser,1280,true);fallback.state.messages=[message('photo-a'),message('photo-b','b')];
+  let releaseFallback;upstreamGate=new Promise(resolve=>{releaseFallback=resolve;});
+  const fallback=await fixture(browser,1280,true,1200);fallback.state.messages=[message('photo-a'),message('photo-b','b')];
+  const firstAuto=fallback.page.waitForRequest(request=>new URL(request.url()).searchParams.get('auto_preview')==='1');
   try{
-    await fallback.open();assert.equal(await fallback.page.evaluate(()=>!!navigator.locks),false);
+    await fallback.open();await firstAuto;assert.equal(await fallback.page.evaluate(()=>!!navigator.locks),false);
+    await fallback.page.waitForFunction(()=>window.fixtureVisiblePhotos.size===2);
+    await fallback.page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    assert.equal(requests.filter(r=>r.cache).length,1,'pending first acquisition must keep the second photo queued');
+    assert.equal(requests.filter(r=>r.auto).length,1);assert.equal(upstream.length,1);
+    releaseFallback();
     await Promise.all([fallback.photo('photo-a').locator('[data-media-preview=image]').waitFor(),fallback.photo('photo-b').locator('[data-media-preview=image]').waitFor()]);
     assert.equal(requests.filter(r=>r.auto).length,2);assert.equal(upstream.length,2);
     assert.equal(await fallback.page.locator('[data-media-preview-state=rate_limited]').count(),0);
     assert.deepEqual(fallback.errors,[]);console.log('PASS no Web Locks: two visible cold photos serialize against background cap1, no self429/manual retry');
-  }finally{upstreamGate=null;enforceAutomaticSlot=false;await fallback.context.close();}
+  }finally{releaseFallback();upstreamGate=null;enforceAutomaticSlot=false;await fallback.context.close();}
   // Two independent contexts racing one source model the shared endpoint's singleflight.
   cache.clear();upstream.length=0;responseStatus=200;let release;upstreamGate=new Promise(resolve=>release=resolve);
   const a=await fixture(browser),b=await fixture(browser);try{await Promise.all([a.open(),b.open()]);await a.page.waitForFunction(()=>document.querySelector('[data-media-open]')?.getAttribute('aria-busy')==='true');while(!upstream.length)await a.page.waitForTimeout(10);await a.page.waitForTimeout(80);assert.equal(upstream.length,1);release();await Promise.all([a.photo('photo').locator('[data-media-preview=image]').waitFor(),b.photo('photo').locator('[data-media-preview=image]').waitFor()]);}finally{upstreamGate=null;release();await a.context.close();await b.context.close();}
