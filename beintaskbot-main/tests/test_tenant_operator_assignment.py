@@ -188,17 +188,32 @@ def test_primary_assignment_can_be_changed_or_removed_without_resuming(old_dialo
 def test_archive_transfers_dialog_atomically_and_preserves_history(old_dialog):
     f=old_dialog;db=f['db'];data=payload(f)
     assignment.assign(PROFILE,data)
-    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT2))
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb,enabled=FALSE,version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}]),A,AGENT2))
+    db.execute("UPDATE saas_ai_agents SET enabled=FALSE WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))
+    group_jid='120363012345@g.us'
+    db.execute("INSERT INTO saas_ai_group_coordination(tenant_id,provider,group_jid,state,assignments) VALUES(%s::uuid,'connect',%s,'human',%s::jsonb)",(A,group_jid,json.dumps([{'channel_id':CA,'agent_id':AGENT,'enabled':True}])))
     before=db.execute("SELECT id,direction,body FROM saas_crm_messages WHERE tenant_id=%s::uuid ORDER BY id",(A,));db.commit()
-    result=agents.delete_agent(PROFILE,AGENT,replacement_agent_id=AGENT2)
+    source_version=db.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))[0]['version']
+    replacement_version=db.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT2))[0]['version'];db.commit()
+    preview=agents.preview_agent_archive_transfer(PROFILE,AGENT,AGENT2)
+    assert preview['allowed'] and preview['dialog_count']>=1 and preview['group_count']==1
+    assert preview['agent_version']==source_version and preview['replacement_version']==replacement_version
+    result=agents.delete_agent(PROFILE,AGENT,replacement_agent_id=AGENT2,expected_version=source_version,
+        expected_replacement_version=replacement_version,expected_preview_hash=preview['snapshot_hash'])
     assert result['archived'] and result['transferred_dialogs'] >= 1
     source=db.execute("SELECT enabled,archived_at,archived_replaced_by FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]
     assert source['enabled'] is False and source['archived_at'] and str(source['archived_replaced_by'])==AGENT2
     state=db.execute("SELECT agent_id,state,reason FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id='client'",(A,CA))[0]
     assert str(state['agent_id'])==AGENT2 and state['state']=='human' and state['reason']=='agent_archived_transfer'
     assert db.execute("SELECT id,direction,body FROM saas_crm_messages WHERE tenant_id=%s::uuid ORDER BY id",(A,))==before
+    group=db.execute("SELECT state,assignments FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s",(A,group_jid))[0]
+    assert group['state']=='human' and group['assignments'][0]['agent_id']==AGENT2
+    assert db.execute('SELECT enabled FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT2))[0]['enabled'] is False
     assert AGENT not in [row['id'] for row in agents.list_agents(PROFILE)]
     assert f['process']() is None;f['send'].assert_not_called();f['generate'].assert_not_called()
+    with pytest.raises(TenantLinearError):
+        agents.delete_agent(PROFILE,AGENT,replacement_agent_id=AGENT2,expected_version=source_version,
+            expected_replacement_version=replacement_version,expected_preview_hash=preview['snapshot_hash'])
 
 
 def test_archive_rejects_recipient_without_channel_scope(old_dialog):
@@ -208,6 +223,106 @@ def test_archive_rejects_recipient_without_channel_scope(old_dialog):
         agents.delete_agent(PROFILE,AGENT,replacement_agent_id=AGENT2)
     assert error.value.status==409
     assert db.execute("SELECT archived_at FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]['archived_at'] is None
+
+
+def test_archive_transfer_preview_rejects_stale_dialog_or_recipient_snapshot(old_dialog):
+    f=old_dialog;db=f['db'];assignment.assign(PROFILE,payload(f))
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT2));db.commit()
+    preview=agents.preview_agent_archive_transfer(PROFILE,AGENT,AGENT2)
+    db.execute("UPDATE saas_ai_conversation_state SET revision=revision+1 WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s",(A,CA));db.commit()
+    current=db.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))[0]['version'];db.commit()
+    replacement=db.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT2))[0]['version'];db.commit()
+    with pytest.raises(TenantLinearError):
+        agents.delete_agent(PROFILE,AGENT,replacement_agent_id=AGENT2,expected_version=current,
+            expected_replacement_version=replacement,expected_preview_hash=preview['snapshot_hash'])
+    db.rollback()
+    assert db.execute("SELECT archived_at FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]['archived_at'] is None
+    assert str(db.execute("SELECT agent_id FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s",(A,CA))[0]['agent_id'])==AGENT
+
+
+def test_archive_transfer_preview_rejects_stale_replacement_version(old_dialog):
+    f=old_dialog;db=f['db'];assignment.assign(PROFILE,payload(f))
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT2));db.commit()
+    preview=agents.preview_agent_archive_transfer(PROFILE,AGENT,AGENT2)
+    db.execute('UPDATE saas_ai_agents SET version=version+1 WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT2));db.commit()
+    with pytest.raises(TenantLinearError):
+        agents.delete_agent(PROFILE,AGENT,replacement_agent_id=AGENT2,expected_version=preview['agent_version'],
+            expected_replacement_version=preview['replacement_version'],expected_preview_hash=preview['snapshot_hash'])
+    db.rollback()
+    assert db.execute("SELECT archived_at FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]['archived_at'] is None;db.commit()
+
+
+def test_archive_transfer_keeps_unknown_outcome_historical_without_retry(old_dialog):
+    f=old_dialog;db=f['db'];assignment.assign(PROFILE,payload(f))
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT2))
+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,payload,state) VALUES(%s::uuid,'unknown-only-transfer','connect','incoming_message','{}'::jsonb,'unknown')",(A,))
+    db.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,channel_id,event_fingerprint,state,attempts,due_at) VALUES(%s::uuid,%s::uuid,'connect','unknown-only-client',41,'','unknown-only-client',%s,'unknown-only-transfer','unknown',1,now())",(A,AGENT,CA));db.commit()
+    preview=agents.preview_agent_archive_transfer(PROFILE,AGENT,AGENT2)
+    assert preview['allowed'] and preview['impact']['unknown_jobs']==1
+    result=agents.delete_agent(PROFILE,AGENT,replacement_agent_id=AGENT2,expected_version=preview['agent_version'],
+        expected_replacement_version=preview['replacement_version'],expected_preview_hash=preview['snapshot_hash'])
+    assert result['archived']
+    unknown=db.execute("SELECT state,attempts,agent_id FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint='unknown-only-transfer'",(A,))[0];db.commit()
+    assert unknown=={'state':'unknown','attempts':1,'agent_id':AGENT},'unknown work remains historical and is never retried or rebound'
+    state=db.execute("SELECT agent_id,state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s",(A,CA))[0];db.commit()
+    assert state=={'agent_id':AGENT2,'state':'human'}
+    assert f['process']() is None;f['send'].assert_not_called();f['generate'].assert_not_called()
+
+
+def test_archive_transfer_only_stops_never_attempted_queued_work(old_dialog):
+    f=old_dialog;db=f['db'];assignment.assign(PROFILE,payload(f))
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT2))
+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,payload,state) VALUES(%s::uuid,'queued-transfer','connect','incoming_message','{}'::jsonb,'queued')",(A,))
+    db.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,channel_id,event_fingerprint,state,attempts,due_at) VALUES(%s::uuid,%s::uuid,'connect','queued-client',41,'','queued-client',%s,'queued-transfer','queued',0,now())",(A,AGENT,CA));db.commit()
+    preview=agents.preview_agent_archive_transfer(PROFILE,AGENT,AGENT2)
+    assert preview['allowed'] and preview['impact']['queued_jobs_cancellable']==1
+    agents.delete_agent(PROFILE,AGENT,replacement_agent_id=AGENT2,expected_version=preview['agent_version'],
+        expected_replacement_version=preview['replacement_version'],expected_preview_hash=preview['snapshot_hash'])
+    job=db.execute("SELECT state,attempts,error_code FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint='queued-transfer'",(A,))[0]
+    event=db.execute("SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint='queued-transfer'",(A,));db.commit()
+    assert job=={'state':'skipped','attempts':0,'error_code':'agent_archived'}
+    assert event==[{'state':'skipped','error_code':'agent_archived'}]
+    assert f['send'].call_count==0 and f['generate'].call_count==0
+
+
+def test_archive_transfer_blocks_shared_event_when_other_agent_has_unknown_work(old_dialog):
+    f=old_dialog;db=f['db'];assignment.assign(PROFILE,payload(f))
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT2))
+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,payload,state) VALUES(%s::uuid,'shared-transfer','connect','incoming_message','{}'::jsonb,'queued')",(A,))
+    db.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,channel_id,event_fingerprint,state,attempts,due_at) VALUES(%s::uuid,%s::uuid,'connect','source-client',41,'','source-client',%s,'shared-transfer','queued',0,now())",(A,AGENT,CA))
+    db.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,channel_id,event_fingerprint,state,attempts,due_at) VALUES(%s::uuid,%s::uuid,'connect','other-client',41,'','other-client',%s,'shared-transfer','unknown',1,now())",(A,AGENT2,CA));db.commit()
+    preview=agents.preview_agent_archive_transfer(PROFILE,AGENT,AGENT2)
+    assert not preview['allowed'] and preview['impact']['shared_event_work']==1
+    with pytest.raises(TenantLinearError):
+        agents.delete_agent(PROFILE,AGENT,replacement_agent_id=AGENT2,expected_version=preview['agent_version'],
+            expected_replacement_version=preview['replacement_version'],expected_preview_hash=preview['snapshot_hash'])
+    db.rollback()
+    jobs=db.execute("SELECT agent_id,state,attempts FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint='shared-transfer' ORDER BY agent_id",(A,))
+    event=db.execute("SELECT state,error_code FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND fingerprint='shared-transfer'",(A,));db.commit()
+    assert jobs==[{'agent_id':AGENT,'state':'queued','attempts':0},{'agent_id':AGENT2,'state':'unknown','attempts':1}]
+    assert event==[{'state':'queued','error_code':''}]
+    assert db.execute("SELECT archived_at FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]['archived_at'] is None;db.commit()
+
+
+def test_archive_transfer_never_cancels_processing_or_retries_unknown(old_dialog):
+    f=old_dialog;db=f['db'];assignment.assign(PROFILE,payload(f))
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT2))
+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,payload,state) VALUES(%s::uuid,'unknown-transfer','connect','incoming_message','{}'::jsonb,'unknown')",(A,))
+    db.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,channel_id,event_fingerprint,state,attempts,due_at) VALUES(%s::uuid,%s::uuid,'connect','unknown-client',41,'','unknown-client',%s,'unknown-transfer','unknown',1,now())",(A,AGENT,CA))
+    db.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,event_type,payload,state) VALUES(%s::uuid,'processing-transfer','connect','incoming_message','{}'::jsonb,'processing')",(A,))
+    db.execute("INSERT INTO saas_ai_agent_jobs(tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,channel_id,event_fingerprint,state,attempts,lease_token,lease_until,due_at) VALUES(%s::uuid,%s::uuid,'connect','busy-client',41,'','busy-client',%s,'processing-transfer','processing',1,%s::uuid,now()+interval '1 minute',now())",(A,AGENT,CA,str(uuid.uuid4())))
+    db.commit()
+    preview=agents.preview_agent_archive_transfer(PROFILE,AGENT,AGENT2)
+    assert not preview['allowed'] and preview['impact']['active_jobs']==1 and preview['impact']['unknown_jobs']==1
+    source=db.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT))[0]['version'];db.commit()
+    replacement=db.execute('SELECT version FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,AGENT2))[0]['version'];db.commit()
+    with pytest.raises(TenantLinearError,match='Transfer preview'):
+        agents.delete_agent(PROFILE,AGENT,replacement_agent_id=AGENT2,expected_version=source,
+            expected_replacement_version=replacement,expected_preview_hash=preview['snapshot_hash'])
+    db.rollback()
+    states=db.execute("SELECT conversation_id,state,attempts FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND agent_id=%s::uuid ORDER BY conversation_id",(A,AGENT));db.commit()
+    assert states==[{'conversation_id':'busy-client','state':'processing','attempts':1},{'conversation_id':'unknown-client','state':'unknown','attempts':1}]
+    assert db.execute("SELECT archived_at FROM saas_ai_agents WHERE tenant_id=%s::uuid AND id=%s::uuid",(A,AGENT))[0]['archived_at'] is None;db.commit()
 
 
 def test_permanent_delete_removes_agent_config_but_preserves_history_and_pauses_dialog(old_dialog,monkeypatch):

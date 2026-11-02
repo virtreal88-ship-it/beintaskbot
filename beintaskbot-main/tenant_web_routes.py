@@ -128,6 +128,8 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('instructor/jobs/{job_id:[0-9a-fA-F-]{36}}/artifacts/{artifact_id:[0-9a-fA-F-]{36}}', ai_instructor_handler(member, origin, logger, 'artifact'), ('GET',)),
         ('agents/options', ai_agents_handler(member, origin, logger, 'options', context.crm_request), ('GET',)),
         ('agents/{agent_id:[0-9a-fA-F-]{36}}/delete-preview', ai_agents_handler(member, origin, logger, 'agent_delete_preview'), ('GET',)),
+        ('agents/{agent_id:[0-9a-fA-F-]{36}}/archive-transfer-preview', ai_agents_handler(member, origin, logger, 'agent_archive_transfer_preview'), ('GET',)),
+        ('agents/{agent_id:[0-9a-fA-F-]{36}}/archive-transfer', ai_agents_handler(member, origin, logger, 'agent_archive_transfer'), ('POST',)),
         ('dialogs', operator_handler(member, origin, logger, 'dialogs'), ('GET',)),
         ('dialogs/avatar', operator_handler(member, origin, logger, 'avatar'), ('GET',)),
         ('dialogs/history', operator_handler(member, origin, logger, 'history'), ('GET',)),
