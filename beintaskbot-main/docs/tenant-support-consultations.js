@@ -90,7 +90,7 @@
       catch(error){if(opening===formRevision&&current()){formOpening=false;showError(error);formHost.replaceChildren();start.hidden=!canSend;}return;}
       if(!current()||opening!==formRevision)return;formOpening=false;
       const source=preview.messages||getMessages(),destinations=(targets.destinations||[]).filter(item=>item.channel_id!==ticket.channel_id||item.conversation_id!==ticket.conversation_id);
-      const saved=followup?{}:drafts.get(draftKey)||{},latest=followup||items.find(item=>item.destination_channel&&item.destination_conversation),preferred=latest?{channel_id:latest.destination_channel,conversation_id:latest.destination_conversation}:saved.destination;
+      const saved=followup?{}:drafts.get(draftKey)||{},latest=followup||items.find(item=>item.destination_channel&&item.destination_conversation),preferred=ticket.assigned_developer_channel_id?{channel_id:ticket.assigned_developer_channel_id,conversation_id:ticket.assigned_developer_conversation_id}:latest?{channel_id:latest.destination_channel,conversation_id:latest.destination_conversation}:saved.destination;
       const form=el('form');form.id='caseDeveloperForm';form.className='support-edit';formHost.replaceChildren(form);
       const recipient=el('select');recipient.id='consultRecipient';recipient.required=true;recipient.append(new Option(t('recipient'),''));
       destinations.forEach((item,index)=>recipient.append(new Option((item.customer_name||item.contact_name||item.conversation_id)+(item.channel_name?' · '+item.channel_name:''),String(index))));

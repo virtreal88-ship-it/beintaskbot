@@ -125,6 +125,32 @@ def manual(**values):
     return store.create(PROFILE,{'request_id':str(uuid.uuid4()),'lead_id':41,**values})
 
 
+def test_case_developer_assignment_is_tenant_scoped_and_separate_from_crm_assignee(db,monkeypatch):
+    from tenant_dialog_consultations import schema as consultation_schema,developer_marker
+    import tenant_dialog_consultations as flow
+    monkeypatch.setattr(flow,'_connect',lambda:db)
+    consultation_schema(db)
+    ticket=manual()['ticket']['id']
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,77,'Developer group',now())",(A,CA,'developers@g.us'))
+    db.execute("INSERT INTO saas_dialog_developer_markers(tenant_id,channel_id,conversation_id,enabled,updated_by) VALUES(%s::uuid,%s::uuid,%s,TRUE,11)",(A,CA,'developers@g.us'));db.commit()
+    saved=store.update(PROFILE,ticket,{'assigned_developer_channel_id':CA,'assigned_developer_conversation_id':'developers@g.us'})
+    assert saved['ticket']['assigned_developer_channel_id']==CA
+    assert saved['ticket']['assigned_developer_conversation_id']=='developers@g.us'
+    assert saved['ticket']['assigned_developer_name']=='Developer group'
+    assert saved['ticket']['assigned_to'] is None
+    cleared=store.update(PROFILE,ticket,{'assigned_developer_channel_id':None,'assigned_developer_conversation_id':None})
+    assert cleared['ticket']['assigned_developer_channel_id'] is None
+
+
+def test_case_developer_assignment_rejects_unmarked_destination(db,monkeypatch):
+    from tenant_dialog_consultations import schema as consultation_schema
+    import tenant_dialog_consultations as flow
+    monkeypatch.setattr(flow,'_connect',lambda:db)
+    consultation_schema(db);ticket=manual()['ticket']['id']
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,77,'Ordinary group',now())",(A,CA,'ordinary@g.us'));db.commit()
+    with pytest.raises(TenantLinearError):store.update(PROFILE,ticket,{'assigned_developer_channel_id':CA,'assigned_developer_conversation_id':'ordinary@g.us'})
+
+
 def test_direct_login_employee_is_atomic_and_does_not_require_synthetic_email(db, monkeypatch):
     monkeypatch.setattr(member_store, '_connect', lambda: db)
     created=member_store.provision_employee_account(

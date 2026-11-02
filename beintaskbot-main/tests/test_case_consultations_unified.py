@@ -82,6 +82,53 @@ def test_case_pending_receipt_reconciles_late_reply_and_never_auto_drafts(case_r
     assert local.execute('SELECT count(*) AS n FROM saas_tenant_notifications')[0]['n']==1
 
 
+def test_resolution_requires_explicit_command_quote_and_assigned_developer(case_ready):
+    local,data,sender=case_ready
+    local.execute('''UPDATE saas_support_tickets SET assigned_developer_channel_id=%s::uuid,
+      assigned_developer_conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid''',
+      (CA,TARGET,A,data['case_id']));local.commit()
+    result=flow.prepare(PROFILE,data,'https://crm.test')
+    flow.dispatch(PROFILE,result['id'],data['request_id'])
+    with local.cursor() as cur:
+        ordinary=flow.record_reply(cur,A,CA,TARGET,'ordinary-reply','Завтра посмотрю','PROVIDER_123',author='Developer')
+    local.commit()
+    assert ordinary and local.execute('SELECT status FROM saas_support_tickets WHERE id=%s::uuid',(data['case_id'],))[0]['status']=='new'
+    with local.cursor() as cur:
+        assert flow.record_reply(cur,A,CA,TARGET,'unquoted-done','/done',author='Developer') is None
+    local.commit()
+    with local.cursor() as cur:
+        resolved=flow.record_reply(cur,A,CA,TARGET,'explicit-done','/done','PROVIDER_123',author='Developer')
+    local.commit()
+    assert resolved
+    row=local.execute('SELECT status,completion_outcome FROM saas_support_tickets WHERE id=%s::uuid',(data['case_id'],))[0]
+    assert row=={'status':'resolved','completion_outcome':'resolved_confirmed'}
+    assert flow.record_reply(local.cursor(),A,CA,TARGET,'explicit-done','/done','PROVIDER_123',author='Developer') is None
+
+
+def test_resolution_command_from_unassigned_destination_only_records_answer(case_ready):
+    local,data,_=case_ready
+    result=flow.prepare(PROFILE,data,'https://crm.test');flow.dispatch(PROFILE,result['id'],data['request_id'])
+    with local.cursor() as cur:
+        ident=flow.record_reply(cur,A,CA,TARGET,'unassigned-done','/решено','PROVIDER_123',author='Developer')
+    local.commit()
+    assert ident
+    assert local.execute('SELECT status FROM saas_support_tickets WHERE id=%s::uuid',(data['case_id'],))[0]['status']=='new'
+
+
+def test_developer_context_is_limited_to_unique_case_containing_current_message(case_ready,monkeypatch):
+    local,data,_=case_ready
+    monkeypatch.setattr(flow,'_connect',lambda:local)
+    result=flow.prepare(PROFILE,data,'https://crm.test');flow.dispatch(PROFILE,result['id'],data['request_id'])
+    with local.cursor() as cur:
+        assert flow.record_reply(cur,A,CA,TARGET,'context-reply','Завтра посмотрю','PROVIDER_123',author='Developer')
+    local.commit()
+    source=local.execute('SELECT external_id FROM saas_crm_messages WHERE id=%s::uuid',(data['message_ids'][0],))[0]['external_id']
+    job={'provider':'connect','tenant_id':A,'channel_id':CA,'conversation_id':'client'}
+    context=flow.active_case_developer_context(job,source)
+    assert len(context)==1 and context[0]['message']=='Завтра посмотрю'
+    assert flow.active_case_developer_context(job,'unrelated-message')==[]
+
+
 def test_legacy_case_marker_and_saved_reply_project_to_common_thread(case_ready):
     local,data,_=case_ready
     cid=str(uuid.uuid4());rid=str(uuid.uuid4())

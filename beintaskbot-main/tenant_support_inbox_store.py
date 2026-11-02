@@ -227,6 +227,8 @@ _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_messag
  cs.state AS ai_state,cs.reason AS ai_reason,a.name AS agent_name,cs.agent_id AS agent_id,
  a.enabled AS agent_enabled,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,
  company.status AS tenant_status,j.state AS latest_job_state,j.error_code AS latest_job_error,
+ t.assigned_developer_channel_id::text AS assigned_developer_channel_id,
+ t.assigned_developer_conversation_id,COALESCE(NULLIF(dc.display_name,''),NULLIF(dc.contact_name,'')) AS assigned_developer_name,
  ch.active AS channel_active,cs.updated_at AS ai_updated_at,
  NOT ai_legacy_blocked(t.tenant_id,t.channel_id::text,t.conversation_id) AS unambiguous
  FROM saas_support_tickets t
@@ -240,6 +242,8 @@ _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_messag
  LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect' AND cs.conversation_id=t.conversation_id AND cs.channel_id=t.channel_id::text
  LEFT JOIN saas_ai_agents a ON a.tenant_id=t.tenant_id AND a.id=cs.agent_id
  LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.assigned_to
+ LEFT JOIN saas_connect_conversations dc ON dc.tenant_id=t.tenant_id
+   AND dc.connect_channel_id=t.assigned_developer_channel_id AND dc.conversation_id=t.assigned_developer_conversation_id
  LEFT JOIN LATERAL (SELECT COALESCE(happened_at,created_at) AS last_message_at FROM saas_crm_messages
    WHERE tenant_id=t.tenant_id AND kommo_lead_id=c.lead_id AND channel='connect:'||t.channel_id::text
    ORDER BY COALESCE(happened_at,created_at) DESC,id DESC LIMIT 1) lm ON TRUE'''
@@ -480,7 +484,7 @@ def create(profile, data):
 
 
 def update(profile, ticket_id, data):
-    if set(data)-{'status','assigned_to','description','next_steps','suggestions'}:
+    if set(data)-{'status','assigned_to','description','next_steps','suggestions','assigned_developer_channel_id','assigned_developer_conversation_id'}:
         raise TenantLinearError('Некорректные поля обращения.')
     if 'status' in data and data['status'] not in STATUSES:
         raise TenantLinearError('Некорректный статус.')
@@ -489,6 +493,18 @@ def update(profile, ticket_id, data):
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
             ticket_id = identifier(ticket_id)
+            if ('assigned_developer_channel_id' in data) != ('assigned_developer_conversation_id' in data):
+                raise TenantLinearError('Выберите чат разработчика целиком.')
+            if 'assigned_developer_channel_id' in data and data['assigned_developer_channel_id'] is not None:
+                from tenant_operator_access import access
+                tenant,_,developer_policy=access(cur,profile,'dialogs')
+                from tenant_dialog_consultations import developer_target
+                destination=developer_target(cur,tenant,developer_policy,
+                    identifier(data['assigned_developer_channel_id']),data['assigned_developer_conversation_id'])
+                data={**data,'assigned_developer_channel_id':str(destination.get('channel_id') or destination['connect_channel_id']),
+                      'assigned_developer_conversation_id':str(destination['conversation_id'])}
+            elif 'assigned_developer_channel_id' in data:
+                data={**data,'assigned_developer_channel_id':None,'assigned_developer_conversation_id':None}
             if 'assigned_to' in data and data['assigned_to'] is not None:
                 assigned = int(data['assigned_to'])
                 if assigned not in {int(m['telegram_id']) for m in eligible_members(cur,tenant)}:
@@ -499,6 +515,10 @@ def update(profile, ticket_id, data):
             for key, value in data.items():
                 fields.append(key+'=%s')
                 if key=='assigned_to': value = int(value) if value is not None else None
+                elif key=='assigned_developer_channel_id': value = identifier(value) if value is not None else None
+                elif key=='assigned_developer_conversation_id':
+                    if value is not None and (not isinstance(value,str) or not value or len(value)>200):
+                        raise TenantLinearError('Диалог разработчика недоступен.',404)
                 elif key!='status':
                     if not isinstance(value,str) or len(value)>4000: raise TenantLinearError('Слишком длинный текст.')
                 args.append(value)

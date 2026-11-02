@@ -29,6 +29,19 @@ def create_schema(conn):
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS history_scope TEXT NOT NULL DEFAULT 'legacy'")
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS summary_agent_binding TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS summary_scope_hash TEXT NOT NULL DEFAULT ''")
+        cur.execute('ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS assigned_developer_channel_id UUID NULL')
+        cur.execute('ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS assigned_developer_conversation_id TEXT NULL')
+        cur.execute('''DO $$ BEGIN
+          IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_developer_route_fk') THEN
+            ALTER TABLE saas_support_tickets ADD CONSTRAINT saas_support_developer_route_fk
+              FOREIGN KEY(tenant_id,assigned_developer_channel_id,assigned_developer_conversation_id)
+              REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) ON DELETE RESTRICT;
+          END IF;
+          IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='saas_support_tickets'::regclass AND conname='saas_support_developer_pair_check') THEN
+            ALTER TABLE saas_support_tickets ADD CONSTRAINT saas_support_developer_pair_check
+              CHECK((assigned_developer_channel_id IS NULL)=(assigned_developer_conversation_id IS NULL));
+          END IF;
+        END $$''')
         cur.execute('DROP INDEX IF EXISTS saas_support_open_route_idx')
         cur.execute("CREATE UNIQUE INDEX saas_support_open_route_idx ON saas_support_tickets(tenant_id,channel_id,conversation_id) WHERE status<>'resolved' AND completion_outcome<>'test_stopped'")
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_support_completions(

@@ -432,7 +432,7 @@ def _reply_notice(cur,tenant,consultation_id,reply_id,text):
           (uuid.uuid4(),tenant,recipient,'dialog_consultation:'+reply_id,source['customer'],text[:180],deep_link(source,reply_id)))
 
 
-def _store_reply(cur,tenant,consultation_id,channel,conversation,message_id,text,author='',at=None,*,source_kind='provider',source_actor=None,message_type='text',source_external_id=''):
+def _store_reply(cur,tenant,consultation_id,channel,conversation,message_id,text,author='',at=None,*,source_kind='provider',source_actor=None,message_type='text',source_external_id='',explicit_resolution=False):
     cur.execute('SELECT case_id FROM saas_internal_consultations WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,consultation_id))
     consult=cur.fetchone()
     if not consult:return None
@@ -460,6 +460,13 @@ def _store_reply(cur,tenant,consultation_id,channel,conversation,message_id,text
       response=%s,response_kind=%s WHERE tenant_id=%s::uuid AND id=%s::uuid
         AND (answered_at IS NULL OR answered_at<=COALESCE(%s::timestamptz,now()))''',
       (at,text[:4000],'manual_reply' if source_kind=='manual' else 'developer_reply',tenant,consultation_id,at))
+    if explicit_resolution and source_kind=='provider' and consult.get('case_id'):
+        # A case resolves only on an exact command quoted against the sent
+        # receipt for this consultation. The ordinary reply remains answered.
+        cur.execute('''UPDATE saas_support_tickets SET status='resolved',resolved_at=COALESCE(resolved_at,now()),
+          completion_outcome='resolved_confirmed',completion_note=%s,updated_at=now()
+          WHERE tenant_id=%s::uuid AND id=%s::uuid AND status<>'resolved' ''',
+          ('Developer confirmed completion via /done or /решено.',tenant,consult['case_id']))
     _reply_notice(cur,tenant,consultation_id,ident,text)
     return ident
 
@@ -505,9 +512,54 @@ def record_reply(cur,tenant,channel,conversation,message_id,text,quoted=None,aut
     if len(rows)!=1:return None
     item=rows[0]
     if quoted and marker and (not item['quote_match'] or item['id']!=marker):return None
+    assigned_developer=False
+    if item.get('id') and quoted and item['quote_match']:
+        cur.execute('''SELECT t.assigned_developer_channel_id::text AS channel_id,
+            t.assigned_developer_conversation_id AS conversation_id
+          FROM saas_internal_consultations c JOIN saas_support_tickets t
+            ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+          WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid''',(tenant,item['id']))
+        assignment=cur.fetchone() or {}
+        assigned_developer=(str(assignment.get('channel_id') or '')==str(channel)
+                            and str(assignment.get('conversation_id') or '')==str(conversation))
+    resolution=(kind=='text' and bool(re.fullmatch(r'\s*/(?:done|решено)\s*',text,re.I))
+                and bool(quoted) and bool(item['quote_match']) and assigned_developer)
     body=text.strip() or {'audio':'Аудиосообщение разработчика — без расшифровки','image':'Изображение разработчика','video':'Видео разработчика','document':'Документ разработчика'}.get(kind,'Вложение разработчика')
     return _store_reply(cur,tenant,item['id'],channel,conversation,message_id,body,author,at,
-      message_type=kind,source_external_id=source_external_id or 'connect:'+message_id)
+      message_type=kind,source_external_id=source_external_id or 'connect:'+message_id,
+      explicit_resolution=resolution)
+
+
+def active_case_developer_context(job,source_external_id,limit=3):
+    """Return developer replies only for the unique open case containing this message."""
+    if str(job.get('provider') or '')!='connect':return []
+    tenant=str(job.get('tenant_id') or '');channel=str(job.get('channel_id') or '');conversation=str(job.get('conversation_id') or '')
+    source=str(source_external_id or '').strip()
+    if not tenant or not channel or not conversation or not source:return []
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute('''SELECT DISTINCT t.id::text AS case_id
+              FROM saas_support_tickets t JOIN saas_support_ticket_messages cm
+                ON cm.tenant_id=t.tenant_id AND cm.ticket_id=t.id
+              JOIN saas_crm_messages m ON m.tenant_id=cm.tenant_id AND m.id=cm.message_id
+              WHERE t.tenant_id=%s::uuid AND t.channel_id=%s::uuid AND t.conversation_id=%s
+                AND t.status<>'resolved' AND m.external_id=ANY(%s::text[])''',
+              (tenant,channel,conversation,list(dict.fromkeys([source,'connect:'+source.removeprefix('connect:')]))))
+            cases=cur.fetchall()
+            if len(cases)!=1:return []
+            cur.execute('''SELECT r.author,r.body,r.happened_at,c.reason,c.status AS consultation_status
+              FROM saas_support_tickets t
+              JOIN saas_internal_consultations c ON c.tenant_id=t.tenant_id AND c.case_id=t.id
+              JOIN saas_dialog_consultation_replies r ON r.tenant_id=c.tenant_id AND r.consultation_id=c.id
+              WHERE t.tenant_id=%s::uuid AND t.channel_id=%s::uuid AND t.conversation_id=%s
+                AND t.id=%s::uuid AND t.status<>'resolved' AND c.status='answered' AND r.source_kind='provider'
+              ORDER BY r.happened_at DESC,r.created_at DESC,r.id DESC LIMIT %s''',
+              (tenant,channel,conversation,cases[0]['case_id'],max(1,min(int(limit),10))))
+            rows=cur.fetchall()
+    return [{'developer':str(row.get('author') or 'Разработчик')[:120],
+             'message':str(row.get('body') or '')[:2000],
+             'received_at':str(row.get('happened_at') or ''),
+             'case_status':'open'} for row in reversed(rows)]
 
 
 def record_manual_reply(cur,tenant,consultation,actor,text,kind):
