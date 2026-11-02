@@ -100,6 +100,8 @@ def database():
     platform_schema._schema_ready=False;schema._ready=False;chat_schema._ready=False
     schema.ensure_schema(db)
     chat_schema.ensure_schema(db)
+    # Request/queue paths depend on the production startup bootstrap.
+    dialog_consultations.schema(db)
     yield db
     db.process.stdin.close();db.process.wait(timeout=10)
     platform_schema._schema_ready=False;schema._ready=False;chat_schema._ready=False
