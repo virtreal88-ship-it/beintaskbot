@@ -3,8 +3,15 @@
 Only authenticated Connect photos in the open conversation's viewport are
 eligible. A RAM-cache miss is followed by one automatic original acquisition for
 that source/version during the current dialog lifecycle. Other media stay
-explicit. No archive, retention change, history scan, AI/ASR or outbound send is
-introduced. A cold browser/server restart may resolve an original upstream again.
+explicit. Autoloading adds no archive, history scan, AI/ASR or outbound send.
+A cold browser/server restart may resolve an original upstream again.
+
+The attachment server's temporary RAM cache has a 30-minute insertion-based TTL
+(1,800 seconds) and the unchanged 32 MiB total/per-entry byte bound per process.
+Cache reads do not extend the TTL; LRU pressure can evict a file earlier. Expiry
+is lazy: an expired entry is removed on a cache read, not by a timer that promises
+physical deletion at exactly 30 minutes. A new worker process starts empty.
+Current source/version and access checks still apply to every cache hit.
 
 The browser has at most 24 queued visible hosts and two scheduling jobs; Web
 Locks serialize automatic work across same-origin tabs when supported. Without

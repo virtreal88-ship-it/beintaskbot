@@ -18,7 +18,8 @@ MEDIA_CACHE = OrderedDict()
 MEDIA_CACHE_BYTES = 0
 MEDIA_INFLIGHT = {}
 MEDIA_CACHE_LIMIT = 32 * 1024 * 1024
-MEDIA_CACHE_TTL = 300
+# Expired entries are removed lazily by cache reads; LRU/byte limits are separate.
+MEDIA_CACHE_TTL = 1800
 MEDIA_PENDING_LIMIT = 12
 
 
