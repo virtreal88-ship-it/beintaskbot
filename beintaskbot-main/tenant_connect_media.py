@@ -5,7 +5,8 @@ import hashlib
 import json
 import threading
 import time
-from concurrent.futures import Future
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import uuid
@@ -22,8 +23,11 @@ AUDIO_TYPES = {'audio/ogg', 'application/ogg', 'audio/mpeg', 'audio/mp3', 'audio
 # other event loops in this worker, share Connect's two resolution slots.
 _media_lock = threading.Lock()
 _media_active = 0
+_media_auto_active = 0
 _media_budgets = {}
 _media_flights = {}
+_media_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='connect-media')
+_MEDIA_FLIGHT_TIMEOUT = 35
 
 
 def _media_scope(route):
@@ -44,8 +48,20 @@ def _media_limited(seconds):
     return error
 
 
-async def download_media(item, *, max_bytes=None, preview_documents=False):
-    global _media_active
+def _run_media(item, max_bytes, preview_documents):
+    # Acquisition outlives every caller's task AND event loop (AI uses asyncio.run).
+    async def acquire():
+        async with asyncio.timeout(_MEDIA_FLIGHT_TIMEOUT):
+            return await _download_media(item, max_bytes=max_bytes, preview_documents=preview_documents)
+    try:
+        return asyncio.run(acquire())
+    except TimeoutError:
+        raise TenantLinearError('WhatsApp faylı yüklənmədi. Sonra yenidən yoxlayın.', 502) from None
+
+
+async def download_media(item, *, max_bytes=None, preview_documents=False, automatic_photo=False):
+    global _media_active, _media_auto_active
+    item = deepcopy(item)
     route = item['route']; kind = item['row']['message_type']
     raw = item['row'].get('raw') or {}
     digest = hashlib.sha256(json.dumps(raw, sort_keys=True, default=str).encode()).hexdigest()
@@ -63,31 +79,35 @@ async def download_media(item, *, max_bytes=None, preview_documents=False):
             for old, (_count, until, cooldown) in list(_media_budgets.items()):
                 if max(until, cooldown) <= now: _media_budgets.pop(old, None)
             count, until, cooldown = _media_budgets.get(scope, (0, now + 60, 0))
-            wait = max(cooldown - now, until - now if count >= 20 else 0, 1 if _media_active >= 2 else 0)
+            wait = max(cooldown - now, until - now if count >= 20 else 0,
+                       1 if _media_active >= 2 or automatic_photo and _media_auto_active >= 1 else 0)
             if wait > 0 or len(_media_budgets) >= 2000 and scope not in _media_budgets:
                 raise _media_limited(max(1, int(wait + .999)))
             _media_budgets[scope] = (count + 1, until, cooldown)
             _media_active += 1
-            future = Future(); _media_flights[key] = future
-    if not owner:
-        waiter = asyncio.wrap_future(future)
-        waiter.add_done_callback(lambda done: None if done.cancelled() else done.exception())
-        return await asyncio.shield(waiter)
-    try:
-        result = await _download_media(item, max_bytes=max_bytes, preview_documents=preview_documents)
-        future.set_result(result)
-        return result
-    except BaseException as error:
-        if isinstance(error, TenantLinearError) and error.status == 429:
+            _media_auto_active += bool(automatic_photo)
+            try:
+                future = _media_executor.submit(_run_media, item, max_bytes, preview_documents)
+            except RuntimeError:
+                _media_active -= 1; _media_auto_active -= bool(automatic_photo)
+                _media_budgets[scope] = (count, until, cooldown)
+                raise TenantLinearError('WhatsApp faylı hazırda əlçatan deyil.', 503) from None
+            _media_flights[key] = future
+    if owner:
+        def settled(done):
+            global _media_active, _media_auto_active
+            error = None if done.cancelled() else done.exception()
             with _media_lock:
-                count, until, cooldown = _media_budgets[scope]
-                _media_budgets[scope] = (count, until, max(cooldown, time.monotonic() + getattr(error, 'retry_after', 60)))
-        future.set_exception(error)
-        raise
-    finally:
-        with _media_lock:
-            _media_active -= 1
-            if _media_flights.get(key) is future: _media_flights.pop(key, None)
+                if isinstance(error, TenantLinearError) and error.status == 429:
+                    now = time.monotonic()
+                    count, until, cooldown = _media_budgets.get(scope, (0, now + 60, 0))
+                    _media_budgets[scope] = (count, until, max(cooldown, now + getattr(error, 'retry_after', 60)))
+                _media_active -= 1; _media_auto_active -= bool(automatic_photo)
+                if _media_flights.get(key) is done: _media_flights.pop(key, None)
+        future.add_done_callback(settled)
+    waiter = asyncio.wrap_future(future)
+    waiter.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+    return await asyncio.shield(waiter)
 
 
 def canonical_audio_mime(content, mime):

@@ -185,7 +185,9 @@ def handler(member_from_request, request_provider, logger):
                         async with SLOTS:
                             if item.get('provider') == 'connect':
                                 from tenant_connect_media import download_media
-                                data, content_type = await download_media(item, preview_documents=True)
+                                options = {'preview_documents': True}
+                                if automatic_photo: options['automatic_photo'] = True
+                                data, content_type = await download_media(item, **options)
                             else:
                                 async with asyncio.timeout(15):
                                     account = await request_provider(session['tenant_id'], 'GET', 'account', params={'with': 'drive_url'})

@@ -21,6 +21,7 @@ def clear_attachment_api_memory():
     media._media_budgets.clear()
     media._media_flights.clear()
     media._media_active=0
+    media._media_auto_active=0
     api.MEDIA_CACHE.clear()
     api.MEDIA_CACHE_BYTES = 0
     api.MEDIA_INFLIGHT.clear()
@@ -241,6 +242,20 @@ def test_attachment_api_serves_office_file_as_download_with_original_filename(mo
     assert response.content_type=='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     assert response.headers['Content-Disposition']=='attachment; filename="maintenance.xlsx"; filename*=UTF-8\'\'maintenance.xlsx'
     fetched.assert_awaited_once_with(current,preview_documents=True)
+
+
+def test_photo_auto_classification_reaches_shared_transport_admission(monkeypatch):
+    from tenant_media_evidence import media_version
+    current=item()
+    monkeypatch.setattr(api,'load',Mock(return_value=current))
+    fetched=AsyncMock(return_value=(b'photo','image/png'))
+    monkeypatch.setattr(media,'download_media',fetched)
+    handle=api.handler(lambda _:PROFILE,AsyncMock(),Mock())
+    request=SimpleNamespace(query={'lead_id':'41','message_id':'connect:'+MID,'expected_tenant_id':A,
+      'expected_user_id':'11','auto_preview':'1','expected_media_version':media_version({})},headers={})
+    response=run(handle(request))
+    assert response.status==200 and response.body==b'photo'
+    fetched.assert_awaited_once_with(current,preview_documents=True,automatic_photo=True)
 
 
 def test_preview_api_rechecks_authority_without_kommo_or_ai(monkeypatch):

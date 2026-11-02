@@ -18,7 +18,13 @@ acquisitions per tenant/minute. Source-version changes fail before acquisition.
 All `tenant_connect_media.download_media` callers, including AI and event loops
 in other threads, share two process-wide slots, 20 acquisitions per tenant/minute,
 upstream Retry-After and in-flight results fenced by source and authority.
-Canceled waiters do not cancel a shared flight. No completed binary cache is
+Automatic photo owners occupy at most one of those slots; foreground/AI can use
+the other. This reserves capacity against background photos, not a guarantee
+against contention with other foreground work. First and subsequent canceled
+waiters cannot cancel the shared acquisition: a two-thread bounded executor
+owns its independent event loop with a 35-second outer deadline. Completion,
+failure and timeout release the slot even after every caller has gone away.
+No completed binary cache is
 added to that transport. Connect's own admission remains the final bound across
 worker processes/replicas; these local counters do not claim distributed state.
 

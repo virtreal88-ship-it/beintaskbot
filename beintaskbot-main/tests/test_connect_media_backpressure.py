@@ -15,19 +15,27 @@ def item(tenant='tenant-a', channel='channel-a', message='photo-a', version=1):
 
 @pytest.fixture(autouse=True)
 def isolated_process_state():
-    media._media_budgets.clear(); media._media_flights.clear(); media._media_active=0
+    media._media_budgets.clear(); media._media_flights.clear(); media._media_active=0;media._media_auto_active=0
     yield
-    assert media._media_active==0 and not media._media_flights
+    assert media._media_active==media._media_auto_active==0 and not media._media_flights
+
+
+async def released(event):
+    while not event.is_set():await asyncio.sleep(.001)
+
+
+async def started(event):
+    assert await asyncio.to_thread(event.wait,1)
 
 
 def test_ai_and_multiple_preview_waiters_share_exact_source_and_survive_waiter_abort(monkeypatch):
     async def scenario():
-        started,release=asyncio.Event(),asyncio.Event()
+        ready,release=threading.Event(),threading.Event()
         async def acquire(*_args,**_kwargs):
-            started.set();await release.wait();return b'photo','image/png'
+            ready.set();await released(release);return b'photo','image/png'
         transport=AsyncMock(side_effect=acquire);monkeypatch.setattr(media,'_download_media',transport)
         ai=asyncio.create_task(media.download_media(item()))
-        await started.wait()
+        await started(ready)
         tab_a=asyncio.create_task(media.download_media(item(),preview_documents=True))
         tab_b=asyncio.create_task(media.download_media(item()))
         await asyncio.sleep(0);tab_a.cancel()
@@ -40,14 +48,14 @@ def test_ai_and_multiple_preview_waiters_share_exact_source_and_survive_waiter_a
 
 def test_shared_two_slots_include_ai_and_other_tenants_channels(monkeypatch):
     async def scenario():
-        release=asyncio.Event();entered=0
+        release=threading.Event();entered=0
         async def acquire(*_args,**_kwargs):
             nonlocal entered
-            entered+=1;await release.wait();return b'photo','image/png'
+            entered+=1;await released(release);return b'photo','image/png'
         transport=AsyncMock(side_effect=acquire);monkeypatch.setattr(media,'_download_media',transport)
         a=asyncio.create_task(media.download_media(item()))
         b=asyncio.create_task(media.download_media(item(channel='channel-b')))
-        while entered<2:await asyncio.sleep(0)
+        while entered<2:await asyncio.sleep(.001)
         with pytest.raises(TenantLinearError) as error:await media.download_media(item(tenant='tenant-b'))
         assert error.value.status==429 and error.value.retry_after>=1
         assert transport.await_count==2
@@ -95,7 +103,7 @@ def test_source_versions_and_tenants_never_share_bytes(monkeypatch):
 def test_ai_thread_event_loop_and_http_loop_share_a_single_flight(monkeypatch):
     started,release=threading.Event(),threading.Event()
     async def acquire(*_args,**_kwargs):
-        started.set();await asyncio.to_thread(release.wait,2);return b'photo','image/png'
+        started.set();await released(release);return b'photo','image/png'
     transport=AsyncMock(side_effect=acquire);monkeypatch.setattr(media,'_download_media',transport)
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         ai=pool.submit(lambda:asyncio.run(media.download_media(item())))
@@ -107,3 +115,95 @@ def test_ai_thread_event_loop_and_http_loop_share_a_single_flight(monkeypatch):
         assert asyncio.run(request())==(b'photo','image/png')
         assert ai.result(timeout=2)==(b'photo','image/png')
         assert transport.await_count==1
+
+
+def test_canceling_first_owner_does_not_cancel_ui_joiner(monkeypatch):
+    async def scenario():
+        ready,release=threading.Event(),threading.Event()
+        async def acquire(*_args,**_kwargs):
+            ready.set();await released(release);return b'photo','image/png'
+        transport=AsyncMock(side_effect=acquire);monkeypatch.setattr(media,'_download_media',transport)
+        owner=asyncio.create_task(media.download_media(item()));await started(ready)
+        ui=asyncio.create_task(media.download_media(item()));await asyncio.sleep(0)
+        owner.cancel()
+        with pytest.raises(asyncio.CancelledError):await owner
+        assert not ui.done() and media._media_active==1
+        release.set();assert await ui==(b'photo','image/png');assert transport.await_count==1
+    asyncio.run(scenario())
+
+
+def test_actual_ai_ten_second_timeout_and_event_loop_shutdown_preserve_ui(monkeypatch):
+    ready,release=threading.Event(),threading.Event()
+    async def acquire(*_args,**_kwargs):
+        ready.set();await released(release);return b'photo','image/png'
+    transport=AsyncMock(side_effect=acquire);monkeypatch.setattr(media,'_download_media',transport)
+    async def ai_request():return await asyncio.wait_for(media.download_media(item()),10)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        ai=pool.submit(lambda:asyncio.run(ai_request()))
+        assert ready.wait(1)
+        async def ui_request():
+            ui=asyncio.create_task(media.download_media(item()));await asyncio.sleep(0)
+            with pytest.raises(TimeoutError):await asyncio.to_thread(ai.result,12)
+            assert not ui.done() and media._media_active==1
+            release.set();return await ui
+        try:assert asyncio.run(ui_request())==(b'photo','image/png')
+        finally:release.set()
+        assert transport.await_count==1
+
+
+def test_all_waiters_cancel_cleanup_and_slot_reuse(monkeypatch):
+    async def scenario():
+        ready,release=threading.Event(),threading.Event()
+        async def acquire(*_args,**_kwargs):
+            ready.set();await released(release);return b'photo','image/png'
+        transport=AsyncMock(side_effect=acquire);monkeypatch.setattr(media,'_download_media',transport)
+        a=asyncio.create_task(media.download_media(item()));await started(ready)
+        b=asyncio.create_task(media.download_media(item()));await asyncio.sleep(0)
+        a.cancel();b.cancel();results=await asyncio.gather(a,b,return_exceptions=True)
+        assert all(isinstance(result,asyncio.CancelledError) for result in results)
+        assert media._media_active==1 and len(media._media_flights)==1
+        release.set()
+        while media._media_active:await asyncio.sleep(.001)
+        assert not media._media_flights and transport.await_count==1
+        assert await media.download_media(item(message='next'))==(b'photo','image/png')
+    asyncio.run(scenario())
+
+
+def test_acquisition_deadline_releases_slot_even_without_waiters(monkeypatch):
+    async def acquire(*_args,**_kwargs):await asyncio.sleep(60)
+    transport=AsyncMock(side_effect=acquire);monkeypatch.setattr(media,'_download_media',transport)
+    monkeypatch.setattr(media,'_MEDIA_FLIGHT_TIMEOUT',.03)
+    async def scenario():
+        caller=asyncio.create_task(media.download_media(item()))
+        while not media._media_active:await asyncio.sleep(0)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):await caller
+        while media._media_active:await asyncio.sleep(.001)
+        assert not media._media_flights
+        transport.side_effect=None;transport.return_value=(b'photo','image/png')
+        assert await media.download_media(item(message='next'))==(b'photo','image/png')
+    asyncio.run(scenario())
+
+
+def test_background_classification_reserves_foreground_slot_through_joins_and_cancel(monkeypatch):
+    async def scenario():
+        ready,release=threading.Event(),threading.Event()
+        async def acquire(*_args,**_kwargs):
+            ready.set();await released(release);return b'photo','image/png'
+        transport=AsyncMock(side_effect=acquire);monkeypatch.setattr(media,'_download_media',transport)
+        auto_a=asyncio.create_task(media.download_media(item(),automatic_photo=True));await started(ready)
+        with pytest.raises(TenantLinearError) as error:
+            await media.download_media(item(message='auto-b'),automatic_photo=True)
+        assert error.value.status==429
+        ai=asyncio.create_task(media.download_media(item(message='ai')))
+        joined_ai=asyncio.create_task(media.download_media(item()))
+        while media._media_active<2:await asyncio.sleep(.001)
+        auto_a.cancel()
+        with pytest.raises(asyncio.CancelledError):await auto_a
+        assert media._media_auto_active==1 and not joined_ai.done()
+        with pytest.raises(TenantLinearError):await media.download_media(item(message='auto-b'),automatic_photo=True)
+        assert transport.await_count==2
+        release.set();assert await joined_ai==await ai==(b'photo','image/png')
+        assert await media.download_media(item(message='auto-b'),automatic_photo=True)==(b'photo','image/png')
+        assert transport.await_count==3
+    asyncio.run(scenario())
