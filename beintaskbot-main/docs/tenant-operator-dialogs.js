@@ -354,9 +354,24 @@
     }
     chat.scrollTop=top;rememberDialogPage(route,currentPage);
   }
+  function updateDeliveryEvidence(latest,route){
+    const chat=$('chatRows');if(!chat||!currentPage||!sameDialog(route,currentDialog)||!sameDialog(latest.dialog,route))return;
+    const top=chat.scrollTop;
+    for(const fresh of latest.messages||[]){
+      if(fresh.source!=='connect'||fresh.direction!=='outgoing')continue;
+      const old=(currentPage.messages||[]).find(item=>item.source===fresh.source&&item.direction==='outgoing'&&String(item.id)===String(fresh.id)&&String(item.external_id)===String(fresh.external_id)&&String(item.source_channel_id||route.channel_id)===String(fresh.source_channel_id||route.channel_id)&&String(item.source_conversation_id||route.conversation_id)===String(fresh.source_conversation_id||route.conversation_id));
+      if(!old||old.delivery_state===fresh.delivery_state)continue;
+      if(Object.prototype.hasOwnProperty.call(fresh,'delivery_state'))old.delivery_state=fresh.delivery_state;else delete old.delivery_state;
+      const article=[...chat.querySelectorAll('article[data-message-id]')].find(node=>node.dataset.messageId===String(old.id));
+      const footer=article?.querySelector('[data-message-footer-actions]');if(!footer)continue;
+      const prior=footer.querySelector('[data-delivery-state]'),markup=deliveryMarkup(old);
+      if(prior){if(markup)prior.outerHTML=markup;else prior.remove();}else if(markup)footer.insertAdjacentHTML('afterbegin',markup);
+    }
+    chat.scrollTop=top;
+  }
   async function refreshAudioEvidence(route,sourceIds){
     const page=currentPage,chat=$('chatRows'),version=epoch;
-    try{const latest=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||page!==currentPage||!chat?.isConnected||!sameDialog(route,currentDialog))return;updateAudioEvidence(latest,route,sourceIds);updateVisualEvidence(latest,route,sourceIds);}
+    try{const latest=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||page!==currentPage||!chat?.isConnected||!sameDialog(route,currentDialog))return;updateDeliveryEvidence(latest,route);updateAudioEvidence(latest,route,sourceIds);updateVisualEvidence(latest,route,sourceIds);}
     catch(error){if(version===epoch&&page===currentPage&&sameDialog(route,currentDialog)){const status=$('operatorChatError');if(status)status.textContent=error.message;}}
   }
   async function appendNewMessages(route){
@@ -364,6 +379,7 @@
     try{
       const latest=await api('dialogs/history?'+historyQuery(route));
       if(!sameDialog(route,currentDialog)||!chat.isConnected)return;
+      updateDeliveryEvidence(latest,route);
       updateAudioEvidence(latest,route);
       updateVisualEvidence(latest,route);
       const messageKeys=m=>[m.id,m.external_id].filter(Boolean).map(String),seen=new Set((currentPage.messages||[]).flatMap(messageKeys));

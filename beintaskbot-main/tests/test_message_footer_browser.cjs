@@ -32,6 +32,27 @@ const {fixture,server,message,launch,deferred}=require('./visible_media_fixture.
    assert.equal(await f.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.equal(s.paidOrSend,0);assert.deepEqual(f.errors,[]);assert.equal(f.state.navigations,1);console.log('PASS footer '+width+' '+language+': copy bottom-right/keyboard, all receipts, blue onlyread, incoming/no inference, player/popup no success label');
   }finally{await f.context.close();}
  }
+ // Exercise the real list -> appendNewMessages/history path, never openDialog.
+ for(const width of [390,1280]){
+  const s=server(),out={...message('incremental','text'),direction:'outgoing',author_type:'operator',body:'Preserve this text selection',delivery_state:'sent'},f=await fixture(browser,s,{width,messages:[out,message('voice-a')]});try{
+   // A valid snapshot without a read cursor isolates status refresh from the
+   // separate mark-read/list-refresh lifecycle. No extra poll is introduced.
+   f.state.readThroughId=null;await f.open();await f.loaded('voice-a');await f.page.evaluate(async()=>{
+    const article=document.querySelector('article[data-message-id=incremental]'),body=article.querySelector('[data-user-content]'),copy=article.querySelector('[data-copy-message]'),audio=document.querySelector('audio');
+    const range=document.createRange();range.selectNodeContents(body);getSelection().removeAllRanges();getSelection().addRange(range);copy.focus({preventScroll:true});audio.currentTime=.5;
+    window.keptIncremental={article,body,copy,audio,selection:getSelection().toString()};await audio.play();
+   });
+   for(const [index,state] of ['delivered','read','pending','failed','unknown'].entries()){
+    f.state.messages[0].delivery_state=state;const id='receipt-update-'+index;f.state.messages.push({...message(id,'text'),body:'New cached incoming message'});f.state.lastMessageId=id;
+    await f.page.evaluate(()=>window.tenantOperator.refresh());await f.page.waitForFunction(state=>document.querySelector('article[data-message-id=incremental] [data-delivery-state]')?.dataset.deliveryState===state,state);
+    assert.equal(await f.page.evaluate(()=>{const k=window.keptIncremental;return document.querySelector('article[data-message-id=incremental]')===k.article&&k.article.querySelector('[data-user-content]')===k.body&&k.article.querySelector('[data-copy-message]')===k.copy&&document.activeElement===k.copy&&getSelection().toString()===k.selection&&document.querySelector('audio')===k.audio&&k.audio.currentTime>=.5&&!k.audio.paused;}),true,'incremental receipt changes only the indicator, preserving text/focus/playing player');
+    const indicator=f.page.locator('article[data-message-id=incremental] [data-delivery-state]');assert.equal(await indicator.locator('svg').count(),['delivered','read'].includes(state)?1:0);
+   }
+   const originalChannel=f.state.messages[0].source_channel_id;f.state.messages[0].source_channel_id='00000000-0000-0000-0000-000000000299';f.state.messages[0].delivery_state='read';f.state.messages.push({...message('wrong-source-update','text'),body:'New message'});f.state.lastMessageId='wrong-source-update';await f.page.evaluate(()=>window.tenantOperator.refresh());await f.page.locator('article[data-message-id=wrong-source-update]').waitFor();assert.equal(await f.page.locator('article[data-message-id=incremental] [data-delivery-state]').getAttribute('data-delivery-state'),'unknown','foreign source cannot turn an existing receipt blue');
+   f.state.messages[0].source_channel_id=originalChannel;delete f.state.messages[0].delivery_state;f.state.messages.push({...message('missing-receipt-update','text'),body:'New message'});f.state.lastMessageId='missing-receipt-update';await f.page.evaluate(()=>window.tenantOperator.refresh());await f.page.locator('article[data-message-id=missing-receipt-update]').waitFor();assert.equal(await f.page.locator('article[data-message-id=incremental] [data-delivery-state]').count(),0,'missing persisted state does not retain stale ticks');
+   assert.equal(s.upstream.length,1);assert.equal(s.paidOrSend,0);assert.equal(f.state.navigations,1);assert.deepEqual(f.errors,[]);console.log('PASS incremental receipts '+width+': sent/delivered/read/pending/failed/unknown, exact source/removal; selection/focus/player stay unchanged');
+  }finally{await f.context.close();}
+ }
  // Retain meaningful loading and error feedback while removing only success.
  for(const status of [200,503]){
   const s=server(),gate=deferred();s.status=status;s.gates.set('voice-a',gate);const f=await fixture(browser,s);try{
