@@ -3,11 +3,12 @@ import asyncio
 import time
 
 
-_RETRYABLE_MIGRATION_SQLSTATES = {"40P01", "40001"}
+_RETRYABLE_MIGRATION_SQLSTATES = {"40P01", "40001", "55P03"}
+_STARTUP_SCHEMA_LOCK='tenant-service-startup-schema'
 
 
 def _retryable_migration_error(exc: Exception) -> bool:
-    """Only retry PostgreSQL deadlocks/serialization conflicts."""
+    """Only retry PostgreSQL migration lock/serialization conflicts."""
     return getattr(exc, "sqlstate", None) in _RETRYABLE_MIGRATION_SQLSTATES
 
 
@@ -36,31 +37,57 @@ def prepare_database() -> None:
 
     _fernet()
     with _connect() as conn:
-        ensure_agents_schema(conn)
-        # These receipts are read from the Connect ingestion transaction. Make
-        # their additive schema available before that HTTP path starts serving
-        # events; it must not depend on a consultation having been created first.
-        ensure_pilot_case_schema(conn)
-        ensure_chat_ai_schema(conn)
-        ensure_simulation_schema(conn)
-        ensure_drafts_schema(conn)
-        ensure_approvals_schema(conn)
-        ensure_observations_schema(conn)
-        ensure_apply_schema(conn)
+        # Nested legacy initializers commit. A session lock deliberately
+        # survives those boundaries and serializes complete cold startups.
+        with conn.cursor() as cur:
+            # This startup-only connection is closed on exit. A session
+            # timeout also bounds ALTER waits after nested commits.
+            cur.execute("SET lock_timeout='15000ms'")
+            cur.execute('SELECT pg_advisory_lock(hashtextextended(%s,0))',(_STARTUP_SCHEMA_LOCK,))
+        conn.commit()
+        try:
+            ensure_agents_schema(conn)
+            ensure_pilot_case_schema(conn)
+            ensure_chat_ai_schema(conn)
+            ensure_simulation_schema(conn)
+            ensure_drafts_schema(conn)
+            ensure_approvals_schema(conn)
+            ensure_observations_schema(conn)
+            ensure_apply_schema(conn)
+            conn.commit()
+            from tenant_dialog_consultations import require_schema
+            require_schema(conn)
+            conn.commit()
+        finally:
+            conn.rollback()
+            with conn.cursor() as cur:
+                cur.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))',(_STARTUP_SCHEMA_LOCK,))
+            conn.commit()
 
 
 def ensure_pilot_case_schema(conn) -> None:
     """Idempotently install the additive consultation/follow-up schema."""
-    from tenant_consultation_group import schema as ensure_schema
+    from tenant_dialog_consultations import schema as ensure_schema
     ensure_schema(conn)
+
+
+def require_database_ready() -> None:
+    """Direct HTTP/worker entry points verify committed shape without repair."""
+    from tenant_platform_core import _connect
+    from tenant_ai_agents_schema import _schema_current
+    from tenant_dialog_consultations import require_schema
+    with _connect() as conn:
+        if not _schema_current(conn):raise RuntimeError('Tenant startup schema preparation is required.')
+        require_schema(conn)
 
 
 async def start_worker(app, worker, kommo_request, logger, wait_slot,
                        *, prepare_database_first=False,
-                       simulation_worker=None, prepare=prepare_database) -> None:
+                       simulation_worker=None, prepare=prepare_database,require_ready=require_database_ready) -> None:
     """Optionally migrate an isolated staging DB before the worker can run."""
     if prepare_database_first:
         await asyncio.to_thread(_prepare_database_with_retry, prepare)
+    await asyncio.to_thread(require_ready)
     app["tenant_ai_agent_worker"] = asyncio.create_task(
         worker(kommo_request, logger, wait_slot), name="tenant-ai-agent-worker")
     if simulation_worker is not None:

@@ -8,6 +8,7 @@ import tenant_dialog_consultations as flow
 
 def pending(limit=10):
     with _connect() as conn:
+        flow.require_schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT to_regclass('saas_dialog_consultation_replies') AS ready")
             if not (cur.fetchone() or {}).get('ready'):return []
@@ -35,6 +36,7 @@ def pending(limit=10):
 def auto_dispatch_queue(limit=10):
     """Read only freshly queued automatic CASE dispatch intents."""
     with _connect() as conn:
+        flow.require_schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT to_regclass('saas_ai_case_developer_dispatches') AS ready")
             if not (cur.fetchone() or {}).get('ready'):return []
@@ -45,6 +47,7 @@ def auto_dispatch_queue(limit=10):
 def reconcile_auto_dispatches():
     """Project the existing consultation receipt ledger; never resubmit a provider POST."""
     with _connect() as conn:
+        flow.require_schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT to_regclass('saas_ai_case_developer_dispatches') AS ready")
             if not (cur.fetchone() or {}).get('ready'):return
@@ -64,6 +67,7 @@ def dispatch_auto_case(item_id):
     """Prepare and send one owner-authorized auto CASE request through the existing receipt path."""
     import uuid
     with _connect() as conn:
+        flow.require_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''UPDATE saas_ai_case_developer_dispatches SET state='preparing',updated_at=now()
               WHERE id=%s::uuid AND state='queued' RETURNING *''',(item_id,))
@@ -161,9 +165,8 @@ def reconcile():
     The receipt and actual quote/CONSULT correlation are independently rechecked.
     """
     with _connect() as conn:
+        flow.require_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='saas_dialog_consultation_replies' AND column_name='source_external_id') AS ready")
-            if not (cur.fetchone() or {}).get('ready'):return 0
             # A crashed provider attempt cannot remain an optimistic spinner or
             # become eligible for another POST. A later signed echo can recover it.
             cur.execute("UPDATE saas_consultation_group_deliveries SET state='unknown',updated_at=now() WHERE state='sending' AND updated_at<now()-interval '5 minutes'")

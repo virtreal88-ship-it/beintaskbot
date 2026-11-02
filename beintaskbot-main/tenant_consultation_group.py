@@ -12,11 +12,14 @@ from tenant_operator_access import access,assert_route
 from tenant_ai_agents_store import _audit
 from tenant_ai_group_coordination import group_jid
 from tenant_internal_consultations import schema as consultation_schema
+from tenant_consultation_schema import schema_ready,require_schema
 
 _MARKER=re.compile(r'(?<![A-Za-z0-9])CASE:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![A-Za-z0-9])',re.I)
 
 
 def schema(conn):
+    with conn.cursor() as cur:
+        if schema_ready(cur,'group'):return
     consultation_schema(conn)
     with conn.cursor() as cur:
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_consultation_group_deliveries(
@@ -114,7 +117,7 @@ def prepare(profile,consultation_id,data):
     if len(set(attachment_ids))!=len(attachment_ids):raise TenantLinearError('Duplicate attachment selection.',400)
     key=identifier(consultation_id)
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'group')
         with conn.cursor() as cur:
             tenant,actor,policy=_owner(cur,profile)
             # A client request UUID must never be mistaken for AI-run origin
@@ -178,7 +181,7 @@ def dispatch(profile,consultation_id,request_id):
     from tenant_connect_transport import connect_route,send_consultation_with_receipt
     key=identifier(consultation_id);request_id=identifier(request_id)
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'group')
         with conn.cursor() as cur:
             tenant,actor,policy=_owner(cur,profile)
             cur.execute('''SELECT c.channel_id,c.conversation_id,c.status,t.status AS ticket_status FROM saas_internal_consultations c
@@ -270,7 +273,7 @@ def dispatch(profile,consultation_id,request_id):
 def read(profile,consultation_id):
     key=identifier(consultation_id)
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'group')
         with conn.cursor() as cur:
             tenant,_,policy=_owner(cur,profile)
             cur.execute('''SELECT d.*,c.channel_id AS source_channel,c.conversation_id AS source_conversation
@@ -302,7 +305,7 @@ def save_draft(profile,consultation_id,data):
         type(data['expected_revision']) is not int or data['expected_revision']<0):raise TenantLinearError('Invalid draft.',400)
     key=identifier(consultation_id)
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'group')
         with conn.cursor() as cur:
             tenant,actor,policy=_owner(cur,profile)
             # Serialize draft edits with creation of the next delivery so the
@@ -728,7 +731,7 @@ def record_pilot_followup_action(job,action):
         return False
     from tenant_platform import _json
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'group')
         with conn.cursor() as cur:
             cur.execute('''SELECT id,state,case_id FROM saas_ai_pilot_followups
               WHERE tenant_id=%s::uuid AND id=%s::uuid AND channel_id=%s::uuid
@@ -754,7 +757,7 @@ def record_group_turn_action(job,action,message_id):
     followup_id=str(payload.get('pilot_followup_id') or '')
     if not followup_id:return False
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'group')
         with conn.cursor() as cur:
             cur.execute('''UPDATE saas_ai_pilot_followups SET reply_action=%s,
                 awaiting_customer=FALSE,updated_at=now()
@@ -851,10 +854,10 @@ def deliver_pilot_consultation_to_group(job,consultation_id,summary,source_exter
         ('beintaskbot-pilot-turn:'+tenant+':'+str(turn_id)) if turn_id else
         'beintaskbot-pilot-group:'+tenant+':'+consultation_id))
     with _connect() as schema_conn:
-        schema(schema_conn)
+        require_schema(schema_conn,'group')
         if not turn_id:
-            from tenant_public_case import _schema as public_case_schema
-            public_case_schema(schema_conn)
+            from tenant_consultation_schema import require_schema as public_case_schema
+            public_case_schema(schema_conn,'public')
         schema_conn.commit()
     body='';media_request_id=None
     with _connect() as conn:
@@ -1094,7 +1097,7 @@ def acknowledge_pilot_consultation_to_customer(job,consultation_id,source_extern
     try:source_key=str(uuid.UUID(str(source_external_id)))
     except (ValueError,TypeError,AttributeError):return {'state':'blocked','reason':'source_message_invalid'}
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'group')
         with conn.cursor() as cur:
             cur.execute('''SELECT c.case_id::text AS case_id,c.channel_id::text AS channel_id,c.conversation_id,
                 c.status,t.status AS ticket_status,d.state AS group_state,d.channel_id::text AS group_channel_id,
@@ -1131,7 +1134,7 @@ def acknowledge_pilot_consultation_to_customer(job,consultation_id,source_extern
     attempted=False
     try:
       with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'group')
         with conn.cursor() as cur:
             lock_dialog(cur,tenant,'connect',customer_scope['channel_id'],customer_scope['conversation_id'])
             from tenant_ai_pilot import pilot_group_handoff_allowed

@@ -7,10 +7,13 @@ from tenant_ai_agents_schema import ensure_schema
 from tenant_operator_access import authorize
 from tenant_ai_agents_store import _audit
 from tenant_linear_policy import TenantLinearError
+from tenant_consultation_schema import schema_ready,require_schema
 
 STATUSES={'queued_after_hours','waiting_specialist','answered','confirmed_bug','workaround','deployed_fix','closed'}
 
 def schema(conn):
+    with conn.cursor() as cur:
+        if schema_ready(cur,'internal'):return
     ensure_schema(conn)
     with conn.cursor() as cur:
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_internal_consultations(
@@ -63,7 +66,7 @@ def recipient_available(tenant_id, recipient_id):
 def create(profile,data):
     if not isinstance(data,dict) or set(data)-{'case_id','reason','evidence','request_key','recipient_id'}: raise TenantLinearError('consultation_request_invalid',400)
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'internal')
         with conn.cursor() as cur:
             tenant,actor=authorize(cur,profile)
             cur.execute('''SELECT channel_id,conversation_id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR SHARE''',(tenant,data.get('case_id')));case=cur.fetchone()
@@ -104,7 +107,7 @@ def create_from_ai(job, *, recipient_id=None, reason, evidence, run_id=None, des
     elif recipient_id is None:
         return {'created':False,'reason':'consultation_recipient_invalid'}
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'internal')
         with conn.cursor() as cur:
             tenant=str(job['tenant_id'])
             recipient=_recipient(cur,tenant,recipient_id) if destination=='employee' else None
@@ -162,7 +165,7 @@ def create_from_ai(job, *, recipient_id=None, reason, evidence, run_id=None, des
 
 def listing(profile,case_id):
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'internal')
         with conn.cursor() as cur:
             tenant,_=authorize(cur,profile)
             cur.execute('''SELECT c.id,c.case_id,c.reason,c.evidence,c.status,c.delivery_state,c.created_at,c.answered_at,c.response,c.response_kind,
@@ -174,7 +177,7 @@ def listing(profile,case_id):
 def reply(profile,consultation_id,data):
     if not isinstance(data,dict) or set(data)!={'response','kind'} or data['kind'] not in {'diagnosis','hypothesis','confirmed_bug','workaround','deployed_fix'}: raise TenantLinearError('consultation_reply_invalid',400)
     with _connect() as conn:
-        from tenant_dialog_consultations import schema as unified_schema,record_manual_reply
+        from tenant_dialog_consultations import require_schema as unified_schema,record_manual_reply
         unified_schema(conn)
         with conn.cursor() as cur:
             tenant,actor=authorize(cur,profile)

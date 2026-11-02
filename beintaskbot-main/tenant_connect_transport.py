@@ -782,27 +782,10 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
         if simulation_prepared:
             from tenant_ai_simulation_schema import ensure_schema as ensure_simulation_schema
             ensure_simulation_schema(conn)
-        # Usually installed by tenant_ai_agent_startup.prepare_database. The
-        # HTTP listener starts before the background worker's startup task, so
-        # close that first-request race as well. This is additive/idempotent;
-        # if it fails, the CRM receipt path remains available and AI admission
-        # below is isolated behind its own savepoint.
-        with conn.cursor() as cur:
-            cur.execute("SELECT to_regclass('saas_ai_pilot_followups') IS NOT NULL AS ready")
-            pilot_case_schema_ready=bool((cur.fetchone() or {}).get('ready'))
-        if not pilot_case_schema_ready:
-            with conn.cursor() as cur:
-                cur.execute('SAVEPOINT pilot_case_schema_setup')
-                try:
-                    from tenant_ai_agent_startup import ensure_pilot_case_schema
-                    ensure_pilot_case_schema(conn)
-                except Exception:
-                    cur.execute('ROLLBACK TO SAVEPOINT pilot_case_schema_setup')
-                    import logging
-                    logging.getLogger(__name__).exception(
-                        'Pilot CASE schema setup failed; continuing with CRM-only ingress')
-                finally:
-                    cur.execute('RELEASE SAVEPOINT pilot_case_schema_setup')
+        # Consultation migrations finish before the listener is bound. An
+        # unsupported schema is a readiness failure, never request-time DDL.
+        from tenant_dialog_consultations import require_schema as require_consultation_schema
+        require_consultation_schema(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT to_regclass('saas_crm_notice_events') IS NOT NULL AND to_regclass('saas_crm_notice_deliveries') IS NOT NULL AS ready")
             notices_ready = (cur.fetchone() or {}).get('ready')

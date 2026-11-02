@@ -15,6 +15,7 @@ from tenant_linear_policy import TenantLinearError, identifier
 from tenant_operator_access import authorize as _authorize
 from tenant_platform import _connect
 from tenant_ai_agents_schema import ensure_schema
+from tenant_consultation_schema import schema_ready,require_schema
 
 _RATE = {}
 _RATE_LIMIT = 60
@@ -26,6 +27,8 @@ _MEDIA_TYPES = {'image','video','audio','voice','document'}
 
 
 def _schema(conn):
+    with conn.cursor() as cur:
+        if schema_ready(cur,'public'):return
     with conn.cursor() as cur:
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_public_case_shares(
           id UUID PRIMARY KEY, tenant_id UUID NOT NULL, ticket_id UUID NOT NULL,
@@ -277,7 +280,7 @@ def create(profile,ticket_id,payload,origin):
     token_hash=hashlib.sha256(token.encode()).hexdigest()
     share_id=str(uuid.uuid4())
     with _connect() as conn:
-        ensure_schema(conn);_schema(conn)
+        require_schema(conn,'public')
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
             cur.execute("SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE",(tenant,actor))
@@ -335,7 +338,7 @@ def create(profile,ticket_id,payload,origin):
 def revoke(profile,share_id):
     share_id=identifier(share_id)
     with _connect() as conn:
-        ensure_schema(conn);_schema(conn)
+        require_schema(conn,'public')
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
             cur.execute("SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE",(tenant,actor))
@@ -352,7 +355,7 @@ def revoke(profile,share_id):
 def list_shares(profile,ticket_id):
     ticket_id=identifier(ticket_id)
     with _connect() as conn:
-        ensure_schema(conn);_schema(conn)
+        require_schema(conn,'public')
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
             cur.execute("SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE",(tenant,actor))
