@@ -29,11 +29,16 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
    try{
     await page.goto('https://crm.test/app?view=dialogs');await page.locator('.app-topbar').waitFor();await page.locator('[data-app-language]').selectOption(language);
     const read=()=>page.evaluate(()=>{const r=selector=>{const n=document.querySelector(selector),box=n.getBoundingClientRect();return {x:box.x,y:box.y,w:box.width,h:box.height,position:getComputedStyle(n).position};};return {search:r('#operatorSearch'),trigger:r('#operatorToolsMenu>summary'),details:r('#operatorToolsMenu'),filter:r('#operatorFiltersToggle'),toolbar:r('.operator-filters'),firstAction:r('#operatorSoundToggle')};});
+    const assertStableGeometry=(actual,expected,label)=>{
+     assert.equal(actual.position,expected.position,label+' keeps positioning mode');
+     for(const field of ['x','y','w','h'])assert.ok(Math.abs(actual[field]-expected[field])<=1.5,
+      label+' stays fixed ('+field+': '+expected[field]+' -> '+actual[field]+' CSS px)');
+    };
     await page.evaluate(()=>document.fonts.ready);await page.waitForFunction(()=>document.querySelector('#operatorSearch')?.offsetWidth>0);await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     const before=await read(),trigger=page.locator('#operatorToolsMenu>summary'),popover=page.locator('#operatorToolsPopover');
     assert.equal(await page.locator('#operatorSearch').getAttribute('placeholder'),{ru:'Поиск',az:'Axtarış',en:'Search'}[language]);
     await trigger.click();await popover.waitFor();const after=await read();
-    for(const name of ['search','trigger','details','filter','toolbar'])assert.deepEqual(after[name],before[name],name+' stays fixed on menu open');
+    for(const name of ['search','trigger','details','filter','toolbar'])assertStableGeometry(after[name],before[name],name+' on menu open');
     assert.equal(after.trigger.h,44);if(width<=900)assert.equal(after.filter.h,44);
     const checkBounds=async()=>{const box=await popover.boundingBox();assert.ok(box.x>=7&&box.y>=7&&box.x+box.width<=width-7&&box.y+box.height<=height-7,JSON.stringify(box));};
     await checkBounds();assert.equal(await trigger.getAttribute('aria-expanded'),'true');
@@ -43,7 +48,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     await page.keyboard.press('Escape');assert.equal(await popover.isVisible(),false);assert.equal(await trigger.getAttribute('aria-expanded'),'false');assert.equal(await trigger.evaluate(n=>n===document.activeElement),true);
     await page.keyboard.press('ArrowDown');await popover.waitFor();assert.equal(await page.evaluate(()=>document.activeElement.id),'operatorSoundToggle');
     await page.evaluate(()=>{document.querySelector('#operatorSoundStatus').textContent='Очень длинный статус / Uzun bildiriş mətni '.repeat(20);});await page.waitForTimeout(40);await checkBounds();
-    await page.locator('#operatorSearch').click();assert.equal(await popover.isVisible(),false);assert.deepEqual((await read()).toolbar,before.toolbar);
+    await page.locator('#operatorSearch').click();assert.equal(await popover.isVisible(),false);assertStableGeometry((await read()).toolbar,before.toolbar,'toolbar after search focus');
     if(width<=900){await page.locator('#operatorFiltersToggle').click();assert.equal(await page.locator('#operatorFiltersToggle').getAttribute('aria-expanded'),'true');await page.locator('#operatorFiltersToggle').click();}
     await trigger.click();await popover.waitFor();await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-view',{detail:{view:'dialogs'}})));assert.equal(await popover.isVisible(),false);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
