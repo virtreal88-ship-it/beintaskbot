@@ -8,7 +8,7 @@ from tenant_request_origin import require_json_post
 from tenant_linear_policy import TenantLinearError
 from tenant_policy import TenantPolicy
 from tenant_crm_contact_listing import directory, ContactsDirectoryError
-from tenant_crm_request_context import require_expected_context as _expected_identity, CRMContextError
+from tenant_crm_request_context import require_expected_context as _expected_identity, CRMContextError, native_policy_profile
 
 
 def _listing_query(request):
@@ -18,6 +18,9 @@ def _listing_query(request):
                                          for key in request.query if hasattr(request.query, 'getall')):
         raise ContactsDirectoryError('contacts_invalid_query')
     if request.query.get('listing') != '1':
+        raise ContactsDirectoryError('contacts_invalid_query')
+    if ('source' in request.query and request.query['source'] not in {'native', 'kommo'}
+            or any(key in request.query and not request.query[key] for key in ('row_key', 'legacy_deal_id'))):
         raise ContactsDirectoryError('contacts_invalid_query')
     return {key: request.query[key] for key in ('source', 'search', 'limit', 'offset', 'row_key', 'legacy_deal_id')
             if key in request.query}
@@ -41,6 +44,7 @@ def handler(member_from_request, origin, logger):
         if not profile:
             return web.json_response({'success': False, 'error': 'forbidden', 'code': 'contacts_forbidden'}, status=403,
                                      headers={'Cache-Control': 'no-store'})
+        profile = native_policy_profile(profile)
         policy=TenantPolicy(profile)
         tenant_id = str(profile['tenant_id'])
         contact_id = request.match_info.get('id')

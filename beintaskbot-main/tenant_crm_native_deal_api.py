@@ -7,7 +7,7 @@ from tenant_crm_native_deals import create_deal,get_deal,list_deals,update_deal,
 from tenant_request_origin import require_json_post
 from tenant_linear_policy import TenantLinearError
 from tenant_policy import TenantPolicy
-from tenant_crm_request_context import require_expected_context, CRMContextError
+from tenant_crm_request_context import require_expected_context, CRMContextError, native_policy_profile
 
 
 def _jsonable(value):
@@ -23,6 +23,7 @@ def handler(member_from_request,origin,logger):
         profile=member_from_request(request)
         if not profile:
             return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
+        profile = native_policy_profile(profile)
         policy=TenantPolicy(profile)
         tenant_id=str(profile['tenant_id']); deal_id=request.match_info.get('id')
         if deal_id:

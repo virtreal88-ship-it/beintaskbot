@@ -9,6 +9,18 @@ class CRMContextError(ValueError):
         self.code, self.status = code, status
 
 
+def native_policy_profile(profile):
+    """Malformed legacy JSON objects are not stored lists of native grants.
+
+    Keep this tightening local to these APIs. Owner-role authority and every
+    valid array remain unchanged; neither membership data nor global policy
+    is rewritten.
+    """
+    if isinstance(profile.get('permissions'), list):
+        return profile
+    return {**profile, 'permissions': []}
+
+
 def require_expected_context(request, profile):
     keys = ('expected_tenant_id', 'expected_user_id')
     values = [request.query.getall(key, []) if hasattr(request.query, 'getall')

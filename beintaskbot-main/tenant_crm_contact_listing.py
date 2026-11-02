@@ -9,6 +9,7 @@ from tenant_crm_queries import deal_filters
 from tenant_platform_core import _connect
 from tenant_policy import TenantPolicy
 from tenant_workflow_store import _read_tenant_workflow
+from tenant_crm_request_context import native_policy_profile
 
 
 class ContactsDirectoryError(ValueError):
@@ -45,6 +46,7 @@ def _current_policy(cur, tenant, actor):
     member = cur.fetchone()
     if not member or member.get('active') is not True:
         raise ContactsDirectoryError('contacts_forbidden', 403)
+    member = native_policy_profile(dict(member))
     return TenantPolicy({**dict(member), 'tenant_id': tenant,
         'modules': company.get('modules') or {}, 'onboarding': company.get('onboarding') or {},
         'workflow': _read_tenant_workflow(cur, tenant)})
