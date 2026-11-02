@@ -11,11 +11,11 @@ assert(app.includes('externalCrmSyncPanel'));
 assert(app.includes('Sinxronizasiya standart olaraq söndürülüb'));
 
 function setup() {
-  const listeners = {}, events = [], boxes = [], timers = new Map();
+  const listeners = {}, events = [], boxes = [], anchors = [], timers = new Map();
   let next = 0, responses = [];
   const document = {
     hidden: false,
-    getElementById(id) { if (id==='externalCrmSyncPanel'||id==='externalCrmSyncSave') return null; return {after(box) { boxes.push(box); }}; },
+    getElementById(id) { if (id==='externalCrmSyncPanel'||id==='externalCrmSyncSave') return null; return {after(box) { boxes.push(box); anchors.push({id,box}); }}; },
     createElement() { return {textContent:'', classList:{toggle(){}}, setAttribute(){}}; },
     addEventListener(name, handler) { listeners[name] = handler; },
     dispatchEvent(event) { events.push(event); }
@@ -26,13 +26,14 @@ function setup() {
     setTimeout:fn=>{timers.set(++next,fn);return next;}, clearTimeout:id=>timers.delete(id)};
   vm.runInNewContext(source, context);
   const reply = jobs => ({ok:true,json:async()=>({success:true,jobs})});
-  return {context, document, requests, listeners, events, boxes, timers, reply,
+  return {context, document, requests, listeners, events, boxes, anchors, timers, reply,
     push(value) {responses.push(value);},
     profile(tenant,role='worker') {listeners['tenant-profile']({detail:{member:{tenant_id:tenant,role},capabilities:{modules:{tasks:true}}}});}}
 }
 const flush = () => new Promise(resolve=>setImmediate(resolve));
 (async()=>{
   const s = setup();
+  assert(s.anchors.some(row=>row.id==='tasksRefresh'));assert(s.anchors.some(row=>row.id==='dealsRefresh'));assert.equal(s.anchors.some(row=>row.id==='customersRefresh'||row.id==='customersNotice'),false,'contacts own their selected-source reload and must not inherit deal synchronization controls/status');
   s.push(s.reply([{resource:'tasks',status:'queued',pages_done:2}]));s.profile('company-a');await flush();
   assert(s.boxes.some(box=>box.textContent.includes('2 səhifə')));
   assert.equal(s.timers.size,1);
