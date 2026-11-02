@@ -1,5 +1,11 @@
 """Read-only, bounded Connect preview. Never calls the AI, webhook or send paths."""
 import ipaddress
+import asyncio
+import hashlib
+import json
+import threading
+import time
+from concurrent.futures import Future
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import uuid
@@ -11,6 +17,77 @@ from tenant_linear_policy import TenantLinearError
 IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
 AUDIO_TYPES = {'audio/ogg', 'application/ogg', 'audio/mpeg', 'audio/mp3', 'audio/mp4',
                'audio/opus', 'audio/x-m4a', 'audio/m4a', 'audio/wav', 'audio/x-wav', 'audio/webm', 'audio/flac', 'audio/x-flac', 'audio/aac'}
+
+# All callers (human previews, automatic photos and AI preparation), including
+# other event loops in this worker, share Connect's two resolution slots.
+_media_lock = threading.Lock()
+_media_active = 0
+_media_budgets = {}
+_media_flights = {}
+
+
+def _media_scope(route):
+    return hashlib.sha256(str(route.get('tenant_id') or route.get('api_key') or '').encode()).hexdigest()
+
+
+def media_backpressure(route):
+    with _media_lock:
+        now = time.monotonic()
+        count, until, cooldown = _media_budgets.get(_media_scope(route), (0, now + 60, 0))
+        wait = max(cooldown - now, until - now if count >= 20 else 0, 1 if _media_active >= 2 else 0)
+        return max(0, min(3600, int(wait + .999)))
+
+
+def _media_limited(seconds):
+    error = TenantLinearError('Çox sorğu göndərilib. Göstərilən müddətdən sonra yoxlayın.', 429)
+    error.retry_after = max(1, min(3600, seconds))
+    return error
+
+
+async def download_media(item, *, max_bytes=None, preview_documents=False):
+    global _media_active
+    route = item['route']; kind = item['row']['message_type']
+    raw = item['row'].get('raw') or {}
+    digest = hashlib.sha256(json.dumps(raw, sort_keys=True, default=str).encode()).hexdigest()
+    cap = media_limit(kind)
+    if max_bytes is not None: cap = min(cap, max(0, int(max_bytes)))
+    scope = _media_scope(route)
+    authority = hashlib.sha256(str(route.get('api_key') or '').encode()).hexdigest()
+    key = (scope, route['channel_id'], route['conversation_id'], item['message_id'], kind, digest,
+           cap, bool(preview_documents) if kind == 'document' else False, authority)
+    with _media_lock:
+        future = _media_flights.get(key)
+        owner = future is None
+        if owner:
+            now = time.monotonic()
+            for old, (_count, until, cooldown) in list(_media_budgets.items()):
+                if max(until, cooldown) <= now: _media_budgets.pop(old, None)
+            count, until, cooldown = _media_budgets.get(scope, (0, now + 60, 0))
+            wait = max(cooldown - now, until - now if count >= 20 else 0, 1 if _media_active >= 2 else 0)
+            if wait > 0 or len(_media_budgets) >= 2000 and scope not in _media_budgets:
+                raise _media_limited(max(1, int(wait + .999)))
+            _media_budgets[scope] = (count + 1, until, cooldown)
+            _media_active += 1
+            future = Future(); _media_flights[key] = future
+    if not owner:
+        waiter = asyncio.wrap_future(future)
+        waiter.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        return await asyncio.shield(waiter)
+    try:
+        result = await _download_media(item, max_bytes=max_bytes, preview_documents=preview_documents)
+        future.set_result(result)
+        return result
+    except BaseException as error:
+        if isinstance(error, TenantLinearError) and error.status == 429:
+            with _media_lock:
+                count, until, cooldown = _media_budgets[scope]
+                _media_budgets[scope] = (count, until, max(cooldown, time.monotonic() + getattr(error, 'retry_after', 60)))
+        future.set_exception(error)
+        raise
+    finally:
+        with _media_lock:
+            _media_active -= 1
+            if _media_flights.get(key) is future: _media_flights.pop(key, None)
 
 
 def canonical_audio_mime(content, mime):
@@ -80,7 +157,7 @@ def retry_after_seconds(value, default=60):
             seconds = int(default)
     return max(1, min(3600, seconds))
 
-async def download_media(item, *, max_bytes=None, preview_documents=False):
+async def _download_media(item, *, max_bytes=None, preview_documents=False):
     route = dict(item['route'])
     raw=item.get('row',{}).get('raw') or {}
     from tenant_connect_direct_identity import direct_identity

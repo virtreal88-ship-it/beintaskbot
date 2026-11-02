@@ -18,6 +18,9 @@ MID = str(uuid.UUID(int=901))
 
 @pytest.fixture(autouse=True)
 def clear_attachment_api_memory():
+    media._media_budgets.clear()
+    media._media_flights.clear()
+    media._media_active=0
     api.MEDIA_CACHE.clear()
     api.MEDIA_CACHE_BYTES = 0
     api.MEDIA_INFLIGHT.clear()
