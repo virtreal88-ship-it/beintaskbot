@@ -183,6 +183,8 @@ def test_real_sql_text_voice_text_and_central_key(flow,transcript):
 def test_pilot_send_requires_fresh_exact_kwid_and_separate_owner_confirmation(flow,monkeypatch):
     from tenant_ai_pilot import _snapshot
     f=flow;db=f['db']
+    # Pilot's lazy connection import must use the same isolated fixture DB.
+    monkeypatch.setattr('tenant_platform._connect',lambda:db)
     monkeypatch.setenv('AI_AGENTS_PILOT_SCOPE_ENABLED','true')
     monkeypatch.setenv('AI_AGENTS_PILOT_TENANT_ID',A)
     monkeypatch.setenv('AI_AGENTS_PILOT_CHANNEL_ID',CA)
