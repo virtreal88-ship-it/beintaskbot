@@ -20,6 +20,7 @@ import tenant_crm_native_task_api as api
 import tenant_crm_native_tasks as tasks
 import tenant_crm_native_deals as native_deals
 import tenant_member_store as members
+import tenant_workflow_store as workflow
 from tenant_policy import TenantPolicy
 
 
@@ -30,7 +31,7 @@ LOGGER = logging.getLogger(__name__)
 @pytest.fixture
 def native(db, monkeypatch):
     factory = lambda: psycopg.connect(db.dsn, row_factory=dict_row)
-    for module in (tasks, members, native_deals):
+    for module in (tasks, members, native_deals, workflow):
         monkeypatch.setattr(module, '_connect', factory)
     forbidden = Mock(side_effect=AssertionError('Native task assignment must not contact an external provider'))
     monkeypatch.setattr(requests.sessions.Session, 'request', forbidden)
@@ -405,3 +406,172 @@ def test_existing_granular_admin_creator_contract_does_not_make_that_actor_an_el
     asyncio.run(scenario())
     assert members.member(A, 31)['permissions'] == granular
     assert f['db'].execute('SELECT count(*) AS n FROM saas_crm_native_tasks')[0]['n'] == 1
+
+
+@pytest.mark.parametrize('crowd', ['other_employees', 'own_allowed'])
+def test_options_apply_manager_authority_before_limit_and_preserve_an_older_explicit_selection(native, crowd):
+    f = native
+    own = crowd == 'own_allowed'
+    f['db'].execute("""INSERT INTO saas_crm_native_deals
+      (id,tenant_id,title,pipeline_id,stage_id,responsible_id,updated_at)
+      SELECT gen_random_uuid(),%s::uuid,%s,%s,%s,%s,clock_timestamp()+interval '1 hour'
+      FROM generate_series(1,201)""",
+      (A, 'Synthetic picker crowd', '1' if own else '2', '10' if own else '20', 34 if own else 11))
+    allowed = {str(row['id']) for row in f['db'].execute("""SELECT id FROM saas_crm_native_deals
+      WHERE tenant_id=%s::uuid AND responsible_id=34 AND pipeline_id='1' AND stage_id='10'""", (A,))}
+    f['db'].commit()
+    async def scenario():
+        async with TestClient(TestServer(_app())) as http:
+            for selection in ({}, {'deal_id': f['deals'][0]}):
+                status, options = await _get(http, actor=34, options='1', **selection)
+                assert status == 200, options
+                assert options['assignment']['status'] == 'ready'
+                assert [row['telegram_id'] for row in options['members']] == [34]
+                ids = {row['id'] for row in options['deals']}
+                assert ids and ids <= allowed and len(options['deals']) <= 200
+                assert options['selected_deal_id'] in ids
+                if selection or not own:
+                    assert options['selected_deal_id'] == f['deals'][0]
+                if not own:
+                    assert ids == {f['deals'][0]}
+    asyncio.run(scenario())
+    _no_tasks(f)
+
+
+def _wait_creator_terminal_or_blocked(factory, finished, writer_pid):
+    deadline = time.monotonic() + 5
+    with factory() as observer:
+        while time.monotonic() < deadline:
+            if finished.is_set():
+                return
+            if observer.execute('SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND %s=ANY(pg_blocking_pids(pid))', (writer_pid,)).fetchall():
+                return
+            observer.commit()
+            time.sleep(.01)
+    raise AssertionError('Creator neither completed nor reached the real workflow writer lock')
+
+
+@pytest.mark.parametrize('keys', [('modules', 'members'), ('members', 'modules'), (' modules ', ' members ')])
+def test_real_workflow_policy_writer_and_task_admission_have_consistent_lock_order_for_json_keys(native, keys):
+    f = native
+    f['db'].execute("INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value,updated_by) VALUES(%s::uuid,'members','{}'::jsonb,11)", (A,))
+    f['db'].commit()
+    values = {'modules': {'tasks': True, 'deals': True}, 'members': {'34': {'pipeline_ids': ['1']}}}
+    ordered = {key: values[key.strip()] for key in keys}
+    results, failures = {}, []
+    creator_finished = threading.Event()
+    command = _command(f)
+
+    def writer():
+        try:
+            results['workflow'] = workflow.save_tenant_workflow_config(
+                tenant_id=A, owner_id=11, policies=ordered)
+        except Exception as error:
+            failures.append(('workflow', type(error).__name__, str(error)))
+
+    def creator():
+        try:
+            results['task'] = tasks.create_task(A, command['deal_id'], command['text'], command['responsible_id'],
+                due_at=command['due_at'], created_by=11, idempotency_key=command['request_id'], actor_id=11)
+        except Exception as error:
+            failures.append(('task', type(error).__name__, str(error)))
+        finally:
+            creator_finished.set()
+
+    threads = []
+    with f['factory']() as holder:
+        holder.execute("SELECT 1 FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid AND policy_key='members' FOR SHARE", (A,))
+        try:
+            threads.append(threading.Thread(target=writer))
+            threads[-1].start()
+            writer_pid = _wait_blocked(f['factory'], holder.info.backend_pid)
+            threads.append(threading.Thread(target=creator))
+            threads[-1].start()
+            # With canonical ordering the creator may legitimately finish
+            # before release. The old inversion instead reaches a real lock
+            # wait here and deadlocks after the temporary holder is released.
+            _wait_creator_terminal_or_blocked(f['factory'], creator_finished, writer_pid)
+        finally:
+            holder.commit()
+            for thread in threads:
+                thread.join(10)
+        assert all(not thread.is_alive() for thread in threads)
+    assert not failures, failures
+    assert 'workflow' in results and results['task']['responsible_id'] == 41
+    assert results['task']['text'] == command['text']
+    saved = {row['policy_key']: row['value'] for row in f['db'].execute(
+        'SELECT policy_key,value FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid', (A,))}
+    assert saved['modules'] == values['modules'] and saved['members'] == values['members']
+    assert f['db'].execute('SELECT count(*) AS n FROM saas_crm_native_tasks')[0]['n'] == 1
+
+
+@pytest.mark.parametrize('first,last,initial,final', [
+    (' modules ', 'modules', False, True), ('modules', ' modules ', True, False)])
+def test_sorted_workflow_policy_writes_preserve_last_insertion_for_duplicate_canonical_keys(native, first, last, initial, final):
+    f = native
+    workflow.save_tenant_workflow_config(tenant_id=A, owner_id=11,
+        policies={first: {'tasks': initial}, last: {'tasks': final}})
+    saved = f['db'].execute('SELECT policy_key,value FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid', (A,))
+    assert saved == [{'policy_key': 'modules', 'value': {'tasks': final}}]
+    assert TenantPolicy(members.member(A, 41)).allows('tasks') is final
+
+
+@pytest.mark.parametrize('order', [(41, 31), (31, 41)])
+def test_actual_workflow_member_writer_and_task_admission_share_numeric_lock_order(native, order):
+    f = native
+    edits = {actor: {'telegram_id': actor, 'display_name': 'Updated synthetic ' + str(actor),
+        'role': 'admin' if actor == 31 else 'worker', 'permissions': ['tasks']} for actor in order}
+    results, failures = {}, []
+    creator_finished = threading.Event()
+    command = _command(f)
+
+    def writer():
+        try:
+            results['workflow'] = workflow.save_tenant_workflow_config(
+                tenant_id=A, owner_id=11, members=[edits[actor] for actor in order])
+        except Exception as error:
+            failures.append(('workflow', type(error).__name__, str(error)))
+
+    def creator():
+        try:
+            results['task'] = tasks.create_task(A, command['deal_id'], command['text'], 41,
+                due_at=command['due_at'], created_by=31, idempotency_key=command['request_id'], actor_id=31)
+        except Exception as error:
+            failures.append(('task', type(error).__name__, str(error)))
+        finally:
+            creator_finished.set()
+
+    threads = []
+    with f['factory']() as holder:
+        holder.execute('SELECT 1 FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=31 FOR SHARE', (A,))
+        try:
+            threads.append(threading.Thread(target=writer))
+            threads[-1].start()
+            writer_pid = _wait_blocked(f['factory'], holder.info.backend_pid)
+            threads.append(threading.Thread(target=creator))
+            threads[-1].start()
+            _wait_creator_terminal_or_blocked(f['factory'], creator_finished, writer_pid)
+        finally:
+            holder.commit()
+            for thread in threads:
+                thread.join(10)
+        assert all(not thread.is_alive() for thread in threads)
+    assert not failures, failures
+    assert 'workflow' in results
+    assert results['task']['created_by'] == 31 and results['task']['responsible_id'] == 41
+    for actor in order:
+        current = members.member(A, actor)
+        assert current['display_name'] == edits[actor]['display_name']
+        assert current['role'] == edits[actor]['role'] and current['permissions'] == ['tasks']
+    assert f['db'].execute('SELECT count(*) AS n FROM saas_crm_native_tasks')[0]['n'] == 1
+
+
+@pytest.mark.parametrize('first,last,initial,final', [('041', 41, [], ['tasks']), (41, '041', ['tasks'], [])])
+def test_numeric_member_alias_sort_preserves_last_update_for_the_same_employee(native, first, last, initial, final):
+    workflow.save_tenant_workflow_config(tenant_id=A, owner_id=11, members=[
+        {'telegram_id': first, 'display_name': 'Earlier synthetic edit', 'role': 'worker', 'permissions': initial},
+        {'telegram_id': last, 'display_name': 'Final synthetic edit', 'role': 'worker', 'permissions': final}])
+    current = members.member(A, 41)
+    assert current['display_name'] == 'Final synthetic edit'
+    assert current['role'] == 'worker' and current['permissions'] == final
+    assert native['db'].execute('SELECT count(*) AS n FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=41', (A,))[0]['n'] == 1

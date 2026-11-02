@@ -144,15 +144,21 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
                       stage_type=EXCLUDED.stage_type, settings=EXCLUDED.settings, updated_at=now()
                 """, (str(tenant_id), pid, sid, str(item.get("name") or "")[:180], int(item.get("sort_order") or 0),
                        str(item.get("stage_type") or "open")[:40], _json(item.get("settings") if isinstance(item.get("settings"), dict) else {})))
-            for key, value in policies.items():
-                policy_key = str(key or "").strip()[:120]
+            # Task admission takes policy row locks in canonical key order.
+            # Stable sorting also preserves last-write wins for aliases that
+            # normalize to the same existing policy key.
+            policy_items = sorted(((str(key or "").strip()[:120], value)
+                                   for key, value in policies.items()), key=lambda item: item[0])
+            for policy_key, value in policy_items:
                 if not policy_key: continue
                 cur.execute("""
                     INSERT INTO saas_tenant_workflow_policies (tenant_id,policy_key,value,updated_by)
                     VALUES (%s::uuid,%s,%s::jsonb,%s)
                     ON CONFLICT (tenant_id,policy_key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()
                 """, (str(tenant_id), policy_key, _json(value), int(owner_id)))
-            for item in members:
+            # Match task admission's numeric membership lock order. Stable
+            # sorting keeps repeated IDs' existing last-update semantics.
+            for item in sorted(members, key=lambda item: int(item['telegram_id'])):
                 cur.execute("""
                     UPDATE saas_tenant_members SET display_name=%s,role=%s,permissions=%s::jsonb,updated_at=now()
                     WHERE tenant_id=%s::uuid AND telegram_id=%s AND role <> 'owner' AND active=TRUE

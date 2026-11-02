@@ -217,21 +217,38 @@ def task_options(tenant_id,actor_id,privileged=False,*,deal_id=None,task_id=None
             company=_tenant(cur,tenant_id)
             profiles=_profiles(cur,tenant_id,company)
             policy=_actor(profiles,actor_id,'view')
+            args=[tenant_id]
+            scope=''
+            if not policy.privileged:
+                scope=' AND responsible_id=%s';args.append(actor_id)
+                if policy.profile.get('role')=='manager':
+                    parts=[]
+                    for item in policy.pipeline_scope():
+                        part='pipeline_id=%s';args.append(str(item['pipeline_id']))
+                        if item['status_ids']:
+                            part+=' AND stage_id=ANY(%s::text[])'
+                            args.append([str(value) for value in item['status_ids']])
+                        parts.append('('+part+')')
+                    scope+=' AND ('+' OR '.join(parts)+')' if parts else ' AND FALSE'
             cur.execute('''SELECT id,title,contact_id,channel_id,conversation_id,responsible_id,pipeline_id,stage_id
-              FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND archived_at IS NULL
-              ORDER BY updated_at DESC,id LIMIT 200''',(tenant_id,))
-            deals=[row for row in cur.fetchall() if _creation_deal_allowed(policy,row,actor_id)]
+              FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND archived_at IS NULL'''+scope+
+              ' ORDER BY updated_at DESC,id LIMIT 200',args)
+            deals=cur.fetchall()
             selected=None
             if task_id:
                 task=_row(cur,tenant_id,_id(task_id,'task id'))
                 if not task_access_allowed(policy,task,actor_id):raise NativeTaskAccessError('task_unavailable',404)
                 selected=_deal(cur,tenant_id,str(task['deal_id']),lock=False)
                 if deal_id and _id(deal_id,'deal id')!=str(selected['id']):raise NativeTaskAccessError('deal_unavailable',404)
-                if not any(str(row['id'])==str(selected['id']) for row in deals):deals.insert(0,selected)
             elif deal_id:
-                selected=next((row for row in deals if str(row['id'])==_id(deal_id,'deal id')),None)
-                if selected is None:raise NativeTaskAccessError('deal_unavailable',404)
+                # The current selection can legitimately be older than this
+                # bounded picker window; authorize it independently.
+                selected=_deal(cur,tenant_id,_id(deal_id,'deal id'),lock=False)
+                if not _creation_deal_allowed(policy,selected,actor_id):
+                    raise NativeTaskAccessError('deal_unavailable',404)
             elif deals:selected=deals[0]
+            if selected and not any(str(row['id'])==str(selected['id']) for row in deals):
+                deals=[selected,*deals[:199]]
             people=profiles.values() if policy.privileged else [profiles[actor_id]]
             members=[{'telegram_id':person['telegram_id'],'display_name':person['display_name']}
               for person in people if selected and _eligible(person,selected)]
