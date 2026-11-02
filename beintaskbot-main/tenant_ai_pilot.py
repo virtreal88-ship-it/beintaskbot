@@ -1,4 +1,4 @@
-"""Single-dialog pilot scope, short-lived KWID attestation, and read-only preflight."""
+"""Shared exact-dialog pilot processing and send safety fences."""
 import hashlib
 import json
 import os
@@ -226,19 +226,6 @@ def _snapshot(cur, tenant, scope):
     return row, hashlib.sha256(json.dumps(version, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def _confirmation(cur, tenant, scope, fingerprint):
-    cur.execute('''SELECT kwid_confirmed_by,kwid_confirmed_at,kwid_expires_at,
-        owner_approved_by,owner_approved_at,owner_expires_at
-        FROM saas_ai_pilot_confirmations WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
-          AND conversation_id=%s AND scope_fingerprint=%s''',
-        (tenant, scope['channel_id'], scope['conversation_id'], fingerprint))
-    row = cur.fetchone() or {}
-    cur.execute('''SELECT (kwid_expires_at>clock_timestamp()) AS kwid_valid,
-        (owner_expires_at>clock_timestamp()) AS owner_valid FROM saas_ai_pilot_confirmations
-        WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
-          AND scope_fingerprint=%s''', (tenant, scope['channel_id'], scope['conversation_id'], fingerprint))
-    validity = cur.fetchone() or {}
-    return row, validity
 
 
 def _lock_scope(cur, tenant, scope):
