@@ -175,20 +175,53 @@ def normalize_media_row(row,channel):
     return historical_context
 
 
-def apply_historical_context(row,context):
+def apply_historical_context(row,context,*,authority=None):
     if context:
         row['_copilot_attachment_text']=context
         row['_historical_media_status']=(row.get('media_evidence') or {}).get('status')
         partial=row['_historical_media_status']=='partial'
         row['_copilot_media_notice']=('[Historical attachment; saved partial evidence; incomplete, do not infer omitted contents; not the latest attachment]'
             if partial else '[Historical attachment; saved evidence from an earlier turn, not the latest attachment]')
+        if (authority is not None and str(row.get('message_type') or '').lower()=='image'
+                and str(row.get('channel') or '').removeprefix('connect:')==authority.channel):
+            # Only an exact saved receipt may add a private typed candidate.
+            # This read never enters a flight or re-analyzes historical media.
+            from tenant_product_identifiers import context as product_context
+            ref=reference(row,authority.channel,authority.lead)
+            row['_copilot_attachment_text']=product_context(authority.tenant,ref,reusable({'tenant_id':authority.tenant},ref))+'\n'+context
 
 
-def apply_episode_receipt(row,message,receipt):
+def apply_episode_receipt(row,message,receipt,*,authority=None,ref=None,saved=None):
     status=receipt.get('status','unknown');code=receipt.get('code','media_result_unknown')
     row['_copilot_media_notice']='[Attachment '+status+': '+code+'; never infer unread contents]'
     row['_copilot_attachment_text']=message['text']
     row['_episode_receipt']=receipt
+    if authority is not None and ref is not None and ref['media_kind']=='image':
+        from copy import deepcopy
+        from tenant_product_identifiers import context as product_context
+        from tenant_media_evidence import _safe_text
+        row['_copilot_attachment_text']=product_context(authority.tenant,ref,saved or {
+            'status':receipt.get('status'),'coverage':receipt.get('coverage',{}),'result':receipt})+'\n'+_safe_text(message['text'])
+        # Coverage compares the private rendered projection, not raw persisted
+        # OCR. Keep the original receipt (and typed provenance) untouched.
+        projected=deepcopy(receipt)
+        fields=[(projected,'observation')]
+        if isinstance(projected.get('observations'),list):
+            fields.extend((item,'text') for item in projected['observations'] if isinstance(item,dict))
+        for item,key in fields:
+            value=item.get(key)
+            if isinstance(value,str):
+                item[key]=_safe_text(value)
+                if len(value)>4000:projected['truncated']=True
+        # Reuse may already have bounded/masked the text. Its shorter view
+        # cannot erase a known truncation or an omitted original tail.
+        if isinstance(saved,dict) and isinstance(saved.get('result'),dict):
+            original=saved['result'];texts=[original.get('observation')]
+            if isinstance(original.get('observations'),list):
+                texts.extend(item.get('text') for item in original['observations'] if isinstance(item,dict))
+            if original.get('truncated') is True or any(isinstance(text,str) and len(text)>4000 for text in texts):
+                projected['truncated']=True
+        row['_episode_receipt']=projected
 
 
 def prepare(authority, rows):
@@ -205,7 +238,7 @@ def prepare(authority, rows):
         if str(row.get('message_type') or '').lower() not in KINDS:continue
         historical_context=normalize_media_row(row,authority.channel)
         if str(row.get('external_id')) not in selected_ids:
-            apply_historical_context(row,historical_context)
+            apply_historical_context(row,historical_context,authority=authority)
             continue
         authority.check()
         ref=reference(row,authority.channel,authority.lead)
@@ -239,7 +272,7 @@ def prepare(authority, rows):
                 saved={'status':receipt.get('status'),'code':receipt.get('code'),
                        'coverage':receipt.get('coverage',{}),'result':receipt}
                 apply_reusable(message,saved)
-        apply_episode_receipt(row,message,receipt)
+        apply_episode_receipt(row,message,receipt,authority=authority,ref=ref,saved=prior)
     return rows
 
 

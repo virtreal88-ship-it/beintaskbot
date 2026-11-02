@@ -1,0 +1,232 @@
+[
+  {
+    "name": "english_optional_field",
+    "eligible": true,
+    "response": {
+      "status": "completed",
+      "output": [
+        {
+          "type": "message",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "Product packaging observed.\nProduct name: \"KIRLANGIÇ sunflower oil\"\nProduct size: \"1L\"\nBarcode on product packaging: 4006381333931."
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 100,
+        "output_tokens": 35,
+        "total_tokens": 135
+      }
+    }
+  },
+  {
+    "name": "russian_optional_field",
+    "eligible": true,
+    "response": {
+      "status": "completed",
+      "output": [
+        {
+          "type": "message",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "Product packaging observed.\nProduct name: \"Подсолнечное масло KIRLANGIÇ\"\nProduct size: \"1L\"\nBarcode on product packaging: 4006381333931."
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 100,
+        "output_tokens": 35,
+        "total_tokens": 135
+      }
+    }
+  },
+  {
+    "name": "azerbaijani_optional_field",
+    "eligible": true,
+    "response": {
+      "status": "completed",
+      "output": [
+        {
+          "type": "message",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "Product packaging observed.\nProduct name: \"KIRLANGIÇ günəbaxan yağı\"\nProduct size: \"1L\"\nBarcode on product packaging: 4006381333931."
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 100,
+        "output_tokens": 35,
+        "total_tokens": 135
+      }
+    }
+  },
+  {
+    "name": "ordinary_prose_without_contract",
+    "eligible": false,
+    "response": {
+      "status": "completed",
+      "output": [
+        {
+          "type": "message",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "The bottle barcode is 4006381333931."
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "total_tokens": 120
+      }
+    }
+  },
+  {
+    "name": "unreadable_optional_field_omitted",
+    "eligible": false,
+    "response": {
+      "status": "completed",
+      "output": [
+        {
+          "type": "message",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "KIRLANGIÇ sunflower oil bottle, 1L. The barcode is unreadable."
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "total_tokens": 120
+      }
+    }
+  },
+  {
+    "name": "remote_window_field_rejected",
+    "eligible": false,
+    "response": {
+      "status": "completed",
+      "output": [
+        {
+          "type": "message",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "AnyDesk window: Free license (non-professional use).\nBarcode on product packaging: 4006381333931."
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 100,
+        "output_tokens": 35,
+        "total_tokens": 135
+      }
+    }
+  },
+  {
+    "name": "russian_contradiction",
+    "eligible": false,
+    "response": {
+      "status": "completed",
+      "output": [
+        {
+          "type": "message",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "Product packaging observed.\nШтрихкод на бутылке не читается.\nBarcode on product packaging: 4006381333931."
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 100,
+        "output_tokens": 35,
+        "total_tokens": 135
+      }
+    }
+  },
+  {
+    "name": "azerbaijani_contradiction",
+    "eligible": false,
+    "response": {
+      "status": "completed",
+      "output": [
+        {
+          "type": "message",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "Product packaging observed.\nŞüşənin üzərindəki barkod oxunmur.\nBarcode on product packaging: 4006381333931."
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 100,
+        "output_tokens": 35,
+        "total_tokens": 135
+      }
+    }
+  },
+  {
+    "name": "russian_remote_window",
+    "eligible": false,
+    "response": {
+      "status": "completed",
+      "output": [
+        {
+          "type": "message",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "Product packaging observed.\nНа изображении окно удалённого доступа, товара нет.\nBarcode on product packaging: 4006381333931."
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 100,
+        "output_tokens": 35,
+        "total_tokens": 135
+      }
+    }
+  },
+  {
+    "name": "ascii_azerbaijani_contradiction",
+    "eligible": false,
+    "response": {
+      "status": "completed",
+      "output": [
+        {
+          "type": "message",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "Product packaging observed.\nBarkod oxunmur.\nBarcode on product packaging: 4006381333931."
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 100,
+        "output_tokens": 35,
+        "total_tokens": 135
+      }
+    }
+  }
+]

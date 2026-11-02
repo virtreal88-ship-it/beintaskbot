@@ -280,6 +280,7 @@ def collect(profile,item,check_before_ai=None,*,execution=None):
                     observation_item={**observation_item,'key':item.get('photo_api_key') or item['key'],
                       'route':{**item['route'],'photo_model':observation_model}}
                 for content,content_type,origin in visuals:
+                    observation_item.pop('_product_barcode_artifact',None)
                     if check_before_ai: check_before_ai()
                     try:
                         text,_,_=observe_once(profile,observation_item,ref,content,content_type,origin,generate,check_before_ai=check_before_ai)
@@ -294,6 +295,10 @@ def collect(profile,item,check_before_ai=None,*,execution=None):
                         item['vision_usage']=list(observation_item.get('vision_usage') or [])
                     message['text']+='\n[Untrusted visual observation; not a confirmed solution] '+text
                     receipt.setdefault('observations',[]).append({'origin':origin,'text':text})
+                    if kind=='image' and len(visuals)==1:
+                        from tenant_product_identifiers import bind_artifact
+                        typed=bind_artifact(item['tenant'],ref,observation_item.get('_product_barcode_artifact'),text,origin)
+                        if typed:receipt['_product_barcode_candidate']=typed
                 partial=(kind=='video' or receipt.get('document_pages',0)>receipt.get('rendered_pages',0))
                 receipt.update(status='partial' if partial else 'processed',
                     code='document_pages_sampled' if kind=='document' and partial else 'vision_observation',
