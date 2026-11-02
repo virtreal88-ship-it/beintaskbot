@@ -48,8 +48,35 @@ def prepare(profile,data,review=None,training=None):
         store.schema(conn)
         with conn.cursor() as cur:
             tenant,_,_,_,_,_=store.route(cur,profile,data)
+            cur.execute('''SELECT c.id AS campaign_id,c.sources,f.route,c.max_cost_microusd,c.progress,c.photo_model FROM saas_knowledge_campaign_fragments f
+              JOIN saas_knowledge_campaigns c ON c.tenant_id=f.tenant_id AND c.id=f.campaign_id
+              WHERE f.tenant_id=%s::uuid AND f.id=%s::uuid''',(tenant,request_id))
+            campaign_source=cur.fetchone()
             from tenant_dialog_ai_context import resolve as dialog_context, binding as dialog_binding
-            context=dialog_context(cur,tenant,data)
+            context_command=data
+            # A case-media fragment can contain approved historical sources
+            # from another channel than the group's current assignment. Resolve
+            # the AI identity against the exact saved group assignment channel;
+            # the source channel remains separately checked by the campaign
+            # grant and is never used to authorize a chat reply.
+            if campaign_source and data.get('case_extension_id'):
+                route=campaign_source.get('route') or {}
+                identity_keys=('provider','channel_id','conversation_id','history_mode','message_ids',
+                    'period_start','period_end','analysis_agent_id','source_version','case_id',
+                    'case_version','case_plan_hash','case_extension_id','case_source_sha256')
+                exact_source=all(data.get(k)==route.get(k) for k in identity_keys)
+                approved=set(route.get('approved_channel_ids') or [])
+                if exact_source and data.get('channel_id') in approved:
+                    from tenant_ai_group_coordination import group_jid,read as read_group
+                    if group_jid(data.get('conversation_id')):
+                        group=read_group(cur,tenant,data['conversation_id'])
+                        assignments=group.get('assignments') if group else None
+                        matches=[item for item in assignments or [] if isinstance(item,dict)
+                            and str(item.get('agent_id') or '')==str(route.get('analysis_agent_id') or '')
+                            and str(item.get('channel_id') or '') in approved]
+                        if len(matches)==1:
+                            context_command={**data,'channel_id':matches[0]['channel_id']}
+            context=dialog_context(cur,tenant,context_command)
             if data.get('analysis_agent_id') and str(data['analysis_agent_id'])!=str(context['agent_id']):
                 raise TenantLinearError('Анализ выполняет назначенный агент диалога.',409)
             data={**data,'analysis_agent_id':str(context['agent_id'])}
@@ -70,10 +97,6 @@ def prepare(profile,data,review=None,training=None):
                     if explicit_language or replay['request_key']!=store.digest(legacy_shape):
                         raise TenantLinearError('request_id уже использован для другого запроса.',409)
                 return {'existing':request_id}
-            cur.execute('''SELECT c.id AS campaign_id,c.sources,f.route,c.max_cost_microusd,c.progress,c.photo_model FROM saas_knowledge_campaign_fragments f
-              JOIN saas_knowledge_campaigns c ON c.tenant_id=f.tenant_id AND c.id=f.campaign_id
-              WHERE f.tenant_id=%s::uuid AND f.id=%s::uuid''',(tenant,request_id))
-            campaign_source=cur.fetchone()
             failed_media_recovery=False
             grant_id=(campaign_source or {}).get('route',{}).get('media_grant_id')
             if data.get('owner_retry_basis') and not campaign_source:
