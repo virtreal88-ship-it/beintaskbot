@@ -394,17 +394,19 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
     try:
         if command['mode']=='reply' and consultation_evidence is None:manifest=MediaCoverage(rows,tenant,command['channel_id'],command['lead_id'],latest_request=True)
         if consultation_evidence is not None:
-            from tenant_media_coverage import KINDS as required_kinds
-            snapshot_media=next((row for row in rows if str(row.get('message_type') or '').lower() in required_kinds),None)
-            if snapshot_media is not None:
-                error=_episode_evidence_error(command,snapshot_media,agent_context)
-                command['_media_failure']['code']='consultation_media_coverage_unavailable'
-                error.args=({'az':'Konsultasiya materiallarının tam təhlili təsdiqlənməyib. AI cavabı yaradılmadı.','en':'Consultation snapshot media lacks full verified coverage. No AI reply was created.'}.get(str(agent_context.get('language') or 'auto'),'Полный анализ вложений снимка консультации не подтверждён. AI-ответ не создан.'),)
-                raise error
+            manifest=MediaCoverage(rows,tenant,command['channel_id'],command['lead_id'],snapshot={
+                'reply_id':consultation_evidence['id'],'conversation_id':command['conversation_id'],
+                'source_versions':consultation_evidence['source_versions'],'case_id':consultation_evidence.get('case_id')})
         if manifest:
             try:manifest.supported()
             except CoverageError as error:raise _episode_evidence_error(command,error.row,agent_context)
-        if saved_only:
+        if consultation_evidence is not None:
+            from tenant_episode_media import prepare
+            try:prepare(execution,rows,saved_only=True,snapshot=True)
+            except CoverageError as error:raise _episode_evidence_error(command,error.row,agent_context)
+            media={'images':[],'voice_transcriptions':{str(row['external_id']) for row in rows if (row.get('_episode_receipt') or {}).get('transcript')},
+              'documents':{str(row['external_id']) for row in rows if row.get('message_type')=='document'},'skipped':[]}
+        elif saved_only:
             from tenant_saved_only_copilot import prepare_saved
             media=prepare_saved(execution,rows)
         else:media = _prepare_copilot_media(tenant, actor, command, rows, model,
@@ -522,7 +524,7 @@ def run(profile, data, *, consultation_reply_id=None):
             if consultation_reply_id is not None:
                 # Internal worker argument; never accepted from a browser's JSON.
                 # Fetch evidence by its actual source mapping, not caller text.
-                cur.execute("""SELECT r.id::text,r.body,r.author,r.happened_at
+                cur.execute("""SELECT r.id::text,r.body,r.author,r.happened_at,c.case_id::text AS case_id
                   FROM saas_dialog_consultation_replies r JOIN saas_internal_consultations c
                   ON c.tenant_id=r.tenant_id AND c.id=r.consultation_id
                   WHERE r.tenant_id=%s::uuid AND r.id=%s::uuid AND c.channel_id=%s::uuid AND c.conversation_id=%s""",
@@ -580,9 +582,14 @@ def run(profile, data, *, consultation_reply_id=None):
                     raise TenantLinearError('Код запроса уже использован для другой операции.', 409)
                 if existing['status'] == 'completed' and existing.get('result') and str(existing['config_version']) == str(connection['updated_at']):
                     if consultation_evidence is not None and any(str(row.get('message_type') or '').lower() in {'voice','audio','voice_message','ptt','image','video','document'} for row in original_rows):
-                        error=TenantLinearError('Полный анализ вложений снимка консультации не подтверждён. AI-ответ не выдан.',409)
-                        error.keep_request=True
-                        raise error
+                        proof=existing['result'].get('media_coverage')
+                        expected={'reply_id':consultation_evidence['id'],'conversation_id':command['conversation_id'],
+                            'source_versions':consultation_evidence['source_versions'],'case_id':consultation_evidence.get('case_id')}
+                        if not isinstance(proof,dict) or proof.get('snapshot')!=expected:
+                            error=TenantLinearError('Полный анализ вложений снимка консультации не подтверждён. AI-ответ не выдан.',409)
+                            error.keep_request=True
+                            raise error
+                        MediaCoverage.validate_proof(cur,tenant,command['channel_id'],command['lead_id'],proof)
                     if command['mode']=='reply' and not existing['result'].get('source_versions'):
                         error=TenantLinearError('Сохранённый черновик не привязан к версии сообщений. Запросите новый черновик.',409)
                         error.keep_request=True

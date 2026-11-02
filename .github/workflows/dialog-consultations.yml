@@ -12,6 +12,7 @@ on:
       - 'beintaskbot-main/docs/tenant-support-consultations.js'
       - 'beintaskbot-main/tests/test_case_consultations_unified.py'
       - 'beintaskbot-main/tests/test_pr465_workflow_integration.py'
+      - 'beintaskbot-main/tests/test_manual_case_saved_media.py'
       - 'beintaskbot-main/tests/test_pr465_followup_worker.py'
       - 'beintaskbot-main/tests/test_ai_schema_cold_readiness.py'
       - 'beintaskbot-main/tests/test_operator_case_recovery*'
@@ -181,6 +182,7 @@ jobs:
             tests/test_support_case_materials.py \
             tests/test_case_consultations_unified.py \
             tests/test_pr465_workflow_integration.py \
+            tests/test_manual_case_saved_media.py \
             tests/test_pr465_followup_worker.py \
             tests/test_ai_schema_cold_readiness.py \
             tests/test_tenant_ai_pilot_worker.py \

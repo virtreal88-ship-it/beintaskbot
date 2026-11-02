@@ -1122,7 +1122,16 @@ def draft(profile,reply_id,data):
             assigned=_assigned_context(cur,tenant,{'channel_id':str(consult['channel_id']),'conversation_id':consult['conversation_id']})
             binding=_agent_binding(assigned)
             if reply['draft_state']=='completed' and reply.get('draft_binding')==binding:
-                original_evidence(cur,tenant,reply_id,str(consult['channel_id']),consult['conversation_id'],int(source['lead_id']))
+                rows,_summary,versions=original_evidence(cur,tenant,reply_id,str(consult['channel_id']),consult['conversation_id'],int(source['lead_id']))
+                from tenant_media_coverage import KINDS,MediaCoverage
+                if any(str(row.get('message_type') or '').lower() in KINDS for row in rows):
+                    cur.execute('SELECT status,result FROM saas_chat_ai_runs WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(tenant,reply.get('draft_request_id')))
+                    saved=cur.fetchone() or {};result=saved.get('result') if isinstance(saved.get('result'),dict) else {}
+                    proof=result.get('media_coverage');expected={'reply_id':reply_id,'conversation_id':consult['conversation_id'],
+                      'source_versions':versions,'case_id':str(consult['case_id']) if consult.get('case_id') else None}
+                    if saved.get('status')!='completed' or result.get('text')!=reply['draft'] or not isinstance(proof,dict) or proof.get('snapshot')!=expected:
+                        raise TenantLinearError('Сохранённый черновик не имеет полного подтверждения вложений исходного снимка.',409)
+                    MediaCoverage.validate_proof(cur,tenant,str(consult['channel_id']),int(source['lead_id']),proof)
                 return {'text':reply['draft'],'customer_message_sent':False}
             if reply['draft_state'] not in {'pending','completed','not_requested'}:raise TenantLinearError('Предыдущий AI-запрос требует проверки; повтор отключён.',409)
             cur.execute("UPDATE saas_dialog_consultation_replies SET draft_state='sending',draft_request_id=%s::uuid WHERE tenant_id=%s::uuid AND id=%s::uuid",(request,tenant,reply_id))
