@@ -345,6 +345,11 @@ def detail(profile, ticket_id, before=None, message_id=None):
             if not ticket:
                 raise TenantLinearError('Обращение не найдено.', 404)
             ticket=_attach_verified_contact_identity(cur,tenant,ticket)
+            from tenant_support_summary_history import versions as summary_versions, fingerprint as summary_fingerprint
+            summary_history = summary_versions(cur,tenant,ticket_id)
+            ticket['summary_hash'] = summary_fingerprint(ticket)
+            applied_summary = next((version for version in summary_history if version.get('state')=='applied'),None)
+            ticket['summary_language'] = applied_summary.get('language') if applied_summary else None
             from tenant_support_case_context import load_scope, messages, metadata
             material_scope = load_scope(cur, tenant, ticket_id)
             scope_metadata = metadata(cur, material_scope)
@@ -407,7 +412,7 @@ def detail(profile, ticket_id, before=None, message_id=None):
               WHERE e.tenant_id=%s::uuid AND e.provider='connect' AND e.channel_id=%s AND e.conversation_id=%s
               ORDER BY e.created_at DESC LIMIT 10''',(tenant,str(ticket['channel_id']),ticket['conversation_id']))
             expert_results=[public(row) for row in cur.fetchall()]
-    return {'expert_results':expert_results,'ticket':public(ticket), 'messages':[public(row) for row in reversed(rows[:50])],
+    return {'expert_results':expert_results,'ticket':public(ticket),'summary_history':summary_history, 'messages':[public(row) for row in reversed(rows[:50])],
             'attached_media':attached_media,'scope':scope_metadata,
             'focus_message':public(focus_message) if focus_message else None,
             'next_before':str(rows[49]['id']) if len(rows)>50 else None}

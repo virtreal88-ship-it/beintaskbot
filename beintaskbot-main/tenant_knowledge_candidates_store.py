@@ -221,6 +221,8 @@ def snapshot(cur,profile,data):
             source=route_cache[channel]
             names.extend([source.get('contact_name'),source.get('phone')]);channels.add(channel)
     preview_sender_names=_preview_sender_names(cur,tenant,policy,binding,chosen,rows)
+    from tenant_summary_language import customer_evidence
+    language_roles={str(row['id']):row['role'] for row in customer_evidence(cur,tenant,rows,binding['channel_id'],binding['conversation_id'])}
     refs=[];messages=[];preview_metadata=[];remaining=MAX_CONTEXT
     for row in rows:
         body=redact(row.get('body'),names)[:min(1500,remaining)]
@@ -236,7 +238,8 @@ def snapshot(cur,profile,data):
             # without storing a URL or raw provider payload.
             media_version=digest({key:raw.get(key) for key in ('mediaId','media_id','file_uuid','fileUuid','fileLength','file_size','size_bytes','mediaKeyTimestamp','timestamp')})
             ref.update(media_kind=kind,external_id=row.get('external_id'),media_version=media_version,happened_at=str(row.get('happened_at') or row.get('created_at') or ''))
-        refs.append(ref);messages.append({'ref':'m'+str(len(refs)),'role':role,'text':body})
+        refs.append(ref);messages.append({'ref':'m'+str(len(refs)),'role':role,'text':body,
+          'summary_language_role':language_roles[str(row['id'])]})
         preview_metadata.append({'message_type':str(kind),'happened_at':str(row.get('happened_at') or row.get('created_at') or ''),
                                  'sender_name':preview_sender_names.get(str(row['id'])) or ''})
         remaining-=len(body)
@@ -546,7 +549,8 @@ def public_card(cur,row,content_language='az',source_route=None,tenant=None,dial
         value.update(_case_customer(cur,tenant,route,value,dialog))
     # Existing records predate the explicit content-language field. Their extraction
     # route records the language requested when the card was generated.
-    value.setdefault('content_language',content_language if content_language in {'ru','az','en'} else 'az')
+    value.setdefault('content_language',content_language if content_language in {'ru','az','en','tr'} else 'az')
+    value['language_selection']=(source_route or {}).get('summary_language')
     reason=approval_reason(value)
     value['result_confirmed']=value['outcome']['status']=='confirmed'
     value['clarification_status']='required' if reason else 'not_required'
