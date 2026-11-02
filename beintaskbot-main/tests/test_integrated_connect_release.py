@@ -406,7 +406,8 @@ def test_restart_after_paid_voice_claim_does_not_repeat_call(flow):
         voice._claim(job,reservation,source,'test-transcriber')
     f['inbound']();f['process']()
     f['speech'].assert_not_called()
-    f['send'].assert_called_once()
+    # The earlier unknown voice is still required in this current burst.
+    f['generate'].assert_not_called();f['send'].assert_not_called()
 
 @pytest.mark.parametrize('mode,company_send',[('manual',True),('automatic',False)])
 def test_manual_mode_and_company_send_gate_never_send(flow,mode,company_send):

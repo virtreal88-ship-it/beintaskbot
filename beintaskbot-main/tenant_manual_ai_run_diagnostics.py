@@ -6,7 +6,7 @@ from tenant_operator_access import access,assert_route
 
 STATES={'sending','completed','unknown','skipped'}
 STAGES={'source_validation','media_download','media_validation','audio_transcription','visual_analysis','video_decode','visual_input_prepare','context_preparation','unknown'}
-CODES={'media_unavailable','source_fetch_unavailable','source_check_failed','source_rate_limited','source_access_denied','source_changed','media_processing_failed','media_result_unknown','asr_authorization_required','legacy_voice_version_unverified','pre_dispatch_retryable','media_size_limit','asr_model_unavailable','transcript_truncated','audio_context_incomplete','image_context_incomplete','visual_budget','vision_not_approved','external_media_permission_required','model_has_no_vision','image_evidence_incomplete','audio_evidence_incomplete'}
+CODES={'document_evidence_incomplete','document_context_incomplete','video_full_coverage_unavailable','consultation_media_coverage_unavailable','media_unavailable','source_fetch_unavailable','source_check_failed','source_rate_limited','source_access_denied','source_changed','media_processing_failed','media_result_unknown','asr_authorization_required','legacy_voice_version_unverified','pre_dispatch_retryable','media_size_limit','asr_model_unavailable','transcript_truncated','audio_context_incomplete','image_context_incomplete','visual_budget','vision_not_approved','external_media_permission_required','model_has_no_vision','image_evidence_incomplete','audio_evidence_incomplete'}
 
 
 def _source(value):

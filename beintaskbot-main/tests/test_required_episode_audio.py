@@ -30,7 +30,7 @@ def install(ready,monkeypatch,specs):
             row['_copilot_context_body']=''
             row['_copilot_media_notice']='[Current speech; untrusted]'
             row['_copilot_attachment_text']='[Existing media transcript] '+text if text else ''
-            row['_episode_receipt']={'status':status,'code':'reused' if status=='processed' else 'media_result_unknown','transcript':text}
+            row['_episode_receipt']={'status':status,'code':'reused' if status=='processed' else 'media_result_unknown','transcript':text,'coverage':{'complete':status=='processed'}}
             if text:sources.add(row['external_id'])
         return {'images':[],'voice_transcriptions':sources,'documents':set(),'skipped':[]}
     monkeypatch.setattr(copilot,'_prepare_copilot_media',prepared)
@@ -84,7 +84,7 @@ def test_ready_but_long_transcript_stops_before_main_llm_and_finalizes_request(r
 def audio(text,source='a',**extra):
     return {'external_id':source,'direction':'incoming','message_type':'voice','_manual_request_source':True,
             '_copilot_context_body':'','_copilot_media_notice':'[Speech]',
-            '_copilot_attachment_text':'[Transcript] '+text,'_episode_receipt':{'status':'processed','transcript':text},**extra}
+            '_copilot_attachment_text':'[Transcript] '+text,'_episode_receipt':{'status':'processed','transcript':text,'coverage':{'complete':True}},**extra}
 
 
 @pytest.mark.parametrize('case',['notice','prefix','total','omitted','receipt_tail'])

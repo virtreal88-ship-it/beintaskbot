@@ -40,6 +40,11 @@ on:
       - 'beintaskbot-main/tests/test_manual_ai_source_receipts.py'
       - 'beintaskbot-main/tenant_dialog_evidence.py'
       - 'beintaskbot-main/tenant_episode_media.py'
+      - 'beintaskbot-main/tenant_media_coverage.py'
+      - 'beintaskbot-main/tenant_ai_agent_worker.py'
+      - 'beintaskbot-main/tenant_connect_transport.py'
+      - 'beintaskbot-main/tenant_ai_agent_connect.py'
+      - 'beintaskbot-main/tests/test_shared_media_coverage.py'
       - 'beintaskbot-main/tenant_media_evidence.py'
       - 'beintaskbot-main/tests/test_dialog_media_grounding.py'
       - 'beintaskbot-main/tests/test_dialog_photo*'
@@ -180,6 +185,7 @@ jobs:
             tests/test_connect_group_history.py::test_group_context_retains_safe_staff_and_ai_provenance \
             tests/test_assigned_operator_copilot.py \
             tests/test_required_episode_audio.py \
+            tests/test_shared_media_coverage.py \
             tests/test_required_episode_photos.py \
             tests/test_manual_ai_run_diagnostics.py \
             tests/test_manual_ai_source_receipts.py \

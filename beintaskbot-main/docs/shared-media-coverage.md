@@ -1,0 +1,15 @@
+# Shared current-episode media barrier
+
+Manual AI reply and ordinary Connect automatic replies use the same server-side readiness/components/manifest proof. Existing ten-minute/staff/resume episode selection is retained. This is not a whole-request boundary implementation; unrelated older history is not required.
+
+Every selected voice/audio/photo/document/video source and every selected text version is frozen before preparation mutates local voice bodies. Required evidence must be processed, positively complete, nonempty, and neither partial, sampled nor truncated. Both existing formatters keep their limits (manual 20 / 1200 / 14000; automatic 4000 / 24000). The common seal independently checks full component ranges on the actual source/channel-qualified rendered lines; a processed status or renderer boolean alone is insufficient. Final provider serialization is checked immediately before HTTP.
+
+Missing, pending, unknown, error and clipped current evidence stops main generation, expert/no-answer work and automatic sends. No retries or mode changes are introduced. A known coverage stop terminalizes the job, releases only unused main reservation, and preserves separate unknown media holds and known usage. The no-answer sender handles coverage stops without pausing the conversation.
+
+The same proof is checked inside the existing final Connect dialog lock using the provided transaction only. It is bound to actual run/revision/route, current assignment/model/lease, exact source versions and selected source membership. Committed backdated additions within the existing episode invalidate it too. Selection proof reads at most 257 newest rows, fails closed above 256 selected sources when completeness is unproven, and respects staff/resume boundaries so older unrelated messages do not consume the cap. Existing tenant/channel/assignment/permissions/schedule/budget/lease/human-takeover/revision guards remain active.
+
+Manual replies remain private drafts: ordinary employee composer sends are unchanged. Publication and completed-cache reuse validate the saved source-set proof. Reply policy v6 invalidates earlier completed v3/v4/v5 drafts only via an explicit fresh action; pending/unknown old UUIDs cannot redispatch. Proof metadata contains hashes/IDs, never the manifest object or extra evidence text in the prompt.
+
+Current video adapters only provide sampled partial coverage, so selected video stops before paid preparation. CASE followups/customer turns with current required media also stop before the separate legacy media pipeline; text-only CASE behavior is preserved. Media-bearing frozen manual consultation snapshots fail closed before preparation because that snapshot workflow does not establish this full-coverage proof; text-only consultation snapshots retain their independent source guards. No full video adapter, consultation rewrite or boundary architecture is introduced.
+
+All validation uses synthetic SQL and intercepted provider/media/send calls. No production or paid calls are part of this change.

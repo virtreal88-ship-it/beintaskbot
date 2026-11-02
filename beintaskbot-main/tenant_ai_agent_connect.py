@@ -782,6 +782,7 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
             from tenant_media_evidence import annotate_rows
             annotate_rows(cur, tenant, rows)
     return [{'external_id': str(row.get('external_id') or '').removeprefix('connect:'),
+             '_stored_external_id':str(row.get('external_id') or ''),
              'direction': str(row.get('direction') or ''), 'body': str(row.get('body') or ''),
              'message_type': str(row.get('message_type') or 'text'), 'media_url': str(row.get('media_url') or ''),
              'has_attachment': bool(row.get('media_url')) or str(row.get('message_type') or 'text') != 'text',

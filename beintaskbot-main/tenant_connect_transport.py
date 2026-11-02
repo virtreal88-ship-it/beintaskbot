@@ -1318,7 +1318,7 @@ def download_connect_message_media(route: dict, message_id: str, expected_type: 
 
 def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversation_id: str,
                             text: str, run_id: str, expected_revision: int, *, handoff_fingerprint: str = '',
-                            pilot_scope_fenced: bool = False, stop_after_reply: bool = False) -> str | None:
+                            pilot_scope_fenced: bool = False, stop_after_reply: bool = False, coverage_manifest=None) -> str | None:
     """Serialize Connect send with an observed human takeover.
 
     The row lock intentionally spans the short Connect request. If the human
@@ -1399,6 +1399,15 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
             if not automatic_send_allowed(gate_context, connection=conn):
                 conn.rollback()
                 return None
+            if coverage_manifest is not None:
+                from tenant_media_coverage import MediaCoverage,CoverageError
+                if not isinstance(coverage_manifest,MediaCoverage):raise CoverageError(code='media_manifest_invalid')
+                if (coverage_manifest.reservation is None or str(coverage_manifest.reservation.get('run_id'))!=str(run_id)
+                    or int(coverage_manifest.reservation.get('conversation_revision') or 0)!=int(expected_revision)
+                    or coverage_manifest.job is None or str(coverage_manifest.job.get('conversation_id'))!=str(conversation_id)):raise CoverageError(code='media_manifest_run_changed')
+                from tenant_ai_agent_connect import allowed
+                if not allowed(coverage_manifest.job,connection=conn):return None
+                coverage_manifest.validate(cur,tenant,channel_id,lead_id)
             message_id = send_ai_reply(route, text, run_id)
             cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,'AI Agent',%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',

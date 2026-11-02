@@ -514,36 +514,50 @@ def evidence_query(rows,source_id,*,max_chars=1000):
     return '\n'.join(parts)
 
 
-def context_lines(context,local_rows):
+def context_lines(context,local_rows,*,coverage=None):
     """One normalized evidence representation, with latest/historical provenance."""
-    own={str(r.get('external_id')):r for r in local_rows}
+    from tenant_media_coverage import component_spans
+    canonical=lambda value:str(value or '').removeprefix('connect:')
+    local_channels={str(row.get('_episode_channel') or row.get('channel') or '').removeprefix('connect:') for row in local_rows if row.get('_episode_channel') or row.get('channel')}
+    default_channel=coverage.channel if coverage else (next(iter(local_channels)) if len(local_channels)==1 else '')
+    row_channel=lambda row:str(row.get('_episode_channel') or row.get('channel') or default_channel).removeprefix('connect:')
+    own={(row_channel(r),canonical(r.get('external_id'))):r for r in local_rows}
     lines=[];missing=0;used=0
     for row in reversed(context):
         source=str(row.get('external_id') or '')
-        local=own.get(source,{})
-        channel=str(row.get('channel') or '').removeprefix('connect:')
-        if channel and local.get('_episode_channel') and channel!=local['_episode_channel']:local={}
+        channel=str(row.get('channel') or default_channel).removeprefix('connect:')
+        local=own.get((channel,canonical(source)),{})
         if not local:
-            local=own.get(str(row.get('photo_message_id') or row.get('document_message_id') or ''),{})
+            local=own.get((channel,canonical(row.get('photo_message_id') or row.get('document_message_id'))),{})
         kind=str(row.get('message_type') or 'text')
         receipt=local.get('_episode_receipt') or {}
         body=str(row.get('body') or '')[:2000]
+        spans=[]
         if kind in KINDS:
             body=str(local.get('_copilot_context_body') or '')
             body+='\n'+(local.get('_copilot_media_notice') or '[Historical or other-channel attachment; not analyzed for this request]')
-            body+='\n'+str(local.get('_copilot_attachment_text') or '')[:10000]
+            appendix=str(local.get('_copilot_attachment_text') or '')
+            spans=[(len(body)+1+start,len(body)+1+end) for start,end in component_spans(local,appendix)]
+            body+='\n'+appendix[:10000]
             if receipt.get('status')!='processed' and local.get('_historical_media_status')!='processed':missing+=1
         if used>=24000:break
         available=min(4000,24000-used)
         if len(body)>available:body=body[:max(0,available-70)]+'\n[Evidence shortened; do not infer omitted contents]'
+        if coverage and id(local) in coverage.coverage:
+            coverage.coverage[id(local)]=bool(spans) and all(end<=len(body) and body[start:end]==appendix[a:b]
+                for (start,end),(a,b) in zip(spans,component_spans(local,appendix)))
         used+=len(body)
         from tenant_dialog_evidence import provenance, speaker
         evidence_row={**local,**row,'_copilot_attachment_text':local.get('_copilot_attachment_text','')}
-        lines.append({'speaker':speaker(row),
+        line={'speaker':speaker(row),
                       'text':body,'at':str(row.get('happened_at') or ''),'source_id':source,
                       'media_kind':kind,'evidence_scope':'current_episode' if receipt else 'historical',
                       'provenance':provenance(evidence_row),
-                      **({'sender':row.get('author_name',''),'source_channels':row['source_channels']} if 'source_channels' in row else {})})
+                      **({'sender':row.get('author_name',''),'source_channels':row['source_channels']} if 'source_channels' in row else {})}
+        if coverage:
+            if local:line['source_id']=str(local.get('_stored_external_id',local.get('external_id')) or '')
+            coverage.register_line(line,local)
+        lines.append(line)
     lines.reverse()
     return lines,missing
 
