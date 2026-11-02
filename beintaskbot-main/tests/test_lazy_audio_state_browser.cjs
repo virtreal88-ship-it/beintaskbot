@@ -2,6 +2,8 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.join(__dirname,'..');
 (async()=>{const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||undefined,args:['--no-sandbox']});try{for(const width of [390,1440]){
  const page=await browser.newPage({viewport:{width,height:900}});
+ // Manual/rerender regression; automatic visibility has its own browser suite.
+ await page.addInitScript(()=>{window.IntersectionObserver=class{observe(){}unobserve(){}disconnect(){}};});
  await page.route('https://test.local/**',r=>r.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'')}));await page.goto('https://test.local/app');
  await page.evaluate(()=>{
   document.querySelectorAll('.view').forEach(e=>e.classList.remove('active'));document.getElementById('view-dialogs').classList.add('active');
@@ -24,7 +26,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await voice().locator('audio').evaluate(audio=>audio.dispatchEvent(new Event('error')));
  assert.doesNotMatch(await voice().textContent(),/Audio unavailable|Аудио недоступно|Audio əlçatan deyil/,'unloaded native error cannot claim the file is absent');
  assert.match(await voice().locator('[data-media-load-status]').innerText(),/не загружено|not loaded|yüklənməyib/);
- await voice().locator('[data-media-open]').click();await page.waitForFunction(()=>document.querySelector('audio.operator-native-audio')?.getAttribute('src')?.startsWith('blob:'));
+ await voice().locator('[data-media-open]').evaluate(n=>n.click());await page.waitForFunction(()=>document.querySelector('audio.operator-native-audio')?.getAttribute('src')?.startsWith('blob:'));
  assert.equal(await page.evaluate(()=>window.mediaCount),1);
  assert.match(await voice().locator('[data-media-meta]').innerText(),/KB/);
  await page.evaluate(()=>{window.staleAudio=document.querySelector('audio.operator-native-audio');window.staleError=window.staleAudio.onerror;document.dispatchEvent(new CustomEvent('tenant-chat-history-reset'));document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));});
@@ -42,8 +44,8 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  await page.evaluate(()=>window.tenantOperator.openDialog(window.testRoute));
  assert.equal(await voice().locator('audio').getAttribute('src'),null,'changed source version cannot reuse old bytes');
  assert.doesNotMatch(await page.locator('.operator-client-phone').innerText(),/123456789012345|994500001234/,'explicit blank and LID never fabricate phone');
- await page.evaluate(()=>{window.rateLimit=true;});await voice().locator('[data-media-open]').click();await page.waitForFunction(()=>window.mediaCount===2);
- await voice().locator('[data-media-open]').click();assert.equal(await page.evaluate(()=>window.mediaCount),2,'429 cooldown prevents repeated downloads');
+ await page.evaluate(()=>{window.rateLimit=true;});await voice().locator('[data-media-open]').evaluate(n=>n.click());await page.waitForFunction(()=>window.mediaCount===2);
+ await voice().locator('[data-media-open]').evaluate(n=>n.click());assert.equal(await page.evaluate(()=>window.mediaCount),2,'429 cooldown prevents repeated downloads');
  await page.evaluate(()=>{document.dispatchEvent(new CustomEvent('tenant-profile',{detail:{member:{tenant_id:'other-tenant',telegram_id:34,role:'owner',active:true}}}));});
  assert.equal(await page.locator('audio[src^="blob:"]').count(),0,'identity change revokes previous previews even when the dialog is removed');
  assert.equal((await page.evaluate(()=>window.requests)).filter(u=>/copilot|transcrib|\/asr|\/send/.test(u)).length,0);

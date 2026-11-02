@@ -48,6 +48,9 @@ on:
       - 'beintaskbot-main/tests/test_shared_media_coverage.py'
       - 'beintaskbot-main/tests/test_connect_documents.py'
       - 'beintaskbot-main/tenant_media_evidence.py'
+      - 'beintaskbot-main/tenant_product_identifiers.py'
+      - 'beintaskbot-main/tests/test_product_barcode*.py'
+      - 'beintaskbot-main/tests/fixtures/product_barcode_observation_responses.json'
       - 'beintaskbot-main/tests/test_dialog_media_grounding.py'
       - 'beintaskbot-main/tests/test_dialog_photo*'
       - 'beintaskbot-main/tenant_operator_dialogs.py'
@@ -58,6 +61,8 @@ on:
       - 'beintaskbot-main/tests/test_message_attachment_menu_browser.cjs'
       - 'beintaskbot-main/tests/test_photo_preview_browser.cjs'
       - 'beintaskbot-main/tests/test_visible_photo_autoload_browser.cjs'
+      - 'beintaskbot-main/tests/test_visible_audio_autoload_browser.cjs'
+      - 'beintaskbot-main/tests/visible_media_fixture.cjs'
       - 'beintaskbot-main/tests/test_connect_media_backpressure.py'
       - 'beintaskbot-main/tests/test_photo_thumbnail_projection.py'
       - 'beintaskbot-main/tenant_chat_attachment_api.py'
@@ -186,6 +191,9 @@ jobs:
             tests/test_dialog_consultations_postgres.py \
             tests/test_manual_knowledge_persistence_postgres.py \
             tests/test_dialog_media_grounding.py \
+            tests/test_product_barcode_evidence.py \
+            tests/test_product_barcode_coverage.py \
+            tests/test_product_barcode_postgres.py \
             tests/test_dialog_photo_receipts.py \
             tests/test_dialog_photo_receipts_postgres.py \
             tests/test_connect_group_history.py::test_group_context_retains_safe_staff_and_ai_provenance \
@@ -246,3 +254,4 @@ jobs:
           node tests/test_message_attachment_menu_browser.cjs
           node tests/test_photo_preview_browser.cjs
           node tests/test_visible_photo_autoload_browser.cjs
+          node tests/test_visible_audio_autoload_browser.cjs

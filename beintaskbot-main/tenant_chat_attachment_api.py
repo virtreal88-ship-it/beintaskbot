@@ -162,8 +162,10 @@ def handler(member_from_request, request_provider, logger):
                 from tenant_media_evidence import media_version
                 if expected_version != media_version((item.get('row') or {}).get('raw')):
                     raise TenantLinearError('Fayl dəyişib. Dialoqu yeniləyin.', 409)
-            if automatic_photo and (item.get('provider') != 'connect' or item['row']['message_type'] != 'image'):
-                raise TenantLinearError('Avtomatik baxış yalnız şəkillər üçündür.', 400)
+            # Keep the existing automatic-photo admission bucket/transport flag:
+            # photos and visible audio share its budget and reserved single slot.
+            if automatic_photo and (item.get('provider') != 'connect' or item['row']['message_type'] not in {'image', 'audio', 'voice'}):
+                raise TenantLinearError('Avtomatik baxış yalnız şəkil və səs üçündür.', 400)
             key = _media_key(session, item, lead, message)
             result = _cache_get(key)
             if result is None and request.query.get('cache_only') == '1' and item.get('provider') == 'connect':
