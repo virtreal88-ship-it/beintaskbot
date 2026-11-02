@@ -1,0 +1,75 @@
+name: Notification case target regression
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/notification-case-targets.yml'
+      - 'beintaskbot-main/tenant_ai_agent_actions.py'
+      - 'beintaskbot-main/tenant_internal_consultations.py'
+      - 'beintaskbot-main/tenant_notification_center*.py'
+      - 'beintaskbot-main/tenant_support_inbox*.py'
+      - 'beintaskbot-main/tenant_operator_access.py'
+      - 'beintaskbot-main/tenant_policy.py'
+      - 'beintaskbot-main/docs/tenant-dialog-consultations.js'
+      - 'beintaskbot-main/docs/tenant-support-inbox.js'
+      - 'beintaskbot-main/tests/test_notification_case_targets*'
+      - 'beintaskbot-main/tests/notification_case_targets*.cjs'
+      - 'beintaskbot-main/tests/test_tenant_notification_center*'
+      - 'beintaskbot-main/tests/test_tenant_internal_consultations_api.py'
+      - 'beintaskbot-main/tests/test_support_notification_bridge_ui.cjs'
+      - 'beintaskbot-main/tests/isolated_database_guard/*'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  notification-case-targets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=postgres
+      PYTHONPATH: tests/isolated_database_guard:.:tests
+      NODE_PATH: .support-test-deps/node_modules
+      SUPPORT_CASES_JSDOM: ../.support-test-deps/node_modules/jsdom
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt pytest pytest-asyncio
+      - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0 playwright@1.62.1
+      - run: node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Select installed Chromium for all browser fixtures
+        run: |
+          node -e "const fs=require('node:fs');fs.appendFileSync(process.env.GITHUB_ENV,'CHROMIUM_EXECUTABLE_PATH='+require('./.support-test-deps/node_modules/playwright').chromium.executablePath()+'\n')"
+      - name: Native ingress, notification authority, case receipt and actual HTTP browser
+        run: >-
+          python -m pytest -q -rs
+          tests/test_notification_case_targets_postgres.py
+          tests/test_tenant_notification_center.py
+          tests/test_tenant_notification_center_postgres.py
+          tests/test_tenant_internal_consultations_api.py
+      - name: Current app event rendering and existing strict developer reply bridge
+        run: |
+          node tests/test_notification_case_targets_ui.cjs
+          node tests/test_support_notification_bridge_ui.cjs
+      - name: Chromium case notification at four viewport widths
+        run: node tests/test_notification_case_targets_browser.cjs

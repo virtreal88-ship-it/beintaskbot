@@ -87,24 +87,31 @@ def _eligible(cur, tenant, actor, policy):
     # module visibility. Never infer a case from the latest ticket or a lead
     # number that could belong to either Connect or Kommo.
     case_joins=''
+    proof_ctes=[]
+    proof_params=[]
     handoff_case='NULL::text'
     consultation_case='NULL::text'
     consultation_id='NULL::text'
     consultation_reason="''::text"
     if ready.get('tickets') and ready.get('events'):
-        case_joins+=''' LEFT JOIN LATERAL (
-          SELECT min(st.id::text) AS case_id FROM saas_support_events se
+        proof_ctes.append('''handoff_proofs AS MATERIALIZED (
+          SELECT DISTINCT 'ai_handoff:'||st.conversation_id||':'||substring(se.event_key from 9) AS notification_event_key,
+            st.id::text AS case_id FROM saas_support_events se
           JOIN saas_support_tickets st ON st.tenant_id=se.tenant_id AND st.id=se.ticket_id
           JOIN saas_connect_conversations cv ON cv.tenant_id=st.tenant_id
             AND cv.connect_channel_id=st.channel_id AND cv.conversation_id=st.conversation_id
           JOIN saas_connect_channels cc ON cc.tenant_id=cv.tenant_id AND cc.connect_channel_id=cv.connect_channel_id
-          WHERE n.event_key ~ '^ai_handoff:' AND se.tenant_id=n.tenant_id AND se.event_key LIKE 'handoff:%%'
-            AND n.event_key='ai_handoff:'||st.conversation_id||':'||substring(se.event_key from 9)
-            AND (COALESCE(substring(n.target_url from '[?&]support_ticket_id=([^&#]+)'),'')=''
-              OR st.id::text=lower(substring(n.target_url from '[?&]support_ticket_id=([^&#]+)')))
-          HAVING count(*)=1
-        ) hc ON TRUE'''
-        handoff_case='hc.case_id'
+          WHERE se.tenant_id=%s::uuid AND se.event_key LIKE 'handoff:%%'
+        ), handoff_unique AS MATERIALIZED (
+          SELECT notification_event_key,min(case_id) AS case_id,count(*) AS matches
+          FROM handoff_proofs GROUP BY notification_event_key
+        )''')
+        proof_params.append(tenant)
+        case_joins+=''' LEFT JOIN handoff_unique hu ON hu.notification_event_key=n.event_key
+          LEFT JOIN handoff_proofs he ON he.notification_event_key=n.event_key
+            AND he.case_id=lower(substring(n.target_url from '[?&]support_ticket_id=([^&#]+)'))'''
+        handoff_case="""CASE WHEN COALESCE(substring(n.target_url from '[?&]support_ticket_id=([^&#]+)'),'')=''
+          THEN CASE WHEN hu.matches=1 THEN hu.case_id END ELSE he.case_id END"""
     if ready.get('tickets') and ready.get('consultations'):
         case_joins+=''' LEFT JOIN saas_internal_consultations ic ON ic.tenant_id=n.tenant_id
           AND n.event_key='ai_consultation:'||ic.request_key
@@ -118,10 +125,15 @@ def _eligible(cur, tenant, actor, policy):
         consultation_reason="COALESCE(NULLIF(ic.evidence->>'reason_code',''),ic.evidence->>'signal','')"
     kommo_proven='FALSE'
     if ready.get('webhooks'):
-        kommo_proven='''EXISTS(SELECT 1 FROM saas_tenant_webhook_events we
-          WHERE n.event_key ~ '^ai_handoff:' AND we.tenant_id=n.tenant_id AND we.provider='kommo'
-            AND n.event_key='ai_handoff:'||(we.payload->>'chat_id')||':'||we.fingerprint
-            AND we.payload->>'lead_id'=substring(n.target_url from '[?&]deal_id=([^&#]+)'))'''
+        proof_ctes.append('''kommo_proofs AS MATERIALIZED (
+          SELECT DISTINCT 'ai_handoff:'||(payload->>'chat_id')||':'||fingerprint AS notification_event_key,
+            payload->>'lead_id' AS lead_id FROM saas_tenant_webhook_events
+          WHERE tenant_id=%s::uuid AND provider='kommo'
+        )''')
+        proof_params.append(tenant)
+        case_joins+=''' LEFT JOIN kommo_proofs kp ON kp.notification_event_key=n.event_key
+          AND kp.lead_id=substring(n.target_url from '[?&]deal_id=([^&#]+)')'''
+        kommo_proven='kp.notification_event_key IS NOT NULL'
     case_columns='''COALESCE('''+handoff_case+','+consultation_case+''') AS case_target_id,
         '''+consultation_id+''' AS case_consultation_id,
         CASE WHEN '''+handoff_case+''' IS NOT NULL THEN n.body ELSE '''+consultation_reason+''' END AS case_reason_code,
@@ -147,7 +159,7 @@ def _eligible(cur, tenant, actor, policy):
             deal_scope.append('(' + clause + ')')
     deal_guard = '''p.target_deal='' OR EXISTS(SELECT 1 FROM saas_crm_deals d
       WHERE d.tenant_id=p.tenant_id AND d.kommo_lead_id::text=p.target_deal AND d.deleted_at IS NULL AND (''' + (' OR '.join(deal_scope) or 'FALSE') + '))'
-    sql = '''WITH personal AS NOT MATERIALIZED (
+    sql = 'WITH '+(', '.join(proof_ctes)+', ' if proof_ctes else '')+'''personal AS NOT MATERIALIZED (
       SELECT n.*,''' + consult_columns + ',' + case_columns + ''',
         split_part(n.event_key,':',1)='dialog_consultation' AS is_reply,
         (''' + consult_guard + ''') AS reply_allowed,
@@ -183,7 +195,7 @@ def _eligible(cur, tenant, actor, policy):
         AND (p.target_view<>'dialogs' OR (''' + dialog_guard + '''))
         AND (p.target_view NOT IN ('deals','customers') OR (''' + deal_guard + ''')))) END
     ) '''
-    return sql, [tenant, actor, *deal_args]
+    return sql, [*proof_params, tenant, actor, *deal_args]
 
 
 def _cursor(value, status):
@@ -294,6 +306,15 @@ def mark_read(profile, notification_id, *, opened_case_id=_UNSET,opened_event_ke
     with _connect() as conn:
         with conn.cursor() as cur:
             tenant, actor, policy = _access(cur, profile)
+            if receipt:
+                # Serialize a scoped receipt before reading its projection.
+                # PostgreSQL may otherwise wait on UPDATE and then recheck a
+                # newer target row against an older subquery snapshot.
+                cur.execute('''SELECT id FROM saas_tenant_notifications
+                  WHERE tenant_id=%s::uuid AND telegram_id=%s AND id=%s::uuid FOR UPDATE''',
+                  (tenant,actor,key))
+                if not cur.fetchone():raise TenantLinearError('Уведомление недоступно.',404)
+                tenant,actor,policy=_access(cur,profile)
             sql, params = _eligible(cur, tenant, actor, policy)
             cur.execute(sql + 'SELECT * FROM eligible WHERE id=%s::uuid', (*params, key))
             row = cur.fetchone()
@@ -308,9 +329,10 @@ def mark_read(profile, notification_id, *, opened_case_id=_UNSET,opened_event_ke
             if receipt:
                 # Recheck in the mutation statement as well: a stale case
                 # receipt never acknowledges a newly rebound event.
-                update=sql+update+'''AND EXISTS(SELECT 1 FROM eligible p WHERE p.id=%s::uuid
+                update=sql+update+'''AND event_key=%s AND target_url=%s
+                  AND EXISTS(SELECT 1 FROM eligible p WHERE p.id=%s::uuid
                   AND p.target_state='case' AND p.case_target_id=%s AND p.event_key=%s) '''
-                values=(*params,*values,key,opened_case_id,opened_event_key)
+                values=(*params,*values,row['event_key'],row['target_url'],key,opened_case_id,opened_event_key)
             cur.execute(update+'RETURNING read_at',values)
             changed=cur.fetchone()
             if not changed:raise TenantLinearError('notification_target_changed',409)
