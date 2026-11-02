@@ -258,7 +258,7 @@ async def test_automatic_developer_reply_runs_client_continuation_in_worker(monk
         ('Your request is accepted. The developer plans to review it tomorrow.',{'input_tokens':1,'output_tokens':1,'total_tokens':2}))
     await worker.process_connect_one(job,logger)
     assert len(generated)==1 and len(sends)==1, (finishes,diagnostics)
-    assert 'without promising a fix or date' in generated[0]['instructions']
+    assert 'without promising a resolution date' in generated[0]['instructions']
     assert generated[0]['extra_context']['verified_developer_case_updates'][0]['message'].endswith('Завтра посмотрю')
     assert sends[0][0][4]=='Your request is accepted. The developer plans to review it tomorrow.'
     assert finishes==[]
@@ -267,6 +267,10 @@ async def test_automatic_developer_reply_runs_client_continuation_in_worker(monk
 @pytest.mark.asyncio
 async def test_developer_followup_with_incomplete_case_media_never_generates_or_sends(monkeypatch):
     import tenant_dialog_consultations as consultations
+    import tenant_episode_media as episode
+    monkeypatch.setattr(episode.AutoExecution,'check',lambda *_a,**_k:None)
+    monkeypatch.setattr(episode.AutoExecution,'validate',lambda *_a,**_k:None)
+    monkeypatch.setattr(episode,'reusable',lambda *_a,**_k:None)
     worker,job,logger,source,sends,finishes,_diagnostics=_install_initial_worker_fakes(
         monkeypatch,generated='Never reached')
     source.update({'message_type':'image','has_attachment':True,'media_url':''})
@@ -280,4 +284,4 @@ async def test_developer_followup_with_incomplete_case_media_never_generates_or_
     monkeypatch.setattr(worker_module,'generate',lambda *_a,**_k:generated.append(True))
     await worker.process_connect_one(job,logger)
     assert generated==[] and sends==[]
-    assert finishes and any('case_required_media_coverage_unavailable' in str(item) for item in finishes)
+    assert finishes and any('required_media_incomplete' in str(item) for item in finishes)

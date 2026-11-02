@@ -423,7 +423,7 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                 patch['response_policy']['auto_case_dispatch_enabled']=False
             if patch.get('response_policy') and patch['response_policy'].get('auto_case_dispatch_enabled'):
                 _validate_case_developer_destinations(cur,profile,tenant,patch['response_policy'])
-                patch['response_policy']['auto_case_dispatch_owner_id']=actor
+                if creating:patch['response_policy']['auto_case_dispatch_owner_id']=actor
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('ai-agent-config:'+tenant,))
             # A retry after a browser/network interruption must return the
             # original disabled agent.  The key is also employee-scoped so an
@@ -556,7 +556,7 @@ def save_agent(profile, data, *, agent_id=None, connection=None):
                     # Revalidation above requires the current company owner.
                     # Keep the original owner when that same owner saves; on
                     # first enable, bind this server-verified owner.
-                    merged['response_policy']['auto_case_dispatch_owner_id']=stored_dispatch_owner or actor
+                    merged['response_policy']['auto_case_dispatch_owner_id']=actor
                 else:
                     merged['response_policy'].pop('auto_case_dispatch_owner_id',None)
                 if merged['response_policy']['enabled']:

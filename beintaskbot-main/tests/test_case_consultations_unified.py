@@ -243,10 +243,11 @@ def test_verified_developer_reply_enqueues_one_automatic_client_followup(case_re
     monkeypatch.setattr(connect_transport,'connect_route',lambda _cur,_tenant,lead,**_kw:{'channel_id':CA,'conversation_id':direct if lead==199 else 'client','api_key':'synthetic'})
     consultation=flow.prepare(PROFILE,selected,'https://crm.test')
     assert flow.dispatch(PROFILE,consultation['id'],selected['request_id'])['state']=='sent'
-    with local.cursor() as cur:
-      reply_id=flow.record_reply(cur,A,CA,direct,'developer-reply-1','Завтра посмотрю','PROVIDER_123',author='Synthetic Developer',source_external_id='connect:developer-reply-1')
-    assert reply_id
     local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,199,'connect:developer-reply-1','incoming',%s,'Завтра посмотрю','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'developer-reply-1','quotedExternalMessageId':'PROVIDER_123'})));local.commit()
+    with local.cursor() as cur:
+      reply_id=flow.record_reply(cur,A,CA,direct,'developer-reply-1','Завтра посмотрю','PROVIDER_123',author='Synthetic Developer',source_external_id='connect:developer-reply-1',fresh_followup=True)
+    assert reply_id
+    local.execute("UPDATE saas_ai_agent_jobs SET state='skipped'");local.commit()
     # Webhook/reply receipt is already stored, but its enqueue was lost. The
     # scheduled reconciler must recover it idempotently without provider POST.
     local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,41,'connect:newer-client-message','incoming',%s,'A newer unrelated question','text',now()+interval '1 minute')",(uuid.uuid4(),A,'connect:'+CA));local.commit()
@@ -296,9 +297,9 @@ def test_group_case_followup_inherits_only_current_admitted_source_fence(case_re
     consultation=flow.prepare(PROFILE,{**data,'destination_conversation_id':direct},'https://crm.test')
     flow.dispatch(PROFILE,consultation['id'],data['request_id'])
     local.execute("UPDATE saas_support_tickets SET conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid",(group,A,data['case_id']))
-    with local.cursor() as cur:reply_id=flow.record_reply(cur,A,CA,direct,'developer-reply-group','We will check the cable','PROVIDER_123',author='Synthetic Developer',source_external_id='connect:developer-reply-group')
     local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,99,'connect:developer-reply-group','incoming',%s,'We will check the cable','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'developer-reply-group','quotedExternalMessageId':'PROVIDER_123'})))
     local.commit()
+    with local.cursor() as cur:reply_id=flow.record_reply(cur,A,CA,direct,'developer-reply-group','We will check the cable','PROVIDER_123',author='Synthetic Developer',source_external_id='connect:developer-reply-group',fresh_followup=True)
     with local.cursor() as cur:assert connect_ai.enqueue_case_developer_followup(cur,A,reply_id,source_external_id='connect:developer-reply-group',quoted_message_id='PROVIDER_123')
     event=local.execute("SELECT payload::jsonb AS payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid AND event_type='developer_case_reply'",(A,))[0]['payload']
     assert event['group_event_key']==admission['group_event_key'] and event['group_revision']==admission['group_revision']
@@ -358,11 +359,12 @@ def test_auto_dispatch_reply_resolution_notification_full_offline_flow(case_read
     local.execute("INSERT INTO saas_ai_group_staff(tenant_id,channel_id,jid,member_id,verified_by) VALUES(%s::uuid,%s::uuid,'15550001111@s.whatsapp.net',11,11) ON CONFLICT DO NOTHING",(A,CA))
     local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,raw) VALUES(%s::uuid,%s::uuid,99,'connect:auto-answer','incoming',%s,'Завтра посмотрю','text',%s::jsonb)",(uuid.uuid4(),A,'connect:'+CA,json.dumps({'id':'auto-answer','participantJid':'15550001111@s.whatsapp.net','quotedExternalMessageId':'PROVIDER_123'})));local.commit()
     with local.cursor() as cur:
-        answer=flow.record_reply(cur,A,CA,TARGET,'auto-answer','Завтра посмотрю','PROVIDER_123',author='Developer',source_external_id='connect:auto-answer',source_actor=11)
+        answer=flow.record_reply(cur,A,CA,TARGET,'auto-answer','Завтра посмотрю','PROVIDER_123',author='Developer',source_external_id='connect:auto-answer',source_actor=11,fresh_followup=True)
     local.commit()
     assert answer and local.execute('SELECT status FROM saas_support_tickets WHERE id=%s::uuid',(receipt['id'],))[0]['status']!='resolved'
     assert local.execute('SELECT draft_state FROM saas_dialog_consultation_replies WHERE id=%s::uuid',(answer,))[0]['draft_state']=='not_requested'
     from tenant_ai_agent_connect import enqueue_case_developer_followup
+    local.execute("UPDATE saas_ai_agent_jobs SET state='skipped'");local.commit()
     with local.cursor() as cur:
         assert enqueue_case_developer_followup(cur,A,answer,source_external_id='connect:auto-answer',quoted_message_id='PROVIDER_123')
     local.commit()

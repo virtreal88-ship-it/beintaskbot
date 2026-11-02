@@ -624,6 +624,17 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
                 if connection is None:
                     conn.commit()
                 return queued
+            # A fresh admitted customer turn in the same open support dialog
+            # extends its private context. Previously published snapshots keep
+            # their immutable explicit selection.
+            cur.execute('''SELECT id::text FROM saas_support_tickets WHERE tenant_id=%s::uuid
+              AND channel_id=%s::uuid AND conversation_id=%s AND status<>'resolved' FOR UPDATE''',
+              (tenant,channel_id,conversation_id))
+            open_case=cur.fetchone()
+            if open_case:
+                from tenant_support_inbox_store import record_case_message_membership
+                record_case_message_membership(cur,tenant,open_case['id'],channel_id,conversation_id,
+                  [str(message_id or event_id)],'customer-followup:'+fingerprint)
             # A prior reconciliation may have left a newly resolved binding
             # paused while company/runtime admission was off. Only this fresh
             # inbound path, after all company, global, agent-mode and schedule
@@ -718,6 +729,15 @@ def enqueue_case_developer_followup(cur,tenant,reply_id,*,source_external_id='',
     message in the same open case and captures the active conversation revision.
     """
     if not quoted_message_id:return False
+    # Every client continuation shares the dialog fence with customer admission,
+    # final send and case edits. Read the route first, then revalidate it below.
+    cur.execute('''SELECT t.channel_id::text,t.conversation_id FROM saas_dialog_consultation_replies r
+      JOIN saas_internal_consultations c ON c.tenant_id=r.tenant_id AND c.id=r.consultation_id
+      JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+      WHERE r.tenant_id=%s::uuid AND r.id=%s::uuid''',(tenant,reply_id))
+    client_route=cur.fetchone()
+    if not client_route:return False
+    lock_dialog(cur,tenant,'connect',client_route['channel_id'],client_route['conversation_id'])
     cur.execute('''SELECT r.id::text AS reply_id,r.source_actor,c.case_id::text,t.channel_id::text AS client_channel,
       t.conversation_id,r.channel_id::text AS reply_channel,r.conversation_id AS reply_conversation,
       (t.assigned_developer_channel_id IS DISTINCT FROM r.channel_id OR t.assigned_developer_conversation_id IS DISTINCT FROM r.conversation_id) AS auto_recipient,
@@ -749,6 +769,7 @@ def enqueue_case_developer_followup(cur,tenant,reply_id,*,source_external_id='',
             AND (COALESCE(newer.happened_at,newer.created_at),newer.id)>(COALESCE(x.happened_at,x.created_at),x.id))
         ORDER BY COALESCE(x.happened_at,x.created_at) DESC,x.id DESC LIMIT 1) m ON TRUE
       WHERE r.id=%s::uuid AND r.source_kind='provider' AND r.message_type='text'
+        AND r.followup_requested_at IS NOT NULL
         AND c.tenant_id=%s::uuid AND t.status<>'resolved'
         AND r.source_external_id=%s
         AND EXISTS(SELECT 1 FROM saas_consultation_group_deliveries d
@@ -806,7 +827,11 @@ def enqueue_case_developer_followup(cur,tenant,reply_id,*,source_external_id='',
       'developer_reply_conversation_id':str(row['reply_conversation']),'developer_quoted_message_id':str(quoted_message_id),
       'developer_expected_assignment_channel_id':str(row.get('assigned_developer_channel_id') or ''),
       'developer_expected_assignment_conversation_id':str(row.get('assigned_developer_conversation_id') or ''),
+      'developer_expected_agent_id':str(row['agent_id']),
+      'developer_expected_assignment_id':str(row.get('assignment_id') or ''),
       'expected_conversation_revision':int(row['dialog_revision'])}
+    from tenant_dialog_consultations import case_developer_followup_current
+    if not case_developer_followup_current(cur,tenant,payload):return False
     # A case follow-up in a client group may reuse only the exact original
     # admitted customer event. Never mint a fresh group fence from a developer
     # reply or resume group authority implicitly.
@@ -824,11 +849,35 @@ def enqueue_case_developer_followup(cur,tenant,reply_id,*,source_external_id='',
       admission_job={'provider':'connect','tenant_id':tenant,'channel_id':str(row['client_channel']),
         'conversation_id':str(row['conversation_id']),'agent_id':str(row['agent_id']),'payload':payload}
       if not job_allowed(cur,admission_job):return False
+    cur.execute('''SELECT j.event_fingerprint,j.state,e.payload,e.event_type FROM saas_ai_agent_jobs j
+      JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
+      WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider='connect'
+        AND j.channel_id=%s AND j.conversation_id=%s FOR UPDATE OF j''',
+      (tenant,row['agent_id'],row['client_channel'],row['conversation_id']))
+    previous=cur.fetchone() or {}
+    # An uncertain client send is a durable hold. A later developer reply is
+    # retained as intent, but cannot silently reopen that same source turn.
+    if previous.get('state')=='unknown':return False
+    # Preserve every exact new developer reference when a burst supersedes a
+    # pending generation. A customer event always owns its existing job.
+    if previous.get('state') in {'queued','processing'} and previous.get('event_type')!='developer_case_reply':return False
+    binding={key:value for key,value in payload.items() if key.startswith('developer_') and key!='developer_case_followup'}
+    binding['case_id']=payload['case_id']
+    prior_payload=previous.get('payload') if isinstance(previous.get('payload'),dict) else {}
+    bindings=prior_payload.get('developer_reply_bindings') or ([{key:value for key,value in prior_payload.items()
+      if key.startswith('developer_') and key not in {'developer_case_followup','developer_reply_bindings'}} | {'case_id':prior_payload.get('case_id')}]
+      if prior_payload.get('developer_reply_message_id') else [])
+    if prior_payload.get('case_id')!=payload['case_id']:bindings=[]
+    payload['developer_reply_bindings']=[*bindings,binding]
     cur.execute('''INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,external_id,event_type,payload,state,available_at)
       VALUES(%s::uuid,%s,'connect',%s,'developer_case_reply',%s::jsonb,'queued',now())
       ON CONFLICT(tenant_id,fingerprint) DO NOTHING RETURNING fingerprint''',
       (tenant,event_fingerprint,'case-developer-reply:'+str(reply_id),_json(payload)))
     if not cur.fetchone():return False
+    if previous.get('state') in {'queued','processing'}:
+        cur.execute('''UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),
+          error_code='developer_replies_coalesced' WHERE tenant_id=%s::uuid AND fingerprint=%s
+            AND state IN ('queued','processing')''',(tenant,previous['event_fingerprint']))
     # Never supersede unrelated customer turns. If a newer customer message
     # arrived, the SELECT above rejects this follow-up and that job owns progress.
     cur.execute('''INSERT INTO saas_ai_agent_jobs
@@ -896,7 +945,7 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
             from tenant_connect_dialog_equivalence import lead_members
             history_leads=lead_members(cur,tenant,channel_id,lead_id)
             cur.execute('''SELECT * FROM (
-              SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,m.created_at,m.id,m.channel,m.raw,m.kommo_lead_id AS _stored_lead_id,
+              SELECT m.external_id,m.direction,m.body,m.message_type,m.media_url,m.happened_at,m.created_at,m.id,m.channel,m.raw,m.author_name,m.kommo_lead_id AS _stored_lead_id,
                 COALESCE(v.state,'') AS voice_state,
                 NOT EXISTS (SELECT 1 FROM saas_connect_conversations c
                   JOIN saas_ai_conversation_state cs ON cs.tenant_id=c.tenant_id
@@ -922,6 +971,7 @@ def history(tenant: str, lead_id: int, channel_id: str) -> list[dict]:
              'has_attachment': bool(row.get('media_url')) or str(row.get('message_type') or 'text') != 'text',
              'happened_at': (row.get('happened_at') or row.get('created_at')).isoformat() if row.get('happened_at') or row.get('created_at') else '',
              'raw': row.get('raw') or {},
+             'author_name':str(row.get('author_name') or ''),
              'transcript': str(row.get('transcript') or ''), 'voice_state': str(row.get('voice_state') or ''),
              'media_evidence': row.get('media_evidence') if isinstance(row.get('media_evidence'),dict) else None,
              'media_evidence_context': str(row.get('media_evidence_context') or '')[:4000],

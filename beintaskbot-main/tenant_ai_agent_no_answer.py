@@ -112,7 +112,10 @@ def prompt_instructions():
 
 def selected_action(policy, signal, *, clarification_count=0, expert_result=None):
     """Resolve a policy action without weakening the configured fallback."""
-    config = validate_policy(policy)
+    # Runtime consumes persisted policy, whose owner binding is server-only.
+    # Public validate_policy deliberately continues rejecting this browser key.
+    runtime_policy={key:value for key,value in policy.items() if key!='auto_case_dispatch_owner_id'} if isinstance(policy,dict) else policy
+    config = validate_policy(runtime_policy)
     if not config['enabled']:
         return {'action': 'continue', 'reason': 'policy_disabled'}
     if signal not in {'missing_knowledge', 'unsupported_evidence', 'conflicting_evidence', 'expert_failed', 'customer_unsolved'}:

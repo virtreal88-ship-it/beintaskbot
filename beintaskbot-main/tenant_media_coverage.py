@@ -75,6 +75,14 @@ class MediaCoverage:
 
     def bind_job(self,job,reservation):
         self.job=copy.deepcopy(job)
+        if (job.get('payload') or {}).get('developer_case_followup') is True:
+            # This continuation revisits the last customer burst after an AI
+            # acknowledgment. Keep that acknowledgment version fenced, while
+            # the latest-input comparison stays anchored to the customer.
+            source=str((job.get('payload') or {}).get('message_id') or '').removeprefix('connect:')
+            matching=[ref for ref in self.refs if str(ref.get('external_id') or '').removeprefix('connect:')==source]
+            if not matching:raise CoverageError(code='media_source_changed')
+            self.refs=tuple([ref for ref in self.refs if ref not in matching]+matching)
         self.reservation={key:reservation.get(key) for key in ('run_id','model','agent_version','conversation_revision','schedule')}
         self.reservation=copy.deepcopy(self.reservation)
 

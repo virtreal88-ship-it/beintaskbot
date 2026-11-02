@@ -205,11 +205,12 @@ _SCHEMA_INDEXES = ['saas_connect_dialog_links_canonical',
 
 
 def _schema(conn) -> None:
-    _ensure_schema(conn)
     with conn.cursor() as cur:
         from tenant_schema_preflight import ready, lock_schema
         if ready(cur, _SCHEMA_COLUMNS, _SCHEMA_INDEXES):
             return
+    _ensure_schema(conn)
+    with conn.cursor() as cur:
         lock_schema(cur)
         if ready(cur, _SCHEMA_COLUMNS, _SCHEMA_INDEXES):
             return
@@ -825,7 +826,7 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
             if not cur.fetchone():
                 return False
             data={k:v for k,v in data.items() if k not in {
-                '_crm_provider_conversation_id','_crm_owner_assertion_id','pilot_test_role_override'}}
+                '_crm_provider_conversation_id','_crm_owner_assertion_id','pilot_test_role_override','_case_followup_intent'}}
             original_conversation = conversation
             conversation, identity_conflict = _canonical_direct_conversation(
                 cur, tenant, channel_id, conversation, data, metadata)
@@ -1057,6 +1058,12 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                     return accepted
             independent_consultation_reply=False
             if not outbound and not ai_origin and data.get('type') in {'text','image','video','audio','voice','document','ptt','voice_message','photo','file'}:
+                if message_inserted:
+                    # The signed fresh webhook admits a possible continuation.
+                    # Keeping it on the original CRM source survives an early
+                    # reply whose outbound quote receipt is reconciled later.
+                    from tenant_dialog_consultations import admit_case_followup_intent
+                    admit_case_followup_intent(cur,tenant,channel_id,conversation,'connect:'+str(data.get('id') or event_id))
                 cur.execute('SAVEPOINT dialog_consultation_reply')
                 try:
                     from tenant_dialog_consultations import record_reply,known_reply

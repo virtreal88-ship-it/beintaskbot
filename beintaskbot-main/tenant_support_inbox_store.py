@@ -254,6 +254,8 @@ def summarize_created(tenant, receipt):
 
 
 _SELECT = '''SELECT t.*,c.contact_name,c.phone,c.lead_id,COALESCE(lm.last_message_at,c.last_message_at) AS last_message_at,ch.name AS channel_name,m.display_name AS assignee_name,
+ (SELECT substring(e.event_key from 8) FROM saas_support_events e WHERE e.tenant_id=t.tenant_id
+   AND e.ticket_id=t.id AND e.event_key LIKE 'manual:%%' ORDER BY e.event_key LIMIT 1) AS create_request_id,
  cs.state AS ai_state,cs.reason AS ai_reason,a.name AS agent_name,cs.agent_id AS agent_id,
  a.enabled AS agent_enabled,s.enabled AS company_enabled,s.emergency_stop AS company_emergency_stop,
  company.status AS tenant_status,j.state AS latest_job_state,j.error_code AS latest_job_error,
@@ -531,6 +533,12 @@ def create(profile, data):
             receipt = create_in_transaction(cur,tenant,data.get('channel_id'),data.get('conversation_id'),
                 data.get('reason') or 'Создано сотрудником','manual:'+request_id,actor=actor,
                 description=data.get('description',''),source='manual',lead_id=data.get('lead_id'),message_ids=data.get('message_ids'))
+            cur.execute('''SELECT assigned_developer_channel_id::text,assigned_developer_conversation_id
+              FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE''',(tenant,receipt['id']))
+            existing=cur.fetchone() or {}
+            if not receipt.get('created') and (str(existing.get('assigned_developer_channel_id') or '')!=str(destination.get('channel_id') or destination['connect_channel_id'])
+                or str(existing.get('assigned_developer_conversation_id') or '')!=str(destination['conversation_id'])):
+                raise TenantLinearError('Обращение уже существует с другим разработчиком. Проверьте его назначение.',409)
             if receipt.get('created'):
                 cur.execute('''UPDATE saas_support_tickets SET assigned_developer_channel_id=%s::uuid,
                   assigned_developer_conversation_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid''',
@@ -539,7 +547,11 @@ def create(profile, data):
               {'developer_confirmed':True,'developer_channel_id':str(destination.get('channel_id') or destination['connect_channel_id'])})
         conn.commit()
     summarize_created(tenant,receipt)
-    return detail(profile,receipt['id'])
+    result=detail(profile,receipt['id'])
+    # This response acknowledges this exact idempotent request, including a
+    # new explicit request that attached to an already open dialog case.
+    result['ticket']['create_request_id']=request_id
+    return result
 
 
 def update(profile, ticket_id, data):
@@ -552,6 +564,12 @@ def update(profile, ticket_id, data):
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
             ticket_id = identifier(ticket_id)
+            cur.execute('SELECT channel_id::text,conversation_id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,ticket_id))
+            source_case=cur.fetchone()
+            if not source_case:raise TenantLinearError('Обращение не найдено.',404)
+            lock_dialog(cur,tenant,'connect',source_case['channel_id'],source_case['conversation_id'])
+            cur.execute('SELECT id FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE',(tenant,ticket_id))
+            cur.fetchone()
             if ('assigned_developer_channel_id' in data) != ('assigned_developer_conversation_id' in data):
                 raise TenantLinearError('Выберите чат разработчика целиком.')
             if 'assigned_developer_channel_id' in data and data['assigned_developer_channel_id'] is not None:
@@ -624,6 +642,7 @@ def complete(profile, data):
             if int(selected.get('lead_id') or 0)!=lead_id:
                 raise TenantLinearError('Диалог изменился. Обновите его.',409)
             channel=str(selected['connect_channel_id']);conversation=str(selected['conversation_id'])
+            lock_dialog(cur,tenant,'connect',channel,conversation)
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('support-complete:'+tenant+':'+channel+':'+conversation,))
             cur.execute('SELECT actor_id,input_hash,ticket_id,channel_id,conversation_id FROM saas_support_completions WHERE tenant_id=%s::uuid AND request_id=%s::uuid FOR UPDATE',(tenant,request_id))
             previous=cur.fetchone()

@@ -224,7 +224,7 @@ def apply_episode_receipt(row,message,receipt,*,authority=None,ref=None,saved=No
         row['_episode_receipt']=projected
 
 
-def prepare(authority, rows):
+def prepare(authority, rows, *, saved_only=False):
     """Process every selected episode attachment before draft generation."""
     from tenant_knowledge_media import collect
     profile={'tenant_id':authority.tenant}
@@ -248,6 +248,11 @@ def prepare(authority, rows):
         message={'text':'','ref':ref['id']}
         if prior:
             receipt={'id':ref['id'],'kind':ref['media_kind'],**apply_reusable(message,prior)}
+        elif saved_only:
+            # A developer continuation reuses the exact admitted evidence. It
+            # must never turn a historical/missing result into new paid work.
+            from tenant_media_coverage import CoverageError
+            raise CoverageError(row)
         else:
             key,token,receipt=_flight(authority,ref)
             if token:
@@ -466,6 +471,7 @@ class AutoExecution(Execution):
     def __init__(self,job,reservation):
         self.job,self.reservation=job,reservation
         payload = job.get('payload') if isinstance(job.get('payload'), dict) else {}
+        self.latest_request=payload.get('developer_case_followup') is True
         if job.get('provider') != 'connect' or payload.get('pilot_developer_followup') or payload.get('pilot_customer_case_reply'):
             self.shared_asr_context = ''
         self.tenant,self.channel,self.conversation,self.lead=str(job['tenant_id']),str(job['channel_id']),str(job['conversation_id']),int(job['lead_id'])

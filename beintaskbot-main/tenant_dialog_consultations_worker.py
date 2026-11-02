@@ -218,6 +218,7 @@ def reconcile():
               JOIN saas_crm_messages m ON m.tenant_id=r.tenant_id AND m.external_id=r.source_external_id
                 AND m.channel='connect:'||r.channel_id::text AND m.direction='incoming'
               WHERE r.source_kind='provider' AND r.message_type='text' AND t.status<>'resolved'
+                AND r.followup_requested_at IS NOT NULL
                 AND r.source_external_id<>'' AND m.raw->>'quotedExternalMessageId' IS NOT NULL
               ORDER BY r.created_at DESC LIMIT 100''')
             for saved in cur.fetchall():

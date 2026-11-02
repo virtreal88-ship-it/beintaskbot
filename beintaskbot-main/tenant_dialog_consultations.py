@@ -18,16 +18,16 @@ from tenant_public_case import _schema as share_schema, _public_text, _MEDIA_TYP
 
 def schema(conn):
     with conn.cursor() as cur:
+        cur.execute('''SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='saas_dialog_consultation_replies'
+          AND column_name='followup_requested_at') AND to_regclass('saas_dialog_developer_markers') IS NOT NULL
+          AND EXISTS(SELECT 1 FROM pg_constraint WHERE conname='saas_public_snapshot_owner_check') AS ready''')
+        if (cur.fetchone() or {}).get('ready'):return
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_dialog_developer_markers(
           tenant_id UUID NOT NULL,channel_id UUID NOT NULL,conversation_id TEXT NOT NULL,
           enabled BOOLEAN NOT NULL DEFAULT FALSE,updated_by BIGINT NOT NULL,updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY(tenant_id,channel_id,conversation_id),
           FOREIGN KEY(tenant_id) REFERENCES saas_tenants(id) ON DELETE CASCADE)''')
     conn.commit()
-    with conn.cursor() as cur:
-        cur.execute('''SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='saas_dialog_consultation_replies'
-          AND column_name='source_external_id') AND EXISTS(SELECT 1 FROM pg_constraint WHERE conname='saas_public_snapshot_owner_check') AS ready''')
-        if (cur.fetchone() or {}).get('ready'):return
     legacy_schema(conn)
     share_schema(conn)
     with conn.cursor() as cur:
@@ -70,6 +70,7 @@ def schema(conn):
         cur.execute('ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS source_actor BIGINT NULL')
         cur.execute("ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS message_type TEXT NOT NULL DEFAULT 'text'")
         cur.execute("ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS source_external_id TEXT NOT NULL DEFAULT ''")
+        cur.execute('ALTER TABLE saas_dialog_consultation_replies ADD COLUMN IF NOT EXISTS followup_requested_at TIMESTAMPTZ NULL')
         cur.execute('CREATE INDEX IF NOT EXISTS saas_dialog_consultation_pending_idx ON saas_dialog_consultation_replies(tenant_id,created_at) WHERE handled_at IS NULL')
     conn.commit()
 
@@ -510,7 +511,7 @@ def _reply_notice(cur,tenant,consultation_id,reply_id,text):
           (uuid.uuid4(),tenant,recipient,'dialog_consultation:'+reply_id,source['customer'],text[:180],deep_link(source,reply_id)))
 
 
-def _store_reply(cur,tenant,consultation_id,channel,conversation,message_id,text,author='',at=None,*,source_kind='provider',source_actor=None,message_type='text',source_external_id='',explicit_resolution=False,request_draft=False,quoted_message_id=''):
+def _store_reply(cur,tenant,consultation_id,channel,conversation,message_id,text,author='',at=None,*,source_kind='provider',source_actor=None,message_type='text',source_external_id='',explicit_resolution=False,request_draft=False,quoted_message_id='',fresh_followup=False):
     cur.execute('''SELECT c.case_id,a.mode AS case_agent_mode FROM saas_internal_consultations c
       LEFT JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
       LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect'
@@ -547,6 +548,11 @@ def _store_reply(cur,tenant,consultation_id,channel,conversation,message_id,text
       ON CONFLICT DO NOTHING RETURNING id''',
       (tenant,ident,consultation_id,channel,conversation,message_id,str(author or '')[:180],text[:4000],at,draft_state,source_kind,source_actor,message_type,str(source_external_id or '')[:240]))
     if not cur.fetchone():return None
+    if consult.get('case_id') and request_draft is True and fresh_followup is True and consult.get('case_agent_mode')=='automatic':
+        # Only a newly observed exact provider reply admits continuation work.
+        # Old records deliberately keep NULL, including after mode changes.
+        cur.execute('''UPDATE saas_dialog_consultation_replies SET followup_requested_at=now()
+          WHERE tenant_id=%s::uuid AND id=%s::uuid''',(tenant,ident))
     cur.execute('''UPDATE saas_internal_consultations SET status='answered',answered_at=COALESCE(%s::timestamptz,now()),
       response=%s,response_kind=%s WHERE tenant_id=%s::uuid AND id=%s::uuid
         AND (answered_at IS NULL OR answered_at<=COALESCE(%s::timestamptz,now()))''',
@@ -579,14 +585,32 @@ def message_identity(external,raw=None):
 
 def _verified_group_reply_author(cur,tenant,channel,conversation,source_external_id,source_actor):
     if type(source_actor) is not int or not str(conversation or '').endswith('@g.us') or not source_external_id:return False
-    cur.execute('''SELECT EXISTS(SELECT 1 FROM saas_ai_group_staff s
+    cur.execute('''SELECT s.member_id FROM saas_ai_group_staff s
       JOIN saas_tenant_members m ON m.tenant_id=s.tenant_id AND m.telegram_id=s.member_id AND m.active=TRUE
+      JOIN saas_connect_conversations v ON v.tenant_id=s.tenant_id AND v.connect_channel_id=s.channel_id AND v.conversation_id=%s
       JOIN saas_crm_messages r ON r.tenant_id=s.tenant_id AND r.external_id=%s
-        AND r.channel='connect:'||s.channel_id::text AND r.direction='incoming'
+        AND r.kommo_lead_id=v.lead_id AND r.channel='connect:'||s.channel_id::text AND r.direction='incoming'
         AND s.jid=ANY(ARRAY[r.raw->>'participantJid',r.raw->>'participantAlt',r.raw->>'senderJid']::text[])
-      WHERE s.tenant_id=%s::uuid AND s.channel_id=%s::uuid AND s.member_id=%s) AS allowed''',
-      (str(source_external_id),tenant,channel,source_actor))
-    return bool((cur.fetchone() or {}).get('allowed'))
+      WHERE s.tenant_id=%s::uuid AND s.channel_id=%s::uuid AND s.member_id=%s
+      FOR SHARE OF s,m,r,v''',
+      (conversation,str(source_external_id),tenant,channel,source_actor))
+    return bool(cur.fetchone())
+
+
+def verified_group_reply_actor(cur,tenant,channel,conversation,source_external_id):
+    """Recover only a unique current staff actor from stored provider metadata."""
+    if not str(conversation or '').endswith('@g.us') or not source_external_id:return None
+    cur.execute('''SELECT DISTINCT s.member_id FROM saas_ai_group_staff s
+      JOIN saas_tenant_members m ON m.tenant_id=s.tenant_id AND m.telegram_id=s.member_id AND m.active=TRUE
+      JOIN saas_connect_conversations v ON v.tenant_id=s.tenant_id AND v.connect_channel_id=s.channel_id
+        AND v.conversation_id=%s
+      JOIN saas_crm_messages r ON r.tenant_id=s.tenant_id AND r.kommo_lead_id=v.lead_id
+        AND r.external_id=%s AND r.channel='connect:'||s.channel_id::text AND r.direction='incoming'
+        AND s.jid=ANY(ARRAY[r.raw->>'participantJid',r.raw->>'participantAlt',r.raw->>'senderJid']::text[])
+      WHERE s.tenant_id=%s::uuid AND s.channel_id=%s::uuid LIMIT 2''',
+      (conversation,source_external_id,tenant,channel))
+    rows=cur.fetchall()
+    return int(rows[0]['member_id']) if len(rows)==1 else None
 
 
 def _reply_kind(value):
@@ -594,12 +618,45 @@ def _reply_kind(value):
     return {'voice':'audio','voice_message':'audio','ptt':'audio','photo':'image','file':'document'}.get(kind,kind)
 
 
-def record_reply(cur,tenant,channel,conversation,message_id,text,quoted=None,author='',at=None,*,message_type='text',source_external_id='',source_actor=None):
+def admit_case_followup_intent(cur,tenant,channel,conversation,source_external_id):
+    """Stamp a fresh signed ingress with its current automatic case authority.
+
+    The caller invokes this only after inserting a new verified provider source.
+    A late quote receipt can recover this admission, never recreate it later.
+    """
+    cur.execute('''SELECT t.id::text AS case_id,cs.agent_id::text AS agent_id,
+        COALESCE(cs.agent_assignment_id::text,'') AS assignment_id,a.version,tn.owner_telegram_id
+      FROM saas_consultation_group_deliveries d
+      JOIN saas_internal_consultations c ON c.tenant_id=d.tenant_id AND c.id=d.consultation_id
+      JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id AND t.status<>'resolved'
+      JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect'
+        AND cs.channel_id=t.channel_id::text AND cs.conversation_id=t.conversation_id AND cs.state='active'
+      JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id AND a.enabled=TRUE AND a.mode='automatic'
+      JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id AND s.enabled=TRUE AND s.auto_send_enabled=TRUE AND s.emergency_stop=FALSE
+      JOIN saas_tenants tn ON tn.id=t.tenant_id
+      WHERE d.tenant_id=%s::uuid AND d.channel_id=%s::uuid AND d.conversation_id=%s
+        AND d.state IN ('sending','pending','unknown','sent')''',(tenant,channel,conversation))
+    admitted={str(row['case_id']):{'agent_id':row['agent_id'],'assignment_id':row['assignment_id'],
+      'version':row['version'],'owner_id':row['owner_telegram_id']} for row in cur.fetchall()}
+    if admitted:
+        cur.execute('''UPDATE saas_crm_messages SET raw=jsonb_set(raw,'{_case_followup_intent}',%s::jsonb)
+          WHERE tenant_id=%s::uuid AND external_id=%s AND channel=%s AND direction='incoming' ''',
+          (_json(admitted),tenant,source_external_id,'connect:'+str(channel)))
+    return admitted
+
+
+def record_reply(cur,tenant,channel,conversation,message_id,text,quoted=None,author='',at=None,*,message_type='text',source_external_id='',source_actor=None,fresh_followup=False):
     """Correlate only signed provider evidence, including legacy CASE replies."""
     kind=_reply_kind(message_type)
     if kind not in {'text',*_MEDIA_TYPES} or not isinstance(text,str) or not isinstance(message_id,str) or not message_id or len(message_id)>200:return None
     if kind=='text' and not text.strip():return None
     source_external_id=source_external_id or 'connect:'+message_id
+    if source_actor is None:
+        source_actor=verified_group_reply_actor(cur,tenant,channel,conversation,source_external_id)
+    cur.execute('''SELECT raw->'_case_followup_intent' AS intent FROM saas_crm_messages
+      WHERE tenant_id=%s::uuid AND external_id=%s AND channel='connect:'||%s::uuid::text AND direction='incoming' ''',
+      (tenant,source_external_id,channel))
+    saved_intent=cur.fetchone() or {}
     message_id=message_identity(source_external_id,{'id':message_id})
     cur.execute("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='saas_dialog_consultation_replies' AND column_name='source_external_id') AS ready")
     if not (cur.fetchone() or {}).get('ready'):return None
@@ -614,6 +671,18 @@ def record_reply(cur,tenant,channel,conversation,message_id,text,quoted=None,aut
       (quoted,tenant,channel,conversation,quoted,marker));rows=cur.fetchall()
     if len(rows)!=1:return None
     item=rows[0]
+    if fresh_followup is not True and isinstance(saved_intent.get('intent'),dict):
+        cur.execute('''SELECT t.id::text AS case_id,cs.agent_id::text AS agent_id,
+            COALESCE(cs.agent_assignment_id::text,'') AS assignment_id,a.version,tn.owner_telegram_id
+          FROM saas_internal_consultations c JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+          JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect'
+            AND cs.channel_id=t.channel_id::text AND cs.conversation_id=t.conversation_id
+          JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
+          JOIN saas_tenants tn ON tn.id=t.tenant_id WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid''',(tenant,item['id']))
+        current=cur.fetchone() or {}
+        admission=saved_intent['intent'].get(str(current.get('case_id') or ''))
+        fresh_followup=isinstance(admission,dict) and admission=={'agent_id':current.get('agent_id'),
+          'assignment_id':current.get('assignment_id'),'version':current.get('version'),'owner_id':current.get('owner_telegram_id')}
     if quoted and marker and (not item['quote_match'] or item['id']!=marker):return None
     assigned_developer=False
     if item.get('id') and quoted and item['quote_match']:
@@ -652,16 +721,19 @@ def record_reply(cur,tenant,channel,conversation,message_id,text,quoted=None,aut
     return _store_reply(cur,tenant,item['id'],channel,conversation,message_id,body,author,at,
       source_actor=source_actor if type(source_actor) is int else None,
       message_type=kind,source_external_id=source_external_id or 'connect:'+message_id,
-      explicit_resolution=resolution,request_draft=bool(quoted and item.get('quote_match')),quoted_message_id=quoted or '')
+      explicit_resolution=resolution,request_draft=bool(quoted and item.get('quote_match')),quoted_message_id=quoted or '',fresh_followup=fresh_followup)
 
 
-def active_case_developer_context(job,source_external_id,limit=3):
+def active_case_developer_context(job,source_external_id,limit=10):
     """Return developer replies only for the unique open case containing this message."""
     if str(job.get('provider') or '')!='connect':return []
     tenant=str(job.get('tenant_id') or '');channel=str(job.get('channel_id') or '');conversation=str(job.get('conversation_id') or '')
+    try:uuid.UUID(tenant);uuid.UUID(channel)
+    except (ValueError,TypeError):return []
     source=str(source_external_id or '').strip()
     payload=job.get('payload') if isinstance(job.get('payload'),dict) else {}
     exact_reply=str(payload.get('developer_reply_message_id') or '')
+    exact_replies=[str(item.get('developer_reply_message_id') or '') for item in payload.get('developer_reply_bindings',[]) if isinstance(item,dict)] or ([exact_reply] if exact_reply else [])
     exact_case=str(payload.get('case_id') or '')
     if job.get('developer_case_followup') or payload.get('developer_case_followup'):
         if not exact_reply or not exact_case:return []
@@ -684,9 +756,9 @@ def active_case_developer_context(job,source_external_id,limit=3):
               JOIN saas_dialog_consultation_replies r ON r.tenant_id=c.tenant_id AND r.consultation_id=c.id
               WHERE t.tenant_id=%s::uuid AND t.channel_id=%s::uuid AND t.conversation_id=%s
                 AND t.id=%s::uuid AND t.status<>'resolved' AND c.status='answered' AND r.source_kind='provider'
-                AND (%s::uuid IS NULL OR r.id=%s::uuid)
+                AND (%s::uuid[] IS NULL OR r.id=ANY(%s::uuid[]))
               ORDER BY r.happened_at DESC,r.created_at DESC,r.id DESC LIMIT %s''',
-              (tenant,channel,conversation,cases[0]['case_id'],exact_reply or None,exact_reply or None,max(1,min(int(limit),10))))
+              (tenant,channel,conversation,cases[0]['case_id'],exact_replies or None,exact_replies or None,max(len(exact_replies),max(1,min(int(limit),100)))))
             rows=cur.fetchall()
     return [{'source_id':'case-reply:'+str(row.get('reply_id') or ''),
              'title':'Verified developer reply',
@@ -700,6 +772,11 @@ def active_case_developer_context(job,source_external_id,limit=3):
 def case_developer_followup_current(cur,tenant,payload):
     """Fail closed unless the exact queued provider reply still has authority."""
     if not isinstance(payload,dict):return False
+    bindings=payload.get('developer_reply_bindings')
+    if bindings is not None:
+        if not isinstance(bindings,list) or not bindings:return False
+        if any(not isinstance(item,dict) or item.get('case_id')!=payload.get('case_id') for item in bindings):return False
+        return all(case_developer_followup_current(cur,tenant,{**item,'developer_reply_bindings':None}) for item in bindings)
     try:
         case_id=str(uuid.UUID(str(payload.get('case_id') or '')))
         reply_id=str(uuid.UUID(str(payload.get('developer_reply_message_id') or '')))
@@ -711,7 +788,9 @@ def case_developer_followup_current(cur,tenant,payload):
     cur.execute('''SELECT t.status,t.assigned_developer_channel_id::text AS assigned_channel,
         t.assigned_developer_conversation_id,
         cs.agent_id::text AS agent_id,a.mode,a.enabled,a.response_policy,
-        s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop
+        s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop,
+        a.scopes,tn.status AS tenant_status,tn.owner_telegram_id,r.source_actor,r.source_external_id,
+        t.channel_id::text AS client_channel,cs.agent_assignment_id::text AS assignment_id
       FROM saas_support_tickets t
       JOIN saas_internal_consultations c ON c.tenant_id=t.tenant_id AND c.case_id=t.id
       JOIN saas_dialog_consultation_replies r ON r.tenant_id=c.tenant_id AND r.consultation_id=c.id
@@ -719,6 +798,11 @@ def case_developer_followup_current(cur,tenant,payload):
         AND cs.channel_id=t.channel_id::text AND cs.conversation_id=t.conversation_id
       JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
       JOIN saas_ai_agent_settings s ON s.tenant_id=a.tenant_id
+      JOIN saas_tenants tn ON tn.id=t.tenant_id
+      JOIN saas_connect_channels ch ON ch.tenant_id=r.tenant_id AND ch.connect_channel_id=r.channel_id AND ch.active=TRUE
+      JOIN saas_connect_channels source_ch ON source_ch.tenant_id=t.tenant_id AND source_ch.connect_channel_id=t.channel_id AND source_ch.active=TRUE
+      JOIN saas_dialog_developer_markers marker ON marker.tenant_id=r.tenant_id AND marker.channel_id=r.channel_id
+        AND marker.conversation_id=r.conversation_id AND marker.enabled=TRUE
       WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.status<>'resolved'
         AND r.id=%s::uuid AND r.source_kind='provider' AND r.channel_id=%s::uuid
         AND r.conversation_id=%s AND c.status='answered'
@@ -728,9 +812,13 @@ def case_developer_followup_current(cur,tenant,payload):
         AND EXISTS(SELECT 1 FROM saas_crm_messages rm WHERE rm.tenant_id=r.tenant_id
           AND rm.external_id=r.source_external_id AND rm.channel='connect:'||r.channel_id::text
           AND rm.direction='incoming' AND rm.raw->>'quotedExternalMessageId'=%s)
-      LIMIT 1''',(tenant,case_id,reply_id,channel,conversation,channel,conversation,quote,quote))
+      LIMIT 1 FOR UPDATE OF t,cs FOR SHARE OF a,s,tn,ch,source_ch,marker''',(tenant,case_id,reply_id,channel,conversation,channel,conversation,quote,quote))
     row=cur.fetchone()
     if not row:return False
+    if str(conversation).endswith('@g.us') and not _verified_group_reply_author(
+        cur,tenant,channel,conversation,row.get('source_external_id'),row.get('source_actor')):return False
+    if payload.get('developer_expected_agent_id') and str(row.get('agent_id') or '')!=str(payload['developer_expected_agent_id']):return False
+    if 'developer_expected_assignment_id' in payload and str(row.get('assignment_id') or '')!=str(payload['developer_expected_assignment_id'] or ''):return False
     assigned=(str(row.get('assigned_channel') or '')==channel and
               str(row.get('assigned_developer_conversation_id') or '')==conversation and
               str(payload.get('developer_expected_assignment_channel_id') or '')==channel and
@@ -741,6 +829,19 @@ def case_developer_followup_current(cur,tenant,payload):
         or str(row.get('assigned_developer_conversation_id') or '')!=str(payload.get('developer_expected_assignment_conversation_id') or '')):
         return False
     policy=row.get('response_policy') if isinstance(row.get('response_policy'),dict) else {}
+    if row.get('mode')=='automatic':
+        from tenant_ai_agent_connect import scope_matches
+        if (row.get('tenant_status') not in {'active','trial'} or not scope_matches(row.get('scopes'),row['client_channel'])):return False
+        # Automatic fanout belongs to the current owner, including after an
+        # ownership or permission change. Browser JSON is never authority.
+        if policy.get('auto_case_dispatch_enabled') is True:
+            owner=policy.get('auto_case_dispatch_owner_id')
+            if type(owner) is not int or owner!=row.get('owner_telegram_id'):return False
+            try:
+                verified_tenant,_,owner_policy=access(cur,{'tenant_id':tenant,'telegram_id':owner},'dialogs')
+                if str(verified_tenant)!=str(tenant):return False
+                developer_target(cur,tenant,owner_policy,channel,conversation)
+            except TenantLinearError:return False
     auto=(row.get('mode')=='automatic' and row.get('enabled') is True
       and row.get('company_enabled') is True and row.get('auto_send_enabled') is True
       and row.get('emergency_stop') is not True and policy.get('auto_case_dispatch_enabled') is True
