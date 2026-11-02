@@ -12,7 +12,7 @@
   const notify = options.onChange || (() => {});
   const maxBytes = options.maxBytes || 5 * 1024 * 1024;
   const maxMs = options.maxMs || 120_000;
-  const formats = ['audio/ogg;codecs=opus', 'audio/webm;codecs=opus', 'audio/mp4'];
+  const formats = ['audio/ogg;codecs=opus', 'audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
   let state = 'idle', error = '', stream = null, recorder = null, timer = null;
   let generation = 0, chunks = [], bytes = 0, blob = null, started = 0, durationMs = 0;
 
