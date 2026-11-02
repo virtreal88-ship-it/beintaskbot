@@ -19,9 +19,31 @@ import tenant_knowledge_media as media_core
 import tenant_chat_ai_provider as provider
 import tenant_ai_spend_budget as spend_budget
 
+def isolated_flow_connector(db,original_connect,forbidden_connection):
+    from psycopg.conninfo import conninfo_to_dict
+    provided_dsn=getattr(db,'dsn',None)
+    if provided_dsn:
+        import re
+        supplied=conninfo_to_dict(provided_dsn)
+        assert supplied.get('host') in {'127.0.0.1','localhost','::1'}
+        assert not supplied.get('service')
+        assert supplied.get('hostaddr') in {None,'127.0.0.1','::1'}
+        assert re.fullmatch(r'test_channel_[0-9a-f]{32}',supplied.get('dbname',''))
+    def isolated_connect(conninfo='',*args,**kwargs):
+        if provided_dsn and conninfo==provided_dsn and not args and set(kwargs)<={'row_factory','autocommit'}:
+            return original_connect(conninfo,*args,**kwargs)
+        forbidden_connection()  # Never record credentials/connection arguments.
+        raise AssertionError('External database connections forbidden in isolated flow')
+    return isolated_connect
+
+
 @pytest.fixture
 def flow(db, monkeypatch):
     from cryptography.fernet import Fernet
+    monkeypatch.setenv('DATABASE_URL','postgresql://invalid.invalid/disabled')
+    import psycopg
+    forbidden_connection=Mock()
+    monkeypatch.setattr(psycopg,'connect',isolated_flow_connector(db,psycopg.connect,forbidden_connection))
     cipher=Fernet(Fernet.generate_key())
     for module in (runs,voice,transport,episode_media,evidence,images,spend_budget):
         monkeypatch.setattr(module,'_connect',lambda:db)
@@ -81,7 +103,8 @@ def flow(db, monkeypatch):
         job=runs.claim_next()
         if job: asyncio.run(worker.process_connect_one(job,Mock()))
         return job
-    return dict(db=db,inbound=inbound,process=process,speech=speech,generate=generation,send=send,summary=summary_call,observation=observation)
+    yield dict(db=db,inbound=inbound,process=process,speech=speech,generate=generation,send=send,summary=summary_call,observation=observation)
+    forbidden_connection.assert_not_called()
 
 def state(db):
     result=db.execute("SELECT state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect'",(A,))[0]['state']
@@ -183,6 +206,8 @@ def test_real_sql_text_voice_text_and_central_key(flow,transcript):
 def test_pilot_send_requires_fresh_exact_kwid_and_separate_owner_confirmation(flow,monkeypatch):
     from tenant_ai_pilot import _snapshot
     f=flow;db=f['db']
+    # Pilot's lazy connection import must use the same isolated fixture DB.
+    monkeypatch.setattr('tenant_platform._connect',lambda:db)
     monkeypatch.setenv('AI_AGENTS_PILOT_SCOPE_ENABLED','true')
     monkeypatch.setenv('AI_AGENTS_PILOT_TENANT_ID',A)
     monkeypatch.setenv('AI_AGENTS_PILOT_CHANNEL_ID',CA)
@@ -406,7 +431,8 @@ def test_restart_after_paid_voice_claim_does_not_repeat_call(flow):
         voice._claim(job,reservation,source,'test-transcriber')
     f['inbound']();f['process']()
     f['speech'].assert_not_called()
-    f['send'].assert_called_once()
+    # The earlier unknown voice is still required in this current burst.
+    f['generate'].assert_not_called();f['send'].assert_not_called()
 
 @pytest.mark.parametrize('mode,company_send',[('manual',True),('automatic',False)])
 def test_manual_mode_and_company_send_gate_never_send(flow,mode,company_send):
@@ -530,3 +556,31 @@ def test_same_id_media_edit_keeps_paid_old_receipt_but_never_sends_stale_reply(f
     assert 'Visible test observation' in str(saved[0]['result'])
     assert not db.execute("SELECT 1 FROM saas_episode_media_flights WHERE tenant_id=%s::uuid AND external_id=%s AND state='running'",(A,'connect:'+mid))
     db.commit()
+
+
+@pytest.mark.parametrize('mode',['exact','alternate','override','no_dsn'])
+def test_flow_connector_only_allows_explicit_disposable_database(mode):
+    from types import SimpleNamespace
+    dsn='host=127.0.0.1 port=55439 dbname=test_channel_'+'a'*32
+    real=Mock(return_value='isolated-connection');forbidden=Mock()
+    db=SimpleNamespace(dsn=dsn) if mode!='no_dsn' else SimpleNamespace()
+    connect=isolated_flow_connector(db,real,forbidden)
+    supplied=dsn if mode!='alternate' else dsn+' host=example.invalid'
+    kwargs={'host':'example.invalid'} if mode=='override' else {'row_factory':object()}
+    if mode=='exact':
+        assert connect(supplied,**kwargs)=='isolated-connection'
+        real.assert_called_once();forbidden.assert_not_called()
+    else:
+        with pytest.raises(AssertionError,match='External database'):connect(supplied,**kwargs)
+        real.assert_not_called();forbidden.assert_called_once_with()
+
+
+@pytest.mark.parametrize('suffix',[
+    ' hostaddr=203.0.113.1',' service=untrusted',' host=example.invalid',' dbname=not_disposable',
+])
+def test_flow_connector_rejects_redirecting_or_non_disposable_dsn(suffix):
+    from types import SimpleNamespace
+    real=Mock();denied=Mock()
+    dsn='host=127.0.0.1 dbname=test_channel_'+'a'*32+suffix
+    with pytest.raises(AssertionError):isolated_flow_connector(SimpleNamespace(dsn=dsn),real,denied)
+    real.assert_not_called();denied.assert_not_called()

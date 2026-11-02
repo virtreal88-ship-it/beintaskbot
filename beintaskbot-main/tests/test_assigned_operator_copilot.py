@@ -170,6 +170,24 @@ def test_manual_reply_processes_current_media_then_auto_reuses_same_exact_receip
     from tenant_ai_agent_run_store import knowledge_context as actual_knowledge
     retrieve=Mock(side_effect=actual_knowledge)
     monkeypatch.setattr('tenant_ai_agent_run_store.knowledge_context',retrieve)
+    if kind=='video':
+        # The current adapter is sampled/partial: full reply coverage stops
+        # before any paid preparation, even for an explicit fresh request.
+        original_source=db.execute('SELECT body,raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',(A,source))
+        db.execute("INSERT INTO saas_ai_spend_reservations(tenant_id,id,call_key,model,kind,reserved_microusd,state) VALUES(%s::uuid,%s::uuid,'synthetic-old-video-unknown','gpt-4o-mini','episode_media',2,'unknown')",(A,str(uuid.uuid4())))
+        original_holds=db.execute('SELECT id,state,reserved_microusd,actual_microusd FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid ORDER BY id',(A,));db.commit()
+        with pytest.raises(TenantLinearError,match='video_full_coverage_unavailable'):copilot.run(PROFILE,data)
+        with pytest.raises(TenantLinearError):copilot.run(PROFILE,data)
+        data['request_id']=str(uuid.uuid4())
+        with pytest.raises(TenantLinearError,match='video_full_coverage_unavailable'):copilot.run(PROFILE,data)
+        for provider_mock in (generated,visual,speech,video_speech,retrieve):provider_mock.assert_not_called()
+        download.assert_not_awaited()
+        assert db.execute('SELECT body,raw FROM saas_crm_messages WHERE tenant_id=%s::uuid AND external_id=%s',(A,source))==original_source
+        assert db.execute('SELECT id,state,reserved_microusd,actual_microusd FROM saas_ai_spend_reservations WHERE tenant_id=%s::uuid ORDER BY id',(A,))==original_holds
+        if db.execute("SELECT to_regclass('public.saas_episode_media_flights') AS relation")[0]['relation']:
+            assert db.execute('SELECT count(*) AS n FROM saas_episode_media_flights WHERE tenant_id=%s::uuid AND external_id=%s',(A,source))[0]['n']==0
+        assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
+        return
     if interrupt=='answered':
         db.execute('''INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,happened_at)
           VALUES(%s::uuid,%s::uuid,41,'employee-after-media',%s,'outgoing','Earlier employee answer',now()+(%s * interval '1 second'))''',

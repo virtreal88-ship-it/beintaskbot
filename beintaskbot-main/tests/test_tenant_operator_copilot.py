@@ -88,6 +88,8 @@ def test_reply_context_resolves_open_customer_question_instead_of_closing_conver
     monkeypatch.setattr(copilot,'assert_route',Mock(return_value={'lead_id':17}))
     monkeypatch.setattr(copilot,'_fernet',lambda:SimpleNamespace(decrypt=lambda _:json.dumps({'tenant_id':tenant,'provider':'chat_ai','api_key':'test-key'}).encode()))
     monkeypatch.setattr(copilot,'_finish',Mock())
+    # This unit fixture mocks SQL; actual manifest publication is covered by SQL integration tests.
+    monkeypatch.setattr(copilot.MediaCoverage,'validate',Mock())
     generated=Mock(return_value=('Hazır olub-olmadığını indi yoxlayıram; təsdiqlənmiş məlumatı sizə bildirəcəyəm.',{'total_tokens':20}))
     monkeypatch.setattr(copilot,'generate',generated)
 
@@ -143,6 +145,7 @@ def test_copilot_uses_assigned_model_and_never_sends_a_message(monkeypatch):
     monkeypatch.setattr(copilot,'assert_route',Mock(return_value={'lead_id':17}))
     monkeypatch.setattr(copilot,'_fernet',lambda:SimpleNamespace(decrypt=lambda _:json.dumps({'tenant_id':tenant,'provider':'chat_ai','api_key':'test-key'}).encode()))
     finish=Mock();monkeypatch.setattr(copilot,'_finish',finish)
+    monkeypatch.setattr(copilot.MediaCoverage,'validate',Mock())
     generate=Mock(return_value=('Salam, kömək edək.',{'total_tokens':12}));monkeypatch.setattr(copilot,'generate',generate)
     result=copilot.run({'tenant_id':tenant,'telegram_id':actor},request())
     assert result['text']=='Salam, kömək edək.'
@@ -170,6 +173,8 @@ def test_provider_failure_logs_only_allowlisted_metadata(monkeypatch):
     monkeypatch.setattr(copilot,'assert_route',Mock(return_value={'lead_id':17}))
     monkeypatch.setattr(copilot,'_fernet',lambda:SimpleNamespace(decrypt=lambda _:json.dumps({'tenant_id':tenant,'provider':'chat_ai','api_key':'private-secret'}).encode()))
     monkeypatch.setattr(copilot,'_finish',Mock())
+    # This unit fixture mocks SQL; actual manifest publication is covered by SQL integration tests.
+    monkeypatch.setattr(copilot.MediaCoverage,'validate',Mock())
     monkeypatch.setattr(copilot,'generate',Mock(side_effect=ChatAIProviderError(404,'model_access')))
     warning=Mock();monkeypatch.setattr(copilot._LOGGER,'warning',warning)
     with pytest.raises(TenantLinearError):copilot.run({'tenant_id':tenant,'telegram_id':actor},request())
@@ -294,6 +299,8 @@ def test_reply_does_not_reanalyse_historical_voice_photo_after_employee_reply(mo
     monkeypatch.setattr('tenant_connect_images.supports_images',lambda _model:True)
     monkeypatch.setattr('tenant_connect_images.signature',lambda _data,_mime:True)
     monkeypatch.setattr(copilot,'_finish',Mock())
+    # This unit fixture mocks SQL; actual manifest publication is covered by SQL integration tests.
+    monkeypatch.setattr(copilot.MediaCoverage,'validate',Mock())
     generated=Mock(return_value=('Sifarişi indi yoxlayıram və təsdiqlənmiş məlumatı sizə bildirəcəyəm.',{'total_tokens':40}))
     monkeypatch.setattr(copilot,'generate',generated)
     result=copilot.run({'tenant_id':tenant,'telegram_id':actor},command)
