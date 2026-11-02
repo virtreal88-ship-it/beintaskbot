@@ -4,7 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from tenant_platform import _connect
-from tenant_internal_consultations import schema
+from tenant_consultation_schema import require_schema
 from tenant_member_store import member
 from tenant_notifications import notification_channels
 from tenant_policy import TenantPolicy
@@ -49,7 +49,7 @@ def _consultation_is_actionable(item: dict) -> bool:
     may be notified; the tenant predicate prevents cross-company reads.
     """
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'internal')
         with conn.cursor() as cur:
             cur.execute('''SELECT 1 FROM saas_internal_consultations
               WHERE tenant_id=%s::uuid AND id=%s::uuid
@@ -76,7 +76,7 @@ def claim_delivery():
     if not _hours():
         return None
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'internal')
         with conn.cursor() as cur:
             cur.execute("UPDATE saas_consultation_telegram_deliveries SET status='unknown',updated_at=now() WHERE status='sending' AND updated_at<now()-interval '5 minutes'")
             cur.execute('''SELECT d.tenant_id,d.consultation_id,d.recipient_id,d.chat_id,d.binding_verified_at,c.status
@@ -96,7 +96,7 @@ def claim_delivery():
 def skip_delivery(item: dict) -> None:
     """Terminally cancel an invalid recipient; never turn it into a retry."""
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'internal')
         with conn.cursor() as cur:
             cur.execute('''UPDATE saas_consultation_telegram_deliveries SET status='skipped',updated_at=now()
               WHERE tenant_id=%s AND consultation_id=%s AND status='sending' ''', (item['tenant_id'], item['consultation_id']))
@@ -108,7 +108,7 @@ def skip_delivery(item: dict) -> None:
 def defer_delivery(item: dict) -> None:
     """Release an in-flight row after a clock boundary without losing it."""
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'internal')
         with conn.cursor() as cur:
             cur.execute('''UPDATE saas_consultation_telegram_deliveries SET status='pending',updated_at=now()
               WHERE tenant_id=%s AND consultation_id=%s AND status='sending' ''',
@@ -120,7 +120,7 @@ def finish_delivery(item, status, message_id=None):
     if status not in {'delivered', 'unknown'}:
         raise ValueError('Invalid consultation delivery state')
     with _connect() as conn:
-        schema(conn)
+        require_schema(conn,'internal')
         with conn.cursor() as cur:
             cur.execute('''UPDATE saas_consultation_telegram_deliveries SET status=%s,message_id=%s,updated_at=now()
               WHERE tenant_id=%s AND consultation_id=%s AND status='sending' ''', (status, message_id, item['tenant_id'], item['consultation_id']))
