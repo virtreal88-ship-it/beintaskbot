@@ -105,6 +105,9 @@ def dispatch_auto_case(item_id):
                 if not case or case['status']=='resolved':raise TenantLinearError('case_no_longer_open',409)
                 if not scope_matches(cfg.get('scopes') or [],str(case['channel_id'])):
                     raise TenantLinearError('automatic_dispatch_agent_scope_changed',409)
+                if not flow.auto_case_dispatch_source_current(cur,tenant,case['channel_id'],case['conversation_id'],
+                    str(item['agent_id']),str(item['event_key'])):
+                    raise TenantLinearError('source_dialog_state_or_assignment_changed',409)
                 cur.execute('''SELECT state,revision,agent_id::text AS agent_id,agent_assignment_id::text AS assignment_id
                   FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect'
                     AND channel_id=%s AND conversation_id=%s FOR SHARE''',(tenant,case['channel_id'],case['conversation_id']))
@@ -112,9 +115,6 @@ def dispatch_auto_case(item_id):
                 if (source_state.get('state')!='active' or str(source_state.get('agent_id') or '')!=str(item['agent_id'])
                     or item.get('source_revision') is None or int(source_state.get('revision') or 0)!=int(item['source_revision'])
                     or str(source_state.get('assignment_id') or '')!=str(item.get('source_assignment_id') or '')):
-                    raise TenantLinearError('source_dialog_state_or_assignment_changed',409)
-                if not flow.auto_case_dispatch_source_current(cur,tenant,case['channel_id'],case['conversation_id'],
-                    str(item['agent_id']),str(item['event_key'])):
                     raise TenantLinearError('source_dialog_state_or_assignment_changed',409)
                 from tenant_dialog_consultations import access,developer_target
                 tenant_check,_actor,dialogs_policy=access(cur,profile,'dialogs')

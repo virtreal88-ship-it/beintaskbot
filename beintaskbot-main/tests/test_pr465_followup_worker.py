@@ -511,3 +511,129 @@ def test_concurrent_initial_fanout_keeps_shared_owner_reads_without_lock_upgrade
     assert sorted(calls.values())==[2,2]
     assert f['developer_sends'].call_count==2
     assert {row['state'] for row in local.execute('SELECT state FROM saas_ai_case_developer_dispatches WHERE tenant_id=%s::uuid',(A,))}=={'sent'}
+
+
+def test_cross_channel_initial_groups_take_physical_group_fences_in_one_order(case_flow,monkeypatch):
+    import hashlib
+    import threading
+    import psycopg
+    from psycopg.rows import dict_row
+    from test_tenant_support_inbox import CB
+    import tenant_ai_group_coordination as groups
+    f=case_flow;local=f['db'];other_agent=str(uuid.UUID(int=4465))
+    low,high='120363400000004461@g.us','120363400000004469@g.us'
+    local.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'Developer histories')",(A,CB))
+    scopes=json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}])
+    local.execute("INSERT INTO saas_ai_agents(tenant_id,id,name,created_by,enabled,mode,scopes) VALUES(%s::uuid,%s::uuid,'Other group primary',11,TRUE,'automatic',%s::jsonb)",(A,other_agent,scopes))
+    items=[]
+    for index,(source_group,destination_group,agent) in enumerate(((high,low,AGENT),(low,high,other_agent))):
+        policy=json.dumps({'auto_case_dispatch_enabled':True,'auto_case_dispatch_owner_id':11,'developer_destinations':[{'channel_id':CB,'conversation_id':destination_group}]})
+        local.execute('UPDATE saas_ai_agents SET scopes=%s::jsonb,response_policy=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',(scopes,policy,A,agent))
+        for channel,lead in ((CA,44650+index),(CB,44660+index)):
+            local.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,conversation_kind,contact_name) VALUES(%s::uuid,%s::uuid,%s,%s,'group','Physical group')",(A,channel,source_group,lead))
+        local.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,state,assignments) VALUES(%s::uuid,%s,'active',%s::jsonb)",(A,source_group,json.dumps([{'agent_id':agent,'channel_id':CA,'priority':0}])))
+        local.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,agent_id,state) VALUES(%s::uuid,'connect',%s,%s,%s::uuid,'active')",(A,CA,source_group,agent))
+        source=str(uuid.uuid4());fingerprint=hashlib.sha256(('connect:'+source).encode()).hexdigest()
+        local.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,happened_at) VALUES(%s::uuid,%s::uuid,%s,%s,'incoming',%s,'Physical group issue',clock_timestamp())",(uuid.uuid4(),A,44650+index,'connect:'+source,'connect:'+CA))
+        with local.cursor() as cur:
+            admitted=groups.admit(cur,A,CA,source_group,source,source);assert admitted
+            payload={'channel_id':CA,'conversation_id':source_group,'message_id':source,**admitted}
+            cur.execute("INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,external_id,event_type,payload,state) VALUES(%s::uuid,%s,'connect',%s,'incoming_message',%s::jsonb,'completed')",(A,fingerprint,source,json.dumps(payload)))
+            case=tickets.handoff_ticket(cur,{'tenant_id':A,'provider':'connect','channel_id':CA,'conversation_id':source_group,
+              'lead_id':44650+index,'agent_id':agent,'event_fingerprint':fingerprint,'source_message_id':source,'case_message_ids':[source]},'Cross-channel group escalation')
+        local.commit()
+        items.append(local.execute('SELECT id::text FROM saas_ai_case_developer_dispatches WHERE tenant_id=%s::uuid AND case_id=%s::uuid',(A,case['id']))[0]['id'])
+    for group in (low,high):consultations.developer_marker(PROFILE,{'channel_id':CB,'conversation_id':group,'enabled':True})
+    local.commit()
+    def factory():
+        connection=psycopg.connect(local.dsn,row_factory=dict_row);connection.execute("SET statement_timeout='15000ms'");return connection
+    for module in (consultations,dispatch,transport):monkeypatch.setattr(module,'_connect',factory)
+    barrier=threading.Barrier(2);counts={};orders={};errors=[];original_consult=consultations._consult;original_lock=groups.lock_group
+    def consult(*args,**kwargs):
+        result=original_consult(*args,**kwargs);name=threading.current_thread().name;counts[name]=counts.get(name,0)+1
+        if counts[name]==2:
+            orders[name]=[];barrier.wait(10)
+        return result
+    def lock(cur,tenant,conversation):
+        name=threading.current_thread().name
+        if name in orders and conversation not in orders[name]:orders[name].append(conversation)
+        return original_lock(cur,tenant,conversation)
+    monkeypatch.setattr(consultations,'_consult',consult);monkeypatch.setattr(groups,'lock_group',lock)
+    def send(item):
+        try:dispatch.dispatch_auto_case(item)
+        except Exception as error:errors.append(error)
+    threads=[threading.Thread(target=send,args=(item,),name='cross-initial-'+str(index),daemon=True) for index,item in enumerate(items)]
+    for thread in threads:thread.start()
+    for thread in threads:thread.join(25);assert not thread.is_alive(),'cross-channel physical group locks formed a cycle'
+    assert not errors,errors
+    assert list(orders.values())==[[low,high],[low,high]]
+    # These active source groups are deliberately invalid developer targets;
+    # rejection must still acquire shared physical fences without a deadlock.
+    assert {row['state'] for row in local.execute('SELECT state FROM saas_ai_case_developer_dispatches WHERE tenant_id=%s::uuid',(A,))}=={'blocked'}
+    f['developer_sends'].assert_not_called()
+
+
+def test_initial_group_dispatch_holds_source_group_fence_until_external_receipt(case_flow,monkeypatch):
+    import threading
+    import time
+    import psycopg
+    from psycopg.rows import dict_row
+    import tenant_ai_group_coordination as groups
+    f=case_flow;local=f['db'];item,group,_revision,_fingerprint=_queue_initial_group_case(f,monkeypatch)
+    local.commit();started=threading.Event();finished=threading.Event();pids=[];errors=[];threads=[]
+    def factory():return psycopg.connect(local.dsn,row_factory=dict_row)
+    def stop():
+        try:
+            with factory() as connection:
+                pids.append(connection.info.backend_pid);started.set()
+                with connection.cursor() as cur:groups.stop(cur,A,group,reason='verified_employee_reply',actor=11)
+        except Exception as error:errors.append(error)
+        finally:finished.set()
+    def send(*_args):
+        thread=threading.Thread(target=stop);threads.append(thread);thread.start();assert started.wait(5)
+        waiting=False;deadline=time.monotonic()+5
+        with factory() as observer:
+            while time.monotonic()<deadline:
+                row=observer.execute('SELECT wait_event_type FROM pg_stat_activity WHERE pid=%s',(pids[0],)).fetchone()
+                if row and row['wait_event_type']=='Lock':waiting=True;break
+                observer.commit();time.sleep(.01)
+        assert waiting and not finished.is_set(),'source-group takeover crossed the external dispatch boundary'
+        return {'message_id':'source-group-fenced-queue','external_message_id':'PROVIDER_SOURCE_GROUP_FENCED'}
+    f['developer_sends'].side_effect=send
+    dispatch.dispatch_auto_case(item)
+    for thread in threads:thread.join(10);assert not thread.is_alive()
+    assert not errors and finished.is_set(),errors
+    f['developer_sends'].assert_called_once()
+    assert local.execute('SELECT state FROM saas_ai_case_developer_dispatches WHERE id=%s::uuid',(item,))[0]['state']=='sent'
+    assert local.execute('SELECT state FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s',(A,group))[0]['state']=='human'
+
+
+def test_initial_dispatch_preflight_takes_dialog_fence_before_shared_source_state(case_flow,monkeypatch):
+    import threading
+    import psycopg
+    from psycopg.rows import dict_row
+    import tenant_ai_agents_store as agents
+    f=case_flow;local=f['db'];item=_queue_initial_case(f);local.commit()
+    acquired=threading.Event();preflight=threading.Event();finished=threading.Event();errors=[]
+    def factory():
+        connection=psycopg.connect(local.dsn,row_factory=dict_row);connection.execute("SET statement_timeout='15000ms'");return connection
+    monkeypatch.setattr(agents,'_connect',factory)
+    original_lock=agents.lock_dialog;original_source=consultations.auto_case_dispatch_source_current
+    def lock(*args,**kwargs):
+        result=original_lock(*args,**kwargs)
+        if threading.current_thread().name=='real-source-pause':acquired.set();assert preflight.wait(10)
+        return result
+    def source(*args,**kwargs):
+        preflight.set();return original_source(*args,**kwargs)
+    monkeypatch.setattr(agents,'lock_dialog',lock);monkeypatch.setattr(consultations,'auto_case_dispatch_source_current',source)
+    def pause():
+        try:agents.set_conversation_state(PROFILE,'client','paused','Employee pause',provider='connect',channel_id=CA)
+        except Exception as error:errors.append(error)
+        finally:finished.set()
+    thread=threading.Thread(target=pause,name='real-source-pause',daemon=True);thread.start();assert acquired.wait(10)
+    dispatch.dispatch_auto_case(item)
+    thread.join(20);assert not thread.is_alive(),'preflight source SHARE inverted the real Pause dialog fence'
+    assert finished.is_set() and not errors,errors
+    f['developer_sends'].assert_not_called()
+    assert local.execute('SELECT state FROM saas_ai_case_developer_dispatches WHERE id=%s::uuid',(item,))[0]['state']=='blocked'
+    assert local.execute("SELECT state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND channel_id=%s AND conversation_id='client'",(A,CA))[0]['state']=='paused'
