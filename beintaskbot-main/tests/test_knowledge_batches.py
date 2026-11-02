@@ -8,6 +8,8 @@ from test_knowledge_candidates import ready,model_card,candidate,GROUP
 import tenant_knowledge_batches as batches
 import tenant_knowledge_candidates_store as store
 import tenant_knowledge_candidates_service as service
+import tenant_ai_group_coordination as groups
+import tenant_operator_assignment as assignment
 from tenant_linear_policy import TenantLinearError
 
 START='2026-10-18T00:00:00Z';END='2026-10-19T00:00:00Z'
@@ -35,6 +37,9 @@ def test_dead_batch_becomes_interrupted_without_retry(batch):
 @pytest.fixture
 def batch(ready,monkeypatch):
     d,generation,_=ready;monkeypatch.setattr(batches,'_connect',lambda:d)
+    monkeypatch.setenv('AI_AGENTS_ENABLED','true')
+    for module in (groups,assignment):monkeypatch.setattr(module,'_connect',lambda:d)
+    d.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT DO NOTHING",(A,))
     d.execute("UPDATE saas_crm_messages SET happened_at='2026-10-18T01:00:00Z'::timestamptz+(CASE external_id WHEN 'response-0' THEN 1 WHEN 'response-1' THEN 2 ELSE 0 END * interval '1 second') WHERE tenant_id=%s::uuid",(A,));d.commit()
     def generate(*args,**kwargs):
         refs=[m['ref'] for m in args[3]]
@@ -49,17 +54,29 @@ def run(batch):
     if receipt['created']:batches.process(PROFILE,receipt['id'])
     return batches.get(PROFILE,receipt['id'])['batch']
 
+
+def employee_confirmed_cards(batch_id):
+    """Review the exact stored source quote through the employee edit flow.
+
+    Model prose alone has never been authority to confirm a resolved case.
+    These queue/publication fixtures start after that explicit human review.
+    """
+    values=store.listing(PROFILE,{'batch_id':batch_id})['candidates']
+    return [store.mutate(PROFILE,value['id'],{'expected_version':value['version'],
+        'outcome':{**value['outcome'],'status':'confirmed','text':'Всё работает, помогло'},'work_status':'resolved'})['candidate']
+        for value in values]
+
 def test_multiple_cases_manual_batch_replay_and_knowledge_compatibility(batch):
     d,generation,data=batch;result=run(batch)
     assert result['status']=='completed'
-    cards=store.listing(PROFILE,{'batch_id':result['id']})['candidates']
-    assert len(cards)==2 and all(v['status']=='pending_review' for v in cards)
+    cards=employee_confirmed_cards(result['id'])
+    assert len(cards)==2 and all(v['status']=='needs_clarification' and v['can_approve'] for v in cards)
     assert not d.execute('SELECT id FROM saas_ai_knowledge_sources');d.commit()
     assert batches.start(PROFILE,data)=={'id':result['id'],'created':False}
     assert batches.start(PROFILE,{**data,'request_id':str(uuid.uuid4())})['id']==result['id']
     generation.assert_called_once()
     confirm=next(v for v in cards if v['outcome']['status']=='confirmed')
-    assert store.mutate(PROFILE,confirm['id'],{'expected_version':1,'agent_ids':[AGENT]},'approve')['candidate']['status']=='approved'
+    assert store.mutate(PROFILE,confirm['id'],{'expected_version':confirm['version'],'agent_ids':[AGENT]},'approve')['candidate']['status']=='approved'
 
 def test_batch_summary_is_tenant_scoped_and_counts_unique_usage(batch):
     d,_,_=batch;result=run(batch);summary=result['summary']
@@ -90,7 +107,7 @@ def test_invalid_period_channel_never_calls_model(batch,patch):
 def test_no_text_and_model_error_have_visible_item_codes(batch):
     d,generation,data=batch;generation.side_effect=RuntimeError('PRIVATE PROVIDER ERROR')
     result=run(batch)
-    assert result['status']=='failed' and result['items'][0]['error_code']=='model_unavailable'
+    assert result['status']=='failed' and result['items'][0]['error_code']=='provider_call_failed'
     assert 'PRIVATE' not in json.dumps(result)
     generation.assert_called_once()
 
@@ -108,17 +125,20 @@ def test_company_limit_and_isolation(batch,monkeypatch):
 
 def test_queue_filters_keyset_and_needs_clarification(batch):
     d,generation,data=batch;result=run(batch)
-    rows=store.listing(PROFILE,{'limit':1,'status':'pending_review'})
+    employee_confirmed_cards(result['id'])
+    assert store.listing(PROFILE,{'status':'pending_review'})['candidates']==[]
+    rows=store.listing(PROFILE,{'limit':1,'status':'needs_clarification'})
     assert len(rows['candidates'])==1 and rows['next_before']
-    page=store.listing(PROFILE,{'limit':1,'status':'pending_review','before':rows['next_before']})
+    page=store.listing(PROFILE,{'limit':1,'status':'needs_clarification','before':rows['next_before']})
     assert len(page['candidates'])==1 and page['candidates'][0]['id']!=rows['candidates'][0]['id']
     item=rows['candidates'][0]
-    updated=store.mutate(PROFILE,item['id'],{'expected_version':1,'clarification_note':'Please confirm the result.'},'clarify')['candidate']
-    assert updated['status']=='needs_clarification' and updated['version']==2
+    updated=store.mutate(PROFILE,item['id'],{'expected_version':item['version'],'clarification_note':'Please confirm the result.'},'clarify')['candidate']
+    assert updated['status']=='needs_clarification' and updated['version']==item['version']+1
+    assert len(store.listing(PROFILE,{'status':'needs_clarification','channel_id':CA,'batch_id':result['id']})['candidates'])==2
+    changed=store.mutate(PROFILE,item['id'],{'expected_version':updated['version'],'title':'Уточнённая проблема'})['candidate']
+    assert changed['version']==updated['version']+1
+    assert store.mutate(PROFILE,item['id'],{'expected_version':changed['version']},'reject')['candidate']['status']=='rejected'
     assert len(store.listing(PROFILE,{'status':'needs_clarification','channel_id':CA,'batch_id':result['id']})['candidates'])==1
-    changed=store.mutate(PROFILE,item['id'],{'expected_version':2,'title':'Уточнённая проблема'})['candidate']
-    assert changed['version']==3
-    assert store.mutate(PROFILE,item['id'],{'expected_version':3},'reject')['candidate']['status']=='rejected'
 
 def test_bounded_windows_do_not_skip_messages_trimmed_by_context(batch):
     d,generation,data=batch
@@ -145,7 +165,11 @@ def test_group_two_channel_copies_are_deduplicated_within_period(batch):
             raw={'channelId':channel,'conversationId':GROUP,'externalMessageId':'EVENT_'+str(i),'participantJid':'994500000001@s.whatsapp.net','participantName':'Иван Иванов'}
             d.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,message_type,raw,happened_at) VALUES(%s::uuid,%s::uuid,%s,%s,%s,'incoming',%s,'text',%s::jsonb,'2026-10-18T01:00:00Z'::timestamptz+(%s * interval '1 second'))",
                 (A,str(uuid.uuid4()),lead,str(uuid.uuid4()),'connect:'+channel,'Всё работает, помогло',json.dumps(raw),i))
-    d.commit();batch=(d,generation,{**data,'conversation_id':GROUP,'history_mode':'unified_group'})
+    d.execute('UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+        (json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}]),A,AGENT));d.commit()
+    groups.configure(PROFILE,{'conversation_id':GROUP,'expected_revision':0,
+        'assignments':[{'agent_id':AGENT,'channel_id':CA,'priority':0}]})
+    batch=(d,generation,{**data,'conversation_id':GROUP,'history_mode':'unified_group'})
     result=run(batch)
     assert result['message_count']==3 and len(generation.call_args.args[3])==3
     assert len(store.listing(PROFILE,{'batch_id':result['id']})['candidates'])==2
@@ -162,10 +186,16 @@ def test_group_two_channel_copies_are_deduplicated_within_period(batch):
 
 def test_channel_discovery_is_bounded_and_does_not_require_open_dialog(batch):
     d,generation,data=batch
+    d.execute('UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid',
+        (json.dumps([{'provider':'connect','channel_id':CA}]),A,AGENT));d.commit()
     for i in range(5):
         lead=2000+i;conv='client-'+str(i)
         d.execute('INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,%s,%s)',(A,CA,conv,lead))
         d.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,happened_at) VALUES(%s::uuid,%s::uuid,%s,%s,%s,'incoming','Всё работает, помогло','2026-10-18T02:00:00Z')",(A,str(uuid.uuid4()),lead,str(uuid.uuid4()),'connect:'+CA))
+        d.commit()
+        route={'provider':'connect','channel_id':CA,'conversation_id':conv,'lead_id':lead}
+        options=assignment.options(PROFILE,route)
+        assignment.assign(PROFILE,{**route,'agent_id':AGENT,'request_id':str(uuid.uuid4()),'expected_revision':options['revision']})
     d.commit();data={k:v for k,v in data.items() if k!='conversation_id'}
     result=run((d,generation,data))
     assert len(result['items'])==4 and result['routes_truncated'] and result['status']=='partial'
@@ -223,9 +253,18 @@ def test_explicit_http_dispatch_is_finite_and_idempotent(monkeypatch):
 def test_status_constraint_upgrade_preserves_existing_candidates(batch):
     import tenant_knowledge_candidates_schema as schema
     d,generation,data=batch;result=run(batch)
-    ids=[r['id'] for r in store.listing(PROFILE,{})['candidates']]
+    values=store.listing(PROFILE,{})['candidates']
+    for value in values:store.mutate(PROFILE,value['id'],{'expected_version':value['version']},'reject')
+    ids=[r['id'] for r in values]
     d.execute('ALTER TABLE saas_knowledge_candidates DROP CONSTRAINT saas_knowledge_candidates_status_check')
     d.execute("ALTER TABLE saas_knowledge_candidates ADD CONSTRAINT saas_knowledge_candidates_status_check CHECK(status IN ('pending_review','approved','rejected'))")
     d.commit();schema.create_schema(d);d.commit()
-    assert {r['id'] for r in store.listing(PROFILE,{})['candidates']}==set(ids)
-    assert store.mutate(PROFILE,ids[0],{'expected_version':1,'clarification_note':'Please confirm the result.'},'clarify')['candidate']['status']=='needs_clarification'
+    historical=store.listing(PROFILE,{'status':'all'})['candidates']
+    assert {r['id'] for r in historical}==set(ids)
+    assert all(row['status']=='rejected' for row in historical)
+    # A genuinely new source fragment may now persist the newer queue status;
+    # rejected historical decisions are preserved rather than reset for a test.
+    d.execute("INSERT INTO saas_crm_messages(tenant_id,id,kommo_lead_id,external_id,channel,direction,body,happened_at) VALUES(%s::uuid,%s::uuid,41,%s,%s,'incoming','Всё работает, помогло','2026-10-18T03:00:00Z')",
+        (A,str(uuid.uuid4()),'post-upgrade-source','connect:'+CA));d.commit()
+    created=service.analyze(PROFILE,{**data,'request_id':str(uuid.uuid4())})['candidates'][0]
+    assert store.mutate(PROFILE,created['id'],{'expected_version':created['version'],'clarification_note':'Please confirm the result.'},'clarify')['candidate']['status']=='needs_clarification'

@@ -53,7 +53,7 @@ def handler(member_from_request, origin, logger, resource):
                 elif resource=='ticket_messages' and request.method=='POST' and set(payload)=={'message_ids'}:
                     result = await asyncio.to_thread(attach_case_messages,profile,request.match_info['ticket_id'],payload['message_ids'])
                 elif resource=='summary' and request.method=='POST':
-                    result = await asyncio.to_thread(regenerate,profile,request.match_info['ticket_id'])
+                    result = await asyncio.to_thread(regenerate,profile,request.match_info['ticket_id'],payload)
                 elif resource=='consultation' and request.method=='POST':
                     from tenant_internal_consultations import create as create_consultation
                     result=await asyncio.to_thread(create_consultation,profile,payload)

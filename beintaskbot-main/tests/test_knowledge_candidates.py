@@ -1049,17 +1049,19 @@ def test_empty_model_result_completes_without_persistence(ready):
     assert service.analyze(PROFILE,data)['candidates']==[]
     generation.assert_called_once()
 
-def test_knowledge_extraction_defaults_to_az_and_preserves_explicit_languages():
-    assert policy.language(None,{})=='az'
-    assert policy.language(None,{'language':'en','language_code':'ru'})=='az'
-    assert policy.language('en',{})=='az'
-    assert policy.language('ru',{'language':'az'})=='az'
+def test_knowledge_extraction_leaves_default_to_company_rule_and_validates_choices():
+    assert policy.language(None,{})=='auto'
+    assert policy.language(None,{'language':'en','language_code':'ru'})=='auto'
+    assert policy.language('en',{})=='en'
+    assert policy.language('ru',{'language':'az'})=='ru'
     assert policy.language('az',{})=='az'
+    assert policy.language('tr',{})=='tr'
 
 
-def test_ai_generation_language_is_always_azerbaijani_even_for_ru_en_interface():
-    assert [policy.language(value,{}) for value in ('ru','az','en',None)]==['az','az','az','az']
-    assert 'Azerbaijani (AZ)' in service.PROMPT
+def test_ai_generation_language_follows_server_selection_independently_of_interface():
+    assert [policy.language(None,{'language':ui}) for ui in ('ru','az','en')]==['auto']*3
+    assert 'server-selected output_language' in service.PROMPT
+    assert 'Azerbaijani (AZ)' not in service.PROMPT
 
 
 def test_work_status_is_separate_from_confirmation_and_gates_publication():

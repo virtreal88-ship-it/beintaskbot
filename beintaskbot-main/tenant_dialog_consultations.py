@@ -281,7 +281,7 @@ def _verified_contact_phone(cur,tenant,channel,conversation):
     return '+'+jid.split('@',1)[0] if jid else ''
 
 
-def prepare(profile,data,origin):
+def prepare(profile,data,origin,*,ai_summary=None):
     required={'request_id','channel_id','conversation_id','destination_channel_id','destination_conversation_id','message_ids','media_ids','summary','confirm'}
     optional={'case_id','include_customer_identity'}
     if not isinstance(data,dict) or not required.issubset(data) or set(data)-required-optional or data['confirm'] is not True:
@@ -321,6 +321,18 @@ def prepare(profile,data,origin):
             else:rows=selection(cur,tenant,source,selected)
             if any(row['id'] in media and row['message_type'] not in _MEDIA_TYPES for row in rows):
                 raise TenantLinearError('Выберите только сообщения с файлами.',400)
+            if ai_summary is not None:
+                if not case_id:raise TenantLinearError('Нет точного обращения для AI-сводки.',409)
+                from tenant_consultation_summary import for_case
+                current_summary=for_case(cur,tenant,case_id,channel_id=channel,
+                  conversation_id=source['conversation_id'],selected_ids=selected)
+                same_source=all(current_summary.get(key)==ai_summary.get(key) for key in
+                  ('case_id','scope_hash','source_message_ids','original_quote')) and all(
+                  (current_summary.get('selection') or {}).get(key)==(ai_summary.get('selection') or {}).get(key)
+                  for key in ('language','method','policy_version','policy_source'))
+                unchanged_fallback=ai_summary.get('state')=='unavailable' and same_source and summary==ai_summary.get('text')
+                if not unchanged_fallback and (current_summary!=ai_summary or summary!=current_summary['text']):
+                    raise TenantLinearError('Сводка обращения изменилась до подготовки консультации.',409)
             allowed=[row['id'] for row in rows if row['id'] in media and not _MEDIA_SECRET_MARKER.search(row['body'] or '')]
             # Identity follows actual send/share semantics, not JSON spelling or
             # ignored/withheld media flags. Fresh UUIDs cannot bypass uncertainty.
@@ -363,10 +375,14 @@ def prepare(profile,data,origin):
             # Keep the provider receipt/request key as the machine correlation.
             # A quoted reply matches provider_message_id; the consultation UUID
             # remains persisted in the ledger and is no longer shown to people.
-            body=summary.strip()+'\n\nФрагмент переписки (ссылка действует 7 дней):\n'+url
+            from tenant_consultation_summary import COPY
+            fragment=COPY[ai_summary['selection']['language']]['fragment'] if ai_summary else 'Фрагмент переписки (ссылка действует 7 дней)'
+            body=summary.strip()+'\n\n'+fragment+':\n'+url
+            consultation_evidence={'input_hash':digest,'scope_hash':scope_hash,'share_id':share,'message_ids':selected}
+            if ai_summary is not None:consultation_evidence['ai_summary']=ai_summary
             cur.execute('''INSERT INTO saas_internal_consultations(tenant_id,id,case_id,channel_id,conversation_id,request_key,reason,evidence,status,created_by)
               VALUES(%s::uuid,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb,'waiting_specialist',%s)''',
-              (tenant,ident,case_id,channel,source['conversation_id'],'employee:'+request,summary.strip(),_json({'input_hash':digest,'scope_hash':scope_hash,'share_id':share,'message_ids':selected}),actor))
+              (tenant,ident,case_id,channel,source['conversation_id'],'employee:'+request,summary.strip(),_json(consultation_evidence),actor))
             cur.execute('''INSERT INTO saas_public_case_shares(id,tenant_id,ticket_id,consultation_id,channel_id,conversation_id,
               group_channel_id,group_conversation_id,token_hash,selected_message_ids,selected_media_ids,public_messages,created_by,expires_at,source_versions,is_partial,public_identity)
               VALUES(%s::uuid,%s::uuid,NULL,%s::uuid,%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,now()+interval '7 days',%s::jsonb,%s,%s::jsonb)''',

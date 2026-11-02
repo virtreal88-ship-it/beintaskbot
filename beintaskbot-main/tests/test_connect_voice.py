@@ -208,11 +208,17 @@ class WorkerVoice(unittest.IsolatedAsyncioTestCase):
                 def configured(*args,**kwargs):return {**CONFIG,'agent_model':current['model']}
                 async def changed(*args,**kwargs):current['model']='changed-after-reservation';return None
                 expert=AsyncMock(side_effect=changed)
+                # This unit harness has no case SQL. Supply the newly consumed
+                # read-only language context; native group/consultation tests
+                # exercise its actual case, source and policy authorization.
+                summary_context={'state':'unavailable','selection':{'language':'az','method':'fallback',
+                    'policy_version':0,'policy_source':'legacy','detector_version':1}}
                 with patch.object(runs,'load_agent_config',side_effect=configured), \
                      patch.object(worker,'request_expert',expert), \
+                     patch('tenant_consultation_summary.for_job',return_value=summary_context), \
                      patch('tenant_connect_documents.prepare',new=AsyncMock(return_value={})), \
                      patch('tenant_connect_videos.prepare',new=AsyncMock(return_value=({},{},{}))):
-                    await self.process({**JOB,'payload':{'message_id':mid,flag:True}})
+                    await self.process({**JOB,'payload':{'message_id':mid,'case_id':RUN,flag:True}})
                 expert.assert_awaited_once()
                 self.generate.assert_not_called();self.send.assert_not_called()
 

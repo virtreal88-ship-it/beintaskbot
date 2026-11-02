@@ -10,11 +10,8 @@ BASE_FIELDS={'title','symptoms','cause','resolution_steps','outcome','source_mes
 FIELDS=BASE_FIELDS|{'resolution_method','operator_actions','operator_action_evidence','cause_evidence','case_kind','content_language','clarification_note','work_status','start_message_id','end_message_id','case_relation','owner_additions'}
 
 def language(value=None,profile=None):
-    # AI-created case content has a fixed Azerbaijani language contract. Keep
-    # accepting legacy RU/EN request values, but never let UI locale change the
-    # generated case language. Staff edits remain unrestricted in card policy.
-    if value not in (None, '', 'ru', 'az', 'en'): raise TenantLinearError('Язык: ru, az или en.')
-    return 'az'
+    from tenant_summary_language import language as validate
+    return validate(value,optional=True) or 'auto'
 
 
 OWNER_APPROVED_PAYMENT_URL='https://million.az/attributes/beinaz_yigim'
@@ -64,7 +61,7 @@ def card(data,allowed_ids,allow_boundary_outside_sources=False,*,owner_guidance_
     if method not in {'chat','remote','phone','unknown'} or kind not in {'technical','informational'}: raise TenantLinearError('Некорректный тип кейса или способ решения.')
     if not isinstance(actions,list) or len(actions)>10: raise TenantLinearError('Некорректные действия сотрудника.')
     content_language=data.get('content_language','az')
-    if not isinstance(content_language,str) or content_language not in {'ru','az','en'}: raise TenantLinearError('Язык карточки: ru, az или en.')
+    if not isinstance(content_language,str) or content_language not in {'ru','az','en','tr'}: raise TenantLinearError('Язык карточки: AZ, RU, EN или TR.')
     clarification_note=data.get('clarification_note','')
     work_status=data.get('work_status','unknown')
     case_relation=data.get('case_relation','unknown')

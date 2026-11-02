@@ -37,7 +37,7 @@ function fixture(view,{campaign=true,auto=true}={}){
  };
  w.fetch=(input,opt={})=>{const u=new URL(input,w.location.href);f.calls.push({url:u,opt});if(f.hold?.(u,opt))return new Promise(resolve=>f.holds.push({u,opt,resolve}));return Promise.resolve(f.reply(u,opt));};
  if(campaign)w.eval(source('tenant-knowledge-campaigns.js'));else w.TenantKnowledgeCampaigns={mount:async(root,ctx)=>{f.ctx=ctx;}};
- f.start=()=>w.eval(source(view==='support_cases'?'tenant-knowledge-candidates.js':'tenant-knowledge-center.js'));
+ f.start=()=>{if(!baseline&&view==='support_cases')w.eval(source('tenant-summary-language.js'));w.eval(source(view==='support_cases'?'tenant-knowledge-candidates.js':'tenant-knowledge-center.js'));};
  f.close=()=>w.close();return f;
 }
 async function metrics(){
@@ -102,7 +102,12 @@ async function mutationAndBatchTests(){
  f.close();
  const b=fixture('support_cases',{campaign:false}),scheduled=[];const original=b.w.setTimeout.bind(b.w);b.w.setTimeout=(fn,delay,...args)=>delay===2500?(scheduled.push(fn),scheduled.length):original(fn,delay,...args);
  const reply=b.reply;b.reply=(u,opt)=>u.pathname.startsWith(base+'/batches')?b.response({batch:{id:'batch-1',status:'running',params:{},summary:{},limits:{}}}):reply(u,opt);
- b.start();await settle();b.d.querySelector('#casesChannel').innerHTML='<option value="channel-a">Channel</option>';b.d.querySelector('#casesFrom').value='2026-10-01';b.d.querySelector('#casesTo').value='2026-10-02';b.d.querySelector('#casesAnalyse').click();await settle();assert.equal(scheduled.length,1);
+ b.start();await settle();b.d.querySelector('#casesChannel').innerHTML='<option value="channel-a">Channel</option>';b.d.querySelector('#casesFrom').value='2026-10-01';b.d.querySelector('#casesTo').value='2026-10-02';b.d.querySelector('#casesAnalyse').click();await settle();
+ // The shipped controller now waits for the real language and AI-cost chooser;
+ // opening it must not POST or schedule batch polling before explicit consent.
+ assert.equal(scheduled.length,0,'opening language confirmation does not schedule work');assert.equal(b.calls.some(call=>call.opt.method==='POST'&&call.url.pathname===base+'/batches'),false);
+ const confirmation=b.d.querySelector('[data-summary-language-dialog]');assert(confirmation,'the actual language/cost helper is mounted');const language=confirmation.querySelector('select');language.value='policy';language.dispatchEvent(new b.w.Event('change'));confirmation.querySelector('form').dispatchEvent(new b.w.Event('submit',{bubbles:true,cancelable:true}));await settle();assert.equal(scheduled.length,0,'company-policy selection still requires AI-cost consent');assert.equal(b.calls.some(call=>call.opt.method==='POST'&&call.url.pathname===base+'/batches'),false);
+ const consent=confirmation.querySelector('input[type=checkbox]');consent.checked=true;consent.dispatchEvent(new b.w.Event('change'));confirmation.querySelector('button[type=submit]').click();await settle();assert.equal(scheduled.length,1);const batchPosts=b.calls.filter(call=>call.opt.method==='POST'&&call.url.pathname===base+'/batches');assert.equal(batchPosts.length,1);const batchPayload=JSON.parse(batchPosts[0].opt.body);assert.equal('language' in batchPayload,false,'company policy never inherits an implicit AZ/interface language');assert.equal('language_explicit' in batchPayload,false);assert(batchPayload.request_id);
  b.hold=u=>u.pathname===base+'/batches/batch-1';scheduled.shift()();await tick();const poll=b.holds.shift();assert(poll,'running batch poll begins');await b.ctx.api(base+'/case-a/boundaries',{method:'POST',body:'{}'});poll.resolve(b.reply(poll.u,poll.opt));await settle();assert.equal(scheduled.length,1,'case mutation cannot kill running batch polling');
  b.emit('tenant-auth-pending');b.emit('tenant-profile',profile());await settle();assert.equal(scheduled.length,2,'same-user reauth resumes batch status monitoring');b.close();
  console.log('PASS case writes: edit/publish/boundaries/archive/delete invalidate; campaign/proposal preserve rows; batch polling survives');

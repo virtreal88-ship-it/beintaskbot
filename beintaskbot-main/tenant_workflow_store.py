@@ -80,6 +80,17 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            # This setting has its own optimistic version contract. The
+            # existing workflow editor may echo it, but cannot bypass that
+            # contract or overwrite a newer language policy on an old form.
+            if any(str(key or '').strip()[:120] == 'summary_language' and key != 'summary_language' for key in policies):
+                raise TenantPlatformError('Настройку языка сводок сохраняйте через её версионную форму.')
+            if 'summary_language' in policies:
+                cur.execute("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid AND policy_key='summary_language'", (str(tenant_id),))
+                current_policy = cur.fetchone()
+                if not current_policy or current_policy['value'] != policies['summary_language']:
+                    raise TenantPlatformError('Настройка языка сводок изменилась. Сохраните её в настройках компании.')
+                policies = {key: value for key, value in policies.items() if key != 'summary_language'}
             # Validate links against this company's current membership before
             # any insert. IDs from another company must never grant access.
             cur.execute("SELECT telegram_id,role,permissions FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE", (str(tenant_id),))

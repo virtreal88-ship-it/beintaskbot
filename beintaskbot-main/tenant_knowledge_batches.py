@@ -12,7 +12,7 @@ MAX_DIALOGS=4
 
 
 def start(profile,data):
-    allowed={'request_id','provider','channel_id','conversation_id','period_start','period_end','history_mode','analysis_agent_id','before','language','allow_external_media','allow_paid_asr'}
+    allowed={'request_id','provider','channel_id','conversation_id','period_start','period_end','history_mode','analysis_agent_id','before','language','language_explicit','allow_external_media','allow_paid_asr'}
     if not isinstance(data,dict) or set(data)-allowed: raise TenantLinearError('Некорректный пакет.')
     if data.get('provider','connect')!='connect': raise TenantLinearError('Поддерживается только WhatsApp.')
     request_id=identifier(data.get('request_id'));channel=identifier(data.get('channel_id'));start,end=period(data,True)
@@ -21,18 +21,30 @@ def start(profile,data):
     if data.get('before') and not conversation: raise TenantLinearError('Курсор требует конкретного диалога.')
     mode=data.get('history_mode','channel')
     if mode not in {'channel','unified_group'}: raise TenantLinearError('Некорректный режим истории.')
-    params={'language':language(data.get('language'),profile),'channel_id':channel,'period_start':start,'period_end':end,'history_mode':mode}
+    if 'language_explicit' in data and type(data['language_explicit']) is not bool:
+        raise TenantLinearError('Некорректный выбор языка сводки.',400)
+    requested_language=language(data.get('language'),profile)
+    explicit_language=data.get('language_explicit') is True
+    if explicit_language and requested_language=='auto':raise TenantLinearError('Выберите явный язык сводки.',400)
+    params={'language':requested_language if explicit_language else 'auto','channel_id':channel,'period_start':start,'period_end':end,'history_mode':mode}
+    if explicit_language:params['language_explicit']=True
     for flag in ('allow_external_media','allow_paid_asr'):
         if flag in data:
             if type(data[flag]) is not bool: raise TenantLinearError('Некорректное разрешение медиа.')
             params[flag]=data[flag]
     if params.get('allow_paid_asr') and not params.get('allow_external_media'): raise TenantLinearError('Требуется разрешение передачи медиа.')
     selected_language=params['language']
-    if 'language' not in data and selected_language=='ru': params.pop('language')
     if conversation: params['conversation_id']=conversation
     if data.get('before'): params['before']=identifier(data['before'])
     if data.get('analysis_agent_id'): params['analysis_agent_id']=identifier(data['analysis_agent_id'])
     key=store.digest(params)
+    compatible_keys={key}
+    if not explicit_language:
+        # The old UI always supplied AZ implicitly. An exact saved batch must
+        # retain its routes/child UUIDs and never restart a paid fragment.
+        legacy={**params,'language':'az'}
+        without_language={k:v for k,v in params.items() if k!='language'}
+        compatible_keys.update((store.digest(legacy),store.digest(without_language)))
     with _connect() as conn:
         store.schema(conn)
         with conn.cursor() as cur:
@@ -40,10 +52,10 @@ def start(profile,data):
             cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid',(tenant,channel))
             if not cur.fetchone(): raise TenantLinearError('Канал недоступен.',404)
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('knowledge-batches:'+tenant,))
-            cur.execute('SELECT id,request_key FROM saas_knowledge_batches WHERE tenant_id=%s::uuid AND (id=%s::uuid OR request_key=%s) ORDER BY id=%s::uuid DESC LIMIT 1',(tenant,request_id,key,request_id))
+            cur.execute('SELECT id,request_key FROM saas_knowledge_batches WHERE tenant_id=%s::uuid AND (id=%s::uuid OR request_key=ANY(%s::text[])) ORDER BY id=%s::uuid DESC LIMIT 1',(tenant,request_id,sorted(compatible_keys),request_id))
             old=cur.fetchone()
             if old:
-                if str(old['id'])==request_id and old['request_key']!=key: raise TenantLinearError('request_id уже используется для другого пакета.',409)
+                if str(old['id'])==request_id and old['request_key'] not in compatible_keys: raise TenantLinearError('request_id уже используется для другого пакета.',409)
                 return {'id':str(old['id']),'created':False}
             cur.execute("UPDATE saas_knowledge_batches SET status='interrupted',completed_at=now() WHERE tenant_id=%s::uuid AND status='running' AND deadline<now() AND (active_until IS NULL OR active_until<now())",(tenant,))
             cur.execute("SELECT 1 FROM saas_knowledge_batches WHERE tenant_id=%s::uuid AND status='running' LIMIT 1",(tenant,))
