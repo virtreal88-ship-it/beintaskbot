@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { chromium } = require('playwright');
+const { chromium, firefox, webkit } = require('playwright');
 
 const docs = path.resolve(__dirname, '../docs');
 const scripts = ['tenant-voice-recorder.js','tenant-microphone-lease.js','tenant-customer-voice-store.js','tenant-customer-voice-ui.js'];
@@ -24,8 +24,12 @@ async function main(){
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const origin=`http://127.0.0.1:${server.address().port}`;
-  const executablePath=process.env.CHROMIUM_EXECUTABLE_PATH || (fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':undefined);
-  const browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{}),args:['--no-sandbox']});
+  const engine=process.env.VOICE_BROWSER_ENGINE||'chromium',browserType={chromium,firefox,webkit}[engine];
+  if(!browserType)throw Error('Unsupported test browser');
+  const executablePath=engine==='chromium'?(process.env.CHROMIUM_EXECUTABLE_PATH || (fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':undefined)):undefined;
+  let browser;
+  try{browser=await browserType.launch({headless:true,timeout:15000,...(executablePath?{executablePath}:{}),...(engine==='chromium'?{args:['--no-sandbox']}:{})});}
+  catch(error){await new Promise(resolve=>server.close(resolve));throw error;}
   let posts=0,checks=0,accepted=false,enabled=true;
   const context=await browser.newContext();
   await context.route('**/api/platform/crm/chat/**',async route=>{
@@ -66,8 +70,8 @@ async function main(){
     await page.getByRole('button',{name:'Проверить статус'}).waitFor({state:'visible'});
     assert.equal(posts,1,'one explicit send');
     await page.reload();await page.getByRole('button',{name:'Проверить статус'}).waitFor({state:'visible'});
-    await page.getByRole('button',{name:'Проверить статус'}).click();assert.equal(posts,1,'unknown check is read-only');assert.equal(checks,1);
-    accepted=true;await page.getByRole('button',{name:'Проверить статус'}).click();
+    await Promise.all([page.waitForResponse(r=>r.url().includes('/voice-receipt?')),page.getByRole('button',{name:'Проверить статус'}).click()]);assert.equal(posts,1,'unknown check is read-only');assert.equal(checks,1);
+    accepted=true;await Promise.all([page.waitForResponse(r=>r.url().includes('/voice-receipt?')),page.getByRole('button',{name:'Проверить статус'}).click()]);
     await page.getByText('Провайдер принял сообщение. Доставка клиенту пока не подтверждена.').waitFor({state:'visible'});
     assert.equal(posts,1);assert.equal(checks,2);
 
@@ -79,17 +83,29 @@ async function main(){
     const id=await page.evaluate(async()=>(await createTenantVoiceStore().get('synthetic-storage-race')).request_id);
     const claim=async p=>p.evaluate(async id=>createTenantVoiceStore().claim('synthetic-storage-race',id),id);
     assert.equal((await Promise.all([claim(page),claim(race)])).filter(Boolean).length,1,'only one tab claims a draft');
-    await page.evaluate(async id=>{const s=createTenantVoiceStore();await s.markUnknown('synthetic-storage-race',id);if(await s.removeDraft('synthetic-storage-race',id))throw Error('unknown removed as draft');await s.removeAccepted('synthetic-storage-race',id);},id);
+    const safeRetry=await page.evaluate(async id=>{const s=createTenantVoiceStore();await s.releaseDraft('synthetic-storage-race',id,'new-safe-id');return s.get('synthetic-storage-race');},id);
+    assert.equal(safeRetry.request_id,'new-safe-id');assert.equal(safeRetry.state,'draft');assert.ok(safeRetry.blob);
+    assert.equal(await page.evaluate(()=>createTenantVoiceStore().claim('synthetic-storage-race','new-safe-id')),true);
+    const activeId='new-safe-id';
+    await page.evaluate(async id=>{const s=createTenantVoiceStore();await s.markUnknown('synthetic-storage-race',id);if(await s.removeDraft('synthetic-storage-race',id))throw Error('unknown removed as draft');await s.removeAccepted('synthetic-storage-race',id);},activeId);
+    await race.locator('.operator-voice-mic').click();await race.getByRole('button',{name:'Остановить'}).waitFor({state:'visible'});
     const logout=await page.evaluate(async()=>{
       const s=createTenantVoiceStore(),a=JSON.stringify(['tenant','20','101','channel','a']),b=JSON.stringify(['tenant','20','102','channel','b']);
+      const generation=await s.epoch('tenant','20');
       await s.createDraft({key:a,request_id:'draft-id',state:'draft',blob:new Blob(['private'])});
       await s.createDraft({key:b,request_id:'pending-id',state:'draft',blob:new Blob(['private'])});await s.claim(b,'pending-id');
-      await window.tenantCustomerVoiceForget();return {draft:await s.get(a),pending:await s.get(b)};
+      await window.tenantCustomerVoiceForget();const late=await s.createScopedDraft({key:a,request_id:'late',state:'draft',blob:new Blob(['private'])},'tenant','20',generation);
+      let startBlocked=false;try{await s.activeEpoch('tenant','20');}catch{startBlocked=true;}
+      const later=await s.createScopedDraft({key:a,request_id:'later',state:'draft',blob:new Blob(['private'])},'tenant','20',await s.epoch('tenant','20'));
+      return {draft:await s.get(a),pending:await s.get(b),late,later,startBlocked};
     });
-    assert.equal(logout.draft,undefined);assert.equal(logout.pending.state,'unknown');assert.equal(logout.pending.blob,null);
+    assert.equal(logout.draft,undefined);assert.equal(logout.pending.state,'unknown');assert.equal(logout.pending.blob,null);assert.equal(logout.late,false);assert.equal(logout.later,false);assert.equal(logout.startBlocked,true);
+    await race.waitForTimeout(200);assert.equal(await race.evaluate(async()=>!!await createTenantVoiceStore().get(JSON.stringify(['tenant','20','11','channel','chat-11']))),false,'logout cannot resurrect another tab recording');
+    const switched=await page.evaluate(async()=>{const s=createTenantVoiceStore();await s.activate('tenant','20',await s.ownerVersion());const before=await s.epoch('tenant','20'),oldVersion=await s.ownerVersion();await s.activate('tenant','21',oldVersion);const after=await s.epoch('tenant','20');let startBlocked=false;try{await s.activeEpoch('tenant','20');}catch{startBlocked=true;}return {before,after,startBlocked,stale:await s.activate('tenant','20',oldVersion),late:await s.createScopedDraft({key:'switch-test',request_id:'id',state:'draft',blob:new Blob(['private'])},'tenant','20',before),later:await s.createScopedDraft({key:'switch-test',request_id:'id',state:'draft',blob:new Blob(['private'])},'tenant','20',after)};});
+    assert.equal(switched.after,switched.before+1);assert.equal(switched.late,false);assert.equal(switched.later,false);assert.equal(switched.stale,false);assert.equal(switched.startBlocked,true,'account switch invalidates old capability responses and writes');
     enabled=false;const disabled=await context.newPage();await disabled.goto(origin+'/?lead=10');await disabled.waitForTimeout(250);
     assert.equal(await disabled.locator('.operator-voice-mic').count(),0,'disabled capability is not shown');
-    console.log('PASS Chromium: cancellation, two-tab exclusion, preview, dialog isolation, unknown recovery, permission error, disabled feature');
+    console.log('PASS '+engine+': cancellation, two-tab exclusion, preview, dialog isolation, unknown recovery, permission error, disabled feature');
   }finally{await context.close();await browser.close();await new Promise(resolve=>server.close(resolve));}
 }
 main().catch(error=>{console.error(error);process.exitCode=1});

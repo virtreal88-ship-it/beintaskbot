@@ -80,6 +80,13 @@ class VoiceService(unittest.IsolatedAsyncioTestCase):
         self.send.assert_not_called(); self.mark.assert_not_called()
         self.finish.assert_called_once_with(self.item, 'blocked')
 
+    async def test_group_voice_fails_closed_before_ai_handoff_or_submission(self):
+        self.item['connection']=['connect',CHANNEL,'123456789012345@g.us']
+        with self.assertRaises(TenantLinearError):
+            await run(SESSION,COMMAND,b'synthetic',logging.getLogger('synthetic'))
+        self.mark.assert_not_called();self.send.assert_not_called();self.record.assert_not_called()
+        self.finish.assert_called_once_with(self.item,'blocked')
+
     async def test_accepted_replay_checks_receipt_without_sending(self):
         self.reserve.return_value = {'cached_result': {'state':'accepted'}}
         with patch('tenant_customer_voice_service.check', new=AsyncMock(return_value=self.receipt)) as check:

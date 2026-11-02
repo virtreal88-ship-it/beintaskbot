@@ -70,7 +70,7 @@
     try{
       const entry={key:session.scope.key,request_id:crypto.randomUUID(),state:'draft',blob,mime:String(blob.type||'').split(';')[0].toLowerCase(),durationMs:session.recorder.snapshot().durationMs,createdAt:Date.now()};
       if(!['audio/ogg','audio/webm','audio/mp4'].includes(entry.mime))throw Error('unsupported');
-      if(await store.createDraft(entry))session.entry=entry;
+      if(await store.createScopedDraft(entry,session.scope.tenant,session.scope.user,session.epoch))session.entry=entry;
       else{session.entry=await store.get(session.scope.key);session.message=text('conflict');}
       session.recorder.cancel();
     }catch(error){session.message=text(error.message==='unsupported'?'unsupported':'storage');}
@@ -117,10 +117,14 @@
     if(!same(session)||session.busy||session.entry)return;
     session.busy=true;session.message='';draw(session);
     try{
+      if(!voiceBroadcast)throw Error('microphone_exclusion_unsupported');
+      session.epoch=await store.activeEpoch(session.scope.tenant,session.scope.user);
+      if(!same(session))return;
       const releaseLock=await window.acquireTenantMicrophone();
       if(!same(session)){releaseLock?.();return;}
       if(!releaseLock){session.message=text('busy');return;}
       session.release=releaseLock;
+      if(await store.activeEpoch(session.scope.tenant,session.scope.user)!==session.epoch||!same(session)){release(session);return;}
       await session.recorder.start();
     }catch(error){session.message=text(error?.message==='microphone_exclusion_unsupported'?'unsupported':'unavailable');release(session);}
     finally{session.busy=false;draw(session);}
@@ -150,7 +154,7 @@
       try{response=await fetch('/api/platform/crm/chat/send-voice',{method:'POST',credentials:'same-origin',body:data});result=await readJson(response);}
       catch{await store.markUnknown(session.scope.key,entry.request_id);session.entry=await store.get(session.scope.key)||null;session.message=text('unknown');return;}
       if(response.ok&&result.success&&result.provider_accepted===true){await accepted(session,entry,result);return;}
-      if(!response.ok&&response.status<500&&result.keep_request===false){await store.releaseDraft(session.scope.key,entry.request_id);session.entry=await store.get(session.scope.key)||null;session.message=result.error||text('error');return;}
+      if(!response.ok&&response.status<500&&result.keep_request===false){await store.releaseDraft(session.scope.key,entry.request_id,crypto.randomUUID());session.entry=await store.get(session.scope.key)||null;session.message=result.error||text('error');return;}
       await store.markUnknown(session.scope.key,entry.request_id);session.entry=await store.get(session.scope.key)||null;session.message=text('unknown');
     }catch{session.message=text('storage');}
     finally{session.busy=false;draw(session);}
@@ -198,17 +202,21 @@
     const token=++revision;if(current){const old=current;current=null;closeSession(old);}
     const query=new URLSearchParams({lead_id:route.lead,expected_tenant_id:route.tenant,expected_user_id:route.user});
     try{
+      const ownerVersion=await store.ownerVersion();
       const response=await fetch('/api/platform/crm/chat/voice-capability?'+query,{credentials:'same-origin',cache:'no-store'}),result=await readJson(response);
       if(token!==revision||scope()?.key!==route.key||scope()?.policy!==route.policy||!response.ok||!result.enabled)return;
+      if(!await store.activate(route.tenant,route.user,ownerVersion)||token!==revision)return;
       const session=create(route);session.saving=true;current=session;
       actions.insertBefore(session.mic,sendButton);composer.append(session.host);draw(session);
-      try{await store.purgeOtherUsers(route.tenant,route.user);session.entry=await store.get(route.key)||null;}
+      try{voiceBroadcast?.postMessage({active:true,tenant:route.tenant,user:route.user});session.entry=await store.get(route.key)||null;}
       catch{session.message=text('storage');}
       finally{session.saving=false;if(same(session)){draw(session);scanStatuses(session);}}
     }catch{/* Unavailable capability remains hidden. */}
   }
   const stopCurrent=(discard=false)=>{revision++;if(current){const old=current;current=null;closeSession(old,discard);}};
-  const forgetUser=async()=>{const member=operator()?.member;const old=lastUser||(member?.tenant_id&&member?.telegram_id?{tenant:String(member.tenant_id),user:String(member.telegram_id)}:null);lastUser=null;stopCurrent(true);if(old)await store.purgeUser(old.tenant,old.user);};
+  const voiceBroadcast=typeof BroadcastChannel==='function'?new BroadcastChannel('beintaskbot-customer-voice-logout'):null;
+  if(voiceBroadcast)voiceBroadcast.onmessage=event=>{if(!lastUser)return;const sameUser=event.data?.tenant===lastUser.tenant&&event.data?.user===lastUser.user;if(event.data?.active?!sameUser:sameUser){lastUser=null;stopCurrent(true);}};
+  const forgetUser=async()=>{const member=operator()?.member;const old=lastUser||(member?.tenant_id&&member?.telegram_id?{tenant:String(member.tenant_id),user:String(member.telegram_id)}:null);lastUser=null;stopCurrent(true);if(old){voiceBroadcast?.postMessage(old);await store.purgeUser(old.tenant,old.user);}};
   window.tenantCustomerVoiceForget=forgetUser;
   document.addEventListener('tenant-chat-attachments-ready',()=>void attach());
   document.addEventListener('tenant-chat-close',()=>stopCurrent());

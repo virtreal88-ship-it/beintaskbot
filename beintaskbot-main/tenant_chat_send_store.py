@@ -73,7 +73,11 @@ def reserve(session, command):
                 error.keep_request = row['state'] != 'blocked'
                 conn.commit()  # Persist stale receipt transitions before returning the refusal.
                 raise error
-            cur.execute("SELECT request_id FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND lead_id=%s AND state IN ('preparing','sending','unknown') LIMIT 1", (key[0], command['lead_id']))
+            # A voice attempt with an unknown outcome remains non-retryable by
+            # its request ID, but must not freeze unrelated conversation sends.
+            cur.execute("""SELECT request_id FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND lead_id=%s
+              AND state IN ('preparing','sending','unknown')
+              AND NOT (state='unknown' AND COALESCE(route->>'voice_protocol','false')='true') LIMIT 1""", (key[0], command['lead_id']))
             if cur.fetchone():
                 conn.commit()
                 raise TenantLinearError('Bu çatda başqa göndərmə yoxlanılır. Kommo-da vəziyyəti yoxlayın.', 409)

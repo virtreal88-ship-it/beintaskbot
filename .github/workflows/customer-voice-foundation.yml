@@ -12,6 +12,7 @@ on:
       - 'beintaskbot-main/tenant_customer_voice.py'
       - 'beintaskbot-main/tenant_customer_voice_api.py'
       - 'beintaskbot-main/tenant_customer_voice_service.py'
+      - 'beintaskbot-main/tenant_chat_send_store.py'
       - 'beintaskbot-main/tenant_web_routes.py'
       - 'beintaskbot-main/tenant_web_assets.py'
       - 'beintaskbot-main/tenant_operator_dialogs.py'
@@ -19,6 +20,7 @@ on:
       - 'beintaskbot-main/tests/test_tenant_voice_recorder.cjs'
       - 'beintaskbot-main/tests/test_tenant_customer_voice*.py'
       - 'beintaskbot-main/tests/test_customer_voice_browser.cjs'
+      - 'beintaskbot-main/tests/test_tenant_chat_send_store.py'
       - 'beintaskbot-main/tests/test_tenant_web_routes.py'
   workflow_dispatch:
 permissions:
@@ -55,6 +57,7 @@ jobs:
       - run: command -v ffmpeg && command -v ffprobe
       - run: node --test tests/test_tenant_voice_recorder.cjs
       - run: python -m unittest discover -s tests -p 'test_tenant_customer_voice*.py' -v
+      - run: python -m unittest discover -s tests -p test_tenant_chat_send_store.py -v
       - run: python -m unittest discover -s tests -p test_tenant_web_routes.py -v
       - run: npm install --prefix .voice-test-deps --no-save playwright@1.62.1
       - run: node .voice-test-deps/node_modules/playwright/cli.js install --with-deps chromium
