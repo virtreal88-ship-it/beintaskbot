@@ -1,3 +1,4 @@
+process.env.TZ='Asia/Baku';
 const {JSDOM,VirtualConsole}=require('../.support-test-deps/node_modules/jsdom');
 const fs=require('node:fs'),assert=require('node:assert/strict');
 let contacts=[],deals=[],tasks=[],writes=[],optionFailure=false;
