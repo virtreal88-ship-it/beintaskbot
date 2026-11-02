@@ -27,6 +27,7 @@ import tenant_ai_group_coordination as group_coordination
 import tenant_ai_dashboard as ai_dashboard
 import tenant_ai_spend_budget as spend_budget
 import tenant_internal_consultations as consultations
+import tenant_dialog_consultations as dialog_consultations
 import tenant_member_store as member_store
 import tenant_consultation_notification_worker as consultation_worker
 import tenant_telegram_binding as telegram_binding
@@ -125,8 +126,7 @@ def db(database,monkeypatch):
 def prepare_manual_developer():
     target='synthetic-dev@g.us'
     connection=store._connect()
-    consultations._ready=False
-    consultations.schema(connection)
+    dialog_consultations.schema(connection)
     connection.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at) VALUES(%s::uuid,%s::uuid,%s,88,'Synthetic Developer',now()) ON CONFLICT DO NOTHING",(A,CA,target))
     connection.execute("INSERT INTO saas_dialog_developer_markers(tenant_id,channel_id,conversation_id,enabled,updated_by) VALUES(%s::uuid,%s::uuid,%s,TRUE,11) ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET enabled=TRUE",(A,CA,target))
     connection.commit()
