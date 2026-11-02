@@ -664,8 +664,8 @@ def test_actual_app_chromium_uses_real_case_http_and_acknowledges_only_a_rendere
         assert not thread.is_alive()
 
 
-def test_notification_proof_scans_are_bounded_once_per_tenant_for_large_mixed_history(notifications):
-    """Actual plan invariant, without a shared-runner wall-clock threshold."""
+def test_notification_proof_source_work_is_bounded_for_large_mixed_history(notifications):
+    """Bound actual row work across valid physical plans, without timing limits."""
     f = notifications
     case_id = _new_case(f, conversation='performance-source', lead=43)
     f['db'].execute("""INSERT INTO saas_support_events(tenant_id,event_key,ticket_id)
@@ -684,7 +684,11 @@ def test_notification_proof_scans_are_bounded_once_per_tenant_for_large_mixed_hi
       'Synthetic history','Kommo event','/app?view=deals&deal_id=901'
       FROM generate_series(1,1000) AS g(i)""", (A,))
     f['db'].commit()
-    f['db'].execute('ANALYZE saas_tenant_notifications,saas_support_events,saas_tenant_webhook_events')
+    f['db'].execute('''ANALYZE saas_tenant_notifications,saas_support_events,
+      saas_tenant_webhook_events,saas_support_tickets,saas_connect_conversations,
+      saas_connect_channels,saas_internal_consultations,saas_dialog_consultation_replies,
+      saas_connect_dialog_links,saas_crm_deals,saas_tenant_members,saas_tenants,
+      saas_tenant_workflow_policies''')
     f['db'].commit()
     listed = center.listing(PROFILE, limit=20)
     assert listed['unread_count'] == 2000 and len(listed['notifications']) == 20
@@ -703,17 +707,20 @@ def test_notification_proof_scans_are_bounded_once_per_tenant_for_large_mixed_hi
         for child in node.get('Plans', []):
             visit(child)
     visit(plan)
+    def processed_rows(node):
+        return sum(node.get(key, 0) for key in (
+            'Actual Rows', 'Rows Removed by Filter', 'Rows Removed by Join Filter')) * node.get('Actual Loops', 0)
     for relation in ('saas_support_events', 'saas_tenant_webhook_events'):
         scans = [node for node in nodes if node.get('Relation Name') == relation]
         assert scans, relation + ' must be exercised by the actual mixed-history projection'
-        assert sum(node['Actual Loops'] for node in scans) == 1, [
-            (node['Node Type'], node['Actual Loops'], node['Actual Rows']) for node in scans]
-    # Reading each base table once is insufficient if its materialized proof
-    # rows are then scanned for every notification. Bound the complete plan's
-    # row work generously enough for normal joins/index probes, independently
-    # of machine speed, while rejecting a quadratic proof-map consumer.
-    work = [(sum(node.get(key, 0) for key in (
-        'Actual Rows', 'Rows Removed by Filter', 'Rows Removed by Join Filter'))
-        * node.get('Actual Loops', 0), node['Node Type'], node.get('CTE Name'))
+        # Either side of a small join may be the outer relation. Allow a
+        # constant number of source passes while rejecting a source scan for
+        # each notification in this 1000-proof-per-source fixture.
+        assert sum(processed_rows(node) for node in scans) < 10 * 1000, [
+            (node['Node Type'], node['Actual Loops'], processed_rows(node)) for node in scans]
+    # Bounded base-table scans are insufficient if materialized proof rows
+    # are then scanned for every notification. The complete plan also has
+    # a linear row-work budget, including filtered and rejected join rows.
+    work = [(processed_rows(node), node['Node Type'], node.get('CTE Name'))
         for node in nodes]
     assert sum(item[0] for item in work) < 50 * (2000 + 2000), sorted(work, reverse=True)[:12]
