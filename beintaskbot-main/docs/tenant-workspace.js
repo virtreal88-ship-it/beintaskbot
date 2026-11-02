@@ -120,6 +120,7 @@
   }
   sections.querySelectorAll('button').forEach(button => button.onclick = () => {section=button.dataset.settingsTab;showSettings();});
   window.tenantOpenSettingsSection = target => {
+    if(target==='employees'&&document.getElementById('view-employees')){const entry=document.getElementById('companyEmployeesNav');if(entry)entry.click();return;}
     if (['integrations','ai','notifications'].includes(target)) {
       document.querySelector('.nav [data-view="integrations"]')?.click();
       return;
@@ -154,7 +155,7 @@
   const observer = new MutationObserver(showSettings);
   observer.observe(settings,{childList:true}); observer.observe(settings.querySelector('.grid'),{childList:true});
   document.addEventListener('tenant-profile', e => {catalog=e.detail.capabilities?.deal_board || [];updateIcons();showSettings();refresh();});
-  document.addEventListener('tenant-staff-management-ready', () => { section='employees';showSettings(); });
+  document.addEventListener('tenant-staff-management-ready', () => {if(document.getElementById('staffManagement')?.closest('#view-settings')){section='employees';showSettings();}});
   document.addEventListener('tenant-language',showSettings);
   const integrationRepository = document.createElement('div');
   integrationRepository.id = 'integrationSettingsRepository';
