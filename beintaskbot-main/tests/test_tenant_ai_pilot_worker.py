@@ -17,6 +17,7 @@ async def test_initial_consultation_runs_through_worker_and_requires_delivery_re
     import tenant_connect_videos as videos
     import tenant_internal_consultations as consultations
     import tenant_consultation_group as group_flow
+    import tenant_connect_voice as voice
 
     source = {'external_id': 'source-1', 'direction': 'incoming', 'body': 'Alış 1 qutu 50 AZN, ekranda 49,9992 göstərilir.',
         'message_type': 'text', 'happened_at': '2026-10-31T04:43:44+00:00', 'media_url': '', 'has_attachment': False}
@@ -45,6 +46,9 @@ async def test_initial_consultation_runs_through_worker_and_requires_delivery_re
     monkeypatch.setattr(worker, 'matching_triggers', lambda *_a, **_k: [])
     monkeypatch.setattr(worker, 'handoff_reason', lambda *_: '')
     monkeypatch.setattr(worker, '_next_open', lambda *_: None)
+    # This text-only pilot test is independent of the media coverage barrier,
+    # which has separate focused source/lease coverage.
+    monkeypatch.setattr(worker,'_check_connect_media',lambda *_a,**_k:None)
     monkeypatch.setattr(worker, 'knowledge_context', lambda *_a, **_k: [])
     monkeypatch.setattr(worker, 'record_token_usage', lambda *_a, **_k: None)
     monkeypatch.setattr(worker, 'generate', lambda *_a, **_k: (json.dumps({
@@ -57,6 +61,7 @@ async def test_initial_consultation_runs_through_worker_and_requires_delivery_re
     monkeypatch.setattr(images, 'prepare', empty_images)
     monkeypatch.setattr(documents, 'prepare', empty_documents)
     monkeypatch.setattr(videos, 'prepare', empty_videos)
+    monkeypatch.setattr(voice,'active',lambda *_a,**_k:True)
     monkeypatch.setattr(worker, 'history', lambda *_a, **_k: ([{'speaker': 'CLIENT', 'text': source['body']}], 0))
     monkeypatch.setattr(pilot, 'manual_live_job', lambda _job: True)
     monkeypatch.setattr(pilot, 'configured_group_scope', lambda: {'tenant_id':'tenant-1','channel_id':'channel-1','conversation_id':'developers@g.us'})
@@ -96,6 +101,7 @@ def _install_initial_worker_fakes(monkeypatch, *, generated, send_result='sent-1
     import tenant_connect_images as images
     import tenant_connect_documents as documents
     import tenant_connect_videos as videos
+    import tenant_connect_voice as voice
     import tenant_connect_transport as transport
     import tenant_ai_agent_native_crm_actions as native
 
@@ -135,6 +141,10 @@ def _install_initial_worker_fakes(monkeypatch, *, generated, send_result='sent-1
     monkeypatch.setattr(worker,'matching_triggers',lambda *_a,**_k:[])
     monkeypatch.setattr(worker,'handoff_reason',lambda *_:'')
     monkeypatch.setattr(worker,'_next_open',lambda *_:None)
+    # These cases assert pilot decision/routing behavior for a text-only
+    # source. Media coverage itself is covered by test_shared_media_coverage;
+    # keep its separate source/lease contract out of this fake DB harness.
+    monkeypatch.setattr(worker,'_check_connect_media',lambda *_a,**_k:None)
     monkeypatch.setattr(worker,'knowledge_context',lambda *_a,**_k:knowledge or [])
     monkeypatch.setattr(worker,'record_token_usage',lambda *_a,**_k:None)
     monkeypatch.setattr(worker,'record_pilot_initial_rejection',lambda *_a,**_k:True)
@@ -148,6 +158,7 @@ def _install_initial_worker_fakes(monkeypatch, *, generated, send_result='sent-1
     monkeypatch.setattr(images,'prepare',empty_images)
     monkeypatch.setattr(documents,'prepare',empty_documents)
     monkeypatch.setattr(videos,'prepare',empty_videos)
+    monkeypatch.setattr(voice,'active',lambda *_a,**_k:True)
     monkeypatch.setattr(connect,'finish_sent_after_reply_handoff',lambda *_:None)
     monkeypatch.setattr(worker,'finish_sent',lambda *_a,**_k:None)
     finishes=[]
@@ -224,3 +235,49 @@ async def test_fallback_obeys_worker_guards_and_never_retries_uncertain_or_refus
         assert finishes==[('superseded','automatic_processing_disabled')]
     else:
         assert finishes==[('superseded','connect_human_takeover')]
+
+
+@pytest.mark.asyncio
+async def test_automatic_developer_reply_runs_client_continuation_in_worker(monkeypatch):
+    import tenant_dialog_consultations as consultations
+    import tenant_connect_images as images
+    worker,job,logger,source,sends,finishes,diagnostics=_install_initial_worker_fakes(
+        monkeypatch,generated='Your request is accepted. The developer plans to review it tomorrow.')
+    job['payload'].update({'developer_case_followup':True,'case_id':'synthetic-case',
+        'expected_conversation_revision':3,'developer_reply_message_id':'synthetic-reply'})
+    monkeypatch.setattr(consultations,'active_case_developer_context',lambda *_a,**_k:[{
+        'source_id':'case-reply:synthetic-reply','message':'Завтра посмотрю','case_status':'open'}])
+    monkeypatch.setattr(consultations,'case_developer_followup_is_current',lambda *_a,**_k:True)
+    async def empty_case_images(*_a,**_k):return [],set(),[]
+    monkeypatch.setattr(images,'prepare_case',empty_case_images)
+    monkeypatch.setattr(worker,'assert_reservation_current',lambda *_a,**_k:None)
+    monkeypatch.setattr(worker,'_check_connect_media',lambda *_a,**_k:None)
+    generated=[]
+    monkeypatch.setattr(worker,'generate',lambda *args,**kwargs:
+        generated.append({'instructions':kwargs.get('instructions'),'extra_context':kwargs.get('extra_context')}) or
+        ('Your request is accepted. The developer plans to review it tomorrow.',{'input_tokens':1,'output_tokens':1,'total_tokens':2}))
+    await worker.process_connect_one(job,logger)
+    assert len(generated)==1 and len(sends)==1, (finishes,diagnostics)
+    assert 'without promising a fix or date' in generated[0]['instructions']
+    assert generated[0]['extra_context']['verified_developer_case_updates'][0]['message'].endswith('Завтра посмотрю')
+    assert sends[0][0][4]=='Your request is accepted. The developer plans to review it tomorrow.'
+    assert finishes==[]
+
+
+@pytest.mark.asyncio
+async def test_developer_followup_with_incomplete_case_media_never_generates_or_sends(monkeypatch):
+    import tenant_dialog_consultations as consultations
+    worker,job,logger,source,sends,finishes,_diagnostics=_install_initial_worker_fakes(
+        monkeypatch,generated='Never reached')
+    source.update({'message_type':'image','has_attachment':True,'media_url':''})
+    job['payload'].update({'developer_case_followup':True,'case_id':'synthetic-case',
+        'expected_conversation_revision':3,'developer_reply_message_id':'synthetic-reply'})
+    monkeypatch.setattr(consultations,'active_case_developer_context',lambda *_a,**_k:[{
+        'source_id':'case-reply:synthetic-reply','message':'Завтра посмотрю','case_status':'open'}])
+    monkeypatch.setattr(consultations,'case_developer_followup_is_current',lambda *_a,**_k:True)
+    generated=[]
+    import tenant_ai_agent_worker as worker_module
+    monkeypatch.setattr(worker_module,'generate',lambda *_a,**_k:generated.append(True))
+    await worker.process_connect_one(job,logger)
+    assert generated==[] and sends==[]
+    assert finishes and any('case_required_media_coverage_unavailable' in str(item) for item in finishes)

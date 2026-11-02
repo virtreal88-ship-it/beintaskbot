@@ -13,7 +13,20 @@ def pending(limit=10):
             if not (cur.fetchone() or {}).get('ready'):return []
             cur.execute('''SELECT r.id::text,r.tenant_id::text,c.created_by FROM saas_dialog_consultation_replies r
               JOIN saas_internal_consultations c ON c.tenant_id=r.tenant_id AND c.id=r.consultation_id
-              WHERE r.draft_state='pending' AND r.handled_at IS NULL AND c.created_by IS NOT NULL AND c.case_id IS NULL
+              LEFT JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+              LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=t.tenant_id AND cs.provider='connect'
+                AND cs.channel_id=t.channel_id::text AND cs.conversation_id=t.conversation_id
+              LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
+              WHERE r.draft_state='pending' AND r.draft_request_id IS NULL AND r.handled_at IS NULL AND c.created_by IS NOT NULL
+                AND (c.case_id IS NULL OR (t.status<>'resolved' AND a.mode='manual'
+                  AND r.source_kind='provider' AND r.message_type='text'
+                  AND EXISTS(SELECT 1 FROM saas_crm_messages m WHERE m.tenant_id=r.tenant_id
+                    AND m.external_id=r.source_external_id AND m.channel='connect:'||r.channel_id::text
+                    AND m.direction='incoming' AND m.raw->>'quotedExternalMessageId' IS NOT NULL
+                    AND EXISTS(SELECT 1 FROM saas_consultation_group_deliveries d
+                      WHERE d.tenant_id=c.tenant_id AND d.consultation_id=c.id AND d.channel_id=r.channel_id
+                        AND d.conversation_id=r.conversation_id AND d.state='sent'
+                        AND d.provider_message_id=m.raw->>'quotedExternalMessageId'))))
                 AND (r.draft_retry_after IS NULL OR r.draft_retry_after<=now())
               ORDER BY r.created_at LIMIT %s''',(limit,))
             return [dict(r) for r in cur.fetchall()]
@@ -186,9 +199,36 @@ def reconcile():
             for row in cur.fetchall():
                 raw=row.get('raw') if isinstance(row.get('raw'),dict) else {}
                 if raw.get('ai_origin') is True or raw.get('aiOrigin') is True:continue
-                count+=bool(flow.record_reply(cur,row['tenant_id'],row['channel_id'],row['conversation_id'],
+                linked=flow.record_reply(cur,row['tenant_id'],row['channel_id'],row['conversation_id'],
                     flow.message_identity(row['external_id'],raw),row['body'] or str(raw.get('caption') or ''),raw.get('quotedExternalMessageId'),
-                    row.get('author_name') or '',row['happened_at'],message_type=row['message_type'],source_external_id=row['external_id']))
+                    row.get('author_name') or '',row['happened_at'],message_type=row['message_type'],source_external_id=row['external_id'])
+                count+=bool(linked)
+                if linked and raw.get('quotedExternalMessageId'):
+                    from tenant_ai_agent_connect import enqueue_case_developer_followup
+                    enqueue_case_developer_followup(cur,row['tenant_id'],linked,source_external_id=row['external_id'],
+                        quoted_message_id=str(raw['quotedExternalMessageId']))
+            # Recover a saved, authoritative reply if the webhook path committed
+            # the receipt but its follow-up enqueue failed. The event fingerprint
+            # makes this reconciliation idempotent; it never sends provider I/O.
+            cur.execute('''SELECT r.id::text AS reply_id,r.tenant_id::text,r.source_external_id,
+                r.channel_id::text,r.conversation_id,m.raw
+              FROM saas_dialog_consultation_replies r
+              JOIN saas_internal_consultations c ON c.tenant_id=r.tenant_id AND c.id=r.consultation_id
+              JOIN saas_support_tickets t ON t.tenant_id=c.tenant_id AND t.id=c.case_id
+              JOIN saas_crm_messages m ON m.tenant_id=r.tenant_id AND m.external_id=r.source_external_id
+                AND m.channel='connect:'||r.channel_id::text AND m.direction='incoming'
+              WHERE r.source_kind='provider' AND r.message_type='text' AND t.status<>'resolved'
+                AND r.source_external_id<>'' AND m.raw->>'quotedExternalMessageId' IS NOT NULL
+              ORDER BY r.created_at DESC LIMIT 100''')
+            for saved in cur.fetchall():
+                try:
+                    from tenant_ai_agent_connect import enqueue_case_developer_followup
+                    count+=bool(enqueue_case_developer_followup(cur,saved['tenant_id'],saved['reply_id'],
+                        source_external_id=saved['source_external_id'],
+                        quoted_message_id=str((saved.get('raw') or {}).get('quotedExternalMessageId') or '')))
+                except Exception:
+                    # Fail closed; a later scheduled reconciliation can retry.
+                    continue
         # Historical CASE replies already linked by the previous handler remain
         # visible even if their original quoted webhook metadata was not retained.
         with conn.cursor() as cur:

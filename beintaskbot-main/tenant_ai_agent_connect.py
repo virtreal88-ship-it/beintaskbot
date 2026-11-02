@@ -718,12 +718,16 @@ def enqueue_case_developer_followup(cur,tenant,reply_id,*,source_external_id='',
     message in the same open case and captures the active conversation revision.
     """
     if not quoted_message_id:return False
-    cur.execute('''SELECT r.id::text AS reply_id,c.case_id::text,t.channel_id::text AS client_channel,
-      t.conversation_id,t.assigned_developer_channel_id::text AS dev_channel,
-      t.assigned_developer_conversation_id AS dev_conversation,cs.agent_id::text AS agent_id,
+    cur.execute('''SELECT r.id::text AS reply_id,r.source_actor,c.case_id::text,t.channel_id::text AS client_channel,
+      t.conversation_id,r.channel_id::text AS reply_channel,r.conversation_id AS reply_conversation,
+      (t.assigned_developer_channel_id IS DISTINCT FROM r.channel_id OR t.assigned_developer_conversation_id IS DISTINCT FROM r.conversation_id) AS auto_recipient,
+      cs.agent_id::text AS agent_id,
       cs.state AS dialog_state,cs.revision AS dialog_revision,cs.agent_assignment_id::text AS assignment_id,
+      t.assigned_developer_channel_id::text AS assigned_developer_channel_id,
+      t.assigned_developer_conversation_id AS assigned_developer_conversation_id,
       m.id::text AS source_id,m.external_id,m.body,m.message_type,m.kommo_lead_id AS lead_id,
-      a.enabled AS agent_enabled,a.mode,a.scopes,a.schedule,a.delay_seconds,
+      a.enabled AS agent_enabled,a.mode,a.scopes,a.schedule,a.delay_seconds,a.response_policy,
+      (a.response_policy->>'auto_case_dispatch_owner_id')::bigint AS dispatch_owner,
       s.enabled AS company_enabled,s.auto_send_enabled,s.emergency_stop,tn.status AS tenant_status,
       ch.active AS channel_active
       FROM saas_dialog_consultation_replies r
@@ -740,20 +744,36 @@ def enqueue_case_developer_followup(cur,tenant,reply_id,*,source_external_id='',
           ON x.tenant_id=cm.tenant_id AND x.id=cm.message_id
         WHERE cm.tenant_id=t.tenant_id AND cm.ticket_id=t.id AND x.direction='incoming'
           AND x.channel='connect:'||t.channel_id::text
+          AND NOT EXISTS(SELECT 1 FROM saas_crm_messages newer WHERE newer.tenant_id=x.tenant_id
+            AND newer.kommo_lead_id=x.kommo_lead_id AND newer.channel=x.channel AND newer.direction='incoming'
+            AND (COALESCE(newer.happened_at,newer.created_at),newer.id)>(COALESCE(x.happened_at,x.created_at),x.id))
         ORDER BY COALESCE(x.happened_at,x.created_at) DESC,x.id DESC LIMIT 1) m ON TRUE
       WHERE r.id=%s::uuid AND r.source_kind='provider' AND r.message_type='text'
         AND c.tenant_id=%s::uuid AND t.status<>'resolved'
-        AND r.channel_id=t.assigned_developer_channel_id
-        AND r.conversation_id=t.assigned_developer_conversation_id
         AND r.source_external_id=%s
         AND EXISTS(SELECT 1 FROM saas_consultation_group_deliveries d
           JOIN saas_internal_consultations dc ON dc.tenant_id=d.tenant_id AND dc.id=d.consultation_id
           WHERE d.tenant_id=r.tenant_id AND dc.case_id=t.id AND d.state='sent'
-            AND d.channel_id=t.assigned_developer_channel_id AND d.conversation_id=t.assigned_developer_conversation_id
-            AND d.provider_message_id=%s)
+            AND d.channel_id=r.channel_id AND d.conversation_id=r.conversation_id
+            AND d.provider_message_id=%s AND (
+              (d.channel_id=t.assigned_developer_channel_id AND d.conversation_id=t.assigned_developer_conversation_id)
+              OR EXISTS(SELECT 1 FROM saas_ai_case_developer_dispatches x
+                WHERE x.tenant_id=t.tenant_id AND x.case_id=t.id AND x.channel_id=d.channel_id
+                  AND x.conversation_id=d.conversation_id AND x.state IN ('sent','pending','unknown','preparing')
+                  AND a.mode='automatic' AND a.response_policy->>'auto_case_dispatch_enabled'='true'
+                  AND COALESCE(a.response_policy->'developer_destinations','[]'::jsonb) @>
+                    jsonb_build_array(jsonb_build_object('channel_id',d.channel_id::text,'conversation_id',d.conversation_id))))
+            )
         AND EXISTS(SELECT 1 FROM saas_connect_conversations d WHERE d.tenant_id=r.tenant_id
           AND d.connect_channel_id=r.channel_id AND d.conversation_id=r.conversation_id
-          AND d.conversation_id NOT LIKE '%%@g.us' AND d.conversation_id NOT LIKE '%%@broadcast')
+          AND d.conversation_id NOT LIKE '%%@broadcast')
+        AND (r.conversation_id NOT LIKE '%%@g.us' OR
+          (r.source_actor IS NOT NULL AND EXISTS(SELECT 1 FROM saas_ai_group_staff gs
+            JOIN saas_tenant_members gm ON gm.tenant_id=gs.tenant_id AND gm.telegram_id=gs.member_id AND gm.active=TRUE
+            JOIN saas_crm_messages rm ON rm.tenant_id=r.tenant_id AND rm.external_id=r.source_external_id
+              AND rm.channel='connect:'||r.channel_id::text AND rm.direction='incoming'
+              AND gs.jid=ANY(ARRAY[rm.raw->>'participantJid',rm.raw->>'participantAlt',rm.raw->>'senderJid']::text[])
+            WHERE gs.tenant_id=r.tenant_id AND gs.channel_id=r.channel_id AND gs.member_id=r.source_actor)))
         AND EXISTS(SELECT 1 FROM saas_support_ticket_messages cm WHERE cm.tenant_id=t.tenant_id
           AND cm.ticket_id=t.id AND cm.message_id=m.id)
       FOR UPDATE OF t,cs''',(reply_id,tenant,str(source_external_id),str(quoted_message_id)))
@@ -767,8 +787,14 @@ def enqueue_case_developer_followup(cur,tenant,reply_id,*,source_external_id='',
         or not scope_matches(row.get('scopes'),str(row['client_channel']))
         or not runtime_flag('AI_AGENTS_ENABLED') or not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')):
         return False
-    from tenant_ai_group_coordination import group_jid
-    if group_jid(row['conversation_id']):return False
+    if row.get('auto_recipient'):
+      try:
+        from tenant_dialog_consultations import access as dialogs_access,developer_target
+        dialogs_tenant,_actor,dialogs_policy=dialogs_access(cur,{'tenant_id':tenant,'telegram_id':row.get('dispatch_owner')},'dialogs')
+        if str(dialogs_tenant)!=str(tenant):return False
+        developer_target(cur,tenant,dialogs_policy,str(row['reply_channel']),row['reply_conversation'])
+      except Exception:
+        return False
     channel_scope('connect',row['client_channel'])
     event_fingerprint=hashlib.sha256(('connect:developer-case-reply:'+str(reply_id)).encode()).hexdigest()
     source_external=str(row['external_id'] or '')
@@ -776,14 +802,35 @@ def enqueue_case_developer_followup(cur,tenant,reply_id,*,source_external_id='',
     payload={'message_id':source_id,'channel_id':str(row['client_channel']),'conversation_id':str(row['conversation_id']),
       'text':str(row['body'] or '')[:8000],'message_type':str(row['message_type'] or 'text')[:40],
       'first_inquiry':False,'phone':'','developer_case_followup':True,'case_id':str(row['case_id']),
-      'developer_reply_message_id':str(reply_id),'expected_conversation_revision':int(row['dialog_revision'])}
+      'developer_reply_message_id':str(reply_id),'developer_reply_channel_id':str(row['reply_channel']),
+      'developer_reply_conversation_id':str(row['reply_conversation']),'developer_quoted_message_id':str(quoted_message_id),
+      'developer_expected_assignment_channel_id':str(row.get('assigned_developer_channel_id') or ''),
+      'developer_expected_assignment_conversation_id':str(row.get('assigned_developer_conversation_id') or ''),
+      'expected_conversation_revision':int(row['dialog_revision'])}
+    # A case follow-up in a client group may reuse only the exact original
+    # admitted customer event. Never mint a fresh group fence from a developer
+    # reply or resume group authority implicitly.
+    from tenant_ai_group_coordination import group_jid,job_allowed
+    if group_jid(row['conversation_id']):
+      cur.execute('''SELECT payload FROM saas_tenant_webhook_events WHERE tenant_id=%s::uuid
+        AND provider='connect' AND event_type='incoming_message' AND external_id=%s
+        AND payload->>'channel_id'=%s AND payload->>'conversation_id'=%s
+        AND payload->>'message_id'=%s ORDER BY received_at DESC LIMIT 2''',
+        (tenant,source_id,str(row['client_channel']),str(row['conversation_id']),source_id))
+      admitted=[item.get('payload') or {} for item in cur.fetchall()]
+      if len(admitted)!=1 or not admitted[0].get('group_event_key') or not admitted[0].get('group_revision'):
+        return False
+      payload.update({key:admitted[0][key] for key in ('group_event_key','group_revision','primary_agent_id')})
+      admission_job={'provider':'connect','tenant_id':tenant,'channel_id':str(row['client_channel']),
+        'conversation_id':str(row['conversation_id']),'agent_id':str(row['agent_id']),'payload':payload}
+      if not job_allowed(cur,admission_job):return False
     cur.execute('''INSERT INTO saas_tenant_webhook_events(tenant_id,fingerprint,provider,external_id,event_type,payload,state,available_at)
       VALUES(%s::uuid,%s,'connect',%s,'developer_case_reply',%s::jsonb,'queued',now())
       ON CONFLICT(tenant_id,fingerprint) DO NOTHING RETURNING fingerprint''',
       (tenant,event_fingerprint,'case-developer-reply:'+str(reply_id),_json(payload)))
     if not cur.fetchone():return False
-    cur.execute("UPDATE saas_tenant_webhook_events SET state='superseded',completed_at=now(),error_code='developer_case_reply' WHERE tenant_id=%s::uuid AND provider='connect' AND state IN ('queued','processing') AND payload->>'conversation_id'=%s AND payload->>'channel_id'=%s AND fingerprint<>%s",
-      (tenant,row['conversation_id'],str(row['client_channel']),event_fingerprint))
+    # Never supersede unrelated customer turns. If a newer customer message
+    # arrived, the SELECT above rejects this follow-up and that job owns progress.
     cur.execute('''INSERT INTO saas_ai_agent_jobs
       (tenant_id,agent_id,provider,conversation_id,lead_id,talk_id,chat_id,channel_id,event_fingerprint,due_at,state)
       VALUES(%s::uuid,%s::uuid,'connect',%s,%s,'',%s,%s,%s,now()+(%s*interval '1 second'),'queued')

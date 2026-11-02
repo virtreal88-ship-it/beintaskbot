@@ -105,6 +105,11 @@ def handoff(job,reason,*,source_message_id='',expected_conversation_revision=Non
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
+            group_jid=None
+            if job['provider']=='connect':
+                from tenant_ai_group_coordination import group_jid as _group_jid,lock_group,authority
+                group_jid=_group_jid(chat)
+                if group_jid:lock_group(cur,tenant,chat)
             lock_dialog(cur, tenant, job["provider"], job.get("channel_id"), chat)
             if source_message_id:
                 # A generated handoff is valid only while this exact inbound
@@ -133,6 +138,12 @@ def handoff(job,reason,*,source_message_id='',expected_conversation_revision=Non
                         (expected_conversation_revision is not None
                          and int(state.get('revision') or 0)!=expected_conversation_revision)):
                     return False
+                if preserve_active and group_jid:
+                    # Creating a case must not stop a client group or leave a
+                    # new follow-up with implicit group authority. Preserve the
+                    # active group only while the exact assigned agent remains
+                    # authorized under the group lock.
+                    if not authority(cur,tenant,scope,chat,job.get('agent_id')):return False
                 try: source_key=str(uuid.UUID(str(source_message_id)))
                 except (ValueError,TypeError,AttributeError): return False
                 cur.execute('''SELECT external_id FROM saas_crm_messages
@@ -144,7 +155,7 @@ def handoff(job,reason,*,source_message_id='',expected_conversation_revision=Non
                     return False
             if handoff_recorded(cur, job):
                 return False
-            if job['provider'] == 'connect':
+            if job['provider'] == 'connect' and not preserve_active:
                 from tenant_ai_group_coordination import stop
                 stop(cur, tenant, chat, reason=reason)
             if preserve_active:

@@ -520,6 +520,27 @@ def test_generated_handoff_current_event_creates_one_case_and_skips_queued_jobs(
     assert state=={'state':'skipped','error_code':'human_handoff'}
 
 
+def test_auto_case_preserve_active_keeps_group_authority_and_jobs(db,monkeypatch):
+    import tenant_ai_group_coordination as groups
+    job=seed_job(db);group='120363431037910651@g.us';source=str(uuid.uuid4())
+    monkeypatch.setattr(actions,'_connect',lambda:db)
+    groups.create_schema(db)
+    db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,conversation_kind,lead_id) VALUES(%s::uuid,%s::uuid,%s,'group',999)",(A,CA,group))
+    db.execute("UPDATE saas_ai_agents SET scopes=%s::jsonb WHERE tenant_id=%s::uuid AND id=%s::uuid",(json.dumps([{'provider':'connect','channel_id':CA,'allow_group_messages':True}]),A,AGENT))
+    db.execute("INSERT INTO saas_ai_group_coordination(tenant_id,group_jid,state,revision,assignments) VALUES(%s::uuid,%s,'active',7,%s::jsonb)",(A,group,json.dumps([{'agent_id':AGENT,'channel_id':CA,'priority':0}])))
+    db.execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,conversation_id,channel_id,agent_id,state,revision) VALUES(%s::uuid,'connect',%s,%s,%s::uuid,'active',4)",(A,group,CA,AGENT))
+    db.execute("UPDATE saas_ai_agent_jobs SET conversation_id=%s,chat_id=%s,state='processing',lease_token=%s,lease_until=now()+interval '3 minutes',lead_id=999,revision=1 WHERE tenant_id=%s::uuid AND event_fingerprint='evt'",(group,group,job['lease_token'],A))
+    db.execute("INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,body,message_type,happened_at) VALUES(%s::uuid,%s::uuid,999,%s,'incoming',%s,'Group issue','text',now())",(source,A,'connect:'+source,'connect:'+CA));db.commit()
+    job.update({'lead_id':999,'conversation_id':group,'chat_id':group,'lease_token':job['lease_token'],'revision':1})
+    state=db.execute("SELECT revision FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s",(A,CA,group))[0]['revision'];db.commit()
+    with patch.object(store,'summarize_created'):
+        assert actions.handoff(job,'Create a support case',source_message_id=source,
+            expected_conversation_revision=state,preserve_active=True)
+    assert db.execute("SELECT state,revision FROM saas_ai_group_coordination WHERE tenant_id=%s::uuid AND group_jid=%s",(A,group))[0]=={'state':'active','revision':7}
+    assert db.execute("SELECT state FROM saas_ai_conversation_state WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s AND conversation_id=%s",(A,CA,group))[0]['state']=='active'
+    assert db.execute("SELECT state FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND event_fingerprint='evt'",(A,))[0]['state']=='skipped'
+
+
 def test_reply_then_handoff_creates_ticket(db):
     job=seed_job(db)
     with patch.object(store,'summarize_created'):

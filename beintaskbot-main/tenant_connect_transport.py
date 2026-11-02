@@ -1064,7 +1064,8 @@ def _ingest_once(raw: bytes, signature: str, event: dict) -> bool:
                         str(data.get('text') or data.get('caption') or ''),data.get('quotedExternalMessageId'),
                         str(metadata.get('participant_name') or _phone_from_jid(metadata.get('participant_jid')) or metadata.get('display_name') or metadata.get('participant_jid') or conversation),
                         event.get('occurred_at'),message_type=str(data.get('type') or 'text'),
-                        source_external_id='connect:'+str(data.get('id') or event_id))
+                        source_external_id='connect:'+str(data.get('id') or event_id),
+                        source_actor=employee if coordinated and employee is not None else None)
                     if linked and data.get('quotedExternalMessageId'):
                         cur.execute('SAVEPOINT case_developer_followup')
                         try:
@@ -1331,7 +1332,8 @@ def download_connect_message_media(route: dict, message_id: str, expected_type: 
 
 def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversation_id: str,
                             text: str, run_id: str, expected_revision: int, *, handoff_fingerprint: str = '',
-                            pilot_scope_fenced: bool = False, stop_after_reply: bool = False, coverage_manifest=None) -> str | None:
+                            pilot_scope_fenced: bool = False, stop_after_reply: bool = False, coverage_manifest=None,
+                            case_followup_binding=None) -> str | None:
     """Serialize Connect send with an observed human takeover.
 
     The row lock intentionally spans the short Connect request. If the human
@@ -1352,6 +1354,11 @@ def send_ai_reply_if_active(tenant: str, lead_id: int, channel_id: str, conversa
         conn.commit()  # Release DDL locks before waiting on a dialogue/group lock.
         with conn.cursor() as cur:
             lock_dialog(cur, tenant, "connect", channel_id, conversation_id)
+            if case_followup_binding is not None:
+                from tenant_dialog_consultations import case_developer_followup_current
+                if not case_developer_followup_current(cur,tenant,case_followup_binding):
+                    conn.rollback()
+                    return None
             if coordinated:
                 # Lock candidate settings before choosing the scheduled speaker.
                 cur.execute('SELECT id FROM saas_ai_agents WHERE tenant_id=%s::uuid ORDER BY id FOR SHARE',(tenant,))

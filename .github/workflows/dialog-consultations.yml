@@ -20,6 +20,7 @@ on:
       - 'beintaskbot-main/tests/test_support_consultation_flow_ui.cjs'
       - 'beintaskbot-main/tests/test_support_ticket_modal_browser.cjs'
       - 'beintaskbot-main/tests/test_tenant_support_inbox*'
+      - 'beintaskbot-main/tests/test_operator_case_submission_ui.cjs'
       - 'beintaskbot-main/tenant_dialog_audio*.py'
       - 'beintaskbot-main/tests/test_dialog_audio_transcription*'
       - 'beintaskbot-main/tests/test_dialog_audio_result_durability.py'
@@ -222,6 +223,7 @@ jobs:
           node tests/test_developer_media_reply_ui.cjs
           node tests/test_support_ticket_modal_browser.cjs
           node tests/test_tenant_support_inbox_ui.cjs
+          node tests/test_operator_case_submission_ui.cjs
           node tests/test_tenant_push_dialog_route_ui.cjs
           node tests/test_tenant_notification_badge_browser.cjs
           node tests/test_dialog_photo_status_ui.cjs

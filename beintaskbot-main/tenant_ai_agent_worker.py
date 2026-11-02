@@ -992,12 +992,15 @@ async def process_connect_one(job, logger):
         pilot_payload=payload if isinstance(payload,dict) else {}
         pilot_developer_turn=pilot_payload.get('pilot_developer_followup') is True
         pilot_customer_turn=pilot_payload.get('pilot_customer_case_reply') is True
+        # A quoted developer reply uses the case-bound media/source guards
+        # without entering the older pilot's strict JSON response protocol.
         pilot_case_turn=pilot_developer_turn or pilot_customer_turn
-        pilot_case_id=str(pilot_payload.get('case_id') or '') if pilot_case_turn else ''
+        case_context_turn=pilot_case_turn or developer_followup
+        pilot_case_id=str(pilot_payload.get('case_id') or '') if case_context_turn else ''
         from tenant_connect_images import prepare_case as prepare_case_images,live as image_live,ImageInactive
         case_media_artifacts=[]
         try:
-            if pilot_case_turn:
+            if case_context_turn:
                 if pilot_case_id:
                     images,analyzed_images,case_media_artifacts=await prepare_case_images(
                         job,reservation,pilot_case_id,model,logger)
@@ -1011,14 +1014,14 @@ async def process_connect_one(job, logger):
             await asyncio.to_thread(finish_superseded,job,reservation,'image_parent_inactive');return
         from tenant_connect_documents import prepare as prepare_documents, live as documents_live, DocumentInactive
         try:
-            documents = await prepare_documents(job, reservation, context[-30:], logger) if pilot_case_turn else {}
+            documents = await prepare_documents(job, reservation, context[-30:], logger) if case_context_turn else {}
         except DocumentInactive:
             await asyncio.to_thread(finish_superseded,job,reservation,'document_parent_inactive');return
         if documents and not await asyncio.to_thread(documents_live,job,reservation):
             await asyncio.to_thread(finish_superseded,job,reservation,'document_parent_inactive');return
         from tenant_connect_videos import prepare as prepare_videos
         video_observations,video_statuses,video_transcripts=(await prepare_videos(
-            job,reservation,context[-30:],logger)) if pilot_case_turn else ({},{},{})
+            job,reservation,context[-30:],logger)) if case_context_turn else ({},{},{})
         context_rows = [{**row, 'body': ''} if row.get('transcript') else row for row in context]
         try:
             lines, missing = history(context_rows[-30:], transcripts,analyzed_media=analyzed_images,
@@ -1033,7 +1036,7 @@ async def process_connect_one(job, logger):
                       'text': '[Attachment unavailable: do not infer its contents]',
                       'at': str(source.get('happened_at') or '')}]
             missing = 1 if str(source.get('message_type') or 'text').casefold() not in {'text',''} else 0
-        if not pilot_case_turn:
+        if not case_context_turn:
             from tenant_episode_media import context_lines
             lines,missing=context_lines(context,rows,coverage=coverage_manifest)
         context_media_ids={str(row.get('external_id') or '').removeprefix('connect:') for row in context}
@@ -1065,18 +1068,20 @@ async def process_connect_one(job, logger):
         await asyncio.to_thread(_check_connect_media,job,reservation,lines=lines)
         query = str(source.get('body') or '')[:6000]
         from tenant_ai_pilot import manual_live_job
-        pilot_initial_turn=manual_live_job(job) and not pilot_case_turn
+        pilot_initial_turn=manual_live_job(job) and not case_context_turn
         from tenant_episode_media import evidence_query
-        knowledge_query=(evidence_query(rows,source_id) or query) if not pilot_case_turn else query
+        knowledge_query=(evidence_query(rows,source_id) or query) if not case_context_turn else query
         if pilot_developer_turn:
             knowledge_query=str(pilot_payload.get('developer_reply') or query)[:1000]
         elif pilot_customer_turn:
             knowledge_query=(str(pilot_payload.get('developer_reply') or '')+' '+query)[:1000]
-        if not pilot_case_turn:await asyncio.to_thread(episode_execution.check_sources)
+        if not case_context_turn:await asyncio.to_thread(episode_execution.check_sources)
         knowledge = await asyncio.to_thread(knowledge_context, tenant, knowledge_query, agent_id=job['agent_id'])
         developer_updates=[]
         if developer_followup:
-            from tenant_dialog_consultations import active_case_developer_context
+            from tenant_dialog_consultations import active_case_developer_context,case_developer_followup_is_current
+            if not await asyncio.to_thread(case_developer_followup_is_current,tenant,job.get('payload') or {}):
+                await asyncio.to_thread(skip_job,job,'developer_case_reply_authorization_stale');return
             developer_updates=await asyncio.to_thread(active_case_developer_context,job,source_id)
             if not developer_updates or not any(item.get('source_id') for item in developer_updates):
                 await asyncio.to_thread(skip_job,job,'developer_case_reply_context_unavailable');return
@@ -1147,7 +1152,7 @@ async def process_connect_one(job, logger):
             from tenant_ai_agent_no_answer import prompt_instructions
             prompt += '\n\n' + prompt_instructions()
         assert_job_allowed(job)
-        if not pilot_case_turn:await asyncio.to_thread(episode_execution.check_sources)
+        if not case_context_turn:await asyncio.to_thread(episode_execution.check_sources)
         await asyncio.to_thread(_check_connect_media,job,reservation,lines=lines)
         expert_result = await request_expert(job, reservation, problem=query, lines=lines, triggers=matched,
             checks=['Exact Connect channel and conversation verified', 'Unavailable media count: '+str(missing)],
@@ -1167,7 +1172,7 @@ async def process_connect_one(job, logger):
         phase = 'connect_generation'
         if images and not await asyncio.to_thread(image_live,job,reservation):
             await asyncio.to_thread(finish_superseded,job,reservation,'image_parent_inactive');return
-        if not pilot_case_turn:await asyncio.to_thread(episode_execution.check_sources)
+        if not case_context_turn:await asyncio.to_thread(episode_execution.check_sources)
         assert_reservation_current(job,reservation)
         await asyncio.to_thread(_check_connect_media,job,reservation,lines=lines)
         draft, usage = await asyncio.to_thread(generate, reservation['api_key'], model, 'reply', lines, '',
@@ -1188,7 +1193,7 @@ async def process_connect_one(job, logger):
             await asyncio.to_thread(record_token_usage, job, reservation, combined, cumulative=True, generated=True)
         else:
             await asyncio.to_thread(record_token_usage, job, reservation, usage, cumulative=bool(reservation.get('episode_media_usage')),generated=True)
-        if not pilot_case_turn:await asyncio.to_thread(episode_execution.check_sources)
+        if not case_context_turn:await asyncio.to_thread(episode_execution.check_sources)
         pilot_decision=None
         pilot_action=''
         if pilot_initial_turn:
@@ -1402,11 +1407,13 @@ async def process_connect_one(job, logger):
                 await asyncio.to_thread(finish_superseded,job,reservation,'developer_case_dialog_revision_changed');return
             handoff_after_reply = any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matched)
             send_options = {'pilot_scope_fenced':job.get('_pilot_scope_fenced') is True,'coverage_manifest':coverage_manifest}
+            if developer_followup:
+                send_options['case_followup_binding']=dict(job.get('payload') or {})
             if handoff_after_reply:
                 send_options['handoff_fingerprint'] = job['event_fingerprint']
             def route_and_send():
                 _check_connect_media(job,reservation,lines=lines)
-                if not pilot_case_turn:episode_execution.check_sources()
+                if not case_context_turn:episode_execution.check_sources()
                 return send_ai_reply_if_active(tenant, int(job['lead_id']), str(job['channel_id']),
                                                str(job['conversation_id']), draft[:8000], reservation['run_id'],
                                                int(reservation.get('conversation_revision') or 0), **send_options)
