@@ -29,10 +29,13 @@ def handler(member, origin, logger, resource='list'):
                 if len(raw) > 2000:
                     raise TenantLinearError('Слишком большой запрос.', 413)
                 data = json.loads(raw)
-                if not isinstance(data, dict) or set(data) != {'expected_tenant_id', 'expected_user_id'}:
+                fields={'expected_tenant_id', 'expected_user_id'}
+                receipt={'opened_case_id','opened_event_key'}
+                if not isinstance(data, dict) or set(data) not in (fields,fields|receipt):
                     raise TenantLinearError('Некорректный запрос.', 400)
                 _expected(data, profile)
-                result = await asyncio.to_thread(center.mark_read, profile, request.match_info['notification_id'])
+                options={key:data[key] for key in receipt} if receipt<=set(data) else {}
+                result = await asyncio.to_thread(center.mark_read, profile, request.match_info['notification_id'],**options)
             else:
                 raise TenantLinearError('Метод не поддерживается.', 405)
             return web.json_response({'success': True, 'result': result}, headers=headers)
