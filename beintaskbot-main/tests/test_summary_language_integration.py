@@ -817,3 +817,155 @@ def test_preupgrade_extraction_digest_new_language_annotations_do_not_admit_anot
     assert repeated['request']['status'] == state
     generation.assert_called_once()
     assert f['db'].execute('SELECT count(*) AS n FROM saas_knowledge_extractions WHERE tenant_id=%s::uuid', (A,))[0]['n'] == 1
+
+
+@pytest.mark.parametrize('language', [None, 'tr'])
+def test_full_reload_restores_unknown_regeneration_exact_immutable_command_without_another_paid_call(language_db, language):
+    f = language_db
+    page, _ids = _case(f, [AZ])
+    ticket_id = page['ticket']['id']
+    command = _regenerate(page, language=language)
+    normalized = {**command, 'language': language}
+    f['provider'].side_effect = TimeoutError('Synthetic unknown provider outcome before browser reload')
+    with pytest.raises(TimeoutError):
+        summaries.regenerate(PROFILE, ticket_id, command)
+    restored = cases.detail({**PROFILE, 'locale': 'en'}, ticket_id)
+    assert restored['summary_pending_request'] == {'command': normalized, 'state': 'unknown'}
+    restored['summary_pending_request']['command']['language'] = 'ru'
+    cases.update(PROFILE, ticket_id, {'description': 'Employee edit made after the uncertain request'})
+    _policy(mode='fixed', fixed='en')
+    reloaded = cases.detail({**PROFILE, 'locale': 'ru'}, ticket_id)
+    assert reloaded['summary_pending_request'] == {'command': normalized, 'state': 'unknown'}
+    assert reloaded['ticket']['summary_hash'] != normalized['expected_summary_hash']
+    replayed = summaries.regenerate(PROFILE, ticket_id, reloaded['summary_pending_request']['command'])
+    assert replayed['summary_request'] == {'request_id': command['request_id'], 'state': 'unknown'}
+    assert replayed['summary_pending_request'] == reloaded['summary_pending_request']
+    with pytest.raises(TenantLinearError) as changed:
+        summaries.regenerate(PROFILE, ticket_id, {**normalized, 'language': 'en'})
+    assert changed.value.status == 409
+    assert f['provider'].call_count == 2
+
+
+def test_detail_restores_pending_real_run_during_generation_and_clears_it_after_apply(language_db):
+    f = language_db
+    page, _ids = _case(f, [AZ])
+    ticket_id = page['ticket']['id']
+    command = _regenerate(page)
+    normalized = {**command, 'language': None}
+    generated = f['provider'].side_effect
+    pending = []
+
+    def during(*args, **kwargs):
+        current = cases.detail(PROFILE, ticket_id)
+        pending.append(current['summary_pending_request'])
+        assert pending[-1] == {'command': normalized, 'state': 'pending'}
+        assert current['ticket']['summary_state'] == 'generating'
+        assert cases.detail({'tenant_id': A, 'telegram_id': 33}, ticket_id)['summary_pending_request'] is None
+        replay = summaries.regenerate(PROFILE, ticket_id, command)
+        assert replay['summary_request'] == {'request_id': command['request_id'], 'state': 'pending'}
+        assert replay['summary_pending_request'] == pending[-1]
+        assert f['provider'].call_count == 2
+        return generated(*args, **kwargs)
+
+    f['provider'].side_effect = during
+    applied = summaries.regenerate(PROFILE, ticket_id, command)
+    assert len(pending) == 1
+    assert applied['summary_request'] == {'request_id': command['request_id'], 'state': 'applied'}
+    assert applied['summary_pending_request'] is None
+    assert cases.detail(PROFILE, ticket_id)['summary_pending_request'] is None
+    assert f['provider'].call_count == 2
+
+
+def test_unresolved_employee_command_survives_more_than_ten_other_employee_results(language_db):
+    f = language_db
+    page, _ids = _case(f, [AZ])
+    ticket_id = page['ticket']['id']
+    generated = f['provider'].side_effect
+    command = _regenerate(page, language='tr')
+    f['provider'].side_effect = TimeoutError('Synthetic owner request outcome unknown')
+    with pytest.raises(TimeoutError):
+        summaries.regenerate(PROFILE, ticket_id, command)
+    f['provider'].side_effect = generated
+    f['output_language'] = 'en'
+    employee = {'tenant_id': A, 'telegram_id': 33}
+    for _ in range(11):
+        current = cases.detail(employee, ticket_id)
+        assert current['summary_pending_request'] is None
+        applied = summaries.regenerate(employee, ticket_id, _regenerate(current, language='en'))
+        assert applied['summary_request']['state'] == 'applied'
+    reloaded = cases.detail(PROFILE, ticket_id)
+    assert len(reloaded['summary_history']) == 10
+    assert all(version.get('request_id') != command['request_id'] for version in reloaded['summary_history'])
+    assert reloaded['summary_pending_request'] == {'command': command, 'state': 'unknown'}
+    assert cases.detail(employee, ticket_id)['summary_pending_request'] is None
+    replayed = summaries.regenerate(PROFILE, ticket_id, command)
+    assert replayed['summary_request']['state'] == 'unknown'
+    assert f['provider'].call_count == 13
+
+
+@pytest.mark.parametrize('terminal', ['applied', 'conflict', 'blocked'])
+def test_latest_terminal_request_does_not_resurrect_older_unknown_command(language_db, terminal):
+    f = language_db
+    page, _ids = _case(f, [AZ])
+    ticket_id = page['ticket']['id']
+    generated = f['provider'].side_effect
+    old = _regenerate(page, language='en')
+    f['provider'].side_effect = TimeoutError('Synthetic earlier request remains unknown')
+    with pytest.raises(TimeoutError):
+        summaries.regenerate(PROFILE, ticket_id, old)
+    assert cases.detail(PROFILE, ticket_id)['summary_pending_request']['command'] == old
+    latest = _regenerate(cases.detail(PROFILE, ticket_id), language='tr')
+    f['output_language'] = 'tr'
+    if terminal == 'blocked':
+        # A real reservation is invalidated before provider dispatch; finish
+        # records its durable blocked status even though the run is unknown.
+        item = summaries.reserve(A, ticket_id, PROFILE, retry=True, command=latest)
+        assert item and cases.detail(PROFILE, ticket_id)['summary_pending_request']['state'] == 'pending'
+        cases.update(PROFILE, ticket_id, {'description': 'Edited before dispatch; no paid attempt'})
+        summaries.finish(item, None, {})
+        result = summaries.regenerate(PROFILE, ticket_id, latest)
+    else:
+        def complete(*args, **kwargs):
+            if terminal == 'conflict':
+                cases.update(PROFILE, ticket_id, {'description': 'Keep this exact concurrent employee edit'})
+            return generated(*args, **kwargs)
+        f['provider'].side_effect = complete
+        result = summaries.regenerate(PROFILE, ticket_id, latest)
+    assert result['summary_request'] == {'request_id': latest['request_id'], 'state': terminal}
+    assert result['summary_pending_request'] is None
+    older_replay = summaries.regenerate(PROFILE, ticket_id, old)
+    assert older_replay['summary_request']['state'] == 'unknown'
+    assert older_replay['summary_pending_request'] is None
+    assert cases.detail(PROFILE, ticket_id)['summary_pending_request'] is None
+    assert f['provider'].call_count == (2 if terminal == 'blocked' else 3)
+
+
+def test_restored_summary_command_is_scoped_to_exact_case_tenant_and_authorized_employee(language_db):
+    f = language_db
+    page, _ids = _case(f, [AZ])
+    ticket_id = page['ticket']['id']
+    generated = f['provider'].side_effect
+    command = _regenerate(page, language='en')
+    f['provider'].side_effect = TimeoutError('Synthetic owner-only pending operation')
+    with pytest.raises(TimeoutError):
+        summaries.regenerate(PROFILE, ticket_id, command)
+    other_employee = cases.detail({'tenant_id': A, 'telegram_id': 33, 'role': 'owner'}, ticket_id)
+    assert other_employee['ticket']['id'] == ticket_id
+    assert other_employee['summary_pending_request'] is None
+    for profile, status in (({'tenant_id': B, 'telegram_id': 22}, 404), ({'tenant_id': B, 'telegram_id': 11}, 403)):
+        with pytest.raises(TenantLinearError) as foreign:
+            cases.detail(profile, ticket_id)
+        assert foreign.value.status == status
+    f['db'].execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id) VALUES(%s::uuid,%s::uuid,'other-summary-customer',43)", (A, CA))
+    f['db'].execute("INSERT INTO saas_ai_conversation_state(tenant_id,provider,channel_id,conversation_id,agent_id,state) VALUES(%s::uuid,'connect',%s,'other-summary-customer',%s::uuid,'active')", (A, CA, AGENT))
+    f['db'].commit()
+    f['provider'].side_effect = generated
+    other_case, _ = _case(f, [AZ], lead=43)
+    assert other_case['ticket']['id'] != ticket_id and other_case['summary_pending_request'] is None
+    assert cases.detail(PROFILE, ticket_id)['summary_pending_request']['command'] == command
+    f['db'].execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=11', (A,))
+    f['db'].commit()
+    with pytest.raises(TenantLinearError) as revoked:
+        cases.detail(PROFILE, ticket_id)
+    assert revoked.value.status == 403
+    assert f['provider'].call_count == 3

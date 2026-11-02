@@ -72,3 +72,16 @@ def test_priority_and_compatibility_are_explicit():
 def test_unsupported_language_is_rejected_before_paid_work():
     with pytest.raises(TenantLinearError):
         language('de')
+
+
+@pytest.mark.parametrize('text',["It doesn't work",'Cannot login','I cannot print',"I can’t print","Doesn't work","Don't print"])
+def test_short_english_technical_message_is_substantive_customer_evidence(text):
+    selected=resolve(POLICY,[customer(text)])
+    assert selected['language']=='en' and selected['method']=='customer_detected'
+
+
+@pytest.mark.parametrize('text',['Thanks, it works now','Thank you for your help','Thank you, this works','This works',
+    'Microsoft Print','Workday Print','ERR_PRINT_FAILED','ERR-PRINT-FAILED','cannot_login','SKU AB123 ERR104'])
+def test_acknowledgement_product_or_code_does_not_become_a_new_language_phase(text):
+    selected=resolve(POLICY,[customer(text),customer(text)])
+    assert selected['language']=='az' and selected['method']=='fallback'

@@ -26,6 +26,7 @@ on:
       - 'beintaskbot-main/tenant_company_admin_api.py'
       - 'beintaskbot-main/tenant_workflow_store.py'
       - 'beintaskbot-main/tenant_knowledge_candidates*.py'
+      - 'beintaskbot-main/tenant_knowledge_batches.py'
       - 'beintaskbot-main/docs/tenant-summary-language.js'
       - 'beintaskbot-main/tests/test_summary_language*'
       - 'beintaskbot-main/tests/test_summary_group_worker_language.py'
@@ -217,6 +218,7 @@ jobs:
             tests/test_ai_schema_cold_readiness.py \
             tests/test_summary_language.py \
             tests/test_summary_language_integration.py \
+            tests/test_summary_language_batches.py \
             tests/test_summary_group_worker_language.py \
             tests/test_summary_consultation_language.py \
             tests/test_consultation_startup_upgrade_postgres.py \

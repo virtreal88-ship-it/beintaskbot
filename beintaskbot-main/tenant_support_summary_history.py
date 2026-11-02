@@ -1,6 +1,8 @@
 """Summary versions use the existing private, tenant-owned audit ledger."""
 import hashlib
 import json
+import re
+import uuid
 
 FIELDS = ('description', 'summary', 'suggestions', 'next_steps')
 
@@ -49,3 +51,29 @@ def request_status(cur, tenant, ticket_id, request_id):
       (tenant,str(ticket_id),request_id))
     run=cur.fetchone()
     return {'request_id':request_id,'state':'pending' if run and run['state']=='generating' else 'unknown'}
+
+
+def pending_request(cur, tenant, ticket_id, actor):
+    """Restore only this employee's latest durable, unresolved command.
+
+    This receipt is independent of the bounded version-comparison history. A
+    newer terminal command supersedes any earlier unknown operation.
+    """
+    cur.execute('''SELECT payload FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid
+      AND entity_type='support_ticket' AND entity_id=%s AND actor_telegram_id=%s
+      AND action='support_summary_requested' ORDER BY created_at DESC,id DESC LIMIT 1''',
+      (tenant,str(ticket_id),actor))
+    row=cur.fetchone()
+    command=(row.get('payload') or {}).get('command') if row else None
+    if (not isinstance(command,dict) or set(command)!={'request_id','confirm_ai_cost','expected_summary_hash','language'}
+            or command.get('confirm_ai_cost') is not True
+            or not isinstance(command.get('expected_summary_hash'),str)
+            or not re.fullmatch('[0-9a-f]{64}',command['expected_summary_hash'])
+            or command.get('language') not in (None,'az','ru','en','tr')):
+        return None
+    try:
+        if str(uuid.UUID(command['request_id']))!=command['request_id']:return None
+    except (TypeError,ValueError,AttributeError):
+        return None
+    status=request_status(cur,tenant,ticket_id,command['request_id'])
+    return {'command':dict(command),'state':status['state']} if status['state'] in {'pending','unknown'} else None

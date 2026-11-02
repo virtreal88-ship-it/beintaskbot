@@ -340,8 +340,16 @@ def test_text_only_case_seals_after_appended_archived_context(flow,monkeypatch,f
     import tenant_ai_agent_run_store as runs
     import tenant_connect_images as images
     import tenant_consultation_group as groups
-    f=flow;f['inbound']('text','Text-only current CASE question')
-    job=runs.claim_next();job['payload'].update({flag:True,'case_id':str(uuid.uuid4()),'consultation_id':str(uuid.uuid4())})
+    import tenant_support_inbox_store as cases
+    f=flow;message_id,_=f['inbound']('text','Text-only current CASE question')
+    # This is a real CASE consumer now, so bind the fixture to a real selected
+    # case. Coverage and the source/model send barriers remain fully exercised.
+    with f['db'].cursor() as cur:
+        receipt=cases.create_in_transaction(cur,A,CA,'client','Synthetic selected case',
+            'coverage-case-'+message_id,actor=11,source='manual',message_ids=[],bounded_episode=True)
+        assert cases.record_case_message_membership(cur,A,receipt['id'],CA,'client',[message_id],'coverage-selected')==1
+    f['db'].commit()
+    job=runs.claim_next();job['payload'].update({flag:True,'case_id':receipt['id'],'consultation_id':str(uuid.uuid4())})
     artifact={'message_id':'archived-other-turn','cached_observation':{'relevance':'relevant','text':'Saved archived fact','source':'case_receipt'},'analysis_expected':False}
     monkeypatch.setattr(images,'prepare_case',AsyncMock(return_value=([],set(),[artifact])))
     monkeypatch.setattr(images,'persist_case_observations',Mock(return_value=[]));monkeypatch.setattr(images,'validate_cached_case_observations',Mock(return_value=['archived-other-turn']))

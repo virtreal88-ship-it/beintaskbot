@@ -143,7 +143,7 @@ def customer_evidence(cur, tenant, rows, channel_id, conversation_id):
 _WORDS = {
     'az': set('salam zehmet olmasa proqram proqramda mehsul mehsulu duzelmir duzelib islemir xeta yoxdur var satis alis qaimeni hesab yuklenmir acilmir gonderin gonderdim yoxlayin komek lazim edir ede edirem edirik bilmirik olmur olunmur deyil niye nece qiymet melumat mushteri musteri musterinin hell edin xahis bugun sabah qalir gorunmur yazilir yaziram silinmir duzeltmek meseleni'.split()),
     'tr': set('merhaba lutfen program programda urun urunu duzelmiyor calismiyor hata yok var satis alis faturayi hesap yuklenmiyor acilmiyor gonderin gonderdim kontrol yardim gerekiyor eder misiniz yapamiyorum olmuyor degil neden nasil fiyat bilgi musteri cozum bugun yarin gorunmuyor yaziyor silemiyorum kaydedemiyorum sorun sorunu'.split()),
-    'en': set('hello please the this that is are was were have has cannot can not with when why how our my your we you after before save saving delete deleted customer product invoice payment amount error issue problem works working stopped fix help need want shows showing open upload fails failed message request'.split()),
+    'en': set('hello please the this that is are was were have has cannot can not with when why how our my your we you after before save saving delete deleted customer product invoice payment amount error issue problem work works working stopped fix help need want shows showing open upload fails failed login print printing message request'.split()),
 }
 _REQUESTS = {
     'az': r'(?:на\s+азербайджанском|in\s+azerbaijani|azerbaycan(?:ca|\s+dilinde))',
@@ -180,17 +180,27 @@ def _customer_text(message):
     return value[:6000]
 
 
-_ACKNOWLEDGEMENTS = set('спасибо благодарю благодарим большое огромное очень всем вам вас вашу за помощь помогли помогло все работает теперь хорошо да нет ок ага thank thanks you your for help very much so everyone works worked now great okay ok yes no cox chox sag olun sagol sagolun tesekkur tesekkurler yaxsi oldu aydindir evet hayir cok'.split())
-_TECHNICAL=re.compile(r'программ|ошиб|обновл|слома|сохраня|открыва|подключ|сбой|save|fail|error|acilmiyor|calismiyor|silinmir|islemir|duzelmir|xeta')
+_ACKNOWLEDGEMENTS = set('спасибо благодарю благодарим большое огромное очень всем вам вас вашу за помощь помогли помогло все работает теперь хорошо да нет ок ага thank thanks you your it this that is are all everything for help very much so everyone works worked now great okay ok yes no cox chox sag olun sagol sagolun tesekkur tesekkurler yaxsi oldu aydindir evet hayir cok'.split())
+_TECHNICAL=re.compile(r'программ|ошиб|обновл|слома|сохраня|открыва|подключ|сбой|save|fail|error|work|login|print|acilmiyor|calismiyor|silinmir|islemir|duzelmir|xeta')
+_EN_CONTRACTIONS={"can't":'cannot',"won't":'will not',"don't":'do not',"doesn't":'does not',
+                  "didn't":'did not',"isn't":'is not',"aren't":'are not',"wasn't":'was not',
+                  "weren't":'were not',"haven't":'have not',"hasn't":'has not',"couldn't":'could not'}
 
 
 def _scores(text):
-    tokens = re.findall(r'[^\W\d_]+', _plain(text), re.UNICODE)
-    if len(tokens) < 2 or sum(map(len, tokens)) < (8 if len(tokens)==2 else 12):
+    # Code identifiers are not customer prose. Normalize contractions only for
+    # the local vote; quotes and all saved/provider text remain byte-for-byte.
+    plain=re.sub(r'\b\w+(?:_\w+)+\b|\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b',' ',str(text))
+    plain=_plain(plain).replace('’',"'")
+    plain=re.sub(r"\b(?:can|won|don|doesn|didn|isn|aren|wasn|weren|haven|hasn|couldn)'t\b",
+                 lambda match:_EN_CONTRACTIONS[match.group()],plain)
+    tokens = re.findall(r'[^\W\d_]+', plain, re.UNICODE)
+    technical=bool(_TECHNICAL.search(' '.join(tokens)))
+    if len(tokens) < 2 or sum(map(len, tokens)) < (8 if technical else 12):
         return None
     if all(token in _ACKNOWLEDGEMENTS for token in tokens):
         return None
-    if len(tokens)==2 and not _TECHNICAL.search(' '.join(tokens)):
+    if len(tokens)==2 and not technical:
         return None
     if sum(len(token) for token in tokens if re.search('[а-яё]', token)) >= (8 if len(tokens)==2 else 10):
         return 'ru', min(30, len(tokens)), len(tokens)
