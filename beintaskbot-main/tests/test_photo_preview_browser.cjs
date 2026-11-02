@@ -13,11 +13,11 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
    page.on('pageerror',error=>errors.push(error.message));page.on('dialog',()=>assert.fail('Unexpected native dialog'));
    // Production stores question templates in this tenant/employee scoped key.
    await page.addInitScript(({tenant})=>localStorage.setItem(`tenant.operator.copilot-question-templates.${tenant}:33`,JSON.stringify(Array.from({length:12},(_,i)=>({id:'template-'+i,name:'Saved question '+i,prompt:'Saved question'})))),{tenant});
-   await page.route('**/*',async route=>{
+   const routeApp=async route=>{
     const request=route.request(),url=new URL(request.url()),name=url.pathname;calls.push({path:name,method:request.method(),body:request.postData(),url:request.url()});
     if(name==='/app')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8')});
     if(name.startsWith('/assets/')){const file=path.join(root,'docs',path.basename(name));return fs.existsSync(file)?route.fulfill({path:file}):route.fulfill({status:404,body:''});}
-    if(name.endsWith('/crm/chat/attachment')){const id=url.searchParams.get('message_id');if(url.searchParams.get('cache_only')==='1')return cached.has(id)?route.fulfill({contentType:'image/png',body:png}):route.fulfill({status:204,body:''});mediaRequests++;if(downloadGate&&url.searchParams.get('download')==='1')await downloadGate;if(mediaStatus!==200)return route.fulfill({status:mediaStatus,headers:{'Retry-After':'60'},json:{error:'Synthetic file failure'}});cached.add(id);return route.fulfill({contentType:'image/png',body:png});}
+    if(name.endsWith('/crm/chat/attachment')){const id=url.searchParams.get('message_id');if(url.searchParams.get('cache_only')==='1')return cached.has(id)?route.fulfill({contentType:'image/png',body:png}):route.fulfill({status:204,body:''});if(url.searchParams.get('auto_preview')==='1')return route.fulfill({status:503,json:{error:'Synthetic temporary photo failure'}});mediaRequests++;if(downloadGate&&url.searchParams.get('download')==='1')await downloadGate;if(mediaStatus!==200)return route.fulfill({status:mediaStatus,headers:{'Retry-After':'60'},json:{error:'Synthetic file failure'}});cached.add(id);return route.fulfill({contentType:'image/png',body:png});}
     if(name==='/api/platform/me')return route.fulfill({json:profile});
     let result={};
     if(name.endsWith('/dialogs/history'))result={dialog,messages:['cached-photo','thumbnail-photo','placeholder-photo'].map((id,index)=>({id,external_id:id,source:'connect',source_lead_id:41,source_channel_id:channel,source_conversation_id:dialog.conversation_id,direction:'incoming',message_type:'image',media_version:'a'.repeat(64),body:'',media_thumbnail:index===1?'data:image/png;base64,'+png.toString('base64'):'',analysis_state:'failed',happened_at:'2026-10-21T10:00:00Z'})),next_before:null};
@@ -25,13 +25,14 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     else if(name.endsWith('/developer-marker'))result={enabled:false};
     else if(name.endsWith('/replies'))result={replies:[],consultations:[]};
     return route.fulfill({json:{success:true,result}});
-   });
+   };
+   await page.route('**/*',routeApp);
    try{
     await page.goto('https://crm.test/app?view=dialogs');await page.locator('[data-app-language]').selectOption(language);await page.locator('.operator-row').first().click();
     const card=id=>page.locator('article[data-message-id="'+id+'"] [data-chat-attachment]'),cachedCard=card('cached-photo'),thumb=card('thumbnail-photo'),empty=card('placeholder-photo');
     await cachedCard.scrollIntoViewIfNeeded();await cachedCard.locator('[data-media-preview=image]').waitFor();assert.equal(await cachedCard.locator('[data-media-open]').isVisible(),false,'cached bytes show an actual photo without a redundant Load action');assert.equal(mediaRequests,0,'automatic cached-only reads never start provider downloads');
-    await thumb.scrollIntoViewIfNeeded();await page.waitForFunction(()=>document.querySelector('[data-chat-attachment="thumbnail-photo"]')?.dataset.mediaPreviewState==='unloaded');assert.equal(await thumb.locator('[data-media-thumbnail]').isVisible(),true);assert.match(await thumb.locator('[data-media-thumbnail]').evaluate(n=>getComputedStyle(n).filter),/blur/);assert.equal(await thumb.locator('.operator-media-analysis').isVisible(),false,'AI status is a separate collapsed detail');
-    await empty.scrollIntoViewIfNeeded();await page.waitForFunction(()=>document.querySelector('[data-chat-attachment="placeholder-photo"]')?.dataset.mediaPreviewState==='unloaded');assert.equal(await empty.locator('[data-media-thumbnail]').count(),0);assert.equal(await empty.locator('[data-photo-placeholder]').isVisible(),true,'missing thumbnail uses an honest photo placeholder');
+    await thumb.scrollIntoViewIfNeeded();await page.waitForFunction(()=>document.querySelector('[data-chat-attachment="thumbnail-photo"]')?.dataset.mediaPreviewState==='retryable');assert.equal(await thumb.locator('[data-media-thumbnail]').isVisible(),true);assert.match(await thumb.locator('[data-media-thumbnail]').evaluate(n=>getComputedStyle(n).filter),/blur/);assert.equal(await thumb.locator('.operator-media-analysis').isVisible(),false,'AI status is a separate collapsed detail');
+    await empty.scrollIntoViewIfNeeded();await page.waitForFunction(()=>document.querySelector('[data-chat-attachment="placeholder-photo"]')?.dataset.mediaPreviewState==='retryable');assert.equal(await empty.locator('[data-media-thumbnail]').count(),0);assert.equal(await empty.locator('[data-photo-placeholder]').isVisible(),true,'missing thumbnail uses an honest photo placeholder');
     assert.equal(mediaRequests,0);assert.equal(calls.some(c=>/copilot|audio-transcription|chat\/send/.test(c.path)&&c.method==='POST'),false);
     await page.screenshot({path:'/tmp/photo-preview-unloaded-'+width+'-'+language+'.png'});
     // Holding the clickable preview opens actions; releasing it cannot load the image.
@@ -48,6 +49,19 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     }
     const beforeReload=mediaRequests;
     await page.reload();await thumb.waitFor();await thumb.scrollIntoViewIfNeeded();await thumb.locator('[data-media-preview=image]').waitFor();assert.equal(mediaRequests,beforeReload,'full reload restores already cached bytes without provider replay');
+    // A different browser context has neither this tab's Blob cache nor sessionStorage.
+    // Server-cache availability, rather than a browser restoration hint, controls display.
+    const restarted=await browser.newContext({viewport:{width,height}});
+    try{
+      await restarted.route('**/*',routeApp);const reopened=await restarted.newPage();
+      await reopened.goto('https://crm.test/app?view=dialogs');
+      assert.equal(await reopened.evaluate(()=>sessionStorage.getItem('tenant.audio-reload-intent.v1')),null);
+      await reopened.locator('.operator-row').first().click();
+      const restartedPhoto=reopened.locator('[data-chat-attachment="thumbnail-photo"]');
+      await restartedPhoto.scrollIntoViewIfNeeded();await restartedPhoto.locator('[data-media-preview=image]').waitFor();
+      assert.equal(await restartedPhoto.locator('[data-media-open]').isVisible(),false);
+      assert.equal(mediaRequests,beforeReload,'new authorized browser session displays server-cached photo without provider replay');
+    }finally{await restarted.close();}
     const geometry=await thumb.boundingBox();assert.ok(geometry.x>=0&&geometry.x+geometry.width<=width+1);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     await page.screenshot({path:'/tmp/photo-preview-'+width+'-'+language+'.png'});assert.deepEqual(errors,[]);console.log('PASS photo preview '+width+' '+language+': cached bytes, real blur/placeholder, touch menu without load, 429, explicit load, rerender/full reload, no AI/provider replay');
    }catch(error){await page.screenshot({path:'/tmp/voice-card-failure-'+width+'-'+language+'.png'});throw error;}finally{await page.close();}

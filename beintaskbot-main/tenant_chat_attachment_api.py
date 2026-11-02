@@ -106,13 +106,17 @@ def _byte_range(value, length):
     return (start, end) if start < length and end >= start else False
 
 
-def admit(session):
+def admit(session, *, automatic_photo=False):
     now = time.monotonic()
     for key in list(REQUESTS):
         if REQUESTS[key][1] <= now:
             del REQUESTS[key]
     keys = [(str(session['tenant_id']), str(session['telegram_id'])), (str(session['tenant_id']), '*')]
-    blocked = [(key, cap) for key, cap in zip(keys, (20, 60))
+    caps = [20, 60]
+    if automatic_photo:
+        # Leave room inside Connect's shared 20/min tenant budget for human/AI work.
+        keys.append((str(session['tenant_id']), 'automatic-photo')); caps.append(8)
+    blocked = [(key, cap) for key, cap in zip(keys, caps)
                if REQUESTS.get(key, (0, 0))[0] >= cap]
     if len(REQUESTS) > 2000 or blocked:
         wait = max((REQUESTS[key][1] - now for key, _cap in blocked), default=60)
@@ -151,8 +155,20 @@ def handler(member_from_request, request_provider, logger):
                    'conversation_id':request.query.get('conversation_id') or None}
             item = await asyncio.to_thread(load, session, lead, message, **scope)
             await asyncio.to_thread(_check_case_attachment,session,item,request.query)
+            automatic_photo = request.query.get('auto_preview') == '1'
+            expected_version = request.query.get('expected_media_version')
+            if expected_version or automatic_photo:
+                from tenant_media_evidence import media_version
+                if expected_version != media_version((item.get('row') or {}).get('raw')):
+                    raise TenantLinearError('Fayl dəyişib. Dialoqu yeniləyin.', 409)
+            if automatic_photo and (item.get('provider') != 'connect' or item['row']['message_type'] != 'image'):
+                raise TenantLinearError('Avtomatik baxış yalnız şəkillər üçündür.', 400)
             key = _media_key(session, item, lead, message)
             result = _cache_get(key)
+            if result is None and request.query.get('cache_only') == '1' and item.get('provider') == 'connect':
+                from tenant_connect_media import media_backpressure, _media_limited
+                wait = media_backpressure(item['route'])
+                if wait: raise _media_limited(wait)
             if result is None and request.query.get('cache_only') == '1':
                 # A preview probe never joins a provider flight or starts a download.
                 return web.Response(status=204, headers=headers)
@@ -163,26 +179,33 @@ def handler(member_from_request, request_provider, logger):
                         error = TenantLinearError('Fayllar yüklənir. Göstərilən müddətdən sonra yenidən yoxlayın.', 429)
                         error.retry_after = 5
                         raise error
-                    admit(session)
+                    admit(session, automatic_photo=automatic_photo)
 
                     async def fetch_and_verify():
                         async with SLOTS:
                             if item.get('provider') == 'connect':
                                 from tenant_connect_media import download_media
-                                data, content_type = await download_media(item, preview_documents=True)
+                                options = {'preview_documents': True}
+                                if automatic_photo: options['automatic_photo'] = True
+                                data, content_type = await download_media(item, **options)
                             else:
                                 async with asyncio.timeout(15):
                                     account = await request_provider(session['tenant_id'], 'GET', 'account', params={'with': 'drive_url'})
                                 bearer = await asyncio.to_thread(token, item)
                                 data, content_type = await asyncio.to_thread(download, item['row'], account.get('drive_url'), bearer)
                             filename = _media_name((item.get('row') or {}).get('raw'), content_type)
-                            return data, content_type, filename
+                            result = data, content_type, filename
+                            _cache_put(key, result)
+                            return result
 
                     task = asyncio.create_task(fetch_and_verify())
                     MEDIA_INFLIGHT[key] = task
+                    def settled(done):
+                        if MEDIA_INFLIGHT.get(key) is done: MEDIA_INFLIGHT.pop(key, None)
+                        if not done.cancelled(): done.exception()
+                    task.add_done_callback(settled)
                 try:
-                    result = await task
-                    _cache_put(key, result)
+                    result = await asyncio.shield(task)
                 finally:
                     if MEDIA_INFLIGHT.get(key) is task and task.done():
                         MEDIA_INFLIGHT.pop(key, None)

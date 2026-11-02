@@ -34,18 +34,58 @@
       autoRestoreAttempted=true;await load(false,true,binding);
     }catch{}finally{restorePending.delete(host);}
   }
-  let photoQueue=[],photoObserver,photoQueued=new WeakSet();
-  let photoReads=0;
+  let photoQueue=[],photoObserver,photoQueued=new WeakSet(),photoProbed=new WeakSet();
+  let photoReads=0,photoWake=null;
+  const photoPending=new WeakSet(),photoAttempts=new Map(),photoCooldown=new Map();
+  const photoSource=host=>[identity(member),host.dataset.channelId,host.dataset.conversationId,host.dataset.attachmentLeadId,host.dataset.chatAttachment,host.dataset.mediaVersion].join('|');
+  function photoVisible(host){
+    if(document.hidden||!freshProfile||!member||!host.isConnected||!host.closest?.('#chatRows')||!host.closest('#view-dialogs')?.classList.contains('active'))return false;
+    if(document.getElementById('operatorCopilotBackdrop')?.hidden===false)return false;
+    const rect=host.getBoundingClientRect(),chat=host.closest('#chatRows').getBoundingClientRect();
+    return rect.width>0&&rect.height>0&&rect.bottom>Math.max(0,chat.top)&&rect.top<Math.min(innerHeight,chat.bottom)&&rect.right>0&&rect.left<innerWidth;
+  }
+  function photoBackpressure(host,response){
+    if(response.status!==429||host?.dataset.connectMedia!=='true')return;
+    const scope=String(member?.tenant_id||'');photoCooldown.set(scope,Math.max(photoCooldown.get(scope)||0,Date.now()+retryDelay(response)*1000));
+  }
+  function enqueuePhoto(host){
+    photoQueue=photoQueue.filter(item=>photoVisible(item.host));
+    if(!photoVisible(host)||photoProbed.has(host)||photoPending.has(host)||photoQueue.some(item=>item.host===host)||photoQueue.length>=24||host.querySelector('[data-media-preview]'))return;
+    if(['retryable','rate_limited','unavailable','forbidden','too_large','invalid','terminal'].includes(host.dataset.mediaPreviewState))return;
+    photoQueue.push({host,load:host._photoCacheLoad,source:photoSource(host),revision:epoch});pumpPhotoCache();
+  }
+  function stopHiddenPhotos(){
+    for(const controller of active)if(controller.photoHost&&!photoVisible(controller.photoHost)){photoProbed.delete(controller.photoHost);controller.photoStopped=true;controller.abort();}
+  }
   function pumpPhotoCache(){
-    photoQueue=photoQueue.filter(item=>item.host.isConnected&&item.host.closest?.('#chatRows'));
-    while(member&&photoReads<2){const index=photoQueue.findIndex(item=>canStartMedia(item.host));if(index<0)return;const {host,load}=photoQueue.splice(index,1)[0];if(host.querySelector('[data-media-preview]'))continue;photoReads++;void load(false,false,null,true).finally(()=>{photoReads--;pumpPhotoCache();});}
+    photoQueue=photoQueue.filter(item=>item.revision===epoch&&photoVisible(item.host)&&item.source===photoSource(item.host));
+    if(!photoQueue.length){clearTimeout(photoWake);photoWake=null;return;}
+    if(document.hidden||!freshProfile)return;
+    const wait=(photoCooldown.get(String(member?.tenant_id||''))||0)-Date.now();
+    if(wait>0){if(photoWake===null)photoWake=setTimeout(()=>{photoWake=null;pumpPhotoCache();},Math.min(3600000,wait+1));return;}
+    const jobs=window.navigator?.locks?.request?2:1;
+    while(member&&photoReads<jobs){const index=photoQueue.findIndex(item=>photoVisible(item.host)&&canStartMedia(item.host));if(index<0)return;
+      const {host,load,source,revision}=photoQueue.splice(index,1)[0];if(host.querySelector('[data-media-preview]'))continue;
+      photoReads++;photoPending.add(host);photoProbed.add(host);
+      const same=()=>revision===epoch&&source===photoSource(host)&&photoVisible(host);
+      const acquire=async()=>{
+        if(!same()||(photoCooldown.get(String(member?.tenant_id||''))||0)>Date.now())return;
+        if(await load(false,false,null,true)!=='cache_miss'||!same()||photoAttempts.get(source)===revision)return;
+        photoAttempts.set(source,revision);while(photoAttempts.size>200)photoAttempts.delete(photoAttempts.keys().next().value);
+        await load(false,false,null,false,true);
+      };
+      // Serialize automatic acquisitions across same-origin tabs where supported.
+      // Server admission/singleflight still enforces the shared bound without Web Locks.
+      const work=window.navigator?.locks?.request?window.navigator.locks.request('tenant-visible-photos.'+String(member.tenant_id),acquire):acquire();
+      void work.catch(()=>{}).finally(()=>{photoReads--;photoPending.delete(host);pumpPhotoCache();});
+    }
   }
   function queuePhotoCache(host,load){
-    if(!member||host.dataset.mediaKind!=='image'||host.dataset.connectMedia!=='true'||!host.closest?.('#chatRows')||!/^[a-f0-9]{64}$/.test(host.dataset.mediaVersion||'')||photoQueued.has(host))return;
-    photoQueued.add(host);host._photoCacheLoad=load;
-    const enqueue=()=>{photoQueue.push({host,load:host._photoCacheLoad});pumpPhotoCache();};
-    if(window.IntersectionObserver){if(!photoObserver)photoObserver=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){photoObserver.unobserve(entry.target);photoQueue.push({host:entry.target,load:entry.target._photoCacheLoad});}pumpPhotoCache();},{threshold:.01});photoObserver.observe(host);}
-    else {const rect=host.getBoundingClientRect?.();if(rect?.width&&rect?.height&&rect.bottom>0&&rect.top<innerHeight)enqueue();}
+    if(!member||host.dataset.mediaKind!=='image'||host.dataset.connectMedia!=='true'||!host.closest?.('#chatRows')||!/^[a-f0-9]{64}$/.test(host.dataset.mediaVersion||''))return;
+    host._photoCacheLoad=load;
+    if(photoQueued.has(host)){enqueuePhoto(host);pumpPhotoCache();return;}photoQueued.add(host);
+    if(window.IntersectionObserver){if(!photoObserver)photoObserver=new IntersectionObserver(entries=>{for(const entry of entries){if(entry.isIntersecting)enqueuePhoto(entry.target);else photoProbed.delete(entry.target);}stopHiddenPhotos();},{threshold:.01});photoObserver.observe(host);}
+    else enqueuePhoto(host);
   }
   const MAX_PREVIEW_BYTES=100*1024*1024,MAX_CACHE_BYTES=32*1024*1024;
   const text=(key,fallback)=>globalThis.window?.tenantI18n?.t(key)||fallback;
@@ -56,7 +96,7 @@
   const rememberRetry=(host,button,until,fallback='')=>{retryUntil.set(retryKey(host,fallback),until);if(host)host.dataset.mediaRetryAt=String(until);if(button)button.dataset.retryAt=String(until);};
   const canStartMedia=host=>active.size<3&&(!(host?.dataset.connectMedia==='true')||[...active].filter(controller=>controller.connectMedia).length<2);
   const busyText=()=>text('mediaBusy','Other attachments are loading. Try again when they finish.');
-  function updateMediaMenu(host){const load=host?.querySelector('[data-media-menu-load]'),primary=host?.querySelector('[data-media-open]'),download=host?.querySelector('[data-media-download]');if(load){const loaded=!!host.querySelector('[data-media-preview]'),state=host.dataset.mediaPreviewState,blocked=['unavailable','forbidden','too_large','invalid','terminal'].includes(state);load.hidden=loaded;load.disabled=blocked;load.textContent=['retryable','rate_limited'].includes(state)?text('retryAttachment','Retry loading'):text('loadAttachment','Load file');if(primary)primary.disabled=blocked;if(download)download.disabled=blocked;}paintNativeAudioCard(host,primary,load);}
+  function updateMediaMenu(host){const load=host?.querySelector('[data-media-menu-load]'),primary=host?.querySelector('[data-media-open]'),download=host?.querySelector('[data-media-download]');if(load){const loaded=!!host.querySelector('[data-media-preview]'),state=host.dataset.mediaPreviewState,blocked=['unavailable','forbidden','too_large','invalid','terminal'].includes(state)&&!(state==='unavailable'&&host.dataset.photoAutoFailed==='true');load.hidden=loaded;load.disabled=blocked;load.textContent=['retryable','rate_limited'].includes(state)||state==='unavailable'&&host.dataset.photoAutoFailed==='true'?text('retryAttachment','Retry loading'):text('loadAttachment','Load file');if(primary)primary.disabled=blocked;if(download)download.disabled=blocked;}paintNativeAudioCard(host,primary,load);}
   function paintNativeAudioCard(host,primary,menuLoad){
     if(host?.dataset.nativeAudio!=='true')return;
     const audio=host.querySelector('.operator-native-audio'),busy=primary?.getAttribute('aria-busy')==='true';
@@ -82,7 +122,7 @@
     if(!canStartMedia(host)){if(statusNode)statusNode.textContent=busyText();return;}
     const current=epoch,who=identity(member),controller=new AbortController();controller.connectMedia=host?.dataset.connectMedia==='true';active.add(controller);button.disabled=true;button.setAttribute('aria-busy','true');if(statusNode)statusNode.textContent=text('loading','Yüklənir…');
     try{const response=await fetch(url,{credentials:'same-origin',cache:'no-store',signal:controller.signal});
-      if(!response.ok){const data=await response.json().catch(()=>({}));if(response.status===429){const seconds=retryDelay(response),until=Date.now()+seconds*1000;rememberRetry(host,button,until,attachmentKey);if(host){host.dataset.mediaPreviewState='rate_limited';updateMediaMenu(host);}throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds)));}if(host){host.dataset.mediaPreviewState=mediaFailureState(response.status);updateMediaMenu(host);}throw Error(response.status===403?text('mediaForbidden','You do not have access to this file.'):response.status===404||response.status===410?text('mediaUnavailable','File is unavailable or expired.'):response.status===413?text('mediaLarge','File is too large.'):response.status===415?text('mediaInvalid','File format is not supported.'):data.error||text('mediaFailed','File could not be downloaded.'));}
+      if(!response.ok){photoBackpressure(host,response);const data=await response.json().catch(()=>({}));if(response.status===429){const seconds=retryDelay(response),until=Date.now()+seconds*1000;rememberRetry(host,button,until,attachmentKey);if(host){host.dataset.mediaPreviewState='rate_limited';updateMediaMenu(host);}throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds)));}if(host){host.dataset.mediaPreviewState=mediaFailureState(response.status);updateMediaMenu(host);}throw Error(response.status===403?text('mediaForbidden','You do not have access to this file.'):response.status===404||response.status===410?text('mediaUnavailable','File is unavailable or expired.'):response.status===413?text('mediaLarge','File is too large.'):response.status===415?text('mediaInvalid','File format is not supported.'):data.error||text('mediaFailed','File could not be downloaded.'));}
       const blob=await response.blob();if(current!==epoch||who!==identity(member)||!button.isConnected)return;if(!blob.size||blob.size>MAX_PREVIEW_BYTES)throw Error(text('mediaLarge','File is too large.'));
       const objectUrl=URL.createObjectURL(blob),link=document.createElement('a');link.href=objectUrl;link.download=dispositionName(response.headers.get('Content-Disposition'))||'attachment';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);if(statusNode)statusNode.textContent='';retryUntil.delete(retryKey(host,attachmentKey));delete button.dataset.retryAt;if(host){delete host.dataset.mediaRetryAt;delete host.dataset.mediaPreviewState;updateMediaMenu(host);}
     }catch(error){if(current===epoch&&who===identity(member)&&button.isConnected){if(host&&!['rate_limited','unavailable','forbidden','too_large','invalid','terminal'].includes(host.dataset.mediaPreviewState)){host.dataset.mediaPreviewState='retryable';updateMediaMenu(host);}if(statusNode)statusNode.textContent=error.message||text('mediaFailed','File could not be downloaded.');}}
@@ -127,7 +167,9 @@
   const viewerStyle=document.createElement('style');viewerStyle.textContent=`.operator-photo-viewer{position:fixed;inset:0;z-index:25000;background:#000e;display:flex;align-items:stretch;justify-content:stretch;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}.operator-photo-stage{width:100%;height:100%;overflow:auto;display:flex;align-items:center;justify-content:center;touch-action:pan-x pan-y pinch-zoom;overscroll-behavior:contain}.operator-photo-stage.is-zoomed{display:block;cursor:grab}.operator-photo-stage.is-zoomed:active{cursor:grabbing}.operator-photo-image{display:block;max-width:100%;max-height:100%;object-fit:contain;cursor:zoom-in}.operator-photo-stage.is-zoomed .operator-photo-image{max-width:none;max-height:none;margin:auto;cursor:zoom-out}.operator-photo-image:focus-visible,.operator-photo-close:focus-visible{outline:3px solid white;outline-offset:3px}.operator-photo-close{position:absolute;right:max(8px,env(safe-area-inset-right));top:max(8px,env(safe-area-inset-top));width:44px;height:44px;border:0;border-radius:50%;background:#222c;color:white;font-size:28px;line-height:1}`;document.head?.append(viewerStyle);
   const stop=media=>{if(media&&['AUDIO','VIDEO'].includes(media.tagName))media.pause?.();};
   function clear(dropCache=false){
-    photoQueue=[];photoObserver?.disconnect();photoQueued=new WeakSet();
+    clearTimeout(photoWake);photoWake=null;
+    photoQueue=[];photoObserver?.disconnect();photoQueued=new WeakSet();photoProbed=new WeakSet();
+    if(dropCache===true){photoAttempts.clear();photoCooldown.clear();}
     if(photoViewer){if(history.state?.operatorPhotoViewer===photoViewer.token){const state={...history.state};delete state.operatorPhotoViewer;history.replaceState(state,'',location.href);}closePhotoViewer(true);}
     epoch++;
     active.forEach(controller=>{if(dropCache===true||!controller.audioReload){controller.abort();active.delete(controller);}});pendingKeys.forEach((controller,key)=>{if(dropCache===true||!controller.audioReload)pendingKeys.delete(key);});
@@ -152,9 +194,9 @@
       updateMediaMenu(host);
       if(host.querySelector('[data-media-preview]'))return;
       if(host.querySelector('.operator-native-audio')&&!status.textContent)status.textContent=({ru:'Аудио не загружено',az:'Səs yüklənməyib',en:'Audio not loaded'}[window.tenantI18n?.language]||'Audio is not loaded in this tab');
-      const mediaQuery=()=>new URLSearchParams({lead_id:host.dataset.attachmentLeadId||viewLead(host),message_id:host.dataset.chatAttachment,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id,...(host.dataset.channelId&&host.dataset.conversationId?{channel_id:host.dataset.channelId,conversation_id:host.dataset.conversationId}:{})});
+      const mediaQuery=()=>new URLSearchParams({lead_id:host.dataset.attachmentLeadId||viewLead(host),message_id:host.dataset.chatAttachment,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id,...(host.dataset.channelId&&host.dataset.conversationId?{channel_id:host.dataset.channelId,conversation_id:host.dataset.conversationId}:{}),...(/^[a-f0-9]{64}$/.test(host.dataset.mediaVersion||'')?{expected_media_version:host.dataset.mediaVersion}:{})});
       const previewKey=()=>mediaQuery().toString()+'|'+String(host.dataset.mediaVersion||'');
-      const load=async(cachedOnly=false,automatic=false,intentBinding=null,serverCacheOnly=false)=>{
+      const load=async(cachedOnly=false,automatic=false,intentBinding=null,serverCacheOnly=false,photoAuto=false)=>{
         if(button.disabled||!member||!(viewLead(host)||host.dataset.attachmentLeadId))return;
         const requestKey=previewKey();if(pendingKeys.has(requestKey)){status.textContent=busyText();return;}
         const retry=retryAt(host,button,host.dataset.chatAttachment||'');
@@ -166,20 +208,22 @@
         if(!cachedOnly&&!canStartMedia(host)){status.textContent=busyText();return;}
         const current=epoch,who=identity(member),selected=viewLead(host)||host.dataset.attachmentLeadId,controller=new AbortController();
         controller.audioReload=automatic;controller.connectMedia=host.dataset.connectMedia==='true';if(!cachedOnly){active.add(controller);pendingKeys.set(requestKey,controller);}button.disabled=true;button.setAttribute('aria-busy','true');if(menuLoad)menuLoad.disabled=true;status.textContent=' '+text('loading','Yüklənir…');updateMediaMenu(host);
-        const valid=()=>current===epoch&&who===identity(member)&&selected===(viewLead(host)||host.dataset.attachmentLeadId)&&host.isConnected;
+        if(serverCacheOnly||photoAuto)controller.photoHost=host;
+        const initialSource=photoSource(host);
+        const valid=()=>current===epoch&&who===identity(member)&&selected===(viewLead(host)||host.dataset.attachmentLeadId)&&host.isConnected&&initialSource===photoSource(host);
         const proof=profilePolicy,sourceVersion=host.dataset.mediaVersion,sourceDialog=host.closest?.('[data-dialog-key]')?.dataset.dialogKey;
         const canRetain=()=>automatic&&freshProfile&&proof===profilePolicy&&who===identity(member)&&selected===(viewLead(host)||host.dataset.attachmentLeadId)&&[...document.querySelectorAll('#chatRows [data-chat-attachment]')].some(next=>next.dataset.chatAttachment===host.dataset.chatAttachment&&next.dataset.mediaVersion===sourceVersion&&next.dataset.channelId===host.dataset.channelId&&next.dataset.conversationId===host.dataset.conversationId&&next.closest('[data-dialog-key]')?.dataset.dialogKey===sourceDialog);
         const timer=setTimeout(()=>controller.abort(),70000);
         let blobUrl,restoreRetained=false;
         try{
-          const query=mediaQuery(),cacheKey=previewKey();if(serverCacheOnly)query.set('cache_only','1');let blob=mediaCache.get(cacheKey),contentLength='',servedFilename=host.dataset.mediaFilename||'';
+          const query=mediaQuery(),cacheKey=previewKey();if(serverCacheOnly)query.set('cache_only','1');if(photoAuto)query.set('auto_preview','1');let blob=mediaCache.get(cacheKey),contentLength='',servedFilename=host.dataset.mediaFilename||'';
           if(cachedOnly&&!blob)return;
           if(blob){mediaCache.delete(cacheKey);mediaCache.set(cacheKey,blob);}
           else{
             const response=await fetch('/api/platform/crm/chat/attachment?'+query,
               {credentials:'same-origin',cache:'no-store',signal:controller.signal});
-            if(serverCacheOnly&&response.status===204){if(valid()){host.dataset.mediaPreviewState='unloaded';status.textContent='';}return;}
-            if(!response.ok){const data=await response.json().catch(()=>({}));const key=data.code==='media_duration_limit'?'mediaDuration':({404:'mediaUnavailable',410:'mediaUnavailable',413:'mediaLarge',415:'mediaInvalid',429:'mediaBusy'}[response.status]||'mediaFailed');await failAudio(host,intentBinding,response.status,response.status===429?Date.now()+retryDelay(response)*1000:0);if(response.status===429){const seconds=retryDelay(response),until=Date.now()+seconds*1000;rememberRetry(host,button,until,host.dataset.chatAttachment||'');host.dataset.mediaPreviewState='rate_limited';updateMediaMenu(host);throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds)));}host.dataset.mediaPreviewState=mediaFailureState(response.status);updateMediaMenu(host);throw Error(response.status===403?text('mediaForbidden','You do not have access to this file.'):response.status===404||response.status===410?text(key,'File is unavailable or expired.'):response.status===413?text(key,'File is too large.'):response.status===415?text(key,'File format is not supported.'):data.error||text('mediaFailed','File could not be downloaded.'));}
+            if(serverCacheOnly&&response.status===204){if(valid()){host.dataset.mediaPreviewState='unloaded';status.textContent='';}return 'cache_miss';}
+            if(!response.ok){if(photoAuto&&[404,410].includes(response.status))host.dataset.photoAutoFailed='true';photoBackpressure(host,response);const data=await response.json().catch(()=>({}));const key=data.code==='media_duration_limit'?'mediaDuration':({404:'mediaUnavailable',410:'mediaUnavailable',413:'mediaLarge',415:'mediaInvalid',429:'mediaBusy'}[response.status]||'mediaFailed');await failAudio(host,intentBinding,response.status,response.status===429?Date.now()+retryDelay(response)*1000:0);if(response.status===429){const seconds=retryDelay(response),until=Date.now()+seconds*1000;rememberRetry(host,button,until,host.dataset.chatAttachment||'');host.dataset.mediaPreviewState='rate_limited';updateMediaMenu(host);throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds)));}host.dataset.mediaPreviewState=mediaFailureState(response.status);updateMediaMenu(host);throw Error(response.status===403?text('mediaForbidden','You do not have access to this file.'):response.status===404||response.status===410?text(key,'File is unavailable or expired.'):response.status===413?text(key,'File is too large.'):response.status===415?text(key,'File format is not supported.'):data.error||text('mediaFailed','File could not be downloaded.'));}
             servedFilename=dispositionName(response.headers.get('Content-Disposition'))||servedFilename;const declaredSize=Number(response.headers.get('Content-Length'));contentLength=response.headers.get('Content-Length')||'';
             const chunks=[],reader=response.body.getReader(),total=declaredSize;
             let size=0;
@@ -222,7 +266,7 @@
           previews.set(blobUrl,{node,button,media,host,cacheKey});if(mediaCache.has(cacheKey)){loadedKeys.delete(cacheKey);loadedKeys.add(cacheKey);while(loadedKeys.size>3)loadedKeys.delete(loadedKeys.values().next().value);}
           if(!node.closest?.('.operator-audio-controls')){if(host.insertBefore)host.insertBefore(node,button);else host.append(node);}button.hidden=true;status.textContent='';
           delete host.dataset.mediaRetryAt;retryUntil.delete(retryKey(host,host.dataset.chatAttachment||''));host.dataset.mediaPreviewState='loaded';updateMediaMenu(host);if(!cachedOnly&&!automatic)void rememberAudio(host);
-        }catch(error){if(blobUrl){URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);}if(valid()){if(automatic)blockAudioIntent(intentBinding,0);if(!host.dataset.mediaPreviewState||host.dataset.mediaPreviewState==='loaded')host.dataset.mediaPreviewState='retryable';status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;updateMediaMenu(host);}}
+        }catch(error){if(blobUrl){URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);}if(valid()){if(controller.photoStopped){host.dataset.mediaPreviewState='unloaded';status.textContent='';return;}if(automatic)blockAudioIntent(intentBinding,0);if(!host.dataset.mediaPreviewState||host.dataset.mediaPreviewState==='loaded')host.dataset.mediaPreviewState='retryable';status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;updateMediaMenu(host);}}
         finally{clearTimeout(timer);active.delete(controller);if(pendingKeys.get(requestKey)===controller)pendingKeys.delete(requestKey);button.setAttribute('aria-busy','false');if(menuLoad)menuLoad.disabled=false;updateMediaMenu(host);if(restoreRetained)bind();pumpPhotoCache();}
       };
       button.onclick=()=>load();
@@ -241,7 +285,11 @@
   document.addEventListener('tenant-chat-history-added',bind);
   document.getElementById('closeModal')?.addEventListener('click',clear);
   document.getElementById('dealModal')?.addEventListener('click',event=>{if(event.target.id==='dealModal')clear();});
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden)bind();});
+  document.addEventListener('visibilitychange',()=>{stopHiddenPhotos();if(!document.hidden){photoProbed=new WeakSet();bind();}});
+  if(window.MutationObserver)new MutationObserver(records=>{
+    if(!records.some(record=>['operatorCopilotBackdrop','view-dialogs'].includes(record.target.id)))return;
+    stopHiddenPhotos();document.querySelectorAll('#chatRows [data-chat-attachment]').forEach(host=>{if(host._photoCacheLoad)enqueuePhoto(host);});pumpPhotoCache();
+  }).observe(document.body,{subtree:true,attributes:true,attributeFilter:['hidden','class']});
   let profileFetch;
   function refreshAudioProfile(){
     const revision=profileRevision,expected=profilePolicy;
