@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import copy
+from datetime import datetime,timedelta,timezone
 import hashlib
 import json
 import os
@@ -22,11 +23,16 @@ from tenant_operator_realtime_wire import MODEL,QUOTE,MINIMUM_HOLD
 SNAPSHOT={'existing_copilot_instructions':'Never send messages, call tools or perform external actions.','lines':[],'extra_context':{}}
 OPTIONS={'tools':[],'create_response':False,'interrupt_response':False,'transcription':False,'reconnect':False}
 
+def scoped(**changes):
+    s=session_tests.scope(**changes)
+    s['source_fingerprint']=integration.synthetic_source_fingerprint(s,SNAPSHOT)
+    return s
+
 class Guard:
     async def consume(self,scope,receipt):return True  # only #480 interface; not authorization
 
 def good_config():
-    return {'type':'session.update','session':{'type':'realtime','model':MODEL,'instructions':'Never send messages',
+    return {'type':'session.update','session':{'type':'realtime','model':MODEL,'instructions':SNAPSHOT['existing_copilot_instructions'],
       'output_modalities':['audio'],'tools':[],'tool_choice':'none','max_output_tokens':4096,
       'audio':{'input':{'format':{'type':'audio/pcm','rate':24000},'transcription':None,
         'turn_detection':{'type':'server_vad','create_response':False,'interrupt_response':False,'idle_timeout_ms':None}},
@@ -47,22 +53,22 @@ class WireBudgetTests(base.BoundSenderTests):
         return scope,receipt
     def test_hold_commits_before_connection_and_no_hold_no_fake_socket(self):
         async def run():
-            s=session_tests.scope()
+            s=scoped()
             with patch.object(integration,'_FakeSocket',wraps=integration._FakeSocket) as fake:
-                with self.assertRaises(Exception):await integration.connect_synthetic(self.dsn,s,Guard())
+                with self.assertRaises(Exception):await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT)
                 fake.assert_not_called()
                 self.call(budget.reserve_session,s)
-                wire=await integration.connect_synthetic(self.dsn,s,Guard())
+                wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT)
                 self.assertEqual(fake.call_count,1)
                 with local_connect(self.dsn) as conn:
                     self.assertEqual(conn.execute('SELECT state,reserved_microusd FROM saas_voice_session_budget').fetchone(),{'state':'opening','reserved_microusd':4_224_000})
-                with self.assertRaisesRegex(ValueError,'open_capability_unavailable'):await integration.connect_synthetic(self.dsn,s,Guard())
+                with self.assertRaisesRegex(ValueError,'open_capability_unavailable'):await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT)
                 self.assertEqual(fake.call_count,1)
         asyncio.run(run())
     def test_real_wire_config_context_audio_response_all_match_committed_bytes(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
-            wire=await integration.connect_synthetic(self.dsn,s,Guard());await wire.open(SNAPSHOT,**OPTIONS)
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);await wire.open(SNAPSHOT,**OPTIONS)
             pcm=b'\0\1'*200
             await wire.send({'type':'input_audio_buffer.append','audio':base64.b64encode(pcm).decode()})
             claim,receipt=self.claim(s);await wire.bind_claim(claim,receipt);await wire.send({'type':'response.create'})
@@ -78,12 +84,13 @@ class WireBudgetTests(base.BoundSenderTests):
         asyncio.run(run())
     def test_direct_unsafe_config_and_early_audio_are_rejected_before_receipt(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
-            wire=await integration.connect_synthetic(self.dsn,s,Guard())
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT)
             with self.assertRaises(ValueError):await wire.socket.send_json({'type':'session.update','session':{'tools':[{'name':'send'}]}})
             mutations=[lambda x:x['session']['audio']['input'].__setitem__('transcription',{'model':'gpt-transcribe'}),
                        lambda x:x['session']['audio']['input']['turn_detection'].__setitem__('create_response',True),
                        lambda x:x['session']['audio']['input']['turn_detection'].__setitem__('idle_timeout_ms',5000),
+                       lambda x:x['session'].__setitem__('instructions','Never send messages. Other instructions.'),
                        lambda x:x['session'].__setitem__('tools',[{'type':'function'}]),
                        lambda x:x['session'].__setitem__('max_output_tokens','inf')]
             for change in mutations:
@@ -93,10 +100,86 @@ class WireBudgetTests(base.BoundSenderTests):
             self.assertEqual(wire.socket.evidence(),())
             with local_connect(self.dsn) as conn:self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_voice_bound_sender_receipt').fetchone()['n'],0)
         asyncio.run(run())
+    def test_mismatched_synthetic_snapshot_rejected_before_connect_and_open(self):
+        async def run():
+            s=scoped();self.call(budget.reserve_session,s)
+            changed={**SNAPSHOT,'existing_copilot_instructions':'Never send messages. Other instructions.'}
+            with patch.object(integration,'_FakeSocket',wraps=integration._FakeSocket) as fake:
+                with self.assertRaisesRegex(ValueError,'snapshot_scope_mismatch'):
+                    await integration.connect_synthetic(self.dsn,s,Guard(),changed)
+                fake.assert_not_called()
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT)
+            with self.assertRaisesRegex(ValueError,'snapshot_scope_mismatch'):await wire.open(changed,**OPTIONS)
+            self.assertEqual(wire.socket.evidence(),())
+            with local_connect(self.dsn) as conn:self.assertEqual(conn.execute('SELECT state FROM saas_voice_session_budget').fetchone()['state'],'uncertain')
+        asyncio.run(run())
+    def test_quote_expiry_while_waiting_for_tenant_lock_prevents_cas_and_send(self):
+        async def run():
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);await wire.open(SNAPSHOT,**OPTIONS)
+            expires=datetime.now(timezone.utc)+timedelta(seconds=.7);checked=threading.Event();original=budget._quote_fresh
+            def check():original();checked.set()
+            with local_connect(self.dsn) as holder:
+                holder.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('tenant-ai-spend:'+s['tenant_id'],))
+                with patch.object(budget,'QUOTE_EXPIRES',expires),patch.object(budget,'_quote_fresh',check):
+                    task=asyncio.create_task(wire.send({'type':'input_audio_buffer.append','audio':'AAA='}))
+                    self.assertTrue(await asyncio.to_thread(checked.wait,2))
+                    await asyncio.sleep(max(0,(expires-datetime.now(timezone.utc)).total_seconds())+.05)
+                    holder.commit()
+                    with self.assertRaisesRegex(Exception,'quote_expired'):await task
+            self.assertEqual(len(wire.socket.evidence()),2)
+            with local_connect(self.dsn) as conn:
+                self.assertEqual(conn.execute("SELECT count(*) AS n FROM saas_voice_bound_sender_receipt WHERE operation='audio'").fetchone()['n'],0)
+                self.assertEqual(conn.execute('SELECT state FROM saas_voice_session_budget').fetchone()['state'],'uncertain')
+        asyncio.run(run())
+    def test_quote_expiry_after_commit_before_write_keeps_hold_without_send(self):
+        async def run():
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);await wire.open(SNAPSHOT,**OPTIONS)
+            original=integration._BudgetSocket._commit;committed=threading.Event();release=threading.Event()
+            def pause(*args):
+                result=original(*args)
+                if args[1]=='audio':
+                    committed.set()
+                    if not release.wait(5):raise RuntimeError('test_timeout')
+                return result
+            with patch.object(integration._BudgetSocket,'_commit',pause):
+                task=asyncio.create_task(wire.send({'type':'input_audio_buffer.append','audio':'AAA='}))
+                self.assertTrue(await asyncio.to_thread(committed.wait,3))
+                with patch.object(budget,'QUOTE_EXPIRES',datetime.now(timezone.utc)-timedelta(seconds=1)):
+                    release.set()
+                    with self.assertRaisesRegex(Exception,'quote_expired'):await task
+            self.assertEqual(len(wire.socket.evidence()),2)
+            with local_connect(self.dsn) as conn:
+                self.assertEqual(conn.execute("SELECT count(*) AS n FROM saas_voice_bound_sender_receipt WHERE operation='audio'").fetchone()['n'],1)
+                self.assertEqual(conn.execute('SELECT state,reserved_microusd FROM saas_voice_session_budget').fetchone(),{'state':'uncertain','reserved_microusd':4_224_000})
+        asyncio.run(run())
+    def test_expiry_after_final_sql_check_can_still_commit_but_prewrite_stops(self):
+        async def run():
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);await wire.open(SNAPSHOT,**OPTIONS)
+            original=budget._quote_fresh_db;checked=threading.Event();release=threading.Event();calls=0
+            def pause(cur):
+                nonlocal calls
+                original(cur);calls+=1
+                if calls==2:
+                    checked.set()
+                    if not release.wait(5):raise RuntimeError('test_timeout')
+            with patch.object(budget,'_quote_fresh_db',pause):
+                task=asyncio.create_task(wire.send({'type':'input_audio_buffer.append','audio':'AAA='}))
+                self.assertTrue(await asyncio.to_thread(checked.wait,3))
+                with patch.object(budget,'QUOTE_EXPIRES',datetime.now(timezone.utc)-timedelta(seconds=1)):
+                    release.set()
+                    with self.assertRaisesRegex(Exception,'quote_expired'):await task
+            self.assertEqual(len(wire.socket.evidence()),2)
+            with local_connect(self.dsn) as conn:
+                self.assertEqual(conn.execute("SELECT count(*) AS n FROM saas_voice_bound_sender_receipt WHERE operation='audio'").fetchone()['n'],1)
+                self.assertEqual(conn.execute('SELECT state FROM saas_voice_session_budget').fetchone()['state'],'uncertain')
+        asyncio.run(run())
     def test_mismatched_response_scope_never_dispatches(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
-            wire=await integration.connect_synthetic(self.dsn,s,Guard());await wire.open(SNAPSHOT,**OPTIONS)
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);await wire.open(SNAPSHOT,**OPTIONS)
             scope,receipt=self.claim(s);scope['actor_id']+=1;receipt['actor_id']=scope['actor_id']
             with self.assertRaisesRegex(ValueError,'response_scope_invalid'):await wire.bind_claim(scope,receipt)
             self.assertEqual(len(wire.socket.evidence()),2)
@@ -104,8 +187,8 @@ class WireBudgetTests(base.BoundSenderTests):
         asyncio.run(run())
     def test_mismatched_response_ordinal_rolls_back_dispatch_and_sends_nothing(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
-            wire=await integration.connect_synthetic(self.dsn,s,Guard());await wire.open(SNAPSHOT,**OPTIONS)
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);await wire.open(SNAPSHOT,**OPTIONS)
             scope,receipt=self.claim(s);scope['response_number']=2;receipt['response_number']=2
             await wire.bind_claim(scope,receipt)
             with self.assertRaisesRegex(ValueError,'response_ordinal_mismatch'):await wire.send({'type':'response.create'})
@@ -116,8 +199,8 @@ class WireBudgetTests(base.BoundSenderTests):
         asyncio.run(run())
     def test_audio_cumulative_limit_and_reused_receipt_never_retransmits(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
-            wire=await integration.connect_synthetic(self.dsn,s,Guard());await wire.open(SNAPSHOT,**OPTIONS)
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);await wire.open(SNAPSHOT,**OPTIONS)
             with local_connect(self.dsn) as conn:
                 conn.execute('ALTER TABLE saas_voice_session_budget DISABLE TRIGGER voice_session_guard')
                 conn.execute('UPDATE saas_voice_session_budget SET audio_bytes=5759998,audio_frames=1199')
@@ -132,8 +215,8 @@ class WireBudgetTests(base.BoundSenderTests):
         asyncio.run(run())
     def test_ambiguous_commit_never_sends_and_retains_full_hold(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
-            wire=await integration.connect_synthetic(self.dsn,s,Guard());await wire.open(SNAPSHOT,**OPTIONS)
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);await wire.open(SNAPSHOT,**OPTIONS)
             original=integration._BudgetSocket._commit
             def lost(*args):
                 result=original(*args)
@@ -148,8 +231,8 @@ class WireBudgetTests(base.BoundSenderTests):
         asyncio.run(run())
     def test_audio_new_receipt_cannot_exceed_cumulative_limit(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
-            wire=await integration.connect_synthetic(self.dsn,s,Guard());await wire.open(SNAPSHOT,**OPTIONS)
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);await wire.open(SNAPSHOT,**OPTIONS)
             with local_connect(self.dsn) as conn:
                 conn.execute('ALTER TABLE saas_voice_session_budget DISABLE TRIGGER voice_session_guard')
                 conn.execute('UPDATE saas_voice_session_budget SET audio_bytes=5759998,audio_frames=1199')
@@ -163,8 +246,8 @@ class WireBudgetTests(base.BoundSenderTests):
         asyncio.run(run())
     def test_concurrent_distinct_audio_each_has_exactly_one_matching_receipt(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
-            wire=await integration.connect_synthetic(self.dsn,s,Guard());await wire.open(SNAPSHOT,**OPTIONS)
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);await wire.open(SNAPSHOT,**OPTIONS)
             await asyncio.gather(*(wire.send({'type':'input_audio_buffer.append','audio':base64.b64encode(x).decode()}) for x in (b'\x01\x02'*100,b'\x03\x04'*250)))
             frames=wire.socket.evidence()[2:];self.assertEqual(len(frames),2)
             with local_connect(self.dsn) as conn:
@@ -174,8 +257,8 @@ class WireBudgetTests(base.BoundSenderTests):
         asyncio.run(run())
     def test_cancel_response_after_commit_and_before_write_never_retries(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
-            wire=await integration.connect_synthetic(self.dsn,s,Guard());await wire.open(SNAPSHOT,**OPTIONS)
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);await wire.open(SNAPSHOT,**OPTIONS)
             claim,receipt=self.claim(s);await wire.bind_claim(claim,receipt)
             original=integration._BudgetSocket._commit;committed=threading.Event();release=threading.Event()
             def pause(*args):
@@ -199,42 +282,42 @@ class WireBudgetTests(base.BoundSenderTests):
         asyncio.run(run())
     def test_two_executors_cannot_open_same_session(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
+            s=scoped();self.call(budget.reserve_session,s)
             with patch.object(integration,'_FakeSocket',wraps=integration._FakeSocket) as fake:
-                result=await asyncio.gather(integration.connect_synthetic(self.dsn,s,Guard()),integration.connect_synthetic(self.dsn,s,Guard()),return_exceptions=True)
+                result=await asyncio.gather(integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT),integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT),return_exceptions=True)
                 self.assertEqual(sum(isinstance(x,integration.BoundSyntheticWire) for x in result),1)
                 self.assertEqual(fake.call_count,1)
         asyncio.run(run())
     def test_cancel_after_open_hold_commit_creates_no_socket_and_never_reopens(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
+            s=scoped();self.call(budget.reserve_session,s)
             committed=threading.Event();release=threading.Event();original=integration._consume_open
             def pause(*args):
                 result=original(*args);committed.set()
                 if not release.wait(5):raise RuntimeError('test_timeout')
                 return result
             with patch.object(integration,'_consume_open',pause),patch.object(integration,'_FakeSocket',wraps=integration._FakeSocket) as fake:
-                task=asyncio.create_task(integration.connect_synthetic(self.dsn,s,Guard()))
+                task=asyncio.create_task(integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT))
                 self.assertTrue(await asyncio.to_thread(committed.wait,3));task.cancel()
                 try:
                     with self.assertRaises(asyncio.CancelledError):await task
                     fake.assert_not_called()
                 finally:release.set()
                 await asyncio.sleep(.01)
-                with self.assertRaisesRegex(ValueError,'open_capability_unavailable'):await integration.connect_synthetic(self.dsn,s,Guard())
+                with self.assertRaisesRegex(ValueError,'open_capability_unavailable'):await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT)
                 fake.assert_not_called()
             with local_connect(self.dsn) as conn:self.assertEqual(conn.execute('SELECT state FROM saas_voice_session_budget').fetchone()['state'],'opening')
         asyncio.run(run())
     def test_caller_scope_mutation_after_open_commit_does_not_rebind_socket(self):
         async def run():
-            s=session_tests.scope();original_scope=copy.deepcopy(s);self.call(budget.reserve_session,s)
+            s=scoped();original_scope=copy.deepcopy(s);self.call(budget.reserve_session,s)
             committed=threading.Event();release=threading.Event();original=integration._consume_open
             def pause(*args):
                 result=original(*args);committed.set()
                 if not release.wait(5):raise RuntimeError('test_timeout')
                 return result
             with patch.object(integration,'_consume_open',pause):
-                task=asyncio.create_task(integration.connect_synthetic(self.dsn,s,Guard()))
+                task=asyncio.create_task(integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT))
                 self.assertTrue(await asyncio.to_thread(committed.wait,3))
                 s['actor_id']+=1;s['source_fingerprint']='b'*64;release.set()
                 wire=await task
@@ -245,8 +328,8 @@ class WireBudgetTests(base.BoundSenderTests):
         asyncio.run(run())
     def test_unsafe_provider_ack_never_sends_context_and_marks_uncertain(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
-            wire=await integration.connect_synthetic(self.dsn,s,Guard());original=integration._FakeSocket.read
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);original=integration._FakeSocket.read
             async def bad(socket):
                 event=await original(socket)
                 if event['type']=='session.updated':event['session']['audio']['input']['transcription']={'model':'gpt-transcribe'}
@@ -260,8 +343,8 @@ class WireBudgetTests(base.BoundSenderTests):
         async def run():
             original=integration._FakeSocket.read
             for desired in ('session.update','conversation.item.create'):
-                s=session_tests.scope(response_limit=1);self.call(budget.reserve_session,s)
-                wire=await integration.connect_synthetic(self.dsn,s,Guard());announced=False
+                s=scoped(response_limit=1);self.call(budget.reserve_session,s)
+                wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);announced=False
                 async def interleaved(socket):
                     nonlocal announced
                     if socket.frames and not announced and json.loads(socket.frames[-1])['type']==desired:
@@ -274,8 +357,8 @@ class WireBudgetTests(base.BoundSenderTests):
         asyncio.run(run())
     def test_foreign_conversation_announcement_does_not_advance_or_send_context(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
-            wire=await integration.connect_synthetic(self.dsn,s,Guard());original=integration._FakeSocket.read
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT);original=integration._FakeSocket.read
             async def foreign(socket):
                 if socket.frames:return {'type':'conversation.created','session_id':'sess_other','conversation':{'id':'conv_fake'}}
                 return await original(socket)
@@ -286,8 +369,8 @@ class WireBudgetTests(base.BoundSenderTests):
         asyncio.run(run())
     def test_concurrent_config_cannot_be_sent_twice(self):
         async def run():
-            s=session_tests.scope();self.call(budget.reserve_session,s)
-            wire=await integration.connect_synthetic(self.dsn,s,Guard())
+            s=scoped();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT)
             config=good_config()
             results=await asyncio.gather(wire.socket.send_json(config),wire.socket.send_json(config),return_exceptions=True)
             self.assertEqual(sum(isinstance(x,Exception) for x in results),1)
@@ -295,7 +378,7 @@ class WireBudgetTests(base.BoundSenderTests):
             with local_connect(self.dsn) as conn:self.assertEqual(conn.execute("SELECT count(*) AS n FROM saas_voice_bound_sender_receipt WHERE operation='config'").fetchone()['n'],1)
         asyncio.run(run())
     def test_death_after_config_receipt_prevents_reconnect(self):
-        s=session_tests.scope();self.call(budget.reserve_session,s)
+        s=scoped();self.call(budget.reserve_session,s)
         root=Path(__file__).resolve().parents[2]
         env={'PATH':os.environ['PATH'],'POC_DSN':self.dsn,'POC_SCOPE':json.dumps(s),'PYTHONPATH':':'.join(str(root/x) for x in ('beintaskbot-main','experiments/voice_budget_poc','experiments/voice_session_budget_poc','experiments/voice_bound_sender_poc','experiments/voice_budget_wire_poc'))}
         script='''import asyncio,json,os
@@ -311,14 +394,15 @@ def crash(*args):
  return result
 async def main():
  with patch.object(w,'ENABLED_SYNTHETIC',True),patch.object(b,'ADMISSION_VERIFIED',True),patch.object(b,'RECONCILIATION_VERIFIED',True),patch.object(b,'CONFIG_ATTESTATION_VERIFIED',True),patch.object(spending,'limit_microusd',return_value=0),patch.object(w._BudgetSocket,'_commit',crash):
-  wire=await w.connect_synthetic(os.environ['POC_DSN'],s,G())
-  await wire.open({'existing_copilot_instructions':'Never send messages','lines':[],'extra_context':{}},tools=[],create_response=False,interrupt_response=False,transcription=False,reconnect=False)
+  snapshot={'existing_copilot_instructions':'Never send messages, call tools or perform external actions.','lines':[],'extra_context':{}}
+  wire=await w.connect_synthetic(os.environ['POC_DSN'],s,G(),snapshot)
+  await wire.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=False,reconnect=False)
 asyncio.run(main())
 '''
         result=subprocess.run([sys.executable,'-c',script],env=env,capture_output=True,text=True)
         self.assertEqual(result.returncode,75,result.stderr)
         async def retry():
-            with self.assertRaisesRegex(ValueError,'open_capability_unavailable'):await integration.connect_synthetic(self.dsn,s,Guard())
+            with self.assertRaisesRegex(ValueError,'open_capability_unavailable'):await integration.connect_synthetic(self.dsn,s,Guard(),SNAPSHOT)
         asyncio.run(retry())
         with local_connect(self.dsn) as conn:
             self.assertEqual(conn.execute('SELECT operation FROM saas_voice_bound_sender_receipt').fetchone()['operation'],'config')

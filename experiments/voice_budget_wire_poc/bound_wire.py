@@ -20,6 +20,14 @@ def _encode(event):
     return json.dumps(event,ensure_ascii=True,separators=(',',':'),allow_nan=False).encode('ascii')
 
 
+def synthetic_source_fingerprint(scope,snapshot):
+    # Test-only provenance model. It binds exact bytes to scope, but does not
+    # assert the caller built them from the real authorized Copilot sources.
+    identity={k:v for k,v in scope.items() if k!='source_fingerprint'}
+    return hashlib.sha256(json.dumps({'identity':identity,'snapshot':snapshot},sort_keys=True,
+                          separators=(',',':'),ensure_ascii=True,allow_nan=False).encode('ascii')).hexdigest()
+
+
 class _FakeSocket:
     """No actual network, private to the candidate sender."""
     def __init__(self):self.frames=[];self.closed=False
@@ -35,8 +43,9 @@ class _FakeSocket:
 
 class _BudgetSocket:
     """Only outbound interface supplied to #480 wire; fake connector only."""
-    def __init__(self,dsn,scope,socket):
+    def __init__(self,dsn,scope,snapshot,socket):
         self._dsn=dsn;self._scope=budget._scope(json.loads(json.dumps(scope)));self.__socket=socket
+        self._snapshot=json.loads(json.dumps(snapshot,ensure_ascii=True,allow_nan=False))
         self._lock=asyncio.Lock();self._poisoned=False;self._stage='connected';self._expected_config=None;self._expected_context=None;self._response=None
     def evidence(self):return tuple(self.__socket.frames)
     def _mark_uncertain(self):
@@ -86,6 +95,7 @@ class _BudgetSocket:
                 'Never send messages' not in c['instructions'] or len(c['instructions'].encode())>120000 or
                 c.get('tools')!=[] or c.get('tool_choice')!='none' or c.get('output_modalities')!=['audio'] or c.get('max_output_tokens')!=4096 or
                 set(a)!={'input','output'} or set(i)!={'format','transcription','turn_detection'} or set(o)!={'format'} or
+                c['instructions']!=self._snapshot['existing_copilot_instructions'] or
                 i.get('format')!={'type':'audio/pcm','rate':24000} or o.get('format')!={'type':'audio/pcm','rate':24000} or
                 i.get('transcription') is not None or v!={'type':'server_vad','create_response':False,'interrupt_response':False,'idle_timeout_ms':None}):
                 raise ValueError('config_invalid')
@@ -99,6 +109,8 @@ class _BudgetSocket:
                 content[0]['type']!='input_text' or not isinstance(content[0]['text'],str) or
                 not content[0]['text'].startswith('Untrusted dialog context: ') or len(content[0]['text'].encode())>120100):
                 raise ValueError('context_invalid')
+            expected='Untrusted dialog context: '+json.dumps({'lines':self._snapshot['lines'],'extra_context':self._snapshot['extra_context']},ensure_ascii=False,separators=(',',':'))
+            if content[0]['text']!=expected:raise ValueError('context_scope_mismatch')
             return 'context',None
         if self._stage!='active':raise ValueError('stage_invalid')
         if typ=='input_audio_buffer.append' and set(event)=={'type','audio'}:
@@ -127,6 +139,7 @@ class _BudgetSocket:
                 expected='opening' if kind=='config' else 'ready'
                 issued=row['state']==expected and budget._tenant(cur,self._scope,row,'unknown')
             if not issued:return False
+            budget._quote_fresh_db(cur)
             cur.execute('''INSERT INTO saas_voice_bound_sender_receipt(operation_id,session_id,operation,scope_fingerprint,wire_sha256,wire_bytes)
               VALUES(%s,%s,%s,%s,%s,%s)''',(operation_id,self._scope['session_id'],kind,budget._fingerprint(self._scope),hashlib.sha256(frame).hexdigest(),len(frame)))
         return True
@@ -141,6 +154,7 @@ class _BudgetSocket:
             try:
                 if not await asyncio.to_thread(self._commit,kind,operation_id,frame,pcm,ordinal):raise ValueError('budget_capability_unavailable')
                 if kind=='response':self._response=None
+                budget._quote_fresh()  # after commit, immediately before fake write
                 await asyncio.wait_for(self.__socket.write(frame),0.2)
                 if kind=='config':self._expected_config=snapshot['session'];self._stage='config_sent'
                 elif kind=='context':self._expected_context=snapshot['item'];self._stage='context_sent'
@@ -155,7 +169,9 @@ class BoundSyntheticWire(_RealtimeWire):
         if type(socket) is not _BudgetSocket:raise ValueError('bound_socket_required')
         super().__init__(socket,guard)
     async def open(self,snapshot,**options):
-        try:return await super().open(snapshot,**options)
+        try:
+            if _encode(snapshot)!=_encode(self.socket._snapshot):raise ValueError('snapshot_scope_mismatch')
+            return await super().open(snapshot,**options)
         except BaseException:
             self.ready=False
             await self.socket.abort()
@@ -170,13 +186,18 @@ def _consume_open(dsn,scope):
     with local_connect(dsn) as conn,conn.cursor() as cur:return budget.issue_open(cur,scope)
 
 
-async def connect_synthetic(dsn,scope,guard):
+async def connect_synthetic(dsn,scope,guard,snapshot):
     if ENABLED_SYNTHETIC is not True:raise ValueError('wire_integration_disabled')
     # Detach scope before first await; caller mutation cannot make the future
     # socket represent a different identity than the durable opening hold.
     scope=budget._scope(json.loads(json.dumps(scope,allow_nan=False)))
+    snapshot=json.loads(json.dumps(snapshot,ensure_ascii=True,allow_nan=False))
+    if (not isinstance(snapshot,dict) or set(snapshot)!={'existing_copilot_instructions','lines','extra_context'} or
+        synthetic_source_fingerprint(scope,snapshot)!=scope['source_fingerprint']):
+        raise ValueError('snapshot_scope_mismatch')
     # Session hold and one-use open transition must commit before *creating*
     # even this fake socket; duplicate or uncertain open never reconnects.
     issued=await asyncio.to_thread(_consume_open,dsn,scope)
     if not issued:raise ValueError('open_capability_unavailable')
-    return BoundSyntheticWire(_BudgetSocket(dsn,scope,_FakeSocket()),guard)
+    budget._quote_fresh()  # after commit, before creating even the fake socket
+    return BoundSyntheticWire(_BudgetSocket(dsn,scope,snapshot,_FakeSocket()),guard)

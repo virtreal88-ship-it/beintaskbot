@@ -72,6 +72,14 @@ def _quote_fresh():
     if datetime.now(timezone.utc)>=QUOTE_EXPIRES:raise TenantLinearError('voice_session_quote_expired',409)
 
 
+def _quote_fresh_db(cur):
+    # PostgreSQL now() is fixed at transaction start and cannot detect expiry
+    # while waiting on a lock; clock_timestamp() is the current DB clock.
+    cur.execute('SELECT clock_timestamp() AS current_time')
+    if cur.fetchone()['current_time']>=QUOTE_EXPIRES:
+        raise TenantLinearError('voice_session_quote_expired',409)
+
+
 def _global(cur,*,require_enabled=True):
     cur.execute('SELECT cap_microusd,enabled,frozen FROM saas_voice_test_grant WHERE grant_key=%s FOR UPDATE',(GRANT_KEY,))
     row=cur.fetchone()
@@ -123,6 +131,7 @@ def reserve_session(cur,scope):
         if previous['quote_version']!=QUOTE or previous['model']!=MODEL or previous['reserved_microusd']!=_quote(s):
             raise TenantLinearError('voice_session_quote_changed',409)
         if previous['state']=='released':raise TenantLinearError('voice_session_released',409)
+        _quote_fresh_db(cur)
         return previous
     cur.execute('''SELECT session_id FROM saas_voice_session_budget WHERE tenant_id=%s AND actor_id=%s AND channel_id=%s
       AND conversation_id=%s AND state IN ('reserved','opening','ready','uncertain')''',
@@ -140,6 +149,7 @@ def reserve_session(cur,scope):
     if (not hold or hold['kind']!='realtime_voice_session_test' or hold['model']!=MODEL or hold['state']!='reserved' or
         hold['reserved_microusd']!=_quote(s) or hold['actual_microusd'] is not None):
         raise TenantLinearError('voice_session_tenant_hold_conflict',409)
+    _quote_fresh_db(cur)
     cur.execute('''INSERT INTO saas_voice_session_budget(session_id,tenant_id,actor_id,channel_id,conversation_id,executor,
       source_fingerprint,response_limit,asr_mode,model,quote_version,fingerprint,reserved_microusd,tenant_reservation_id,state)
       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'reserved') RETURNING *''',
@@ -157,6 +167,7 @@ def issue_open(cur,scope):
     if row['quote_version']!=QUOTE or row['model']!=MODEL or row['reserved_microusd']!=_quote(s):
         raise TenantLinearError('voice_session_quote_changed',409)
     if not _tenant(cur,s,row,'reserved'):return None
+    _quote_fresh_db(cur)
     cur.execute("UPDATE saas_ai_spend_reservations SET state='unknown' WHERE tenant_id=%s AND id=%s AND state='reserved' RETURNING id",
                 (s['tenant_id'],row['tenant_reservation_id']))
     if not cur.fetchone():raise TenantLinearError('voice_session_tenant_hold_conflict',409)
@@ -192,6 +203,10 @@ def accept_config(cur,scope,event,provider_session_id):
     if not _tenant(cur,s,row,'unknown'):
         cur.execute('SELECT * FROM saas_voice_session_budget WHERE session_id=%s',(s['session_id'],))
         return cur.fetchone()
+    try:_quote_fresh_db(cur)
+    except TenantLinearError:
+        cur.execute("UPDATE saas_voice_session_budget SET state='uncertain',updated_at=now() WHERE session_id=%s RETURNING *",(s['session_id'],))
+        return cur.fetchone()
     payload={'provider_session_id':provider_session_id,'model':MODEL,'quote':QUOTE,'asr':'off','response_limit':s['response_limit']}
     digest=hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     cur.execute("""UPDATE saas_voice_session_budget SET state='ready',provider_session_id=%s,config_fingerprint=%s,updated_at=now()
@@ -209,6 +224,7 @@ def issue_audio(cur,scope,chunk_id,data):
     _global(cur);_quote_fresh();row=_session(cur,s)
     if row['state']!='ready' or not row['provider_session_id'] or not row['config_fingerprint']:return None
     if not _tenant(cur,s,row,'unknown'):return None
+    _quote_fresh_db(cur)
     cur.execute('''INSERT INTO saas_voice_session_audio(chunk_id,session_id,byte_count) VALUES(%s,%s,%s)
       ON CONFLICT(chunk_id) DO NOTHING RETURNING *''',(chunk_id,s['session_id'],len(data)))
     receipt=cur.fetchone()
@@ -228,6 +244,7 @@ def claim_response(cur,scope,response_id,ordinal):
     _global(cur);_quote_fresh();row=_session(cur,s)
     if row['state']!='ready' or not row['config_fingerprint']:return None
     if not _tenant(cur,s,row,'unknown'):return None
+    _quote_fresh_db(cur)
     cur.execute('SELECT ordinal,state FROM saas_voice_session_response WHERE session_id=%s ORDER BY ordinal',(s['session_id'],))
     previous=cur.fetchall()
     if any(r['state']!='completed' for r in previous) or ordinal!=len(previous)+1:return None
@@ -244,6 +261,7 @@ def issue_response(cur,scope,response_id):
     _global(cur);_quote_fresh();row=_session(cur,s)
     if row['state']!='ready':return None
     if not _tenant(cur,s,row,'unknown'):return None
+    _quote_fresh_db(cur)
     cur.execute("""UPDATE saas_voice_session_response SET state='dispatching',updated_at=now()
       WHERE response_id=%s AND session_id=%s AND scope_fingerprint=%s AND state='claimed' RETURNING *""",
       (response_id,s['session_id'],_fingerprint(s)))
