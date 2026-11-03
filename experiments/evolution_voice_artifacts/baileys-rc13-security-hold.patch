@@ -1,5 +1,36 @@
+diff --git a/Docker/scripts/deploy_database.sh b/Docker/scripts/deploy_database.sh
+index fea58ff..202bedd 100755
+--- a/Docker/scripts/deploy_database.sh
++++ b/Docker/scripts/deploy_database.sh
+@@ -9,7 +9,6 @@ fi
+ if [[ "$DATABASE_PROVIDER" == "postgresql" || "$DATABASE_PROVIDER" == "mysql" || "$DATABASE_PROVIDER" == "psql_bouncer" ]]; then
+     export DATABASE_URL
+     echo "Deploying migrations for $DATABASE_PROVIDER"
+-    echo "Database URL: $DATABASE_URL"
+     # rm -rf ./prisma/migrations
+     # cp -r ./prisma/$DATABASE_PROVIDER-migrations ./prisma/migrations
+     npm run db:deploy
+diff --git a/Docker/scripts/generate_database.sh b/Docker/scripts/generate_database.sh
+index 248c6cf..07140cb 100644
+--- a/Docker/scripts/generate_database.sh
++++ b/Docker/scripts/generate_database.sh
+@@ -9,7 +9,6 @@ fi
+ if [[ "$DATABASE_PROVIDER" == "postgresql" || "$DATABASE_PROVIDER" == "mysql" || "$DATABASE_PROVIDER" == "psql_bouncer" ]]; then
+     export DATABASE_URL
+     echo "Generating database for $DATABASE_PROVIDER"
+-    echo "Database URL: $DATABASE_URL"
+     npm run db:generate
+     if [ $? -ne 0 ]; then
+         echo "Prisma generate failed"
+@@ -20,4 +19,4 @@ if [[ "$DATABASE_PROVIDER" == "postgresql" || "$DATABASE_PROVIDER" == "mysql" ||
+ else
+     echo "Error: Database provider $DATABASE_PROVIDER invalid."
+     exit 1
+-fi
+\ No newline at end of file
++fi
 diff --git a/Dockerfile b/Dockerfile
-index 24c4e3b..f970445 100644
+index 24c4e3b..81f3948 100644
 --- a/Dockerfile
 +++ b/Dockerfile
 @@ -12,8 +12,10 @@ WORKDIR /evolution
@@ -21,12 +52,18 @@ index 24c4e3b..f970445 100644
  
  COPY --from=builder /evolution/node_modules ./node_modules
  COPY --from=builder /evolution/dist ./dist
+@@ -57,4 +60,4 @@ ENV DOCKER_ENV=true
+ 
+ EXPOSE 8080
+ 
+-ENTRYPOINT ["/bin/bash", "-c", ". ./Docker/scripts/deploy_database.sh && npm run start:prod" ]
++ENTRYPOINT ["/bin/bash", "-c", "node scripts/patch-baileys-curve.cjs --check && . ./Docker/scripts/deploy_database.sh && npm run start:prod" ]
 diff --git a/compat-tests/README.md b/compat-tests/README.md
 new file mode 100644
-index 0000000..e385c7a
+index 0000000..591e8fe
 --- /dev/null
 +++ b/compat-tests/README.md
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,80 @@
 +# LOCAL EXPERIMENT — NOT A RELEASE CANDIDATE
 +
 +Base: Evolution `2.3.7`, commit `cd800f2976e1e5b682fbf86a01ee4d85ae61f370`.
@@ -77,10 +114,16 @@ index 0000000..e385c7a
 +  Jimp/media dependencies, and a new `whatsapp-rust-bridge` dependency.
 +* `npm ci --ignore-scripts` passed using this lockfile. Prisma client was
 +  generated locally with a synthetic localhost URI and `npm run build`
-+  passed (TypeScript, CJS and ESM). A production Docker/Alpine build,
-+  lifecycle scripts, service startup and runtime migrations were not tested.
++  passed (TypeScript, CJS and ESM). A local Node 24 Alpine Docker build with
++  the environment proxy CA mounted temporarily reached and passed `npm ci`
++  with lifecycle scripts, then was intentionally stopped as shared disk space
++  dropped to 3.8 GiB. Its final image, service startup and migrations are not
++  validated. The first build attempt failed Alpine TLS verification before the
++  CA was supplied; verification was not disabled.
 +* `node --test compat-tests/patch-guard.test.cjs` checks refusal of missing or
 +  modified patch, wrong package versions and changed bytes in a temporary tree.
++  It also exercises the actual candidate entrypoint with fake commands and
++  verifies a failed guard prevents migrations and start.
 +* `node compat-tests/crypto-offline.mjs` checks known synthetic HKDF/MD5,
 +  cross-version ECDH/signatures and rejection of changed message, signature,
 +  length and key. It expects an independently installed rc9 fixture at
@@ -101,6 +144,91 @@ index 0000000..e385c7a
 +message histories, event provenance, group behavior, full encryption protocol,
 +operational migration/rollback or concurrent Evolution deployments. Production
 +tests and independent security review remain necessary before a release.
+diff --git a/compat-tests/SECURITY_ASSESSMENT.md b/compat-tests/SECURITY_ASSESSMENT.md
+new file mode 100644
+index 0000000..bd15365
+--- /dev/null
++++ b/compat-tests/SECURITY_ASSESSMENT.md
+@@ -0,0 +1,79 @@
++# Bounded security assessment — local review only
++
++As of 2026-11-03 this is not an approved production change. Findings are
++independent and must not be merged or described as one verified exploit.
++
++## 1. Upstream advisory (confirmed affected dependency)
++
++Baileys upstream classifies [GHSA-qvv5-jq5g-4cgg / CVE-2026-48063](https://github.com/WhiskeySockets/Baileys/security/advisories/GHSA-qvv5-jq5g-4cgg)
++as critical and describes risks involving forged events, history and app-state
++corruption. Upstream lists fixes 6.7.22 and 7.0.0-rc12. Its [rc13 release](https://github.com/WhiskeySockets/Baileys/releases/tag/v7.0.0-rc13)
++also fixes a `fromMe` regression introduced in rc12. Railway was observed to
++use image digest `sha256:1bd8afc4a6cf48822e6cf02469aeae7bd35a12a6b616eacd1291926307f4d339`;
++local inspection of that same immutable image reported Baileys `7.0.0-rc.9`.
++The dependency is in the affected range. No production exploitation or actual
++impact has been established; filtering a field or switching history sync off
++is not a complete workaround according to upstream.
++
++## 2. Local signature observations (not part of that advisory)
++
++Local tests of the pinned image rc9/libsignal 2.0.1 and npm rc13/libsignal 6.0.0
++showed that `Curve.verify` returns true on synthetically modified messages,
++signatures and wrong keys although the underlying library returns false. It
++discards that boolean. Known call sites are pairing validation in rc9 and
++pairing plus Noise certificate verification in rc13. The candidate returns
++only an actual true result and rejects invalid cases in both local fixtures.
++No network traffic, real credentials or exploitation test was used.
++
++Separately, inspected libsignal `session_builder.js` invokes
++`verifySignature(..., true)`, whose `isInit` branch returns true without the
++primitive verification; that caller also ignores the result. This candidate
++does not fix that behavior. Signal's published [X3DH specification](https://signal.org/docs/specifications/x3dh/)
++describes verifying signed prekeys before continuing, but protocol-specific
++compatibility and the actual reachable impact here remain unverified. Neither
++finding is claimed to be the upstream GHSA or an assigned CVE.
++
++## 3. Image logging observation (separate)
++
++Local inspection of the exact pinned public image's config returned only safe
++booleans: its entrypoint invokes `deploy_database.sh` before `start:prod`.
++The image's `/evolution/Docker/scripts/deploy_database.sh` has SHA-256
++`29cf68a21b5c2220ed80eba47b83c5008a9cfe42b70a91a6ac0058e55ec90cc8`,
++contains an echo of `DATABASE_URL`, and invokes the database deployment script.
++No environment values or production logs were read. It is not established
++whether the variable was populated, printed in any actual run or exposed.
++
++This local candidate moves the integrity guard before the migration step and
++removes DATABASE_URL echo from both local build and deploy scripts. A synthetic
++entrypoint test uses fake migration/start commands and confirms an invalid guard
++prevents both. This does not repair the deployed image, investigate actual logs,
++rotate credentials, or authorize any production action.
++
++## Bounded next steps and decision required
++
++1. Owner decision: authorize any production Evolution security change after
++   review of the exact image and rollback plan. Isolated offline engineering
++   and the specifically approved test contact are already authorised; any
++   other real test identity needs its own authorisation. This security change
++   is separate from voice PRs #474/#26.
++2. Validate the supported replacement or reviewed fork with upstream maintainers;
++   examine the `isInit` behavior and fix/verify signed-prekey checks without
++   weakening transport. Record independent security review and dependencies.
++3. Produce a digest-pinned image with a guard *before* DB migrations, remove
++   secret-bearing output, prove runtime integrity independent of alternative
++   startup paths, inspect the full dependency graph, and verify a rollback plan.
++   Current candidate only checks selected files and npm startup path; direct
++   `node dist/main` and post-start mutation remain unguarded.
++4. In a separately authorised isolated environment, exercise startup, session
++   persistence, reconnect, direct/group inbound/outbound media and text,
++   webhook attribution, failure handling and migrations. Do not use live
++   client contacts or attack a production endpoint. Verify success/rollback
++   independently before proposing a production deploy.
++5. Any review of actual potentially secret-bearing logs or credential rotation
++   is a separate, narrowly scoped security action; do not infer a leak from
++   source or image inspection, and do not print credentials.
++
++The target image contains compiled JavaScript installed from npm: changing only
++Evolution's TypeScript source does not change the library wrapper. A maintained
++upstream fix or reviewed fork is preferable to local post-install patching. The
++current local candidate intentionally remains unreleased and non-production.
 diff --git a/compat-tests/baileys-send-offline.mjs b/compat-tests/baileys-send-offline.mjs
 new file mode 100644
 index 0000000..56eab90
@@ -257,10 +385,10 @@ index 0000000..d02ab77
 +console.log('PASS synthetic rc9 ↔ rc13 HKDF, md5, ECDH and signatures');
 diff --git a/compat-tests/patch-guard.test.cjs b/compat-tests/patch-guard.test.cjs
 new file mode 100644
-index 0000000..6eec2c1
+index 0000000..9659f84
 --- /dev/null
 +++ b/compat-tests/patch-guard.test.cjs
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,63 @@
 +// Synthetic disposable tree, tests patch admission and integrity guards.
 +const {test} = require('node:test');
 +const assert = require('node:assert/strict');
@@ -270,6 +398,9 @@ index 0000000..6eec2c1
 +const {spawnSync} = require('node:child_process');
 +
 +test('candidate patch refuses missing patch, wrong versions and changed bytes', () => {
++  for(const script of ['Docker/scripts/deploy_database.sh','Docker/scripts/generate_database.sh']){
++    assert.doesNotMatch(fs.readFileSync(script,'utf8'),/echo\s+["']?[^\n]*\$\{?DATABASE_URL/);
++  }
 +  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'baileys-guard-'));
 +  try {
 +    fs.mkdirSync(path.join(dir,'scripts'),{recursive:true});
@@ -306,6 +437,18 @@ index 0000000..6eec2c1
 +    const alternate=path.join(dir,'dist/node_modules/baileys');fs.mkdirSync(alternate,{recursive:true});
 +    fs.writeFileSync(path.join(alternate,'package.json'),JSON.stringify({version:'7.0.0-rc.9'}));
 +    assert.notEqual(run('--check').status,0);fs.rmSync(path.join(dir,'dist'),{recursive:true,force:true});assert.equal(run('--check').status,0);
++    // Exercise the candidate's actual shell entrypoint with fake migration and
++    // fake npm. Failed integrity must not invoke either operation.
++    fs.mkdirSync(path.join(dir,'Docker/scripts'),{recursive:true});fs.mkdirSync(path.join(dir,'bin'),{recursive:true});
++    fs.writeFileSync(path.join(dir,'Docker/scripts/deploy_database.sh'),'printf "migration\\n" >> "$TEST_SENTINEL"\n');
++    const npm=path.join(dir,'bin/npm');fs.writeFileSync(npm,'#!/bin/sh\nprintf "start\\n" >> "$TEST_SENTINEL"\n');fs.chmodSync(npm,0o755);
++    const entryLine=fs.readFileSync('Dockerfile','utf8').split('\n').find(line=>line.startsWith('ENTRYPOINT '));
++    const entry=JSON.parse(entryLine.slice('ENTRYPOINT '.length));
++    const sentinel=path.join(dir,'sentinel'),env={PATH:path.join(dir,'bin')+path.delimiter+process.env.PATH,TEST_SENTINEL:sentinel};
++    const clean=fs.readFileSync(lib,'utf8');fs.writeFileSync(lib,clean+'\n// changed before startup');
++    let boot=spawnSync(entry[0],entry.slice(1),{cwd:dir,env,encoding:'utf8'});assert.notEqual(boot.status,0);assert.equal(fs.existsSync(sentinel),false);
++    fs.writeFileSync(lib,clean);boot=spawnSync(entry[0],entry.slice(1),{cwd:dir,env,encoding:'utf8'});
++    assert.equal(boot.status,0,boot.stderr);assert.equal(fs.readFileSync(sentinel,'utf8'),'migration\nstart\n');
 +    fs.writeFileSync(lib,fs.readFileSync(lib,'utf8')+'\n// changed');assert.notEqual(run('--check').status,0);
 +  } finally { fs.rmSync(dir,{recursive:true,force:true}); }
 +});
