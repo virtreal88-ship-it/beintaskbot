@@ -26,7 +26,8 @@ more than two responses per synthetic session. This is a deliberately
 conservative arithmetic example, not approval for a live session:
 
 * Official `gpt-realtime-2.1-mini` model page lists 128,000 context tokens and
-  32,000 maximum output tokens. Charge every input/output token as audio (the
+  32,000 model-maximum output tokens as a conservative reservation assumption,
+  although the session API now explicitly requests 4,096. Charge every input/output token as audio (the
   highest published modality rate for the selected model), at $10/$20 per
   million, with a 10% regional uplift: `(128000*10+32000*20)*1.1` microdollars.
 * No discount, caching or special credit is assumed. This quote does not cover

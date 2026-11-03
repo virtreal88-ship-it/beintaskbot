@@ -13,7 +13,9 @@ import aiohttp
 from tenant_linear_policy import TenantLinearError
 
 MODEL='gpt-realtime-2.1-mini'
-OUTPUT_LIMIT=32000
+# The session API accepts 1..4096 or "inf", regardless of the larger model
+# maximum. Keep the larger existing hold until a full billing bound is proven.
+OUTPUT_LIMIT=4096
 QUOTE='mini-2026-11-03-1resp-v1'
 MINIMUM_HOLD=2_112_000
 OPENAI_URL='wss://api.openai.com/v1/realtime'

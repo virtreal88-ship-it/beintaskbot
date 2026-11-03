@@ -53,6 +53,7 @@ class WireTest(unittest.IsolatedAsyncioTestCase):
                  lambda s:s['audio']['input']['turn_detection'].__setitem__('future_trigger',True),
                  lambda s:s['audio']['input'].__setitem__('transcription',{'model':'unapproved'}),
                  lambda s:s.__setitem__('tools',[{'name':'send'}]),lambda s:s.__setitem__('max_output_tokens',999999),
+                 lambda s:s.__setitem__('max_output_tokens',32000),
                  lambda s:s.__setitem__('model','other')]
         for change in changes:
             wire=SyntheticRealtimeWire(Socket(change),Guard())

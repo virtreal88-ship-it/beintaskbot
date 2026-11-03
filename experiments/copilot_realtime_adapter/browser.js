@@ -15,15 +15,16 @@
   let serverInitiated=false, voiceBlocked=false;
   const uncertain='Завершение разговора не подтверждено; текстовый чат доступен.';
   const playbackFailure='Ошибка воспроизведения. '+uncertain;
+  const microphoneUncertain='Не удалось подтвердить отключение микрофона. Текстовый чат доступен.';
   function send(event){
     if(!channel)return;
     try { Promise.resolve(channel.send(event)).catch(()=>stop(uncertain)); }
     catch(_){void stop(uncertain);}
   }
 
-  async function stop(reason='ended',confirmed=false) {
+  async function stop(reason='ended',confirmed=false,retainMicrophone=false) {
     if(serverInitiated && !confirmed && reason!==playbackFailure)reason=uncertain;
-    if(reason===uncertain || reason===playbackFailure)voiceBlocked=true;
+    if(reason===uncertain || reason===playbackFailure || reason===microphoneUncertain)voiceBlocked=true;
     serverInitiated=false;
     generation++; running=false; ending=false; start.disabled=voiceBlocked; mute.hidden=true; end.hidden=true;
     if(endTimer){clearTimeout(endTimer);endTimer=null;} end.disabled=false;
@@ -35,9 +36,14 @@
     try { oldAudio?.stopNow?.(); } catch (_) {}
     const mediaStop=(async()=>{
       if(oldAudio)await oldAudio.close();
-      if(pendingAudio){let pending;try{pending=await pendingAudio;}catch(_){}
+      if(pendingAudio){let pending;try{pending=await pendingAudio;}catch(error){
+          if(error?.message==='microphone_stop_unconfirmed'){
+            retainMicrophone=true;voiceBlocked=true;start.disabled=true;
+            if(!destroyed)status.textContent=microphoneUncertain;
+          }
+        }
         if(pending && pending!==oldAudio){pending.stopNow?.();await pending.close();}}
-      if(oldRelease)oldRelease();
+      if(oldRelease && !retainMicrophone)oldRelease();
     })().catch(()=>{});
     muted=false;mute.textContent='Выключить микрофон';
     if(!destroyed) status.textContent=reason==='ended'?'Разговор завершён':reason;
@@ -81,10 +87,11 @@
       channel=socket;mute.hidden=false;status.textContent='Слушаю';
     } catch(error) {
       if(version!==generation)return;
-      const code=error?.name==='NotAllowedError'?'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.':
+      const code=error?.message==='microphone_stop_unconfirmed'?microphoneUncertain:
+        error?.name==='NotAllowedError'?'Нет доступа к микрофону. Разрешите микрофон в настройках браузера.':
         error?.message==='microphone_busy'?'Микрофон уже используется в другом режиме.':
         'Не удалось начать голосовой разговор. Проверьте подключение и доступ к микрофону.';
-      await stop(code);
+      await stop(code,false,error?.message==='microphone_stop_unconfirmed');
     }
   }
   start.addEventListener('click',begin);

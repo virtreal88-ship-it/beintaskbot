@@ -105,3 +105,20 @@ test('unknown connect failure keeps voice blocked and releases microphone',async
   assert.match(x.root.children[0].textContent,/не подтверждено/);
   assert.equal(x.root.children[1].disabled,true);assert.equal(x.released(),1);
 });
+
+test('unconfirmed startup track cleanup keeps shared microphone lease',async()=>{
+  const x=setup({open:async()=>{throw new Error('microphone_stop_unconfirmed');}});
+  await x.view.start();
+  assert.match(x.root.children[0].textContent,/отключение микрофона/);
+  assert.equal(x.root.children[1].disabled,true);assert.equal(x.released(),0);
+});
+
+test('late unconfirmed capture cleanup never releases shared lease',async()=>{
+  let fail;const pending=new Promise((_resolve,reject)=>{fail=reject;});
+  const x=setup({open:()=>pending});const starting=x.view.start();
+  await new Promise(resolve=>setImmediate(resolve));
+  const stopping=x.view.stop();fail(new Error('microphone_stop_unconfirmed'));
+  await Promise.all([starting,stopping]);
+  assert.equal(x.released(),0);assert.equal(x.root.children[1].disabled,true);
+  assert.match(x.root.children[0].textContent,/отключение микрофона/);
+});

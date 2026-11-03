@@ -76,6 +76,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([e['type'] for e in self.received],['session.update','conversation.item.create',
                         'input_audio_buffer.append','response.create'])
         settings=self.received[0]['session'];vad=settings['audio']['input']['turn_detection']
+        self.assertEqual(settings['max_output_tokens'],4096)
         self.assertFalse(vad['create_response']);self.assertFalse(vad['interrupt_response']);self.assertIsNone(vad['idle_timeout_ms'])
         self.assertIsNone(settings['audio']['input']['transcription'])
         self.assertEqual(settings['tools'],[]);self.assertEqual(settings['tool_choice'],'none')
