@@ -1,0 +1,1163 @@
+diff --git a/poc-tests/baileys-real-offline.mjs b/poc-tests/baileys-real-offline.mjs
+new file mode 100644
+index 0000000..625962f
+--- /dev/null
++++ b/poc-tests/baileys-real-offline.mjs
+@@ -0,0 +1,124 @@
++// Exercises the installed Baileys implementation to the sendNode boundary.
++// All identities, crypto, media cache and transport below are synthetic.
++// Run: node /workspace/voice-evolution-poc/poc-tests/baileys-real-offline.mjs
++// Requires Node.js 22.15+ (module.registerHooks); verified with Node.js 24.
++import assert from 'node:assert/strict';
++import { EventEmitter } from 'node:events';
++import { createRequire, registerHooks, syncBuiltinESMExports } from 'node:module';
++import net from 'node:net';
++import tls from 'node:tls';
++import http from 'node:http';
++import https from 'node:https';
++
++let networkAttempts = 0;
++let queryAttempts = 0;
++const denyNetwork = () => { networkAttempts++; throw new Error('Unexpected network access'); };
++globalThis.fetch = denyNetwork;
++globalThis.WebSocket = class { constructor() { denyNetwork(); } };
++net.connect = net.createConnection = denyNetwork;
++net.Socket.prototype.connect = denyNetwork;
++tls.connect = denyNetwork;
++http.request = http.get = denyNetwork;
++https.request = https.get = denyNetwork;
++syncBuiltinESMExports();
++
++const root = 'file:///workspace/voice-poc-deps/node_modules/baileys/';
++const socketRoot = root + 'lib/Socket/';
++registerHooks({
++  load(url, context, nextLoad) {
++    // Avoid constructing a real WebSocket. messages-send.js itself remains real.
++    if (url === socketRoot + 'newsletter.js') {
++      return { format: 'module', source: 'export const makeNewsletterSocket = () => globalThis.__offlineBaileysSocket', shortCircuit: true };
++    }
++    return nextLoad(url, context);
++  },
++});
++
++const user = '994500000000:1@s.whatsapp.net';
++const recipient = process.env.VOICE_POC_DEST_JID || '994500000001@s.whatsapp.net';
++assert.match(recipient,/^[0-9]{5,22}@(s\.whatsapp\.net|lid)$/);
++const stanzas = [];
++const encrypted = [];
++const logger = {};
++for (const name of ['trace', 'debug', 'info', 'warn', 'error', 'fatal']) logger[name] = () => {};
++logger.child = () => logger;
++const unexpectedQuery = () => { queryAttempts++; throw new Error('Unexpected query or USync'); };
++globalThis.__offlineBaileysSocket = {
++  user: { id: user }, ev: new EventEmitter(),
++  authState: { creds: { me: { id: user } }, keys: { transaction: async (fn) => fn(), get: async () => ({}), set: async () => {} } },
++  processingMutex: { mutex: async (fn) => fn() },
++  signalRepository: {
++    jidToSignalProtocolAddress: (jid) => jid,
++    validateSession: async () => ({ exists: true }),
++    encryptMessage: async (input) => { encrypted.push(input); return { type: 'msg', ciphertext: Buffer.from([1]) }; },
++  },
++  upsertMessage: async () => {}, query: unexpectedQuery, executeUSyncQuery: unexpectedQuery,
++  sendNode: async (stanza) => { stanzas.push(stanza); }, fetchPrivacySettings: async () => ({}),
++  groupMetadata: unexpectedQuery, groupToggleEphemeral: unexpectedQuery,
++};
++
++const { proto } = await import(root + 'WAProto/index.js');
++const encodedAudio = proto.Message.encode(proto.Message.fromObject({
++  audioMessage: { mimetype: 'audio/ogg; codecs=opus', ptt: true, seconds: 1, directPath: '/synthetic' },
++})).finish();
++const mediaCache = {
++  // A cache hit prevents media processing, file creation, upload and network.
++  get: async (key) => { assert.equal(key, 'audio:https://offline.invalid/synthetic'); return encodedAudio; },
++  set: async () => { throw new Error('Unexpected media cache miss'); },
++};
++const { makeMessagesSocket } = await import(socketRoot + 'messages-send.js');
++const { generateMessageIDV2 } = await import(root + 'lib/Utils/generics.js');
++const { getDevice } = await import(root + 'lib/Utils/messages.js');
++const version = JSON.parse(await (await import('node:fs/promises')).readFile(new URL(root + 'package.json'), 'utf8')).version;
++assert.equal(version, '7.0.0-rc.9');
++const providerId = process.env.VOICE_POC_RESERVED_ID || generateMessageIDV2(user);
++const audio=Buffer.from(process.env.VOICE_POC_AUDIO_BASE64||Buffer.from('synthetic').toString('base64'),'base64');
++assert.ok(audio.length>0&&audio.length<=5*1024*1024);
++assert.match(providerId,/^3EB0[A-F0-9]{18}$/);
++const socket = makeMessagesSocket({
++  logger, mediaCache, options: {}, emitOwnEvents: false, patchMessageBeforeSending: async (message) => message,
++  userDevicesCache: { mget: async (users) => Object.fromEntries(users.map((value) => [value, [{ user: value, server: 's.whatsapp.net', device: 0 }]])) },
++});
++
++let message,evolutionReceipt;
++if(process.env.VOICE_POC_EVOLUTION_BRIDGE==='true'){
++  const require=createRequire(import.meta.url),{make}=require('../poc/evolution-test-bridge.cjs');
++  const {api,calls}=make(async(jid,upstreamAudio,options)=>{
++    assert.deepEqual(upstreamAudio.audio,audio);assert.equal(upstreamAudio.ptt,true);
++    // Replace only media bytes with a cache-key placeholder so the real
++    // Baileys media upload never touches disk or network. ID and route are
++    // passed unchanged through the patched Evolution methods.
++    message=await socket.sendMessage(jid,{...upstreamAudio,audio:{url:'https://offline.invalid/synthetic'},seconds:1},options);
++    return message;
++  });
++  const result=await api.audioWhatsapp({number:recipient,audio:audio.toString('base64'),encoding:false},undefined,false,
++    {messageId:providerId,expectedJid:recipient});
++  assert.equal(calls.length,1);assert.equal(calls[0].options.messageId,providerId);assert.equal(result.key.id,providerId);
++  evolutionReceipt={key:result.key,message:{audioMessage:{ptt:result.message.audioMessage.ptt}}};
++}else{
++  message = await socket.sendMessage(recipient, {
++    audio: { url: 'https://offline.invalid/synthetic' }, ptt: true, mimetype: 'audio/ogg; codecs=opus', seconds: 1,
++  }, { messageId: providerId });
++}
++assert.equal(message.key.id, providerId);
++assert.equal(message.key.remoteJid, recipient);
++assert.equal(message.key.fromMe, true);
++assert.equal(message.message.audioMessage.ptt, true);
++assert.equal(message.message.audioMessage.mimetype, 'audio/ogg; codecs=opus');
++assert.equal(stanzas.length, 1);
++assert.equal(stanzas[0].attrs.id, providerId);
++assert.equal(stanzas[0].attrs.to, recipient);
++const participants = stanzas[0].content.find((node) => node.tag === 'participants');
++assert.ok(participants?.content?.length);
++assert.equal(participants.content[0].content[0].attrs.mediatype, 'ptt');
++assert.ok(encrypted.length > 0);
++assert.equal(networkAttempts, 0);
++assert.equal(queryAttempts, 0);
++
++// getDevice predicts a label from the ID string; it is not author proof.
++assert.equal(getDevice(providerId), 'web');
++assert.equal(getDevice('3A' + 'A'.repeat(18)), 'ios');
++assert.equal(getDevice('A'.repeat(21)), 'android');
++assert.equal(getDevice('OTHER'), 'unknown');
++if(process.env.VOICE_POC_JSON==='true')process.stdout.write(JSON.stringify({providerId,jid:recipient,socketUser:user,fromMe:true,ptt:true,evolutionReceipt,source:getDevice(providerId),networkAttempts,queryAttempts})+'\n');
++else process.stdout.write('PASS Baileys 7.0.0-rc.9 offline: supplied ID, exact JID and PTT reach intercepted sendNode; source is only an ID-pattern prediction.\n');
+diff --git a/poc-tests/evolution-bridge.test.cjs b/poc-tests/evolution-bridge.test.cjs
+new file mode 100644
+index 0000000..6723da4
+--- /dev/null
++++ b/poc-tests/evolution-bridge.test.cjs
+@@ -0,0 +1,85 @@
++// Extract the actual three patched Evolution 2.3.7 methods with the TypeScript
++// parser, transpile them, and run them with all provider/side effects faked.
++// This is a local path test, not a whole-service build or WhatsApp test.
++const {test}=require('node:test');
++const assert=require('node:assert/strict');
++const {make}=require('../poc/evolution-test-bridge.cjs');
++const jid='994500000000@s.whatsapp.net',id='3EB0ABCDEF123456789ABC';
++
++test('synthetic guard bypass: both extracted audio paths pass the exact ID to a fake client',async()=>{
++  for(const encoding of [false,true]){
++    const {api,calls,events}=make();
++    const result=await api.audioWhatsapp({number:jid,audio:'synthetic-base64',encoding},undefined,false,{messageId:id,expectedJid:jid});
++    assert.equal(calls.length,1);assert.equal(calls[0].jid,jid);assert.equal(calls[0].options.messageId,id);
++    assert.equal(calls[0].message.ptt,true);assert.equal(result.key.id,id);assert.equal(events.length,1);
++  }
++});
++test('synthetic guard bypass: route change, group, malformed ID or media fail',async()=>{
++  for(const [resolved,correlation] of [
++    ['994599999999@s.whatsapp.net',{messageId:id,expectedJid:jid}],
++    ['123456789012345@g.us',{messageId:id,expectedJid:jid}],
++    [jid,{messageId:'bad-id',expectedJid:jid}],
++    [jid,{messageId:id,expectedJid:'invalid'}],
++  ]){
++    const {api,calls}=make();api.resolvedJid=resolved;
++    await assert.rejects(api.audioWhatsapp({number:jid,audio:'synthetic-base64',encoding:false},undefined,false,correlation),/voice_correlation_scope_conflict/);
++    assert.equal(calls.length,0);
++  }
++  const {api,calls}=make();
++  await assert.rejects(api.sendMessageWithTyping(jid,{conversation:'not audio'},undefined,false,{messageId:id,expectedJid:jid}),/voice_correlation_scope_conflict/);
++  assert.equal(calls.length,0);
++});
++test('synthetic harness: existing callers without internal correlation remain unchanged',async()=>{
++  const {api,calls}=make();
++  const result=await api.audioWhatsapp({number:jid,audio:'synthetic-base64',encoding:false});
++  assert.equal(calls.length,1);assert.equal(calls[0].options.messageId,undefined);assert.equal(result.key.id,'LEGACY_GENERATED');
++});
++test('refused runtime stops before route lookup, audio processing or relay; legacy remains available',async()=>{
++  const {api,calls}=make(undefined,()=>{throw Error('voice_correlation_unavailable')});
++  let touched=0;
++  api.whatsappNumber=async()=>{touched++;throw Error('route should not run')};
++  api.processAudio=async()=>{touched++;throw Error('conversion should not run')};
++  await assert.rejects(api.audioWhatsapp({number:jid,audio:'synthetic-base64',encoding:true},undefined,false,{messageId:id,expectedJid:jid}),/voice_correlation_unavailable/);
++  await assert.rejects(api.sendMessageWithTyping(jid,{audio:Buffer.from('synthetic'),ptt:true},undefined,false,{messageId:id,expectedJid:jid}),/voice_correlation_unavailable/);
++  assert.equal(touched,0);assert.equal(calls.length,0);
++});
++test('synthetic guard bypass: changing getters are read once and snapshot is sent',async()=>{
++  for(const entry of ['direct','audio']){
++    const {api,calls}=make();
++    let idReads=0,jidReads=0;
++    const correlation={
++      get messageId(){return ++idReads===1?id:'3EB0FFFFFFFFFFFFFFFFFF'},
++      get expectedJid(){return ++jidReads===1?jid:'994599999999@s.whatsapp.net'},
++    };
++    const result=entry==='direct'
++      ? await api.sendMessageWithTyping(jid,{audio:Buffer.from('synthetic'),ptt:true},undefined,false,correlation)
++      : await api.audioWhatsapp({number:jid,audio:'synthetic-base64',encoding:true},undefined,false,correlation);
++    assert.equal(idReads,1);assert.equal(jidReads,1);
++    assert.equal(result.key.id,id);assert.equal(calls.length,1);assert.equal(calls[0].options.messageId,id);
++  }
++});
++test('synthetic guard bypass: async mutation cannot change captured ID or JID',async()=>{
++  for(const entry of ['direct','audio']){
++    const {api,calls}=make();
++    const correlation={messageId:id,expectedJid:jid};
++    const change=()=>{correlation.messageId='3EB0FFFFFFFFFFFFFFFFFF';correlation.expectedJid='994599999999@s.whatsapp.net'};
++    if(entry==='direct')api.whatsappNumber=async()=>{await Promise.resolve();change();return [{exists:true,jid}];};
++    else api.processAudio=async()=>{await Promise.resolve();change();return Buffer.from('synthetic');};
++    const result=entry==='direct'
++      ? await api.sendMessageWithTyping(jid,{audio:Buffer.from('synthetic'),ptt:true},undefined,false,correlation)
++      : await api.audioWhatsapp({number:jid,audio:'synthetic-base64',encoding:true},undefined,false,correlation);
++    assert.equal(result.key.id,id);assert.equal(calls.length,1);assert.equal(calls[0].jid,jid);assert.equal(calls[0].options.messageId,id);
++  }
++});
++test('synthetic guard bypass: non-primitive values fail before async work',async()=>{
++  for(const entry of ['direct','audio']){
++    const {api,calls}=make();let touched=0;
++    api.whatsappNumber=async()=>{touched++;throw Error('unexpected lookup')};
++    api.processAudio=async()=>{touched++;throw Error('unexpected conversion')};
++    const correlation={messageId:new String(id),expectedJid:jid};
++    await assert.rejects(entry==='direct'
++      ? api.sendMessageWithTyping(jid,{audio:Buffer.from('synthetic'),ptt:true},undefined,false,correlation)
++      : api.audioWhatsapp({number:jid,audio:'synthetic-base64',encoding:true},undefined,false,correlation),/voice_correlation_scope_conflict/);
++    assert.equal(touched,0);assert.equal(calls.length,0);
++  }
++});
+diff --git a/poc-tests/protocol-postgres.test.mjs b/poc-tests/protocol-postgres.test.mjs
+new file mode 100644
+index 0000000..2c1b7c8
+--- /dev/null
++++ b/poc-tests/protocol-postgres.test.mjs
+@@ -0,0 +1,168 @@
++// Tests use a disposable localhost PostgreSQL container and synthetic relay.
++import test,{before,after} from 'node:test';
++import assert from 'node:assert/strict';
++import {createHash,randomUUID} from 'node:crypto';
++import {createRequire} from 'node:module';
++import {spawn} from 'node:child_process';
++import {resolve} from 'node:path';
++import {fileURLToPath} from 'node:url';
++import {VoiceIntentPrototype,localPool,schema,syntheticScope,syntheticAudio} from '../poc/protocol.mjs';
++
++const require=createRequire(resolve(process.env.VOICE_POC_DEPS||'/workspace/voice-poc-deps','index.js'));
++const {Pool}=require('pg');
++const base=new URL(process.env.VOICE_POC_ADMIN_URL||'');
++const parsedAdmin=require('pg-connection-string').parse(base.toString());
++if(!['postgres:','postgresql:'].includes(base.protocol)||base.search||base.hash||
++   !['localhost','127.0.0.1','::1','[::1]'].includes(base.hostname)||
++   !['localhost','127.0.0.1','::1','[::1]'].includes(parsedAdmin.host)||base.pathname!=='/postgres')throw Error('localhost_synthetic_admin_only');
++const name='test_voice_corr_'+randomUUID().replaceAll('-','');
++const admin=new Pool({connectionString:base.toString(),max:1});base.pathname='/'+name;
++let pool;
++before(async()=>{await admin.query(`CREATE DATABASE "${name}"`);pool=localPool(base.toString());await pool.query(schema);});
++after(async()=>{await pool?.end();await new Promise(resolve=>setTimeout(resolve,150));await admin.query(`DROP DATABASE IF EXISTS "${name}"`);await admin.end();});
++const allow=async()=>{};
++const socketIdentity=async()=>({instance:'synthetic-instance',accountEpoch:'synthetic-session',senderJid:'994500000000:1@s.whatsapp.net'});
++const engine=options=>new VoiceIntentPrototype(pool,{socketIdentity,...options});
++const commit=(a,s,options={})=>a.commit(s,{audio:syntheticAudio(),...options});
++const fixture=()=>{let calls=0;const requests=[];return {calls:()=>calls,requests,relay:async input=>{calls++;requests.push(input);return {key:{id:input.providerId,remoteJid:input.actualJid,fromMe:true},message:{audioMessage:{ptt:true}}};}};};
++const event=(s,id)=>({tenant:s.tenant,channel:s.channel,instance:s.instance,accountEpoch:s.accountEpoch,jid:s.actualJid,providerId:id,fromMe:true,type:'audio'});
++
++test('database URL cannot override localhost through pg connection parameters',()=>{
++  assert.throws(()=>localPool(base.toString()+'?host=example.invalid'),/local_test_postgres_only/);
++});
++
++test('audio snapshot is bound before async authorization and wrong content is rejected',async()=>{
++  const s=syntheticScope(),f=fixture(),original=syntheticAudio();let mutate=false;
++  const a=engine({authorize:async(x,stage)=>{if(mutate&&stage==='commit')original.fill(0);},relay:f.relay});
++  await a.prepare(s);
++  await assert.rejects(a.commit(s,{audio:Buffer.from('wrong')}),/audio_content_conflict/);
++  assert.equal((await a.read(s)).state,'prepared');
++  mutate=true;assert.equal((await a.commit(s,{audio:original})).state,'accepted');
++  assert.deepEqual(f.requests[0].audio,syntheticAudio());assert.notDeepEqual(original,syntheticAudio());
++});
++
++test('changed synthetic socket identity cannot claim an existing operation',async()=>{
++  const s=syntheticScope(),f=fixture();let sender='994500000000:1@s.whatsapp.net';
++  const a=engine({authorize:allow,relay:f.relay,socketIdentity:async()=>({...await socketIdentity(),senderJid:sender})});
++  await a.prepare(s);sender='994599999999:1@s.whatsapp.net';
++  await assert.rejects(commit(a,s),/verified_socket_changed/);
++  assert.equal((await a.read(s)).state,'prepared');assert.equal(f.calls(),0);
++});
++
++test('instance remap cannot create a second operation for accepted or unknown send',async()=>{
++  for(const unknown of [false,true]){
++    const s=syntheticScope(),f=fixture();let instance=s.instance;
++    const a=engine({authorize:allow,socketIdentity:async()=>({...await socketIdentity(),instance}),
++      relay:async i=>{const response=await f.relay(i);if(unknown)throw Error('unknown');return response;}});
++    await a.prepare(s);assert.equal((await commit(a,s)).state,unknown?'claimed':'accepted');
++    instance='remapped-instance';const remapped={...s,instance};
++    await assert.rejects(a.prepare(remapped),/scope_or_content_conflict/);
++    await assert.rejects(commit(a,remapped),/scope_or_content_conflict/);
++    assert.equal(f.calls(),1);
++  }
++});
++
++test('process death after claim or during relay cannot cause a new relay after restart',async()=>{
++  const script=fileURLToPath(new URL('./restart-worker.mjs',import.meta.url));
++  const run=(mode,scope)=>new Promise((resolvePromise,reject)=>{
++    const child=spawn(process.execPath,[script],{env:{PATH:process.env.PATH,VOICE_POC_DB_URL:base.toString(),VOICE_POC_SCOPE:JSON.stringify(scope),VOICE_POC_MODE:mode},stdio:['ignore','pipe','pipe']});
++    let stdout='',stderr='';child.stdout.on('data',v=>stdout+=v);child.stderr.on('data',v=>stderr+=v);
++    const timeout=setTimeout(()=>child.kill('SIGKILL'),15000);
++    child.on('error',reject);child.on('close',code=>{clearTimeout(timeout);resolvePromise({code,stdout,stderr});});
++  });
++  for(const [mode,exitCode] of [['exit-after-claim',71],['exit-in-relay',72]]){
++    const scope=syntheticScope(),f=fixture(),p=engine({authorize:allow,relay:f.relay});await p.prepare(scope);
++    const killed=await run(mode,scope);assert.equal(killed.code,exitCode,killed.stderr);
++    const restarted=await run('retry',scope);assert.equal(restarted.code,0,restarted.stderr);
++    assert.deepEqual(JSON.parse(restarted.stdout),{state:'claimed',calls:0});assert.equal(f.calls(),0);
++  }
++});
++
++test('prepare is durable and idempotent; a changed scope or audio never reuses the request',async()=>{
++  const s=syntheticScope(),f=fixture(),a=engine({authorize:allow,relay:f.relay});
++  const rows=await Promise.all(Array.from({length:16},()=>a.prepare(s)));
++  assert.equal(new Set(rows.map(r=>r.provider_id)).size,1);assert.match(rows[0].provider_id,/^3EB0[A-F0-9]{18}$/);assert.equal(f.calls(),0);
++  assert.equal((await engine({authorize:allow,relay:f.relay}).read(s)).provider_id,rows[0].provider_id);
++  for(const changes of [{audioHash:'c'.repeat(64)},{paramsHash:'c'.repeat(64)},{actor:21},{accountEpoch:'another-session'},
++    {expectedJid:'994599999999@s.whatsapp.net',actualJid:'994599999999@s.whatsapp.net'}]){
++    await assert.rejects(a.prepare({...s,...changes}),/scope_or_content_conflict|verified_socket_changed/);
++  }
++  assert.equal(await a.read({...s,tenant:randomUUID()}),null);
++  assert.equal(await a.read({...s,channel:randomUUID()}),null);
++});
++
++test('concurrent commit: exactly one local relay attempt and scoped positive facts only',async()=>{
++  const s=syntheticScope(),f=fixture(),a=engine({authorize:allow,relay:f.relay});
++  const reserved=await a.prepare(s),results=await Promise.all(Array.from({length:20},()=>commit(a,s)));
++  assert.equal(f.calls(),1);assert.equal(f.requests[0].providerId,reserved.provider_id);
++  assert.ok(results.every(r=>['claimed','accepted'].includes(r.state)));
++  assert.equal((await a.read(s)).state,'accepted');assert.equal(await a.matchEvent(s,event(s,reserved.provider_id)),true);
++  for(const change of [{tenant:randomUUID()},{channel:randomUUID()},{instance:'wrong-instance'},
++    {accountEpoch:'wrong-session'},{jid:'994599999999@s.whatsapp.net'},{providerId:'3EB0000000000000000000'},
++    {fromMe:false},{type:'text'}])assert.equal(await a.matchEvent(s,{...event(s,reserved.provider_id),...change}),false);
++  assert.equal(f.calls(),1);
++});
++
++test('lost response, mismatched response, and crash after claim never allow a second relay',async()=>{
++  for(const mode of ['throw','wrong-id','wrong-jid','wrong-direction','wrong-media','crash']){
++    const s=syntheticScope();let calls=0;
++    const relay=async i=>{calls++;if(mode==='throw')throw Error('lost');return {key:{id:mode==='wrong-id'?'3EB0000000000000000000':i.providerId,
++      remoteJid:mode==='wrong-jid'?'994599999999@s.whatsapp.net':i.actualJid,fromMe:mode!=='wrong-direction'},message:{audioMessage:{ptt:mode!=='wrong-media'}}};};
++    const a=engine({authorize:allow,relay});await a.prepare(s);
++    if(mode==='crash')await assert.rejects(commit(a,s,{crashAfterClaim:true}),/simulated_process_death/);else await commit(a,s);
++    const restarted=engine({authorize:allow,relay});
++    assert.equal((await restarted.read(s)).state,'claimed');assert.equal((await commit(restarted,s)).state,'claimed');
++    assert.equal(calls,mode==='crash'?0:1);assert.equal(await restarted.cancel(s),false);
++  }
++});
++
++test('cancel races atomically with claim, never sends twice or reopens tombstones',async()=>{
++  for(let i=0;i<12;i++){
++    const s=syntheticScope(),f=fixture(),a=engine({authorize:allow,relay:f.relay});await a.prepare(s);
++    const [cancelled]=await Promise.all([a.cancel(s),commit(a,s)]),row=await a.read(s);
++    assert.equal(f.calls(),cancelled?0:1);assert.equal(row.state,cancelled?'cancelled':'accepted');
++    await a.prepare(s);await commit(a,s);assert.equal(f.calls(),cancelled?0:1);
++  }
++});
++
++test('scope, route or permission revocation stops before synthetic relay; no auto-retry after claim',async()=>{
++  const s=syntheticScope(),f=fixture();let allowed=true,route=s.actualJid,session=s.accountEpoch;
++  const authorize=async (x,stage)=>{if(!allowed||route!==x.actualJid||session!==x.accountEpoch)throw Error('authorization_changed');};
++  const a=engine({authorize,relay:f.relay});
++  await assert.rejects(a.prepare({...s,actualJid:'994599999999@s.whatsapp.net'}),/authorization_changed|unverified_route/);
++  await a.prepare(s);allowed=false;await assert.rejects(commit(a,s),/authorization_changed/);assert.equal(f.calls(),0);
++  allowed=true;route='994599999999@s.whatsapp.net';await assert.rejects(commit(a,s),/authorization_changed/);assert.equal(f.calls(),0);
++  route=s.actualJid;session='different-session';await assert.rejects(commit(a,s),/authorization_changed/);assert.equal(f.calls(),0);
++  session=s.accountEpoch;let stages=0;
++  const b=engine({authorize:async(x,stage)=>{if(stage==='dispatch')throw Error('revoked');stages++;},relay:f.relay});
++  assert.equal((await commit(b,s)).state,'claimed');assert.equal(f.calls(),0);assert.equal((await commit(a,s)).state,'claimed');
++});
++
++test('persisted provider ID reaches patched Evolution and real Baileys sendNode in an offline child',async()=>{
++  const s={...syntheticScope(),audioHash:createHash('sha256').update('synthetic').digest('hex')};let calls=0,result;
++  const relay=async ({providerId,actualJid,audio,ptt,encoding,mime})=>{
++    calls++;
++    assert.equal(createHash('sha256').update(audio).digest('hex'),s.audioHash);
++    assert.deepEqual({ptt,encoding,mime},{ptt:true,encoding:false,mime:'audio/ogg'});
++    const script=fileURLToPath(new URL('./baileys-real-offline.mjs',import.meta.url));
++    result=await new Promise((resolvePromise,reject)=>{
++      const child=spawn(process.execPath,[script],{env:{PATH:process.env.PATH,VOICE_POC_EVOLUTION_BRIDGE:'true',VOICE_POC_JSON:'true',
++        VOICE_POC_RESERVED_ID:providerId,VOICE_POC_DEST_JID:actualJid,VOICE_POC_AUDIO_BASE64:audio.toString('base64')},stdio:['ignore','pipe','pipe']});
++      let stdout='',stderr='';child.stdout.on('data',chunk=>stdout+=chunk);child.stderr.on('data',chunk=>stderr+=chunk);
++      const timeout=setTimeout(()=>child.kill('SIGKILL'),15000);
++      child.on('error',error=>{clearTimeout(timeout);reject(error);});
++      child.on('close',code=>{clearTimeout(timeout);if(code!==0)return reject(Error('synthetic child failed: '+stderr.slice(-2000)));
++        try{resolvePromise(JSON.parse(stdout));}catch(error){reject(error);}});
++    });
++    assert.equal(result.providerId,providerId);assert.equal(result.jid,actualJid);assert.equal(result.socketUser,(await socketIdentity()).senderJid);assert.equal(result.ptt,true);
++    assert.equal(result.networkAttempts,0);assert.equal(result.queryAttempts,0);
++    return result.evolutionReceipt;
++  };
++  const protocol=engine({authorize:allow,relay});
++  const prepared=await protocol.prepare(s);assert.equal((await protocol.read(s)).provider_id,prepared.provider_id);
++  const accepted=await commit(protocol,s);assert.equal(accepted.state,'accepted');assert.equal(calls,1);
++  assert.equal(await protocol.matchEvent(s,event(s,prepared.provider_id)),true);
++  assert.equal((await commit(protocol,s)).state,'accepted');assert.equal(calls,1);
++  // The local provider's pattern label is an untrusted heuristic, not proof.
++  assert.equal(result.source,'web');
++});
+diff --git a/poc-tests/restart-worker.mjs b/poc-tests/restart-worker.mjs
+new file mode 100644
+index 0000000..74f4291
+--- /dev/null
++++ b/poc-tests/restart-worker.mjs
+@@ -0,0 +1,16 @@
++// Separate disposable process; all dependencies and provider data are synthetic.
++import {VoiceIntentPrototype,localPool,syntheticAudio} from '../poc/protocol.mjs';
++const pool=localPool(process.env.VOICE_POC_DB_URL);
++const scope=JSON.parse(process.env.VOICE_POC_SCOPE);
++const mode=process.env.VOICE_POC_MODE;
++let calls=0;
++const p=new VoiceIntentPrototype(pool,{
++  authorize:async()=>{},
++  socketIdentity:async()=>({instance:'synthetic-instance',accountEpoch:'synthetic-session',senderJid:'994500000000:1@s.whatsapp.net'}),
++  relay:async()=>{calls++;if(mode==='exit-in-relay')process.exit(72);throw Error('unexpected_relay');}
++});
++try{
++  const row=await p.commit(scope,{audio:syntheticAudio(),crashAfterClaim:mode==='exit-after-claim'});
++  console.log(JSON.stringify({state:row.state,calls}));
++}catch(error){if(mode==='exit-after-claim'&&error.message==='simulated_process_death_after_claim')process.exit(71);throw error;}
++await pool.end();
+diff --git a/poc-tests/runtime-guard.test.cjs b/poc-tests/runtime-guard.test.cjs
+new file mode 100644
+index 0000000..519118d
+--- /dev/null
++++ b/poc-tests/runtime-guard.test.cjs
+@@ -0,0 +1,67 @@
++// Offline: transpile and run the actual production-path guard in isolation.
++// No WhatsApp socket, credentials, provider or network access.
++const { test } = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const path = require('node:path');
++const vm = require('node:vm');
++const { createRequire } = require('node:module');
++const ts = require('/workspace/voice-beintaskbot-connect/node_modules/typescript');
++
++const source = fs.readFileSync(path.join(__dirname, '../src/api/integrations/channel/whatsapp/voice-correlation-runtime.ts'), 'utf8');
++const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
++const candidate = '/workspace/voice-security-poc/rc13';
++const vulnerable = '/workspace/voice-poc-deps';
++
++function loadAt(installation, enabled) {
++  const localRequire = createRequire(path.join(installation, 'synthetic-runtime.cjs'));
++  const exports = {};
++  const env = enabled === undefined ? {} : { VOICE_CORRELATION_POC_ENABLED: enabled };
++  vm.runInNewContext(compiled, { exports, require: localRequire, process: { env } });
++  return exports.assertVoiceCorrelationRuntime;
++}
++
++test('all versions, absent packages, and old opt-in settings remain unconditionally refused', () => {
++  assert.equal(JSON.parse(fs.readFileSync(path.join(vulnerable, 'node_modules/baileys/package.json'))).version, '7.0.0-rc.9');
++  assert.equal(JSON.parse(fs.readFileSync(path.join(candidate, 'node_modules/baileys/package.json'))).version, '7.0.0-rc13');
++  for (const installation of [candidate, vulnerable, '/nonexistent/voice-installation']) {
++    for (const enabled of ['true', 'false', undefined]) {
++      assert.throws(loadAt(installation, enabled), /voice_correlation_unavailable/);
++    }
++  }
++});
++test('the actual guard does not inspect environment or load dependencies', () => {
++  const exports = {};
++  const forbid = () => { throw Error('unexpected environment or dependency access'); };
++  vm.runInNewContext(compiled, { exports, require: forbid, process: new Proxy({}, { get: forbid }) });
++  assert.throws(exports.assertVoiceCorrelationRuntime, /voice_correlation_unavailable/);
++});
++test('both extracted Evolution entry points refuse before route lookup, conversion and provider', async () => {
++  const { make } = require('../poc/evolution-test-bridge.cjs');
++  const jid = '994500000000@s.whatsapp.net';
++  const correlation = { messageId: '3EB0ABCDEF123456789ABC', expectedJid: jid };
++  for (const installation of [vulnerable, candidate]) {
++    const {api, calls} = make(undefined, loadAt(installation, 'true'));
++    let touched = 0;
++    api.whatsappNumber = async () => { touched++; throw Error('route must not run'); };
++    api.processAudio = async () => { touched++; throw Error('conversion must not run'); };
++    await assert.rejects(api.audioWhatsapp({ number: jid, audio: 'synthetic-base64', encoding: true }, undefined, false, correlation), /voice_correlation_unavailable/);
++    await assert.rejects(api.sendMessageWithTyping(jid, { audio: Buffer.from('synthetic') }, undefined, false, correlation), /voice_correlation_unavailable/);
++    assert.equal(touched, 0); assert.equal(calls.length, 0);
++  }
++});
++test('closed guard refuses before evaluating correlation getters', async () => {
++  const { make } = require('../poc/evolution-test-bridge.cjs');
++  const { api, calls } = make(undefined, loadAt(candidate, 'true'));
++  let reads = 0;
++  const correlation = { get messageId() { reads++; throw Error('getter ran'); } };
++  await assert.rejects(api.audioWhatsapp({}, undefined, false, correlation), /voice_correlation_unavailable/);
++  await assert.rejects(api.sendMessageWithTyping('synthetic', {}, undefined, false, correlation), /voice_correlation_unavailable/);
++  assert.equal(reads, 0); assert.equal(calls.length, 0);
++});
++test('actual closed guard does not change legacy calls without correlation', async () => {
++  const { make } = require('../poc/evolution-test-bridge.cjs');
++  const {api,calls} = make(undefined, loadAt(candidate, 'true'));
++  const result = await api.audioWhatsapp({ number: '994500000000@s.whatsapp.net', audio: 'synthetic-base64', encoding: false });
++  assert.equal(result.key.id, 'LEGACY_GENERATED'); assert.equal(calls.length, 1);
++});
+diff --git a/poc/README.md b/poc/README.md
+new file mode 100644
+index 0000000..70142ca
+--- /dev/null
++++ b/poc/README.md
+@@ -0,0 +1,76 @@
++# Local-only voice correlation experiment
++
++This is not a production implementation or an authenticated API. The patch to
++Evolution adds an internal optional reserved ID for direct audio; it adds no
++HTTP endpoint. The PoC ledger and authority callbacks are synthetic. Never
++connect them to a real customer, provider, production database or credentials.
++
++The internal correlated path is **unconditionally disabled** and refuses before
++route lookup or conversion for every runtime and environment. The former
++opt-in and three-file rc13 check have been removed: rc13 is not an approved
++production dependency. A signature-verification issue independently reproduced
++in both rc9 and rc13 remains unresolved. Existing calls without the internal
++correlation argument do not invoke this guard. Replacing the denial requires a
++separately accepted security fix and review; see `deployment-and-rollback.md`.
++
++The disposable PostgreSQL ledger persists a fingerprint and a Baileys-generated
++ID before an atomic one-shot claim. Unknown outcomes remain claimed; no timer,
++retry or cancellation reopens them. The bridge extracts the modified Evolution
++methods and sends synthetic bytes to actual Baileys 7.0.0-rc.9 until an
++intercepted fake `sendNode`. Audio media is replaced by a synthetic cache hit;
++this does not test upload, encryption, WhatsApp delivery or real webhooks.
++
++`VOICE_POC_ADMIN_URL=postgresql://...localhost.../postgres node --test poc-tests/protocol-postgres.test.mjs`
++requires a disposable local PostgreSQL; it creates and drops a random dedicated
++database. `node --test poc-tests/evolution-bridge.test.cjs` exercises the bridge.
++Both tests have local third-party dependencies and require a compatible Node 24.
++No credentials or persistent database settings are supplied by this project.
++
++`node --test poc-tests/runtime-guard.test.cjs poc-tests/evolution-bridge.test.cjs`
++checks that the actual guard rejects both locally identified package copies,
++missing packages and every tested legacy opt-in. The guard does not resolve or
++verify package bytes: it always rejects. The test bridge extracts TypeScript
++methods and mocks Evolution and the provider; its no-op guard is an explicit
++synthetic-only bypass outside the service. It is not a complete Evolution
++process or image test. Tests require the local TypeScript dependency in the
++Connect checkout.
++The tests can be run with `--network none`, read-only input mounts and
++a temporary writable `/tmp`, using the already available `postgres:16` image
++only as a filesystem (its database server was not started):
++
++```sh
++docker --host=unix:///var/run/docker.sock run --rm --pull=never --network none \
++  --read-only --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 \
++  --pids-limit 128 --memory 512m --tmpfs /tmp:rw,noexec,nosuid,size=128m \
++  --mount type=bind,src=/workspace/voice-evolution-runtime-patch,dst=/work,readonly \
++  --mount type=bind,src=/workspace/voice-beintaskbot-connect/node_modules/typescript,dst=/workspace/voice-beintaskbot-connect/node_modules/typescript,readonly \
++  --mount type=bind,src=/workspace/voice-poc-deps,dst=/workspace/voice-poc-deps,readonly \
++  --mount type=bind,src=/workspace/voice-security-poc/rc13,dst=/workspace/voice-security-poc/rc13,readonly \
++  --mount type=bind,src=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin/node,dst=/test-node,readonly \
++  --entrypoint /test-node postgres:16 --test /work/poc-tests/runtime-guard.test.cjs /work/poc-tests/evolution-bridge.test.cjs
++```
++
++Security limits that block production use:
++
++* Synthetic event field equality is not proof of event origin or author.
++  The deployed pinned Baileys rc9 is affected by GHSA-qvv5-jq5g-4cgg; upgraded
++  Evolution compatibility and event authenticity require separate review.
++  See https://github.com/WhiskeySockets/Baileys/security/advisories/GHSA-qvv5-jq5g-4cgg
++  and `security-neutral/`. Matching dependency bytes and neutral fixtures do not
++  demonstrate production exploitation or verify that rc13 is compatible.
++* Synthetic identity and permission callbacks do not implement authentication,
++  tenant isolation or revocation; dispatch is not atomically bound to a verified
++  real socket generation. Route lookup and account rotation require integration.
++* A single local ledger is tested, not distributed Worker/Connect/Evolution
++  storage or endpoint failure boundaries. `claimed` means only that the local
++  intent was claimed; it does not prove dispatch began. The separate process
++  exits at relay entry, before provider send. A new request ID is a new intent.
++* The test disables Evolution's optional OpenAI transcription side effect;
++  real instance configuration and existing consent/cost policy require review.
++  The receipt is extracted from Evolution's locally mocked `prepareMessage`,
++  not an observed production response.
++* Direct-message only. Groups are explicitly rejected. The existing held PRs'
++  persistent channel-wide AI pause is not fixed by this experiment.
++* The optional third-repository Evolution patch has not passed a complete build,
++  service integration, security review or real-provider test and must not be
++  deployed automatically. No production changes have been made.
+diff --git a/poc/deployment-and-rollback.md b/poc/deployment-and-rollback.md
+new file mode 100644
+index 0000000..09334e1
+--- /dev/null
++++ b/poc/deployment-and-rollback.md
+@@ -0,0 +1,139 @@
++# Draft deployment and rollback plan — NOT approved for production
++
++## Scope and actual status
++
++The base is upstream Evolution tag 2.3.7 (`cd800f2976e1e5b682fbf86a01ee4d85ae61f370`).
++The reserved-ID patch has no route or real caller; the durable ledger and
++identity checks in `poc/` are simulated and are not an implementation in
++Evolution, Connect or Worker. Stock `package.json` remains on Baileys
++`7.0.0-rc.9`. Hence the current tree cannot provide the intended production
++feature. Do not merge or deploy it merely because the local tests pass.
++
++Production image inspection reported Evolution 2.3.7 with rc9; the two
++inspected Baileys files matched npm rc9. Record the **full** current production
++image digest and both current deployment and Git SHA afresh before any action;
++a tag, version string, or old report is insufficient. Confirm the image build
++provenance and verify the actual Evolution handler and module resolution in the
++built artifact against the reviewed source. Do not claim the complete image
++matches the tag solely from these two hashes.
++
++The production-path guard **always refuses** correlated calls before lookup or
++conversion. There is no opt-in, version allowlist, checksum bypass or runtime
++switch. Legacy noncorrelated calls remain on the original path. The previous
++three-file rc13 check failed to cover signature-verification behavior and has
++been removed. The guard does not inspect or certify the image or its runtime.
++The synthetic-only harness can replace the guard to test unrelated ID plumbing;
++that is not an enablement path for a deployed service.
++
++Independent offline checks on the locally inspected rc9 image and a separate
++rc13 npm copy found `Curve.verify` returns success for an invalid signature
++when `libsignal.verifySignature` returns false without throwing. rc13 invokes
++this wrapper when checking Noise certificate signatures; both inspected
++versions call it for account signature checking during pairing. Other checks,
++including pairing HMAC and rc13's Noise issuer check, remain present. In both
++inspected `libsignal` copies, the outgoing session builder also calls the
++signature verifier with `isInit=true`, for which that implementation returns
++true; its security implications require separate assessment. These are local
++code and neutral fixture findings, not proof of real exploitation, production
++compromise or a complete protocol assessment. The rc9 image also has the
++separate GHSA noted below. Do not treat any matching file digest as a fix.
++
++## Mandatory decisions before third-repository or production changes
++
++1. Owner approval for modifying/forking the separate Evolution repository,
++   building and running a new Evolution production image, and any operational
++   maintenance window or interruption. This local branch has not received it.
++2. Select an independently reviewed, supported Baileys version and image;
++   fix and assess the signature-verification findings above. Unmodified rc13
++   is known to contain the wrapper issue and is not an approved fix.
++   Resolve GHSA-qvv5-jq5g-4cgg with a tested remediation, including the
++   existing nonvoice workload, and assess other advisories. The finding affects
++   the existing image, not only this experimental voice feature. Escalate
++   separately; no conclusion about actual exploitation has been established.
++3. Approve voice API budget/limits and a controlled test account/contact before
++   paid calls or any real WhatsApp send. Obtain consent and agree on data
++   retention; no real client contact may be used without separate permission.
++
++## Prerequisites before release
++
++* Build a reproducible immutable candidate image from reviewed source, pinned
++  base digest and lockfile; perform full TypeScript/build, vulnerability,
++  licence, dependency and image scans. Pin and record the complete digest and
++  SBOM. Explicitly upgrade and test Evolution's Baileys dependency; this PoC
++  does **not** upgrade it. Confirm 2.3.7/selected-Baileys compatibility,
++  session migration/rollback, receiving, reconnect, groups, text, audio, media,
++  receipt and webhook behavior in an isolated environment with no customers.
++* Implement and independently review the real authenticated internal API and
++  ledger: authorization and current tenant/channel/session identity checked at
++  prepare and commit; stable recipient, media digest and ID bound to a durable
++  intent; atomic claim committed before provider call; one claim only; no
++  blind retry after timeout/crash; replay and rotation handling; scoped reads;
++  unknown remains unknown until trustworthy evidence resolves it. This local
++  PoC's callbacks are not those controls. Groups remain unsupported.
++* Verify webhook origin and semantics end-to-end, including the actual Baileys
++  receive path, downstream event signing and identity checks. Internal HMAC
++  proves the forwarding hop, not the original WhatsApp author. An exact ID,
++  `fromMe`, or `getDevice` ID pattern alone is not authentication. A repaired
++  signature verifier would not alone prove all webhook inputs or authors authentic. Until
++  sufficient proof exists, retain `unknown` and existing protective behavior;
++  never infer origin from timing or remove protection from old unknown sends.
++* Audit existing per-instance speech-to-text and AI rules without disclosing
++  credentials. Evolution has optional audio transcription side effects. Verify
++  the exact inbound and outbound paths, existing consent and budget with
++  isolated mocked external calls and the owner's configuration decision.
++  Prevent new unintended STT/AI calls, charges or stored audio; don't silently
++  disable the tenant's existing processing. The local bridge stubs this path
++  and proves nothing about production configuration.
++* Establish exact-head independent review and CI for all changed repos, tests
++  for races, failover, in-flight revocation, tenant and channel isolation,
++  kill-switch propagation, idempotency, retention and restore. Stage with real
++  auth rules and disposable databases; verify no unexpected migrations. Verify
++  all listed rollback artifacts before touching production. Do not alter old
++  HOLD PRs, unrelated AI settings, roles or customer data.
++
++## Ordered release, only after prerequisites and approvals
++
++1. Capture fresh `main` heads and deployed image digest and health; confirm no
++   parallel changes conflict. Preserve immutable previous images, configuration
++   and DB schema compatibility. Never print credentials. Independently validate
++   exact candidate image provenance, dependency runtime and refusal behavior.
++2. Deploy the reviewed security-compatible Evolution image with the new voice
++   path disabled; check service health and legacy text/media/receive/webhook
++   regression. A mere successful deployment is not acceptance. If the image
++   fails validation, stop; do not switch on the voice path.
++3. Release compatible backend components with voice disabled and non-destructive
++   backward-compatible migrations only if separately reviewed. Verify that
++   capability endpoints refuse sending and that old clients and rollback work.
++4. Enable only on a specifically authorized test tenant/channel and test contact,
++   with bounded usage. Verify real delivery and receipt; audio must not cause
++   unapproved STT. Exercise duplicates, timeouts, concurrent sends, connection
++   changes and recovery without sending to customers. Monitor health, error,
++   unknown and dispatch counts, consent and cost; never log audio or secrets.
++   Test voice assistant separately under its own budget and credentials.
++5. Expand only after owner acceptance of observed behavior, attribution limits,
++   costs, rollback and independent security review. Acceptance must distinguish
++   real-provider evidence from mocks; this document asserts no real delivery.
++
++## Stop and rollback
++
++1. On unexpected sends, provenance ambiguity, duplicate relay, credential or
++   permission failure, unauthorized STT, incompatible runtime or degraded
++   service: disable voice at Worker/Connect and deny the internal endpoint;
++   verify propagation and stop new preparations and claims. A future runtime
++   gate must not be treated as an instantaneous kill switch for work already claimed.
++2. Drain or classify in-flight work; a request after provider dispatch may have
++   succeeded even with no response. Preserve all claimed/unknown IDs and audio
++   recovery state; no retry, cancellation, expiry or rollback may make the same
++   intent send again. Never infer safety from the absence of a receipt.
++3. Roll back downstream components only to versions that preserve the durable
++   ledger and correctly refuse the new protocol. Keep feature off and verify
++   scope isolation and legacy service health. Use the reviewed immutable image
++   and documented backward-compatible schema. Do not delete the ledger or
++   clear existing channel protections.
++4. Prefer a previously validated **security-fixed** Evolution image. The known
++   rc9 image is vulnerable; reverting to it is not an acceptable routine
++   rollback. If there is no compatible fixed image, isolate or stop the affected
++   integration and escalate the availability/security decision to the owner;
++   do not silently re-enable the vulnerable image. Check session compatibility
++   and event queues before reconnecting. Preserve evidence and reassess before
++   retrying a release.
+diff --git a/poc/evolution-test-bridge.cjs b/poc/evolution-test-bridge.cjs
+new file mode 100644
+index 0000000..80f60b8
+--- /dev/null
++++ b/poc/evolution-test-bridge.cjs
+@@ -0,0 +1,44 @@
++// LOCAL TEST HARNESS: extract actual patched upstream methods; every external
++// dependency and post-send side effect is replaced with synthetic callbacks.
++// Its default no-op guard is a TEST-ONLY synthetic bypass in this file, never
++// imported by the service; runtime-guard.test.cjs separately tests the real
++// unconditionally closed guard against the extracted service entry points.
++const assert=require('node:assert/strict');
++const fs=require('node:fs');
++const vm=require('node:vm');
++const ts=require('/workspace/voice-beintaskbot-connect/node_modules/typescript');
++const path=require('node:path');
++const file=path.resolve(__dirname,'../src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts');
++const source=fs.readFileSync(file,'utf8');
++const tree=ts.createSourceFile(file,source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
++const original=tree.statements.find(s=>ts.isClassDeclaration(s)&&s.name?.text==='BaileysStartupService');
++assert.ok(original,'actual upstream class exists');
++const members=['sendMessage','sendMessageWithTyping','audioWhatsapp'].map(name=>{
++  const item=original.members.find(m=>m.name?.getText(tree)===name);
++  assert.ok(item,`actual upstream method ${name} exists`);return item.getFullText(tree);
++});
++const code=ts.transpileModule(`class ExtractedEvolution { ${members.join('\n')} }; globalThis.ExtractedEvolution=ExtractedEvolution;`,
++  {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText;
++class FakeBadRequest extends Error {}
++const sandbox={Buffer,console,Date,assertVoiceCorrelationRuntime:()=>{},BadRequestException:FakeBadRequest,InternalServerErrorException:FakeBadRequest,NotFoundException:FakeBadRequest,
++  isURL:()=>false,isBase64:()=>true,isJidGroup:jid=>jid.endsWith('@g.us'),Long:{isLong:()=>false},Events:{SEND_MESSAGE:'send.message'}};
++vm.runInNewContext(code,sandbox,{filename:'extracted-evolution-2.3.7.js'});
++function make(sendMessage, assertRuntime=()=>{}){
++  sandbox.assertVoiceCorrelationRuntime=assertRuntime;
++  const api=new sandbox.ExtractedEvolution(),calls=[],events=[];
++  api.whatsappNumber=async({numbers})=>[{exists:true,jid:api.resolvedJid||numbers[0]}];
++  api.logger={verbose:()=>{},error:()=>{},warn:()=>{}};
++  api.processAudio=async()=>Buffer.from('synthetic-preconverted-audio');
++  api.instance={wuid:'994500000001@s.whatsapp.net',name:'synthetic'};
++  api.localWebhook={enabled:false};
++  api.configService={get:key=>key==='DATABASE'?{SAVE_DATA:{NEW_MESSAGE:false}}:{ENABLED:false}};
++  api.prepareMessage=message=>({key:message.key,message:{audioMessage:{ptt:true}}});
++  api.sendDataWebhook=(type,data)=>events.push({type,data});
++  api.client={sendMessage:async(jid,message,options)=>{
++    calls.push({jid,message,options});
++    if(sendMessage)return sendMessage(jid,message,options);
++    return {key:{id:options.messageId||'LEGACY_GENERATED',remoteJid:jid,fromMe:true},message:{audioMessage:{ptt:true}}};
++  }};
++  return {api,calls,events};
++}
++module.exports={make};
+diff --git a/poc/protocol.mjs b/poc/protocol.mjs
+new file mode 100644
+index 0000000..1397bad
+--- /dev/null
++++ b/poc/protocol.mjs
+@@ -0,0 +1,132 @@
++// LOCAL PROTOTYPE ONLY. No HTTP route, credentials or production provider.
++// Caller-supplied authority/route facts below stand in for a future server
++// boundary; they are NOT an implementation of authentication or authorization.
++import {createHash, randomUUID} from 'node:crypto';
++import {createRequire} from 'node:module';
++import {resolve} from 'node:path';
++import {pathToFileURL} from 'node:url';
++
++const deps=resolve(process.env.VOICE_POC_DEPS||'/workspace/voice-poc-deps');
++const require=createRequire(resolve(deps,'index.js'));
++const {Pool}=require('pg');
++const {generateMessageIDV2}=await import(pathToFileURL(resolve(deps,'node_modules/baileys/lib/Utils/generics.js')).href);
++const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
++const jid=/^[0-9]{5,22}@(s\.whatsapp\.net|lid)$/;
++const messageId=/^3EB0[A-F0-9]{18}$/;
++const digest=/^[a-f0-9]{64}$/;
++const fixedParamsHash=createHash('sha256').update(JSON.stringify({ptt:true,encoding:false,mime:'audio/ogg'})).digest('hex');
++
++export function localPool(url){
++  const parsed=new URL(url);
++  const pgParsed=require('pg-connection-string').parse(url);
++  if(!['postgres:','postgresql:'].includes(parsed.protocol)||parsed.search||parsed.hash||
++     !['localhost','127.0.0.1','::1','[::1]'].includes(parsed.hostname)||
++     !['localhost','127.0.0.1','::1','[::1]'].includes(pgParsed.host))
++    throw Error('local_test_postgres_only');
++  if(!/^test_voice_corr_[a-f0-9]{32}$/.test(parsed.pathname.slice(1)))throw Error('synthetic_test_database_only');
++  return new Pool({connectionString:url,max:12});
++}
++export const schema=`CREATE TABLE voice_poc_intent (
++ tenant_id UUID NOT NULL, channel_id UUID NOT NULL, instance_id TEXT NOT NULL,
++ account_epoch TEXT NOT NULL, sender_hash TEXT NOT NULL, actor_id BIGINT NOT NULL, request_id UUID NOT NULL,
++ expected_jid TEXT NOT NULL, actual_jid TEXT NOT NULL, mime TEXT NOT NULL,
++ audio_hash TEXT NOT NULL, params_hash TEXT NOT NULL, fingerprint TEXT NOT NULL,
++ provider_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('prepared','claimed','accepted','cancelled')),
++ created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
++ PRIMARY KEY(tenant_id,channel_id,request_id), UNIQUE(tenant_id,channel_id,provider_id)
++)`;
++
++function validated(input){
++  const x={...input};
++  if(!uuid.test(x.tenant)||!uuid.test(x.channel)||!uuid.test(x.request)||!Number.isSafeInteger(x.actor)||x.actor<1 ||
++     !/^[a-z0-9_-]{3,80}$/.test(x.instance)||!/^[a-z0-9_-]{3,80}$/.test(x.accountEpoch)||
++     !jid.test(x.expectedJid)||!jid.test(x.actualJid)||x.mime!=='audio/ogg' ||
++     !digest.test(x.audioHash)||!digest.test(x.paramsHash))throw Error('invalid_scope');
++  if(x.paramsHash!==fixedParamsHash)throw Error('scope_or_content_conflict');
++  return x;
++}
++function fp(x,senderHash){
++  return createHash('sha256').update(JSON.stringify([x.tenant,x.channel,x.instance,x.accountEpoch,x.actor,x.request,
++    x.expectedJid,x.actualJid,senderHash,x.mime,x.audioHash,x.paramsHash,'ptt'])).digest('hex');
++}
++const key=x=>[x.tenant,x.channel,x.request];
++
++export class VoiceIntentPrototype {
++  constructor(pool,{authorize,relay,socketIdentity}){
++    if(typeof authorize!=='function'||typeof relay!=='function'||typeof socketIdentity!=='function')throw Error('synthetic_dependencies_required');
++    this.pool=pool;this.authorize=authorize;this.relay=relay;this.socketIdentity=socketIdentity;
++  }
++  async currentSocket(x,stage){
++    await this.authorize(x,stage);
++    const socket=await this.socketIdentity();
++    if(!socket || socket.instance!==x.instance||socket.accountEpoch!==x.accountEpoch||
++       !/^[0-9]{5,22}(?::[0-9]{1,3})?@s\.whatsapp\.net$/.test(socket.senderJid||''))throw Error('verified_socket_changed');
++    return {senderJid:socket.senderJid,senderHash:createHash('sha256').update(socket.senderJid).digest('hex')};
++  }
++  async read(input){
++    const x=validated(input);await this.authorize(x,'read');
++    const result=await this.pool.query(`SELECT * FROM voice_poc_intent WHERE tenant_id=$1 AND channel_id=$2 AND request_id=$3`,key(x));
++    const row=result.rows[0];if(!row)return null;
++    if(row.fingerprint!==fp(x,row.sender_hash))throw Error('scope_or_content_conflict');
++    return row;
++  }
++  async prepare(input){
++    const x=validated(input),socket=await this.currentSocket(x,'prepare');
++    // Route proof belongs to the caller: exact equality only in this PoC.
++    if(x.actualJid!==x.expectedJid)throw Error('unverified_route');
++    const providerId=generateMessageIDV2(socket.senderJid);
++    const data=[x.tenant,x.channel,x.instance,x.request,x.accountEpoch,socket.senderHash,x.actor,x.expectedJid,x.actualJid,x.mime,x.audioHash,x.paramsHash,fp(x,socket.senderHash),providerId];
++    const result=await this.pool.query(`INSERT INTO voice_poc_intent
++      (tenant_id,channel_id,instance_id,request_id,account_epoch,sender_hash,actor_id,expected_jid,actual_jid,mime,audio_hash,params_hash,fingerprint,provider_id,state)
++      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'prepared')
++      ON CONFLICT(tenant_id,channel_id,request_id) DO NOTHING RETURNING *`,data);
++    if(result.rows.length)return result.rows[0];
++    const previous=await this.read(x);if(!previous)throw Error('prepare_not_persisted');
++    if(previous.fingerprint!==fp(x,socket.senderHash))throw Error('scope_or_content_conflict');return previous;
++  }
++  async cancel(input){
++    const x=validated(input);await this.authorize(x,'cancel');
++    const existing=await this.read(x);if(!existing)return false;
++    const result=await this.pool.query(`UPDATE voice_poc_intent SET state='cancelled',updated_at=now()
++      WHERE tenant_id=$1 AND channel_id=$2 AND request_id=$3 AND fingerprint=$4 AND state='prepared' RETURNING *`,[...key(x),existing.fingerprint]);
++    return result.rows.length===1;
++  }
++  async commit(input,{audio,crashAfterClaim=false}={}){
++    const x=validated(input);
++    if(!Buffer.isBuffer(audio)||!audio.length||audio.length>5*1024*1024)throw Error('audio_content_conflict');
++    const snapshot=Buffer.from(audio);
++    if(createHash('sha256').update(snapshot).digest('hex')!==x.audioHash)
++      throw Error('audio_content_conflict');
++    const socket=await this.currentSocket(x,'commit'),fingerprint=fp(x,socket.senderHash);
++    // Atomic claim is committed before *any* synthetic provider call.
++    const claim=await this.pool.query(`UPDATE voice_poc_intent SET state='claimed',updated_at=now()
++      WHERE tenant_id=$1 AND channel_id=$2 AND request_id=$3 AND fingerprint=$4 AND state='prepared' RETURNING *`,[...key(x),fingerprint]);
++    if(!claim.rows.length){const current=await this.read(x);if(!current)throw Error('not_prepared');if(current.fingerprint!==fingerprint)throw Error('verified_socket_changed');return current;}
++    const row=claim.rows[0];
++    if(crashAfterClaim)throw Error('simulated_process_death_after_claim');
++    // A real integration must recheck membership, instance ownership and the
++    // resolved route here; failure after claim still cannot reopen the intent.
++    try{const again=await this.currentSocket(x,'dispatch');if(again.senderHash!==socket.senderHash)return row;}catch{return row;}
++    let response;
++    try{response=await this.relay({providerId:row.provider_id,actualJid:row.actual_jid,requestId:x.request,audio:snapshot,ptt:true,encoding:false,mime:'audio/ogg'});}
++    catch{return row;} // Unknown forever unless a later exact scoped fact proves more.
++    // Evolution returns messageRaw, not a top-level type. This local receipt
++    // proves only the provider adapter returned matching fields, not delivery.
++    if(response?.key?.id!==row.provider_id||response?.key?.remoteJid!==row.actual_jid||response?.key?.fromMe!==true||response?.message?.audioMessage?.ptt!==true)return row;
++    const accepted=await this.pool.query(`UPDATE voice_poc_intent SET state='accepted',updated_at=now()
++      WHERE tenant_id=$1 AND channel_id=$2 AND request_id=$3 AND fingerprint=$4 AND provider_id=$5 AND state='claimed' RETURNING *`,[...key(x),fingerprint,row.provider_id]);
++    return accepted.rows[0]||await this.read(x);
++  }
++  // Deliberately synthetic equality only: does not authenticate a webhook.
++  async matchEvent(input,event){
++    const x=validated(input);await this.authorize(x,'read');
++    if(!event || event.instance!==x.instance||event.tenant!==x.tenant||event.channel!==x.channel||
++       event.accountEpoch!==x.accountEpoch||event.jid!==x.actualJid||event.fromMe!==true||event.type!=='audio'||!messageId.test(event.providerId))return false;
++    const row=await this.read(x);
++    return !!row && row.state!=='prepared'&&row.state!=='cancelled'&&row.provider_id===event.providerId;
++  }
++}
++export function syntheticAudio(){return Buffer.from('synthetic');}
++export function syntheticScope(){return {tenant:randomUUID(),channel:randomUUID(),instance:'synthetic-instance',accountEpoch:'synthetic-session',actor:20,
++  request:randomUUID(),expectedJid:'994500000000@s.whatsapp.net',actualJid:'994500000000@s.whatsapp.net',
++  mime:'audio/ogg',audioHash:createHash('sha256').update(syntheticAudio()).digest('hex'),paramsHash:fixedParamsHash};}
+diff --git a/poc/security-neutral/README.md b/poc/security-neutral/README.md
+new file mode 100644
+index 0000000..9e72c0c
+--- /dev/null
++++ b/poc/security-neutral/README.md
+@@ -0,0 +1,42 @@
++# Baileys self-only guard: isolated neutral comparison
++
++This local experiment compares pinned Baileys `7.0.0-rc.9` and `7.0.0-rc13`.
++The rc9 `node_modules` is a local copy of the previously installed package;
++rc13 was installed from npm with lifecycle scripts disabled. Verify the
++versions and SHA-256 values printed by the test against your own supply-chain
++records before using the result.
++
++The fixtures contain only synthetic message keys and empty protocol data. No
++embedded messages, real contacts, auth state, provider sessions or keys are
++used. History processing is disabled. Event emitter, resend cache, signal
++repository and key store are fakes; writes and unexpected transactions throw.
++The test invokes the actual installed `processMessage` implementation.
++
++Run with a separately installed Node 24 binary inside a locally available
++Debian-compatible image. The example below uses an existing `postgres:16`
++image only as a filesystem; its database entrypoint is not started. Nothing is
++pulled, and the entire experiment directory and Node binary are mounted
++read-only. Change the Node path if necessary.
++
++```sh
++docker --host=unix:///var/run/docker.sock run --rm --pull=never \
++  --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
++  --user 1000:1000 --pids-limit 128 --memory 512m \
++  --mount type=bind,src=/workspace/voice-security-poc,dst=/work,readonly \
++  --mount type=bind,src=/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin/node,dst=/test-node,readonly \
++  --entrypoint /test-node postgres:16 /work/test-neutral.mjs
++```
++
++It checks the difference in local dispatch for four inert self-only protocol
++types and checks the continuing handling of several ordinary cross-user
++protocol types. `GROUP_MEMBER_LABEL_CHANGE` is checked only for rc13 because
++the copied rc9 implementation has no corresponding branch. It does not
++exercise real history synchronization, decrypt a message, create a spoofed
++message, open a WhatsApp connection, or demonstrate production exploitability.
++The input `fromMe` flag is supplied by the test; this does not exercise
++`messages-recv`, authenticate the sender or validate rc13's real-device
++`fromMe` parsing fix. Empty peer-response data does not exercise placeholder
++resend or webhook propagation.
++It is not a full security audit or proof that Evolution 2.3.7 is compatible
++with rc13, nor proof that any actual image runs these copies. Real message
++delivery and coexistence behaviour remain untested.
+diff --git a/poc/security-neutral/test-neutral.mjs b/poc/security-neutral/test-neutral.mjs
+new file mode 100644
+index 0000000..cb5f0ed
+--- /dev/null
++++ b/poc/security-neutral/test-neutral.mjs
+@@ -0,0 +1,81 @@
++// Offline regression check of the self-only protocol guard in two pinned
++// Baileys packages. No embedded messages, real IDs, credentials or sockets.
++import assert from 'node:assert/strict';
++import { createHash } from 'node:crypto';
++import { readFile } from 'node:fs/promises';
++import net from 'node:net';
++import tls from 'node:tls';
++import http from 'node:http';
++import https from 'node:https';
++import { syncBuiltinESMExports } from 'node:module';
++
++let networkAttempts=0;
++const denyNetwork=()=>{networkAttempts++;throw Error('Network access forbidden');};
++globalThis.fetch=denyNetwork;
++globalThis.WebSocket=class { constructor(){denyNetwork();} };
++net.connect=net.createConnection=net.Socket.prototype.connect=denyNetwork;
++tls.connect=http.request=http.get=https.request=https.get=denyNetwork;
++syncBuiltinESMExports();
++
++const roots=[['rc9','7.0.0-rc.9'],['rc13','7.0.0-rc13']];
++const results={};
++for(const [label,expectedVersion] of roots){
++  const root=new URL(`./${label}/node_modules/baileys/`,import.meta.url);
++  const pkg=JSON.parse(await readFile(new URL('package.json',root),'utf8'));
++  assert.equal(pkg.version,expectedVersion);
++  const processBytes=await readFile(new URL('lib/Utils/process-message.js',root));
++  const receiveBytes=await readFile(new URL('lib/Socket/messages-recv.js',root));
++  const {default:processMessage}=await import(new URL('lib/Utils/process-message.js',root));
++  const {proto}=await import(new URL('WAProto/index.js',root));
++  const types=proto.Message.ProtocolMessage.Type;
++
++  async function run(name,body,fromMe){
++    const logs=[],events=[],cacheCalls=[],mappingCalls=[],accesses=[];
++    const logger={info:(_data,msg)=>logs.push(['info',msg]),warn:(_data,msg)=>logs.push(['warn',msg]),
++      debug:()=>{},trace:()=>{},error:()=>{},child(){return this;}};
++    const protocol=new Proxy({type:types[name],...body},{get(target,key,receiver){accesses.push(key);return Reflect.get(target,key,receiver);}});
++    const remoteJid=name==='GROUP_MEMBER_LABEL_CHANGE'?'123456789012345@g.us':'994500000001@s.whatsapp.net';
++    const message={key:{remoteJid,fromMe,id:'SYNTHETIC_MESSAGE',participant:'994500000002@s.whatsapp.net'},
++      messageTimestamp:1700000000,message:{protocolMessage:protocol}};
++    const context={shouldProcessHistoryMsg:false,ev:{emit:(...args)=>events.push(args)},
++      creds:{me:{id:'994500000000@s.whatsapp.net'},accountSettings:{}},
++      placeholderResendCache:{del:async value=>cacheCalls.push(value)},
++      keyStore:{transaction:async()=>{throw Error('Unexpected key-store transaction');},set:async()=>{throw Error('Unexpected key-store write');}},
++      signalRepository:{lidMapping:{storeLIDPNMappings:async pairs=>mappingCalls.push(pairs)},migrateSession:async()=>{throw Error('Unexpected session migration');}},
++      logger,options:{},getMessage:async()=>undefined};
++    await processMessage(message,context);
++    assert.equal(events.some(([event])=>event==='messages.upsert'),false,'No nested messages in neutral fixtures');
++    return {logs,events,cacheCalls,mappingCalls,accesses};
++  }
++
++  const fixtures=[
++    ['HISTORY_SYNC_NOTIFICATION',{historySyncNotification:{}},r=>r.logs.some(([,msg])=>msg==='got history notification')],
++    ['APP_STATE_SYNC_KEY_SHARE',{appStateSyncKeyShare:{keys:[]}},r=>r.logs.some(([,msg])=>msg==='recv app state sync with 0 keys')],
++    ['PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE',{peerDataOperationRequestResponseMessage:{stanzaId:'SYNTHETIC_STANZA',peerDataOperationResult:[]}},r=>r.accesses.includes('peerDataOperationRequestResponseMessage')],
++    ['LID_MIGRATION_MAPPING_SYNC',{lidMigrationMappingSyncMessage:{encodedMappingPayload:Buffer.alloc(0)}},r=>r.mappingCalls.length===1],
++  ];
++  for(const [name,body,visited] of fixtures){
++    const incoming=await run(name,body,false);
++    if(label==='rc13'){
++      assert.equal(visited(incoming),false,`${name}: non-self guard`);
++      assert.equal(incoming.logs.some(([level,msg])=>level==='warn'&&msg?.includes('dropping spoofed self-only protocolMessage')),true,`${name}: guard logged`);
++    }else assert.equal(visited(incoming),true,`${name}: rc9 reaches branch with inert fixture`);
++    const own=await run(name,body,true);
++    assert.equal(visited(own),true,`${name}: self-origin remains handled`);
++  }
++
++  const revoke=await run('REVOKE',{key:{id:'SYNTHETIC_OLD'}},false);
++  assert.equal(revoke.events.some(([event])=>event==='messages.update'),true,'Cross-user revoke remains handled');
++  const edit=await run('MESSAGE_EDIT',{key:{id:'SYNTHETIC_OLD'},editedMessage:{conversation:'SYNTHETIC'}},false);
++  assert.equal(edit.events.some(([event])=>event==='messages.update'),true,'Cross-user edit remains handled');
++  const ephemeral=await run('EPHEMERAL_SETTING',{ephemeralExpiration:3600},false);
++  assert.equal(ephemeral.events.some(([event])=>event==='chats.update'),true,'Cross-user ephemeral setting remains handled');
++  if(label==='rc13'){
++    const labelChange=await run('GROUP_MEMBER_LABEL_CHANGE',{memberLabel:{label:'SYNTHETIC'}},false);
++    assert.equal(labelChange.events.some(([event])=>event==='group.member-tag.update'),true,'Cross-user label remains handled');
++  }
++  results[label]={version:pkg.version,processSha256:createHash('sha256').update(processBytes).digest('hex'),
++    receiveSha256:createHash('sha256').update(receiveBytes).digest('hex')};
++}
++assert.equal(networkAttempts,0);
++process.stdout.write(JSON.stringify({result:'PASS',offline:true,fixtures:'neutral only',versions:results},null,2)+'\n');
+diff --git a/src/api/integrations/channel/whatsapp/voice-correlation-runtime.ts b/src/api/integrations/channel/whatsapp/voice-correlation-runtime.ts
+new file mode 100644
+index 0000000..c2360f0
+--- /dev/null
++++ b/src/api/integrations/channel/whatsapp/voice-correlation-runtime.ts
+@@ -0,0 +1,11 @@
++/**
++ * This experiment cannot be enabled in a deployed build. The reviewed rc9 and
++ * rc13 dependency combinations have unresolved signature-verification issues.
++ * Replacing this denial requires a separate independently accepted security fix,
++ * full runtime/image verification and a new review; an environment variable,
++ * version string or partial file hashes are not sufficient authorization.
++ * Legacy calls without voice correlation do not enter this path.
++ */
++export function assertVoiceCorrelationRuntime(): void {
++  throw new Error('voice_correlation_unavailable');
++}
+diff --git a/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts b/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts
+index 60e857f..9d8fba4 100644
+--- a/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts
++++ b/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts
+@@ -154,6 +154,11 @@ import { v4 } from 'uuid';
+ 
+ import { BaileysMessageProcessor } from './baileysMessage.processor';
+ import { useVoiceCallsBaileys } from './voiceCalls/useVoiceCallsBaileys';
++import { assertVoiceCorrelationRuntime } from './voice-correlation-runtime';
++
++// Local PoC only: this is an internal argument, not a public DTO or route.
++// A real caller must obtain it from an authenticated, durably claimed intent.
++type InternalVoiceCorrelation = Readonly<{ messageId: string; expectedJid: string }>;
+ 
+ export interface ExtendedIMessageKey extends proto.IMessageKey {
+   remoteJidAlt?: string;
+@@ -2291,7 +2296,26 @@ export class BaileysStartupService extends ChannelStartupService {
+     message: T,
+     options?: Options,
+     isIntegration = false,
++    voiceCorrelation?: InternalVoiceCorrelation,
+   ) {
++    if (voiceCorrelation) assertVoiceCorrelationRuntime();
++    // Capture primitives exactly once before any asynchronous work. Never
++    // validate a caller-controlled object and read it again after an await.
++    const correlation = voiceCorrelation && Object.freeze({
++      messageId: voiceCorrelation.messageId,
++      expectedJid: voiceCorrelation.expectedJid,
++    });
++    if (correlation) {
++      if (
++        typeof correlation.messageId !== 'string' ||
++        typeof correlation.expectedJid !== 'string' ||
++        !/^3EB0[A-F0-9]{18}$/.test(correlation.messageId) ||
++        !/^[0-9]{5,22}@(s\.whatsapp\.net|lid)$/.test(correlation.expectedJid) ||
++        !message || typeof message !== 'object' || !('audio' in message)
++      ) {
++        throw new BadRequestException('voice_correlation_scope_conflict');
++      }
++    }
+     const isWA = (await this.whatsappNumber({ numbers: [number] }))?.shift();
+ 
+     if (!isWA.exists && !isJidGroup(isWA.jid) && !isWA.jid.includes('@broadcast')) {
+@@ -2299,6 +2323,9 @@ export class BaileysStartupService extends ChannelStartupService {
+     }
+ 
+     const sender = isWA.jid.toLowerCase();
++    if (correlation && sender !== correlation.expectedJid) {
++      throw new BadRequestException('voice_correlation_scope_conflict');
++    }
+ 
+     this.logger.verbose(`Sending message to ${sender}`);
+ 
+@@ -2390,7 +2417,7 @@ export class BaileysStartupService extends ChannelStartupService {
+           mentions,
+           linkPreview,
+           quoted,
+-          null,
++          correlation?.messageId ?? null,
+           group?.ephemeralDuration,
+           // group?.participants,
+         );
+@@ -2412,7 +2439,7 @@ export class BaileysStartupService extends ChannelStartupService {
+           mentions,
+           linkPreview,
+           quoted,
+-          null,
++          correlation?.messageId ?? null,
+           undefined,
+           contextInfo,
+         );
+@@ -3203,7 +3230,17 @@ export class BaileysStartupService extends ChannelStartupService {
+     }
+   }
+ 
+-  public async audioWhatsapp(data: SendAudioDto, file?: any, isIntegration = false) {
++  public async audioWhatsapp(data: SendAudioDto, file?: any, isIntegration = false, voiceCorrelation?: InternalVoiceCorrelation) {
++    if (voiceCorrelation) assertVoiceCorrelationRuntime();
++    const correlation = voiceCorrelation && Object.freeze({
++      messageId: voiceCorrelation.messageId,
++      expectedJid: voiceCorrelation.expectedJid,
++    });
++    if (correlation) {
++      if (typeof correlation.messageId !== 'string' || typeof correlation.expectedJid !== 'string') {
++        throw new BadRequestException('voice_correlation_scope_conflict');
++      }
++    }
+     const mediaData: SendAudioDto = { ...data };
+ 
+     if (file?.buffer) {
+@@ -3226,6 +3263,7 @@ export class BaileysStartupService extends ChannelStartupService {
+           { audio: convert, ptt: true, mimetype: 'audio/ogg; codecs=opus' },
+           { presence: 'recording', delay: data?.delay },
+           isIntegration,
++          correlation,
+         );
+ 
+         return result;
+@@ -3243,6 +3281,7 @@ export class BaileysStartupService extends ChannelStartupService {
+       },
+       { presence: 'recording', delay: data?.delay },
+       isIntegration,
++      correlation,
+     );
+   }
+ 
