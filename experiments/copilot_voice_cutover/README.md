@@ -25,6 +25,8 @@ mixed-writer deployment.
 
 [Merge and clear counterexamples](MERGE_EVIDENCE.md) describe the tested
 update-trigger alternative and the missing evidence from a zero-row clear.
+[Railway preflight and acceptance contract](RAILWAY_PREFLIGHT.md) records the
+limited read-only platform observations and the missing independent evidence.
 
 `observe_receipts` is a read-only aggregate diagnostic only. It exposes no
 prompts or identities, performs no mutations, and cannot open the gate even when
@@ -76,18 +78,20 @@ all in-flight work can be identified and drained with independent evidence.
 The following are requirements for a future implementation, not currently
 implemented capabilities:
 
-1. Close the proven barrier for every affected write path and maintain it while
-   draining all old replicas and in-flight requests. Verify both independently
-   from a complete fleet inventory and from an enforcement mechanism that makes
-   legacy writes impossible; neither a receipt count nor a heartbeat is enough.
+1. Establish a proven barrier for every affected write path and drain all old
+   replicas and in-flight requests without failing or losing existing text
+   operations. Verify both independently from a complete fleet inventory and
+   from enforcement that makes legacy writes impossible; neither a receipt
+   count nor a heartbeat is enough. This no-interruption handoff is not yet
+   designed or proven; blocking or revoking active text work is not a solution.
 2. Keep uncertain receipts and financial holds intact. Reconcile only using
    authoritative evidence; do not treat an expiry, process exit or absent row
    as proof an external action never happened. No automatic repeat is permitted.
-3. Apply and verify the schema on the exact target while writes remain blocked.
-   Start and verify only compatible workers at the exact reviewed version. In a
-   single fenced transition bind the gate to that schema, fleet and cutover epoch,
-   and keep it closed if any evidence is missing, expires or changes.
-4. Resume text operations only when their existing behavior is verified. Enable
+3. Apply and verify the additive schema on the exact target with legacy text
+   compatibility. Start and verify only compatible workers at the exact reviewed
+   version. In a single fenced transition bind the gate to that schema, fleet and
+   cutover epoch, and keep it closed if evidence is missing, expires or changes.
+4. Preserve text operations throughout and verify their existing behavior. Enable
    voice writes only after a real writer uses the same transactional fencing,
    tenant/actor/agent checks, session idempotency and ordering. The user-approved
    shared test budget additionally requires an authoritative reservation ledger.
