@@ -53,6 +53,14 @@ class _BudgetSocket:
         self._response=(str(uuid.UUID(scope['request_id'])),scope['response_number'])
     async def receive_json(self):
         event=await self.__socket.read()
+        # #480 permits a conversation announcement before either awaited
+        # acknowledgement; it is not itself proof of config or context.
+        if self._stage in ('config_sent','context_sent') and isinstance(event,dict) and event.get('type')=='conversation.created':
+            conversation=event.get('conversation')
+            if (('session_id' in event and event['session_id']!='sess_fake') or not isinstance(conversation,dict) or
+                not isinstance(conversation.get('id'),str) or not 1<=len(conversation['id'])<=128):
+                raise ValueError('provider_conversation_invalid')
+            return event
         if self._stage=='config_sent':
             # Both #480 verification and budget's independent policy check.
             _RealtimeWire._verify(event,self._expected_config,'sess_fake')

@@ -256,6 +256,34 @@ class WireBudgetTests(base.BoundSenderTests):
             self.assertEqual([json.loads(x)['type'] for x in wire.socket.evidence()],['session.update'])
             with local_connect(self.dsn) as conn:self.assertEqual(conn.execute('SELECT state FROM saas_voice_session_budget').fetchone()['state'],'uncertain')
         asyncio.run(run())
+    def test_conversation_announcement_before_config_or_context_ack(self):
+        async def run():
+            original=integration._FakeSocket.read
+            for desired in ('session.update','conversation.item.create'):
+                s=session_tests.scope(response_limit=1);self.call(budget.reserve_session,s)
+                wire=await integration.connect_synthetic(self.dsn,s,Guard());announced=False
+                async def interleaved(socket):
+                    nonlocal announced
+                    if socket.frames and not announced and json.loads(socket.frames[-1])['type']==desired:
+                        announced=True
+                        return {'type':'conversation.created','session_id':'sess_fake','conversation':{'id':'conv_fake'}}
+                    return await original(socket)
+                with patch.object(integration._FakeSocket,'read',interleaved):await wire.open(SNAPSHOT,**OPTIONS)
+                self.assertTrue(announced);self.assertTrue(wire.ready)
+                self.assertEqual(wire.conversation_id,'conv_fake')
+        asyncio.run(run())
+    def test_foreign_conversation_announcement_does_not_advance_or_send_context(self):
+        async def run():
+            s=session_tests.scope();self.call(budget.reserve_session,s)
+            wire=await integration.connect_synthetic(self.dsn,s,Guard());original=integration._FakeSocket.read
+            async def foreign(socket):
+                if socket.frames:return {'type':'conversation.created','session_id':'sess_other','conversation':{'id':'conv_fake'}}
+                return await original(socket)
+            with patch.object(integration._FakeSocket,'read',foreign):
+                with self.assertRaisesRegex(ValueError,'provider_conversation_invalid'):await wire.open(SNAPSHOT,**OPTIONS)
+            self.assertEqual(len(wire.socket.evidence()),1)
+            with local_connect(self.dsn) as conn:self.assertEqual(conn.execute('SELECT state FROM saas_voice_session_budget').fetchone()['state'],'uncertain')
+        asyncio.run(run())
     def test_concurrent_config_cannot_be_sent_twice(self):
         async def run():
             s=session_tests.scope();self.call(budget.reserve_session,s)
