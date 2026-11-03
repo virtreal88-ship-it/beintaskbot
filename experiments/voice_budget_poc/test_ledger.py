@@ -209,7 +209,7 @@ class LedgerPostgresTests(unittest.TestCase):
             with conn.cursor() as cur:
                 with self.assertRaises(TenantLinearError):candidate.reserve(cur,server_scope())
             self.assertEqual(conn.execute('SELECT count(*) AS n FROM saas_voice_test_hold').fetchone()['n'],0)
-        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True):
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True):
             with self.assertRaises(TenantLinearError):
                 with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,server_scope())
 
@@ -219,7 +219,7 @@ class LedgerPostgresTests(unittest.TestCase):
             try:
                 with local_connect(self.dsn) as conn,conn.cursor() as cur:return candidate.reserve(cur,s)['state']
             except TenantLinearError as exc:return str(exc)
-        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
             with ThreadPoolExecutor(max_workers=12) as workers:
                 results=list(workers.map(reserve_one,[server_scope(executor=f'worker_{n}') for n in range(16)]))
         self.assertEqual(results.count('reserved'),2,results)
@@ -230,7 +230,7 @@ class LedgerPostgresTests(unittest.TestCase):
 
     def test_server_candidate_rolls_back_global_if_tenant_budget_denies(self):
         with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
-        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=1):
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=1):
             with self.assertRaises(TenantLinearError):
                 with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,server_scope())
         with local_connect(self.dsn) as conn:
@@ -240,7 +240,7 @@ class LedgerPostgresTests(unittest.TestCase):
     def test_server_candidate_claim_freeze_and_late_usage_correction(self):
         a,b=server_scope(),server_scope()
         with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
-        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
             for s in (a,b):
                 with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,s)
             with local_connect(self.dsn) as conn,conn.cursor() as cur:self.assertEqual(candidate.claim(cur,a)['state'],'claimed')
@@ -255,7 +255,7 @@ class LedgerPostgresTests(unittest.TestCase):
     def test_server_candidate_cancel_is_atomic_and_claim_cannot_be_cancelled(self):
         a,b=server_scope(),server_scope()
         with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
-        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
             for s in (a,b):
                 with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,s)
             with local_connect(self.dsn) as conn,conn.cursor() as cur:self.assertEqual(candidate.cancel_before_claim(cur,a)['state'],'released')
@@ -269,14 +269,14 @@ class LedgerPostgresTests(unittest.TestCase):
     def test_server_claim_rechecks_tenant_hold_and_changed_limit(self):
         s=server_scope()
         with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
-        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
             with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,s)
-        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=1):
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=1):
             with self.assertRaises(TenantLinearError):
                 with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,s)
         with local_connect(self.dsn) as conn:
             conn.execute("UPDATE saas_ai_spend_reservations SET state='released' WHERE tenant_id=%s",(s['tenant_id'],))
-        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
             with self.assertRaises(TenantLinearError):
                 with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,s)
         with local_connect(self.dsn) as conn:
@@ -285,7 +285,7 @@ class LedgerPostgresTests(unittest.TestCase):
     def test_server_candidate_reconciles_old_quote_without_refunding(self):
         a=server_scope()
         with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
-        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
             with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
             with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
             with patch.object(candidate,'QUOTE','changed'),patch.object(candidate,'MODEL','changed'),patch.object(candidate,'HOLD',3_000_000):
@@ -297,7 +297,7 @@ class LedgerPostgresTests(unittest.TestCase):
     def test_server_session_immutable_across_actor_channel_dialog_executor_and_tenant(self):
         a=server_scope()
         with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
-        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
             with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
             for delta in ({'tenant_id':u()},{'actor_id':2},{'channel_id':u()},{'conversation_id':'other'},{'executor':'other'}):
                 b={**a,**delta,'request_id':u(),'response_number':2}
@@ -309,7 +309,7 @@ class LedgerPostgresTests(unittest.TestCase):
     def test_server_generic_release_and_settle_cannot_free_claimed_hold(self):
         a=server_scope();key='voice-test:'+a['request_id']
         with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
-        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0),patch.object(tenant_spend,'_connect',side_effect=lambda:local_connect(self.dsn)):
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0),patch.object(tenant_spend,'_connect',side_effect=lambda:local_connect(self.dsn)):
             with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
             with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
             tenant_spend.release(a['tenant_id'],key,track_uncapped=True)
@@ -323,7 +323,7 @@ class LedgerPostgresTests(unittest.TestCase):
         for kind, _ in itertools.product(('release','settle'),range(8)):
             a=server_scope();key='voice-test:'+a['request_id']
             with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true,frozen=false')
-            with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0),patch.object(tenant_spend,'_connect',side_effect=lambda:local_connect(self.dsn)):
+            with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0),patch.object(tenant_spend,'_connect',side_effect=lambda:local_connect(self.dsn)):
                 with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
                 def claim():
                     try:
@@ -344,7 +344,7 @@ class LedgerPostgresTests(unittest.TestCase):
     def test_server_inconsistent_tenant_hold_quarantines_overrun_and_commits_evidence(self):
         a=server_scope()
         with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
-        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
             with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
             with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
             # Simulated inconsistent database state: generic API cannot do this
@@ -356,6 +356,39 @@ class LedgerPostgresTests(unittest.TestCase):
         with local_connect(self.dsn) as conn:
             self.assertTrue(conn.execute('SELECT frozen FROM saas_voice_test_grant').fetchone()['frozen'])
             self.assertEqual(conn.execute('SELECT state FROM saas_voice_test_hold').fetchone()['state'],'quarantined')
+
+    def test_server_overrun_increases_tenant_hold_without_false_actual_and_blocks_other_ai(self):
+        a=server_scope();cap=2_200_000;actual=2_300_000
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=cap):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.note_actual(cur,a,actual)
+            with self.assertRaises(TenantLinearError):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:
+                    tenant_spend.reserve(cur,a['tenant_id'],'unrelated-ai','text','synthetic',1,0,
+                                         track_uncapped=True,_bounded_prices=(1_000_000,1_000_000))
+        with local_connect(self.dsn) as conn:
+            tenant=conn.execute('SELECT state,actual_microusd,reserved_microusd FROM saas_ai_spend_reservations').fetchone()
+        self.assertEqual(tenant,{'state':'unknown','actual_microusd':None,'reserved_microusd':actual})
+
+    def test_server_kill_switch_does_not_block_late_reconciliation(self):
+        a=server_scope()
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=true')
+        with patch.object(candidate,'ENFORCEMENT_VERIFIED',True),patch.object(candidate,'RECONCILIATION_VERIFIED',True),patch.object(tenant_spend,'limit_microusd',return_value=0):
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.claim(cur,a)
+        with local_connect(self.dsn) as conn:conn.execute('UPDATE saas_voice_test_grant SET enabled=false')
+        # Admission code switch is off, but trusted reconciliation is separately
+        # available for this test. Both gates default closed in the real code.
+        with patch.object(candidate,'RECONCILIATION_VERIFIED',True):
+            with self.assertRaises(TenantLinearError):
+                with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.reserve(cur,server_scope())
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.mark_unknown(cur,a)
+            with local_connect(self.dsn) as conn,conn.cursor() as cur:candidate.note_actual(cur,a,RESERVE_MICROUSD+1)
+        with local_connect(self.dsn) as conn:
+            row=conn.execute('SELECT h.state,h.actual_microusd,g.frozen FROM saas_voice_test_hold h CROSS JOIN saas_voice_test_grant g').fetchone()
+        self.assertEqual(row,{'state':'settled','actual_microusd':RESERVE_MICROUSD+1,'frozen':True})
 
 
 if __name__=='__main__': unittest.main()

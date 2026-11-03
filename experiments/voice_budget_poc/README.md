@@ -47,8 +47,9 @@ are not instantaneous and recorded spend may exceed the configured limit.
 ## Disabled server candidate and migration gate
 
 `beintaskbot-main/tenant_voice_test_grant.py` is a review candidate with no
-importing route, an immutable-in-source `ENFORCEMENT_VERIFIED=False` guard,
-and a database grant whose proposed migration defaults to disabled. It does
+importing route, separate in-source `ENFORCEMENT_VERIFIED=False` and
+`RECONCILIATION_VERIFIED=False` guards, and a database grant whose proposed
+migration defaults to disabled. It does
 not connect to a database on its own. Its caller supplies an open transaction
 after authorization. `reserve()` locks a cross-tenant singleton first and then
 reuses `tenant_ai_spend_budget.reserve()` under its existing tenant advisory
@@ -58,10 +59,19 @@ current tenant cap, moves the tenant hold to `unknown` atomically, and must
 commit before the caller attempts dispatch. The tested generic release/settle
 methods only act on `reserved` and cannot release a claimed hold. An actual
 provider cost is recorded separately in the voice ledger; the tenant record is
-left `unknown` with a full hold and no false `actual_microusd`. This is a
+left `unknown` with a full hold and no false `actual_microusd`. If late cost
+exceeds that hold, the tenant `reserved_microusd` rises monotonically under
+its existing advisory lock before subsequent ordinary AI admissions; the
+voice grant also freezes. New admissions can be disabled independently of
+trusted reconciliation so that later usage is still recorded and can freeze
+the grant. Both code gates default closed and the actual trusted reconciliation
+entry point/authentication is not implemented. This is a
 temporary conservative accounting limitation, not a complete reporting or
 settlement integration. A tenant-ledger inconsistency preserves the voice
-evidence, quarantines the operation, and freezes admissions. The trusted
+evidence, quarantines the operation, and freezes **voice** admissions. A
+corrupt/missing tenant hold cannot safely be repaired by this candidate; in
+that case ordinary tenant AI admissions may still undercount the cost until
+reconciled. This is a release blocker. The trusted
 caller must commit that quarantine, not roll it back as an exception.
 
 `voice_test_grant.sql` is a **one-shot review artifact**, not integrated in the
