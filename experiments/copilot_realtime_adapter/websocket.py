@@ -58,7 +58,11 @@ def make_handler(*, allowed_origins, authenticate, build_session):
                         now=time.monotonic()
                         if now-window>=1:count=0;window=now
                         count+=1
-                        if count>60 or session._opening or session.closed or incoming.full():
+                        # A fully authorised provider is marked open just
+                        # before ready is sent. A frame immediately following
+                        # observable ready may arrive before that send returns;
+                        # queue it rather than falsely treating it as pre-open.
+                        if count>60 or session.closed or incoming.full():
                             break
                         incoming.put_nowait(message)
                 finally:

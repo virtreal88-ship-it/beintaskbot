@@ -116,6 +116,10 @@ class Session:
                 self._open_task.add_done_callback(self._consume_task)
                 # A cancellation-suppressing open may resurrect a connection.
                 # Keep the lease; an external reconciler must fence it.
+            elif self._end_task is not None:
+                # An end may already be draining a delayed ready/send. Never
+                # race it by separately closing or releasing the same lease.
+                await asyncio.shield(self._end_task)
             elif not self.closed:
                 self._opening = False
                 await self.end('startup_failed')

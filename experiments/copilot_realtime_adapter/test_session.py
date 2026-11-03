@@ -323,5 +323,20 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(Refused):await opening
         self.assertTrue(provider.closed);self.assertEqual(client.events,[]);self.assertFalse(lease.held)
 
+    async def test_end_during_ready_drains_before_single_lease_release(self):
+        entered=asyncio.Event();release=asyncio.Event();ledger=Ledger();lease=Lease();provider=Provider(ledger)
+        class SlowReady(Client):
+            async def send(self,event):
+                if event['type']=='ready':entered.set();await release.wait()
+                await super().send(event)
+        client=SlowReady()
+        s=Session(('tenant',42,'channel','conversation'),authority=Authority(),ledger=ledger,lease=lease,context=Context(),provider=provider,client=client)
+        opening=asyncio.create_task(s.start());await entered.wait()
+        closing=asyncio.create_task(s.end('disconnected'));await asyncio.sleep(.03)
+        self.assertTrue(lease.held);self.assertFalse(closing.done())
+        release.set();self.assertTrue(await closing)
+        with self.assertRaises(Refused):await opening
+        self.assertFalse(lease.held);self.assertEqual([e['type'] for e in client.events],['ready','ended'])
+
 
 if __name__ == '__main__': unittest.main()
