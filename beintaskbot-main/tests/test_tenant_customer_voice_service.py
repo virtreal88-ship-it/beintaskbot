@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from tenant_linear_policy import TenantLinearError
 from tenant_customer_voice_service import _checked_receipt, run
+from tenant_connect_transport import ConnectPreflightError, _request
 from tenant_operator_dialogs import _message
 
 TENANT = 'a9c11a16-01d5-469a-a6c1-9a726975ae42'
@@ -72,6 +73,30 @@ class VoiceService(unittest.IsolatedAsyncioTestCase):
         result = await run(SESSION, COMMAND, b'synthetic', logging.getLogger('synthetic'))
         self.assertEqual(result['state'], 'unknown'); self.record.assert_not_called()
         self.finish.assert_called_once_with(self.item, 'unknown')
+
+    async def test_known_connect_preflight_rejection_returns_draft_without_unknown_outcome(self):
+        self.send.side_effect = ConnectPreflightError('voice_correlation_unavailable')
+        with self.assertRaises(TenantLinearError) as raised:
+            await run(SESSION, COMMAND, b'synthetic', logging.getLogger('synthetic'))
+        self.assertEqual(raised.exception.status,409)
+        self.assertFalse(raised.exception.keep_request)
+        self.assertEqual(raised.exception.error_code,'voice_correlation_unavailable')
+        self.finish.assert_called_once_with(self.item,'blocked')
+        self.record.assert_not_called()
+
+    def test_request_classifies_only_explicit_no_send_codes(self):
+        response=Mock(status_code=409,json=Mock(return_value={'error':'voice_correlation_unavailable'}))
+        with patch('tenant_connect_transport.requests.request',return_value=response):
+            with self.assertRaises(ConnectPreflightError) as raised:
+                _request('synthetic','POST','/v1/channels/test/customer-voice',{},
+                         safe_preflight_codes=('voice_correlation_unavailable','voice_attribution_unresolved'))
+        self.assertEqual(raised.exception.code,'voice_correlation_unavailable')
+        response=Mock(status_code=409,json=Mock(return_value={'error':'unknown'}))
+        with patch('tenant_connect_transport.requests.request',return_value=response):
+            with self.assertRaises(Exception) as raised:
+                _request('synthetic','POST','/v1/channels/test/customer-voice',{},
+                         safe_preflight_codes=('voice_correlation_unavailable','voice_attribution_unresolved'))
+        self.assertNotIsInstance(raised.exception,ConnectPreflightError)
 
     async def test_other_provider_is_blocked_before_submission(self):
         self.item['connection'] = ['kommo', 'version']

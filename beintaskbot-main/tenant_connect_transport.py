@@ -39,6 +39,13 @@ class ConnectWebhookError(TenantPlatformError):
         self.status = status
 
 
+class ConnectPreflightError(TenantPlatformError):
+    """Known refusal returned before a customer voice provider submission."""
+    def __init__(self, code: str):
+        super().__init__('Connect refused the voice send before provider submission.')
+        self.code = code
+
+
 def _safe_label(value, limit=180):
     """Keep provider labels display-safe without manufacturing an identity."""
     if not isinstance(value, str):
@@ -326,7 +333,8 @@ def _public_channel(row: dict) -> dict:
     return {**row, 'connect_channel_id': str(row['connect_channel_id'])}
 
 
-def _request(key: str, method: str, path: str, payload: dict | None = None) -> dict:
+def _request(key: str, method: str, path: str, payload: dict | None = None, *,
+             safe_preflight_codes: tuple[str, ...] = ()) -> dict:
     # HTTP header values must be Latin-1 encodable. Connect-generated API keys
     # are ASCII; fail clearly if a copied key contains a look-alike character.
     if not key or not key.isascii() or any(ord(char) < 33 or ord(char) == 127 for char in key):
@@ -337,6 +345,14 @@ def _request(key: str, method: str, path: str, payload: dict | None = None) -> d
     except requests.RequestException as exc:
         raise TenantPlatformError('Connect xidməti əlçatan deyil.') from exc
     if response.status_code not in {200, 201, 202, 204}:
+        if response.status_code == 409 and safe_preflight_codes:
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            code = body.get('error') if isinstance(body, dict) else None
+            if code in safe_preflight_codes:
+                raise ConnectPreflightError(code)
         raise TenantPlatformError('Connect API açarı və ya icazələri yoxlanılmadı.')
     if response.status_code == 204:
         return {}

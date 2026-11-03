@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 
 from tenant_chat_send_policy import command as text_command
 from tenant_chat_send_store import authority, finish, mark_sending, reserve
-from tenant_connect_transport import _request
+from tenant_connect_transport import ConnectPreflightError, _request
 from tenant_customer_voice import validate_recording
 from tenant_linear_policy import TenantLinearError
 from tenant_platform import _connect, _json
@@ -63,7 +63,8 @@ def _connect_receipt(route, request_id):
 def _submit(route, request_id, mime, content):
     value = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + '/customer-voice',
                      {'conversationId': route['conversation_id'], 'clientMessageId': request_id,
-                      'mime': mime, 'audioBase64': base64.b64encode(content).decode('ascii')})
+                      'mime': mime, 'audioBase64': base64.b64encode(content).decode('ascii')},
+                     safe_preflight_codes=('voice_correlation_unavailable','voice_attribution_unresolved'))
     return _checked_receipt(value, route, request_id)
 
 
@@ -193,6 +194,15 @@ async def run(session, command, content, logger):
             await asyncio.to_thread(finish, item, 'unknown')
         return receipt
     except Exception as error:
+        if isinstance(error, ConnectPreflightError):
+            # These two Connect codes are emitted only before the provider is
+            # called. Restore this exact local draft so the employee can retry
+            # after the per-dialog gate is resolved without risking a duplicate.
+            await asyncio.to_thread(finish, item, 'blocked')
+            result=TenantLinearError('Səs göndərilmədi: təhlükəsiz əlaqə təsdiqlənməyib.',409)
+            result.keep_request=False
+            result.error_code=error.code
+            raise result from None
         try:
             await asyncio.to_thread(finish, item, 'unknown' if started else 'blocked')
         except Exception:

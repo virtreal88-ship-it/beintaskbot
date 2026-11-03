@@ -10,7 +10,9 @@
       denied:'Доступ к микрофону запрещён. Разрешите микрофон в настройках сайта браузера и попробуйте снова.',
       unavailable:'Микрофон недоступен. Проверьте устройство и разрешения браузера.',unsupported:'Этот браузер не поддерживает безопасную запись. Попробуйте обновить браузер.',
       busy:'Микрофон уже используется в другой вкладке или голосовом режиме.',storage:'Не удалось сохранить запись на устройстве. Отправка недоступна.',limit:'Превышен размер записи. Запишите более короткое сообщение.',error:'Не удалось записать или проверить голосовое сообщение.',
-      conflict:'В этом диалоге уже есть другая сохранённая запись. Откройте её перед продолжением.',disabled:'Отправка голосовых временно отключена.'},
+      conflict:'В этом диалоге уже есть другая сохранённая запись. Откройте её перед продолжением.',disabled:'Отправка голосовых временно отключена.',
+      voice_correlation_unavailable:'Отправка не выполнена: Connect пока не может гарантировать точную связь голосового с сообщением WhatsApp. Запись сохранена.',
+      voice_attribution_unresolved:'Отправка не выполнена: в этом диалоге ещё не разрешён статус предыдущего голосового сообщения. Запись сохранена.'},
     az:{mic:'Səs yaz',stop:'Dayandır',cancel:'Ləğv et',discard:'Yazını sil',retrySave:'Yazını yenidən saxla',send:'Səsi göndər',check:'Vəziyyəti yoxla',
       requesting:'Mikrofon icazəsi gözlənilir…',recording:'Yazılır',saving:'Yazı cihazda saxlanılır…',draft:'Göndərməzdən əvvəl dinləyin. Yazı göndərilənə, silinənə və ya hesabdan çıxana qədər cihazda saxlanılır.',
       sending:'Göndərilir…',unknown:'Nəticə məlum deyil. Təkrar göndərmə bağlıdır; vəziyyəti yoxlayın.',accepted:'Provayder qəbul etdi. Müştəriyə çatdırılma hələ təsdiqlənməyib.',
@@ -18,7 +20,9 @@
       denied:'Mikrofon icazəsi verilməyib. Brauzerdə sayt üçün mikrofon icazəsini açıb yenidən yoxlayın.',
       unavailable:'Mikrofon əlçatan deyil. Cihazı və brauzer icazələrini yoxlayın.',unsupported:'Bu brauzer təhlükəsiz səs yazısını dəstəkləmir. Brauzeri yeniləyin.',
       busy:'Mikrofon başqa vərəqdə və ya səs rejimində istifadə olunur.',storage:'Yazını cihazda saxlamaq mümkün olmadı. Göndərmə əlçatan deyil.',limit:'Yazının ölçüsü böyükdür. Daha qısa səs yazın.',error:'Səsi yazmaq və ya vəziyyətini yoxlamaq mümkün olmadı.',
-      conflict:'Bu dialoq üçün başqa saxlanmış yazı var. Davam etməzdən əvvəl onu açın.',disabled:'Səs göndərilməsi müvəqqəti bağlıdır.'},
+      conflict:'Bu dialoq üçün başqa saxlanmış yazı var. Davam etməzdən əvvəl onu açın.',disabled:'Səs göndərilməsi müvəqqəti bağlıdır.',
+      voice_correlation_unavailable:'Göndərilmədi: Connect WhatsApp səsi ilə mesaj arasında dəqiq əlaqəni hələ təmin edə bilmir. Yazı saxlanılıb.',
+      voice_attribution_unresolved:'Göndərilmədi: bu dialoqda əvvəlki səs mesajının vəziyyəti hələ aydın deyil. Yazı saxlanılıb.'},
     en:{mic:'Record voice message',stop:'Stop',cancel:'Cancel',discard:'Delete recording',retrySave:'Try saving again',send:'Send voice message',check:'Check status',
       requesting:'Waiting for microphone permission…',recording:'Recording',saving:'Saving recording on this device…',draft:'Listen before sending. The recording stays on this device until sent, deleted or you sign out.',
       sending:'Sending…',unknown:'The outcome is unknown. Resending is disabled; check the status.',accepted:'The provider accepted the message. Customer delivery is not yet confirmed.',
@@ -26,7 +30,9 @@
       denied:'Microphone access is blocked. Allow the microphone in your browser’s site settings and try again.',
       unavailable:'Microphone unavailable. Check the device and browser permissions.',unsupported:'This browser cannot record safely. Try updating your browser.',
       busy:'The microphone is already in use in another tab or voice mode.',storage:'The recording could not be saved on this device. Sending is unavailable.',limit:'The recording is too large. Record a shorter message.',error:'Could not record or check the voice message.',
-      conflict:'Another recording is saved for this dialog. Open it before continuing.',disabled:'Voice sending is temporarily unavailable.'}
+      conflict:'Another recording is saved for this dialog. Open it before continuing.',disabled:'Voice sending is temporarily unavailable.',
+      voice_correlation_unavailable:'Not sent: Connect cannot yet guarantee an exact link between the voice note and the WhatsApp message. The recording is saved.',
+      voice_attribution_unresolved:'Not sent: the previous voice message in this dialog still has an unresolved status. The recording is saved.'}
   };
   const lang=()=>words[window.tenantI18n?.language]||words.en;
   const text=key=>lang()[key]||lang().error;
@@ -180,6 +186,10 @@
         else await store.markUnknown(session.scope.key,entry.request_id);
         if(!same(session))return;
         if(response.status===401||response.status===409)await forgetUser();else stopCurrent(true);return;
+      }
+      if(response.status===409&&result.keep_request===false&&['voice_correlation_unavailable','voice_attribution_unresolved'].includes(result.error_code)){
+        await store.releaseDraft(session.scope.key,entry.request_id,crypto.randomUUID());
+        session.entry=await store.get(session.scope.key)||null;session.message=text(result.error_code);return;
       }
       if(!response.ok&&response.status<500&&result.keep_request===false){await store.releaseDraft(session.scope.key,entry.request_id,crypto.randomUUID());session.entry=await store.get(session.scope.key)||null;session.message=result.error||text('error');return;}
       await store.markUnknown(session.scope.key,entry.request_id);session.entry=await store.get(session.scope.key)||null;session.message=text('unknown');
