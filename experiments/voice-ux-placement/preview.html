@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Голос в диалоге — макет</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f1f5f2;color:#18352a;font:16px/1.45 system-ui,sans-serif}.page{max-width:1080px;margin:auto;padding:28px 20px 48px}.eyebrow{color:#557365;font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}h1{font-size:clamp(25px,4vw,38px);margin:8px 0}p{margin:0}.intro{color:#587063;max-width:680px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-top:24px}.card{border:1px solid #d9e5dc;border-radius:18px;background:white;overflow:hidden;box-shadow:0 5px 24px #1b493010}.head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:18px 20px;border-bottom:1px solid #e5eee7}.title{font-weight:700}.badge{color:#386c50;background:#eaf5ed;border-radius:99px;padding:5px 10px;font-size:12px;font-weight:700;white-space:nowrap}.content{padding:20px;display:grid;gap:14px}.caption{font-size:14px;color:#60786b}.bubble{border-radius:14px 14px 14px 3px;background:#f0f5f1;padding:12px 14px;max-width:82%}.composer{border:1px solid #d8e4da;border-radius:13px;padding:10px;display:flex;align-items:center;gap:8px}.placeholder{color:#879b8d;flex:1;padding:5px;min-width:0}.btn{display:inline-flex;align-items:center;justify-content:center;border:1px solid #c9dacf;background:#fff;border-radius:10px;min-width:44px;min-height:44px;padding:8px 13px;color:#254e37;font-weight:650;font-size:14px;text-align:center}.primary{background:#17683f;border-color:#17683f;color:white}.voice-draft{padding:12px;border:1px solid #dbe8de;border-radius:12px;display:grid;gap:10px}.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.wave{flex:1;height:5px;min-width:70px;border-radius:3px;background:linear-gradient(90deg,#4c9c6a 0 35%,#dce9df 35%)}.assistant{background:#fafdfb}.orb{width:80px;height:80px;margin:8px auto 0;border-radius:50%;background:radial-gradient(circle at 35% 30%,#8bd5a0,#2a8e55 60%,#13613b);box-shadow:0 0 0 12px #edf8ef}.center{text-align:center}.muted{font-size:13px;color:#6c8274}.separator{margin:4px 0;color:#678071;font-size:13px;font-weight:700}.fine{margin-top:18px;color:#6c8274;font-size:13px}@media(max-width:700px){.page{padding:20px 14px 36px}.grid{grid-template-columns:1fr}.content{padding:16px}.head{padding:16px}.composer{gap:5px}.btn{padding:8px 10px}}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="eyebrow">Beintaskbot · UX-макет</div>
+    <h1>Два отдельных голосовых режима</h1>
+    <p class="intro">Голосовое для клиента находится в диалоге, разговор с AI — внутри существующего помощника.</p>
+    <div class="grid">
+      <section class="card" aria-label="Голосовое сообщение клиенту">
+        <header class="head"><span class="title">Диалог с клиентом</span><span class="badge">Сообщение клиенту</span></header>
+        <div class="content">
+          <div class="bubble">Здравствуйте! Можно уточнить детали?</div>
+          <p class="caption">Микрофон расположен рядом с полем сообщения.</p>
+          <div class="composer" aria-label="Поле сообщения клиенту">
+            <span class="placeholder">Написать сообщение…</span><span class="btn" aria-label="Записать голосовое">🎙</span><span class="btn primary">↑</span>
+          </div>
+          <div class="separator">После остановки записи</div>
+          <div class="voice-draft"><div class="row"><span class="btn">▶</span><span class="wave"></span><span>0:14</span></div><p class="muted">Прослушайте запись перед отправкой.</p><div class="row"><span class="btn">Удалить</span><span class="btn">Записать снова</span><span class="btn primary">Отправить</span></div></div>
+        </div>
+      </section>
+      <section class="card assistant" aria-label="Голосовой режим AI-помощника">
+        <header class="head"><span class="title">AI-помощник</span><span class="badge">Внутри помощника</span></header>
+        <div class="content">
+          <p class="caption">Вопросы и голосовой разговор относятся к помощнику сотрудника.</p>
+          <div class="row"><span class="btn">Вопрос</span><span class="btn">Найти решение</span><span class="btn primary">Голосовой разговор</span></div>
+          <div class="orb" aria-hidden="true"></div>
+          <div class="center"><strong>Слушаю вас</strong><p class="muted">Подключено</p></div>
+          <div class="row" style="justify-content:center"><span class="btn">Выключить микрофон</span><span class="btn">Завершить</span></div>
+          <p class="muted center">После разговора можно продолжить общение текстом.</p>
+        </div>
+      </section>
+    </div>
+    <p class="fine">Статический макет расположения: элементы не запускают запись и не отправляют данные.</p>
+  </main>
+</body>
+</html>
