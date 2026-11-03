@@ -3,7 +3,7 @@
 This is an isolated investigation, not an adapter authorized for production.
 No production routes, database schema, credentials or provider calls changed.
 
-## Shared history cannot yet be written safely
+## Experimental shared-history change
 
 `tenant_operator_copilot._read_history` fetches the customer history and the
 private `saas_operator_copilot_threads` row by tenant, employee, channel and
@@ -13,38 +13,27 @@ prove real authorization: `tenant_operator_access.access` and `assert_route`,
 AI consent, config/version checks and `_assigned_context` still must be called
 by the real admission and at all appropriate subsequent boundaries.
 
-The text request releases its `FOR UPDATE` thread lock when it commits before
-provider I/O (`tenant_operator_copilot.py`, `_read_history` and `run`). On
-completion `_finish` computes `new_turns` from that earlier snapshot and
-unconditionally overwrites the row through `ON CONFLICT ... turns=EXCLUDED.turns`.
-Consequently, a voice writer can commit after the snapshot and be erased by the
-text completion. A voice-only lock, one-time row lock or independently atomic
-voice UPDATE does not protect against the unchanged text writer. The isolated
-PostgreSQL test invokes actual `_finish` with synthetic authorized dependencies,
-and asserts the currently missing voice turn. Its success reproduces the defect;
-it is not a safety pass.
+The base text implementation released its row lock before provider I/O and
+overwrote the thread using an earlier snapshot. In this local experimental branch,
+`tenant_operator_copilot_threads.append` locks/creates the current row and appends
+to its current contents; `_finish` uses it without holding a database transaction
+over provider I/O. `clear_revision` on an empty thread fences responses that
+started before the user cleared history. Scoped PostgreSQL tests cover an
+intervening voice-shaped row and two simultaneous first writers.
 
-The same problem applies in the opposite direction when a voice session saves
-its own stale snapshot. Two text requests can also race. No shared write adapter
-was added because it could not meet the requested serialization guarantee.
-Before integration, factor a single shared append/clear protocol used by every
-text and voice writer. It must lock the exact thread even when the row is absent,
-re-read current history under that lock or use equivalent conditional CAS, and
-atomically verify tenant/member/dialog/agent binding, current config version,
-session/revision, turn idempotency and ordering before committing. Clear and
-assignment changes must be fenced too. Do not hold a DB transaction open over
-provider I/O. Define semantics for concurrent prompts and responses rather than
-claiming chronological order from commit time alone.
+This is a proposed change, **not yet reviewed or production-ready**. The helper
+does not authorize callers or enforce voice session/turn idempotency, per-turn
+ordering or transcript correctness. There is no voice writer yet. Every future
+writer must use this protocol and prove those controls in its own transaction.
+The existing 20-turn retention limit can still remove older messages. Test clear,
+replay, migrations, rolling versions and legacy text flows before integration.
 
-The context constructor `_draft_context` currently projects each prior turn to
-`role`, `text`, `agent_binding`. A test invokes the real constructor with a
-synthetic partial voice turn and demonstrates that `voice_session_id` and
-`transcript_status` are stripped. Merely persisting these fields is therefore
-insufficient: text continuation would see the partial content without its
-qualification. Reuse a common projection which preserves explicit ASR quality,
-partial/interrupted state and ordered session/turn IDs; omit text whose heard
-prefix is not established. Update the prompt rules and retention tests together.
-Do not fabricate a prefix from an audio timestamp when alignment is unavailable.
+The local `_draft_context` now passes allowlisted voice session UUID, sequence,
+partial status and quality through to text context and labels incomplete
+evidence in instructions. Unknown/unavailable transcript text is omitted.
+The meaning of `complete` versus `partial`, actual audio playback alignment and
+voice-to-text persistence remain to be designed and tested; never fabricate a
+heard prefix from an audio timestamp when alignment is unavailable.
 
 ## Required regression matrix
 
@@ -78,7 +67,9 @@ allowances do not qualify. Unknown or missing provider results consume the full
 hold until independently reconciled; do not release on timeout or restart.
 
 Establish a provider-supported worst-case charge bound for every permitted input,
-context replay, output, transcription and reconnect before admitting sessions.
+context replay on each response, output, separately billed input transcription
+and reconnect before admitting sessions. Do not assume a cache hit. A duration
+limit alone does not bound the full token-based cost.
 Metering may arrive late or be absent and usage-based charges can overshoot a
 client-side threshold. If a hard bound cannot be established from provider terms
 and enforced server-side, the strict ceiling cannot be guaranteed and paid tests
@@ -98,6 +89,5 @@ are demonstrated, it is not evidence of cost control.
 `python -m unittest discover -s experiments/copilot_voice_poc -v` runs the pure
 mock cases. To run the PostgreSQL cases set `COPILOT_POC_POSTGRES_URL` to a
 throwaway localhost database named with the `copilot_voice_poc` prefix. The
-tests create and drop a random schema. Two tests explicitly assert the current
-lost-turn and stripped-metadata defects: their successful reproduction means
-those requirements remain unresolved, not that the integration is safe.
+tests create and drop a random schema. A passing synthetic test is not evidence
+that a voice writer, real authorization, provider or production rollout exists.

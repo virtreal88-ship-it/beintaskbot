@@ -35,6 +35,9 @@ def ensure_schema(conn):
               turns JSONB NOT NULL DEFAULT '[]'::jsonb,updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               PRIMARY KEY(tenant_id,requested_by,channel_id,conversation_id),
               FOREIGN KEY(tenant_id,requested_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
+            # A cleared thread is retained as an empty tombstone so a response
+            # started before the clear cannot repopulate private history.
+            cur.execute('ALTER TABLE saas_operator_copilot_threads ADD COLUMN IF NOT EXISTS clear_revision BIGINT NOT NULL DEFAULT 0')
             cur.execute('CREATE INDEX IF NOT EXISTS saas_chat_ai_copilot_usage_idx ON saas_chat_ai_runs(tenant_id,requested_by,provider,channel_id,conversation_id,usage_day)')
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_chat_transcripts(
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,lead_id BIGINT NOT NULL,

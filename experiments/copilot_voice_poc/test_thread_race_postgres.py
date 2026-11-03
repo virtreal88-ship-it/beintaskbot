@@ -1,14 +1,14 @@
-"""Reproduce the current text writer's lost update; isolated local DB only.
-
-The reproduction asserts the known data loss; its passing is not a safety pass.
+"""Exercise scoped text/voice thread interactions on isolated PostgreSQL.
 Set COPILOT_POC_POSTGRES_URL to a disposable localhost database whose name
 starts with copilot_voice_poc; this suite creates/drops one random schema.
 """
 import json
 import os
 import sys
+import threading
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -40,7 +40,7 @@ class ExistingTextWriterRace(unittest.TestCase):
                 tenant_id uuid, provider text, updated_at text)''')
             conn.execute('''CREATE TABLE ''' + cls.schema + '''.saas_operator_copilot_threads(
                 tenant_id uuid, requested_by bigint, channel_id text, conversation_id text,
-                turns jsonb, updated_at timestamptz DEFAULT now(),
+                turns jsonb, clear_revision bigint NOT NULL DEFAULT 0, updated_at timestamptz DEFAULT now(),
                 PRIMARY KEY(tenant_id,requested_by,channel_id,conversation_id))''')
             conn.execute('''CREATE TABLE ''' + cls.schema + '''.saas_crm_messages(
                 tenant_id uuid, kommo_lead_id bigint, external_id text, direction text, body text,
@@ -89,12 +89,12 @@ class ExistingTextWriterRace(unittest.TestCase):
         self.assertEqual([row['body'] for row in rows], ['our-customer'])
         self.assertEqual(turns, [voice])
 
-    def test_current_text_completion_erases_an_intervening_voice_turn(self):
+    def test_text_completion_preserves_an_intervening_voice_turn(self):
         import tenant_operator_copilot as copilot
         tenant, request = str(uuid.uuid4()), str(uuid.uuid4())
         channel, conversation, actor, binding = 'synthetic-channel', 'synthetic-dialog', 1, 'agent-binding'
         command = {'lead_id':1, 'channel_id':channel, 'conversation_id':conversation,
-                   'request_id':request, '_agent_binding':binding}
+                   'request_id':request, '_agent_binding':binding, '_thread_clear_revision':0}
         initial = [{'role':'employee','text':'previous','agent_binding':binding}]
         voice = {'role':'employee','text':'synthetic voice','agent_binding':binding,
                  'voice_session_id':'synthetic-session','transcript_status':'complete'}
@@ -126,5 +126,42 @@ class ExistingTextWriterRace(unittest.TestCase):
             rows=conn.execute('''SELECT turns FROM saas_operator_copilot_threads
                 WHERE tenant_id=%s AND requested_by=%s AND channel_id=%s AND conversation_id=%s''',
                 (tenant,actor,channel,conversation)).fetchone()['turns']
-        self.assertNotIn(voice, rows, 'the known loss no longer reproduces; update the regression test')
-        self.assertEqual([row['text'] for row in rows], ['previous','synthetic question','synthetic text answer'])
+        self.assertIn(voice, rows)
+        self.assertEqual([row['text'] for row in rows], ['previous','synthetic voice','synthetic question','synthetic text answer'])
+
+    def test_two_concurrent_first_writers_preserve_both_turns(self):
+        from tenant_operator_copilot_threads import append
+        tenant, actor, channel, dialog = str(uuid.uuid4()), 9, 'new-channel', 'new-dialog'
+        barrier = threading.Barrier(2)
+        def writer(value):
+            with self.connect() as conn:
+                barrier.wait(timeout=5)
+                with conn.cursor() as cur:
+                    append(cur,tenant,actor,channel,dialog,0,[{'text':value,'agent_binding':'binding'}])
+                conn.commit()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(writer, ['synthetic-text','synthetic-voice']))
+        with self.connect() as conn:
+            turns=conn.execute('''SELECT turns FROM saas_operator_copilot_threads
+                WHERE tenant_id=%s AND requested_by=%s AND channel_id=%s AND conversation_id=%s''',
+                (tenant,actor,channel,dialog)).fetchone()['turns']
+        self.assertCountEqual([turn['text'] for turn in turns], ['synthetic-text','synthetic-voice'])
+
+    def test_clear_tombstone_rejects_old_writer_and_allows_new_revision(self):
+        from tenant_operator_copilot_threads import append, clear, ThreadCleared
+        tenant, actor, channel, dialog = str(uuid.uuid4()), 9, 'new-channel', 'new-dialog'
+        with self.connect() as conn:
+            with conn.cursor() as cur: clear(cur,tenant,actor,channel,dialog)
+            conn.commit()
+        with self.connect() as conn:
+            with self.assertRaises(ThreadCleared):
+                with conn.cursor() as cur: append(cur,tenant,actor,channel,dialog,0,[{'text':'stale'}])
+            conn.rollback()
+        with self.connect() as conn:
+            with conn.cursor() as cur: append(cur,tenant,actor,channel,dialog,1,[{'text':'new'}])
+            conn.commit()
+            row=conn.execute('''SELECT turns,clear_revision FROM saas_operator_copilot_threads
+                WHERE tenant_id=%s AND requested_by=%s AND channel_id=%s AND conversation_id=%s''',
+                (tenant,actor,channel,dialog)).fetchone()
+        self.assertEqual(row['clear_revision'],1)
+        self.assertEqual(row['turns'],[{'text':'new'}])

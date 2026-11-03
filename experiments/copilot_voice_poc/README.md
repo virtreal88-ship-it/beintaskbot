@@ -14,8 +14,7 @@ that calls `tick` even when no events arrive. Client playback reports are
 untrusted estimates, not proof of what was heard.
 
 The separate [context and budget investigation](CONTEXT_AND_BUDGET_GAPS.md)
-includes tests which deliberately reproduce current defects. A passing
-reproduction is evidence that those defects exist, not a release approval.
+documents the experimental text-thread change and outstanding release gates.
 
 ## Existing assistant and mandatory reuse
 

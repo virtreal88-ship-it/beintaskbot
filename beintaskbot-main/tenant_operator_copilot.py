@@ -47,6 +47,7 @@ from tenant_dialog_greeting import GREETING_RULE, greeting_context
 INSTRUCTIONS += GREETING_RULE
 from tenant_dialog_evidence import GROUNDING_RULE, provenance, speaker
 INSTRUCTIONS += GROUNDING_RULE
+INSTRUCTIONS += ' Voice transcript metadata describes imperfect evidence: partial or unavailable transcripts are incomplete and must never be treated as exact or complete.'
 
 
 
@@ -375,8 +376,9 @@ def _read_history(cur,tenant,actor,command,consultation_evidence=None,original_r
     if consultation_evidence is None:command['_latest_source_id']=str(rows[-1].get('external_id') or '')
     from tenant_media_evidence import annotate_rows
     annotate_rows(cur, tenant, rows)
-    cur.execute('SELECT turns FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE', thread_key)
+    cur.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE', thread_key)
     turns_row = cur.fetchone() or {}
+    command['_thread_clear_revision'] = int(turns_row.get('clear_revision') or 0)
     turns = turns_row.get('turns') if isinstance(turns_row.get('turns'), list) else []
     turns = turns[-10:] if consultation_evidence is None else []
     # A private thread from an older assignment must never become the
@@ -384,6 +386,27 @@ def _read_history(cur,tenant,actor,command,consultation_evidence=None,original_r
     turns = [turn for turn in turns if isinstance(turn, dict)
              and turn.get('agent_binding') == command['_agent_binding']]
     return rows,turns
+
+
+def _project_prior_turn(turn):
+    """Project only known private-thread fields; never guess transcript quality."""
+    result = {'role':str(turn.get('role') or '')[:20], 'text':str(turn.get('text') or '')[:800],
+              'agent_binding':turn.get('agent_binding')}
+    if 'transcript_status' in turn:
+        status = turn['transcript_status'] if turn['transcript_status'] in ('complete','partial','unavailable','unknown') else 'unknown'
+        result['transcript_status'] = status
+        if status in {'unavailable','unknown'}:
+            result['text'] = ''
+    if 'transcript_quality' in turn:
+        quality = turn['transcript_quality'] if turn['transcript_quality'] in ('automatic_unverified','human_verified','unknown') else 'unknown'
+        result['transcript_quality'] = quality
+    try:
+        result['voice_session_id'] = str(uuid.UUID(str(turn['voice_session_id'])))
+    except (KeyError, ValueError, TypeError, AttributeError):
+        pass
+    if type(turn.get('turn_sequence')) is int and 0 <= turn['turn_sequence'] < 2**31:
+        result['turn_sequence'] = turn['turn_sequence']
+    return result
 
 
 def _draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence=None,*,saved_only=False):
@@ -486,7 +509,7 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
         'solution':'Find a solution for the customer issue. Explain uncertainty and missing facts.',
         "instruction":"Follow the employee's private instruction about the case and answer the employee, not the customer."}.get(command['mode'], '')
     # Published knowledge is supplied in extra_context below.
-    turns=[{'role':str(turn.get('role') or '')[:20],'text':str(turn.get('text') or '')[:800], 'agent_binding':turn.get('agent_binding')} for turn in turns[-6:] if isinstance(turn,dict)]
+    turns=[_project_prior_turn(turn) for turn in turns[-6:] if isinstance(turn,dict)]
     extra = {'copilot_action': command['mode'], 'employee_request': request,
              'untrusted_developer_consultation_evidence':consultation_evidence,
              'assigned_agent_id': command['_agent_id'],
@@ -541,7 +564,8 @@ def run(profile, data, *, consultation_reply_id=None):
             thread_key = (tenant, actor, command['channel_id'], command['conversation_id'])
             if command['mode'] == 'clear':
                 _assigned_context(cur,tenant,command)
-                cur.execute('DELETE FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s', thread_key)
+                from tenant_operator_copilot_threads import clear
+                clear(cur, *thread_key)
                 conn.commit()
                 return {'cleared': True, 'text': ''}
             from tenant_connect_identity import conflicted
@@ -634,7 +658,12 @@ def run(profile, data, *, consultation_reply_id=None):
             cur.execute('''INSERT INTO saas_chat_ai_runs(tenant_id,request_id,requested_by,lead_id,input_hash,config_version,status,reserved_calls,provider,channel_id,conversation_id)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,'sending',1,'connect',%s,%s)''',
               (tenant, command['request_id'], actor, command['lead_id'], digest, str(connection['updated_at']), command['channel_id'], command['conversation_id']))
-            cur.execute("DELETE FROM saas_operator_copilot_threads WHERE updated_at<now()-interval '60 days' AND tenant_id=%s::uuid", (tenant,))
+            # Never remove a clear fence while a text request that may still
+            # complete holds its revision. Retain no message content beyond the
+            # existing 60-day policy unless an in-flight receipt needs the row.
+            cur.execute("""DELETE FROM saas_operator_copilot_threads t WHERE t.updated_at<now()-interval '60 days' AND t.tenant_id=%s::uuid
+              AND NOT EXISTS(SELECT 1 FROM saas_chat_ai_runs r WHERE r.tenant_id=t.tenant_id AND r.requested_by=t.requested_by
+                AND r.channel_id=t.channel_id AND r.conversation_id=t.conversation_id AND r.status='sending')""", (tenant,))
 
         conn.commit()
     context=_draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence)
@@ -718,17 +747,24 @@ def _finish(tenant, command, actor, result, turns, request, answer, *, coverage_
                 expected = str((cur.fetchone() or {}).get('config_version') or '')
                 cur.execute("SELECT updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
                 status = 'completed' if str((cur.fetchone() or {}).get('updated_at') or '') == expected else 'unknown'
+            if status == 'completed' and not command.get('_consultation_evidence'):
+                from tenant_operator_copilot_threads import append, ThreadCleared
+                entries = [{'role':'employee','text':request[:1600],'agent_binding':command['_agent_binding']},
+                           {'role':'copilot','text':answer[:6000],'agent_binding':command['_agent_binding']}]
+                try:
+                    append(cur, tenant, actor, command['channel_id'], command['conversation_id'],
+                           command['_thread_clear_revision'], entries)
+                except ThreadCleared:
+                    status = 'unknown'
             stored = dict(result or {})
             if result is not None and coverage_manifest is not None:stored['media_coverage']=coverage_manifest.proof()
             if result is None and command.get('_media_failure'):stored={'media_failure':command['_media_failure']}
-            cur.execute("UPDATE saas_chat_ai_runs SET status=%s,result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending'",
+            cur.execute("UPDATE saas_chat_ai_runs SET status=%s,result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending' RETURNING request_id",
                         (status, json.dumps(stored, ensure_ascii=False) if status == 'completed' or command.get('_media_failure') else None, tenant, command['request_id']))
-            if status == 'completed' and not command.get('_consultation_evidence'):
-                new_turns = (turns + [{'role':'employee','text':request[:1600],'agent_binding':command['_agent_binding']}, {'role':'copilot','text':answer[:6000],'agent_binding':command['_agent_binding']}])[-20:]
-                cur.execute('''INSERT INTO saas_operator_copilot_threads(tenant_id,requested_by,channel_id,conversation_id,turns)
-                  VALUES(%s::uuid,%s,%s,%s,%s::jsonb) ON CONFLICT(tenant_id,requested_by,channel_id,conversation_id)
-                  DO UPDATE SET turns=EXCLUDED.turns,updated_at=now()''',
-                  (tenant, actor, command['channel_id'], command['conversation_id'], json.dumps(new_turns, ensure_ascii=False)))
+            if not cur.fetchone() and result is not None:
+                # Raising rolls back a potential append when the receipt was
+                # already completed/claimed by another attempt.
+                raise TenantLinearError('Этот запрос Copilot уже завершён.', 409)
         conn.commit()
     if result is not None and status != 'completed':
         raise TenantLinearError('Настройки или доступ изменились. Результат AI скрыт.', 409)
