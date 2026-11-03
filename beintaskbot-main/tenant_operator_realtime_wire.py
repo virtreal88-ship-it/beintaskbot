@@ -174,8 +174,22 @@ class _RealtimeWire:
         self._verify(updated,config,session_id)
         # Existing dialog/customer material stays user-level untrusted input;
         # it must never be appended to the privileged system instructions.
-        await self.socket.send_json({'type':'conversation.item.create','item':{'type':'message','role':'user',
-                                    'content':[{'type':'input_text','text':'Untrusted dialog context: '+data}]}})
+        context_id='ctx_'+uuid.uuid4().hex
+        context_text='Untrusted dialog context: '+data
+        await self.socket.send_json({'type':'conversation.item.create','item':{'id':context_id,'type':'message','role':'user',
+                                    'content':[{'type':'input_text','text':context_text}]}})
+        # A successful socket write is not proof that the provider accepted the
+        # item.  Refuse readiness until the exact server-acknowledged user item
+        # is present; otherwise the first response might omit Copilot context.
+        acknowledged=await self.socket.receive_json()
+        if isinstance(acknowledged,dict) and acknowledged.get('type')=='conversation.created':
+            self._note_conversation(acknowledged)
+            acknowledged=await self.socket.receive_json()
+        item=acknowledged.get('item') if isinstance(acknowledged,dict) else None
+        if (not isinstance(acknowledged,dict) or acknowledged.get('type')!='conversation.item.added' or not isinstance(item,dict) or
+            item.get('id')!=context_id or item.get('type')!='message' or item.get('role')!='user' or
+            item.get('content')!=[{'type':'input_text','text':context_text}]):
+            raise ValueError('provider_context_unconfirmed')
         self.config=config;self.session_id=session_id;self.ready=True
 
     @staticmethod

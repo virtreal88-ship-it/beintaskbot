@@ -39,6 +39,8 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
                 event=json.loads(message.data);self.received.append(event)
                 if event['type']=='session.update':
                     await ws.send_json({'type':'session.updated','session':{**event['session'],'id':'synthetic-session'}})
+                elif event['type']=='conversation.item.create':
+                    await ws.send_json({'type':'conversation.item.added','item':event['item']})
                 elif event['type']=='response.create':
                     await ws.send_json({'type':'response.created','response':{'id':'synthetic-response'}})
                 elif event['type']=='conversation.item.truncate':

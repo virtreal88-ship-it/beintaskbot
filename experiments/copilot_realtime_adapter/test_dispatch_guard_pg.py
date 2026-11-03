@@ -74,6 +74,8 @@ class GuardPG(IntegratedSynthetic):
                 return await self.queue.get()
             async def send_json(self,event):
                 self.events.append(event)
+                if event['type']=='conversation.item.create':
+                    await self.queue.put({'type':'conversation.item.added','item':event['item']})
                 if event['type']=='input_audio_buffer.append':
                     await self.queue.put({'type':'input_audio_buffer.speech_stopped'})
                 if event['type']=='response.create':
@@ -234,6 +236,7 @@ class GuardPG(IntegratedSynthetic):
             def __init__(self):self.events=[];self.committed=[]
             async def receive_json(self):
                 if not self.events:return {'type':'session.created','session':{'id':'synthetic-session'}}
+                if self.events[-1]['type']=='conversation.item.create':return {'type':'conversation.item.added','item':self.events[-1]['item']}
                 return {'type':'session.updated','session':{**self.events[-1]['session'],'id':'synthetic-session'}}
             async def send_json(self,event):
                 if event['type']=='response.create':

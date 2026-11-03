@@ -195,6 +195,7 @@ class IntegratedSynthetic(RealVoiceAuthority):
                 self.reads+=1
                 if self.reads==1:return {'type':'session.created','session':{'id':'synthetic-session'}}
                 if self.reads==2:return {'type':'session.updated','session':{**self.sent[-1]['session'],'id':'synthetic-session'}}
+                if self.reads==3:return {'type':'conversation.item.added','item':self.sent[-1]['item']}
                 return await self.queue.get()
             async def close(self):self.closed=True;await self.queue.put(None)
 
