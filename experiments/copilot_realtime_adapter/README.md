@@ -73,9 +73,8 @@ be saved as exact speech merely by dividing its transcript by duration.
 
 `browser.js` is an unmounted view with start, status, mute and end. It requires
 the existing `acquireTenantMicrophone` helper by injection and fails closed if
-it is unavailable. The helper currently exists in held PR #474 only, so an
-independent AI release must first extract it to a common compatible base; do
-not add another microphone mutex. Its `beintaskbot-microphone-v1` Web Lock is
+it is unavailable. The microphone helper is now part of current main; reuse it through dependency
+injection and do not add another microphone mutex. Its `beintaskbot-microphone-v1` Web Lock is
 origin-wide when supported. `audio.js` is a provisional PCM16 mono 24 kHz Web
 Audio capture/player; it refuses unsupported 24 kHz contexts. It is untested
 on real iOS/Android and uses deprecated ScriptProcessor. Do not ship it without
