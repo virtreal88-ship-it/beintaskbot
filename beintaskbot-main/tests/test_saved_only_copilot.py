@@ -63,27 +63,6 @@ def test_readonly_preflight_one_dispatch_durable_reuse_and_no_media(saved,monkey
     assert db.execute('SELECT count(*) AS n FROM saas_chat_send_receipts')[0]['n']==0
 
 
-def test_saved_only_filters_expired_thread_without_writing(saved,monkeypatch):
-    db,data,http,forbidden=saved
-    with db.cursor() as cur:
-        agent=copilot._assigned_context(cur,A,data)
-    binding=copilot._agent_binding(agent)
-    stale=[{'role':'employee','text':'expired synthetic private content','agent_binding':binding}]
-    db.execute("INSERT INTO saas_operator_copilot_threads(tenant_id,requested_by,channel_id,conversation_id,turns,updated_at) VALUES(%s::uuid,11,%s,'client',%s::jsonb,now()-interval '61 days')",
-               (A,CA,json.dumps(stale)));db.commit()
-    sql=[];query=db.query
-    def recorded(statement,params=()):sql.append(statement);return query(statement,params)
-    monkeypatch.setattr(db,'query',recorded)
-    preview=gate.preflight(PROFILE,data)
-    assert preview['state']=='ready'
-    assert not any(statement.lstrip().upper().startswith(('CREATE ','ALTER ','INSERT ','UPDATE ','DELETE ')) for statement in sql)
-    row=db.execute('SELECT turns,clear_revision FROM saas_operator_copilot_threads')[0]
-    assert row=={'turns':stale,'clear_revision':0}
-    state=gate._read(PROFILE,data)
-    assert 'expired synthetic private content' not in json.dumps(state['wire'])
-    http.assert_not_called();forbidden.assert_not_called()
-
-
 def test_provider_unknown_never_replays_with_same_or_new_uuid(saved):
     import requests
     db,data,http,forbidden=saved;preview=gate.preflight(PROFILE,data)

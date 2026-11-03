@@ -1,7 +1,8 @@
 """Private Copilot voice admission: same tenant/route/agent boundaries.
 
-This module neither opens a provider nor loads a voice session context. Until
-the shared history and budget boundaries are proven, `context()` fails closed.
+Voice orchestration builds instructions without reading persistent text
+history. This module never opens a provider; session admission stays closed
+until budget and lease protections are verified.
 """
 from dataclasses import dataclass
 from tenant_linear_policy import TenantLinearError, identifier
@@ -85,6 +86,5 @@ def check(profile,data,*,expected=None):
 
 
 def context(*_args,**_kwargs):
-    # The shared writer/clear fencing, authorised context and provider billing
-    # boundary are not yet integrated. Never supply partial context as complete.
+    # The production provider admission and shared spend cap are not verified.
     raise TenantLinearError('Голосовой режим пока недоступен.',503)

@@ -375,18 +375,9 @@ def _read_history(cur,tenant,actor,command,consultation_evidence=None,original_r
     if consultation_evidence is None:command['_latest_source_id']=str(rows[-1].get('external_id') or '')
     from tenant_media_evidence import annotate_rows
     annotate_rows(cur, tenant, rows)
-    cur.execute("SELECT turns,clear_revision,history_revision,voice_history_seen,updated_at < now()-interval '60 days' AS expired FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE", thread_key)
+    cur.execute('SELECT turns FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s FOR UPDATE', thread_key)
     turns_row = cur.fetchone() or {}
-    command['_thread_clear_revision'] = turns_row.get('clear_revision', 0)
-    if type(command['_thread_clear_revision']) is not int or command['_thread_clear_revision'] < 0:
-        raise TenantLinearError('История AI недоступна.',503)
-    command['_thread_history_revision'] = turns_row.get('history_revision', 0)
-    command['_thread_voice_history_seen'] = turns_row.get('voice_history_seen', False)
-    if type(command['_thread_history_revision']) is not int or command['_thread_history_revision'] < 0 or type(command['_thread_voice_history_seen']) is not bool:
-        raise TenantLinearError('История AI недоступна.',503)
-    # Some read-only consumers cannot scrub rows. Never provide expired text
-    # to them even before the next normal writer performs retention cleanup.
-    turns = turns_row.get('turns') if turns_row.get('expired') is not True and isinstance(turns_row.get('turns'), list) else []
+    turns = turns_row.get('turns') if isinstance(turns_row.get('turns'), list) else []
     turns = turns[-10:] if consultation_evidence is None else []
     # A private thread from an older assignment must never become the
     # new agent's memory. Old rows lack a binding and are excluded.
@@ -395,35 +386,7 @@ def _read_history(cur,tenant,actor,command,consultation_evidence=None,original_r
     return rows,turns
 
 
-def _project_prior_turn(turn):
-    """Project only known private-thread fields; never guess transcript quality."""
-    result = {'role':str(turn.get('role') or '')[:20], 'text':str(turn.get('text') or '')[:800],
-              'agent_binding':turn.get('agent_binding')}
-    voice_marked = any(key in turn for key in ('voice_session_id','transcript_status','transcript_quality','turn_sequence'))
-    session_id = None
-    try:
-        session_id = str(uuid.UUID(str(turn['voice_session_id'])))
-    except (KeyError, ValueError, TypeError, AttributeError):
-        pass
-    if voice_marked:
-        status = turn.get('transcript_status')
-        quality = turn.get('transcript_quality')
-        result['transcript_status'] = status if session_id and status in ('complete','partial','unavailable','unknown') else 'unknown'
-        result['transcript_quality'] = quality if quality in ('automatic_unverified','human_verified','unknown') else 'unknown'
-        if result['transcript_status'] in {'unavailable','unknown'}:
-            result['text'] = ''
-    if session_id:
-        result['voice_session_id'] = session_id
-    if type(turn.get('turn_sequence')) is int and 0 <= turn['turn_sequence'] < 2**31:
-        result['turn_sequence'] = turn['turn_sequence']
-    return result
-
-
-def _draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence=None,*,saved_only=False,context_only=False):
-    # Voice context preparation must never enter reply/media execution paths.
-    # Existing text callers keep their original behavior.
-    if context_only and (command.get('mode') != 'chat' or consultation_evidence is not None or saved_only):
-        raise TenantLinearError('Контекст голосового режима недоступен.',409)
+def _draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence=None,*,saved_only=False):
     from tenant_episode_media import ManualExecution
     execution=ManualExecution(tenant,actor,command,config,connection['updated_at'],secret['api_key'],model,
                               agent_context.get('language') or 'auto',rows)
@@ -469,10 +432,10 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
             latest_customer=str(receipt['transcript'])
         else:
             latest_customer=str(latest_row.get('_copilot_attachment_text') or latest_row.get('_copilot_context_body',latest_row.get('body') or '') or '')
-        knowledge=knowledge_context(tenant,latest_customer+'\n'+command['prompt']+'\n'+str((consultation_evidence or {}).get('body') or '')[:2000],agent_id=command['_agent_id'],limit=4,**({'_read_only':True} if saved_only or context_only else {}))
+        knowledge=knowledge_context(tenant,latest_customer+'\n'+command['prompt']+'\n'+str((consultation_evidence or {}).get('body') or '')[:2000],agent_id=command['_agent_id'],limit=4,**({'_read_only':True} if saved_only else {}))
         knowledge=[{**item,'content':item['content'][:1200]} for item in knowledge]
     except Exception as error:
-        if not saved_only and not context_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
+        if not saved_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
         if isinstance(error,TenantLinearError):raise
         raise TenantLinearError('Не удалось подготовить вложения. Повторный анализ автоматически не запущен.',503) from None
     audio_coverage=manifest.coverage if manifest else {}
@@ -480,13 +443,13 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
     incomplete=next((row for row in required_media if not audio_coverage[id(row)]),None)
     if incomplete is not None:
         error=_episode_evidence_error(command,incomplete,agent_context,context_limit=True)
-        if not saved_only and not context_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
+        if not saved_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
         raise error
     if manifest:
         try:manifest.seal(bounded_lines)
         except CoverageError as failure:
             error=_episode_evidence_error(command,failure.row or required_media[0],agent_context,context_limit=failure.context_limit)
-            if not saved_only and not context_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
+            if not saved_only:_finish(tenant,command,actor,None,turns,command['prompt'],'')
             raise error
     if saved_only:
         supplied={line['source_id']:line['text'] for line in bounded_lines}
@@ -523,7 +486,7 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
         'solution':'Find a solution for the customer issue. Explain uncertainty and missing facts.',
         "instruction":"Follow the employee's private instruction about the case and answer the employee, not the customer."}.get(command['mode'], '')
     # Published knowledge is supplied in extra_context below.
-    turns=[_project_prior_turn(turn) for turn in turns[-6:] if isinstance(turn,dict)]
+    turns=[{'role':str(turn.get('role') or '')[:20],'text':str(turn.get('text') or '')[:800], 'agent_binding':turn.get('agent_binding')} for turn in turns[-6:] if isinstance(turn,dict)]
     extra = {'copilot_action': command['mode'], 'employee_request': request,
              'untrusted_developer_consultation_evidence':consultation_evidence,
              'assigned_agent_id': command['_agent_id'],
@@ -539,13 +502,6 @@ def _draft_context(tenant,actor,command,config,connection,secret,model,agent_con
         company=str(agent_context.get('company_instructions') or '')[:20000],
         agent=str(agent_context.get('instructions') or '')[:20000],
         style=agent_context.get('style'))
-    if any('transcript_status' in turn for turn in turns):
-        prompt += (' Voice transcripts are automatic and unverified; a complete transcript only means the provider marked its text complete, '
-                   'not that a person necessarily heard or understood it. Partial or unavailable transcripts are incomplete and must never be treated as exact.')
-    if context_only:
-        # Never return ManualExecution (which holds the caller's credential),
-        # raw rows, or provider objects across the voice context boundary.
-        return {'instructions':prompt,'lines':lines,'extra_context':extra}
     return {'execution':execution,'coverage_manifest':manifest,'lines':lines,'request':request,'instructions':prompt,'extra_context':extra,
             'images':images,'context_usage':context_usage,'knowledge':knowledge,'turns':turns}
 
@@ -585,8 +541,7 @@ def run(profile, data, *, consultation_reply_id=None):
             thread_key = (tenant, actor, command['channel_id'], command['conversation_id'])
             if command['mode'] == 'clear':
                 _assigned_context(cur,tenant,command)
-                from tenant_operator_copilot_threads import clear
-                clear(cur,*thread_key)
+                cur.execute('DELETE FROM saas_operator_copilot_threads WHERE tenant_id=%s::uuid AND requested_by=%s AND channel_id=%s AND conversation_id=%s', thread_key)
                 conn.commit()
                 return {'cleared': True, 'text': ''}
             from tenant_connect_identity import conflicted
@@ -675,14 +630,11 @@ def run(profile, data, *, consultation_reply_id=None):
                     raise ValueError()
             except Exception:
                 raise TenantLinearError('Проверьте настройки Chat AI компании.', 503) from None
-            # Scrub before snapshot so this request does not capture expired
-            # context or invalidate its own generation after reading it.
-            from tenant_operator_copilot_threads import cleanup_expired
-            cleanup_expired(cur,tenant)
             rows,turns=_read_history(cur,tenant,actor,command,consultation_evidence,original_rows if consultation_evidence is not None else None)
             cur.execute('''INSERT INTO saas_chat_ai_runs(tenant_id,request_id,requested_by,lead_id,input_hash,config_version,status,reserved_calls,provider,channel_id,conversation_id)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,'sending',1,'connect',%s,%s)''',
               (tenant, command['request_id'], actor, command['lead_id'], digest, str(connection['updated_at']), command['channel_id'], command['conversation_id']))
+            cur.execute("DELETE FROM saas_operator_copilot_threads WHERE updated_at<now()-interval '60 days' AND tenant_id=%s::uuid", (tenant,))
 
         conn.commit()
     context=_draft_context(tenant,actor,command,config,connection,secret,model,agent_context,rows,turns,consultation_evidence)
@@ -769,29 +721,14 @@ def _finish(tenant, command, actor, result, turns, request, answer, *, coverage_
             stored = dict(result or {})
             if result is not None and coverage_manifest is not None:stored['media_coverage']=coverage_manifest.proof()
             if result is None and command.get('_media_failure'):stored={'media_failure':command['_media_failure']}
-            cur.execute("UPDATE saas_chat_ai_runs SET status=%s,result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending' RETURNING request_id",
+            cur.execute("UPDATE saas_chat_ai_runs SET status=%s,result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='sending'",
                         (status, json.dumps(stored, ensure_ascii=False) if status == 'completed' or command.get('_media_failure') else None, tenant, command['request_id']))
-            claimed_finish=cur.fetchone() is not None
-            if result is not None and status == 'completed' and not claimed_finish:
-                error=TenantLinearError('Статус AI-запроса изменился; результат не сохранён. Повторная отправка заблокирована.',409)
-                error.keep_request=True
-                raise error
-            if status == 'completed' and claimed_finish and not command.get('_consultation_evidence'):
-                from tenant_operator_copilot_threads import append,ThreadCleared
-                entries=[{'role':'employee','text':request[:1600],'agent_binding':command['_agent_binding']},
-                         {'role':'copilot','text':answer[:6000],'agent_binding':command['_agent_binding']}]
-                try:
-                    append(cur,tenant,actor,command['channel_id'],command['conversation_id'],
-                           command.get('_thread_clear_revision'),command['_agent_binding'],entries)
-                except ThreadCleared:
-                    # Return the generated answer, but never resurrect a
-                    # private thread the user cleared while it was running.
-                    # Persist the same explicit status in the idempotent
-                    # receipt so a retry cannot silently hide this outcome.
-                    result['history_status']='cleared'
-                    stored['history_status']='cleared'
-                    cur.execute("UPDATE saas_chat_ai_runs SET result=%s::jsonb WHERE tenant_id=%s::uuid AND request_id=%s::uuid AND status='completed'",
-                                (json.dumps(stored,ensure_ascii=False),tenant,command['request_id']))
+            if status == 'completed' and not command.get('_consultation_evidence'):
+                new_turns = (turns + [{'role':'employee','text':request[:1600],'agent_binding':command['_agent_binding']}, {'role':'copilot','text':answer[:6000],'agent_binding':command['_agent_binding']}])[-20:]
+                cur.execute('''INSERT INTO saas_operator_copilot_threads(tenant_id,requested_by,channel_id,conversation_id,turns)
+                  VALUES(%s::uuid,%s,%s,%s,%s::jsonb) ON CONFLICT(tenant_id,requested_by,channel_id,conversation_id)
+                  DO UPDATE SET turns=EXCLUDED.turns,updated_at=now()''',
+                  (tenant, actor, command['channel_id'], command['conversation_id'], json.dumps(new_turns, ensure_ascii=False)))
         conn.commit()
     if result is not None and status != 'completed':
         raise TenantLinearError('Настройки или доступ изменились. Результат AI скрыт.', 409)

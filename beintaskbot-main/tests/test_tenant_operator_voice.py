@@ -1,12 +1,9 @@
-import json
-import hashlib
 import uuid
 from types import SimpleNamespace
 from unittest.mock import Mock
 import pytest
 from tenant_linear_policy import TenantLinearError
 import tenant_operator_voice_context as voice
-import tenant_operator_copilot as copilot
 
 
 TENANT=str(uuid.uuid4());CHANNEL=str(uuid.uuid4());OTHER=str(uuid.uuid4())
@@ -98,26 +95,3 @@ def test_route_mismatch_permission_conflict_and_emergency_stop(boundaries):
                                    {'lead_id':'041'},{'conversation_id':'bad '},{'conversation_id':'bad\x00value'},{'extra':'x'}])
 def test_browser_cannot_inject_or_change_scope(boundaries,changes):
     with pytest.raises(TenantLinearError):voice.authorize(Cursor(),PROFILE,{**ROUTE,**changes})
-
-
-def test_context_only_chat_never_loads_media_calls_provider_or_writes_finish(monkeypatch):
-    import tenant_episode_media
-    import tenant_ai_agent_run_store
-    execution=SimpleNamespace(source_refs=[])
-    monkeypatch.setattr(tenant_episode_media,'ManualExecution',Mock(return_value=execution))
-    knowledge=Mock(return_value=[]);monkeypatch.setattr(tenant_ai_agent_run_store,'knowledge_context',knowledge)
-    media=Mock(side_effect=AssertionError('media not allowed'));finish=Mock(side_effect=AssertionError('write not allowed'))
-    provider=Mock(side_effect=AssertionError('provider not allowed'))
-    monkeypatch.setattr(copilot,'_prepare_copilot_media',media);monkeypatch.setattr(copilot,'_finish',finish);monkeypatch.setattr(copilot,'generate',provider)
-    cmd={'mode':'chat','prompt':'','lead_id':41,'channel_id':CHANNEL,'conversation_id':'synthetic-dialog','_agent_id':OTHER}
-    rows=[{'external_id':'synthetic','direction':'incoming','body':'synthetic question','message_type':'text','raw':{}}]
-    agent={'model':'existing-model','agent_id':OTHER,'language':'auto'}
-    result=copilot._draft_context(TENANT,7,cmd,{}, {'updated_at':'v1'}, {'api_key':'NOT_A_REAL_KEY'},'existing-model',agent,rows,[],context_only=True)
-    assert 'Never send messages' in result['instructions'];assert knowledge.call_args.kwargs['_read_only'] is True
-    # The base text system prompt is byte-identical to fc75c28; no voice-only
-    # addition appears in a context that contains no voice-marked turns.
-    assert hashlib.sha256(copilot.INSTRUCTIONS.encode()).hexdigest()=='ff97d5d35675f74caa84e53ec1e5587ed487c75233bcb6b531a1f9292fc04568'
-    assert result['instructions']==copilot.INSTRUCTIONS+copilot.assigned_guidance(company='',agent='',style=None)
-    assert set(result)=={'instructions','lines','extra_context'} and 'NOT_A_REAL_KEY' not in json.dumps(result)
-    media.assert_not_called();provider.assert_not_called();finish.assert_not_called()
-    with pytest.raises(TenantLinearError):copilot._draft_context(TENANT,7,{**cmd,'mode':'reply'},{},{},{},'m',agent,rows,[],context_only=True)
