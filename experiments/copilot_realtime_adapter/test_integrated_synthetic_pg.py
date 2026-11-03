@@ -192,8 +192,8 @@ class IntegratedSynthetic(RealVoiceAuthority):
             def __init__(self):self.sent=[];self.closed=False
             async def send_json(self,event):self.sent.append(event)
             async def receive_json(self):
-                if not self.sent:return {'type':'session.created'}
-                return {'type':'session.updated','session':self.sent[-1]['session']}
+                if not self.sent:return {'type':'session.created','session':{'id':'synthetic-session'}}
+                return {'type':'session.updated','session':{**self.sent[-1]['session'],'id':'synthetic-session'}}
             async def close(self):self.closed=True
 
         class DispatchGuard:

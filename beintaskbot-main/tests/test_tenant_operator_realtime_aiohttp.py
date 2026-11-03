@@ -30,14 +30,17 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         async def handler(request):
             ws=web.WebSocketResponse(max_msg_size=MAX_WIRE_MESSAGE)
             await ws.prepare(request);self.server_socket=ws
-            await ws.send_json({'type':'session.created'})
+            await ws.send_json({'type':'session.created','session':{'id':'synthetic-session'}})
             async for message in ws:
                 if message.type!=aiohttp.WSMsgType.TEXT:break
                 event=json.loads(message.data);self.received.append(event)
                 if event['type']=='session.update':
-                    await ws.send_json({'type':'session.updated','session':event['session']})
+                    await ws.send_json({'type':'session.updated','session':{**event['session'],'id':'synthetic-session'}})
                 elif event['type']=='response.create':
                     await ws.send_json({'type':'response.created','response':{'id':'synthetic-response'}})
+                elif event['type']=='conversation.item.truncate':
+                    await ws.send_json({'type':'conversation.item.truncated','item_id':event['item_id'],
+                                        'content_index':event['content_index'],'audio_end_ms':event['audio_end_ms']})
             return ws
         self.runner=web.AppRunner(web.Application())
         self.runner.app.router.add_get('/local',handler)
@@ -57,7 +60,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         wire=_RealtimeWire(self.socket,OneUseGuard())
         snapshot={'existing_copilot_instructions':'Never send messages or perform external actions.',
                   'lines':[{'text':'синтетический mətn'}],'extra_context':{}}
-        await wire.open(snapshot,tools=[],create_response=False,interrupt_response=True,transcription=False,reconnect=False)
+        await wire.open(snapshot,tools=[],create_response=False,interrupt_response=False,transcription=False,reconnect=False)
         scope={'request_id':str(uuid.uuid4()),'tenant_id':str(uuid.uuid4()),'session_id':str(uuid.uuid4()),
                'channel_id':str(uuid.uuid4()),'conversation_id':'synthetic','actor_id':7,'response_number':1,'executor':'test'}
         receipt={**scope,'state':'claimed','model':MODEL,'quote_version':QUOTE,'reserved_microusd':MINIMUM_HOLD,
@@ -70,7 +73,8 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([e['type'] for e in self.received],['session.update','conversation.item.create',
                         'input_audio_buffer.append','response.create'])
         settings=self.received[0]['session'];vad=settings['audio']['input']['turn_detection']
-        self.assertFalse(vad['create_response']);self.assertIsNone(settings['audio']['input']['transcription'])
+        self.assertFalse(vad['create_response']);self.assertFalse(vad['interrupt_response']);self.assertIsNone(vad['idle_timeout_ms'])
+        self.assertIsNone(settings['audio']['input']['transcription'])
         self.assertEqual(settings['tools'],[]);self.assertEqual(settings['tool_choice'],'none')
         self.assertNotIn('синтетический',settings['instructions'])
         self.assertEqual(self.received[1]['item']['role'],'user')
@@ -133,7 +137,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             # Generated transcripts are not proven heard and are neither
             # exposed nor stored by the currently blocked history path.
             await session.receive_provider({'type':'response.output_audio_transcript.done',
-                                            'transcript':'synthetic unverified text'})
+                                            'response_id':'synthetic-response','transcript':'synthetic unverified text'})
             self.assertEqual(client.events,prior)
             await self.server_socket.send_json({'type':'response.output_audio.delta','response_id':'synthetic-response',
                                                'item_id':'audio-1','content_index':0,'delta':base64.b64encode(bytes(480)).decode()})
@@ -143,6 +147,7 @@ class AiohttpRealtimeTest(unittest.IsolatedAsyncioTestCase):
             await session.receive_provider({'type':'input_audio_buffer.speech_stopped'})
             await session.receive_provider({'type':'response.done','response':{'id':'synthetic-response'}})
             await session.receive_client({'type':'played','item_id':'audio-1','played_ms':0})
+            await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
             await session.receive_provider(await asyncio.wait_for(provider.receive(),1))
             self.assertEqual(ledger.events,['reserve','claim','unknown','reserve','claim'])
             self.assertTrue(await session.end('test'))

@@ -202,11 +202,12 @@ redirect/connection timeout semantics, and shared dispatch enforcement remain
 unverified. The no-tools/no-transcription/no-automatic-response settings are
 requested and checked against the peer readback before audio is accepted, but
 mock readback cannot prove actual provider behavior or cost prevention.
-The future dispatch guard must atomically validate the complete scope,
-fingerprint, quote and tenant hold, commit a one-use `claimed` to
-`dispatching` transition, and only then permit the socket send. Unknown
-outcomes retain their hold and cannot be retried blindly. The separately
-developed ledger CAS has not been integrated or independently verified here.
+`ScopedDispatchGuard` now reauthorizes and commits the ledger CAS from
+`claimed` to `dispatching` before the mock socket send, comparing the returned
+scope, fingerprint, quote and tenant hold. Local PostgreSQL tests cover this
+ordering, replay, revocation, cancellation and uncertain send; global admission,
+old-schema migration and actual upstream cost bounds remain unproven. Unknown
+outcomes retain their hold and cannot be retried blindly.
 
 Input ASR remains disabled because no separately metered ASR admission exists.
 Output transcripts are not stored or presented as heard. Incomplete/interrupted
@@ -217,6 +218,25 @@ text-to-voice-to-text continuity, or verified Russian/Azerbaijani behavior.
 The caller must own and close the aiohttp ClientSession as well as the socket;
 the unimplemented live orchestration must prove that no connection or sender
 survives cancellation before releasing its lease.
+
+`transcript_draft.py` is an isolated mock of ordered item registration and
+later input-transcription completion/failure; it only generates candidate
+entries accepted by the existing thread validator and stores no audio. Empty,
+missing or failed input is unavailable, automatic ASR is unverified, and all
+assistant text is omitted because playback is unproven. Item ordering in a real
+provider stream must additionally be checked against linked previous-item IDs;
+the mock's order assumption is not an upstream guarantee. A future writer must
+accept server-derived scope, session/item idempotency keys, ordered entries,
+agent binding and clear revision, reauthorize transactionally and use the
+existing thread adapter after old-writer cutover. ASR also needs a separate,
+durable upper-bounded reservation and usage reconciliation before it is enabled.
+The mock is not connected to sessions or any database writer.
+
+The live connector remains unusable: aiohttp follows redirects, and its
+WebSocket close timeout alone is not an overall connection deadline. A later
+release must reject redirects before following them, use an owned ClientSession
+with reviewed TLS/proxy and bounded connect/cleanup, and establish a remote
+billing-stop guarantee. Local `ws.closed` does not establish that guarantee.
 
 ## Source fingerprints and remaining fence
 

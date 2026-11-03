@@ -207,11 +207,46 @@ class ScopedBudget:
 
     async def reserve(self,item):return await asyncio.to_thread(self._operation,'reserve',dict(item))
     async def claim(self,item):return await asyncio.to_thread(self._operation,'claim',dict(item))
+    async def issue_dispatch(self,item):return await asyncio.to_thread(self._operation,'issue_dispatch',dict(item))
     async def mark_unknown(self,item):return await asyncio.to_thread(self._operation,'mark_unknown',dict(item))
     async def note_actual(self,item,amount):
         # Internal reconciliation only. Never bind this to browser-supplied
         # usage; its authenticity/provider implementation remains blocked.
         return await asyncio.to_thread(self._operation,'note_actual',dict(item),amount)
+
+
+class ScopedDispatchGuard:
+    """Trusted, server-owned CAS; returning True requires committed dispatch.
+
+    A cancelled DB thread may still commit; that hold stays consumed and the
+    caller must not retry. This guard does not provide a source/network fence.
+    """
+    def __init__(self,budget):
+        if not isinstance(budget,ScopedBudget):raise ValueError('scoped_budget_required')
+        self.budget=budget
+
+    @staticmethod
+    def _valid(row,scope,state,hold_id=None):
+        if not isinstance(row,dict):return False
+        try:
+            canonical=grant._scope(scope)
+            hold=str(uuid.UUID(str(row['tenant_reservation_id'])))
+            return (row['state']==state and row['fingerprint']==grant._fingerprint(canonical)
+                    and row['quote_version']==grant.QUOTE and row['model']==grant.MODEL
+                    and type(row['reserved_microusd']) is int and row['reserved_microusd']==grant.HOLD
+                    and row['actual_microusd'] is None and row['tenant_repair_state']=='intact'
+                    and (hold_id is None or hold==hold_id)
+                    and all(str(row[key])==str(value) for key,value in canonical.items()))
+        except (KeyError,ValueError,TypeError,AttributeError,TenantLinearError):return False
+
+    async def consume(self,scope,receipt):
+        self.budget._check_scope(scope)
+        if not self._valid(receipt,scope,'claimed'):return False
+        hold=str(uuid.UUID(str(receipt['tenant_reservation_id'])))
+        # _operation reauthorizes and performs the CAS in one transaction,
+        # returning only after its context manager successfully commits.
+        dispatched=await self.budget.issue_dispatch(scope)
+        return self._valid(dispatched,scope,'dispatching',hold)
 
 
 class VoiceHistory:
@@ -230,10 +265,10 @@ async def prepare_server_session(profile,route,client,lease):
     history=VoiceHistory(authority)
     history.require_writer_ready()  # intentionally always raises
     context=CopilotContext(authority)
-    provider=create_production_provider()  # independently always raises
     # Unreachable until both immutable gates are reviewed and replaced.
     session_id=str(uuid.uuid4())
     ledger=ScopedBudget(authority,session_id)
+    provider=create_production_provider(ScopedDispatchGuard(ledger))  # independently always raises
     session=Session(authority.session_scope,authority=authority,ledger=ledger,lease=lease,
                     context=context,provider=provider,client=client,executor=_EXECUTOR,session_id=session_id)
     return session

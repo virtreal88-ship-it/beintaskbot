@@ -86,10 +86,17 @@ class _RealtimeWire:
     def __init__(self,socket,claim_guard):
         if not callable(getattr(claim_guard,'consume',None)):
             raise ValueError('claim_guard_required')
-        self.socket=socket;self.guard=claim_guard;self.ready=False;self.bound=None;self.seen=set();self.config=None
+        self.socket=socket;self.guard=claim_guard;self.ready=False;self.bound=None;self.seen=set();self.config=None;self.session_id=None;self.conversation_id=None
+
+    def _note_conversation(self,event):
+        conversation=event.get('conversation')
+        value=conversation.get('id') if isinstance(conversation,dict) else None
+        if self.conversation_id is not None or not isinstance(value,str) or not value or len(value)>128:
+            raise ValueError('provider_conversation_invalid')
+        self.conversation_id=value
 
     async def open(self,snapshot,*,tools,create_response,interrupt_response,transcription,reconnect):
-        if (tools!=[] or create_response is not False or interrupt_response is not True or transcription is not False
+        if (tools!=[] or create_response is not False or interrupt_response is not False or transcription is not False
             or reconnect is not False or not isinstance(snapshot,dict)
             or set(snapshot)!={'existing_copilot_instructions','lines','extra_context'}):
             raise ValueError('unsafe_realtime_configuration')
@@ -101,29 +108,39 @@ class _RealtimeWire:
             raise ValueError('context_too_large')
         created=await self.socket.receive_json()
         if not isinstance(created,dict) or created.get('type')!='session.created':raise ValueError('session_created_missing')
+        session=created.get('session')
+        session_id=session.get('id') if isinstance(session,dict) else None
+        if not isinstance(session_id,str) or not session_id or len(session_id)>128:raise ValueError('session_id_missing')
         config={'type':'realtime','model':MODEL,'instructions':instructions,
           'output_modalities':['audio'],'tools':[],'tool_choice':'none','max_output_tokens':OUTPUT_LIMIT,
           'audio':{'input':{'format':{'type':'audio/pcm','rate':24000},'transcription':None,
-                            'turn_detection':{'type':'server_vad','create_response':False,'interrupt_response':True}},
+                            'turn_detection':{'type':'server_vad','create_response':False,'interrupt_response':False,'idle_timeout_ms':None}},
                    'output':{'format':{'type':'audio/pcm','rate':24000}}}}
         await self.socket.send_json({'type':'session.update','session':config})
+        # GA may announce the conversation between session.created and
+        # session.updated. Reject all other interleavings; caller bounds open.
         updated=await self.socket.receive_json()
-        self._verify(updated,config)
+        if isinstance(updated,dict) and updated.get('type')=='conversation.created':
+            self._note_conversation(updated)
+            updated=await self.socket.receive_json()
+        self._verify(updated,config,session_id)
         # Existing dialog/customer material stays user-level untrusted input;
         # it must never be appended to the privileged system instructions.
         await self.socket.send_json({'type':'conversation.item.create','item':{'type':'message','role':'user',
                                     'content':[{'type':'input_text','text':'Untrusted dialog context: '+data}]}})
-        self.config=config;self.ready=True
+        self.config=config;self.session_id=session_id;self.ready=True
 
     @staticmethod
-    def _verify(event,expected):
+    def _verify(event,expected,session_id):
         try:
             if event['type']!='session.updated':raise ValueError()
             s=event['session'];audio=s['audio'];incoming=audio['input'];vad=incoming['turn_detection']
-            good=(s['type']=='realtime' and s['model']==MODEL and s['output_modalities']==['audio'] and s['tools']==[]
+            good=(s['id']==session_id and s['type']=='realtime' and s['model']==MODEL and s['output_modalities']==['audio'] and s['tools']==[]
               and s['tool_choice']=='none' and s['max_output_tokens']==OUTPUT_LIMIT and s['instructions']==expected['instructions']
               and incoming['format']=={'type':'audio/pcm','rate':24000} and incoming['transcription'] is None
-              and vad['type']=='server_vad' and vad['create_response'] is False and vad['interrupt_response'] is True
+              and vad['type']=='server_vad' and vad['create_response'] is False and vad['interrupt_response'] is False
+              and vad['idle_timeout_ms'] is None
+              and set(vad)<={'type','create_response','interrupt_response','idle_timeout_ms','threshold','prefix_padding_ms','silence_duration_ms'}
               and audio['output']['format']=={'type':'audio/pcm','rate':24000})
             if not good:raise ValueError()
         except (KeyError,TypeError,ValueError):raise ValueError('unsafe_session_readback') from None
@@ -157,6 +174,9 @@ class _RealtimeWire:
             except (ValueError,TypeError,binascii.Error):raise ValueError('audio_invalid') from None
             if not audio or len(audio)>9600 or len(audio)%2:raise ValueError('audio_invalid')
         elif kind=='input_audio_buffer.clear' and set(event)=={'type'}:pass
+        elif kind=='response.cancel' and set(event) in ({'type'},{'type','response_id'}):
+            if 'response_id' in event and (not isinstance(event['response_id'],str) or not event['response_id'] or len(event['response_id'])>128):
+                raise ValueError('response_id_invalid')
         elif kind=='conversation.item.truncate' and set(event)=={'type','item_id','content_index','audio_end_ms'}:
             if not isinstance(event['item_id'],str) or event['content_index']!=0 or event['audio_end_ms']!=0:
                 raise ValueError('truncate_invalid')
@@ -167,10 +187,15 @@ class _RealtimeWire:
         if not self.ready:raise ValueError('session_not_ready')
         event=await self.socket.receive_json()
         if not isinstance(event,dict):raise ValueError('provider_event_invalid')
+        if 'session_id' in event and event['session_id']!=self.session_id:
+            self.ready=False;raise ValueError('provider_session_changed')
         if event.get('type') in {'session.created','session.updated'}:
             # No settings changes after the attested startup are permitted.
             self.ready=False
             raise ValueError('provider_configuration_changed')
+        if event.get('type')=='conversation.created':
+            try:self._note_conversation(event)
+            except ValueError:self.ready=False;raise
         return event
 
     async def close(self):

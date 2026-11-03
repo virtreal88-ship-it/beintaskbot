@@ -48,12 +48,14 @@ class Session:
         self.executor = executor
         self.response_number = 0
         self.response_inflight = False
+        self.cancel_requested = False
         self.response_pending = False
         self.current_reservation = None
         self.provider_response_id = None
         self.item = None
         self.produced = 0
         self.interrupt_pending = False
+        self.truncate_pending = None
         self.output_finished = False
         self.output_started_at = None
         self.lock = asyncio.Lock()
@@ -104,7 +106,7 @@ class Session:
             if self._stop_requested: raise Refused('session_stopped_during_start')
             # The injected provider must use the existing Copilot prompt and
             # context, no function tools, and never expose a permanent key.
-            self._open_task = asyncio.create_task(self.provider.open(snapshot, tools=[], create_response=False, interrupt_response=True,
+            self._open_task = asyncio.create_task(self.provider.open(snapshot, tools=[], create_response=False, interrupt_response=False,
                                                                     transcription=False, reconnect=False))
             done, pending = await asyncio.wait({self._open_task}, timeout=3)
             if pending:
@@ -157,7 +159,7 @@ class Session:
     async def _dispatch_pending(self):
         # Caller holds lock. VAD detects turns only; it must never launch an
         # unbudgeted response. The reservation authority is shared externally.
-        if not self.response_pending or self.interrupt_pending or self.response_inflight or self.item is not None or self.closed:
+        if not self.response_pending or self.interrupt_pending or self.truncate_pending or self.response_inflight or self.item is not None or self.closed:
             return
         self.response_number += 1
         if self.response_number > 2:
@@ -177,6 +179,7 @@ class Session:
         self.current_reservation = reservation
         self.response_pending = False
         self.response_inflight = True
+        self.cancel_requested = False
         try:
             await self.authority.check(self.scope, 'response_dispatch')
             await self.lease.assert_current(self.scope, self.fence)
@@ -245,6 +248,7 @@ class Session:
                 ms = event['played_ms']
                 if not self.interrupt_pending or event['item_id'] != self.item or type(ms) is not int or ms != 0:
                     raise Refused('invalid_playback_ack')
+                self.truncate_pending=self.item
                 await self._send_provider({'type': 'conversation.item.truncate', 'item_id': self.item,
                                           'content_index': 0, 'audio_end_ms': ms})
                 self.interrupt_pending = False
@@ -260,6 +264,7 @@ class Session:
                 # Client playback acknowledgments cannot prove what a human
                 # heard. Until a trustworthy model exists, remove all audio
                 # from upstream history rather than retain an unverified reply.
+                self.truncate_pending=self.item
                 await self._send_provider({'type':'conversation.item.truncate','item_id':self.item,
                                           'content_index':0,'audio_end_ms':0})
                 self.item,self.produced=None,0
@@ -284,6 +289,16 @@ class Session:
         if kind == 'input_audio_buffer.speech_started':
             self.activity = time.monotonic()
             async with self.lock:
+                if self.response_inflight and not self.cancel_requested:
+                    event={'type':'response.cancel'}
+                    if self.provider_response_id:event['response_id']=self.provider_response_id
+                    await self._send_provider(event)
+                    self.cancel_requested=True
+                    if self.item is None:
+                        # No stable item exists to truncate. A generated but
+                        # unheard transcript could otherwise leak into the
+                        # next turn; terminate rather than invent an alignment.
+                        raise Refused('interrupted_before_audio')
                 if self.item and not self.interrupt_pending:
                     self.interrupt_pending = True
                     await self._send_client({'type': 'interrupt', 'item_id': self.item})
@@ -299,8 +314,11 @@ class Session:
         if kind == 'response.output_audio.delta':
             if not self.response_inflight or not self.provider_response_id or event.get('response_id') != self.provider_response_id:
                 raise Refused('unreserved_response')
+            encoded=event.get('delta')
+            if not isinstance(encoded,str) or len(encoded)>4*((self.MAX_FRAME+2)//3):
+                raise Refused('invalid_provider_audio')
             try:
-                data = base64.b64decode(event.get('delta', ''), validate=True)
+                data = base64.b64decode(encoded, validate=True)
             except (binascii.Error, ValueError, TypeError):
                 raise Refused('invalid_provider_audio')
             item = event.get('item_id')
@@ -321,11 +339,24 @@ class Session:
                     raise Refused('output_limit')
                 await self._send_client({'type': 'audio', 'item_id': item, 'pcm': data})
             return
+        if kind == 'conversation.item.truncated':
+            async with self.lock:
+                if (not self.truncate_pending or event.get('item_id')!=self.truncate_pending or
+                    event.get('content_index')!=0 or event.get('audio_end_ms')!=0):
+                    raise Refused('invalid_truncation_confirmation')
+                self.truncate_pending=None
+                await self._dispatch_pending()
+            return
         if kind == 'response.done':
             async with self.lock:
+                response=event.get('response')
                 if (not self.current_reservation or not self.response_inflight or not self.provider_response_id or
-                    (event.get('response') or {}).get('id') != self.provider_response_id):
+                    not isinstance(response,dict) or response.get('id') != self.provider_response_id):
                     raise Refused('unreserved_response')
+                output=response.get('output',[])
+                if (not isinstance(output,list) or any(not isinstance(item,dict) or item.get('type')!='message' or
+                    item.get('role')!='assistant' for item in output)):
+                    raise Refused('provider_item_forbidden')
                 # Until a verified tariff adapter reconciles usage, the
                 # conservative hold remains spent/unknown.
                 await self.ledger.mark_unknown(self.current_reservation)
@@ -349,13 +380,25 @@ class Session:
                     self.output_finished=True
                     await self._send_client({'type':'audio_done','item_id':self.item})
             return
-        if kind in ('session.created', 'session.updated'):
+        if kind in ('input_audio_buffer.committed','input_audio_buffer.cleared','rate_limits.updated','conversation.created'):
             return
-        if kind == 'error' or isinstance(kind, str) and kind.startswith('response.function_call'):
-            await self.end('provider_event_forbidden')
-            raise Refused('provider_event_forbidden')
-        # Never proxy provider events, tool calls, settings or transcripts to
-        # clients by default.  History integration is intentionally absent.
+        if kind in ('conversation.item.added','conversation.item.done'):
+            item=event.get('item')
+            if isinstance(item,dict) and item.get('type')=='message' and item.get('role') in ('user','assistant'):
+                return
+            raise Refused('provider_item_forbidden')
+        if kind in ('response.output_item.added','response.output_item.done'):
+            item=event.get('item')
+            if (self.response_inflight and event.get('response_id')==self.provider_response_id and
+                isinstance(item,dict) and item.get('type')=='message' and item.get('role')=='assistant'):
+                return
+            raise Refused('provider_item_forbidden')
+        if kind in ('response.content_part.added','response.content_part.done',
+                    'response.output_audio_transcript.delta','response.output_audio_transcript.done'):
+            if self.response_inflight and event.get('response_id')==self.provider_response_id:return
+            raise Refused('unreserved_response')
+        # Unknown provider events and tool calls never reach the browser.
+        raise Refused('provider_event_forbidden')
 
     async def end(self, reason):
         self._stop_requested = True
