@@ -26,14 +26,17 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_PASSWORD: isolated-fixture
+          POSTGRES_DB: customer_memory_test
         ports: ['55463:5432']
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      CUSTOMER_MEMORY_TEST_DSN: postgresql://postgres:isolated-fixture@127.0.0.1:55463/postgres
+      CUSTOMER_MEMORY_TEST_DSN: postgresql://postgres:isolated-fixture@127.0.0.1:55463/customer_memory_test
+      CUSTOMER_MEMORY_TEST_ISOLATED: "1"
       DATABASE_URL: postgresql://invalid.invalid/disabled
       PYTHONPATH: tests/isolated_database_guard:.:tests
+      NODE_PATH: .support-test-deps/node_modules
     defaults:
       run:
         working-directory: beintaskbot-main
@@ -42,9 +45,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Install test dependencies
         run: python -m pip install -r requirements.txt pytest pytest-asyncio
       - name: Exercise memory policy, PostgreSQL and HTTP
         run: python -m unittest discover -s tests -p 'test_customer_memory*.py' -v
       - name: Exercise existing CRM and route regressions
         run: python -m pytest -q tests/test_tenant_web_routes.py tests/test_tenant_crm_identity.py
+      - name: Install Chromium test dependencies
+        run: |
+          npm install --prefix .support-test-deps --no-save playwright@1.62.1
+          node .support-test-deps/node_modules/playwright/cli.js install --with-deps chromium
+          node -e "const fs=require('node:fs');fs.appendFileSync(process.env.GITHUB_ENV,'CHROMIUM_EXECUTABLE_PATH='+require('./.support-test-deps/node_modules/playwright').chromium.executablePath()+'\n')"
+      - name: Real local HTTP and PostgreSQL in Chromium
+        run: |
+          python tests/customer_memory_browser_fixture.py &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 50); do curl -fsS http://127.0.0.1:18765/ >/dev/null && break; sleep 0.1; done
+          curl -fsS http://127.0.0.1:18765/ >/dev/null
+          node tests/customer_memory_http_browser.cjs

@@ -1,6 +1,7 @@
 """Authenticated, no-cache HTTP boundary for manual customer memory."""
 import asyncio
 import json
+import os
 from aiohttp import web
 from tenant_crm_request_context import require_expected_context, CRMContextError
 from tenant_linear_policy import TenantLinearError
@@ -11,6 +12,8 @@ import tenant_customer_memory as memory
 def handler(member, origin, logger):
     async def endpoint(request):
         headers={'Cache-Control':'no-store','Vary':'Cookie'}
+        if os.environ.get('CUSTOMER_MEMORY_ENABLED') != '1':
+            return web.json_response({'success':False,'error':'memory_unavailable'},status=404,headers=headers)
         profile=member(request)
         if not profile:
             return web.json_response({'success':False,'error':'unavailable'},status=403,headers=headers)
@@ -36,8 +39,8 @@ def handler(member, origin, logger):
                     result=await asyncio.to_thread(memory.revoke_link,profile,contact,body['link_id'],body['expected_version'])
                 elif action=='add_fact' and set(body)=={'action','fact'}:
                     result=await asyncio.to_thread(memory.add_fact,profile,contact,body['fact'])
-                elif action in {'edit','confirm','outdated','refute','delete'} and set(body)==({'action','fact_id','expected_version','value'} if action=='edit' else {'action','fact_id','expected_version'}):
-                    result=await asyncio.to_thread(memory.change_fact,profile,contact,body['fact_id'],body['expected_version'],action,value=body.get('value'))
+                elif action in {'edit','confirm','outdated','refute','delete'} and set(body)==({'action','fact_id','expected_version','value','evidence_quote','evidence_confirmed'} if action=='edit' else {'action','fact_id','expected_version'}):
+                    result=await asyncio.to_thread(memory.change_fact,profile,contact,body['fact_id'],body['expected_version'],action,value=body.get('value'),evidence_quote=body.get('evidence_quote'),evidence_confirmed=body.get('evidence_confirmed'))
                 else: raise TenantLinearError('Invalid request.',400)
             return web.json_response({'success':True,'data':result},dumps=lambda x:json.dumps(x,default=str),headers=headers)
         except CRMContextError as exc:
