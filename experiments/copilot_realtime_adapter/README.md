@@ -284,6 +284,12 @@ audio `conversation.item.added` before requesting a response; duplicate, wrong
 or missing item IDs fail closed. This ordering has only been tested with mock
 events, not a live provider, and does not implement transcript persistence or
 prove that the provider used the intended audio.
+Responses are withheld while any registered speech item is incomplete. Until
+there is a reviewed ordered input-slice protocol, overlapping unanswered turns
+end the session rather than silently combining them. Muting during an
+unconfirmed utterance also ends the session to avoid resuming with uncertain
+upstream audio. These fail-closed limitations do not satisfy the required voice
+UX and must be resolved before the voice feature is enabled.
 
 ## Source fingerprints and remaining fence
 

@@ -1,4 +1,5 @@
 """Synthetic event ordering; no real audio or provider connections."""
+import asyncio
 import unittest
 from test_session import Authority, Client, Context, Lease, Ledger, Provider
 from session import Session, Refused
@@ -14,6 +15,14 @@ class InputTurnOrder(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         await self.session.end('test')
+
+    async def short_idle_session(self):
+        await self.session.end('reset')
+        self.ledger=Ledger();self.provider=Provider(self.ledger)
+        self.session=Session(('tenant',42,'channel','conversation'),authority=Authority(),
+                             ledger=self.ledger,lease=Lease(),context=Context(),
+                             provider=self.provider,client=Client(),max_seconds=1,idle_seconds=.08,poll_seconds=.01)
+        await self.session.start()
 
     async def send(self,kind,item):
         event={'type':kind,'item_id':item}
@@ -72,3 +81,54 @@ class InputTurnOrder(unittest.IsolatedAsyncioTestCase):
             await self.session.receive_provider({'type':'conversation.item.added','item':{
                 'id':'turn-1','type':'message','role':'user','content':[{'type':'input_text','text':'synthetic'}]}})
         self.assertEqual(self.ledger.events,[])
+
+    async def test_no_dispatch_during_next_utterance_or_before_earlier_commit(self):
+        await self.send('input_audio_buffer.speech_started','turn-1')
+        await self.send('input_audio_buffer.speech_stopped','turn-1')
+        await self.send('input_audio_buffer.speech_started','turn-2')
+        await self.send('input_audio_buffer.committed','turn-1')
+        await self.send('conversation.item.added','turn-1')
+        self.assertEqual(self.ledger.events,[])
+        await self.send('input_audio_buffer.speech_stopped','turn-2')
+        await self.send('input_audio_buffer.committed','turn-2')
+        with self.assertRaisesRegex(Refused,'multiple_unanswered_input_turns'):
+            await self.send('conversation.item.added','turn-2')
+        self.assertEqual([event['type'] for event in self.provider.events].count('response.create'),0)
+        self.assertTrue(self.session.closed)
+
+    async def test_later_turn_ack_cannot_skip_earlier_turn(self):
+        await self.send('input_audio_buffer.speech_started','turn-1')
+        await self.send('input_audio_buffer.speech_stopped','turn-1')
+        await self.send('input_audio_buffer.speech_started','turn-2')
+        await self.send('input_audio_buffer.speech_stopped','turn-2')
+        await self.send('input_audio_buffer.committed','turn-2')
+        await self.send('conversation.item.added','turn-2')
+        self.assertEqual(self.ledger.events,[])
+        await self.send('input_audio_buffer.committed','turn-1')
+        with self.assertRaisesRegex(Refused,'multiple_unanswered_input_turns'):
+            await self.send('conversation.item.added','turn-1')
+        self.assertEqual([event['type'] for event in self.provider.events].count('response.create'),0)
+        self.assertTrue(self.session.closed)
+
+    async def test_mute_during_unconfirmed_input_ends_session(self):
+        await self.send('input_audio_buffer.speech_started','turn-1')
+        await self.session.receive_client({'type':'mute','muted':True})
+        self.assertTrue(self.session.closed)
+        self.assertTrue(self.provider.closed)
+        self.assertEqual(self.ledger.events,[])
+
+    async def test_active_speech_does_not_hit_idle_timeout(self):
+        await self.short_idle_session()
+        await self.send('input_audio_buffer.speech_started','turn-1')
+        for _ in range(8):
+            await self.session.receive_client({'type':'audio','pcm':bytes(480)})
+            await asyncio.sleep(.02)
+        self.assertFalse(self.session.closed)
+
+    async def test_unvoiced_pcm_does_not_defeat_idle_timeout(self):
+        await self.short_idle_session()
+        for _ in range(8):
+            if self.session.closed:break
+            await self.session.receive_client({'type':'audio','pcm':bytes(480)})
+            await asyncio.sleep(.02)
+        self.assertTrue(self.session.closed)

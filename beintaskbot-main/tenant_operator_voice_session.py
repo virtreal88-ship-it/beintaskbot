@@ -174,7 +174,9 @@ class Session:
     async def _dispatch_pending(self):
         # Caller holds lock. VAD detects turns only; it must never launch an
         # unbudgeted response. The reservation authority is shared externally.
-        if not self.response_pending or self.interrupt_pending or self.truncate_pending or self.response_inflight or self.item is not None or self.closed:
+        if (not self.response_pending or self.interrupt_pending or self.truncate_pending or self.response_inflight or
+            self.item is not None or self.closed or any(not (turn['stopped'] and turn['committed'] and turn['added'])
+                                                       for turn in self.input_turns.values())):
             return
         self.response_number += 1
         if self.response_number > 2:
@@ -227,6 +229,10 @@ class Session:
             raise Refused('input_item_unmatched')
         turn[marker]=True
         if turn['stopped'] and turn['committed'] and turn['added'] and not turn['scheduled']:
+            # More than one unanswered item in the mutable default provider
+            # conversation cannot safely be assigned to separate responses.
+            # Fail closed until an ordered, scoped input protocol is proven.
+            if self.response_pending:raise Refused('multiple_unanswered_input_turns')
             turn['scheduled']=True
             self.response_pending=True
             await self._dispatch_pending()
@@ -267,6 +273,14 @@ class Session:
             self.muted = event['muted']
             if self.muted:
                 await self._send_provider({'type': 'input_audio_buffer.clear'})
+                # A clear can race VAD/commit. Until we can prove that a
+                # partially recorded item is absent from upstream context,
+                # terminate rather than resume with uncertain speech.
+                async with self.lock:
+                    uncertain=any(not (turn['stopped'] and turn['committed'] and turn['added'])
+                                  for turn in self.input_turns.values())
+                if uncertain:
+                    await self.end('mute_during_unconfirmed_input')
             return
         if kind == 'audio' and set(event) == {'type', 'pcm'} and isinstance(event['pcm'], bytes):
             data = event['pcm']
@@ -274,6 +288,8 @@ class Session:
                 raise Refused('invalid_pcm_frame')
             if not self.muted:
                 await self._send_provider({'type': 'input_audio_buffer.append', 'audio': base64.b64encode(data).decode('ascii')})
+                if any(not turn['stopped'] for turn in self.input_turns.values()):
+                    self.activity=time.monotonic()
             return
         if kind == 'played' and set(event) == {'type', 'item_id', 'played_ms'}:
             async with self.lock:
