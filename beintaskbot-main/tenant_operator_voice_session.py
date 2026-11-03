@@ -471,15 +471,15 @@ class Session:
         # send, but the lease remains held until *all* I/O is really drained.
         drained=await self._bounded(self.provider.close(),self._drain(self.io_lock),self._drain(self.receive_lock),
                                     self._drain(self.client_lock),hold_unknown())
-        if not drained:
-            return False
-        async def ended():
+        async def terminal(event):
             async with self.client_lock:
-                await self.client.send({'type':'ended','reason':reason})
-        if not await self._bounded(ended()):
+                await self.client.send(event)
+        if not drained:
+            await self._bounded(terminal({'type':'end_unconfirmed'}))
             return False
-        # Only release after the provider close, the provider/client drains,
-        # and the terminal client event have all completed successfully.
+        # Release only after provider close and all I/O drains. A failed or
+        # uncertain release must never be reported as a confirmed end.
         if not await self._bounded(self.lease.release(self.scope, self.fence)):
+            await self._bounded(terminal({'type':'end_unconfirmed'}))
             return False
-        return True
+        return await self._bounded(terminal({'type':'ended','reason':reason}))

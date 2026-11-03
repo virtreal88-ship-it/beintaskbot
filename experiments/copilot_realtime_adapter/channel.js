@@ -8,6 +8,7 @@
   if(url.protocol==='http:' && !['127.0.0.1','localhost'].includes(url.hostname))throw new Error('voice_https_required');
   url.protocol=url.protocol==='https:'?'wss:':'ws:';
   const socket=new env.WebSocket(url.toString());
+  let terminal=false;
   socket.binaryType='arraybuffer';
   await new Promise((resolve,reject)=>{
     const timer=env.setTimeout(()=>{socket.close();reject(new Error('voice_connect_timeout'));},5000);
@@ -21,11 +22,13 @@
         if(typeof msg.pcm_base64!=='string'||msg.pcm_base64.length>12800)throw new Error('invalid_audio');
         const raw=env.atob(msg.pcm_base64),pcm=Uint8Array.from(raw,ch=>ch.charCodeAt(0));
         onEvent({type:'audio',item_id:msg.item_id,pcm});
-      }else if(['ready','interrupt','audio_done','ended'].includes(msg.type))onEvent(msg);
-      else if(msg.type==='error')onEvent({type:'ended'});
-    }catch(_){socket.close();onEvent({type:'ended'});}
+      }else if(['ready','interrupt','audio_done','ended','end_unconfirmed'].includes(msg.type)){
+        if(['ended','end_unconfirmed'].includes(msg.type))terminal=true;
+        onEvent(msg);
+      } else if(msg.type==='error'){terminal=true;onEvent({type:'end_unconfirmed'});}
+    }catch(_){terminal=true;socket.close();onEvent({type:'end_unconfirmed'});}
   };
-  socket.onclose=()=>onEvent({type:'ended'});
+  socket.onclose=()=>{if(!terminal)onEvent({type:'end_unconfirmed'});};
   return {
     send(event){
       if(socket.readyState!==env.WebSocket.OPEN)throw new Error('voice_disconnected');

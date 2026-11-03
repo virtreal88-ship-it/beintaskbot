@@ -51,3 +51,13 @@ test('server closes promptly even if audio shutdown is stuck; lease stays held',
   assert.equal(stopped,1);assert.equal(x.channelClosed(),1);assert.equal(x.released(),0);
   finish();await new Promise(resolve=>setImmediate(resolve));assert.equal(x.released(),1);
 });
+
+test('unconfirmed shutdown is not shown as a normal end',async()=>{
+  const x=setup();await x.view.start();x.root.children[3].handlers.click();
+  assert.deepEqual(x.sent.at(-1),{type:'end'});
+  assert.match(x.root.children[0].textContent,/Завершение/);
+  await x.emit({type:'end_unconfirmed'});
+  assert.match(x.root.children[0].textContent,/не подтверждено; текстовый чат доступен/);
+  assert.equal(x.root.children[1].disabled,true);
+  assert.equal(x.released(),1);
+});

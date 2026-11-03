@@ -16,11 +16,11 @@ class SocketClient:
             event={'type':'audio','item_id':event['item_id'],
                    'pcm_base64':base64.b64encode(event['pcm']).decode('ascii')}
         if self.ws.closed:
-            if event.get('type') == 'ended':
+            if event.get('type') in ('ended','end_unconfirmed'):
                 return  # already disconnected; no client notification possible
             raise ConnectionError('voice_socket_closed')
         await self.ws.send_json(event)
-        if event.get('type')=='ended':
+        if event.get('type') in ('ended','end_unconfirmed'):
             await self.ws.close()
 
 

@@ -190,6 +190,17 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         # release the old lease; reconciliation must be explicit.
         self.assertTrue(lease.held)
 
+    async def test_unconfirmed_release_never_reports_ended(self):
+        class RefusingLease(Lease):
+            async def release(self,*_):raise Refused('unconfirmed')
+        lease=RefusingLease();client=Client();provider=Provider(self.ledger)
+        other=Session(('tenant',42,'channel','release'),authority=self.auth,ledger=self.ledger,lease=lease,
+                      context=Context(),provider=provider,client=client)
+        await other.start()
+        self.assertFalse(await other.end('test'));self.assertTrue(lease.held)
+        self.assertEqual(client.events[-1],{'type':'end_unconfirmed'})
+        self.assertNotIn('ended',[event['type'] for event in client.events])
+
     async def test_pending_provider_receive_keeps_lease_until_drained(self):
         entered=asyncio.Event();release=asyncio.Event();lease=Lease();provider=Provider(self.ledger)
         async def receive():entered.set();await release.wait();return {'type':'late'}

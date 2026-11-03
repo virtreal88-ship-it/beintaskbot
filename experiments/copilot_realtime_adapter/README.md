@@ -225,6 +225,10 @@ with fake provider/socket/context/lease and committed durable dispatch guard.
 It does not prove real provider, source or billing behavior. Cleanup now uses a
 shared shielded task and the Session drains the provider receive lock before
 lease release; startup/remote close and cancellation still need review.
+The mock UI now reports an unconfirmed end separately if socket closure,
+draining or server lease release cannot be verified; it keeps text available
+and disables another voice start in that view. An ordinary ended event is sent
+only after release succeeds. Recovery/reconciliation is not implemented.
 
 `transcript_draft.py` is an isolated mock of ordered item registration and
 later input-transcription completion/failure; it only generates candidate
